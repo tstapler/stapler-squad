@@ -16,6 +16,7 @@ import { VaguenessPromptModal } from "@/components/backlog/VaguenessPromptModal"
 import { BacklogTourModal } from "@/components/backlog/BacklogTourModal";
 import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
+import { ClaimedElsewhereNotice, type ClaimedElsewhereEntry } from "@/components/backlog/ClaimedElsewhereNotice";
 import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
@@ -27,10 +28,14 @@ import {
   type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useAppDispatch } from "@/lib/store";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
+import { ALL_STATUSES, BACKLOG_FILTER_FIELDS, filterBacklogItems } from "@/lib/hooks/useBacklogFilters";
+import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
+import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import * as styles from "./backlog.css";
 
 // ---------------------------------------------------------------------------
@@ -40,17 +45,43 @@ import * as styles from "./backlog.css";
 type SortColumn = "title" | "status" | "priority" | "updatedAt" | "repoPath";
 type GroupBy = "none" | "repoPath";
 
-const ALL_STATUSES: BacklogItemStatus[] = [
-  "idea",
-  "refining",
-  "ready",
-  "queued",
-  "in_progress",
-  "review",
-  "pr_pending",
-  "done",
-  "archived",
-];
+const SORT_COLUMNS: SortColumn[] = ["title", "status", "priority", "updatedAt", "repoPath"];
+const GROUP_BY_VALUES: GroupBy[] = ["none", "repoPath"];
+
+interface BacklogViewState {
+  search: string;
+  statusFilter: BacklogItemStatus[];
+  priorityFilter: number[];
+  showArchived: boolean;
+  sortCol: SortColumn;
+  sortAsc: boolean;
+  groupBy: GroupBy;
+}
+
+// Persisted under stapler-squad-backlog-* keys (see usePersistedViewState) —
+// namespaced separately from SessionList's stapler-squad-* keys. The
+// search/statusFilter/priorityFilter/showArchived fields are spread in from
+// BACKLOG_FILTER_FIELDS (useBacklogFilters.ts) — the single source of truth
+// shared with the board view — so the two views can't silently diverge on
+// keys/validators. sortCol/sortAsc/groupBy are list-view-only extras.
+const BACKLOG_VIEW_FIELDS: PersistedFieldsConfig<BacklogViewState> = {
+  ...BACKLOG_FILTER_FIELDS,
+  sortCol: {
+    key: "stapler-squad-backlog-sort-col",
+    defaultValue: "updatedAt",
+    isValid: (v) => SORT_COLUMNS.includes(v as SortColumn),
+  },
+  sortAsc: {
+    key: "stapler-squad-backlog-sort-asc",
+    defaultValue: false,
+    isValid: (v) => typeof v === "boolean",
+  },
+  groupBy: {
+    key: "stapler-squad-backlog-group-by",
+    defaultValue: "none",
+    isValid: (v) => GROUP_BY_VALUES.includes(v as GroupBy),
+  },
+};
 
 const STATUS_CSS: Record<string, string> = {
   idea: styles.statusIdea,
@@ -92,81 +123,6 @@ function formatDateShort(iso?: string): string {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
-
-function StatusFilterChips({
-  selected,
-  onChange,
-}: {
-  selected: BacklogItemStatus[];
-  onChange: (s: BacklogItemStatus[]) => void;
-}) {
-  const { track } = useAnalytics();
-  const toggle = (status: BacklogItemStatus) => {
-    const next = selected.includes(status)
-      ? selected.filter((s) => s !== status)
-      : [...selected, status];
-    onChange(next);
-  };
-
-  // Exclude "archived" from default chips (too noisy)
-  const displayStatuses = ALL_STATUSES.filter((s) => s !== "archived");
-
-  return (
-    <div className={styles.filterChipGroup} role="group" aria-label="Filter by status">
-      {displayStatuses.map((status) => {
-        const active = selected.includes(status);
-        return (
-          <button
-            key={status}
-            type="button"
-            className={`${styles.filterChip} ${active ? styles.filterChipActive : ""}`}
-            onClick={() => { track({ name: "backlog_filter_status", category: "user_action", component: "BacklogPage", labels: { status, active: String(!selected.includes(status)) } }); toggle(status); }}
-            aria-pressed={active}
-            data-testid={`backlog-filter-status-${status}`}
-          >
-            {getStatusLabel(status)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function PriorityFilterChips({
-  selected,
-  onChange,
-}: {
-  selected: number[];
-  onChange: (p: number[]) => void;
-}) {
-  const { track } = useAnalytics();
-  const toggle = (p: number) => {
-    const next = selected.includes(p)
-      ? selected.filter((x) => x !== p)
-      : [...selected, p];
-    onChange(next);
-  };
-
-  return (
-    <div className={styles.filterChipGroup} role="group" aria-label="Filter by priority">
-      {[1, 2, 3, 4, 5].map((p) => {
-        const active = selected.includes(p);
-        return (
-          <button
-            key={p}
-            type="button"
-            className={`${styles.filterChip} ${active ? styles.filterChipActive : ""}`}
-            onClick={() => { track({ name: "backlog_filter_priority", category: "user_action", component: "BacklogPage", labels: { priority: String(p), active: String(!selected.includes(p)) } }); toggle(p); }}
-            aria-pressed={active}
-            data-testid={`backlog-filter-priority-${p}`}
-          >
-            P{p}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 // Sweep fix (backlog-event-driven-updates Phase 5 compliance sweep,
 // 2026-07-22): ux.md UX AC #6 requires the list row itself to play "a
@@ -269,6 +225,7 @@ function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
   const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
   const dispatch = useAppDispatch();
@@ -290,21 +247,31 @@ function BacklogPageInner() {
   // or spinner out (design/ux.md Surface 1 "Error / edge cases").
   const loading = connectionState === "connecting" && items.length === 0;
 
-  // Filters
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<BacklogItemStatus[]>([]);
-  const [priorityFilter, setPriorityFilter] = useState<number[]>([]);
-  // showArchived: archived items are excluded client-side by default (Epic
-  // 5.1 — see filteredItems below); enabling this reveals them from the
-  // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
-  const [showArchived, setShowArchived] = useState(false);
-
-  // Sort
-  const [sortCol, setSortCol] = useState<SortColumn>("updatedAt");
-  const [sortAsc, setSortAsc] = useState(false);
-
-  // Group by
-  const [groupBy, setGroupBy] = useState<GroupBy>("none");
+  // Filters, sort, and grouping — persisted across page loads under
+  // stapler-squad-backlog-* keys (see usePersistedViewState).
+  const backlogViewState = usePersistedViewState<BacklogViewState>(BACKLOG_VIEW_FIELDS);
+  const {
+    search,
+    statusFilter,
+    priorityFilter,
+    // showArchived: archived items are excluded client-side by default (Epic
+    // 5.1 — see filteredItems below); enabling this reveals them from the
+    // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
+    showArchived,
+    sortCol,
+    sortAsc,
+    groupBy,
+  } = backlogViewState.state;
+  const {
+    search: setSearch,
+    statusFilter: setStatusFilter,
+    priorityFilter: setPriorityFilter,
+    showArchived: setShowArchived,
+    sortCol: setSortCol,
+    sortAsc: setSortAsc,
+    groupBy: setGroupBy,
+  } = backlogViewState.setters;
+  const resetViewState = backlogViewState.resetToDefaults;
 
   // Detail pane resize
   const [detailWidth, setDetailWidth] = useState(420);
@@ -333,6 +300,10 @@ function BacklogPageInner() {
   const [githubIssueUrl, setGithubIssueUrl] = useState("");
   const [githubImporting, setGithubImporting] = useState(false);
   const [githubImportError, setGithubImportError] = useState<string | null>(null);
+  const [githubImportProgress, setGithubImportProgress] = useState<{ done: number; total: number } | null>(null);
+  // Issues another host already claimed (cross_host_claim_dedup) — a third
+  // import outcome, distinct from "already imported" and "failed".
+  const [claimedElsewhere, setClaimedElsewhere] = useState<ClaimedElsewhereEntry[]>([]);
 
   // First-visit walkthrough
   const { showTour, setTourComplete, hideTour, resetTour } = useBacklogTour();
@@ -375,18 +346,10 @@ function BacklogPageInner() {
   // Epic 5.1: client-side filtering (search/status/priority/archived),
   // mirroring what the server-side listBacklogItems filter used to do before
   // this page moved to the shared live stream (design/ux.md Surface 1).
-  const filteredItems = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return items.filter((item) => {
-      if (!showArchived && item.status === "archived") return false;
-      if (statusFilter.length > 0 && !statusFilter.includes(item.status)) return false;
-      if (priorityFilter.length > 0 && !priorityFilter.includes(item.priority)) return false;
-      if (q && !item.title.toLowerCase().includes(q) && !(item.description ?? "").toLowerCase().includes(q)) {
-        return false;
-      }
-      return true;
-    });
-  }, [items, search, statusFilter, priorityFilter, showArchived]);
+  const filteredItems = useMemo(
+    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, showArchived }),
+    [items, search, statusFilter, priorityFilter, showArchived],
+  );
 
   // Epic 6.3 (backlog-event-driven-updates): when an item's fields change
   // such that it no longer matches the active filter, keep rendering it
@@ -516,6 +479,13 @@ function BacklogPageInner() {
     }
   };
 
+  const handleHeaderKeyDown = (e: React.KeyboardEvent, col: SortColumn) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleSortClick(col);
+    }
+  };
+
   const handleRowClick = (itemId: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("item", itemId);
@@ -559,7 +529,9 @@ function BacklogPageInner() {
       setGithubImporting(true);
       try {
         const result = await importGitHubIssue(githubIssueUrl.trim());
-        if (result) {
+        if (result?.alreadyClaimedElsewhere) {
+          setGithubImportError("Another host already claimed this issue.");
+        } else if (result) {
           setShowForm(false);
           setGithubIssueUrl("");
           await hydrateItemIntoStore(result.item.id);
@@ -581,18 +553,32 @@ function BacklogPageInner() {
   const handlePickerSelect = useCallback(
     async (owner: string, repo: string, issues: GitHubIssue[]) => {
       setGithubImportError(null);
+      setGithubImporting(true);
+      setGithubImportProgress({ done: 0, total: issues.length });
       const createdIds: string[] = [];
+      const claimed: ClaimedElsewhereEntry[] = [];
       let failures = 0;
-      for (const issue of issues) {
-        const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
-        const result = await importGitHubIssue(url.trim());
-        if (result) {
-          await hydrateItemIntoStore(result.item.id);
-          createdIds.push(result.item.id);
-        } else {
-          failures++;
+      let duplicates = 0;
+      try {
+        for (const issue of issues) {
+          const url = issue.url || `https://${issue.host || "github.com"}/${owner}/${repo}/issues/${issue.number}`;
+          const result = await importGitHubIssue(url.trim());
+          if (result?.alreadyClaimedElsewhere) {
+            claimed.push({ issueUrl: url.trim(), claim: result.alreadyClaimedElsewhere });
+          } else if (result) {
+            await hydrateItemIntoStore(result.item.id);
+            createdIds.push(result.item.id);
+            if (result.alreadyExisted) duplicates++;
+          } else {
+            failures++;
+          }
+          setGithubImportProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
         }
+      } finally {
+        setGithubImporting(false);
+        setGithubImportProgress(null);
       }
+      setClaimedElsewhere(claimed);
       if (failures > 0) {
         // Leave the modal open (don't setShowForm(false) below) so this error
         // is actually visible — closing the form first would unmount it
@@ -604,6 +590,19 @@ function BacklogPageInner() {
         );
         return;
       }
+      if (duplicates > 0) {
+        // Same reasoning as the failures branch above: leave the modal open
+        // so this message is actually visible.
+        setGithubImportError(
+          duplicates === issues.length
+            ? "Already imported — no new items created."
+            : `Imported ${createdIds.length - duplicates} new item${createdIds.length - duplicates === 1 ? "" : "s"}; ${duplicates} already imported.`
+        );
+        return;
+      }
+      // Leave the modal open so the claimed-elsewhere notice (Copy link /
+      // Import anyway) stays reachable.
+      if (claimed.length > 0) return;
       setShowForm(false);
       // Only navigate to the item detail when a single issue was imported —
       // with multiple, there's no single item to land on.
@@ -614,6 +613,25 @@ function BacklogPageInner() {
       }
     },
     [importGitHubIssue, hydrateItemIntoStore, router, searchParams]
+  );
+
+  const handleImportAnyway = useCallback(
+    async (entry: ClaimedElsewhereEntry, reason: string) => {
+      const result = await importGitHubIssue(entry.issueUrl, { overrideReason: reason });
+      if (!result || result.alreadyClaimedElsewhere) {
+        throw new Error("Import failed. Check the reason and try again.");
+      }
+      await hydrateItemIntoStore(result.item.id);
+      const remaining = claimedElsewhere.filter((e) => e.issueUrl !== entry.issueUrl);
+      setClaimedElsewhere(remaining);
+      if (remaining.length === 0) {
+        setShowForm(false);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("item", result.item.id);
+        router.push(`/backlog?${params.toString()}`);
+      }
+    },
+    [importGitHubIssue, hydrateItemIntoStore, claimedElsewhere, router, searchParams]
   );
 
   const sortIndicator = (col: SortColumn) => {
@@ -652,6 +670,18 @@ function BacklogPageInner() {
           </button>
           <button
             className={styles.newItemButton}
+            onClick={() => {
+              track({ name: "backlog_ai_intake", category: "user_action", component: "BacklogPage" });
+              openOmnibar("backlog: ");
+            }}
+            aria-label="Create backlog item via AI intake"
+            data-testid="backlog-ai-intake-button"
+            style={{ marginRight: "8px", background: "var(--accent, #6366f1)" }}
+          >
+            ✨ AI Intake
+          </button>
+          <button
+            className={styles.newItemButton}
             onClick={() => { track({ name: "backlog_new_item", category: "user_action", component: "BacklogPage" }); setFormMode("manual"); setShowForm(true); }}
             aria-label="Create new backlog item"
             data-testid="backlog-new-item-button"
@@ -681,44 +711,20 @@ function BacklogPageInner() {
       </nav>
 
       {/* Filter Bar */}
-      <div className={styles.filterBar} role="search" aria-label="Filter backlog items">
-        <input
-          type="search"
-          className={styles.searchInput}
-          placeholder="Search by title…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          aria-label="Search backlog items"
-          data-testid="backlog-search-input"
-        />
-        <StatusFilterChips selected={statusFilter} onChange={setStatusFilter} />
-        <PriorityFilterChips selected={priorityFilter} onChange={setPriorityFilter} />
-        {/* Archived items are excluded from the default view client-side
-            (Epic 5.1); enabling this re-includes them from the live store. */}
-        <label className={styles.showArchivedLabel}>
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(e) => setShowArchived(e.target.checked)}
-            aria-label="Show archived items"
-            data-testid="backlog-show-archived-toggle"
-          />
-          Show Archived
-        </label>
-        <label className={styles.groupByLabel}>
-          Group by:{" "}
-          <select
-            className={styles.groupBySelect}
-            value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-            aria-label="Group by"
-            data-testid="backlog-group-by-select"
-          >
-            <option value="none">None</option>
-            <option value="repoPath">Repository</option>
-          </select>
-        </label>
-      </div>
+      <BacklogFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        priorityFilter={priorityFilter}
+        onPriorityFilterChange={setPriorityFilter}
+        showArchived={showArchived}
+        onShowArchivedChange={setShowArchived}
+        onResetView={resetViewState}
+        showSortGroupControls={true}
+        groupBy={groupBy}
+        onGroupByChange={setGroupBy}
+      />
 
       {/* Content */}
       <div className={styles.contentArea}>
@@ -730,59 +736,84 @@ function BacklogPageInner() {
           ) : sortedItems.length === 0 && items.length === 0 ? (
             <BacklogEmptyState onCreateItem={() => { setFormMode("manual"); setShowForm(true); }} />
           ) : sortedItems.length === 0 ? (
-            <FilterZeroState onClearFilters={() => { setStatusFilter([]); setPriorityFilter([]); setSearch(""); }} />
+            <FilterZeroState onClearFilters={resetViewState} />
           ) : (
             <table className={styles.table} aria-label="Backlog items">
               <thead className={styles.tableHead}>
                 <tr>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("title")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "title" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Title{sortIndicator("title")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("title")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "title")}
+                    >
+                      Title{sortIndicator("title")}
+                    </button>
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("status")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "status" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Status{sortIndicator("status")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("status")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "status")}
+                    >
+                      Status{sortIndicator("status")}
+                    </button>
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("priority")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "priority" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Priority{sortIndicator("priority")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("priority")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "priority")}
+                    >
+                      Priority{sortIndicator("priority")}
+                    </button>
                   </th>
                   <th scope="col" className={styles.tableHeaderCell}>
                     AC
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("updatedAt")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "updatedAt" ? (sortAsc ? "ascending" : "descending") : "none"}
                   >
-                    Updated{sortIndicator("updatedAt")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("updatedAt")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "updatedAt")}
+                    >
+                      Updated{sortIndicator("updatedAt")}
+                    </button>
                   </th>
                   <th
                     scope="col"
-                    className={styles.tableHeaderCell}
-                    onClick={() => handleSortClick("repoPath")}
-                    style={{ cursor: "pointer" }}
+                    className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
                     aria-sort={sortCol === "repoPath" ? (sortAsc ? "ascending" : "descending") : "none"}
                     data-testid="backlog-col-repo-path"
                   >
-                    Repository{sortIndicator("repoPath")}
+                    <button
+                      type="button"
+                      className={styles.tableHeaderSortButton}
+                      onClick={() => handleSortClick("repoPath")}
+                      onKeyDown={(e) => handleHeaderKeyDown(e, "repoPath")}
+                    >
+                      Repository{sortIndicator("repoPath")}
+                    </button>
                   </th>
                 </tr>
               </thead>
@@ -897,8 +928,11 @@ function BacklogPageInner() {
               <>
                 <GitHubIssuePicker
                   onSelect={handlePickerSelect}
-                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); }}
+                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); setClaimedElsewhere([]); }}
+                  importing={githubImporting}
+                  importProgress={githubImportProgress}
                 />
+                <ClaimedElsewhereNotice entries={claimedElsewhere} onImportAnyway={handleImportAnyway} />
                 {githubImportError && (
                   <p style={{ fontSize: "12px", color: "var(--error)", margin: "8px 0 0" }}>
                     {githubImportError}

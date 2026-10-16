@@ -123,23 +123,33 @@ export const notificationIconWrap = style({
   lineHeight: "1",
 });
 
+// Neutral by default; red is reserved for "needs you" (notificationBadgeAttention).
+// The nav-colored ring separates it from the bell; absolute, so the hit area is unchanged.
 export const notificationBadge = style({
   position: "absolute",
-  top: "-4px",
-  right: "-6px",
-  background: vars.color.error,
+  top: "-7px",
+  right: "-10px",
+  background: vars.color.textMuted,
+  // Darkened so white text keeps >= 4.5:1 on the dark theme's lighter muted grey.
+  backgroundImage: "linear-gradient(rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.3))",
   color: vars.color.primaryText,
-  fontSize: "10px",
+  fontSize: "11px",
   fontWeight: "700",
   lineHeight: "1",
-  minWidth: "16px",
-  height: "16px",
-  borderRadius: "8px",
+  minWidth: "18px",
+  height: "18px",
+  borderRadius: "9px",
+  boxShadow: `0 0 0 2px ${vars.color.background}`,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: "0 3px",
+  padding: "0 4px",
 });
+
+export const notificationBadgeAttention = style([
+  notificationBadge,
+  { background: vars.color.error, backgroundImage: "none" },
+]);
 
 // More menu sheet — slides up from just above the bottom nav
 export const moreBackdrop = style({

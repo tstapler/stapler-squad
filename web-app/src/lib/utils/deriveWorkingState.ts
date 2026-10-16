@@ -9,16 +9,16 @@ import { assertNever } from "@/lib/utils/assertNever";
  * is UNSPECIFIED (e.g. non-Active sessions or legacy items).
  *
  * Mapping:
- *   SubStatus.PROCESSING, NEEDS_APPROVAL, INPUT_REQUIRED, ERROR, TESTS_FAILING, RATE_LIMITED, WAITING_FOR_AGENT
+ *   SubStatus.PROCESSING, NEEDS_APPROVAL, INPUT_REQUIRED, ERROR, TESTS_FAILING, RATE_LIMITED, WAITING_FOR_AGENT, COMPACTING
  *     → WorkingState.PROCESSING  (actively doing something or blocked on user)
  *   SubStatus.IDLE, READY
  *     → WorkingState.IDLE        (at prompt, ready for next instruction)
  *   SubStatus.SUCCESS
  *     → WorkingState.IDLE        (task finished, prompt available)
  *   SubStatus.UNSPECIFIED → fall through to detectedStatus
- *     DetectedStatus.EXECUTING, WAITING_FOR_AGENT → WorkingState.ACTIVE
- *     DetectedStatus.PROCESSING                   → WorkingState.PROCESSING
- *     default                                     → WorkingState.UNSPECIFIED
+ *     DetectedStatus.EXECUTING, WAITING_FOR_AGENT, COMPACTING → WorkingState.ACTIVE
+ *     DetectedStatus.PROCESSING                                → WorkingState.PROCESSING
+ *     default                                                  → WorkingState.UNSPECIFIED
  */
 export function deriveWorkingState(session: {
   subStatus: SubStatus;
@@ -32,6 +32,7 @@ export function deriveWorkingState(session: {
     case SubStatus.TESTS_FAILING:
     case SubStatus.RATE_LIMITED:
     case SubStatus.WAITING_FOR_AGENT:
+    case SubStatus.COMPACTING:
       return WorkingState.PROCESSING;
     case SubStatus.IDLE:
     case SubStatus.READY:
@@ -46,6 +47,7 @@ export function deriveWorkingState(session: {
   switch (session.detectedStatus) {
     case DetectedStatus.EXECUTING:
     case DetectedStatus.WAITING_FOR_AGENT:
+    case DetectedStatus.COMPACTING:
       return WorkingState.ACTIVE;
     case DetectedStatus.PROCESSING:
     case DetectedStatus.NEEDS_APPROVAL:

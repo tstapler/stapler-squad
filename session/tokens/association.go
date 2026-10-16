@@ -11,8 +11,9 @@ import (
 type SessionRecord struct {
 	SessionID      string
 	ConversationID string // matches ParseResult.SessionUUID
-	Path           string // working directory
+	Path           string // resolved working directory (worktree dir if any, else repo root)
 	CreatedAt      time.Time
+	Tags           []string
 }
 
 // SessionStorage is the interface Associator uses to look up sessions.
@@ -43,14 +44,51 @@ func (a *Associator) Associate(result *ParseResult) (sessionID string, isOrphan 
 	if a == nil || a.storage == nil {
 		return "", true
 	}
+	return associate(result, a.storage.ListSessionRecords())
+}
 
-	sessions := a.storage.ListSessionRecords()
+// Snapshot fetches the current session records once, for callers that need to
+// call AssociateWithSnapshot for many results without re-querying storage per
+// call. Both ListInstancesFiltered-style loops in InsightsService previously
+// called Associate per result, each paying a fresh ListSessionRecords() ->
+// ListInstanceData() full-repository scan.
+func (a *Associator) Snapshot() []SessionRecord {
+	if a == nil || a.storage == nil {
+		return nil
+	}
+	return a.storage.ListSessionRecords()
+}
 
+// AssociateWithSnapshot is Associate against a pre-fetched session snapshot
+// (see Snapshot), instead of re-querying storage on every call.
+func (a *Associator) AssociateWithSnapshot(result *ParseResult, sessions []SessionRecord) (sessionID string, isOrphan bool) {
+	if a == nil {
+		return "", true
+	}
+	return associate(result, sessions)
+}
+
+// AssociateRecordWithSnapshot is AssociateWithSnapshot but returns the matched
+// SessionRecord itself (not just its ID), for callers that need other fields
+// on the record (e.g. Tags) without a second scan of sessions.
+func (a *Associator) AssociateRecordWithSnapshot(result *ParseResult, sessions []SessionRecord) (SessionRecord, bool) {
+	if a == nil {
+		return SessionRecord{}, true
+	}
+	return associateRecord(result, sessions)
+}
+
+func associate(result *ParseResult, sessions []SessionRecord) (sessionID string, isOrphan bool) {
+	rec, isOrphan := associateRecord(result, sessions)
+	return rec.SessionID, isOrphan
+}
+
+func associateRecord(result *ParseResult, sessions []SessionRecord) (SessionRecord, bool) {
 	// Strategy 1: exact conversation UUID match.
 	if result.SessionUUID != "" {
 		for _, s := range sessions {
 			if s.ConversationID == result.SessionUUID {
-				return s.SessionID, false
+				return s, false
 			}
 		}
 	}
@@ -59,7 +97,7 @@ func (a *Associator) Associate(result *ParseResult) (sessionID string, isOrphan 
 	if result.ProjectPath != "" {
 		for _, s := range sessions {
 			if s.Path != "" && isPathPrefixMatch(result.ProjectPath, s.Path) {
-				return s.SessionID, false
+				return s, false
 			}
 		}
 	}
@@ -76,16 +114,20 @@ func (a *Associator) Associate(result *ParseResult) (sessionID string, isOrphan 
 				diff = -diff
 			}
 			if diff <= window {
-				return s.SessionID, false
+				return s, false
 			}
 		}
 	}
 
-	return "", true
+	return SessionRecord{}, true
 }
 
-// isPathPrefixMatch returns true if resultPath is a path-component prefix of sessionPath,
-// or if sessionPath is a path-component prefix of resultPath.
+// isPathPrefixMatch returns true if resultPath is sessionPath itself or a
+// path-component subdirectory of it. Deliberately one-directional: matching
+// the reverse (sessionPath under resultPath) let a short, generic decoded
+// path like "/home/tstapler" match any session under $HOME, misattributing
+// ~290 unrelated transcripts onto one session in a live-data check
+// (project_plans/cost-attribution/plan.md, Story 4).
 func isPathPrefixMatch(resultPath, sessionPath string) bool {
 	if resultPath == sessionPath {
 		return true
@@ -93,10 +135,6 @@ func isPathPrefixMatch(resultPath, sessionPath string) bool {
 	// Ensure we match on path component boundaries.
 	if strings.HasPrefix(resultPath, sessionPath) {
 		rest := resultPath[len(sessionPath):]
-		return rest == "" || strings.HasPrefix(rest, "/")
-	}
-	if strings.HasPrefix(sessionPath, resultPath) {
-		rest := sessionPath[len(resultPath):]
 		return rest == "" || strings.HasPrefix(rest, "/")
 	}
 	return false

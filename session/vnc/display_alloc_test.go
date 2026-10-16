@@ -14,6 +14,7 @@ import (
 // ---- parseLockPID tests --------------------------------------------------------
 
 func TestParseLockPID_ValidContent(t *testing.T) {
+	t.Parallel()
 	// Standard X11 lock file format: right-justified 10-char PID + newline.
 	pid := os.Getpid()
 	data := []byte(fmt.Sprintf("%10d\n", pid))
@@ -27,6 +28,7 @@ func TestParseLockPID_ValidContent(t *testing.T) {
 }
 
 func TestParseLockPID_ValidContentNoNewline(t *testing.T) {
+	t.Parallel()
 	data := []byte("      1234")
 	got, err := parseLockPID(data)
 	if err != nil {
@@ -38,6 +40,7 @@ func TestParseLockPID_ValidContentNoNewline(t *testing.T) {
 }
 
 func TestParseLockPID_MalformedContent(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		data []byte
@@ -62,6 +65,7 @@ func TestParseLockPID_MalformedContent(t *testing.T) {
 }
 
 func TestParseLockPID_ExplicitNonNumeric(t *testing.T) {
+	t.Parallel()
 	_, err := parseLockPID([]byte("abc\n"))
 	if err == nil {
 		t.Error("parseLockPID(\"abc\\n\") expected error, got nil")
@@ -71,6 +75,7 @@ func TestParseLockPID_ExplicitNonNumeric(t *testing.T) {
 // ---- isPIDAlive tests ----------------------------------------------------------
 
 func TestIsPIDAlive_PID1_IsAlways(t *testing.T) {
+	t.Parallel()
 	// PID 1 (init/systemd) is always alive on Linux.
 	if !isPIDAlive(1) {
 		t.Error("isPIDAlive(1) = false, want true (PID 1 is always alive)")
@@ -78,6 +83,7 @@ func TestIsPIDAlive_PID1_IsAlways(t *testing.T) {
 }
 
 func TestIsPIDAlive_CurrentProcess(t *testing.T) {
+	t.Parallel()
 	// Our own PID must be alive.
 	if !isPIDAlive(os.Getpid()) {
 		t.Errorf("isPIDAlive(%d) = false, want true (self)", os.Getpid())
@@ -85,6 +91,7 @@ func TestIsPIDAlive_CurrentProcess(t *testing.T) {
 }
 
 func TestIsPIDAlive_ZeroOrNegative(t *testing.T) {
+	t.Parallel()
 	for _, pid := range []int{0, -1, -100} {
 		if isPIDAlive(pid) {
 			t.Errorf("isPIDAlive(%d) = true, want false", pid)
@@ -93,6 +100,7 @@ func TestIsPIDAlive_ZeroOrNegative(t *testing.T) {
 }
 
 func TestIsPIDAlive_KilledProcess(t *testing.T) {
+	t.Parallel()
 	// Spawn a short-lived child and wait for it to exit, then verify it's dead.
 	// Use safeexec.CommandContext to comply with the norawexec lint rule.
 	cmd := safeexec.CommandContext(context.Background(), "true")
@@ -113,6 +121,7 @@ func TestIsPIDAlive_KilledProcess(t *testing.T) {
 // ---- Allocate / Release round-trip tests ----------------------------------------
 
 func TestAllocate_ReturnsDisplayInRange(t *testing.T) {
+	t.Parallel()
 	const base = 200
 	const rangeMax = 5
 	alloc := NewDisplayAllocator(base, rangeMax)
@@ -144,6 +153,7 @@ func TestAllocate_ReturnsDisplayInRange(t *testing.T) {
 }
 
 func TestAllocate_DistinctDisplaysForMultipleSessions(t *testing.T) {
+	t.Parallel()
 	const base = 210
 	const rangeMax = 5
 	alloc := NewDisplayAllocator(base, rangeMax)
@@ -170,6 +180,7 @@ func TestAllocate_DistinctDisplaysForMultipleSessions(t *testing.T) {
 }
 
 func TestAllocate_FullRange_ReturnsError(t *testing.T) {
+	t.Parallel()
 	const base = 220
 	const rangeMax = 3
 	alloc := NewDisplayAllocator(base, rangeMax)
@@ -198,6 +209,7 @@ func TestAllocate_FullRange_ReturnsError(t *testing.T) {
 }
 
 func TestRelease_SafeToCallUnallocated(t *testing.T) {
+	t.Parallel()
 	// Release of a display that was never allocated must not panic.
 	alloc := NewDisplayAllocator(230, 5)
 	alloc.Release(230) // should be a no-op
@@ -206,6 +218,7 @@ func TestRelease_SafeToCallUnallocated(t *testing.T) {
 // ---- CleanupStaleDisplays tests -------------------------------------------------
 
 func TestCleanupStaleDisplays_RemovesStaleFile(t *testing.T) {
+	t.Parallel()
 	const base = 240
 	const rangeMax = 3
 	alloc := NewDisplayAllocator(base, rangeMax)
@@ -239,6 +252,7 @@ func TestCleanupStaleDisplays_RemovesStaleFile(t *testing.T) {
 }
 
 func TestCleanupStaleDisplays_PreservesLiveFile(t *testing.T) {
+	t.Parallel()
 	const base = 250
 	const rangeMax = 3
 	alloc := NewDisplayAllocator(base, rangeMax)
@@ -266,6 +280,7 @@ func TestCleanupStaleDisplays_PreservesLiveFile(t *testing.T) {
 }
 
 func TestCleanupStaleDisplays_MalformedLockFileRemoved(t *testing.T) {
+	t.Parallel()
 	const base = 260
 	const rangeMax = 3
 	alloc := NewDisplayAllocator(base, rangeMax)

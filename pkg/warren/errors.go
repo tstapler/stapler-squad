@@ -1,7 +1,6 @@
 package warren
 
 import (
-	"errors"
 	"strings"
 )
 
@@ -39,10 +38,4 @@ func multiError(errs []error) error {
 	default:
 		return &MultiError{Errors: errs}
 	}
-}
-
-// IsMultiError reports whether err is or wraps a *MultiError.
-func IsMultiError(err error) bool {
-	var m *MultiError
-	return errors.As(err, &m)
 }

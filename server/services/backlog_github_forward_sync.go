@@ -45,14 +45,17 @@ const forwardSyncCloseComment = "Closed automatically — the linked backlog ite
 // deps.BacklogService.Registry() and deps.BacklogService.SyncLoopForForwardSync()
 // instead — see server.go's wiring — which share the same plugin registry and
 // key provider TriggerSync already uses.
-func StartBacklogGitHubForwardSyncSubscriber(ctx context.Context, bus *events.EventBus, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage) {
+func StartBacklogGitHubForwardSyncSubscriber(ctx context.Context, bus *events.EventBus, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage) <-chan struct{} {
+	done := make(chan struct{})
 	if bus == nil || registry == nil || syncLoop == nil || storage == nil {
 		log.Warn("backlog_github_forward_sync: missing dependency, subscriber not started")
-		return
+		close(done)
+		return done
 	}
 
 	ch, _ := bus.Subscribe(ctx)
 	go func() {
+		defer close(done)
 		log.Info("backlog_github_forward_sync: subscriber started")
 		defer log.Info("backlog_github_forward_sync: subscriber stopped")
 		for {
@@ -74,6 +77,7 @@ func StartBacklogGitHubForwardSyncSubscriber(ctx context.Context, bus *events.Ev
 			}
 		}
 	}()
+	return done
 }
 
 // handleForwardSyncClose closes item's linked GitHub issue and leaves a bot

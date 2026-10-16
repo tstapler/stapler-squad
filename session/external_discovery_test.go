@@ -12,6 +12,7 @@ import (
 // TestRetryWithDelay_SuccessFirstAttempt verifies that the function returns nil
 // immediately when fn succeeds on the first call.
 func TestRetryWithDelay_SuccessFirstAttempt(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	err := retryWithDelay(3, 1*time.Millisecond, func() error {
 		calls++
@@ -24,6 +25,7 @@ func TestRetryWithDelay_SuccessFirstAttempt(t *testing.T) {
 // TestRetryWithDelay_SuccessAfterRetry verifies that retryWithDelay retries and
 // returns nil when fn eventually succeeds within maxAttempts.
 func TestRetryWithDelay_SuccessAfterRetry(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	transientErr := errors.New("transient error")
 	err := retryWithDelay(3, 1*time.Millisecond, func() error {
@@ -40,6 +42,7 @@ func TestRetryWithDelay_SuccessAfterRetry(t *testing.T) {
 // TestRetryWithDelay_AllAttemptsExhausted verifies that retryWithDelay returns
 // the last error when all maxAttempts are exhausted.
 func TestRetryWithDelay_AllAttemptsExhausted(t *testing.T) {
+	t.Parallel()
 	permanentErr := errors.New("permanent error")
 	calls := 0
 	err := retryWithDelay(3, 1*time.Millisecond, func() error {
@@ -55,6 +58,7 @@ func TestRetryWithDelay_AllAttemptsExhausted(t *testing.T) {
 // refused error causes retryWithDelay to return immediately without retrying,
 // since a refused connection indicates a stale socket that won't recover.
 func TestRetryWithDelay_ConnectionRefusedSkipsRetry(t *testing.T) {
+	t.Parallel()
 	connRefusedErr := errors.New("dial unix /tmp/dead.sock: connect: connection refused")
 	calls := 0
 	err := retryWithDelay(3, 1*time.Millisecond, func() error {
@@ -68,6 +72,7 @@ func TestRetryWithDelay_ConnectionRefusedSkipsRetry(t *testing.T) {
 // TestRetryWithDelay_NoSuchFileSkipsRetry verifies that "no such file or directory"
 // errors (missing socket) are also treated as permanent and skip retries.
 func TestRetryWithDelay_NoSuchFileSkipsRetry(t *testing.T) {
+	t.Parallel()
 	noFileErr := errors.New("stat /tmp/missing.sock: no such file or directory")
 	calls := 0
 	err := retryWithDelay(3, 1*time.Millisecond, func() error {
@@ -80,6 +85,7 @@ func TestRetryWithDelay_NoSuchFileSkipsRetry(t *testing.T) {
 
 // TestIsConnectionRefused verifies the helper correctly classifies errors.
 func TestIsConnectionRefused(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -95,6 +101,7 @@ func TestIsConnectionRefused(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, isConnectionRefused(tc.err))
 		})
 	}

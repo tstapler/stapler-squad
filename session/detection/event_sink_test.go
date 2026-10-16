@@ -6,6 +6,7 @@ import (
 )
 
 func TestDetectionEventSink_should_returnRecordedEvents_When_recordThenRecent(t *testing.T) {
+	t.Parallel()
 	var s DetectionEventSink
 	s.SetSessionID("test-session")
 	s.Record(StatusExecuting, "test_pattern", "some content")
@@ -23,6 +24,7 @@ func TestDetectionEventSink_should_returnRecordedEvents_When_recordThenRecent(t 
 }
 
 func TestDetectionEventSink_should_capAtRingSize_When_nExceedsCapacity(t *testing.T) {
+	t.Parallel()
 	var s DetectionEventSink
 	// Fill beyond EventRingCap
 	for i := 0; i < EventRingCap+100; i++ {
@@ -35,6 +37,7 @@ func TestDetectionEventSink_should_capAtRingSize_When_nExceedsCapacity(t *testin
 }
 
 func TestDetectionEventSink_should_setSessionID_When_SetSessionIDCalled(t *testing.T) {
+	t.Parallel()
 	var s DetectionEventSink
 	s.SetSessionID("s1")
 	s.Record(StatusReady, "p", "x")

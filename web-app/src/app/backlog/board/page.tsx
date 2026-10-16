@@ -5,8 +5,10 @@
 import { useState, useCallback, useRef, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BacklogBoard } from "@/components/backlog/BacklogBoard";
+import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useBacklogFilters } from "@/lib/hooks/useBacklogFilters";
+import { useBacklogService, type ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import * as styles from "./board.css";
@@ -19,11 +21,35 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
 };
 
 function BacklogBoardPageInner() {
-  const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage } = useBacklogService();
+  const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, listForeignClaims } = useBacklogService();
+  // One local-only call for the whole board (never per card); claims that have
+  // not gossiped here yet simply show no chip.
+  const [foreignClaims, setForeignClaims] = useState<ClaimedElsewhere[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void listForeignClaims().then((claims) => {
+      if (!cancelled) setForeignClaims(claims);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [listForeignClaims]);
   const { showActionToast } = useNotifications();
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedItemId = searchParams.get("item");
+
+  // Shared filter state with the list view (AC 3, 4) — same localStorage
+  // keys via useBacklogFilters. Sort/group-by remain list-only (AC 6).
+  const filterState = useBacklogFilters();
+  const { search, statusFilter, priorityFilter, showArchived } = filterState.state;
+  const {
+    search: setSearch,
+    statusFilter: setStatusFilter,
+    priorityFilter: setPriorityFilter,
+    showArchived: setShowArchived,
+  } = filterState.setters;
+  const resetView = filterState.resetToDefaults;
   /** itemId -> action key currently in flight for that card. */
   const [pending, setPending] = useState<Record<string, string>>({});
   // Called once here (not per-card) so every card shares one poll instead of
@@ -106,18 +132,35 @@ function BacklogBoardPageInner() {
   }, [router, searchParams]);
 
   return (
-    <div className={styles.contentArea}>
-      <BacklogBoard
-        onAction={handleAction}
-        onItemClick={handleItemClick}
-        pending={pending}
-        stuckItems={stuckItems}
+    <div className={styles.pageWrapper}>
+      <BacklogFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        priorityFilter={priorityFilter}
+        onPriorityFilterChange={setPriorityFilter}
+        showArchived={showArchived}
+        onShowArchivedChange={setShowArchived}
+        onResetView={resetView}
+        showSortGroupControls={false}
+        showArchivedControl={false}
       />
-      {selectedItemId && (
-        <aside className={styles.detailPane} aria-label="Item detail">
-          <BacklogItemDetail key={selectedItemId} itemId={selectedItemId} onClose={handleDetailClose} />
-        </aside>
-      )}
+      <div className={styles.contentArea}>
+        <BacklogBoard
+          onAction={handleAction}
+          onItemClick={handleItemClick}
+          pending={pending}
+          stuckItems={stuckItems}
+          foreignClaims={foreignClaims}
+          filters={{ search, statusFilter, priorityFilter, showArchived }}
+        />
+        {selectedItemId && (
+          <aside className={styles.detailPane} aria-label="Item detail">
+            <BacklogItemDetail key={selectedItemId} itemId={selectedItemId} onClose={handleDetailClose} />
+          </aside>
+        )}
+      </div>
     </div>
   );
 }

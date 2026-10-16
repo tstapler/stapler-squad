@@ -48,6 +48,12 @@ var snapshotTests = []snapshotTest{
 		program:     "claude",
 		description: "Claude at the idle prompt — '? for shortcuts' visible, waiting for user input",
 	},
+	{
+		fixture:     "claude_compacting.txt",
+		expected:    StatusCompacting,
+		program:     "claude",
+		description: "Claude actively compacting/summarizing conversation history (INFERRED fixture — see project_plans/context-compaction-detection/implementation/plan.md Story 1.1.1)",
+	},
 
 	// ── Gemini CLI ───────────────────────────────────────────────────────────
 	{
@@ -91,6 +97,14 @@ var snapshotTests = []snapshotTest{
 		expected:    StatusExecuting,
 		program:     "opencode",
 		description: "OpenCode actively processing a request",
+	},
+
+	// ── Agy (Antigravity CLI) ──────────────────────────────────────────────
+	{
+		fixture:     "agy_prompt_approval.txt",
+		expected:    StatusNeedsApproval,
+		program:     "agy",
+		description: "Agy showing a file-edit approval dialog (Pending edit diff + Accept this file edit? with > 1. Yes / 2. No options)",
 	},
 
 	// ── Aider ────────────────────────────────────────────────────────────────
@@ -185,6 +199,7 @@ var snapshotTests = []snapshotTest{
 // Stub fixtures (empty files) fail with a descriptive message telling you
 // exactly what terminal output to capture and paste in.
 func TestSnapshotDetection(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	for _, tc := range snapshotTests {

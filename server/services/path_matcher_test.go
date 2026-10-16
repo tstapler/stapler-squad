@@ -14,6 +14,7 @@ import (
 // ──────────────────────────────────────────────────────────────────────────────
 
 func TestExpandPath_Tilde(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 
 	got := ExpandPath("~")
@@ -23,6 +24,7 @@ func TestExpandPath_Tilde(t *testing.T) {
 }
 
 func TestExpandPath_TildeSlash(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 
 	got := ExpandPath("~/projects/foo")
@@ -33,8 +35,7 @@ func TestExpandPath_TildeSlash(t *testing.T) {
 }
 
 func TestExpandPath_DollarHOME(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	got := ExpandPath("$HOME")
 	if got != home {
@@ -43,8 +44,7 @@ func TestExpandPath_DollarHOME(t *testing.T) {
 }
 
 func TestExpandPath_DollarHOMESubdir(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	t.Setenv("HOME", home)
+	home := withFakeHome(t)
 
 	got := ExpandPath("$HOME/subdir")
 	want := filepath.Clean(home + "/subdir")
@@ -54,6 +54,7 @@ func TestExpandPath_DollarHOMESubdir(t *testing.T) {
 }
 
 func TestExpandPath_DotDot(t *testing.T) {
+	t.Parallel()
 	got := ExpandPath("/foo/../bar")
 	if got != "/bar" {
 		t.Errorf("/foo/../bar → %q; want /bar", got)
@@ -61,6 +62,7 @@ func TestExpandPath_DotDot(t *testing.T) {
 }
 
 func TestExpandPath_DoubleSlash(t *testing.T) {
+	t.Parallel()
 	got := ExpandPath("/tmp//test")
 	if got != "/tmp/test" {
 		t.Errorf("/tmp//test → %q; want /tmp/test", got)
@@ -68,6 +70,7 @@ func TestExpandPath_DoubleSlash(t *testing.T) {
 }
 
 func TestExpandPath_NonPath(t *testing.T) {
+	t.Parallel()
 	// A plain flag should pass through unchanged.
 	got := ExpandPath("-rf")
 	if got != "-rf" {
@@ -90,6 +93,7 @@ func TestExpandPath_UnknownVar(t *testing.T) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 func TestClassifyPath_Root(t *testing.T) {
+	t.Parallel()
 	c := ClassifyPath("/", classifier.ClassificationContext{})
 	if c&PathRoot == 0 {
 		t.Error("/ should be PathRoot")
@@ -100,6 +104,7 @@ func TestClassifyPath_Root(t *testing.T) {
 }
 
 func TestClassifyPath_Home(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	c := ClassifyPath(home, classifier.ClassificationContext{})
 	if c&PathHome == 0 {
@@ -111,6 +116,7 @@ func TestClassifyPath_Home(t *testing.T) {
 }
 
 func TestClassifyPath_HomeSuffix(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	// A subdirectory of home is NOT home itself.
 	c := ClassifyPath(filepath.Join(home, "projects"), classifier.ClassificationContext{})
@@ -120,6 +126,7 @@ func TestClassifyPath_HomeSuffix(t *testing.T) {
 }
 
 func TestClassifyPath_SystemDirs(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"/etc", "/etc/passwd",
 		"/usr", "/usr/bin/bash",
@@ -136,6 +143,7 @@ func TestClassifyPath_SystemDirs(t *testing.T) {
 }
 
 func TestClassifyPath_NotSystemDir(t *testing.T) {
+	t.Parallel()
 	cases := []string{"/tmp", "/home/user/etc", "/var/log"}
 	for _, p := range cases {
 		c := ClassifyPath(p, classifier.ClassificationContext{})
@@ -146,6 +154,7 @@ func TestClassifyPath_NotSystemDir(t *testing.T) {
 }
 
 func TestClassifyPath_TempDir(t *testing.T) {
+	t.Parallel()
 	cases := []string{"/tmp", "/tmp/ai-setup-test", "/var/tmp", "/var/tmp/work"}
 	for _, p := range cases {
 		c := ClassifyPath(p, classifier.ClassificationContext{})
@@ -164,6 +173,7 @@ func TestClassifyPath_TempDir_TMPDIR(t *testing.T) {
 }
 
 func TestClassifyPath_Cwd(t *testing.T) {
+	t.Parallel()
 	ctx := classifier.ClassificationContext{Cwd: "/home/user/project"}
 	c := ClassifyPath("/home/user/project/src/main.go", ctx)
 	if c&PathCwd == 0 {
@@ -172,6 +182,7 @@ func TestClassifyPath_Cwd(t *testing.T) {
 }
 
 func TestClassifyPath_CwdMiss(t *testing.T) {
+	t.Parallel()
 	ctx := classifier.ClassificationContext{Cwd: "/home/user/project"}
 	c := ClassifyPath("/home/user/other", ctx)
 	if c&PathCwd != 0 {
@@ -180,6 +191,7 @@ func TestClassifyPath_CwdMiss(t *testing.T) {
 }
 
 func TestClassifyPath_GitRepo(t *testing.T) {
+	t.Parallel()
 	ctx := classifier.ClassificationContext{RepoRoot: "/home/user/project"}
 	c := ClassifyPath("/home/user/project/server/main.go", ctx)
 	if c&PathGitRepo == 0 {
@@ -188,6 +200,7 @@ func TestClassifyPath_GitRepo(t *testing.T) {
 }
 
 func TestClassifyPath_MultipleBits(t *testing.T) {
+	t.Parallel()
 	// A path can match multiple classifications at once.
 	ctx := classifier.ClassificationContext{Cwd: "/tmp/myproject", RepoRoot: "/tmp/myproject"}
 	c := ClassifyPath("/tmp/myproject/main.go", ctx)
@@ -207,6 +220,7 @@ func TestClassifyPath_MultipleBits(t *testing.T) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 func TestPathMatcher_MatchesRoot(t *testing.T) {
+	t.Parallel()
 	pm := &PathMatcher{ArgIndex: -1, MatchIf: PathRoot}
 	if !pm.Matches([]string{"-rf", "/"}, classifier.ClassificationContext{}) {
 		t.Error("should match / as root")
@@ -214,6 +228,7 @@ func TestPathMatcher_MatchesRoot(t *testing.T) {
 }
 
 func TestPathMatcher_NoMatchSubdir(t *testing.T) {
+	t.Parallel()
 	pm := &PathMatcher{ArgIndex: -1, MatchIf: PathRoot | PathHome}
 	if pm.Matches([]string{"-rf", "/tmp/ai-setup-test"}, classifier.ClassificationContext{}) {
 		t.Error("/tmp/ai-setup-test should not match PathRoot|PathHome")
@@ -221,6 +236,7 @@ func TestPathMatcher_NoMatchSubdir(t *testing.T) {
 }
 
 func TestPathMatcher_MatchesHome(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	pm := &PathMatcher{ArgIndex: -1, MatchIf: PathRoot | PathHome}
 	if !pm.Matches([]string{"-rf", home}, classifier.ClassificationContext{}) {
@@ -229,6 +245,7 @@ func TestPathMatcher_MatchesHome(t *testing.T) {
 }
 
 func TestPathMatcher_ExpandedHomePath(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	// ExpandedArgs already has expansion applied (done in ExtractAllCommands).
 	expanded := []string{"-rf", home}
@@ -239,6 +256,7 @@ func TestPathMatcher_ExpandedHomePath(t *testing.T) {
 }
 
 func TestPathMatcher_RejectIf(t *testing.T) {
+	t.Parallel()
 	// RejectIf: if the path is in /tmp, the rule should NOT match.
 	pm := &PathMatcher{ArgIndex: -1, RejectIf: PathTempDir, MatchIf: PathRoot | PathHome | PathTempDir}
 	// /tmp/test is temp dir — RejectIf should veto.
@@ -248,6 +266,7 @@ func TestPathMatcher_RejectIf(t *testing.T) {
 }
 
 func TestPathMatcher_ArgIndex(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	// ArgIndex: 0 = first non-flag arg (which would be home).
 	// Non-flag args of ["-rf", home, "/tmp/something"] → [home, "/tmp/something"]
@@ -258,6 +277,7 @@ func TestPathMatcher_ArgIndex(t *testing.T) {
 }
 
 func TestPathMatcher_ArgIndexOutOfRange(t *testing.T) {
+	t.Parallel()
 	pm := &PathMatcher{ArgIndex: 5, MatchIf: PathRoot}
 	if pm.Matches([]string{"-rf", "/"}, classifier.ClassificationContext{}) {
 		t.Error("ArgIndex out of range should return false")
@@ -265,6 +285,7 @@ func TestPathMatcher_ArgIndexOutOfRange(t *testing.T) {
 }
 
 func TestPathMatcher_NoCandidates(t *testing.T) {
+	t.Parallel()
 	// All args are flags — no path candidates.
 	pm := &PathMatcher{ArgIndex: -1, MatchIf: PathRoot}
 	if pm.Matches([]string{"-r", "-f"}, classifier.ClassificationContext{}) {
@@ -273,6 +294,7 @@ func TestPathMatcher_NoCandidates(t *testing.T) {
 }
 
 func TestPathMatcher_ZeroMatchIf(t *testing.T) {
+	t.Parallel()
 	// MatchIf == 0 means the check is skipped (always passes if no RejectIf triggered).
 	pm := &PathMatcher{ArgIndex: -1} // both MatchIf and RejectIf are zero
 	// Any non-flag arg present → passes.
@@ -286,6 +308,7 @@ func TestPathMatcher_ZeroMatchIf(t *testing.T) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 func TestClassifier_RmRf_ExpandedHome_Denied(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{}
@@ -306,6 +329,7 @@ func TestClassifier_RmRf_ExpandedHome_Denied(t *testing.T) {
 }
 
 func TestClassifier_RmRf_HomeSubdir_NotDenied(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{}
@@ -321,6 +345,7 @@ func TestClassifier_RmRf_HomeSubdir_NotDenied(t *testing.T) {
 }
 
 func TestClassifier_RmRf_TmpDir_NotDenied(t *testing.T) {
+	t.Parallel()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{}
 
@@ -342,6 +367,7 @@ func TestClassifier_RmRf_TmpDir_NotDenied(t *testing.T) {
 
 // ExpandedArgs integration: verify that $HOME in a command is expanded.
 func TestClassifier_RmRf_DollarHOME_Denied(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	if !strings.HasPrefix(home, "/") {
 		t.Skip("home dir is not absolute, skipping")
@@ -359,6 +385,7 @@ func TestClassifier_RmRf_DollarHOME_Denied(t *testing.T) {
 }
 
 func TestClassifier_RmRf_DollarHOMESubdir_NotDenied(t *testing.T) {
+	t.Parallel()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{}
 
@@ -372,6 +399,7 @@ func TestClassifier_RmRf_DollarHOMESubdir_NotDenied(t *testing.T) {
 }
 
 func TestClassifier_RmRf_RelativeDot_FromRoot_Denied(t *testing.T) {
+	t.Parallel()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{Cwd: "/"}
 
@@ -385,6 +413,7 @@ func TestClassifier_RmRf_RelativeDot_FromRoot_Denied(t *testing.T) {
 }
 
 func TestClassifier_RmRf_RelativeDotDot_FromHomeSubdir_Denied(t *testing.T) {
+	t.Parallel()
 	home, _ := os.UserHomeDir()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{Cwd: filepath.Join(home, "projects")}
@@ -399,6 +428,7 @@ func TestClassifier_RmRf_RelativeDotDot_FromHomeSubdir_Denied(t *testing.T) {
 }
 
 func TestClassifier_RmRf_RelativeDot_FromSafeDir_NotDenied(t *testing.T) {
+	t.Parallel()
 	c := classifier.NewRuleBasedClassifier()
 	ctx := classifier.ClassificationContext{Cwd: "/tmp/myproject"}
 

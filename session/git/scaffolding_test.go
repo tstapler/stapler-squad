@@ -26,6 +26,7 @@ import (
 // itself — the direction that actually matters for correctness (a pattern the
 // guard excludes but .gitignore doesn't know about) is the one covered here.
 func TestScaffoldingExcludePatterns_MatchGitignore(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile(filepath.Join("..", "..", ".gitignore"))
 	require.NoError(t, err, "must be able to read the repo's .gitignore from session/git/")
 

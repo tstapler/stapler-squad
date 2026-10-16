@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import type { BacklogItemShipStatus } from "@/gen/session/v1/backlog_pb";
+import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 
 interface UseBacklogItemShipStatusResult {
   data: BacklogItemShipStatus | null;
@@ -26,8 +27,9 @@ interface UseBacklogItemShipStatusResult {
 export function useBacklogItemShipStatus(itemId: string): UseBacklogItemShipStatusResult {
   const [data, setData] = useState<BacklogItemShipStatus | null>(null);
   const [loading, setLoading] = useState(!!itemId);
+  const [refetchToken, setRefetchToken] = useState(0);
 
-  const fetchStatus = useCallback(async () => {
+  useAbortableEffect(async (signal) => {
     if (!itemId) {
       setLoading(false);
       return;
@@ -35,18 +37,16 @@ export function useBacklogItemShipStatus(itemId: string): UseBacklogItemShipStat
     setLoading(true);
     try {
       const client = createClient(BacklogService, getConnectTransport());
-      const response = await client.getBacklogItemShipStatus({ itemId });
+      const response = await client.getBacklogItemShipStatus({ itemId }, { signal });
+      if (signal.aborted) return;
       setData(response.status ?? null);
     } catch {
+      if (signal.aborted) return;
       setData(null);
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, [itemId]);
+  }, [itemId, refetchToken]);
 
-  useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
-
-  return { data, loading, refetch: fetchStatus };
+  return { data, loading, refetch: () => setRefetchToken((t) => t + 1) };
 }

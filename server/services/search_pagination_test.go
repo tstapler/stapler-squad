@@ -7,6 +7,7 @@ import (
 // --- cursor encoding / decoding ---------------------------------------------
 
 func TestEncodeDecodeHistoryCursor_RoundTrip(t *testing.T) {
+	t.Parallel()
 	c := historyCursor{UpdatedAtNs: 1_700_000_000_000_000_000, ID: "abc-123"}
 	token := encodeHistoryCursor(c)
 	if token == "" {
@@ -26,6 +27,7 @@ func TestEncodeDecodeHistoryCursor_RoundTrip(t *testing.T) {
 }
 
 func TestDecodeHistoryCursor_EmptyToken(t *testing.T) {
+	t.Parallel()
 	_, ok := decodeHistoryCursor("")
 	if ok {
 		t.Fatal("expected ok=false for empty token")
@@ -33,6 +35,7 @@ func TestDecodeHistoryCursor_EmptyToken(t *testing.T) {
 }
 
 func TestDecodeHistoryCursor_InvalidBase64(t *testing.T) {
+	t.Parallel()
 	_, ok := decodeHistoryCursor("!!!not-base64!!!")
 	if ok {
 		t.Fatal("expected ok=false for invalid base64")
@@ -40,6 +43,7 @@ func TestDecodeHistoryCursor_InvalidBase64(t *testing.T) {
 }
 
 func TestDecodeHistoryCursor_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	// base64url("not json") without padding
 	token := "bm90IGpzb24"
 	_, ok := decodeHistoryCursor(token)
@@ -49,6 +53,7 @@ func TestDecodeHistoryCursor_InvalidJSON(t *testing.T) {
 }
 
 func TestEncodeHistoryCursor_IsURLSafe(t *testing.T) {
+	t.Parallel()
 	c := historyCursor{UpdatedAtNs: int64(9_223_372_036_854_775_807), ID: "some-id-with-special/chars+=="}
 	token := encodeHistoryCursor(c)
 	for _, ch := range token {
@@ -116,6 +121,7 @@ func simulatePage(ids []string, pageSize int, pageToken string) paginationResult
 }
 
 func TestPagination_SinglePage(t *testing.T) {
+	t.Parallel()
 	ids := []string{"a", "b", "c"}
 	r := simulatePage(ids, 10, "")
 	if len(r.entries) != 3 {
@@ -127,6 +133,7 @@ func TestPagination_SinglePage(t *testing.T) {
 }
 
 func TestPagination_FirstPage(t *testing.T) {
+	t.Parallel()
 	ids := []string{"a", "b", "c", "d", "e"}
 	r := simulatePage(ids, 2, "")
 	if len(r.entries) != 2 {
@@ -141,6 +148,7 @@ func TestPagination_FirstPage(t *testing.T) {
 }
 
 func TestPagination_SecondPage(t *testing.T) {
+	t.Parallel()
 	ids := []string{"a", "b", "c", "d", "e"}
 	r1 := simulatePage(ids, 2, "")
 	r2 := simulatePage(ids, 2, r1.nextPageToken)
@@ -156,6 +164,7 @@ func TestPagination_SecondPage(t *testing.T) {
 }
 
 func TestPagination_LastPage(t *testing.T) {
+	t.Parallel()
 	ids := []string{"a", "b", "c", "d", "e"}
 	r1 := simulatePage(ids, 2, "")
 	r2 := simulatePage(ids, 2, r1.nextPageToken)
@@ -172,6 +181,7 @@ func TestPagination_LastPage(t *testing.T) {
 }
 
 func TestPagination_FullTraversal(t *testing.T) {
+	t.Parallel()
 	// Walk all pages and verify every entry appears exactly once.
 	ids := make([]string, 25)
 	for i := range ids {
@@ -200,6 +210,7 @@ func TestPagination_FullTraversal(t *testing.T) {
 }
 
 func TestPagination_StaleTokenReturnsFromBeginning(t *testing.T) {
+	t.Parallel()
 	// If cursor references an entry not in the current list (e.g. cache refresh
 	// removed it), the implementation falls back to returning from the beginning.
 	ids := []string{"a", "b", "c"}
@@ -212,6 +223,7 @@ func TestPagination_StaleTokenReturnsFromBeginning(t *testing.T) {
 }
 
 func TestPagination_EmptyList(t *testing.T) {
+	t.Parallel()
 	r := simulatePage(nil, 10, "")
 	if len(r.entries) != 0 {
 		t.Errorf("got %d entries; want 0", len(r.entries))
@@ -222,6 +234,7 @@ func TestPagination_EmptyList(t *testing.T) {
 }
 
 func TestPagination_PageSizeEqualsTotal(t *testing.T) {
+	t.Parallel()
 	ids := []string{"a", "b", "c"}
 	r := simulatePage(ids, 3, "")
 	if len(r.entries) != 3 {

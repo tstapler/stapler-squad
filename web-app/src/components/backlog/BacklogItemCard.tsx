@@ -7,11 +7,16 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // mark and is used here instead (plan.md's snippet assumed `Github` exists;
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
-import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
-import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
+import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
+import { blockedByLabel } from "@/lib/backlog/dependencies";
+import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
+import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
+import { parseExternalRef } from "./externalRef";
 import * as styles from "./BacklogItemCard.css";
 
 interface BacklogItemCardProps {
@@ -38,42 +43,41 @@ interface BacklogItemCardProps {
    * page level (not per-card) and passed down — see board/page.tsx.
    */
   stuckItem?: StuckBacklogItem;
+  /**
+   * Every OTHER currently-open StuckReason for this item beyond `stuckItem`
+   * itself, from BacklogBoard's `summarizeStuckItemGroup` call (a backlog
+   * item can have several simultaneous open StuckBacklogItem rows —
+   * BUG-105). Threaded straight through to BlockerChip's "+N more" indicator.
+   */
+  otherStuckReasons?: StuckReason[];
+  /**
+   * Claim another host holds on this item's externalUrl, from the board's single
+   * ListForeignClaims call. Undefined renders no chip.
+   */
+  claim?: ClaimedElsewhere;
 }
 
-interface ActionSpec {
-  label: string;
-  action: string;
-  disabled?: boolean;
-  isDone?: boolean;
-}
-
-function getActionSpec(item: BacklogItem): ActionSpec {
-  switch (item.status) {
-    case "idea":
-      return {
-        label: "Mark Ready",
-        action: "mark_ready",
-        disabled: item.acCriteria.length === 0,
-      };
-    case "refining":
-      return { label: "Refining…", action: "refining", isDone: true };
-    case "ready":
-      return { label: "Trigger Triage", action: "trigger_triage", disabled: !item.repoPath };
-    case "in_progress":
-      return {
-        label: "View Session",
-        action: "view_session",
-        disabled: item.linkedSessions.length === 0,
-      };
-    case "review":
-      return { label: "View Review", action: "view_review" };
-    case "done":
-      return { label: "Done ✓", action: "done", isDone: true };
-    case "archived":
-      return { label: "Archived", action: "archived", isDone: true };
-    default:
-      return { label: item.status, action: item.status, isDone: true };
-  }
+// The bare externalId is only an issue number, so repo-qualify it from the URL
+// (stapler-mcp#22 vs stapler-squad#22); unparseable URLs keep the bare "#N".
+function ProvenanceBadge({ externalUrl, externalId }: { externalUrl: string; externalId: string }) {
+  const ref = parseExternalRef(externalUrl);
+  const fullRef = ref ? `${ref.repo}#${ref.number}` : `#${externalId}`;
+  const shortRef = ref ? `${ref.repo.split("/")[1]}#${ref.number}` : fullRef;
+  return (
+    <a
+      href={externalUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={styles.provenanceBadge}
+      aria-label={`Imported from GitHub issue ${fullRef}`}
+      title={fullRef}
+      data-action-button="true"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <CircleDot aria-hidden="true" size={12} />
+      {shortRef}
+    </a>
+  );
 }
 
 function AcSummary({ item }: { item: BacklogItem }) {
@@ -128,10 +132,20 @@ export const BacklogItemCard = memo(function BacklogItemCard({
   pendingAction = null,
   forceJustChanged = false,
   stuckItem,
+  otherStuckReasons,
+  claim,
 }: BacklogItemCardProps) {
-  const actionSpec = getActionSpec(item);
+  const actionSpec = getPrimaryCardAction(item);
+  const blockedByText = blockedByLabel(item.blockedBy);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
+  // Transient disable reasons (spinner + "Running…"/"Triage in progress") are
+  // already explained via the button label/TriageLoadingIndicator — never
+  // surface the underlying domain condition's reason on top of those, even
+  // if it's also unmet.
+  const disabledReason =
+    isTriageRunning || pendingAction !== null ? undefined : actionSpec.disabled ? actionSpec.disabledReason : undefined;
+  const disabledReasonId = `${item.id}-disabled-reason`;
 
   // `item.liveVersion` only advances for a genuine live (non-snapshot)
   // BacklogItemEvent (see useWatchBacklogItems.ts / backlogItemsSlice.ts) —
@@ -203,6 +217,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         <span className={styles.statusLabel} data-testid="backlog-item-card-status">
           {getStatusLabel(item.status)}
         </span>
+        {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
       </div>
 
       {isTriageRunning && (
@@ -220,23 +235,15 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           <VerdictBadge item={item} />
         </span>
         {item.externalUrl && item.externalId && (
-          <a
-            href={item.externalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.provenanceBadge}
-            aria-label={`Imported from GitHub issue #${item.externalId}`}
-            data-action-button="true"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <CircleDot aria-hidden="true" size={12} />
-            #{item.externalId}
-          </a>
+          <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} />
         )}
+        {claim && <ClaimChip claim={claim} />}
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}
+          disabled={actionSpec.disabled || actionSpec.isDone || isTriageRunning || pendingAction !== null}
           aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
+          aria-describedby={disabledReason ? disabledReasonId : undefined}
+          title={disabledReason}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
@@ -255,8 +262,18 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             actionSpec.label
           )}
         </button>
-        {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
+        {stuckItem && <BlockerChip variant="compact" item={stuckItem} otherReasons={otherStuckReasons} />}
+        {blockedByText && (
+          <span className={styles.blockedByLabel} data-testid="backlog-card-blocked-by">
+            {blockedByText}
+          </span>
+        )}
       </div>
+      {disabledReason && (
+        <span id={disabledReasonId} className={styles.disabledReason} data-testid="backlog-action-disabled-reason">
+          {disabledReason}
+        </span>
+      )}
     </div>
   );
 });

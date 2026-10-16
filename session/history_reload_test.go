@@ -35,6 +35,7 @@ func historyLine(display, project, sessionID string, tsMs int64) string {
 // ---- Reload() tests --------------------------------------------------------
 
 func TestReload_MissingFile_ReturnsNilErrorAndEmptyEntries(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nonexistent.jsonl")
 
@@ -44,6 +45,7 @@ func TestReload_MissingFile_ReturnsNilErrorAndEmptyEntries(t *testing.T) {
 }
 
 func TestReload_SingleSessionSingleMessage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -71,6 +73,7 @@ func TestReload_SingleSessionSingleMessage(t *testing.T) {
 }
 
 func TestReload_SingleSessionMultipleMessages_NameFromEarliest_UpdatedAtFromLatest(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -97,6 +100,7 @@ func TestReload_SingleSessionMultipleMessages_NameFromEarliest_UpdatedAtFromLate
 }
 
 func TestReload_MultipleSessionsSortedByUpdatedAtDescending(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -118,6 +122,7 @@ func TestReload_MultipleSessionsSortedByUpdatedAtDescending(t *testing.T) {
 }
 
 func TestReload_LinesWithEmptySessionID_Skipped(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -149,6 +154,7 @@ func TestReload_MalformedJSONLines_Skipped(t *testing.T) {
 }
 
 func TestReload_EmptyDisplay_FallsBackToFilepathBaseOfProject(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -165,6 +171,7 @@ func TestReload_EmptyDisplay_FallsBackToFilepathBaseOfProject(t *testing.T) {
 }
 
 func TestReload_BothDisplayAndProjectEmpty_NameIsUnknown(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -181,6 +188,7 @@ func TestReload_BothDisplayAndProjectEmpty_NameIsUnknown(t *testing.T) {
 }
 
 func TestReload_DisplayOver100Chars_TruncatedTo97PlusDots(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -199,6 +207,7 @@ func TestReload_DisplayOver100Chars_TruncatedTo97PlusDots(t *testing.T) {
 }
 
 func TestReload_DisplayStartingWithSlash_SlashTrimmed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -214,6 +223,7 @@ func TestReload_DisplayStartingWithSlash_SlashTrimmed(t *testing.T) {
 }
 
 func TestReload_HistoryPathIsDirectory_ReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Pass the directory itself as the history path.
 	_, err := NewClaudeSessionHistory(dir)
@@ -221,6 +231,7 @@ func TestReload_HistoryPathIsDirectory_ReturnsError(t *testing.T) {
 }
 
 func TestReload_SameSessionIDDeduplicatedIntoOneEntry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -237,6 +248,7 @@ func TestReload_SameSessionIDDeduplicatedIntoOneEntry(t *testing.T) {
 }
 
 func TestGetByProject_ReturnsCorrectCountForSharedProject(t *testing.T) {
+	t.Parallel()
 	// Regression test for a bug where projectIndex was built before sort.Slice
 	// reordered sh.entries, causing indices to point to wrong entries after sorting.
 	// Fix: index is now built after sort.
@@ -272,24 +284,29 @@ func TestGetByProject_ReturnsCorrectCountForSharedProject(t *testing.T) {
 // ---- cleanDisplayName() tests ----------------------------------------------
 
 func TestCleanDisplayName_NormalString_Unchanged(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "fix the bug", cleanDisplayName("fix the bug"))
 }
 
 func TestCleanDisplayName_LeadingWhitespace_Trimmed(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "hello world", cleanDisplayName("  hello world  "))
 }
 
 func TestCleanDisplayName_StartingWithSingleSlash_Trimmed(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "quality:review", cleanDisplayName("/quality:review"))
 }
 
 func TestCleanDisplayName_StartingWithMultipleSlashes_AllTrimmed(t *testing.T) {
+	t.Parallel()
 	result := cleanDisplayName("///nested/path")
 	assert.False(t, strings.HasPrefix(result, "/"), "all leading slashes should be trimmed")
 	assert.Equal(t, "nested/path", result)
 }
 
 func TestCleanDisplayName_Over100Chars_TruncatedTo97PlusDots(t *testing.T) {
+	t.Parallel()
 	input := strings.Repeat("x", 150)
 	result := cleanDisplayName(input)
 	assert.Equal(t, 100, len(result))
@@ -297,6 +314,7 @@ func TestCleanDisplayName_Over100Chars_TruncatedTo97PlusDots(t *testing.T) {
 }
 
 func TestCleanDisplayName_Exactly100Chars_NotTruncated(t *testing.T) {
+	t.Parallel()
 	input := strings.Repeat("y", 100)
 	result := cleanDisplayName(input)
 	assert.Equal(t, 100, len(result))
@@ -304,16 +322,19 @@ func TestCleanDisplayName_Exactly100Chars_NotTruncated(t *testing.T) {
 }
 
 func TestCleanDisplayName_EmptyString_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "", cleanDisplayName(""))
 }
 
 func TestCleanDisplayName_WhitespaceOnly_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "", cleanDisplayName("   "))
 }
 
 // ---- GetAll / GetByID / GetByProject / Search still work after Reload ------
 
 func TestGetAll_ReturnsCopyNotReference(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -331,6 +352,7 @@ func TestGetAll_ReturnsCopyNotReference(t *testing.T) {
 }
 
 func TestGetByID_Found(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -347,6 +369,7 @@ func TestGetByID_Found(t *testing.T) {
 }
 
 func TestGetByID_NotFound_ReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -361,6 +384,7 @@ func TestGetByID_NotFound_ReturnsError(t *testing.T) {
 }
 
 func TestGetByProject_ReturnsOnlyMatchingEntries(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -380,6 +404,7 @@ func TestGetByProject_ReturnsOnlyMatchingEntries(t *testing.T) {
 }
 
 func TestGetByProject_UnknownProject_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -394,6 +419,7 @@ func TestGetByProject_UnknownProject_ReturnsEmpty(t *testing.T) {
 }
 
 func TestSearch_MatchesName(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -410,6 +436,7 @@ func TestSearch_MatchesName(t *testing.T) {
 }
 
 func TestSearch_MatchesProject(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -426,6 +453,7 @@ func TestSearch_MatchesProject(t *testing.T) {
 }
 
 func TestSearch_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -440,6 +468,7 @@ func TestSearch_CaseInsensitive(t *testing.T) {
 }
 
 func TestSearch_NoMatch_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -456,6 +485,7 @@ func TestSearch_NoMatch_ReturnsEmpty(t *testing.T) {
 // ---- Reload called twice (idempotency) -------------------------------------
 
 func TestReload_Idempotent_SameResultOnSecondCall(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{
@@ -480,6 +510,7 @@ func TestReload_Idempotent_SameResultOnSecondCall(t *testing.T) {
 // ---- Edge cases ------------------------------------------------------------
 
 func TestReload_EmptyFile_ZeroEntries(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	// Create the file but write nothing.
@@ -493,6 +524,7 @@ func TestReload_EmptyFile_ZeroEntries(t *testing.T) {
 }
 
 func TestReload_EmptyLinesInFile_Skipped(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -509,6 +541,7 @@ func TestReload_EmptyLinesInFile_Skipped(t *testing.T) {
 }
 
 func TestReload_ProjectFromEarliestEntry_WhenMultipleProjects(t *testing.T) {
+	t.Parallel()
 	// When two messages for the same session have different projects,
 	// the project from the earliest-timestamp message should win.
 	dir := t.TempDir()
@@ -527,6 +560,7 @@ func TestReload_ProjectFromEarliestEntry_WhenMultipleProjects(t *testing.T) {
 }
 
 func TestCount_ReflectsActualEntryCount(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -542,6 +576,7 @@ func TestCount_ReflectsActualEntryCount(t *testing.T) {
 }
 
 func TestGetProjects_ReturnsUniqueProjectsSorted(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 
@@ -559,6 +594,7 @@ func TestGetProjects_ReturnsUniqueProjectsSorted(t *testing.T) {
 }
 
 func TestLastLoadTime_UpdatedAfterReload(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "history.jsonl")
 	writeHistoryJSONL(t, path, []string{

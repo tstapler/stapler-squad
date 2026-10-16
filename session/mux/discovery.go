@@ -249,8 +249,8 @@ func CleanStaleSocket(socketPath string) error {
 		// Can't connect, likely stale - safe to remove
 		return os.Remove(socketPath)
 	}
-	conn.Close()
-	return nil // Socket is active, don't remove
+	_ = conn.Close() // just a liveness probe; nothing more to do with this connection
+	return nil       // Socket is active, don't remove
 }
 
 // CleanAllStaleSockets removes all stale ssq-mux sockets.

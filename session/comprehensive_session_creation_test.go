@@ -17,11 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getTestTmuxSocket returns a unique tmux socket name for test isolation
-func getTestTmuxSocket(t *testing.T) string {
-	return "test_" + strings.ReplaceAll(t.Name(), "/", "_")
-}
-
 // mockTmuxExecutor implements executor.Executor for testing tmux commands
 type mockTmuxExecutor struct {
 	sessionsCreated map[string]bool
@@ -143,8 +138,8 @@ func NewTestInstance(t *testing.T, title string) *TestInstanceBuilder {
 			Path:             t.TempDir(),                              // Each test gets its own temp directory
 			Program:          "bash -c 'echo test session; exec bash'", // Safe default program
 			SessionType:      SessionTypeDirectory,
-			AutoYes:          true,                 // Tests shouldn't prompt for input
-			TmuxServerSocket: getTestTmuxSocket(t), // Isolated tmux server per test
+			AutoYes:          true,              // Tests shouldn't prompt for input
+			TmuxServerSocket: testTmuxSocket(t), // Isolated tmux server per test
 		},
 	}
 }
@@ -223,6 +218,15 @@ func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, 
 	// Use the tmux dependency injection method
 	mockTmuxSession := tmux.NewTmuxSessionWithDeps(instance.Title, instance.Program, mockPtyFactory, mockExecutor)
 
+	// Pre-seed the mock as already alive so initTmuxSession()'s HasSession() &&
+	// IsAlive() reuse guard (see session/instance_tmux.go) accepts this
+	// injected mock instead of discarding it for a brand-new *real* tmux
+	// session -- which would defeat this helper's whole "prevent real tmux
+	// command execution" purpose. Safe here because the mock was already
+	// constructed with instance.Program baked in correctly, so there is
+	// nothing this reuse skips that the tests below depend on.
+	mockExecutor.sessionsCreated[mockTmuxSession.GetSanitizedName()] = true
+
 	// Replace the real tmux session with the mock
 	instance.processManager.(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
 
@@ -248,6 +252,7 @@ func (m *mockPtyFactory) Close() {
 // ComprehensiveSessionCreationSuite provides exhaustive testing of session creation
 // without requiring the full TUI application to run
 func TestComprehensiveSessionCreation(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}

@@ -1,0 +1,19 @@
+{
+  "id": "launcher-presets-list",
+  "type": "frontend",
+  "component": "OmnibarPresetList",
+  "path": "web-app/src/components/sessions/OmnibarPresetList.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "OmnibarPresetList_should_RenderListboxWithOptionRows_When_PresetsProvided",
+    "OmnibarPresetList_should_ShowEmptyStatus_When_NoPresetsAndNoLoadError",
+    "OmnibarPresetList_should_ShowAlert_When_LoadErrorPresent",
+    "OmnibarPresetList_should_ShowLoading_When_FirstFetchInFlight",
+    "OmnibarPresetList_should_KeepShowingList_When_BackgroundRefetchInFlight",
+    "OmnibarPresetList_should_CallOnSelect_When_RowClicked",
+    "OmnibarPresetList_should_CallOnSelect_When_EnterPressedOnRow",
+    "launcher-presets_should_CreateSessionWithPresetProgram_When_RowClickedAndFormSubmitted"
+  ],
+  "lastModified": "2026-08-12T18:00:11Z"
+}

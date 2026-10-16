@@ -8,6 +8,7 @@ import (
 
 // TestReviewQueueWorkflow demonstrates a typical review queue usage pattern
 func TestReviewQueueWorkflow(t *testing.T) {
+	t.Parallel()
 	// Create a review queue
 	queue := NewReviewQueue()
 
@@ -96,6 +97,7 @@ func TestReviewQueueWorkflow(t *testing.T) {
 
 // TestReviewQueueIntegrationWithInstance demonstrates queue integration with instances
 func TestReviewQueueIntegrationWithInstance(t *testing.T) {
+	t.Parallel()
 	// Create a shared review queue
 	queue := NewReviewQueue()
 

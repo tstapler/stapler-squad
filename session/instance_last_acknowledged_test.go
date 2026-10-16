@@ -9,6 +9,7 @@ import (
 // persisted through serialization and deserialization cycles.
 // This test addresses BUG-001: LastAcknowledged not being persisted to disk.
 func TestLastAcknowledgedPersistence(t *testing.T) {
+	t.Parallel()
 	// Create a test instance with LastAcknowledged set
 	now := time.Now()
 	lastAck := now.Add(-1 * time.Hour) // 1 hour ago
@@ -63,6 +64,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 // TestLastAcknowledgedZeroValue verifies that instances without LastAcknowledged
 // (zero time value) are handled correctly.
 func TestLastAcknowledgedZeroValue(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 
 	instance := &Instance{
@@ -99,6 +101,7 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 // TestLastAcknowledgedComparison verifies that LastAcknowledged can be compared
 // with LastMeaningfulOutput for review queue snooze logic.
 func TestLastAcknowledgedComparison(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	oneHourAgo := now.Add(-1 * time.Hour)
 	twoHoursAgo := now.Add(-2 * time.Hour)
@@ -142,6 +145,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			instance := &Instance{
 				Title:  "Test Instance",
 				Path:   "/path/to/repo",

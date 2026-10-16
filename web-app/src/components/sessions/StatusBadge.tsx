@@ -58,6 +58,8 @@ export function getDetectedStatusInfo(status: DetectedStatus): StatusInfo | null
       return { label: "Success", icon: "✅", variant: "complete" };
     case DetectedStatus.WAITING_FOR_AGENT:
       return { label: "Waiting for Agent", icon: "⏳", variant: "processing" };
+    case DetectedStatus.COMPACTING:
+      return { label: "Compacting", icon: "⟳", variant: "processing" };
     case DetectedStatus.UNKNOWN:
       return null;
     case DetectedStatus.UNSPECIFIED:

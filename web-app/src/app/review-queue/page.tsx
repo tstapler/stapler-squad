@@ -11,6 +11,7 @@ import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDe
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
@@ -55,9 +56,15 @@ function ReviewQueueContent() {
 
   // Ref for focus trap inside the session-detail modal
   const modalContentRef = useRef<HTMLDivElement>(null);
+  // Element that opened the modal, so focus can return to it on close. handleSessionClick is
+  // the shared funnel for every click-based opener (queue list, working-sessions row), so we
+  // capture document.activeElement there. Deep-linking (the searchParams effect below) opens
+  // the modal with no click at all — this ref deliberately stays null in that case, since
+  // there's no prior focus context to restore to.
+  const sessionTriggerRef = useRef<HTMLElement | null>(null);
 
   // Use the global session service context — avoids a competing WebSocket stream
-  const { sessions, runOneShot } = useSessionServiceContext();
+  const { sessions } = useSessionServiceContext();
 
   // Backlog items whose plan is awaiting the user's approval — surfaced here so "things
   // needing you" aren't scattered across the board/stuck-items page too.
@@ -67,15 +74,8 @@ function ReviewQueueContent() {
     [backlogItems]
   );
 
-  // S3-3: Adapter from RunOneShotResponse to the shape ReviewQueuePanel expects
-  const handleRunOneShot = useCallback(
-    async (sessionId: string, prompt: string) => {
-      const response = await runOneShot(sessionId, prompt, 0);
-      if (!response) return null;
-      return { prUrl: response.prUrl || undefined, error: response.error || undefined };
-    },
-    [runOneShot]
-  );
+  // Backlog-origin index for the badge shown on backlog-automation-dispatched sessions
+  const { index: backlogSessionIndex } = useBacklogSessionIndex();
 
   // Acknowledge function for dismissing sessions from the modal.
   // allQueueItems is the unfiltered Redux store list — used as the existence oracle in the
@@ -113,7 +113,7 @@ function ReviewQueueContent() {
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
 
   // Trap focus inside the session-detail modal while it is open
-  useFocusTrap(modalContentRef, !!selectedSession);
+  useFocusTrap(modalContentRef, !!selectedSession, sessionTriggerRef);
 
   // Global keyboard shortcuts for this page
   useKeyboard({
@@ -142,6 +142,10 @@ function ReviewQueueContent() {
   }, [searchParams, sessions, queueItems]);
 
   const handleSessionClick = (sessionId: string) => {
+    // Captured synchronously (before any state change) so it reflects the actual
+    // clicked element even though this handler is reached via callback indirection
+    // from multiple distinct buttons (working-sessions list, ReviewQueuePanel rows).
+    sessionTriggerRef.current = document.activeElement as HTMLElement;
     // Try full session data first; fall back to queue item data so the modal
     // always opens immediately regardless of whether the session list has loaded.
     const fromSessions = sessions.find((s) => s.id === sessionId);
@@ -286,6 +290,7 @@ function ReviewQueueContent() {
     ? reviewQueueItems.findIndex((s) => s.id === selectedSession.id) + 1
     : 0;
   const queueTotal = reviewQueueItems.length;
+  const selectedSessionBacklogEntry = selectedSession ? backlogSessionIndex.get(selectedSession.id) : undefined;
 
   return (
     <div className={styles.page}>
@@ -340,7 +345,6 @@ function ReviewQueueContent() {
           onSessionClick={handleSessionClick}
           onItemsChange={handleItemsChange}
           onAcknowledged={handleAcknowledged}
-          onRunOneShot={handleRunOneShot}
           autoAdvance={autoAdvance}
           onAutoAdvanceChange={(val) => {
             setAutoAdvance(val);
@@ -373,6 +377,8 @@ function ReviewQueueContent() {
               onDismissFromQueue={handleDismissFromQueue}
               queuePosition={queuePosition}
               queueTotal={queueTotal}
+              backlogItemId={selectedSessionBacklogEntry?.itemId}
+              backlogEntry={selectedSessionBacklogEntry}
             />
           </div>
         </div>

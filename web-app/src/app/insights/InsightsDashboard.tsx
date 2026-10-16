@@ -1,7 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
-import { useState, useMemo, Suspense } from "react";
+import { useState, useMemo, useCallback, Suspense } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
@@ -9,8 +9,11 @@ import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
 import { useBudgetThreshold } from "@/lib/hooks/useBudgetThreshold";
 import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { SummaryCards } from "./SummaryCards";
+import { FindingsPanel } from "./FindingsPanel";
 import { TopNTable } from "./TopNTables";
+import { ActivityBreakdownTable } from "./ActivityBreakdownTable";
 import { SessionsTable } from "./SessionsTable";
+import { UnattributedByTitleTable } from "./UnattributedByTitleTable";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { ProjectedCostCard } from "./ProjectedCostCard";
 import { TimeRangeFilter, resolveTimeRangeDates } from "./TimeRangeFilter";
@@ -32,6 +35,11 @@ import {
   grid2,
   section,
   sectionTitle,
+  sectionHeader,
+  modeToggleGroup,
+  modeToggleButton,
+  modeToggleButtonActive,
+  projectedCostEmptyState,
 } from "./InsightsDashboard.css";
 
 // Lazy-load recharts and its D3 dependencies (~1.2MB) only when the insights page is visited.
@@ -45,6 +53,10 @@ const ModelBreakdownChart = dynamic(
 );
 const ModelOverTimeChart = dynamic(
   () => import("./ModelOverTimeChart").then((m) => m.ModelOverTimeChart),
+  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+);
+const StageCostChart = dynamic(
+  () => import("./StageCostChart").then((m) => m.StageCostChart),
   { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
 
@@ -83,7 +95,7 @@ function InsightsDashboardInner() {
     [preset, fromParam, toParam]
   );
 
-  const { summary, loading, isLiveUpdating, error } = useInsightsSummary({
+  const { summary, loading, isLiveUpdating, error, refetch } = useInsightsSummary({
     includeOrphans: true,
     from: fromDate,
     to: toDate,
@@ -101,7 +113,23 @@ function InsightsDashboardInner() {
     projection !== null &&
     projection.projectedMonthly > threshold;
 
+  // Bar-click cross-filter (Task 5.2.2b) — lifted here so both StageCostChart
+  // and SessionsTable share it. Clicking the already-active role's bar again
+  // clears the filter (ux.md's "clicking the same bar again... returns to
+  // unfiltered view").
+  const [roleFilter, setRoleFilter] = useState<string | undefined>(undefined);
+  const handleRoleClick = useCallback((role: string) => {
+    setRoleFilter((prev) => (prev === role ? undefined : role));
+  }, []);
+  const clearRoleFilter = useCallback(() => setRoleFilter(undefined), []);
+
   const [selectedSession, setSelectedSession] = useState<SessionTokenSummary | null>(null);
+  // Stable identity — SessionDetailDrawer's keydown-handling effect has this
+  // in its dependency array, so a fresh function every render would tear
+  // down and re-register the document listener on every parent re-render
+  // (including each WatchInsights live-update tick) while the drawer is open.
+  const closeSessionDetail = useCallback(() => setSelectedSession(null), []);
+  const [modelOverTimeMode, setModelOverTimeMode] = useState<"cost" | "tokens">("cost");
 
   const timeRangeValue: TimeRangeValue = {
     preset,
@@ -147,6 +175,15 @@ function InsightsDashboardInner() {
 
       {error && <div className={errorBox}>{friendlyError(error)}</div>}
 
+      <FindingsPanel
+        findings={summary?.findings}
+        sessions={summary?.sessions}
+        loading={loading && !summary}
+        error={error ? friendlyError(error) : null}
+        onSessionClick={(s) => setSelectedSession(s)}
+        onRetry={refetch}
+      />
+
       {loading && !summary && <InsightsDashboardSkeleton />}
 
       {summary?.isLoading && (
@@ -174,20 +211,62 @@ function InsightsDashboardInner() {
                 onThresholdChange={setThreshold}
               />
             )}
+            {!projection && (
+              <div className={projectedCostEmptyState}>
+                Projected monthly cost needs at least 7 days of usage data in the
+                current calendar month — check back once you have more history.
+              </div>
+            )}
           </section>
 
           <section className={section}>
             <div className={grid2}>
               <DailySpendChart daily={summary.daily} />
               <ModelBreakdownChart models={summary.models} />
+              <StageCostChart
+                roles={summary.roleBreakdown}
+                activeRole={roleFilter}
+                onRoleClick={handleRoleClick}
+              />
             </div>
+            <UnattributedByTitleTable
+              title="Unattributed Cost by Session"
+              testId="unattributed-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "")?.items ?? []}
+            />
+            <UnattributedByTitleTable
+              title="External (Non-Stapler-Squad) Cost by Session"
+              testId="external-by-title-table"
+              items={summary.roleBreakdown.find((r) => r.sessionRole === "external")?.items ?? []}
+            />
           </section>
 
           <section className={section}>
-            <ModelOverTimeChart daily={summary.daily} mode="cost" />
+            <div className={sectionHeader}>
+              <h2 className={sectionTitle}>Spend by Model Over Time</h2>
+              <div className={modeToggleGroup} role="group" aria-label="Model over time view">
+                <button
+                  type="button"
+                  className={modelOverTimeMode === "cost" ? `${modeToggleButton} ${modeToggleButtonActive}` : modeToggleButton}
+                  aria-pressed={modelOverTimeMode === "cost"}
+                  onClick={() => setModelOverTimeMode("cost")}
+                >
+                  Cost
+                </button>
+                <button
+                  type="button"
+                  className={modelOverTimeMode === "tokens" ? `${modeToggleButton} ${modeToggleButtonActive}` : modeToggleButton}
+                  aria-pressed={modelOverTimeMode === "tokens"}
+                  onClick={() => setModelOverTimeMode("tokens")}
+                >
+                  Tokens
+                </button>
+              </div>
+            </div>
+            <ModelOverTimeChart daily={summary.daily} mode={modelOverTimeMode} />
           </section>
 
-          {(summary.topSkills.length > 0 || summary.topTools.length > 0) && (
+          {(summary.topSkills.length > 0 || summary.topTools.length > 0 || summary.activityBreakdown.length > 0) && (
             <section className={section}>
               <h2 className={sectionTitle}>Top Usage</h2>
               <div className={grid2}>
@@ -195,15 +274,16 @@ function InsightsDashboardInner() {
                   <TopNTable
                     title="Top Skills"
                     entries={summary.topSkills}
-                    valueLabel="Tokens"
                   />
                 )}
                 {summary.topTools.length > 0 && (
                   <TopNTable
                     title="Top Tools"
                     entries={summary.topTools}
-                    valueLabel="Tokens"
                   />
+                )}
+                {summary.activityBreakdown.length > 0 && (
+                  <ActivityBreakdownTable rows={summary.activityBreakdown} />
                 )}
               </div>
             </section>
@@ -215,6 +295,8 @@ function InsightsDashboardInner() {
               sessions={summary.sessions}
               onSessionClick={(s) => setSelectedSession(s)}
               backlogIndex={backlogIndex}
+              roleFilter={roleFilter}
+              onClearRoleFilter={clearRoleFilter}
             />
           </section>
         </>
@@ -222,7 +304,7 @@ function InsightsDashboardInner() {
 
       <SessionDetailDrawer
         session={selectedSession}
-        onClose={() => setSelectedSession(null)}
+        onClose={closeSessionDetail}
         backlogEntry={selectedSession?.sessionId ? backlogIndex.get(selectedSession.sessionId) : undefined}
       />
     </div>

@@ -18,6 +18,7 @@ import (
 // TestGetWorkspaceInfo_EmptyID verifies that GetWorkspaceInfo returns
 // CodeInvalidArgument when the session id is empty.
 func TestGetWorkspaceInfo_EmptyID(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -34,6 +35,7 @@ func TestGetWorkspaceInfo_EmptyID(t *testing.T) {
 // TestGetWorkspaceInfo_SessionNotFound verifies that GetWorkspaceInfo returns
 // CodeNotFound when no session matches the given id.
 func TestGetWorkspaceInfo_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -51,6 +53,7 @@ func TestGetWorkspaceInfo_SessionNotFound(t *testing.T) {
 // successful response (with an error field in the body) for a session that
 // exists but whose path is not a VCS repository.
 func TestGetWorkspaceInfo_NoSession(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -78,6 +81,7 @@ func TestGetWorkspaceInfo_NoSession(t *testing.T) {
 // TestListWorkspaceTargets_EmptyID verifies that ListWorkspaceTargets returns
 // CodeInvalidArgument when the session id is empty.
 func TestListWorkspaceTargets_EmptyID(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -94,6 +98,7 @@ func TestListWorkspaceTargets_EmptyID(t *testing.T) {
 // TestListWorkspaceTargets_SessionNotFound verifies that ListWorkspaceTargets
 // returns CodeNotFound when no session matches the given id.
 func TestListWorkspaceTargets_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -111,6 +116,7 @@ func TestListWorkspaceTargets_SessionNotFound(t *testing.T) {
 // a response (with an error in the body) for a session whose path has no VCS
 // configuration. The RPC must not return a connect error in this case.
 func TestListWorkspaceTargets_NoConfig(t *testing.T) {
+	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -139,6 +145,7 @@ func TestListWorkspaceTargets_NoConfig(t *testing.T) {
 // The response may contain worktrees (if the cwd is a git repo) or be empty —
 // both are valid; the important invariant is no error.
 func TestListWorktrees_EmptyPath(t *testing.T) {
+	t.Parallel()
 	svc := NewPathCompletionService()
 
 	resp, err := svc.ListWorktrees(context.Background(), connect.NewRequest(&sessionv1.ListWorktreesRequest{
@@ -153,6 +160,7 @@ func TestListWorktrees_EmptyPath(t *testing.T) {
 // TestListWorktrees_NonGitPath verifies that ListWorktrees returns an empty
 // list (not an error) when the given path is not a git repository.
 func TestListWorktrees_NonGitPath(t *testing.T) {
+	t.Parallel()
 	svc := NewPathCompletionService()
 
 	resp, err := svc.ListWorktrees(context.Background(), connect.NewRequest(&sessionv1.ListWorktreesRequest{

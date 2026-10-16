@@ -163,6 +163,29 @@ describe("useStuckBacklogItems", () => {
     expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(1);
   });
 
+  it("bulkResetParkedRemediation(reason) scopes the request to that reason", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [] });
+    mockBulkResetStuckRemediation.mockResolvedValue({ resetCount: 1 });
+
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.lastFetched).not.toBeNull());
+    mockListStuckBacklogItems.mockClear();
+
+    let count = 0;
+    await act(async () => {
+      count = await result.current.bulkResetParkedRemediation(StuckReason.STALE_WORK);
+    });
+
+    expect(count).toBe(1);
+    expect(mockBulkResetStuckRemediation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyParked: true,
+        onlyParkedExplicitlySet: true,
+        reason: StuckReason.STALE_WORK,
+      })
+    );
+  });
+
   it("triggerRemediationNow() calls TriggerRemediationNow, refetches, and rethrows on failure", async () => {
     mockListStuckBacklogItems.mockResolvedValue({ items: [] });
     mockTriggerRemediationNow.mockRejectedValue(new Error("already parked"));

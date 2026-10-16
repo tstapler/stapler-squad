@@ -32,18 +32,29 @@ function createTestMessage(sessionId: string, input?: string): any {
 describe('MessageQueue', () => {
   describe('push and iterate', () => {
     it('should yield messages in order', async () => {
+      // Note: since Task 2.1.1 (drop-on-close), messages pushed before an
+      // iterator ever starts consuming and left buffered when close() is
+      // called are dropped, not drained — so this test (unlike the pre-fix
+      // version) starts the iterator first, matching how the queue is
+      // actually used in production (an active consumer pumping the stream).
       const queue = new MessageQueue();
       const msg1 = createTestMessage('s1', 'hello');
       const msg2 = createTestMessage('s1', 'world');
 
+      const received: any[] = [];
+      const iterPromise = (async () => {
+        for await (const msg of queue) {
+          received.push(msg);
+        }
+      })();
+
       queue.push(msg1);
+      await new Promise(r => setTimeout(r, 10));
       queue.push(msg2);
+      await new Promise(r => setTimeout(r, 10));
       queue.close();
 
-      const received: any[] = [];
-      for await (const msg of queue) {
-        received.push(msg);
-      }
+      await iterPromise;
 
       expect(received).toHaveLength(2);
       expect(received[0].sessionId).toBe('s1');
@@ -90,18 +101,45 @@ describe('MessageQueue', () => {
     });
 
     it('should filter out sentinel messages', async () => {
+      // Note: since Task 2.1.1 (drop-on-close), a message pushed before an
+      // iterator starts consuming would be dropped (not drained) once
+      // close() runs — so this test starts the iterator first, delivering
+      // the real message directly via the waiting-resolver path, then
+      // closes (which delivers the sentinel that must be filtered out).
       const queue = new MessageQueue();
 
+      const received: any[] = [];
+      const iterPromise = (async () => {
+        for await (const msg of queue) {
+          received.push(msg);
+        }
+      })();
+
       queue.push(createTestMessage('s1', 'real'));
+      await new Promise(r => setTimeout(r, 10));
       queue.close();
+
+      await iterPromise;
+
+      expect(received).toHaveLength(1);
+      expect(received[0].sessionId).toBe('s1');
+    });
+
+    it('drops buffered messages that were queued before close() is called', async () => {
+      const queue = new MessageQueue();
+
+      // No active iterator pump yet, so this lands in the internal buffer.
+      queue.push(createTestMessage('s1', 'buffered'));
+
+      const droppedCount = queue.close();
+      expect(droppedCount).toBe(1);
 
       const received: any[] = [];
       for await (const msg of queue) {
         received.push(msg);
       }
 
-      expect(received).toHaveLength(1);
-      expect(received[0].sessionId).toBe('s1');
+      expect(received).toHaveLength(0);
     });
   });
 

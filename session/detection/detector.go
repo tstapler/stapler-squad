@@ -4,15 +4,83 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"gopkg.in/yaml.v3"
 )
+
+// autoModeFooterRegex matches Claude Code's persistent auto-mode footer bar, e.g.
+// "⏵⏵ auto mode on · 2 shells, 1 monitor · ← for agents · 1 feedback draft" — verified
+// against a live pane capture (tmux capture-pane) of a real session. This is NOT the same
+// text as the WaitingForAgent glyph-marker patterns in binaries.ClaudeDetector.Patterns()
+// (e.g. "✻ Waiting for N background agent(s) to finish", "N shells still running"): those
+// describe a mid-turn spinner line that appears above the "esc to interrupt" bar and
+// disappears once the turn ends. This footer, by contrast, is pinned at the bottom of the
+// pane at ALL times — active or idle — whenever any background shell/monitor exists.
+//
+// Because it's always present, it must never enter MatchLines' per-line priority chain: on
+// its own line, nothing else would match, so it would win the backward scan in
+// detectFromLines immediately and mask "Thinking…"/Active status for the entire remaining
+// duration of any background shell/monitor. It's deliberately kept out of PatternSet/
+// StatusPatterns for the same reason, and is instead consulted only as a post-hoc override —
+// see footerAgentCount and applyFooterIdleOverride — applied only once the rest of the scan
+// already concluded the main turn is idle/unknown, never overriding a genuinely active turn.
+var autoModeFooterRegex = regexp.MustCompile(`auto mode on\s*·\s*(\d+)\s+shells?(?:,\s*(\d+)\s+monitors?)?`)
+
+// shellMonitorTokenRegex matches any "N shell(s)"/"N monitor(s)" token.
+var shellMonitorTokenRegex = regexp.MustCompile(`\d+\s+(?:shells?|monitors?)`)
+
+// turnCompletionRunningRegex matches the turn-completion marker (mirrors
+// verb_duration_completion, binaries/claude.go) followed later in the line by "running".
+var turnCompletionRunningRegex = regexp.MustCompile(`[✻◉✦]\s+\w+\s+for\s+\d+[hms].*running`)
+
+// footerAgentCount scans lines (most recent first) for the auto-mode footer bar and, if
+// found, returns the combined shell+monitor count. ok is false if the footer isn't present
+// or reports zero shells/monitors (nothing to wait for).
+func footerAgentCount(lines []string) (count int, desc string, ok bool) {
+	for i := len(lines) - 1; i >= 0; i-- {
+		m := autoModeFooterRegex.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		total := 0
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			total += n
+		}
+		if len(m) > 2 && m[2] != "" {
+			if n, err := strconv.Atoi(m[2]); err == nil {
+				total += n
+			}
+		}
+		if total <= 0 {
+			return 0, "", false
+		}
+		return total, "Claude is idle at the prompt, but background shells/monitors are still running", true
+	}
+	return 0, "", false
+}
+
+// applyFooterIdleOverride re-checks the auto-mode footer bar when the per-line scan
+// concluded the main turn is idle or produced no specific match (StatusIdle/StatusUnknown).
+// It never overrides a more specific or more urgent status (Error, NeedsApproval, Executing,
+// etc.) — see autoModeFooterRegex's doc comment for why the footer can't be folded into the
+// per-line priority chain instead.
+func applyFooterIdleOverride(lines []string, status DetectedStatus, desc string, count int) (DetectedStatus, string, int) {
+	if status != StatusIdle && status != StatusUnknown {
+		return status, desc, count
+	}
+	if fc, fdesc, ok := footerAgentCount(lines); ok {
+		return StatusWaitingForAgent, fdesc, fc
+	}
+	return status, desc, count
+}
 
 // Status represents the current status of a Claude instance based on PTY output analysis.
 // This extends the existing Status type in instance.go with additional detection capabilities.
@@ -30,6 +98,10 @@ const (
 	StatusExecuting       // Actively executing commands (shows "esc to interrupt")
 	StatusSuccess         // Task completed successfully
 	StatusWaitingForAgent // Waiting for one or more background agents to finish
+	// StatusCompacting is set when Claude is actively summarizing/compacting older
+	// conversation history (distinct from the "N% until auto-compact"
+	// approaching-threshold indicator, which is StatusExecuting).
+	StatusCompacting
 )
 
 // StatusPattern represents a regex pattern for detecting a specific status.
@@ -50,6 +122,14 @@ type StatusDetector struct {
 	patternSet atomic.Pointer[PatternSet]
 	sink       DetectionEventSink
 	normalizer PTYNormalizer
+
+	// compactingCanaryLogged guards the TEMPORARY compacting-regex drift canary (see
+	// compactingCanary) so it fires at most once per detector/session, not once per scan.
+	compactingCanaryLogged atomic.Bool
+
+	// shellMonitorCanaryLogged guards shellMonitorWordingCanary so it fires at most once
+	// per detector/session, not once per scan.
+	shellMonitorCanaryLogged atomic.Bool
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
@@ -73,7 +153,7 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	if err := validatePatternFilePath(path); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- validatePatternFilePath above rejects any ".." component; no production caller passes external/request-derived input here today
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status patterns file: %w", err)
 	}
@@ -92,12 +172,15 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	return sd, nil
 }
 
-// LoadPatterns loads patterns from a YAML file.
+// LoadPatterns loads patterns from a YAML file. Note: this does NOT cover the auto-mode
+// footer override (autoModeFooterRegex / applyFooterIdleOverride, above) — that check
+// always runs regardless of any custom pattern file loaded here, for the reasons given
+// in autoModeFooterRegex's doc comment.
 func (sd *StatusDetector) LoadPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- validatePatternFilePath above rejects any ".." component; no production caller passes external/request-derived input here today
 	if err != nil {
 		return fmt.Errorf("failed to read status patterns file: %w", err)
 	}
@@ -247,9 +330,84 @@ const StatusDetectionTailBytes = 4096
 // This is the shared core called by both Detect() and DetectWithContext().
 //
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
-func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string) {
+func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	ps := sd.patternSet.Load()
-	return ps.MatchLines(text, rawPTY)
+	status, name, desc, count := ps.MatchLines(text, rawPTY)
+	sd.compactingCanary(status, text)
+	sd.shellMonitorWordingCanary(status, text)
+	return status, name, desc, count
+}
+
+// compactingCanary is a TEMPORARY bake-in canary (see project_plans/context-compaction-
+// detection/implementation/plan.md, Task 1.1.1c): the compacting_conversation pattern
+// (binaries/claude.go) was grounded in an INFERRED guess, not a verified live capture.
+// Until the follow-up backlog item confirms the regex against real Claude Code output,
+// log a line mentioning "compact" that did NOT classify as StatusCompacting, so a
+// near-miss regex surfaces during real usage instead of via a silent production gap.
+// Remove this method (and its call site above and the compactingCanaryLogged field)
+// once that follow-up item closes.
+//
+// Mirrors ratelimit.Detector.maybeLogUndetectedWording's two safeguards: fires at most
+// once per detector via compactingCanaryLogged (this is called once per scrollback line
+// per poll via detectFromLines, so an unguarded version would log continuously for as
+// long as an unmatched line sits in the tail), and never logs the raw matched text —
+// terminal output routinely contains secrets, so only the byte offset is logged.
+//
+// The pre-existing "N% until auto-compact" approaching-threshold indicator (present in
+// claude_active.txt, claude_thinking_verb.txt, claude_asterism_active.txt) also contains
+// "compact" and is EXPECTED to classify as StatusExecuting, not StatusCompacting — it is
+// excluded here, or the canary would fire on every near-limit session instead of only on
+// a genuine near-miss.
+func (sd *StatusDetector) compactingCanary(status DetectedStatus, text string) {
+	if status == StatusCompacting || sd.compactingCanaryLogged.Load() {
+		return
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "until auto-compact") {
+		return
+	}
+	idx := strings.Index(lower, "compact")
+	if idx == -1 {
+		return
+	}
+	if !sd.compactingCanaryLogged.CompareAndSwap(false, true) {
+		return
+	}
+	log.Debug("detection: line mentions 'compact' but did not classify as StatusCompacting — possible regex near-miss", "byte_offset", idx, "text_len", len(text))
+}
+
+// shellMonitorWordingCanary is a bake-in canary for the shells_still_running/
+// monitors_still_running patterns: this is the fourth documented brush with Claude Code CLI
+// wording drift on this exact status line (PR #678 + two follow-ups + the comma-joined-form
+// fix in project_plans/monitor-waiting-indicator/implementation/plan.md), so it's cheap to
+// hedge against a fifth. Fires when either (a) a WaitingForAgent pattern matched but the line
+// still contains an unmatched "N shell(s)"/"N monitor(s)" token afterward (e.g. a future
+// reversed-order "N monitor, M shell still running" form only partially matching), or (b) the
+// line has the turn-completion marker followed by "running" but no WaitingForAgent pattern
+// matched at all — surfacing the next wording change via logs instead of a silent undercount.
+// Mirrors compactingCanary's two safeguards: fires at most once per detector, and never logs
+// the raw matched text.
+func (sd *StatusDetector) shellMonitorWordingCanary(status DetectedStatus, text string) {
+	if sd.shellMonitorCanaryLogged.Load() {
+		return
+	}
+	tokens := shellMonitorTokenRegex.FindAllString(text, -1)
+	suspicious := false
+	switch {
+	case status == StatusWaitingForAgent && len(tokens) > 2:
+		// The winning pattern accounts for at most 2 tokens (shell + monitor); a third
+		// distinct token in the same line means something went unmatched.
+		suspicious = true
+	case status != StatusWaitingForAgent && turnCompletionRunningRegex.MatchString(text):
+		suspicious = true
+	}
+	if !suspicious {
+		return
+	}
+	if !sd.shellMonitorCanaryLogged.CompareAndSwap(false, true) {
+		return
+	}
+	log.Debug("detection: line mentions shell/monitor+running but did not fully classify as StatusWaitingForAgent — possible wording drift", "status", status, "token_count", len(tokens), "text_len", len(text))
 }
 
 // appendDetectionEvent records the outcome of a detection call to the ring buffer.
@@ -269,11 +427,11 @@ func (sd *StatusDetector) RecentEvents(n int) []DetectionEvent {
 }
 
 // Detect analyzes the provided PTY output and returns the detected status.
-// Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
+// Patterns are checked in priority order: Error > TestsFailing > NeedsApproval > InputRequired > WaitingForAgent > Success > Compacting > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 	text := sd.normalizer.Normalize(string(output))
-	status, patternName, _ := sd.detectFromText(text, output)
+	status, patternName, _, _ := sd.detectFromText(text, output)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status
 }
@@ -282,7 +440,7 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 // Uses the pattern's Description field for human-readable messages instead of raw matched text.
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
 	text := sd.normalizer.Normalize(string(output))
-	status, patternName, context := sd.detectFromText(text, output)
+	status, patternName, context, _ := sd.detectFromText(text, output)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status, context
 }
@@ -290,15 +448,17 @@ func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, stri
 // detectWithContextFromString is the string-accepting variant of DetectWithContext.
 // Avoids the string→[]byte→string round-trip in detectFromLines by aliasing the
 // string data via unsafe.Slice for the rawPTY argument (read-only use in hasScreenOverwrite).
-func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string) {
+// The 3rd return value is the subagent/shell/monitor count captured from the winning
+// WaitingForAgent match (0 for any other status) — see MatchLines.
+func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string, int) {
 	text := sd.normalizer.Normalize(line)
 	var rawPTY []byte
 	if len(line) > 0 {
 		rawPTY = unsafe.Slice(unsafe.StringData(line), len(line))
 	}
-	status, patternName, context := sd.detectFromText(text, rawPTY)
+	status, patternName, context, count := sd.detectFromText(text, rawPTY)
 	sd.appendDetectionEvent(status, patternName, text)
-	return status, context
+	return status, context, count
 }
 
 // getDefaultPatterns returns the default status detection patterns used as
@@ -338,13 +498,17 @@ func (s DetectedStatus) String() string {
 		return "Success"
 	case StatusWaitingForAgent:
 		return "Waiting for Agent"
+	case StatusCompacting:
+		return "Compacting"
 	case StatusUnknown:
 		return "Unknown"
 	}
 	return "Unknown"
 }
 
-// ExportPatterns exports the current patterns to a YAML file.
+// ExportPatterns exports the current patterns to a YAML file. Note: the exported YAML
+// does not (and cannot) capture the auto-mode footer override — see LoadPatterns' doc
+// comment and autoModeFooterRegex, above.
 func (sd *StatusDetector) ExportPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
@@ -387,6 +551,8 @@ func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
 		patterns = p.Success
 	case StatusWaitingForAgent:
 		patterns = p.WaitingForAgent
+	case StatusCompacting:
+		patterns = p.Compacting
 	case StatusUnknown:
 		return nil
 	}
@@ -411,7 +577,7 @@ func (sd *StatusDetector) DetectFromString(output string) DetectedStatus {
 func (sd *StatusDetector) DetectForProgram(output []byte, program string) DetectedStatus {
 	if bsd, ok := lookupBinaryDetector(program); ok {
 		text := stripANSI(collapseCarriageReturns(string(output)))
-		status, patternName, _ := bsd.detectFromText(text, output)
+		status, patternName, _, _ := bsd.detectFromText(text, output)
 		if status != StatusUnknown {
 			sd.appendDetectionEvent(status, patternName, text)
 			return status
@@ -420,56 +586,86 @@ func (sd *StatusDetector) DetectForProgram(output []byte, program string) Detect
 	return sd.Detect(output)
 }
 
+// crSegmentScanResult is the outcome of scanning one \r-split line's segments in
+// scanCRSegments. When terminal is true, the caller must return (status, desc, count)
+// immediately — a definitive, higher-urgency match was found. Otherwise status/desc/count
+// carry the (possibly unchanged) best-candidate triple for the caller to fold back in.
+type crSegmentScanResult struct {
+	terminal bool
+	status   DetectedStatus
+	desc     string
+	count    int
+}
+
+// scanCRSegments scans the \r-split segments of a single terminal line in reverse order
+// (most recent segment first), applying the same urgency rules detectFromLines uses across
+// whole lines. bestStatus is the best candidate found so far on earlier (higher) lines;
+// it is only consulted, never assumed non-empty, so callers must fold non-terminal results
+// back in themselves (see detectFromLines).
+//
+// The last segment is always authoritative. Earlier segments: only promote high-urgency
+// statuses (Active, NeedsApproval, InputRequired, Error) — these represent session states
+// that can be visually hidden by a TUI overlay writing via \r but still indicate the session
+// needs attention. Low-urgency statuses (Success, Processing, Idle) in earlier segments were
+// overwritten and should not override the visual display.
+func (sd *StatusDetector) scanCRSegments(line string, bestStatus DetectedStatus) crSegmentScanResult {
+	segs := strings.Split(line, "\r")
+	result := crSegmentScanResult{status: bestStatus}
+	for j := len(segs) - 1; j >= 0; j-- {
+		if strings.TrimSpace(segs[j]) == "" {
+			continue
+		}
+		s, desc, count := sd.detectWithContextFromString(segs[j])
+		if s == StatusUnknown {
+			continue
+		}
+		if s == StatusReady {
+			if result.status == StatusUnknown {
+				result.status, result.desc, result.count = StatusReady, desc, count
+			}
+			continue
+		}
+		if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
+			return crSegmentScanResult{terminal: true, status: s, desc: desc, count: count}
+		}
+		// Low-urgency earlier segment: record as candidate but keep scanning.
+		if result.status == StatusUnknown {
+			result.status, result.desc, result.count = s, desc, count
+		}
+	}
+	return result
+}
+
 // detectFromLines is the shared implementation for DetectFromLines and DetectWithContextFromLines.
 // Scans lines in reverse (most recent first), handling CR-split segments.
 // See DetectFromLines for the full algorithm documentation.
-func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, string) {
+func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, string, int) {
 	bestStatus := StatusUnknown
 	bestDesc := ""
+	bestCount := 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
 		if strings.ContainsRune(lines[i], '\r') {
-			segs := strings.Split(lines[i], "\r")
-			for j := len(segs) - 1; j >= 0; j-- {
-				if strings.TrimSpace(segs[j]) == "" {
-					continue
-				}
-				s, desc := sd.detectWithContextFromString(segs[j])
-				if s == StatusUnknown {
-					continue
-				}
-				if s == StatusReady {
-					if bestStatus == StatusUnknown {
-						bestStatus, bestDesc = StatusReady, desc
-					}
-					continue
-				}
-				// The last segment is always authoritative.
-				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
-				// InputRequired, Error) — these represent session states that can be visually
-				// hidden by a TUI overlay writing via \r but still indicate the session needs
-				// attention. Low-urgency statuses (Success, Processing, Idle) in earlier
-				// segments were overwritten and should not override the visual display.
-				if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
-					return s, desc
-				}
-				// Low-urgency earlier segment: record as candidate but keep scanning.
-				if bestStatus == StatusUnknown {
-					bestStatus, bestDesc = s, desc
-				}
+			wasUnknown := bestStatus == StatusUnknown
+			res := sd.scanCRSegments(lines[i], bestStatus)
+			if res.terminal {
+				return res.status, res.desc, res.count
+			}
+			if wasUnknown && res.status != StatusUnknown {
+				bestStatus, bestDesc, bestCount = res.status, res.desc, res.count
 			}
 			continue // all segments of this CR line handled above
 		}
 
-		s, desc := sd.detectWithContextFromString(lines[i])
+		s, desc, count := sd.detectWithContextFromString(lines[i])
 		if s == StatusUnknown {
 			continue
 		}
 		if s == StatusReady {
 			if bestStatus == StatusUnknown {
-				bestStatus, bestDesc = StatusReady, desc
+				bestStatus, bestDesc, bestCount = StatusReady, desc, count
 			}
 			continue
 		}
@@ -479,7 +675,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		// High-urgency statuses (Error, NeedsApproval, InputRequired) also override Active.
 		if s == StatusExecuting {
 			if bestStatus == StatusUnknown || bestStatus == StatusReady {
-				bestStatus, bestDesc = StatusExecuting, desc
+				bestStatus, bestDesc, bestCount = StatusExecuting, desc, count
 			}
 			continue
 		}
@@ -487,17 +683,27 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		// earlier (higher) lines. Success/Processing/Idle on earlier lines are stale.
 		if bestStatus == StatusExecuting {
 			switch s {
-			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired:
-				return s, desc
+			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired, StatusCompacting:
+				return s, desc, count
 			case StatusUnknown, StatusReady, StatusProcessing, StatusIdle, StatusSuccess, StatusTestsFailing, StatusExecuting:
 				// Lower-urgency statuses when we already have Executing — skip
 				continue
 			}
 			continue
 		}
-		return s, desc // specific match wins immediately
+		return s, desc, count // specific match wins immediately
 	}
-	return bestStatus, bestDesc
+	return bestStatus, bestDesc, bestCount
+}
+
+// detectFromLinesWithFooter runs detectFromLines and then applies the auto-mode footer
+// idle override in one place — the shared core for DetectFromLines,
+// DetectWithContextFromLines, and DetectWithContextAndCountFromLines below, all three of
+// which otherwise repeat the identical detectFromLines(...)+applyFooterIdleOverride(...)
+// call pair.
+func (sd *StatusDetector) detectFromLinesWithFooter(lines []string) (DetectedStatus, string, int) {
+	s, desc, count := sd.detectFromLines(lines)
+	return applyFooterIdleOverride(lines, s, desc, count)
 }
 
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
@@ -510,7 +716,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 // status pattern on an earlier line. StatusReady is returned as a fallback if no more
 // specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
-	s, _ := sd.detectFromLines(lines)
+	s, _, _ := sd.detectFromLinesWithFooter(lines)
 	return s
 }
 
@@ -522,8 +728,22 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 // Blank/whitespace-only lines are skipped. StatusReady is treated as a low-confidence
 // fallback — the scan continues past Ready results looking for a more specific status,
 // preventing the `.*` catch-all from masking real patterns on earlier lines.
+//
+// Signature intentionally left unchanged (pinned by the TerminalDetector interface and its
+// callers) — see DetectWithContextAndCountFromLines for the count-aware sibling.
 func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
-	return sd.detectFromLines(lines)
+	s, desc, _ := sd.detectFromLinesWithFooter(lines)
+	return s, desc
+}
+
+// DetectWithContextAndCountFromLines is the count-aware sibling of DetectWithContextFromLines.
+// It returns the same status and context, plus the subagent/shell/monitor count captured
+// from the winning WaitingForAgent match (0 for any other status). Added as a new method
+// rather than changing DetectWithContextFromLines in place because that method is pinned by
+// the TerminalDetector interface and consumed by review_queue_determiner.go plus several
+// test files that don't need the count.
+func (sd *StatusDetector) DetectWithContextAndCountFromLines(lines []string) (DetectedStatus, string, int) {
+	return sd.detectFromLinesWithFooter(lines)
 }
 
 // DetectRecent analyzes the most recent n bytes of output for status detection.

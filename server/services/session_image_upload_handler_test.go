@@ -111,6 +111,7 @@ func fixtureStore(t *testing.T) (*fakeInstanceStore, string) {
 // ── BT-01: JPEG success ──────────────────────────────────────────────────────
 
 func TestSessionImageUpload_JPEG_Success(t *testing.T) {
+	t.Parallel()
 	store, dir := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -145,6 +146,7 @@ func TestSessionImageUpload_JPEG_Success(t *testing.T) {
 // ── BT-02: PNG success ───────────────────────────────────────────────────────
 
 func TestSessionImageUpload_PNG_Success(t *testing.T) {
+	t.Parallel()
 	store, dir := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -171,6 +173,7 @@ func TestSessionImageUpload_PNG_Success(t *testing.T) {
 // ── BT-03: WebP success ──────────────────────────────────────────────────────
 
 func TestSessionImageUpload_WebP_Success(t *testing.T) {
+	t.Parallel()
 	store, dir := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -195,6 +198,7 @@ func TestSessionImageUpload_WebP_Success(t *testing.T) {
 // ── BT-04: Oversized file → 413 ─────────────────────────────────────────────
 
 func TestSessionImageUpload_OversizedFile(t *testing.T) {
+	t.Parallel()
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -220,6 +224,7 @@ func TestSessionImageUpload_OversizedFile(t *testing.T) {
 // The MIME allowlist was removed; any non-empty file is now accepted.
 
 func TestSessionImageUpload_AnyFileTypeAccepted(t *testing.T) {
+	t.Parallel()
 	store, dir := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -245,6 +250,7 @@ func TestSessionImageUpload_AnyFileTypeAccepted(t *testing.T) {
 // ── BT-06: Empty file → 400 ──────────────────────────────────────────────────
 
 func TestSessionImageUpload_EmptyFile(t *testing.T) {
+	t.Parallel()
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -260,6 +266,7 @@ func TestSessionImageUpload_EmptyFile(t *testing.T) {
 // ── BT-07: Session not found → 404 ──────────────────────────────────────────
 
 func TestSessionImageUpload_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -278,6 +285,7 @@ func TestSessionImageUpload_SessionNotFound(t *testing.T) {
 // ── BT-08: Missing session_id → 400 ─────────────────────────────────────────
 
 func TestSessionImageUpload_MissingSessionID(t *testing.T) {
+	t.Parallel()
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -304,6 +312,7 @@ func TestSessionImageUpload_MissingSessionID(t *testing.T) {
 // ── BT-09: Missing file field → 400 ─────────────────────────────────────────
 
 func TestSessionImageUpload_MissingFileField(t *testing.T) {
+	t.Parallel()
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -322,6 +331,7 @@ func TestSessionImageUpload_MissingFileField(t *testing.T) {
 // ── BT-10: Path traversal filename → sanitized, 200 ─────────────────────────
 
 func TestSessionImageUpload_PathTraversalFilename(t *testing.T) {
+	t.Parallel()
 	store, dir := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -350,6 +360,7 @@ func TestSessionImageUpload_PathTraversalFilename(t *testing.T) {
 // ── BT-11: Session no path → 422 ─────────────────────────────────────────────
 
 func TestSessionImageUpload_SessionNoPath(t *testing.T) {
+	t.Parallel()
 	inst := &session.Instance{}
 	inst.UUID = "session-nopath"
 	inst.Title = "no-path-session"
@@ -372,6 +383,7 @@ func TestSessionImageUpload_SessionNoPath(t *testing.T) {
 // ── BT-12: Session path missing on disk → 422 ───────────────────────────────
 
 func TestSessionImageUpload_SessionPathMissingOnDisk(t *testing.T) {
+	t.Parallel()
 	inst := &session.Instance{}
 	inst.UUID = "session-badpath"
 	inst.Title = "bad-path-session"
@@ -394,6 +406,7 @@ func TestSessionImageUpload_SessionPathMissingOnDisk(t *testing.T) {
 // ── BT-13: Concurrent uploads produce unique filenames ───────────────────────
 
 func TestSessionImageUpload_ConcurrentUploads(t *testing.T) {
+	t.Parallel()
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store, nil)
 
@@ -445,6 +458,7 @@ func TestSessionImageUpload_ConcurrentUploads(t *testing.T) {
 // ── Additional: sanitizeFilename helper ──────────────────────────────────────
 
 func TestSanitizeFilename(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string

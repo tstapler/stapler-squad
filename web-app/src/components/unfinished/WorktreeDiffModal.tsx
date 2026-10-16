@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { DiffRenderer } from "@/components/shared/DiffRenderer";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./WorktreeDiffModal.css";
 
 interface WorktreeDiffModalProps {
@@ -56,8 +57,12 @@ export function WorktreeDiffModal({ repoPath, branch, repoName, onClose }: Workt
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true);
+
   const modalContent = (
     <div
+      ref={dialogRef}
       className={styles.overlay}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       role="dialog"

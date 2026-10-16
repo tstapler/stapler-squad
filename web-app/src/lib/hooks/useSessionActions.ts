@@ -19,6 +19,8 @@ export function useSessionActions(sessionId: string) {
     restartSession,
     createCheckpoint,
     updateSession,
+    cancelSessionCreation,
+    retrySessionCreation,
   } = useSessionService();
 
   return {
@@ -29,6 +31,8 @@ export function useSessionActions(sessionId: string) {
     delete: (force?: boolean) => deleteSession(sessionId, force),
     rename: (title: string) => renameSession(sessionId, title),
     restart: () => restartSession(sessionId),
+    cancelCreation: () => cancelSessionCreation(sessionId),
+    retryCreation: () => retrySessionCreation(sessionId),
     createCheckpoint: (label: string) => createCheckpoint(sessionId, label),
     updateTags: (tags: string[]) => updateSession(sessionId, { tags }),
     update: (updates: Partial<UpdateSessionRequest>) =>

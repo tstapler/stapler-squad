@@ -5,7 +5,7 @@ import { vars } from "@/styles/theme.css";
 // footer/buttons, kbd, checkbox row) now lives in a common location so other
 // walkthrough modals (e.g. BacklogTourModal) don't have to reach into this
 // feature's implementation-detail CSS module — see
-// .claude/rules/css-architecture.md. Re-exported here so this file's existing
+// docs/reference/css-architecture.md. Re-exported here so this file's existing
 // imports keep working unchanged.
 export * from "@/components/ui/ModalTour.css";
 

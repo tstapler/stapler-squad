@@ -14,9 +14,7 @@ import (
 // outside; this is the in-package equivalent since github_test files here are
 // `package github`, not `package github_test`).
 func resetGhBaseURL(ts *httptest.Server) func() {
-	prev := GhBaseURL
-	GhBaseURL = ts.URL + "/"
-	return func() { GhBaseURL = prev }
+	return SetGhBaseURLForTest(ts.URL + "/")
 }
 
 func TestGetCommit(t *testing.T) {
@@ -71,6 +69,7 @@ func TestGetCommit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			resetRateLimiterForTest(t)
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tt.retryAfter != "" {
 					w.Header().Set("Retry-After", tt.retryAfter)

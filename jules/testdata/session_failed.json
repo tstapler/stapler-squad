@@ -1,0 +1,9 @@
+{
+  "name": "sessions/1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "state": "FAILED",
+  "title": "Migrate the config loader to viper",
+  "createTime": "2026-09-01T09:11:03Z",
+  "updateTime": "2026-09-01T09:18:44Z",
+  "url": "https://jules.google.com/session/1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+}

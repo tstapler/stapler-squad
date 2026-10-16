@@ -7,6 +7,7 @@ import (
 )
 
 func TestNotificationRateLimiter_Allow(t *testing.T) {
+	t.Parallel()
 	// Create limiter with 10/sec, burst of 20
 	rl := NewNotificationRateLimiter(10, 20)
 
@@ -26,6 +27,7 @@ func TestNotificationRateLimiter_Allow(t *testing.T) {
 }
 
 func TestNotificationRateLimiter_MultipleSessions(t *testing.T) {
+	t.Parallel()
 	rl := NewNotificationRateLimiter(10, 5)
 
 	session1 := "session-1"
@@ -48,6 +50,7 @@ func TestNotificationRateLimiter_MultipleSessions(t *testing.T) {
 }
 
 func TestNotificationRateLimiter_Recovery(t *testing.T) {
+	t.Parallel()
 	// Create limiter with high rate for faster test
 	rl := NewNotificationRateLimiter(100, 1)
 
@@ -70,6 +73,7 @@ func TestNotificationRateLimiter_Recovery(t *testing.T) {
 }
 
 func TestNotificationRateLimiter_Cleanup(t *testing.T) {
+	t.Parallel()
 	rl := NewNotificationRateLimiter(10, 20)
 
 	// Create limiters for multiple sessions
@@ -90,6 +94,7 @@ func TestNotificationRateLimiter_Cleanup(t *testing.T) {
 }
 
 func TestNotificationRateLimiter_Reset(t *testing.T) {
+	t.Parallel()
 	rl := NewNotificationRateLimiter(10, 2)
 
 	sessionID := "test-session"

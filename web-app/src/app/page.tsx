@@ -2,7 +2,6 @@
 // +feature: session-list session-search session-filter session-groupby session-list-collapse-groups
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
-import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
@@ -18,14 +17,41 @@ import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
+import type { PaneAction } from "@/lib/pane/paneTypes";
+import { useWindowManager } from "@/lib/window/useWindowManager";
+import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
+import type { WindowId } from "@/lib/window/windowTypes";
+import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
+import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { findSessionById as findSessionByIdIn } from "./findSessionById";
+import { SessionUnavailableCard } from "@/components/sessions/SessionUnavailableCard";
+import { useNotificationRecord } from "@/lib/hooks/useNotificationRecord";
+import {
+  classifyGetSessionFailure,
+  parseSessionDeepLink,
+  shouldResolveViaGetSession,
+  type SessionDeepLinkParams,
+  type SessionLookupOutcome,
+} from "./sessionDeepLink";
+import { useOmnibarQueryParamLaunch } from "./useOmnibarQueryParamLaunch";
+import { DeleteSessionConfirmModal } from "./DeleteSessionConfirmModal";
+import { useResumeSessionFlow } from "./useResumeSessionFlow";
 import * as styles from "./page.css";
+
+// A hidden session is not in the watch stream, so an open one is polled for status changes.
+const FALLBACK_SESSION_REFRESH_MS = 5_000;
+const MAX_FALLBACK_SESSIONS = 5;
 
 function HomeContent() {
   usePageView();
   const { track } = useAnalytics();
+  const { addNotification, notificationHistory } = useNotifications();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -36,25 +62,42 @@ function HomeContent() {
   // j/k keyboard navigation index within the session list
   const [focusedSessionIndex, setFocusedSessionIndex] = useState<number>(-1);
 
+  // List/Board view mode — lifted here (rather than called again deep in the pane
+  // tree) so the 'b' shortcut below and SessionListPaneBody's render both observe
+  // the same state instead of two independent useSessionViewMode() instances.
+  const [viewMode, setViewMode] = useSessionViewMode();
+
   // Tiling: tracks the most-recently-clicked session to route to the focused pane.
   // Using a counter-based key so that clicking the same session again still triggers.
   const [externalAssignCounter, setExternalAssignCounter] = useState(0);
   const [externalAssignSession, setExternalAssignSession] = useState<{ sessionId: string; tab: SessionDetailTab; forceNewPane?: boolean } | null>(null);
-
-
-  // Resume modal state
-  const [resumeTarget, setResumeTarget] = useState<Session | null>(null);
 
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
   const sessionDetailRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
+  const windowTabStripRef = useRef<WindowTabStripHandle>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
   // changes the `sessions` dependency but not the URL itself).
   const lastUrlRoutedRef = useRef<{ sessionId: string | null; tab: string | null }>({ sessionId: null, tab: null });
+
+  // Guards the hidden-session fallback fetch (below) so it fires once per
+  // sessionId instead of refiring on every `sessions` stream update.
+  const hiddenSessionFallbackRef = useRef<string | null>(null);
+
+  // Sessions resolved through getSession because the live list does not carry them
+  // (hidden sessions). They are handed to the pane tree only, never to the session list.
+  const [fallbackSessions, setFallbackSessions] = useState<Record<string, Session>>({});
+  // Set when the deep link's session could not be opened: gone (not_found) or a
+  // retryable lookup failure (failed). Rendered as a card, never a 404 or blank screen.
+  const [lookup, setLookup] = useState<{
+    sessionId: string;
+    notificationId: string | null;
+    status: Exclude<SessionLookupOutcome, "found">;
+  } | null>(null);
 
   // Focus detail panel when session opens; return focus on close
   useEffect(() => {
@@ -67,14 +110,7 @@ function HomeContent() {
   }, [selectedSession]);
 
   // Trap focus inside delete confirmation dialog; return focus on close
-  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget);
-  useEffect(() => {
-    if (!deleteConfirmTarget && lastFocusBeforeDelete.current) {
-      lastFocusBeforeDelete.current.focus();
-      lastFocusBeforeDelete.current = null;
-    }
-  }, [deleteConfirmTarget]);
-
+  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
 
   const {
     sessions,
@@ -85,52 +121,64 @@ function HomeContent() {
     resumeSession,
     renameSession,
     restartSession,
+    pinSession,
+    unpinSession,
+    retrySession,
     clearConversationState,
     createCheckpoint,
     listCheckpoints,
     forkSession,
-    runOneShot,
     listSessions,
     updateSession,
     getSession,
+    hasLoadedOnce,
+    error: sessionsError,
   } = useSessionServiceContext();
 
+  const paneSessions = useMemo(() => {
+    const extras = Object.values(fallbackSessions).filter((f) => !sessions.some((s) => s.id === f.id));
+    return extras.length > 0 ? [...sessions, ...extras] : sessions;
+  }, [sessions, fallbackSessions]);
+
+  const {
+    resumeTarget,
+    resumeTriggerRef,
+    handleResumeRequest,
+    handleDirectResume,
+    handleResumeConfirm,
+    handleResumeCancel,
+  } = useResumeSessionFlow(resumeSession, track);
+
+  // Multi-window layer (Epic 2.2): useWindowManager owns the windows array/persistence;
+  // useWindowUrlSync resolves which window this tab is showing from `?window=`. Neither
+  // hook has a notion of "the active window" on its own (ADR-001) — currentWindow is
+  // derived here by looking up currentWindowId in the windows array.
+  // createWindow/closeWindow/renameWindow have no UI to call them from yet — WindowTabStrip
+  // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
+  const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
+    useWindowManager(paneSessions);
+  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
+  const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
+  const paneDispatch = useCallback(
+    (action: PaneAction) => dispatchPane(currentWindow.id, action),
+    [dispatchPane, currentWindow.id]
+  );
+  // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
+  // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
+  // inline editor double-click/F2 already open, not a separate native prompt.
+  const handleWindowRenameRequest = useCallback(
+    (id: WindowId) => {
+      const target = windows.find((w) => w.id === id);
+      if (target) windowTabStripRef.current?.beginEdit(id, target.name);
+    },
+    [windows]
+  );
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
   // Helper function to find a session by ID with fuzzy matching for external sessions
-  const findSessionById = useCallback((sessionId: string): Session | undefined => {
-    let session = sessions.find((s) => s.id === sessionId);
-    if (session) return session;
-
-    session = sessions.find((s) => {
-      if (s.id.startsWith(sessionId)) return true;
-      if (s.externalMetadata?.tmuxSessionName === sessionId) return true;
-      if (sessionId.includes("/") && s.path && s.path.includes(sessionId)) return true;
-      if (s.path && s.path.endsWith(`/${sessionId}`)) return true;
-      return false;
-    });
-
-    if (!session && sessionId.includes("_")) {
-      const withoutPrefix = sessionId.split("_").slice(1).join("_");
-      session = sessions.find((s) => s.id === withoutPrefix || s.title === withoutPrefix);
-    }
-
-    if (!session) {
-      const searchLower = sessionId.toLowerCase();
-      session = sessions.find((s) => {
-        if (s.title.toLowerCase() === searchLower) return true;
-        const pathBasename = s.path?.split("/").pop()?.toLowerCase();
-        if (pathBasename === searchLower) return true;
-        return false;
-      });
-    }
-
-    if (!session) {
-      console.warn(`[findSessionById] No session found for ID: ${sessionId}`, {
-        availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.path }))
-      });
-    }
-
-    return session;
-  }, [sessions]);
+  const findSessionById = useCallback(
+    (sessionId: string): Session | undefined => findSessionByIdIn(sessions, sessionId),
+    [sessions]
+  );
 
   // Update URL with session and tab parameters
   const updateUrl = useCallback((sessionId: string | null, tab: SessionDetailTab | null) => {
@@ -160,74 +208,126 @@ function HomeContent() {
     }
   }, [pendingSessionId, sessions, findSessionById, updateUrl]);
 
-  // Handle direct session selection from URL
-  useEffect(() => {
-    const sessionId = searchParams.get("session");
-    const tabParam = searchParams.get("tab");
-    const newPaneParam = searchParams.get("newPane");
-    if (sessionId && sessions.length > 0) {
-      const session = findSessionById(sessionId);
-      if (session) {
-        setSelectedSession(session);
-        const resolvedTab = isValidTab(tabParam) ? tabParam : "terminal";
-        setActiveTab(resolvedTab);
-        // Only route to pane when URL params actually changed. The `sessions` dependency
-        // causes this effect to re-run on every stream update; without this guard the
-        // picker would re-appear after every session status change.
-        if (lastUrlRoutedRef.current.sessionId !== sessionId || lastUrlRoutedRef.current.tab !== tabParam) {
-          lastUrlRoutedRef.current = { sessionId, tab: tabParam };
-          setExternalAssignCounter((c) => c + 1);
-          setExternalAssignSession({
-            sessionId: session.id,
-            tab: resolvedTab,
-            forceNewPane: newPaneParam === "true",
-          });
-        }
-        // Clean up newPane param from URL after consuming it
-        if (newPaneParam === "true") {
-          const params = new URLSearchParams();
-          params.set("session", sessionId);
-          if (tabParam) params.set("tab", tabParam);
-          router.replace(`/?${params.toString()}`, { scroll: false });
-        }
-      } else {
-        console.warn(`[URL] Session not found: ${sessionId}`);
+  // Routes to a resolved session — shared by the in-list (findSessionById)
+  // and hidden-session (getSession fallback) paths below so both apply the
+  // exact same tab/pane wiring.
+  const routeToResolvedSession = useCallback(
+    (session: Session, sessionId: string, tabParam: string | null, newPaneParam: string | null) => {
+      setSelectedSession(session);
+      const resolvedTab = isValidTab(tabParam) ? tabParam : "terminal";
+      setActiveTab(resolvedTab);
+      // Only route to pane when URL params actually changed. The `sessions` dependency
+      // causes this effect to re-run on every stream update; without this guard the
+      // picker would re-appear after every session status change.
+      if (lastUrlRoutedRef.current.sessionId !== sessionId || lastUrlRoutedRef.current.tab !== tabParam) {
+        lastUrlRoutedRef.current = { sessionId, tab: tabParam };
+        setExternalAssignCounter((c) => c + 1);
+        setExternalAssignSession({
+          sessionId: session.id,
+          tab: resolvedTab,
+          forceNewPane: newPaneParam === "true",
+        });
       }
+      // Clean up newPane param from URL after consuming it
+      if (newPaneParam === "true") {
+        const params = new URLSearchParams();
+        params.set("session", sessionId);
+        if (tabParam) params.set("tab", tabParam);
+        router.replace(`/?${params.toString()}`, { scroll: false });
+      }
+    },
+    [router]
+  );
+
+  // Not in the locally-fetched list — e.g. a Diagnose & Nudge diagnostic
+  // session, dispatched with hidden=true so it doesn't clutter the main
+  // session list (server/services/session_service.go's
+  // SpawnDiagnosticSession). ListSessions excludes hidden sessions by
+  // default and this component never passes includeHidden, so such a
+  // session can never appear in `sessions` — without this fallback, its
+  // "View diagnostic session" deep link (StuckItemDetail.tsx) would silently
+  // no-op. GetSession, unlike ListSessions, doesn't filter on Hidden, so a
+  // direct-by-UUID lookup still resolves it. Guarded by
+  // hiddenSessionFallbackRef so it fires once per sessionId, not on every
+  // `sessions` stream update.
+  const fetchHiddenSessionFallback = useCallback(
+    (link: SessionDeepLinkParams, force = false) => {
+      const { sessionId } = link;
+      if (!sessionId) return;
+      if (!force && hiddenSessionFallbackRef.current === sessionId) return;
+      hiddenSessionFallbackRef.current = sessionId;
+      let failure: SessionLookupOutcome = "not_found";
+      getSession(sessionId, {
+        onFailure: (err) => {
+          failure = classifyGetSessionFailure(err);
+        },
+      }).then((fetched) => {
+        // A newer deep link superseded this lookup while it was in flight.
+        if (hiddenSessionFallbackRef.current !== sessionId) return;
+        if (!fetched) {
+          setLookup({
+            sessionId,
+            notificationId: link.notificationId,
+            status: failure === "failed" ? "failed" : "not_found",
+          });
+          return;
+        }
+        setLookup(null);
+        setFallbackSessions((prev) => {
+          const kept = Object.entries(prev).filter(([id]) => id !== fetched.id).slice(-(MAX_FALLBACK_SESSIONS - 1));
+          return { ...Object.fromEntries(kept), [fetched.id]: fetched };
+        });
+        routeToResolvedSession(fetched, sessionId, link.tab, link.newPane);
+      });
+    },
+    [getSession, routeToResolvedSession]
+  );
+
+  // Handle direct session selection from URL. A cold deep link arrives with an empty
+  // list: the fallback runs once the list request has settled, not on `sessions.length`.
+  useEffect(() => {
+    const link = parseSessionDeepLink(searchParams);
+    if (!link.sessionId) {
+      hiddenSessionFallbackRef.current = null;
+      setLookup((prev) => (prev ? null : prev));
+      return;
     }
-  }, [searchParams, sessions, findSessionById, router]);
+
+    const session = findSessionById(link.sessionId);
+    if (session) {
+      setLookup((prev) => (prev ? null : prev));
+      routeToResolvedSession(session, link.sessionId, link.tab, link.newPane);
+      return;
+    }
+    const listSettled = hasLoadedOnce === true || sessions.length > 0 || sessionsError != null;
+    if (!shouldResolveViaGetSession({ sessionId: link.sessionId, foundInList: false, listSettled })) return;
+    fetchHiddenSessionFallback(link);
+  }, [searchParams, sessions, hasLoadedOnce, sessionsError, findSessionById, routeToResolvedSession, fetchHiddenSessionFallback]);
+
+  // Keep a fallback session's status current: the watch stream never carries hidden sessions.
+  const openFallbackIds = useMemo(() => Object.keys(fallbackSessions).join(","), [fallbackSessions]);
+  useEffect(() => {
+    const ids = openFallbackIds ? openFallbackIds.split(",") : [];
+    if (ids.length === 0) return;
+    const timer = setInterval(() => {
+      for (const id of ids) {
+        void getSession(id, { onFailure: () => {} }).then((fresh) => {
+          if (fresh) setFallbackSessions((prev) => (prev[id] ? { ...prev, [id]: fresh } : prev));
+        });
+      }
+    }, FALLBACK_SESSION_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [openFallbackIds, getSession]);
+
+  const lookupNotification = useNotificationRecord(
+    notificationHistory,
+    lookup?.notificationId ?? null,
+    lookup?.sessionId ?? null,
+    lookup?.status === "not_found",
+  );
 
   // Detect ?new=true, ?pr=<url>, ?duplicate=<id>, or ?worktree=<path>&branch=<branch> query params
-  useEffect(() => {
-    const newParam = searchParams.get("new");
-    const prUrl = searchParams.get("pr");
-    const duplicateId = searchParams.get("duplicate");
-    const worktreePath = searchParams.get("worktree");
-    const worktreeBranch = searchParams.get("branch");
-    const title = searchParams.get("title");
-
-    if (prUrl) {
-      router.replace("/", { scroll: false });
-      openOmnibar(prUrl);
-    } else if (newParam === "true") {
-      router.replace("/", { scroll: false });
-      openOmnibar();
-    } else if (duplicateId) {
-      router.replace("/", { scroll: false });
-      track({ name: "session_duplicate_initiated", category: "user_action" });
-      getSession(duplicateId).then((session) => {
-        openOmnibar(session?.path);
-      }).catch(() => {
-        openOmnibar();
-      });
-    } else if (worktreePath) {
-      router.replace("/", { scroll: false });
-      // Pass path@branch so the PathWithBranch detector pre-fills both fields
-      openOmnibar(
-        worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath,
-        title || undefined
-      );
-    }
-  }, [searchParams, getSession, openOmnibar, router, track]);
+  useOmnibarQueryParamLaunch(searchParams, router, openOmnibar, track, getSession);
 
   // Close session and clear URL query parameter
   const closeSession = () => {
@@ -251,7 +351,7 @@ function HomeContent() {
   const handleNewWorkspaceSession = (sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
     getSession(sessionId).then((session) => {
-      openOmnibar(session?.path);
+      openOmnibar(session?.repoRoot);
     }).catch(() => {
       openOmnibar();
     });
@@ -286,38 +386,34 @@ function HomeContent() {
     }
   }, [updateSession, track]);
 
-  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
-    track({ name: "session_autonomous_steer", category: "user_action" });
-    await updateSession(sessionId, { steerMessage: message });
+  const handleTogglePinned = useCallback(async (sessionId: string, pinned: boolean): Promise<void> => {
+    track({ name: "session_pinned_updated", category: "user_action" });
+    await (pinned ? pinSession(sessionId) : unpinSession(sessionId));
+  }, [pinSession, unpinSession, track]);
+
+  const handleToggleAutoApprove = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
+    track({ name: "session_auto_approve_updated", category: "user_action" });
+    try {
+      await updateSession(sessionId, { autoApprove: enabled });
+    } catch (err) {
+      console.error("[page] toggleAutoApprove failed:", err);
+    }
   }, [updateSession, track]);
 
-  const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
-    await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
-  }, [runOneShot]);
-
-  const handleResumeRequest = useCallback((session: Session) => {
-    setResumeTarget(session);
-  }, []);
-
-  const handleDirectResume = useCallback((session: Session) => {
-    track({ name: "session_resumed", category: "user_action" });
-    resumeSession(session.id, { title: session.title, tags: [...(session.tags || [])] });
-  }, [resumeSession, track]);
-
-  const handleResumeConfirm = useCallback(async (updates: { title: string; tags: string[] }) => {
-    if (!resumeTarget) return;
-    try {
-      track({ name: "session_resumed", category: "user_action" });
-      await resumeSession(resumeTarget.id, updates);
-      setResumeTarget(null);
-    } catch {
-      // resumeSession dispatches to Redux error state; modal stays open for retry
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<boolean> => {
+    track({ name: "session_autonomous_steer", category: "user_action" });
+    const result = await updateSession(sessionId, { steerMessage: message });
+    if (result === null) {
+      addNotification({
+        message: "Failed to send steering message — the session may not be running.",
+        notificationType: "error",
+        sessionId,
+        sessionName: "",
+      });
+      return false;
     }
-  }, [resumeTarget, resumeSession, track]);
-
-  const handleResumeCancel = useCallback(() => {
-    setResumeTarget(null);
-  }, []);
+    return true;
+  }, [updateSession, track, addNotification]);
 
   const handleSessionClick = (session: Session) => {
     sessionTriggerRef.current = document.activeElement as HTMLElement;
@@ -356,7 +452,7 @@ function HomeContent() {
       if (deleteConfirmTarget) {
         setDeleteConfirmTarget(null);
       } else if (resumeTarget) {
-        setResumeTarget(null);
+        handleResumeCancel();
       } else if (selectedSession) {
         closeSession();
       }
@@ -373,6 +469,12 @@ function HomeContent() {
       setFocusedSessionIndex(prev =>
         sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
       );
+    },
+    // List/Board view toggle. useKeyboard's default ignoreElements (INPUT/TEXTAREA/SELECT)
+    // already covers the instant-search box, so this never fires while typing "b" into it.
+    "b": () => {
+      if (deleteConfirmTarget || resumeTarget) return;
+      setViewMode(viewMode === "board" ? "list" : "board");
     },
     "k": () => {
       if (deleteConfirmTarget || resumeTarget) return;
@@ -400,7 +502,13 @@ function HomeContent() {
     },
     "d": () => {
       if (selectedSession && !deleteConfirmTarget) {
-        lastFocusBeforeDelete.current = document.activeElement as HTMLElement;
+        // document.activeElement is unreliable here: the effect above focuses
+        // sessionDetailRef (the cockpit container) whenever selectedSession is
+        // set, so by the time this fires, activeElement is that container, not
+        // the row that was actually clicked. sessionTriggerRef still holds the
+        // real opener; fall back to activeElement only for the deep-link case
+        // where a session was selected without a click (no captured trigger).
+        lastFocusBeforeDelete.current = sessionTriggerRef.current ?? (document.activeElement as HTMLElement);
         setDeleteConfirmTarget(selectedSession);
       }
     },
@@ -422,45 +530,81 @@ function HomeContent() {
     onNewWorkspaceSession: handleNewWorkspaceSession,
     onRenameSession: renameSession,
     onRestartSession: restartSession,
+    onRetryNowSession: retrySession,
     onUpdateTags: handleUpdateTags,
     onNewSession: handleNewSession,
     onCreateCheckpoint: createCheckpoint,
     onListCheckpoints: listCheckpoints,
     onForkFromCheckpoint: forkSession,
-    onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
+    onTogglePinned: handleTogglePinned,
+    onToggleAutoApprove: handleToggleAutoApprove,
     onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
   }), [
     handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
-    restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
-    listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
-    handleToggleAutonomousMode, handleSteerAutonomousSession, clearConversationState, listSessions,
+    restartSession, retrySession, handleUpdateTags, handleNewSession, createCheckpoint,
+    listCheckpoints, forkSession, handleSetRateLimitEnabled,
+    handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (
     <div className={styles.page}>
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
       <CockpitActionsProvider value={cockpitActions}>
-        <div
-          ref={sessionDetailRef}
-          className={styles.cockpitContainer}
-          tabIndex={-1}
-          role="region"
-          aria-label="Session cockpit"
-          data-context="cockpit"
-        >
-          <PaneTilingContainer
-            sessions={sessions}
-            externalSessionAssign={externalAssignSession ? {
-              ...externalAssignSession,
-              version: externalAssignCounter,
-            } : null}
+        <SessionViewModeProvider value={{ viewMode, setViewMode }}>
+          <WindowTabStrip
+            ref={windowTabStripRef}
+            windows={windows}
+            currentWindowId={currentWindow.id}
+            onSwitch={switchToWindow}
+            onCreate={() => switchToWindow(createWindow())}
+            onClose={(id) => {
+              const next = closeWindow(id);
+              if (id === currentWindow.id && next) switchToWindow(next);
+            }}
+            onRename={renameWindow}
           />
-        </div>
+          {lookup ? (
+            <SessionUnavailableCard
+              variant={lookup.status === "failed" ? "failed" : "unavailable"}
+              sessionLabel={lookup.sessionId.slice(0, 8)}
+              notification={lookup.status === "not_found" ? lookupNotification : null}
+              onOpenNotifications={() => router.push("/notifications")}
+              onGoToSessions={() => {
+                setLookup(null);
+                updateUrl(null, null);
+              }}
+              onRetry={() => {
+                const link = parseSessionDeepLink(searchParams);
+                setLookup(null);
+                fetchHiddenSessionFallback(link, true);
+              }}
+            />
+          ) : (
+            <div
+              ref={sessionDetailRef}
+              className={styles.cockpitContainer}
+              tabIndex={-1}
+              role="region"
+              aria-label="Session cockpit"
+              data-context="cockpit"
+            >
+              <PaneTilingContainer
+                sessions={paneSessions}
+                paneState={currentWindow.paneState}
+                dispatch={paneDispatch}
+                externalSessionAssign={externalAssignSession ? {
+                  ...externalAssignSession,
+                  version: externalAssignCounter,
+                } : null}
+              />
+            </div>
+          )}
+        </SessionViewModeProvider>
       </CockpitActionsProvider>
 
       {/* Resume session modal */}
@@ -471,46 +615,18 @@ function HomeContent() {
           sessions={sessions}
           onConfirm={handleResumeConfirm}
           onCancel={handleResumeCancel}
+          triggerRef={resumeTriggerRef}
         />
       )}
 
       {/* Delete confirmation modal (triggered by 'd' keyboard shortcut) */}
-      {deleteConfirmTarget && createPortal(
-        <div className={styles.modal} onClick={() => setDeleteConfirmTarget(null)}>
-          <div
-            ref={deleteDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="deleteConfirmTitle"
-            tabIndex={-1}
-            className={styles.modalContent}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => { if (e.key === "Escape") setDeleteConfirmTarget(null); }}
-          >
-            <div className={styles.modalHeader}>
-              <h2 id="deleteConfirmTitle">Delete Session</h2>
-              <button className={styles.closeButton} onClick={() => setDeleteConfirmTarget(null)} aria-label="Close">✕</button>
-            </div>
-            <div className={styles.modalBody}>
-              <p>Delete &quot;{deleteConfirmTarget.title}&quot;?</p>
-              <p style={{ color: "var(--error, #ef4444)", fontSize: "0.875rem", marginTop: "0.5rem" }}>This action cannot be undone.</p>
-              <div className={styles.deleteConfirmActions}>
-                <button autoFocus className={styles.cancelButton} onClick={() => setDeleteConfirmTarget(null)}>Cancel</button>
-                <button
-                  className={styles.dangerButton}
-                  onClick={async () => {
-                    const target = deleteConfirmTarget;
-                    setDeleteConfirmTarget(null);
-                    await handleDeleteSession(target.id);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
+      {deleteConfirmTarget && (
+        <DeleteSessionConfirmModal
+          target={deleteConfirmTarget}
+          dialogRef={deleteDialogRef}
+          onCancel={() => setDeleteConfirmTarget(null)}
+          onConfirm={handleDeleteSession}
+        />
       )}
     </div>
   );

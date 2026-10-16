@@ -1,0 +1,16 @@
+{
+  "id": "session:diagnose-assemble-bundle",
+  "type": "backend",
+  "service": "DiagnosticService",
+  "method": "AssembleDiagnosticBundle",
+  "protoFile": "proto/session/v1/diagnose.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/diagnostic_service.go",
+  "tested": true,
+  "testIds": [
+    "TestAssembleDiagnosticBundle_should_IncludeItemContent_When_ItemExists",
+    "TestAssembleDiagnosticBundle_should_Error_When_ItemDoesNotExist",
+    "TestDiagnosticService_AssembleDiagnosticBundle_IncludesAllSections"
+  ],
+  "lastModified": "2026-09-27T22:47:32.790291049-07:00"
+}

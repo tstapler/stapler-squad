@@ -214,6 +214,16 @@ export const actionButton = style({
   },
 });
 
+export const disabledReason = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const blockedByLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
 export const actionButtonDone = style({
   background: vars.statusBadge.completeBg,
   color: vars.statusBadge.completeFg,
@@ -223,4 +233,26 @@ export const actionButtonDone = style({
     background: vars.statusBadge.completeBg,
     borderColor: vars.statusBadge.completeBorder,
   },
+});
+
+export const claimChip = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  height: "20px",
+  maxWidth: "100%",
+  minWidth: 0,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+});
+
+export const claimChipLabel = style({
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 });

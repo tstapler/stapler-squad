@@ -39,7 +39,7 @@ export const icon = style({
 export const slug = style({
   fontFamily: vars.font.mono,
   fontSize: vars.fontSize.sm,
-  color: vars.color.accentHover,
+  color: vars.color.accentText,
   flexShrink: 0,
   minWidth: "8rem",
 });

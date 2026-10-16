@@ -1,0 +1,16 @@
+{
+  "id": "import:confirm_kill",
+  "type": "backend",
+  "service": "ImportService",
+  "method": "ConfirmKillExternalSession",
+  "protoFile": "proto/session/v1/import.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/import_service.go",
+  "tested": true,
+  "testIds": [
+    "TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_InstanceIdEmpty",
+    "TestImportService_ThreeMutatingRPCs_ReturnUnimplemented_When_FeatureFlagUnset",
+    "TestImportService_AllFourRPCs_ExecuteNormally_When_FeatureFlagTrue"
+  ],
+  "lastModified": "2026-07-27T12:45:03.989768954-07:00"
+}

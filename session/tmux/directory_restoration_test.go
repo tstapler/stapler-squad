@@ -299,6 +299,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 
 // TestDirectoryResolutionEdgeCases tests edge cases in directory resolution
 func TestDirectoryResolutionEdgeCases(t *testing.T) {
+	t.Parallel()
 	t.Run("NonExistentDirectory", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec, _ := createMockExecutorForMissingSession()

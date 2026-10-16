@@ -13,6 +13,7 @@ import (
 )
 
 func TestProcessInspector_OpenFiles_IncludesRealFile(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	files, err := inspector.OpenFiles(int32(os.Getpid()))
 	require.NoError(t, err)
@@ -20,6 +21,7 @@ func TestProcessInspector_OpenFiles_IncludesRealFile(t *testing.T) {
 }
 
 func TestProcessInspector_Cwd_MatchesOsGetwd(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	cwd, err := inspector.Cwd(int32(os.Getpid()))
 	require.NoError(t, err)
@@ -34,6 +36,7 @@ func TestProcessInspector_Cwd_MatchesOsGetwd(t *testing.T) {
 }
 
 func TestProcessInspector_CreateTime_ReturnsPositive(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	ct, err := inspector.CreateTime(int32(os.Getpid()))
 	require.NoError(t, err)
@@ -46,6 +49,7 @@ func TestProcessInspector_CreateTime_ReturnsPositive(t *testing.T) {
 }
 
 func TestProcessInspector_IsAlive_CorrectCreateTime(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	ct, err := inspector.CreateTime(int32(os.Getpid()))
 	require.NoError(t, err)
@@ -55,6 +59,7 @@ func TestProcessInspector_IsAlive_CorrectCreateTime(t *testing.T) {
 }
 
 func TestProcessInspector_IsAlive_DetectsPIDReuse(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	// Use wrong create time (epoch 0 — clearly incorrect)
 	alive := inspector.IsAlive(int32(os.Getpid()), 0)
@@ -62,6 +67,7 @@ func TestProcessInspector_IsAlive_DetectsPIDReuse(t *testing.T) {
 }
 
 func TestProcessInspector_NonExistentPID_ReturnsError(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	files, err := inspector.OpenFiles(99999999)
 	// Should either return error or empty slice — must not panic
@@ -71,6 +77,7 @@ func TestProcessInspector_NonExistentPID_ReturnsError(t *testing.T) {
 }
 
 func TestProcessInspector_PermissionDenied_ReturnsEmptyNotError(t *testing.T) {
+	t.Parallel()
 	inspector := NewProcessInspector()
 	// PID 1 (launchd on macOS) — may be permission denied
 	files, err := inspector.OpenFiles(1)

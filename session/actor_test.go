@@ -57,6 +57,17 @@ func newActorTestInstance(t *testing.T) *Instance {
 // actor goroutine THIS test started") - and fails on those unrelated leaks
 // depending on run order/scheduling (observed in CI, not reproducible with
 // -run isolating just this test locally).
+// Not t.Parallel(): goleak.IgnoreCurrent()'s baseline only protects against
+// goroutines that already existed when it was captured — it does nothing
+// about ones created *during* this test's own window. In this package's
+// large t.Parallel() suite, a sibling top-level test's own t.Parallel() call
+// spawns a goroutine parked in testing.(*testState).waitParallel; if that
+// dispatch happens while this test is mid-flight, goleak.VerifyNone sees it
+// as "new" and reports a false leak (observed: TestStatusFromDetected and
+// TestCanTransition_InvalidTransitions's parked wait-goroutines flagged as
+// unexpected). Running non-parallel keeps the Go test runner from dispatching
+// any other top-level test while this one's baseline-to-VerifyNone window is
+// open, closing that race entirely.
 func TestActorNoLeak(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
@@ -69,6 +80,7 @@ func TestActorNoLeak(t *testing.T) {
 // TestActorSendSync confirms that sendSync enqueues a command, the actor
 // executes it, and the atomic snapshot is updated afterwards.
 func TestActorSendSync(t *testing.T) {
+	t.Parallel()
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
@@ -86,8 +98,9 @@ func TestActorSendSync(t *testing.T) {
 // TestActorStopIdempotent confirms that calling Stop() more than once does not
 // panic, deadlock, or close the done channel twice.
 //
-// See TestActorNoLeak for why this baselines via goleak.IgnoreCurrent()
-// instead of a bare process-wide goleak.VerifyNone().
+// Not t.Parallel(): see TestActorNoLeak's doc comment — the same
+// goleak.IgnoreCurrent()-baseline-then-VerifyNone() window is unsafe under
+// t.Parallel() in this package's shared test binary.
 func TestActorStopIdempotent(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)

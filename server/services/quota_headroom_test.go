@@ -8,6 +8,7 @@ import (
 )
 
 func TestComputeHeadroom_should_ExcludeOutOfWindowTurns_When_SummingUsage(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	results := []*tokens.ParseResult{
 		{
@@ -32,6 +33,7 @@ func TestComputeHeadroom_should_ExcludeOutOfWindowTurns_When_SummingUsage(t *tes
 }
 
 func TestComputeHeadroom_should_ReturnInvalidEstimate_When_AssumedBudgetIsZeroOrStoreIsLoading(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	results := []*tokens.ParseResult{
 		{
@@ -42,6 +44,7 @@ func TestComputeHeadroom_should_ReturnInvalidEstimate_When_AssumedBudgetIsZeroOr
 	}
 
 	t.Run("uncalibrated budget", func(t *testing.T) {
+		t.Parallel()
 		estimate := computeHeadroom(results, 0, false, now)
 		if estimate.Valid {
 			t.Error("Valid = true, want false (AssumedWindowTokenBudget<=0)")
@@ -52,6 +55,7 @@ func TestComputeHeadroom_should_ReturnInvalidEstimate_When_AssumedBudgetIsZeroOr
 	})
 
 	t.Run("loading store with calibrated budget", func(t *testing.T) {
+		t.Parallel()
 		estimate := computeHeadroom(results, 1000, true, now)
 		if estimate.Valid {
 			t.Error("Valid = true, want false (isLoading must force invalid regardless of budget)")
@@ -63,6 +67,7 @@ func TestComputeHeadroom_should_ReturnInvalidEstimate_When_AssumedBudgetIsZeroOr
 }
 
 func TestComputeHeadroom_should_ClampPctRemainingToZero_When_UsageExceedsBudget(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	results := []*tokens.ParseResult{
 		{
@@ -80,6 +85,7 @@ func TestComputeHeadroom_should_ClampPctRemainingToZero_When_UsageExceedsBudget(
 }
 
 func TestComputeHeadroom_should_ReturnZeroUsage_When_ResultsEmpty(t *testing.T) {
+	t.Parallel()
 	estimate := computeHeadroom(nil, 1000, false, time.Now())
 
 	if estimate.TokensUsed != 0 {

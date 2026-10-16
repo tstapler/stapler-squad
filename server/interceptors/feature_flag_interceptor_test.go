@@ -35,3 +35,26 @@ func TestNewFeatureFlagInterceptor_FlagDisabled(t *testing.T) {
 		t.Errorf("expected CodeNotFound (%d), got %v", connect.CodeNotFound, connectErr.Code())
 	}
 }
+
+// TestProcedureMethodName_ExtractsBareMethod_When_GivenFullyQualifiedProcedure
+// covers the helper NewScopedFeatureFlagInterceptor uses to match gated
+// method names against connect.Spec().Procedure ("/pkg.Service/Method").
+// Full end-to-end gating behavior (which requires a real *connect.Request
+// with a populated Spec -- not constructible outside the connect package) is
+// covered by the ImportService-level tests in
+// server/services/import_service_test.go
+// (TestImportService_ThreeMutatingRPCs_ReturnUnimplemented_When_FeatureFlagUnset
+// and friends), which spin up a real handler+client pair over httptest.
+func TestProcedureMethodName_ExtractsBareMethod_When_GivenFullyQualifiedProcedure(t *testing.T) {
+	cases := map[string]string{
+		"/session.v1.ImportService/CommitImportExternalSession":  "CommitImportExternalSession",
+		"/session.v1.ImportService/PreviewImportExternalSession": "PreviewImportExternalSession",
+		"NoSlashes": "NoSlashes",
+		"":          "",
+	}
+	for procedure, want := range cases {
+		if got := procedureMethodName(procedure); got != want {
+			t.Errorf("procedureMethodName(%q) = %q, want %q", procedure, got, want)
+		}
+	}
+}

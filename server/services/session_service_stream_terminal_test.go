@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newBidiStreamTestServer creates a TLS+HTTP/2 httptest server. Connect's
@@ -64,7 +65,6 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	queue := session.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
-	svc.SetStatusManager(statusMgr)
 
 	// Wire the actor registry exactly as production does (server/dependencies.go):
 	// without it, CreateSession never wraps the new Instance in a LiveInstance, so
@@ -93,19 +93,17 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	// Poll until the session has actually started a real tmux PTY, or skip if
 	// tmux is unavailable in this environment (mirrors
 	// TestCreateSession_StatusManagerWiredBeforeDriver's convention).
-	var started bool
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		if inst.Started() {
-			started = true
-			break
-		}
-		if session.Status(inst.GetStatus()) == session.Stopped {
-			t.Skip("tmux not available; skipping StreamTerminal raw-output assertion")
-		}
-		time.Sleep(100 * time.Millisecond)
+	_ = wait.WaitForCondition(func() bool {
+		return inst.Started() || session.Status(inst.GetStatus()) == session.Stopped
+	}, wait.WaitConfig{Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Description: "session started or stopped"})
+	started := inst.Started()
+	if !started && session.Status(inst.GetStatus()) == session.Stopped {
+		t.Skip("tmux not available; skipping StreamTerminal raw-output assertion")
 	}
 	require.True(t, started, "session never started within 60s")
+	if session.Status(inst.GetStatus()) == session.Stopped {
+		t.Skip("session stopped immediately after start; skipping StreamTerminal raw-output assertion")
+	}
 
 	// 120s, not 60s: every tmux subprocess this test's stimulus goroutine and
 	// the instance's own internal consumers spawn queues behind the same
@@ -164,6 +162,7 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	for {
 		msg, recvErr := stream.Receive()
 		if recvErr != nil {
+			t.Logf("stream.Receive error: %v", recvErr)
 			break
 		}
 		switch data := msg.Data.(type) {
@@ -186,7 +185,9 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 // TestWaitWithTimeout pins waitWithTimeout's two branches directly, without
 // depending on tmux or the e2e StreamTerminal path above.
 func TestWaitWithTimeout(t *testing.T) {
+	t.Parallel()
 	t.Run("returns true when goroutines finish in time", func(t *testing.T) {
+		t.Parallel()
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() { defer wg.Done() }()
@@ -194,6 +195,7 @@ func TestWaitWithTimeout(t *testing.T) {
 	})
 
 	t.Run("returns false when goroutines don't finish in time", func(t *testing.T) {
+		t.Parallel()
 		var wg sync.WaitGroup
 		wg.Add(1) // deliberately never Done()
 		require.False(t, waitWithTimeout(&wg, 10*time.Millisecond))

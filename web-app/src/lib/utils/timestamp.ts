@@ -2,6 +2,20 @@ import type { Timestamp } from "@bufbuild/protobuf/wkt";
 
 export type DateFilter = "all" | "today" | "week" | "month";
 
+/**
+ * protoTimestampToDate converts a protobuf Timestamp to a Date, including the
+ * sub-second nanos component (unlike this file's other helpers, which only use
+ * `seconds`). Shared by TriggersPanel.tsx and TriggerExecutionHistory.tsx, which
+ * previously carried two divergent inline copies of this arithmetic — one returning a
+ * Date, the other returning an ISO string. Returns Date so callers format as needed
+ * (toLocaleString, relative-time, etc.) rather than baking in one representation.
+ */
+export const protoTimestampToDate = (timestamp: Timestamp | undefined): Date | null => {
+  if (!timestamp) return null;
+  const ms = Number(timestamp.seconds) * 1000 + Math.floor(timestamp.nanos / 1e6);
+  return new Date(ms);
+};
+
 export const formatTimeAgo = (timestamp: Timestamp | undefined): string => {
   if (!timestamp) return "N/A";
   const now = Date.now();

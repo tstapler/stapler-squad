@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // staticSource is a test implementation of WorktreeSource that returns a fixed
@@ -26,6 +27,7 @@ func (s *staticSource) GetWorktrees() []session.WorktreeScanItem {
 }
 
 func TestWorktreePRPoller_GetPRData_NilBeforeData(t *testing.T) {
+	t.Parallel()
 	poller := session.NewWorktreePRPoller(github.NewETagCache(), nil)
 	got := poller.GetPRData("/some/repo", "feature-branch")
 	if got != nil {
@@ -34,6 +36,7 @@ func TestWorktreePRPoller_GetPRData_NilBeforeData(t *testing.T) {
 }
 
 func TestWorktreePRPoller_SetOnUpdated_Atomic(t *testing.T) {
+	t.Parallel()
 	poller := session.NewWorktreePRPoller(github.NewETagCache(), nil)
 	called := make(chan struct{}, 1)
 	poller.SetOnUpdated(func(repoPath, branch string, info *github.PRInfo) {
@@ -67,6 +70,9 @@ func TestWorktreePRPoller_SkipsEmptyRepoPath(t *testing.T) {
 	poller.SetSource(src)
 	ctx := t.Context()
 	poller.Start(ctx)
-	time.Sleep(50 * time.Millisecond)
+	// The loop seeds from the source at start; one more scan-done pass being
+	// consumed proves the first pass finished. Stop then joins the loop.
+	src.done <- time.Now()
+	wait.RequireEventually(t, func() bool { return len(src.done) == 0 }, 5*time.Second, time.Millisecond)
 	poller.Stop()
 }

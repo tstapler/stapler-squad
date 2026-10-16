@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // eventuallyTimeout/eventuallyPoll bound every hot-reload assertion below to
@@ -49,7 +50,7 @@ func TestPluginWatcher_should_detectNewFileWithoutRestart_When_validTomlIsAdded(
 	writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
 
 	sd := NewStatusDetector()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return sd.DetectForProgram([]byte("Thinking..."), "my-agent") == StatusProcessing
 	}, eventuallyTimeout, eventuallyPoll, "new plugin file was not hot-reloaded within timeout")
 }
@@ -61,7 +62,7 @@ func TestPluginWatcher_should_detectEditedFileWithoutRestart_When_regexChanges(t
 	path := writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
 
 	sd := NewStatusDetector()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return sd.DetectForProgram([]byte("Thinking..."), "my-agent") == StatusProcessing
 	}, eventuallyTimeout, eventuallyPoll, "initial plugin file was not loaded within timeout")
 
@@ -77,7 +78,7 @@ status = "needs_approval"
 		t.Fatalf("failed to edit plugin file: %v", err)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return sd.DetectForProgram([]byte("Proceed?"), "my-agent") == StatusNeedsApproval
 	}, eventuallyTimeout, eventuallyPoll, "edited plugin file was not hot-reloaded within timeout")
 }
@@ -88,7 +89,7 @@ func TestPluginWatcher_should_removeBinaryFromProvenance_When_pluginFileIsDelete
 
 	path := writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		_, ok := DetectorProvenance()["my-agent"]
 		return ok
 	}, eventuallyTimeout, eventuallyPoll, "plugin file was not loaded within timeout")
@@ -97,7 +98,7 @@ func TestPluginWatcher_should_removeBinaryFromProvenance_When_pluginFileIsDelete
 		t.Fatalf("failed to remove plugin file: %v", err)
 	}
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		_, ok := DetectorProvenance()["my-agent"]
 		return !ok
 	}, eventuallyTimeout, eventuallyPoll, "removed plugin file's binary name was not dropped from provenance within timeout")
@@ -109,7 +110,7 @@ func TestPluginWatcher_should_restoreBuiltin_When_overridingPluginFileIsDeleted(
 
 	path := writePluginFile(t, dir, "claude-override.toml", validPluginTOML("claude-override", []string{"claude"}))
 
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return DetectorProvenance()["claude"] == path
 	}, eventuallyTimeout, eventuallyPoll, "override plugin file was not loaded within timeout")
 
@@ -118,7 +119,7 @@ func TestPluginWatcher_should_restoreBuiltin_When_overridingPluginFileIsDeleted(
 	}
 
 	sd := NewStatusDetector()
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		return DetectorProvenance()["claude"] == "" &&
 			sd.DetectForProgram([]byte("esc to interrupt"), "claude") == StatusExecuting
 	}, eventuallyTimeout, eventuallyPoll, "built-in claude detector was not restored within timeout after override removal")
@@ -130,17 +131,22 @@ func TestPluginWatcher_should_collapseBurstIntoOneReload_When_sameFileWrittenRep
 
 	before := rebuildCount.Load()
 
+	// Writes are issued back-to-back with no inter-write sleep: the burst
+	// must land inside a single pluginReloadDebounce (200ms) window, and
+	// under CI scheduler contention even a 5ms-per-iteration sleep (50ms
+	// total) could erode enough of that margin to split the burst across
+	// two debounce windows and produce a spurious second rebuild — see the
+	// FAIL in https://github.com/tstapler/stapler-squad/actions/runs/32808236831.
 	path := filepath.Join(dir, "my-agent.toml")
 	for i := 0; i < 10; i++ {
 		if err := os.WriteFile(path, []byte(validPluginTOML("my-agent", []string{"my-agent"})), 0o644); err != nil {
 			t.Fatalf("iteration %d: failed to write plugin file: %v", i, err)
 		}
-		time.Sleep(5 * time.Millisecond) // stay well inside pluginReloadDebounce (200ms)
 	}
 
 	// Wait for the debounced reload to land, then hold steady for a further
 	// window to prove no second reload follows.
-	require.Eventually(t, func() bool {
+	wait.RequireEventually(t, func() bool {
 		_, ok := DetectorProvenance()["my-agent"]
 		return ok
 	}, eventuallyTimeout, eventuallyPoll, "burst-written plugin file was never loaded")
@@ -161,6 +167,7 @@ func TestPluginWatcher_should_collapseBurstIntoOneReload_When_sameFileWrittenRep
 // entries (e.g. the example.toml.sample seed file) so an unrelated file drop
 // doesn't trigger an unnecessary full rebuild.
 func TestPluginDirFingerprint_should_changeOnlyWhenTomlEntriesChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	fp1, err := pluginDirFingerprint(dir)
@@ -256,6 +263,7 @@ func TestPluginWatcher_should_skipRebuild_When_periodicTickFindsNoDirectoryChang
 // copies — this is what lets buildSnapshot skip recompiling identical
 // patterns once per binary name.
 func TestPluginDetector_should_shareOneCompiledPatternSet_When_fileDeclaresMultipleBinaryNames(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePluginFile(t, dir, "multi.toml", validPluginTOML("multi-agent", []string{"agent-a", "agent-b", "agent-c"}))
 
@@ -283,6 +291,7 @@ func TestPluginDetector_should_shareOneCompiledPatternSet_When_fileDeclaresMulti
 // produces for a plugin binary name must wrap the exact PatternSet pointer
 // the PluginDetector already compiled, not a freshly-recompiled one.
 func TestBuildSnapshot_should_reuseCompiledPatternSet_When_detectorProvidesOne(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
 

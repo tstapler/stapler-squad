@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
@@ -70,6 +71,10 @@ func (s *BacklogService) AttachSessionToItem(
 	// shared main checkout, used by countless other things), so a re-review
 	// computed its diff against whatever unrelated commits had landed there
 	// between review rounds — a wrong verdict, not a stuck one.
+	// attachedBranchName feeds the ItemSession's branch_name (step 5 below) — see
+	// ItemSession.branch_name's schema comment for why this needs to be captured
+	// at attach time rather than read back later from the Session/Worktree rows.
+	var attachedBranchName string
 	if instances, loadErr := s.storage.LoadInstances(); loadErr == nil {
 		for _, inst := range instances {
 			if inst.UUID != req.Msg.SessionUuid {
@@ -81,6 +86,7 @@ func (s *BacklogService) AttachSessionToItem(
 					fmt.Errorf("session %q's working directory is the item's shared repo checkout (%q) — attach requires a dedicated worktree or directory so review diffs, reopen, and ship stay scoped to this item's own work",
 						req.Msg.SessionUuid, item.RepoPath))
 			}
+			attachedBranchName = inst.Snapshot().Branch
 			break
 		}
 	}
@@ -93,16 +99,19 @@ func (s *BacklogService) AttachSessionToItem(
 	// the session being attached (mirrors SpawnSessionFromItem's ordering).
 	attachPriorSessions, priorErr := s.storage.ListItemSessions(ctx, item.ID)
 	if priorErr != nil {
-		log.WarningLog.Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
+		log.WarningLog().Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
 		attachPriorSessions = nil
 	}
 
-	// 5. Create ItemSession.
+	// 5. Create ItemSession. ClaimantHostID is the attaching process's own
+	// identity (s.cfg), never derived from req.Msg or the attached session.
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: req.Msg.SessionUuid,
-		SessionRole: session.SessionRoleWork,
-		AcSnapshot:  acSnapshot,
+		ItemID:         item.ID,
+		SessionUUID:    req.Msg.SessionUuid,
+		SessionRole:    session.SessionRoleWork,
+		BranchName:     attachedBranchName,
+		AcSnapshot:     acSnapshot,
+		ClaimantHostID: s.claimantHostID(),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
@@ -137,7 +146,7 @@ func (s *BacklogService) AttachSessionToItem(
 				// UUID) doesn't race the next periodic SaveInstances sweep — same fix as
 				// SpawnSessionFromItem.
 				if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
-					log.WarningLog.Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
+					log.WarningLog().Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 				}
 				break
 			}
@@ -145,9 +154,9 @@ func (s *BacklogService) AttachSessionToItem(
 	}
 
 	// 7. Transition item to in_progress (only if the state machine permits it).
-	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
+	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress, session.BuildStageConfigSnapshotFallback(item)) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
-			log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
+			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real
 			// session is now attached and running while the item's status still
 			// says otherwise.
@@ -267,6 +276,33 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fetch GitHub issue: %w", err))
 	}
 
+	// Dedup: this issue may already have been imported (double-click, re-run of
+	// a bulk-import selection that partially failed, etc). external_url is the
+	// issue's own URL, globally unique on its own — unlike external_id (see
+	// GetBacklogItemByExternalID's doc comment), no ItemSource scoping is
+	// needed since a manual import has no source row to scope by.
+	if existing, lookupErr := s.storage.GetBacklogItemByExternalURL(ctx, issue.URL); lookupErr == nil {
+		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
+			Item:           backlogItemToProto(existing, s.engine, s.buildCostLookup()),
+			AlreadyExisted: true,
+		}), nil
+	} else if !errors.Is(lookupErr, session.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check for existing import: %w", lookupErr))
+	}
+
+	gate, claimErr := s.gateOnClaim(ctx, preCreateClaimCheck{
+		ExternalURL: issue.URL,
+		Override:    req.Msg.Override,
+		Reason:      req.Msg.OverrideReason,
+		LogPrefix:   "import_github_issue",
+	})
+	if claimErr != nil {
+		return nil, claimErr
+	}
+	if gate.Claimed != nil {
+		return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
+	}
+
 	repoPath := req.Msg.RepoPath
 	if repoPath == "" {
 		var resolveErr error
@@ -283,6 +319,8 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		Status:       string(session.BacklogStatusIdea),
 		RepoPath:     repoPath,
 		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
+		ExternalID:   strconv.Itoa(ref.IssueNumber),
+		ExternalURL:  issue.URL,
 		PipelineMode: defaultPipelineModeForNewItem(nil),
 	})
 	if err != nil {
@@ -292,7 +330,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 	triageTriggered := s.MaybeTriggerTriage(ctx, created.ID, req.Msg.SkipPlanning, created.RepoPath)
 
 	return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
-		Item:            backlogItemToProto(created, s.buildCostLookup()),
+		Item:            backlogItemToProto(created, s.engine, s.buildCostLookup()),
 		TriageTriggered: triageTriggered,
 	}), nil
 }

@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/github"
 )
 
 // These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
@@ -24,19 +26,31 @@ import (
 // machine that has one stored.
 
 // withGitHubTestServer points githubAPIBaseURL at ts for the duration of the test.
+//
+// Also resets github.DefaultRateLimiter: it's a package-level global shared
+// by every test in this binary, and since rateLimitTransport.RoundTrip fails
+// fast when it's already limited (github/http_client.go), a test that
+// deliberately triggers a rate-limit response (e.g.
+// TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError) otherwise
+// poisons every GitHub-calling test that runs after it for up to 60s.
 func withGitHubTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(handler)
 	orig := githubAPIBaseURL
 	githubAPIBaseURL = ts.URL
+	origLimiter := github.DefaultRateLimiter
+	github.DefaultRateLimiter = &github.RateLimiter{}
 	t.Cleanup(func() {
 		githubAPIBaseURL = orig
+		github.DefaultRateLimiter = origLimiter
 		ts.Close()
+		github.DefaultRateLimiter.Reset()
 	})
 	return ts
 }
 
 func TestGitHubIssuesPlugin_PluginID(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "github_issues", NewGitHubIssuesPlugin().PluginID())
 }
 
@@ -46,6 +60,7 @@ func TestGitHubIssuesPlugin_PluginID(t *testing.T) {
 // of "". If MockInit is ever dropped from TestMain, this test starts failing
 // on any machine with a real GitHub account connected.
 func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, cursor, err := p.Fetch(context.Background(), cfg, "old-cursor")
@@ -55,6 +70,7 @@ func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 }
 
 func TestGitHubIssuesPlugin_Fetch_ErrorsWhenOwnerOrRepoMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"token":"tok"}`}
 	_, _, err := p.Fetch(context.Background(), cfg, "")
@@ -137,6 +153,7 @@ func TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues(t *testing.T) {
 }
 
 func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
+	github.ResetRateLimiterForTest(t)
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
@@ -221,6 +238,7 @@ func TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit(t *testing
 // Fetch's "disabled source" contract: FetchAll must not attempt any request
 // when no token is configured.
 func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, cursor, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "old-cursor")
@@ -231,6 +249,7 @@ func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) 
 }
 
 func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubIssuesPlugin()
 	longTitle := make([]byte, 300)
 	longDesc := make([]byte, 3000)
@@ -310,6 +329,7 @@ func TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField(t *testing.T) {
 // X-RateLimit-Remaining:0 response surfaces a descriptive error rather than
 // panicking.
 func TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError(t *testing.T) {
+	github.ResetRateLimiterForTest(t)
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("Retry-After", "60")
@@ -370,10 +390,12 @@ func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
 }
 
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, "github_prs", NewGitHubPRsPlugin().PluginID())
 }
 
 func TestGitHubPRsPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubPRsPlugin()
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, _, err := p.Fetch(context.Background(), cfg, "")
@@ -418,6 +440,8 @@ func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testin
 func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.T) {
 	const prCount = 12
 	var inFlight, maxInFlight int32
+	saturated := make(chan struct{})
+	var saturatedOnce sync.Once
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/acme/widgets/pulls":
@@ -443,7 +467,15 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 					break
 				}
 			}
-			time.Sleep(20 * time.Millisecond) // widen the overlap window so concurrent requests actually coincide
+			// Hold this request open until the bounded pool is saturated (or a
+			// safety deadline passes) so concurrent requests actually coincide.
+			if atomic.LoadInt32(&maxInFlight) >= int32(githubCILabelConcurrency) {
+				saturatedOnce.Do(func() { close(saturated) })
+			}
+			select {
+			case <-saturated:
+			case <-time.After(2 * time.Second):
+			}
 
 			var num int
 			fmt.Sscanf(r.URL.Path, "/repos/acme/widgets/commits/sha-%d/check-runs", &num)
@@ -476,6 +508,7 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 }
 
 func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
+	t.Parallel()
 	p := NewGitHubPRsPlugin()
 	longTitle := make([]byte, 300)
 	for i := range longTitle {

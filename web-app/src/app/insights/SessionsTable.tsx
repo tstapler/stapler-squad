@@ -1,11 +1,12 @@
 // +feature: insights-dashboard
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import Fuse from "fuse.js";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
+import { LiveRegion } from "@/components/ui/LiveRegion";
 import {
   tableCard,
   tableHeader,
@@ -28,27 +29,86 @@ import {
   virtualContainer,
   clickableRow,
   sortableTh,
+  sortOrderHint,
+  roleFilterChip,
+  roleFilterChipClear,
 } from "./SessionsTable.css";
-import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
+import { fmtCost, fmtTokens, fmtPct, shortId, pathBasename, roleDisplayLabel } from "./insightsFormatters";
 
 interface Props {
   sessions: SessionTokenSummary[];
   onSessionClick?: (session: SessionTokenSummary) => void;
   backlogIndex?: Map<string, BacklogIndexEntry>;
+  /**
+   * Controlled search text (Task 5.2.2a) — when provided alongside
+   * onSearchTextChange, the table's search box reflects/drives this value
+   * instead of its own internal state. Omitting both preserves the table's
+   * original fully-uncontrolled behavior for every existing caller.
+   */
+  searchText?: string;
+  onSearchTextChange?: (text: string) => void;
+  /**
+   * Cross-filter set by a StageCostChart bar/legend click (Task 5.2.2c) —
+   * an additional array filter applied before Fuse's text search runs, not
+   * fuzzy-matched as free text. Renders a "Filtered to: <role> ×" chip
+   * (Task 5.2.2e) when set.
+   */
+  roleFilter?: string;
+  onClearRoleFilter?: () => void;
 }
 
-function pathBasename(p: string): string {
-  return p.split("/").pop() || p;
+// sessionDurationSeconds returns lastMessageAt - firstMessageAt in seconds,
+// or 0 when either timestamp is missing (documented decision: unlike cost, a
+// missing duration isn't "bad," so it sorts at its natural numeric position
+// rather than being pushed to either end — see SortColumn's "duration" case).
+function sessionDurationSeconds(s: SessionTokenSummary): number {
+  if (!s.firstMessageAt || !s.lastMessageAt) return 0;
+  return Number(s.lastMessageAt.seconds) - Number(s.firstMessageAt.seconds);
+}
+
+function fmtDuration(seconds: number): string {
+  if (seconds <= 0) return "—";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins === 0) return `${secs}s`;
+  return `${mins}m ${secs}s`;
+}
+
+function fmtSignedCost(usd: number): string {
+  const sign = usd < 0 ? "-" : "+";
+  return `${sign}$${Math.abs(usd).toFixed(2)}`;
 }
 
 const VIRTUOSO_THRESHOLD = 50;
 
-type SortColumn = "input" | "output" | "cache" | "cost";
+type SortColumn =
+  | "input"
+  | "output"
+  | "cache"
+  | "cost"
+  | "duration"
+  | "costPerMessage"
+  | "cacheRoi"
+  | "wasteScore";
 
-export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props) {
+export function SessionsTable({
+  sessions,
+  onSessionClick,
+  backlogIndex,
+  searchText: controlledSearchText,
+  onSearchTextChange,
+  roleFilter,
+  onClearRoleFilter,
+}: Props) {
   const [showOrphans, setShowOrphans] = useState(true);
-  const [searchText, setSearchText] = useState("");
+  const [internalSearchText, setInternalSearchText] = useState("");
+  // Controlled/uncontrolled hybrid (Task 5.2.2a): a caller supplying both
+  // props drives the search box; every other caller keeps the original
+  // fully-uncontrolled behavior unchanged.
+  const searchText = controlledSearchText ?? internalSearchText;
+  const setSearchText = onSearchTextChange ?? setInternalSearchText;
   const [modelFilter, setModelFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [sortCol, setSortCol] = useState<SortColumn | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -68,7 +128,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   const fuse = useMemo(
     () =>
       new Fuse(fuseDocs, {
-        keys: ["session.projectPath", "backlogTitle"],
+        keys: ["session.projectPath", "backlogTitle", "session.tags"],
         threshold: 0.4,
       }),
     [fuseDocs]
@@ -82,6 +142,11 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     return Array.from(seen).sort();
   }, [sessions]);
 
+  const uniqueTags = useMemo(
+    () => Array.from(new Set(sessions.flatMap((s) => s.tags ?? []))).sort(),
+    [sessions]
+  );
+
   const displayed = useMemo(() => {
     let result: SessionTokenSummary[];
 
@@ -93,6 +158,19 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
 
     if (modelFilter) {
       result = result.filter((s) => s.primaryModel === modelFilter);
+    }
+
+    if (tagFilter) {
+      result = result.filter((s) => s.tags?.includes(tagFilter));
+    }
+
+    // Role cross-filter (Task 5.2.2c) — applied as its own array filter, not
+    // fuzzy-matched through Fuse's free-text search, since a role name isn't
+    // meant to be searched, only exactly matched. Explicit !== undefined (not
+    // truthiness): "" is itself a real, filterable role value — the
+    // no-backlog-attribution bucket — distinct from "no filter selected".
+    if (roleFilter !== undefined) {
+      result = result.filter((s) => s.sessionRole === roleFilter);
     }
 
     if (!showOrphans) {
@@ -118,6 +196,38 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         const cmp = a.estimatedCostUsd - b.estimatedCostUsd;
         return sortAsc ? cmp : -cmp;
       }
+      if (sortCol === "costPerMessage") {
+        // messageCount === 0 sorts last regardless of direction — mirrors
+        // the "cost" unpriced-last guard above, avoiding a raw N/0 division
+        // that would produce NaN/Infinity.
+        const aZero = a.messageCount === 0;
+        const bZero = b.messageCount === 0;
+        if (aZero !== bZero) return aZero ? 1 : -1;
+        if (aZero && bZero) return 0;
+        const cmp = a.estimatedCostUsd / a.messageCount - b.estimatedCostUsd / b.messageCount;
+        return sortAsc ? cmp : -cmp;
+      }
+      if (sortCol === "cacheRoi") {
+        // Unpriced sessions (ROI undefined) always sort last — same guard
+        // shape as "cost". Negative ROI values are real data and sort
+        // normally alongside positive ones.
+        const aUnpriced = a.unpricedModels.length > 0;
+        const bUnpriced = b.unpricedModels.length > 0;
+        if (aUnpriced !== bUnpriced) return aUnpriced ? 1 : -1;
+        const cmp = a.cacheRoiUsd - b.cacheRoiUsd;
+        return sortAsc ? cmp : -cmp;
+      }
+      if (sortCol === "wasteScore") {
+        // Sort-last bucket covers both "unpriced" and "not evaluated"
+        // (wasteScore undefined) — which of the two a given row is doesn't
+        // affect sort order, only its cell text (see renderCells).
+        const aMissing = a.unpricedModels.length > 0 || a.wasteScore === undefined;
+        const bMissing = b.unpricedModels.length > 0 || b.wasteScore === undefined;
+        if (aMissing !== bMissing) return aMissing ? 1 : -1;
+        if (aMissing && bMissing) return 0;
+        const cmp = (a.wasteScore as number) - (b.wasteScore as number);
+        return sortAsc ? cmp : -cmp;
+      }
       let cmp = 0;
       switch (sortCol) {
         case "input":
@@ -129,10 +239,16 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         case "cache":
           cmp = a.cacheHitRate - b.cacheHitRate;
           break;
+        case "duration":
+          // Missing timestamps default to 0 — a missing duration isn't
+          // "bad" like a missing price, so it sorts at its natural numeric
+          // position rather than being pushed to either end.
+          cmp = sessionDurationSeconds(a) - sessionDurationSeconds(b);
+          break;
       }
       return sortAsc ? cmp : -cmp;
     });
-  }, [sessions, searchText, modelFilter, showOrphans, fuse, sortCol, sortAsc]);
+  }, [sessions, searchText, modelFilter, tagFilter, roleFilter, showOrphans, fuse, sortCol, sortAsc]);
 
   const handleSortClick = useCallback((col: SortColumn) => {
     // Reads sortCol from closure rather than nesting setSortAsc inside
@@ -154,12 +270,32 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     [sortCol, sortAsc]
   );
 
-  const hasActiveFilters = searchText !== "" || modelFilter !== "";
+  const hasActiveFilters = searchText !== "" || modelFilter !== "" || tagFilter !== "" || roleFilter !== undefined;
 
   function clearFilters() {
     setSearchText("");
     setModelFilter("");
+    setTagFilter("");
   }
+
+  // Announces the role cross-filter's state change (ux.md Surface B+C step
+  // 7 / AC21) — a screen-reader user learns the table narrowed or the
+  // filter cleared without needing to re-scan the table. Only fires on a
+  // roleFilter transition, not on every displayed.length change (e.g. a
+  // live session update while filtered would otherwise re-announce
+  // needlessly).
+  const prevRoleFilterRef = useRef<string | undefined>(roleFilter);
+  const [roleFilterAnnouncement, setRoleFilterAnnouncement] = useState("");
+  useEffect(() => {
+    if (prevRoleFilterRef.current === roleFilter) return;
+    if (roleFilter !== undefined) {
+      setRoleFilterAnnouncement(`Filtered to ${roleDisplayLabel(roleFilter)}, showing ${displayed.length} sessions`);
+    } else if (prevRoleFilterRef.current !== undefined) {
+      setRoleFilterAnnouncement("Filter cleared, showing all sessions");
+    }
+    prevRoleFilterRef.current = roleFilter;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleFilter]);
 
   const handleRowKeyDown = useCallback((e: React.KeyboardEvent<HTMLTableRowElement>, s: SessionTokenSummary) => {
     if ((e.key === "Enter" || e.key === " ") && onSessionClick) {
@@ -168,9 +304,11 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     }
   }, [onSessionClick]);
 
-  const sortableHeaderCell = (col: SortColumn, label: string) => (
+  const sortableHeaderCell = (col: SortColumn, label: string, title?: string) => (
     <th
       className={thRight}
+      title={title}
+      scope="col"
       aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}
     >
       <span
@@ -193,13 +331,21 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
 
   const headerContent = () => (
     <tr>
-      <th className={th}>Session</th>
-      <th className={th}>Model</th>
-      <th className={th}>Path</th>
+      <th className={th} scope="col">Session</th>
+      <th className={th} scope="col">Model</th>
+      <th className={th} scope="col">Path</th>
       {sortableHeaderCell("input", "Input")}
       {sortableHeaderCell("output", "Output")}
       {sortableHeaderCell("cache", "Cache")}
       {sortableHeaderCell("cost", "Cost")}
+      {sortableHeaderCell("duration", "Duration")}
+      {sortableHeaderCell("costPerMessage", "Cost/Msg")}
+      {sortableHeaderCell("cacheRoi", "Cache ROI")}
+      {sortableHeaderCell(
+        "wasteScore",
+        "Waste Score",
+        "Weighted 0-100 badness blend, not dollars. Higher is worse. Empty (\"Not evaluated\") means too few turns to evaluate."
+      )}
     </tr>
   );
 
@@ -216,15 +362,18 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
           ) : (
             shortId(s.sessionId || s.conversationId)
           )}
+          {!backlogEntry && s.sessionRole && (
+            <span className={backlogBadge} data-testid="role-badge">{s.sessionRole}</span>
+          )}
           {backlogEntry && (
             <a
               href={`/backlog?item=${backlogEntry.itemId}`}
               className={backlogBadge}
               data-testid="backlog-badge"
-              title={`${backlogEntry.sessionRole}: ${backlogEntry.itemTitle}`}
+              title={`${backlogEntry.sessionRole || s.sessionRole}: ${backlogEntry.itemTitle}`}
               onClick={(e) => e.stopPropagation()}
             >
-              {backlogEntry.sessionRole}: {backlogEntry.itemTitle}
+              {backlogEntry.sessionRole || s.sessionRole}: {backlogEntry.itemTitle}
             </a>
           )}
         </td>
@@ -232,10 +381,30 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         <td className={td} title={s.projectPath}>{pathBasename(s.projectPath) || "—"}</td>
         <td className={tdRight}>{fmtTokens(s.totalInputTokens)}</td>
         <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
-        <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
+        <td className={tdRight} title={`${fmtTokens(s.cacheReadTokens)} read, ${fmtTokens(s.cacheCreationTokens)} written`}>
+          {fmtPct(s.cacheHitRate)}
+        </td>
         <td className={tdRight}>
           {fmtCost(s.estimatedCostUsd)}
           {s.unpricedModels.length > 0 && <span className={unpricedBadge}>unpriced</span>}
+        </td>
+        <td className={tdRight}>{fmtDuration(sessionDurationSeconds(s))}</td>
+        <td className={tdRight}>
+          {s.messageCount === 0 ? "Not evaluated" : fmtCost(s.estimatedCostUsd / s.messageCount)}
+        </td>
+        <td className={tdRight}>
+          {s.unpricedModels.length > 0 ? (
+            <span className={unpricedBadge}>unpriced</span>
+          ) : (
+            fmtSignedCost(s.cacheRoiUsd)
+          )}
+        </td>
+        <td className={tdRight}>
+          {s.unpricedModels.length > 0
+            ? "—"
+            : s.wasteScore === undefined
+              ? "Not evaluated"
+              : s.wasteScore}
         </td>
       </>
     );
@@ -245,7 +414,10 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
     Table: ({ style: s, ...props }: React.ComponentPropsWithRef<"table">) => (
       <table className={table} style={s} {...props} />
     ),
-    TableHead: (props: React.ComponentPropsWithRef<"thead">) => <thead {...props} />,
+    // eslint-disable-next-line react/display-name
+    TableHead: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"thead">>(
+      (props, ref) => <thead ref={ref} {...props} />
+    ),
     // eslint-disable-next-line react/display-name
     TableBody: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"tbody">>(
       (props, ref) => <tbody ref={ref} {...props} />
@@ -254,6 +426,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       const s = displayed[dataIndex];
       return (
         <tr
+          data-index={dataIndex}
           {...props}
           className={onSessionClick ? clickableRow : undefined}
           onClick={onSessionClick && s ? () => onSessionClick(s) : undefined}
@@ -272,12 +445,31 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   return (
     <div className={tableCard}>
       <div className={tableHeader}>
-        <div className={tableTitle}>{titleText}</div>
+        <div className={tableTitle}>
+          {titleText}
+          {sortCol === null && (
+            <span className={sortOrderHint}> — sorted by most recently active</span>
+          )}
+        </div>
         <div className={filterBar}>
+          {roleFilter !== undefined && (
+            <span className={roleFilterChip} data-testid="role-filter-chip">
+              Filtered to: {roleDisplayLabel(roleFilter)}
+              <button
+                type="button"
+                className={roleFilterChipClear}
+                onClick={onClearRoleFilter}
+                aria-label={`Clear filter: ${roleDisplayLabel(roleFilter)}`}
+              >
+                ×
+              </button>
+            </span>
+          )}
+          <LiveRegion message={roleFilterAnnouncement} />
           <input
             type="search"
             className={searchInput}
-            placeholder="Search by path…"
+            placeholder="Search by path or tag…"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             aria-label="Search sessions by project path"
@@ -293,6 +485,19 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
+          {uniqueTags.length > 0 && (
+            <select
+              className={modelSelect}
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              aria-label="Filter by tag"
+            >
+              <option value="">All tags</option>
+              {uniqueTags.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          )}
           {hasActiveFilters && (
             <button
               type="button"

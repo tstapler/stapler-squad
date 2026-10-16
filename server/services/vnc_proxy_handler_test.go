@@ -37,6 +37,7 @@ func newTestInstanceForVNC(t *testing.T) *session.Instance {
 }
 
 func TestVNCProxyHandler_MissingSessionID_Returns400(t *testing.T) {
+	t.Parallel()
 	finder := &fakeInstanceFinder{inst: nil}
 	handler := NewVNCProxyHandler(finder)
 
@@ -52,6 +53,7 @@ func TestVNCProxyHandler_MissingSessionID_Returns400(t *testing.T) {
 }
 
 func TestVNCProxyHandler_UnknownSessionID_Returns404(t *testing.T) {
+	t.Parallel()
 	finder := &fakeInstanceFinder{inst: nil}
 	handler := NewVNCProxyHandler(finder)
 
@@ -66,6 +68,7 @@ func TestVNCProxyHandler_UnknownSessionID_Returns404(t *testing.T) {
 }
 
 func TestVNCProxyHandler_VNCPortZero_Returns503(t *testing.T) {
+	t.Parallel()
 	// A real *session.Instance with a noop VNCManager (Port()=0) triggers 503.
 	inst := newTestInstanceForVNC(t)
 

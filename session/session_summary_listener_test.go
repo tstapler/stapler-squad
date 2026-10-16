@@ -22,6 +22,7 @@ func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID
 }
 
 func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEventStoppedFireWithNormalReason(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		event LifecycleEvent
@@ -32,6 +33,7 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 	for _, tc := range tests {
 		event := tc.event
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			gen := newFakeSummaryGenerator()
 			inst := &Instance{Title: "test-session", UUID: "sess-123", CreatedAt: time.Now()}
 			l := &sessionSummaryListener{generator: gen, instance: inst}
@@ -51,6 +53,7 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 }
 
 func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissing(t *testing.T) {
+	t.Parallel()
 	gen := newFakeSummaryGenerator()
 	inst := &Instance{Title: "test-session", UUID: "sess-456", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
@@ -66,6 +69,7 @@ func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissin
 }
 
 func TestOnLifecycleEvent_should_NotDispatch_When_EventStarted(t *testing.T) {
+	t.Parallel()
 	gen := newFakeSummaryGenerator()
 	inst := &Instance{Title: "test-session", UUID: "sess-789", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}

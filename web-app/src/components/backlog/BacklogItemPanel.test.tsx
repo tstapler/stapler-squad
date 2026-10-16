@@ -93,11 +93,13 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     skipReviewGate: false,
     autoSpawnSession: false,
     autoCreatePR: false,
+    autoApprovePlan: false,
     planApproved: false,
     acCriteria: [{ index: 0, text: "Do the thing", status: "pending" }],
     linkedSessions: [],
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };
@@ -119,6 +121,7 @@ function makeRawItem(overrides: Record<string, unknown> = {}) {
     itemSessions: [],
     statusEvents: [],
     progressNotes: [],
+    activityNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };

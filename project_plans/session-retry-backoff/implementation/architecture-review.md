@@ -1,6 +1,6 @@
 # Architecture Review: session-retry-backoff
 **Date**: 2026-08-06
-**Verdict**: BLOCKED
+**Verdict**: BLOCKED (round 1) → **RESOLVED** (round 2, 2026-08-29, see addendum at end of file). This review was found un-actioned during `sdd:4-validate`'s readiness gate — round 1's 3 blockers (goroutine-killing `return`, per-call-site CAS instead of a single choke point, self-deadlocking RLock) had never been patched into `plan.md` despite `adversarial-review.md`'s separate round-1/round-2 cycle running afterward. All 3 blockers + the addressed Concerns now have concrete `plan.md` task revisions.
 
 ## Constitution Violations
 
@@ -9,7 +9,7 @@
 
 ## Blockers
 
-- [ ] **Epic 2.3, Stories 2.3.2/2.3.3 — the backoff tick-check has no goroutine left to run
+- [x] **RESOLVED (see Round 2 addendum below).** **Epic 2.3, Stories 2.3.2/2.3.3 — the backoff tick-check has no goroutine left to run
   it.** The plan's core design ("existing 2s poll-loop ticker checks
   `time.Now().After(NextRetryAt)` — no new goroutine/timer", Pattern Decisions table,
   "Backoff scheduling" row) requires the *same* ticker goroutine that detected the failure
@@ -47,7 +47,7 @@
     `RetryAttempt`/`RetryHistory` length stay constant across N ticks while `NextRetryAt` is
     still in the future (this is cheap to write and would have caught the bug immediately).
 
-- [ ] **Epic 2.4's `retryInFlight` CAS guard is only wired into `RetryNow()` — the automated
+- [x] **RESOLVED (see Round 2 addendum below).** **Epic 2.4's `retryInFlight` CAS guard is only wired into `RetryNow()` — the automated
   paths it's supposed to guard against never touch it.** The Domain Glossary and Pattern
   Decisions table both assert the guard closes races between "the automated backoff-expiry
   path and a manual 'Retry now' RPC" and that "every mutation path (automated backoff-expiry
@@ -70,7 +70,7 @@
     responsible for remembering it. Add Epic 2.4.2a's concurrency test against this
     single-choke-point version, not just `RetryNow()` racing itself.
 
-- [ ] **Epic 2.1.1b — `inst.mu.RLock()` read immediately preceding a call into
+- [x] **RESOLVED (see Round 2 addendum below).** **Epic 2.1.1b — `inst.mu.RLock()` read immediately preceding a call into
   `handleDriverFailure` (which takes `inst.mu.Lock()`) is a self-deadlock waiting to
   happen.** Task 2.1.1b directs: replace `retried.Load()` at lines ~203/~216 with a read of
   `inst.RetryState.RetryAttempt >= inst.RetryState.RetryMaxAttempts` under
@@ -96,7 +96,7 @@
 
 ## Concerns
 
-- [ ] **Epic 2.1.2 — `RetryPolicyOverride *RetryPolicyConfig` (Task 2.1.2a) claims to
+- [x] **RESOLVED (see Round 2 addendum below).** **Epic 2.1.2 — `RetryPolicyOverride *RetryPolicyConfig` (Task 2.1.2a) claims to
   mirror `ReworkCapOverride *int` but is a materially different shape.** `ReworkCapOverride`
   (`session/repository.go:379`) is a single nilable primitive — no internal optionality.
   `RetryPolicyOverride *RetryPolicyConfig` nests a *second* layer of optionality inside the
@@ -115,7 +115,7 @@
     (`RetryOn: ["crashed"]`) plus a partial override (`MaxAttempts` only), asserting the
     resolved `RetryOn` is still `["crashed"]`, not the all-three fallback default.
 
-- [ ] **`RetryPolicyConfig.Backoff string` is a field with no behavior behind it.**
+- [x] **RESOLVED (see Round 2 addendum below).** **`RetryPolicyConfig.Backoff string` is a field with no behavior behind it.**
   `backoffDelay(attempt, initial, max, jitterFraction)` (Task 1.1.1b) always computes
   exponential backoff — nothing in any task branches on the `Backoff` string's value. So
   `Backoff: "exponential"` and `Backoff: "linear"` (or a typo) produce byte-identical
@@ -128,7 +128,7 @@
     until a second backoff mode actually exists, and hardcode "exponential" as an internal
     constant/comment instead of a user-facing knob that does nothing.
 
-- [ ] **No validation on `RetryOn []string` entries.** `RetryOnOrDefault()` (Task 1.2.1b)
+- [x] **RESOLVED (see Round 2 addendum below).** **No validation on `RetryOn []string` entries.** `RetryOnOrDefault()` (Task 1.2.1b)
   only handles the *empty* case (defaults to all three); nothing validates that each
   provided entry is one of `"crashed"/"stalled"/"tmux_exited"`. A config typo (e.g.
   `"crashd"`) silently produces a policy that never matches `classifyFailureReason`'s output
@@ -140,7 +140,7 @@
     `RetryOnOrDefault`) that logs a warning and drops any entry not in the known set, so a
     typo degrades to "ignored with a log line" rather than "silently wrong forever."
 
-- [ ] **Layering: `evaluateSessionRetry`'s parameter type is `config.RetryPolicyConfig`, not
+- [x] **RESOLVED (see Round 2 addendum below).** **Layering: `evaluateSessionRetry`'s parameter type is `config.RetryPolicyConfig`, not
   a resolved session-domain type.** The Domain Glossary explicitly distinguishes
   `RetryPolicyConfig` (raw, config-package, nilable fields) from `RetryPolicy` *(resolved)* —
   "the effective, already-merged... value... threaded down as a plain parameter." But
@@ -159,7 +159,7 @@
     Inversion direction ADR-001 itself argues for elsewhere (domain state shouldn't leak
     config's representation choices) and costs one small struct + one conversion function.
 
-- [ ] **ADR-001's blast-radius safety claim doesn't hold uniformly across the 3 switches it
+- [x] **RESOLVED (see Round 2 addendum below).** **ADR-001's blast-radius safety claim doesn't hold uniformly across the 3 switches it
   cites.** ADR-001 states "All three have a `default:` fallback, so a missed case degrades
   to a wrong label... rather than a crash." Verified: `Status.String()`
   (`session/instance.go:50`) and `GetStatusDescription` (`session/instance_status.go:127`)
@@ -195,3 +195,24 @@
   at all (see Concerns above); "3 switches over `Status`, each degrading safely for a
   missed case (2 via explicit `default:`, 1 via no-op fallthrough)" would be more accurate
   for whoever implements Epic 2.5.
+
+---
+
+## Round 2 addendum (2026-08-29): resolution status
+
+| Finding | Resolution | Plan task(s) |
+|---|---|---|
+| Blocker 1 — backoff mechanism structurally can't fire (goroutine `return`, re-evaluation on every tick) | `return` removed for the `scheduled` case; `st == Stopped` branch reordered to check `NextRetryAt` before any re-evaluation; regression test added | 2.3.2a (revised), 2.3.2b (new), 2.3.2c (new), 2.3.3a (revised) |
+| Blocker 2 — `retryInFlight` CAS only wired into `RetryNow()`, not the automated paths | CAS moved into `restartForRetry` itself as the single choke point every caller goes through | 2.3.4a (revised), 2.3.3b (revised), 2.4.1a (revised), 2.4.1b (revised); Domain Glossary corrected |
+| Blocker 3 — `inst.mu.RLock()` at the call site self-deadlocks against `handleDriverFailure`'s `inst.mu.Lock()` | New `retryExhausted()` accessor releases the RLock before the caller reaches `handleDriverFailure`; `-race`+timeout test added | 2.1.1b (revised), 2.1.1b-1 (new) |
+| Concern — `RetryPolicyOverride` merge semantics unspecified (silent `RetryOn` widening risk) | Field-by-field merge spec added, resolved type now `session.RetryPolicy` (also closes the layering concern below) | 2.1.2b (revised), 2.1.2c (revised) |
+| Concern — `Backoff` field decorative (no validation) | Load-time validation + warning-and-fallback added | 1.2.1c (new) |
+| Concern — `RetryOn` entries unvalidated (silent typo) | `RetryOnOrDefault()` now drops unknown entries with a logged warning | 1.2.1b (revised) |
+| Concern — layering: `evaluateSessionRetry` took raw `config.RetryPolicyConfig` | New `session.RetryPolicy` domain type; `resolveRetryPolicy` is the sole conversion point | 2.1.2b (revised); Domain Glossary entry added |
+| Concern — ADR-001's "3 switches, all `default:`-safe" claim inaccurate for `reconcileSessions` | ADR-001 corrected in place | `decisions/ADR-001-...md` |
+
+**Caveat**: same as `adversarial-review.md`'s round 2 — this is a plan-text resolution authored
+by the same reviewing pass that raised the findings, not a fresh independent re-review against
+running code. Re-verify with actual implementation during `sdd:5-implement`/`sdd:6-verify`,
+especially Blocker 1's goroutine-lifecycle fix and Blocker 2's choke-point refactor — both are
+concurrency-shaped bugs that are easy to get subtly wrong even with a correct plan-level spec.

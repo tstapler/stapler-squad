@@ -3,8 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,9 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/git/native"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // isTraversalPathSegment reports whether s is "." or ".." — mirrors
@@ -22,6 +26,13 @@ import (
 // here without a package cycle (session imports git).
 func isTraversalPathSegment(s string) bool {
 	return s == "." || s == ".."
+}
+
+// OpenRepo opens the git repository or worktree at path. It is the session/git entry
+// point for native.OpenRepo, which owns the shared open options; every open in this
+// codebase must go through one of the two (see tools/lint's norawgitopen analyzer).
+func OpenRepo(path string) (*git.Repository, error) {
+	return native.OpenRepo(path)
 }
 
 // sanitizeBranchName transforms an arbitrary string into a Git branch name friendly string.
@@ -81,6 +92,37 @@ func sanitizeBranchName(s string) string {
 	return cleaned
 }
 
+// ValidateBranchName rejects a branch name before it ever reaches a git
+// subprocess call, closing a git argument-injection class (same family as
+// CVE-2017-1000117): git's own argument parser treats any positional value
+// starting with "-" as an option rather than a ref name, so an unvalidated
+// caller-supplied branch name (BacklogItem.BaseBranch) reaching e.g. `git
+// fetch origin <name>` could smuggle in a flag like "--upload-pack=<cmd>".
+// FetchBranch also guards with "--" (safe for fetch's refspec argument);
+// CheckoutBranch cannot use the same "--" guard (it puts checkout into
+// path-restore mode instead, verified empirically), so this validation is
+// its only defense. Deliberately conservative: rejects empty, anything
+// starting with "-", and ".." (a valid git ref name is never required to use
+// either).
+func ValidateBranchName(name string) error {
+	if name == "" || strings.HasPrefix(name, "-") || strings.Contains(name, "..") {
+		return fmt.Errorf("invalid branch name %q", name)
+	}
+	return nil
+}
+
+// SanitizeBranchName exports sanitizeBranchName for callers outside this
+// package that need the same safe-subset transform for a remote worktree
+// directory name (server/services/session_service.go's CreateSession
+// mode-specific block, ssh-remote-workspaces Phase 4 Epic 4.2) as this
+// package already applies to local branch/directory names -- including its
+// path-traversal-segment stripping, which matters just as much for a remote
+// `path.Join(base_path, name)` as it does for the local filepath.Join call
+// sites in this file.
+func SanitizeBranchName(s string) string {
+	return sanitizeBranchName(s)
+}
+
 // joinWithinDir joins name onto baseDir and verifies the result is still a
 // descendant of baseDir, returning an error instead of the escaped path if
 // not. sanitizeBranchName already strips "." and ".." segments, so this
@@ -101,8 +143,18 @@ func joinWithinDir(baseDir, name string) (string, error) {
 	return joined, nil
 }
 
-// checkGHCLI checks if GitHub CLI is installed and configured
-func checkGHCLI() error {
+// CanonicalizeWorktreePath forwards to native.CanonicalizeWorktreePath.
+func CanonicalizeWorktreePath(path string) string {
+	return native.CanonicalizeWorktreePath(path)
+}
+
+// checkGHCLI checks if GitHub CLI is installed and configured. The auth check
+// runs through g.commandRunner() (the same CommandRunner execution seam every
+// other gh/git call on GitWorktree uses, per ADR-002 -- see worktree.go's
+// runner field doc comment) rather than shelling out directly, so tests that
+// already inject a spy CommandRunner for gh pr create/list don't also need a
+// real, authenticated `gh` binary on PATH just to get past this guard.
+func (g *GitWorktree) checkGHCLI() error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
@@ -111,8 +163,7 @@ func checkGHCLI() error {
 	// Check if gh is authenticated
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
-	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
-	if err := cmd.Run(); err != nil {
+	if _, err := g.runGHCommand(authCtx, "auth.status", "auth", "status"); err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 
@@ -122,7 +173,7 @@ func checkGHCLI() error {
 // IsGitRepo checks if the given path is within a git repository
 func IsGitRepo(path string) bool {
 	for {
-		_, err := git.PlainOpen(path)
+		_, err := OpenRepo(path)
 		if err == nil {
 			return true
 		}
@@ -135,42 +186,39 @@ func IsGitRepo(path string) bool {
 	}
 }
 
+// findGitRepoRoot walks up from path looking for an existing git repository and
+// returns its root. It requires path to already exist: it must NOT fabricate a repo
+// when the path is missing. An earlier version silently ran os.MkdirAll + git.PlainInit
+// + createInitialCommit for a missing path, which was intended for genuine
+// new-project bootstrapping but was unconditionally shared by every caller —
+// including CreateBacklogWorktree's worktree constructors, which require repoPath to
+// already be a real, previously-cloned repository. When that path went transiently
+// missing (observed live: deleted mid-repair while the backlog automation loop kept
+// retrying), the fallback masked the real "repo is missing" error by fabricating a
+// disconnected repo with a single placeholder commit, which downstream worktree
+// creation then treated as real — producing broken sessions instead of a clear
+// failure. Genuine new-project initialization has its own dedicated function,
+// InitializeProjectDirectory (used by SessionTypeNewProject), which never routes
+// through here — so no caller needs findGitRepoRoot to create anything from scratch.
 func findGitRepoRoot(path string) (string, error) {
-	// First check if the directory exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Directory doesn't exist - create it and initialize git
-		log.Info("directory does not exist, creating and initializing git repository", "path", path)
-
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return "", fmt.Errorf("failed to create directory '%s': %w", path, err)
-		}
-
-		// Initialize git repository
-		repo, err := git.PlainInit(path, false)
-		if err != nil {
-			return "", fmt.Errorf("failed to initialize git repository at '%s': %w", path, err)
-		}
-
-		// Create initial commit (required for worktrees)
-		// Git worktrees require at least one commit to exist
-		if err := createInitialCommit(repo, path); err != nil {
-			return "", fmt.Errorf("failed to create initial commit at '%s': %w", path, err)
-		}
-
-		log.Info("successfully created and initialized git repository with initial commit", "path", path)
-		return path, nil
+		return "", fmt.Errorf("repository path does not exist: %s (expected an existing git repository; use InitializeProjectDirectory to bootstrap a new one)", path)
 	}
 
 	// Directory exists - find the git repo root
 	currentPath := path
 	for {
-		repo, err := git.PlainOpen(currentPath)
+		repo, err := OpenRepo(currentPath)
 		if err == nil {
-			// Found the repository root
-			// Check if the repository has any commits (worktrees require at least one)
-			_, err := repo.Head()
+			// Found the repository root. A bare repo.Head() error is not reliable
+			// evidence the repo is unborn — go-git can transiently fail to resolve
+			// HEAD for an otherwise-real repo (see getHeadCommitSHA's doc comment) —
+			// so check the ref store directly before concluding it has zero history.
+			hasRef, err := repoHasAnyRef(currentPath)
 			if err != nil {
-				// Repository has no commits - create initial commit
+				return "", fmt.Errorf("failed to check for existing refs at '%s': %w", currentPath, err)
+			}
+			if !hasRef {
 				log.Info("repository has no commits, creating initial commit", "path", currentPath)
 				if err := createInitialCommit(repo, currentPath); err != nil {
 					return "", fmt.Errorf("failed to create initial commit at '%s': %w", currentPath, err)
@@ -204,19 +252,21 @@ func findGitRepoRoot(path string) (string, error) {
 // returning the worktree's own path as if it were the repo root — corrupting the
 // worktree's link to its real branch/history entirely.
 //
-// Resolves via `git rev-parse --git-common-dir`, which is the shared .git directory a
+// Resolves via Backend.CommonDir (`git rev-parse --git-common-dir`), which is the shared .git directory a
 // worktree and its main repo both point to; the main repo root is its parent.
 func findMainRepoPathForWorktree(worktreePath string) (string, error) {
+	return mainRepoPathForWorktree(gitprovider.Backend(), worktreePath)
+}
+
+// mainRepoPathForWorktree is findMainRepoPathForWorktree over an explicit backend.
+func mainRepoPathForWorktree(refs backend.Backend, worktreePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
+	commonDir, err := refs.CommonDir(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)})
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve git-common-dir for worktree %s: %w", worktreePath, err)
 	}
-	commonDir := strings.TrimSpace(string(out))
-	return filepath.Dir(commonDir), nil
+	return filepath.Dir(string(commonDir)), nil
 }
 
 // GetCurrentBranchName returns the current branch name for a git repository or worktree.
@@ -228,7 +278,7 @@ func GetCurrentBranchName(path string) (string, error) {
 // getCurrentBranchName returns the current branch name for a git repository or worktree.
 // Uses go-git to read HEAD directly (file read, no subprocess).
 func getCurrentBranchName(path string) (string, error) {
-	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := OpenRepo(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
@@ -274,11 +324,25 @@ const (
 // (repo.CommitObject, still no subprocess) before being trusted, and a Head() error is
 // treated the same as an invalid result; both retry briefly, and only after repeated
 // failures do we fall back to the git CLI, which is immune to both failure modes.
+//
+// Every PlainOpenWithOptions call in this package now also sets EnableDotGitCommonDir
+// (2026-09-02), fixing a third, distinct worktree bug: without it, go-git silently
+// resolves HEAD to a real-but-wrong commit object for a linked worktree (verified
+// against this repo's own worktree: HEAD read without the flag returned a stale SHA
+// from before the worktree was created, not a not-found or malformed result at all) —
+// see session/git/ops.go's diffPatchBetween for the code-review finding that surfaced
+// it. That fix is orthogonal to the retry/CLI-fallback above, which guards against the
+// two races described above and stays in place as defense-in-depth.
 func getHeadCommitSHA(path string) (string, error) {
+	return headCommitSHA(gitprovider.Backend(), path)
+}
+
+// headCommitSHA is getHeadCommitSHA over an explicit backend for its fallback.
+func headCommitSHA(refs backend.Backend, path string) (string, error) {
 	// A failed open (path doesn't exist / isn't a git repo at all) is not retryable —
 	// only the subsequent Head() resolution and object-existence check are, since those
 	// are what were observed to fail transiently for worktrees.
-	if _, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true}); err != nil {
+	if _, err := OpenRepo(path); err != nil {
 		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
 
@@ -289,7 +353,7 @@ func getHeadCommitSHA(path string) (string, error) {
 		}
 		// Re-open fresh each attempt in case go-git's failure originates in gitdir/ref
 		// parsing at open time, not just in the Repository object's later reads.
-		repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+		repo, err := OpenRepo(path)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
 			continue
@@ -306,22 +370,87 @@ func getHeadCommitSHA(path string) (string, error) {
 		lastErr = fmt.Errorf("go-git resolved HEAD to %s at %s, which is not a real commit object", hash, path)
 	}
 	log.Warn("getHeadCommitSHA: go-git repeatedly resolved HEAD to a nonexistent object, falling back to git CLI", "path", path, "err", lastErr)
-	return getHeadCommitSHAViaCLI(path)
+	return getHeadCommitSHAViaBackend(refs, path)
 }
 
-// getHeadCommitSHAViaCLI is the fallback path for getHeadCommitSHA when go-git
-// repeatedly fails to resolve HEAD to a real object. The git CLI relies on atomic-rename
-// ref updates, so it doesn't observe the torn-read race go-git is susceptible to.
-func getHeadCommitSHAViaCLI(path string) (string, error) {
+// repoHasAnyRef reports whether the git repository at path has at least one
+// hash reference — a reliable signal of real history, unlike repo.Head() (see
+// getHeadCommitSHA's doc comment). Only HashReferences count: git.PlainInit's
+// symbolic "HEAD -> refs/heads/master" always exists even in a zero-commit
+// repo, so counting it would always report true. Retry/CLI-fallback shape
+// mirrors getHeadCommitSHA (same underlying go-git flakiness class).
+func repoHasAnyRef(path string) (bool, error) {
+	return repoHasAnyRefIn(gitprovider.Backend(), path)
+}
+
+// repoHasAnyRefIn is repoHasAnyRef over an explicit backend for its fallback.
+func repoHasAnyRefIn(b backend.Backend, path string) (bool, error) {
+	if _, err := OpenRepo(path); err != nil {
+		return false, fmt.Errorf("failed to open git repo at %s: %w", path, err)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < headSHARetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(headSHARetryDelay)
+		}
+		repo, err := OpenRepo(path)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
+			continue
+		}
+		refs, err := repo.References()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to list refs at %s: %w", path, err)
+			continue
+		}
+		found := false
+		iterErr := refs.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Type() != plumbing.HashReference {
+				return nil
+			}
+			found = true
+			return storer.ErrStop
+		})
+		refs.Close()
+		if iterErr != nil {
+			lastErr = fmt.Errorf("failed to iterate refs at %s: %w", path, iterErr)
+			continue
+		}
+		return found, nil
+	}
+	log.Warn("repoHasAnyRef: go-git repeatedly failed to read refs, falling back to git CLI", "path", path, "err", lastErr)
+	return repoHasAnyRefViaBackend(b, path)
+}
+
+// repoHasAnyRefViaBackend is repoHasAnyRef's fallback when go-git repeatedly fails to read
+// the ref store — see getHeadCommitSHAViaBackend's identical rationale (atomic-rename ref
+// updates mean the CLI doesn't observe the torn-read race go-git is susceptible to).
+// `git for-each-ref` does not enumerate the symbolic HEAD pseudo-ref, matching
+// repoHasAnyRef's own HashReference-only filter.
+func repoHasAnyRefViaBackend(refs backend.Backend, path string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmd.Dir = path
-	out, err := cmd.Output()
+	names, err := refs.ListRefs(ctx, backend.Local{Root: backend.RepoRoot(path)}, backend.ListRefsRequest{Limit: 1})
+	if err != nil {
+		return false, fmt.Errorf("failed to list refs at %s: %w", path, err)
+	}
+	return len(names) > 0, nil
+}
+
+// getHeadCommitSHAViaBackend is the fallback path for getHeadCommitSHA when go-git
+// repeatedly fails to resolve HEAD to a real object. It goes through the injected backend:
+// under the default refs=cli that is `git rev-parse`, which relies on atomic-rename ref
+// updates and so doesn't observe the torn-read race go-git is susceptible to; under
+// refs=gogit the router's own torn_read/object_missing handling serves the CLI instead.
+func getHeadCommitSHAViaBackend(refs backend.Backend, path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sha, err := refs.ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(path)}, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("failed to read HEAD at %s: %w", path, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(sha), nil
 }
 
 // InitializeProjectDirectory creates a directory and initializes it as a git repository.
@@ -335,7 +464,7 @@ func getHeadCommitSHAViaCLI(path string) (string, error) {
 // the newly created directory. Logs a warning if rollback also fails.
 func InitializeProjectDirectory(path string) error {
 	// 1. Check if already a git repo (open succeeds) → no-op
-	if _, err := git.PlainOpen(path); err == nil {
+	if _, err := OpenRepo(path); err == nil {
 		return nil
 	}
 
@@ -347,7 +476,7 @@ func InitializeProjectDirectory(path string) error {
 	// 3. Track whether we created the directory so we can roll back on failure
 	dirCreated := false
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0750); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 		dirCreated = true
@@ -380,6 +509,16 @@ func InitializeProjectDirectory(path string) error {
 // createInitialCommit creates an initial commit in a new git repository
 // This is required because git worktrees need at least one commit to exist
 func createInitialCommit(repo *git.Repository, repoPath string) error {
+	// Self-defending guard: refuse to run against a repo that already has any
+	// ref, regardless of caller. A fresh git.PlainInit repo has zero refs by
+	// construction, so this is a no-op for every legitimate caller — it only
+	// fires when something upstream misdiagnosed a real repo as unborn.
+	if hasRef, err := repoHasAnyRef(repoPath); err != nil {
+		return fmt.Errorf("failed to check for existing refs at '%s': %w", repoPath, err)
+	} else if hasRef {
+		return fmt.Errorf("refusing to create initial commit at '%s': repository already has existing refs", repoPath)
+	}
+
 	// Get the worktree
 	worktree, err := repo.Worktree()
 	if err != nil {
@@ -389,7 +528,7 @@ func createInitialCommit(repo *git.Repository, repoPath string) error {
 	// Create a .gitignore file as the initial commit content
 	gitignorePath := filepath.Join(repoPath, ".gitignore")
 	gitignoreContent := []byte("# Project gitignore\n")
-	if err := os.WriteFile(gitignorePath, gitignoreContent, 0644); err != nil {
+	if err := os.WriteFile(gitignorePath, gitignoreContent, 0600); err != nil {
 		return fmt.Errorf("failed to create .gitignore: %w", err)
 	}
 

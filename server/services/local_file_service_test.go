@@ -20,6 +20,7 @@ func newLocalFileServiceHandlers() (list http.Handler, serve http.Handler) {
 // TestListLocalDirectory_DefaultPath verifies that omitting ?path returns 200 +
 // a valid JSON listing rooted at the user home directory.
 func TestListLocalDirectory_DefaultPath(t *testing.T) {
+	t.Parallel()
 	list, _ := newLocalFileServiceHandlers()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -41,6 +42,7 @@ func TestListLocalDirectory_DefaultPath(t *testing.T) {
 // TestListLocalDirectory_ExplicitTmpPath verifies that ?path=/tmp returns 200 +
 // a listing with at least one entry (tmp always has something on Linux).
 func TestListLocalDirectory_ExplicitTmpPath(t *testing.T) {
+	t.Parallel()
 	list, _ := newLocalFileServiceHandlers()
 	req := httptest.NewRequest(http.MethodGet, "/?path=/tmp", nil)
 	w := httptest.NewRecorder()
@@ -60,6 +62,7 @@ func TestListLocalDirectory_ExplicitTmpPath(t *testing.T) {
 
 // TestListLocalDirectory_NonExistentPath verifies that a missing directory returns 404.
 func TestListLocalDirectory_NonExistentPath(t *testing.T) {
+	t.Parallel()
 	list, _ := newLocalFileServiceHandlers()
 	req := httptest.NewRequest(http.MethodGet, "/?path=/nonexistent-path-xyz-stapler-squad-test", nil)
 	w := httptest.NewRecorder()
@@ -72,6 +75,7 @@ func TestListLocalDirectory_NonExistentPath(t *testing.T) {
 
 // TestListLocalDirectory_RelativePath verifies that a non-absolute path returns 400.
 func TestListLocalDirectory_RelativePath(t *testing.T) {
+	t.Parallel()
 	list, _ := newLocalFileServiceHandlers()
 	req := httptest.NewRequest(http.MethodGet, "/?path=relative/path", nil)
 	w := httptest.NewRecorder()
@@ -84,6 +88,7 @@ func TestListLocalDirectory_RelativePath(t *testing.T) {
 
 // TestListLocalDirectory_MethodNotAllowed verifies that POST returns 405.
 func TestListLocalDirectory_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
 	list, _ := newLocalFileServiceHandlers()
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	w := httptest.NewRecorder()
@@ -96,6 +101,7 @@ func TestListLocalDirectory_MethodNotAllowed(t *testing.T) {
 
 // TestServeLocalFile_ExistingFile verifies that an existing regular file returns 200.
 func TestServeLocalFile_ExistingFile(t *testing.T) {
+	t.Parallel()
 	// Write a temp file so the test doesn't depend on /etc/hostname existing.
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "hello.txt")
@@ -116,6 +122,7 @@ func TestServeLocalFile_ExistingFile(t *testing.T) {
 
 // TestServeLocalFile_NonExistentFile verifies that a missing file returns 404.
 func TestServeLocalFile_NonExistentFile(t *testing.T) {
+	t.Parallel()
 	svc := NewLocalFileService()
 	path := "/nonexistent-stapler-squad-test-file.txt"
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -130,6 +137,7 @@ func TestServeLocalFile_NonExistentFile(t *testing.T) {
 
 // TestServeLocalFile_Directory verifies that requesting a directory path returns 400.
 func TestServeLocalFile_Directory(t *testing.T) {
+	t.Parallel()
 	svc := NewLocalFileService()
 	dir := t.TempDir()
 	req := httptest.NewRequest(http.MethodGet, dir, nil)
@@ -145,6 +153,7 @@ func TestServeLocalFile_Directory(t *testing.T) {
 // TestListLocalDirectory_SymlinkedDirectory verifies that a symlink pointing at a
 // real directory is reported as IsDir == true so the frontend can navigate into it.
 func TestListLocalDirectory_SymlinkedDirectory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real-subdir")
 	if err := os.Mkdir(target, 0o755); err != nil {
@@ -198,6 +207,7 @@ func TestListLocalDirectory_SymlinkedDirectory(t *testing.T) {
 // TestListLocalDirectory_Truncation verifies the >2000-entry cap sets HasMore and Total
 // accurately, with an off-by-one boundary at exactly maxLocalDirEntries.
 func TestListLocalDirectory_Truncation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	const count = maxLocalDirEntries + 1
 	for i := 0; i < count; i++ {
@@ -231,6 +241,7 @@ func TestListLocalDirectory_Truncation(t *testing.T) {
 // httptest.NewRequest requires a valid URI, so we start with "/" and then override
 // URL.Path to a relative value — the handler reads r.URL.Path directly.
 func TestServeLocalFile_RelativePath(t *testing.T) {
+	t.Parallel()
 	svc := NewLocalFileService()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.URL.Path = "relative/file.txt" // override after construction

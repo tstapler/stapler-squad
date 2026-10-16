@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -26,10 +27,15 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
 // initRepoInternal mirrors initRepo from vcsreader_test.go for white-box tests.
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
 func initRepoInternal(t *testing.T) string {
 	t.Helper()
 	raw := t.TempDir()
@@ -37,26 +43,27 @@ func initRepoInternal(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
+	if err != nil {
+		t.Fatalf("PlainInitWithOptions: %v", err)
 	}
-	run("init", "-b", "main")
-	run("config", "user.email", "test@test.com")
-	run("config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "initial commit")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	return dir
 }
 
@@ -370,6 +377,57 @@ func TestGoGitVCSReader_HasUncommitted_CacheHitReturnsCachedValue(t *testing.T) 
 	}
 	if cached != !got {
 		t.Errorf("warm call: got %v, want %v (cache was not used)", cached, !got)
+	}
+}
+
+// TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged
+// verifies the PerfFix-3 optimization: when a cached aheadBehindEntry's TTL
+// has expired but HEAD/base hashes still match the current ones (neither ref
+// moved), AheadBehind must reuse the cached ahead/behind counts rather than
+// re-running findMergeBase + countCommitsTo.
+//
+// Detection strategy: after a cold call establishes the real (ahead, behind),
+// the cache entry is overwritten with sentinel counts that don't match
+// reality, an expired expiry, and the SAME headHash/baseHash. If AheadBehind
+// recomputed instead of reusing, it would return the real counts, not the
+// sentinels — so observing the sentinels proves reuse.
+func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(t *testing.T) {
+	dir := initRepoInternal(t)
+	gitRunInternal(t, dir, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunInternal(t, dir, "add", "feature.txt")
+	gitRunInternal(t, dir, "commit", "-m", "diverge from main")
+
+	r := &GoGitVCSReader{}
+	ahead, behind, err := r.AheadBehind(dir, "main")
+	if err != nil {
+		t.Fatalf("cold call: %v", err)
+	}
+	if ahead == 0 && behind == 0 {
+		t.Fatal("test setup did not diverge HEAD from base — real (ahead, behind) is (0, 0)")
+	}
+
+	cacheKey := dir + "\x00" + "main"
+	v, ok := r.aheadBehindCache.Load(cacheKey)
+	if !ok {
+		t.Fatal("cold call did not populate aheadBehindCache")
+	}
+	entry := v.(aheadBehindEntry)
+	const sentinelAhead, sentinelBehind = 999, 888
+	entry.ahead = sentinelAhead
+	entry.behind = sentinelBehind
+	entry.expiry = time.Now().Add(-time.Second) // force TTL-expired path
+	r.aheadBehindCache.Store(cacheKey, entry)
+
+	gotAhead, gotBehind, err := r.AheadBehind(dir, "main")
+	if err != nil {
+		t.Fatalf("warm call: %v", err)
+	}
+	if gotAhead != sentinelAhead || gotBehind != sentinelBehind {
+		t.Errorf("AheadBehind() = (%d, %d), want cached sentinels (%d, %d) — expired-but-unchanged-hash entry was not reused",
+			gotAhead, gotBehind, sentinelAhead, sentinelBehind)
 	}
 }
 
@@ -769,7 +827,7 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 	}
 	// Total history: 6 commits.
 
-	gitRepo, err := git.PlainOpen(repo)
+	gitRepo, err := gitutil.OpenRepo(repo)
 	if err != nil {
 		t.Fatalf("PlainOpen: %v", err)
 	}
@@ -788,6 +846,57 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 	}
 	if len(set) != 3 {
 		t.Errorf("len(set) = %d, want 3 (capped by maxReachableSetCommits; history has 6 commits)", len(set))
+	}
+}
+
+// TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch verifies countCommitsTo
+// stops walking once mergeBaseBFSLimit commits have been visited, rather than
+// decoding every commit back to the branch's root (the same class of bound
+// findMergeBase already applies).
+func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
+	repo := initRepoInternal(t) // 1 commit already (the initial/stop commit)
+
+	for i := range 5 {
+		name := filepath.Join(repo, fmt.Sprintf("file%d.txt", i))
+		if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		gitRunInternal(t, repo, "add", ".")
+		gitRunInternal(t, repo, "commit", "-m", fmt.Sprintf("commit %d", i))
+	}
+	// Total history: 6 commits (1 stop commit + 5 more reachable from HEAD).
+
+	gitRepo, err := gitutil.OpenRepo(repo)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	head, err := gitRepo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	logIter, err := gitRepo.Log(&git.LogOptions{From: head.Hash()})
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	var commits []plumbing.Hash
+	if err := logIter.ForEach(func(c *object.Commit) error {
+		commits = append(commits, c.Hash)
+		return nil
+	}); err != nil {
+		t.Fatalf("ForEach: %v", err)
+	}
+	stop := commits[len(commits)-1] // the initial commit, oldest in history
+
+	origLimit := mergeBaseBFSLimit
+	mergeBaseBFSLimit = 3
+	defer func() { mergeBaseBFSLimit = origLimit }()
+
+	n, err := countCommitsTo(gitRepo, head.Hash(), stop)
+	if err != nil {
+		t.Fatalf("countCommitsTo: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("countCommitsTo = %d, want 3 (capped by mergeBaseBFSLimit; 5 commits separate head from stop)", n)
 	}
 }
 
@@ -878,5 +987,135 @@ func TestWorktreeGitDir_RelativeGitdirLine_ResolvedAgainstRepoPath(t *testing.T)
 	want := filepath.Join(repo, ".git", "worktrees", "relative-case")
 	if got != want {
 		t.Errorf("worktreeGitDir(%q) = %q, want %q (relative gitdir line resolved against repoPath)", repo, got, want)
+	}
+}
+
+// TestCachedReachableSet_ReusedWhileBaseUnchanged guards PerfFix-1: a base
+// hash's ancestry is immutable, so the set must be reused (no re-walk) until
+// the base moves, and a moved base must replace — not accumulate — the entry.
+func TestCachedReachableSet_ReusedWhileBaseUnchanged(t *testing.T) {
+	repo := initRepoInternal(t)
+	r := &GoGitVCSReader{}
+	entry, err := r.openRepoEntry(repo)
+	if err != nil {
+		t.Fatalf("openRepoEntry: %v", err)
+	}
+	headHash := func() plumbing.Hash {
+		t.Helper()
+		head, headErr := entry.repo.Head()
+		if headErr != nil {
+			t.Fatalf("Head: %v", headErr)
+		}
+		return head.Hash()
+	}
+	mapID := func(m map[plumbing.Hash]bool) uintptr { return reflect.ValueOf(m).Pointer() }
+
+	first := headHash()
+	set1, err := r.cachedReachableSet(entry, repo, first)
+	if err != nil {
+		t.Fatalf("cachedReachableSet: %v", err)
+	}
+	set2, err := r.cachedReachableSet(entry, repo, first)
+	if err != nil {
+		t.Fatalf("cachedReachableSet (repeat): %v", err)
+	}
+	if mapID(set1) != mapID(set2) {
+		t.Error("same base hash re-walked history; want the cached set reused")
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "next.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunInternal(t, repo, "add", ".")
+	gitRunInternal(t, repo, "commit", "-m", "move base")
+	second := headHash()
+	set3, err := r.cachedReachableSet(entry, repo, second)
+	if err != nil {
+		t.Fatalf("cachedReachableSet (moved base): %v", err)
+	}
+	if !set3[second] || mapID(set3) == mapID(set1) {
+		t.Error("moved base reused the stale set; want a fresh walk")
+	}
+
+	entries := 0
+	r.reachableSetCache.Range(func(_, _ any) bool { entries++; return true })
+	if entries != 1 {
+		t.Errorf("reachableSetCache holds %d entries after base moved, want 1 per worktree", entries)
+	}
+
+	// Re-adding an expiry would reintroduce the 30s full-history re-walk.
+	for f := range reflect.TypeFor[reachableSetEntry]().Fields() {
+		if f.Type == reflect.TypeFor[time.Time]() {
+			t.Errorf("reachableSetEntry.%s is a time.Time; the set is immutable per base hash and must not expire", f.Name)
+		}
+	}
+}
+
+// TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet guards the
+// event-driven eviction: a .git change event must drop the reader's TTL-cached
+// results for the repo and its linked worktrees so the rescan re-populates them
+// from the new state, while the hash-validated reachable set survives (evicting
+// it per commit would repeat the 50k-commit walk). RemoveRepo then drops it.
+func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing.T) {
+	repo := initRepoInternal(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	r := &GoGitVCSReader{}
+	s := NewScannerWithReader(nil, nil, r)
+	s.indexRepoWorktree(repo, linked)
+
+	for _, p := range []string{repo, linked} {
+		r.diffStatCache.Store(p, diffStatEntry{expiry: time.Now().Add(time.Hour)})
+		r.hasUncommittedCache.Store(p, hasUncommittedEntry{expiry: time.Now().Add(time.Hour)})
+		r.aheadBehindCache.Store(p+"\x00main", aheadBehindEntry{expiry: time.Now().Add(time.Hour)})
+		r.commitMessagesCache.Store(p+"\x00main\x005", commitMessagesEntry{expiry: time.Now().Add(time.Hour)})
+		r.reachableSetCache.Store(p, reachableSetEntry{})
+	}
+	r.diffStatCache.Store("/other/worktree", diffStatEntry{expiry: time.Now().Add(time.Hour)})
+
+	count := func(m *sync.Map) (n int) {
+		m.Range(func(_, _ any) bool { n++; return true })
+		return n
+	}
+
+	s.invalidateRepo(repo)
+	if n := count(&r.diffStatCache); n != 1 {
+		t.Errorf("diffStatCache holds %d entries, want only the unrelated worktree's", n)
+	}
+	for name, m := range map[string]*sync.Map{"hasUncommitted": &r.hasUncommittedCache, "aheadBehind": &r.aheadBehindCache, "commitMessages": &r.commitMessagesCache} {
+		if n := count(m); n != 0 {
+			t.Errorf("%sCache holds %d entries after invalidateRepo, want 0", name, n)
+		}
+	}
+	if n := count(&r.reachableSetCache); n != 2 {
+		t.Errorf("reachableSetCache holds %d entries after invalidateRepo, want 2 (hash-validated, kept)", n)
+	}
+
+	s.RemoveRepo(repo)
+	if n := count(&r.reachableSetCache); n != 0 {
+		t.Errorf("reachableSetCache holds %d entries after RemoveRepo, want 0", n)
+	}
+}
+
+// TestGuardInvalidation_EvictsResultCachedAcrossAnInvalidation guards the
+// invalidate-then-store race: a computation that finishes after
+// InvalidateWorktree has already cached a pre-change value, which must not
+// survive for the TTL.
+func TestGuardInvalidation_EvictsResultCachedAcrossAnInvalidation(t *testing.T) {
+	r := &GoGitVCSReader{}
+	const wt = "/repo/wt"
+
+	finish := r.guardInvalidation(wt)
+	r.InvalidateWorktree(wt)                                                    // event arrives mid-computation
+	r.diffStatCache.Store(wt, diffStatEntry{expiry: time.Now().Add(time.Hour)}) // stale Store lands afterwards
+	finish()
+	if _, ok := r.diffStatCache.Load(wt); ok {
+		t.Error("pre-change result cached across an invalidation was kept; want it re-evicted")
+	}
+
+	finish = r.guardInvalidation(wt)
+	r.diffStatCache.Store(wt, diffStatEntry{expiry: time.Now().Add(time.Hour)})
+	finish() // no invalidation during the call: keep the result
+	if _, ok := r.diffStatCache.Load(wt); !ok {
+		t.Error("result cached with no concurrent invalidation was evicted; want it kept")
 	}
 }

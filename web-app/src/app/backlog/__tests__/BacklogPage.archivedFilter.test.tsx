@@ -115,6 +115,7 @@ jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
 
 describe("BacklogPage archived-item default filtering", () => {
   beforeEach(() => {
+    localStorage.clear();
     mockUseWatchBacklogItems.mockReturnValue({
       items: [activeItem, archivedItem],
       connectionState: "live",

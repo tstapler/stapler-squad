@@ -8,6 +8,7 @@ import (
 )
 
 func TestNewCommandHistory(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	if history == nil {
@@ -24,6 +25,7 @@ func TestNewCommandHistory(t *testing.T) {
 }
 
 func TestNewCommandHistoryWithPersistence(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	history, err := NewCommandHistoryWithPersistence("test-session", tmpDir)
@@ -38,6 +40,7 @@ func TestNewCommandHistoryWithPersistence(t *testing.T) {
 }
 
 func TestCommandHistory_Add(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	entry := &HistoryEntry{
@@ -60,6 +63,7 @@ func TestCommandHistory_Add(t *testing.T) {
 }
 
 func TestCommandHistory_AddFromResult(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	cmd := &Command{
@@ -95,6 +99,7 @@ func TestCommandHistory_AddFromResult(t *testing.T) {
 }
 
 func TestCommandHistory_AddFromResultNil(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	err := history.AddFromResult(nil)
@@ -104,6 +109,7 @@ func TestCommandHistory_AddFromResultNil(t *testing.T) {
 }
 
 func TestCommandHistory_GetAll(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	// Add multiple entries
@@ -130,6 +136,7 @@ func TestCommandHistory_GetAll(t *testing.T) {
 }
 
 func TestCommandHistory_GetRecent(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	// Add 5 entries
@@ -153,6 +160,7 @@ func TestCommandHistory_GetRecent(t *testing.T) {
 }
 
 func TestCommandHistory_GetRecentZero(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	recent := history.GetRecent(0)
@@ -162,6 +170,7 @@ func TestCommandHistory_GetRecentZero(t *testing.T) {
 }
 
 func TestCommandHistory_GetRecentMoreThanExists(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	history.Add(&HistoryEntry{Command: Command{ID: "a"}})
@@ -173,6 +182,7 @@ func TestCommandHistory_GetRecentMoreThanExists(t *testing.T) {
 }
 
 func TestCommandHistory_GetByTimeRange(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	now := time.Now()
@@ -198,6 +208,7 @@ func TestCommandHistory_GetByTimeRange(t *testing.T) {
 }
 
 func TestCommandHistory_Search(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	entries := []*HistoryEntry{
@@ -217,6 +228,7 @@ func TestCommandHistory_Search(t *testing.T) {
 }
 
 func TestCommandHistory_GetByCommandID(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	// Add multiple executions of same command ID
@@ -240,6 +252,7 @@ func TestCommandHistory_GetByCommandID(t *testing.T) {
 }
 
 func TestCommandHistory_GetByStatus(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	statuses := []CommandStatus{CommandCompleted, CommandFailed, CommandCompleted}
@@ -266,6 +279,7 @@ func TestCommandHistory_GetByStatus(t *testing.T) {
 }
 
 func TestCommandHistory_GetSuccessful(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	history.Add(&HistoryEntry{Command: Command{ID: "1", Status: CommandCompleted}})
@@ -279,6 +293,7 @@ func TestCommandHistory_GetSuccessful(t *testing.T) {
 }
 
 func TestCommandHistory_GetFailed(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	history.Add(&HistoryEntry{Command: Command{ID: "1", Status: CommandCompleted}})
@@ -291,6 +306,7 @@ func TestCommandHistory_GetFailed(t *testing.T) {
 }
 
 func TestCommandHistory_Clear(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	// Add entries
@@ -308,6 +324,7 @@ func TestCommandHistory_Clear(t *testing.T) {
 }
 
 func TestCommandHistory_SetMaxEntries(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	// Add 10 entries
@@ -330,6 +347,7 @@ func TestCommandHistory_SetMaxEntries(t *testing.T) {
 }
 
 func TestCommandHistory_SetMaxEntriesUnlimited(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	history.SetMaxEntries(0) // Unlimited
@@ -340,6 +358,7 @@ func TestCommandHistory_SetMaxEntriesUnlimited(t *testing.T) {
 }
 
 func TestCommandHistory_MaxEntriesEnforcement(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 	history.SetMaxEntries(3)
 
@@ -355,6 +374,7 @@ func TestCommandHistory_MaxEntriesEnforcement(t *testing.T) {
 }
 
 func TestCommandHistory_GetStatistics(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	now := time.Now()
@@ -401,6 +421,7 @@ func TestCommandHistory_GetStatistics(t *testing.T) {
 }
 
 func TestCommandHistory_GetStatisticsEmpty(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	stats := history.GetStatistics()
@@ -411,6 +432,7 @@ func TestCommandHistory_GetStatisticsEmpty(t *testing.T) {
 }
 
 func TestCommandHistory_Persistence(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create history with persistence
@@ -445,6 +467,7 @@ func TestCommandHistory_Persistence(t *testing.T) {
 }
 
 func TestCommandHistory_PersistenceAutoSave(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	history, err := NewCommandHistoryWithPersistence("test-session", tmpDir)
@@ -462,6 +485,7 @@ func TestCommandHistory_PersistenceAutoSave(t *testing.T) {
 }
 
 func TestCommandHistory_LoadNonExistent(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 	history.SetPersistPath("/nonexistent/path/history.json")
 
@@ -472,6 +496,7 @@ func TestCommandHistory_LoadNonExistent(t *testing.T) {
 }
 
 func TestCommandHistory_GetSessionName(t *testing.T) {
+	t.Parallel()
 	history := NewCommandHistory("test-session")
 
 	if history.GetSessionName() != "test-session" {

@@ -8,7 +8,9 @@ package gogitstore
 // mechanism under test.
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -364,6 +366,14 @@ func TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary not available")
 	}
+	if testing.Short() {
+		// Builds two 30-commit packed fixtures via buildPackedFixture (the same
+		// slow git-subprocess-heavy helper gogitstore_test.go's -short guards
+		// already skip, see TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst
+		// above) then runs a sustained concurrent Open/Close pressure loop on
+		// top — together this can exceed Go's 10-minute default test timeout.
+		t.Skip("skipped under -short: too slow for make test/quick-check")
+	}
 	dir := t.TempDir()
 
 	pinnedRepo := filepath.Join(dir, "pinned")
@@ -514,12 +524,19 @@ func (f *countingFile) Close() error {
 // promoted straight through to the embedded Filesystem.
 type countingFs struct {
 	billy.Filesystem
-	mu     sync.Mutex
-	opened map[string]int
-	files  []*countingFile
+	mu      sync.Mutex
+	opened  map[string]int
+	statted map[string]int
+	files   []*countingFile
 }
 
 func (c *countingFs) Open(filename string) (billy.File, error) {
+	c.mu.Lock()
+	if c.statted == nil {
+		c.statted = make(map[string]int)
+	}
+	c.statted[filename]++ // attempts, including ENOENT probes of absent loose objects
+	c.mu.Unlock()
 	f, err := c.Filesystem.Open(filename)
 	if err != nil {
 		return nil, err
@@ -533,6 +550,55 @@ func (c *countingFs) Open(filename string) (billy.File, error) {
 	c.files = append(c.files, cf)
 	c.mu.Unlock()
 	return cf, nil
+}
+
+// Lstat counts loose-object-path probes; dotgit.Object resolves a loose object
+// with Stat/Lstat before opening it.
+func (c *countingFs) Lstat(filename string) (os.FileInfo, error) {
+	c.mu.Lock()
+	if c.statted == nil {
+		c.statted = make(map[string]int)
+	}
+	c.statted[filename]++
+	c.mu.Unlock()
+	return c.Filesystem.Lstat(filename)
+}
+
+func (c *countingFs) Stat(filename string) (os.FileInfo, error) {
+	c.mu.Lock()
+	if c.statted == nil {
+		c.statted = make(map[string]int)
+	}
+	c.statted[filename]++
+	c.mu.Unlock()
+	return c.Filesystem.Stat(filename)
+}
+
+// looseObjectProbes reports Stat/Lstat/Open calls under objects/xx/ (loose
+// objects), excluding objects/pack and objects/info.
+func (c *countingFs) looseObjectProbes() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	isLoose := func(name string) bool {
+		i := strings.Index(name, "objects"+string(filepath.Separator))
+		if i < 0 {
+			return false
+		}
+		rest := name[i+len("objects")+1:]
+		return len(rest) > 2 && rest[2] == filepath.Separator && !strings.HasPrefix(rest, "pack") && !strings.HasPrefix(rest, "info")
+	}
+	n := 0
+	for name, count := range c.statted {
+		if isLoose(name) {
+			n += count
+		}
+	}
+	for name, count := range c.opened {
+		if isLoose(name) {
+			n += count
+		}
+	}
+	return n
 }
 
 func (c *countingFs) opensWithSuffix(suffix string) int {
@@ -691,4 +757,85 @@ func firstPackedHashes(t *testing.T, store *SharedObjectStore, n int) []plumbing
 		break // buildPackedFixture's `git gc --aggressive` produces one pack
 	}
 	return hashes
+}
+
+// TestEncodedObject_CachedHit_DoesNotProbeLooseObjectPath guards the CPU fix:
+// a decoded-object cache hit must not touch the loose-object directory (it used
+// to Lstat+Open the loose path first, then return the cached object anyway).
+func TestEncodedObject_CachedHit_DoesNotProbeLooseObjectPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	mainRepo := filepath.Join(t.TempDir(), "main")
+	buildPackedFixture(t, mainRepo, 80)
+	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(mainRepo)
+	if err != nil {
+		t.Fatalf("resolveGitFilesystems: %v", err)
+	}
+	counting := &countingFs{Filesystem: commonFs}
+	store := newSharedObjectStore(commonDirAbs, counting, cache.NewObjectLRU(cache.DefaultMaxSize), 0, false)
+	hashes := firstPackedHashes(t, store, 5)
+	if len(hashes) == 0 {
+		t.Fatal("fixture produced no packed objects")
+	}
+	ws := &WorktreeStorer{shared: store}
+	defer func() { _ = ws.Close() }()
+	for _, h := range hashes { // warm: populates the decoded-object cache
+		if _, err := ws.EncodedObject(plumbing.AnyObject, h); err != nil {
+			t.Fatalf("EncodedObject(%s): %v", h, err)
+		}
+	}
+
+	before := counting.looseObjectProbes()
+	for _, h := range hashes {
+		if _, err := ws.EncodedObject(plumbing.AnyObject, h); err != nil {
+			t.Fatalf("EncodedObject(%s) cached: %v", h, err)
+		}
+	}
+	if probes := counting.looseObjectProbes() - before; probes != 0 {
+		t.Errorf("cached reads of %d objects made %d loose-object filesystem probes, want 0", len(hashes), probes)
+	}
+}
+
+// TestEncodedObject_CachedHit_KeepsNotFoundSemantics: the cache-first shortcut
+// must not change results — a cached object requested as the wrong type is
+// not-found, and one that has dropped out of the pack index (pruned/repacked
+// away) is not-found too rather than served from the cache.
+func TestEncodedObject_CachedHit_KeepsNotFoundSemantics(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	mainRepo := filepath.Join(t.TempDir(), "main")
+	buildPackedFixture(t, mainRepo, 80)
+	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(mainRepo)
+	if err != nil {
+		t.Fatalf("resolveGitFilesystems: %v", err)
+	}
+	store := newSharedObjectStore(commonDirAbs, commonFs, cache.NewObjectLRU(cache.DefaultMaxSize), 0, false)
+	hashes := firstPackedHashes(t, store, 1)
+	if len(hashes) == 0 {
+		t.Fatal("fixture produced no packed objects")
+	}
+	h := hashes[0]
+	ws := &WorktreeStorer{shared: store}
+	defer func() { _ = ws.Close() }()
+	obj, err := ws.EncodedObject(plumbing.AnyObject, h) // warm the cache
+	if err != nil {
+		t.Fatalf("EncodedObject: %v", err)
+	}
+
+	wrong := plumbing.BlobObject
+	if obj.Type() == plumbing.BlobObject {
+		wrong = plumbing.CommitObject
+	}
+	if _, err := ws.EncodedObject(wrong, h); !errors.Is(err, plumbing.ErrObjectNotFound) {
+		t.Errorf("cached object requested as %s: err = %v, want ErrObjectNotFound", wrong, err)
+	}
+
+	store.mu.Lock()
+	store.indexSnapshot = nil // the pack no longer lists h (pruned or repacked away)
+	store.mu.Unlock()
+	if _, err := ws.EncodedObject(plumbing.AnyObject, h); !errors.Is(err, plumbing.ErrObjectNotFound) {
+		t.Errorf("object absent from the pack index: err = %v, want ErrObjectNotFound (cache must not resurrect it)", err)
+	}
 }

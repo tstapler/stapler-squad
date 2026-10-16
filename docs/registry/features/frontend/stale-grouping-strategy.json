@@ -1,0 +1,16 @@
+{
+  "id": "stale-grouping-strategy",
+  "type": "frontend",
+  "name": "\"Stale\" session grouping strategy",
+  "component": "strategies",
+  "path": "web-app/src/lib/grouping/strategies.ts",
+  "filePath": "web-app/src/lib/grouping/strategies.ts",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "GroupingStrategy.Stale > Stale_strategy_buckets_only_the_ActiveSession_past_threshold_into_Stale",
+    "GroupingStrategy.Stale > GroupingStrategyLabels_has_a_working_label_for_Stale",
+    "GroupingStrategy.Stale > Stale_group_is_excluded_from_the_special_end-of-list_sort_bucket"
+  ],
+  "lastModified": "2026-08-15T00:00:00Z"
+}

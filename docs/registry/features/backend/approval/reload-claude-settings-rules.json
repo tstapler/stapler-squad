@@ -1,0 +1,16 @@
+{
+  "id": "approval:reload-claude-settings-rules",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ReloadClaudeSettingsRules",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount",
+    "TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount",
+    "TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented",
+    "TestReloadClaudeSettingsRules_should_ReturnRuleCountAndMessage_When_SettingsFileValid"
+  ],
+  "lastModified": "2026-08-16T21:46:41.807923865-07:00"
+}

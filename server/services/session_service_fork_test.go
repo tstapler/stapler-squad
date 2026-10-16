@@ -2,9 +2,9 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // forkTestFixture sets up a SessionService wired with a ReviewQueuePoller so
@@ -26,21 +27,32 @@ type forkTestFixture struct {
 	cleanup func()
 }
 
-func setupForkTestFixture(t *testing.T) *forkTestFixture {
+func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "fork-svc-test-*")
-	require.NoError(t, err)
-
-	dbPath := fmt.Sprintf("%s/sessions.db", tmpDir)
-	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
-	require.NoError(t, err)
+	repo := session.NewTestEntRepository(t)
 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
 	bus := events.NewEventBus(16)
 	svc := NewSessionService(storage, bus)
+
+	// t.Cleanup runs in LIFO order, so registering the bus teardown here —
+	// before svc.Shutdown()'s cleanup below — guarantees Shutdown() (which
+	// blocks on any in-flight trackCleanup-tracked goroutines, e.g. from
+	// DeleteSession/Destroy()) always runs BEFORE the bus is closed. The repo
+	// is closed via its own t.Cleanup registered inside NewTestEntRepository,
+	// which (being registered first, earlier in this function) runs last.
+	// Callers historically invoked the returned cleanup field themselves (via
+	// t.Cleanup(fix.cleanup) or defer fix.cleanup()) which raced ahead of
+	// Shutdown's own t.Cleanup — see
+	// TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible's
+	// "Fail in goroutine after test has completed" panic. The field is now a
+	// no-op so those existing call sites remain harmless.
+	t.Cleanup(func() {
+		bus.Close()
+	})
 	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire the ReviewQueuePoller so findInstance() can resolve instances.
@@ -49,18 +61,12 @@ func setupForkTestFixture(t *testing.T) *forkTestFixture {
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
-	cleanup := func() {
-		bus.Close()
-		repo.Close()
-		os.RemoveAll(tmpDir)
-	}
-
 	return &forkTestFixture{
 		svc:     svc,
 		bus:     bus,
 		storage: storage,
 		poller:  poller,
-		cleanup: cleanup,
+		cleanup: func() {},
 	}
 }
 
@@ -94,6 +100,7 @@ func makeInstanceWithCheckpoint(title string) (*session.Instance, string) {
 // --------------------------------------------------------------------------
 
 func TestForkSession_MissingSessionID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -109,6 +116,7 @@ func TestForkSession_MissingSessionID(t *testing.T) {
 }
 
 func TestForkSession_MissingCheckpointID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -124,6 +132,7 @@ func TestForkSession_MissingCheckpointID(t *testing.T) {
 }
 
 func TestForkSession_MissingNewTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -139,6 +148,7 @@ func TestForkSession_MissingNewTitle(t *testing.T) {
 }
 
 func TestForkSession_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -154,6 +164,7 @@ func TestForkSession_SessionNotFound(t *testing.T) {
 }
 
 func TestForkSession_DuplicateTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -175,6 +186,7 @@ func TestForkSession_DuplicateTitle(t *testing.T) {
 }
 
 func TestForkSession_CheckpointNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -195,6 +207,7 @@ func TestForkSession_CheckpointNotFound(t *testing.T) {
 }
 
 func TestForkSession_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -211,6 +224,47 @@ func TestForkSession_Success(t *testing.T) {
 	assert.Equal(t, "forked", resp.Msg.Session.Title)
 }
 
+// TestForkSession_WiresMCPServerURLProvider is the regression test for
+// backlog e6c2a88e's fork-path gap: ForkFromCheckpoint builds the new
+// instance via NewInstance, which -- unlike CreateWorktreeSession/
+// CreateDirectorySession -- never sets MCPServerURL in InstanceOptions, so a
+// forked session would launch with no --mcp-config at all unless ForkSession
+// explicitly wires the provider itself. Asserts via the "creating session"
+// log line (see TestResumeHibernatedSession_WiresProvider's doc comment for
+// why: Start(true) runs on its own goroutine against the same *Instance this
+// test holds no other handle to observe launch completion on).
+func TestForkSession_WiresMCPServerURLProvider(t *testing.T) {
+	logs := captureLogs(t)
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+	fix.svc.SetMCPServerURL(func() string { return "http://localhost:19193/mcp" })
+
+	src, cpID := makeInstanceWithCheckpoint("fork-provider-src")
+	addInstanceToPoller(fix.poller, src)
+
+	resp, err := fix.svc.ForkSession(context.Background(), connect.NewRequest(&sessionv1.ForkSessionRequest{
+		SessionId:    "fork-provider-src",
+		CheckpointId: cpID,
+		NewTitle:     "fork-provider-dst",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	t.Cleanup(func() {
+		if inst := fix.svc.findInstance("fork-provider-dst"); inst != nil {
+			_ = inst.KillSession()
+		}
+	})
+
+	wait.RequireEventually(t, func() bool {
+		return strings.Contains(logs.String(), "creating session") && strings.Contains(logs.String(), "fork-provider-dst")
+	}, 15*time.Second, 20*time.Millisecond, "forked session's initTmuxSession log line must appear")
+
+	assert.Contains(t, logs.String(), "--mcp-config",
+		"forked session's launch command must carry --mcp-config")
+	assert.Contains(t, logs.String(), "19193",
+		"forked session's launch command must use the wired provider's URL")
+}
+
 // --------------------------------------------------------------------------
 // GetSessionDiff – UUID ID lookup (regression: frontend passes UUIDs)
 // --------------------------------------------------------------------------
@@ -219,6 +273,7 @@ func TestForkSession_Success(t *testing.T) {
 // incoming session ID via UUID using the ReviewQueuePoller's MatchesID check.
 // Before the fix, only Title was matched, so UUID callers got CodeNotFound.
 func TestGetSessionDiff_FindsByUUID(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -244,6 +299,7 @@ func TestGetSessionDiff_FindsByUUID(t *testing.T) {
 // TestGetSessionDiff_FindsByTitle verifies that legacy Title-based lookups
 // still work after the UUID migration.
 func TestGetSessionDiff_FindsByTitle(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -265,6 +321,7 @@ func TestGetSessionDiff_FindsByTitle(t *testing.T) {
 // TestGetSessionDiff_UnknownIDReturnsNotFound verifies that an ID matching no
 // session UUID or Title produces CodeNotFound.
 func TestGetSessionDiff_UnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -287,6 +344,7 @@ func TestGetSessionDiff_UnknownIDReturnsNotFound(t *testing.T) {
 // DiffStats{} — this must fail against that pre-fix code (no else-if branch
 // at all) and pass now that one exists.
 func TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 

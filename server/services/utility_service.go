@@ -3,12 +3,16 @@ package services
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +26,205 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// logLineRegex matches the legacy stdlib-logger line format
+// ("[instance] LEVEL:2026/08/25 12:34:56 file.go:123: message"), still
+// emitted by call sites that haven't migrated off log.InfoLog().Printf and
+// co. (see log/log.go's atomicLogger-backed loggers). Most log lines are
+// JSON now (see parseJSONLogLine) — this is the fallback for the rest.
 var logLineRegex = regexp.MustCompile(`^\[([^\]]+)\]\s+(\w+):(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+([^:]+:\d+):\s+(.*)$`)
+
+// parsedLogLine is the format-agnostic result of parsing one log line,
+// whichever of the two on-disk formats (JSON or legacy plain-text) produced it.
+type parsedLogLine struct {
+	Timestamp time.Time
+	Level     string
+	Message   string
+	Source    string
+	// Session is the value of the JSON line's "session" attribute (see
+	// log.ForSession), i.e. the owning session's Title — empty for
+	// non-session-scoped entries and for legacy plain-text lines, which
+	// never carry one. Used to filter the single global log file down to
+	// one session's entries (see GetLogs) since entries are no longer
+	// written to separate per-session files.
+	Session string
+}
+
+// sensitiveLogAttributeKeys are folded into Message as "key=<redacted>"
+// instead of their real value — parseJSONLogLine has no allowlist for what
+// a slog call site anywhere in the codebase might attach, so any of these
+// names showing up as an attribute key gets redacted before it can reach
+// the GetLogs API response and the Logs/Patterns page.
+var sensitiveLogAttributeKeys = map[string]bool{ //nolint:gochecknoglobals
+	"token": true, "password": true, "secret": true, "authorization": true,
+	"cookie": true, "api_key": true, "apikey": true, "access_token": true,
+}
+
+// parseJSONLogLine parses one slog JSON-lines record (the format
+// log/log.go's handler chain writes today: {"time":...,"level":...,"msg":...,
+// plus arbitrary attribute fields}). Extra attributes beyond time/level/msg
+// are folded into Message as "key=value" pairs, sorted by key for
+// deterministic output, since sessionv1.LogEntry has no structured-fields
+// slot — this keeps them visible (and searchable) in the API response
+// without a proto change.
+//
+// Source stays empty unless the record carries slog's own AddSource shape
+// (a "source" key holding {"function","file","line"}) — log/log.go's
+// JSONHandler doesn't set HandlerOptions.AddSource today, so this is inert
+// in production for now, but several call sites already pass a plain
+// *string* "source" attribute for unrelated domain data (e.g.
+// credentials.go's "credential source", database_service.go's merge source
+// dir) — treating that string as a caller location would be actively wrong,
+// so only the structural object shape is ever read into Source; a string
+// "source" attribute is left to the generic extraKeys fold below like any
+// other field.
+func parseJSONLogLine(line string) (parsedLogLine, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return parsedLogLine{}, false
+	}
+
+	timeStr, _ := raw["time"].(string)
+	msg, hasMsg := raw["msg"].(string)
+	level, _ := raw["level"].(string)
+	if timeStr == "" || !hasMsg {
+		return parsedLogLine{}, false
+	}
+
+	timestamp, err := time.Parse(time.RFC3339Nano, timeStr)
+	if err != nil {
+		return parsedLogLine{}, false
+	}
+
+	source := slogAddSourceLocation(raw["source"])
+	session, _ := raw["session"].(string)
+
+	extraKeys := make([]string, 0, len(raw))
+	for k := range raw {
+		switch k {
+		case "time", "level", "msg":
+			continue
+		case "source":
+			if source != "" {
+				continue // already consumed as the structural AddSource object
+			}
+		case "session":
+			// Always structural, regardless of value: an empty or
+			// non-string "session" attribute must still be excluded from
+			// the message fold, not leak through as a noisy "session="
+			// suffix — parsed.Session is simply left "" in that case.
+			continue
+		}
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
+
+	message := msg
+	if len(extraKeys) > 0 {
+		pairs := make([]string, 0, len(extraKeys))
+		for _, k := range extraKeys {
+			value := formatLogFieldValue(raw[k])
+			if sensitiveLogAttributeKeys[strings.ToLower(k)] {
+				value = "<redacted>"
+			}
+			pairs = append(pairs, k+"="+value)
+		}
+		message = msg + " " + strings.Join(pairs, " ")
+	}
+
+	if level == "" {
+		level = "INFO"
+	}
+
+	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message, Source: source, Session: session}, true
+}
+
+// slogAddSourceLocation extracts "file:line" from a "source" attribute
+// value shaped like slog's built-in AddSource output
+// ({"function":"...","file":"...","line":42}). Returns "" for anything
+// else (missing, or a plain string from a call site's own domain-specific
+// "source" attribute) — see parseJSONLogLine's doc comment.
+func slogAddSourceLocation(v any) string {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	file, _ := obj["file"].(string)
+	line, _ := obj["line"].(float64)
+	if file == "" || line == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", file, int64(line))
+}
+
+// formatLogFieldValue renders one JSON attribute value as it would appear
+// in the legacy plain-text logger's key=value convention.
+func formatLogFieldValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		// Whole-number floats (byte counts, durations, PIDs — the common
+		// case for numeric slog attributes) must render as plain integers:
+		// 'g' formatting switches to scientific notation at 1e6
+		// (strconv.FormatFloat(1_000_000, 'g', -1, 64) == "1e+06"), which is
+		// actively misleading in a human-readable log viewer.
+		if val == math.Trunc(val) && math.Abs(val) < 1e15 {
+			return strconv.FormatInt(int64(val), 10)
+		}
+		return strconv.FormatFloat(val, 'g', -1, 64)
+	case bool:
+		return strconv.FormatBool(val)
+	case nil:
+		return "null"
+	default:
+		b, err := json.Marshal(val)
+		if err != nil {
+			return fmt.Sprintf("%v", val)
+		}
+		return string(b)
+	}
+}
+
+// parseLegacyLogLine parses one line in the old stdlib-logger format via
+// logLineRegex — see that variable's doc comment.
+func parseLegacyLogLine(line string) (parsedLogLine, bool) {
+	matches := logLineRegex.FindStringSubmatch(line)
+	if len(matches) < 7 {
+		return parsedLogLine{}, false
+	}
+
+	// matches[1] = instance (ignored for API)
+	level := matches[2]
+	dateStr := matches[3]
+	timeStr := matches[4]
+	source := matches[5]
+	message := matches[6]
+
+	timestampStr := fmt.Sprintf("%s %s", dateStr, timeStr)
+	// ParseInLocation with Local timezone since these lines are written in local time.
+	timestamp, err := time.ParseInLocation("2006/01/02 15:04:05", timestampStr, time.Local)
+	if err != nil {
+		return parsedLogLine{}, false
+	}
+
+	return parsedLogLine{Timestamp: timestamp, Level: level, Message: message, Source: source}, true
+}
+
+// parseLogLine parses one log line in whichever format it's actually
+// written in — JSON first (the current default), falling back to the
+// legacy plain-text format for lines from call sites that still use it.
+// Checks the first non-space byte before attempting a JSON parse so legacy
+// lines (which always start with "[") skip straight to the regex path
+// instead of paying for a doomed json.Unmarshal on every one of them.
+func parseLogLine(line string) (parsedLogLine, bool) {
+	trimmed := strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(trimmed, "{") {
+		if parsed, ok := parseJSONLogLine(trimmed); ok {
+			return parsed, true
+		}
+	}
+	return parseLegacyLogLine(line)
+}
 
 // UtilityService handles miscellaneous utility RPCs: GetLogs, FocusWindow,
 // and CreateDebugSnapshot.
@@ -54,29 +256,30 @@ func (us *UtilityService) GetLogs(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetLogsRequest],
 ) (*connect.Response[sessionv1.GetLogsResponse], error) {
-	// Get log file path from config
-	cfg := log.ConfigToLogConfig(config.LoadConfig())
-	var logFilePath string
-	var err error
-	if sid := req.Msg.GetSessionId(); sid != "" {
-		// Log files are written using inst.Title as the key (not UUID).
-		// Resolve the incoming ID (which may be a UUID) to the session Title
-		// before constructing the log file path.
-		resolvedID := sid
-		if us.reviewQueuePoller != nil {
-			if inst := us.reviewQueuePoller.FindInstance(sid); inst != nil {
-				resolvedID = inst.Title
-			}
+	// Log entries are written to the single global log file (see
+	// log/log.go's ForSession), tagged with a "session" attribute rather
+	// than filed into separate per-session log files — no code path writes
+	// those anymore. Resolve a UUID session_id to the session's Title (the
+	// value entries are actually tagged with) so the session filter below
+	// can match on it. Kept as a local variable rather than overwriting
+	// req.Msg.SessionId: the inbound request is the caller's own message,
+	// and rewriting it here would silently disagree with what the client
+	// actually sent for anything else that might inspect it later.
+	sessionFilter := req.Msg.GetSessionId()
+	if sessionFilter != "" && us.reviewQueuePoller != nil {
+		if inst := us.reviewQueuePoller.FindInstance(sessionFilter); inst != nil {
+			sessionFilter = inst.Title
 		}
-		logFilePath, err = log.GetSessionLogFilePath(cfg, resolvedID)
-	} else {
-		logFilePath, err = log.GetLogFilePath(cfg)
 	}
+
+	cfg := log.ConfigToLogConfig(config.LoadConfig())
+	logFilePath, err := log.GetLogFilePath(cfg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get log file path: %w", err))
 	}
 
 	// Read log file
+	// #nosec G304 -- logFilePath is log.GetLogFilePath(cfg), fully internal.
 	file, err := os.Open(logFilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -91,11 +294,13 @@ func (us *UtilityService) GetLogs(
 	defer file.Close()
 
 	// Parse logs with filters
-	result, err := parseLogs(file, req.Msg)
+	result, err := parseLogs(file, req.Msg, sessionFilter)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to parse logs: %w", err))
 	}
 
+	// #nosec G115 -- result.TotalCount is a parsed log-line count from one
+	// local session log file, far below int32 range.
 	return connect.NewResponse(&sessionv1.GetLogsResponse{
 		Entries:    result.Entries,
 		TotalCount: int32(result.TotalCount),
@@ -307,8 +512,91 @@ type parseLogsResult struct {
 	HasMore    bool
 }
 
-// parseLogs reads log file and applies filters to return matching entries
-func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResult, error) {
+// logLineFilters holds all of parseLogs' pre-parsed filter criteria, so the
+// per-line matching logic can live in its own method (matches) instead of
+// inflating parseLogs' own cognitive complexity with one more nested
+// condition per filter.
+type logLineFilters struct {
+	// sessionFilter is the resolved session Title to restrict entries to
+	// (see GetLogs), or "" for no session filtering.
+	sessionFilter    string
+	levelFilterSet   map[string]struct{}
+	startTime        *time.Time
+	endTime          *time.Time
+	searchQueryLower string
+}
+
+// newLogLineFilters builds a logLineFilters from a GetLogsRequest and the
+// separately-resolved session filter (see parseLogs' doc comment for why
+// that isn't just req.GetSessionId()).
+func newLogLineFilters(req *sessionv1.GetLogsRequest, sessionFilter string) logLineFilters {
+	f := logLineFilters{sessionFilter: sessionFilter}
+
+	if req.SearchQuery != nil {
+		f.searchQueryLower = strings.ToLower(*req.SearchQuery)
+	}
+
+	// Build level filter set: prefer repeated Levels field; fall back to single Level for backward compat.
+	if len(req.Levels) > 0 {
+		f.levelFilterSet = make(map[string]struct{}, len(req.Levels))
+		for _, l := range req.Levels {
+			if l != "" {
+				f.levelFilterSet[strings.ToUpper(l)] = struct{}{}
+			}
+		}
+	} else if req.Level != nil && *req.Level != "" {
+		f.levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
+	}
+
+	if req.StartTime != nil {
+		t := req.StartTime.AsTime()
+		f.startTime = &t
+	}
+	if req.EndTime != nil {
+		t := req.EndTime.AsTime()
+		f.endTime = &t
+	}
+
+	return f
+}
+
+// matches reports whether parsed satisfies every configured filter.
+func (f logLineFilters) matches(parsed parsedLogLine) bool {
+	// Entries are tagged with the owning session's Title via
+	// log.ForSession, not filed into a separate log file.
+	if f.sessionFilter != "" && parsed.Session != f.sessionFilter {
+		return false
+	}
+
+	if len(f.levelFilterSet) > 0 {
+		if _, ok := f.levelFilterSet[strings.ToUpper(parsed.Level)]; !ok {
+			return false
+		}
+	}
+
+	if f.startTime != nil && parsed.Timestamp.Before(*f.startTime) {
+		return false
+	}
+	if f.endTime != nil && parsed.Timestamp.After(*f.endTime) {
+		return false
+	}
+
+	if f.searchQueryLower != "" {
+		messageAndSource := strings.ToLower(parsed.Message + " " + parsed.Source)
+		if !strings.Contains(messageAndSource, f.searchQueryLower) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// parseLogs reads log file and applies filters to return matching entries.
+// sessionFilter is the resolved session Title to restrict entries to (see
+// GetLogs), or "" for no session filtering — passed explicitly rather than
+// read off req, since the caller may need to resolve a UUID to a Title
+// first without mutating req itself.
+func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter string) (*parseLogsResult, error) {
 	var entries []*sessionv1.LogEntry
 	scanner := bufio.NewScanner(reader)
 
@@ -324,90 +612,28 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 		offset = int(*req.Offset)
 	}
 
-	// Parse filters
-	var searchQuery string
-	if req.SearchQuery != nil {
-		searchQuery = strings.ToLower(*req.SearchQuery)
-	}
-
-	// Build level filter set: prefer repeated Levels field; fall back to single Level for backward compat.
-	var levelFilterSet map[string]struct{}
-	if len(req.Levels) > 0 {
-		levelFilterSet = make(map[string]struct{}, len(req.Levels))
-		for _, l := range req.Levels {
-			if l != "" {
-				levelFilterSet[strings.ToUpper(l)] = struct{}{}
-			}
-		}
-	} else if req.Level != nil && *req.Level != "" {
-		levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
-	}
-
-	var startTime, endTime *time.Time
-	if req.StartTime != nil {
-		t := req.StartTime.AsTime()
-		startTime = &t
-	}
-	if req.EndTime != nil {
-		t := req.EndTime.AsTime()
-		endTime = &t
-	}
+	filters := newLogLineFilters(req, sessionFilter)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Try to parse the log line
-		matches := logLineRegex.FindStringSubmatch(line)
-		if len(matches) < 7 {
-			// Skip lines that don't match expected format
+		parsed, ok := parseLogLine(line)
+		if !ok {
+			// Skip lines that don't match either known format (e.g. a
+			// stray non-log line, or one truncated mid-write).
 			continue
 		}
 
-		// Extract fields from regex match
-		// matches[1] = instance (ignored for API)
-		level := matches[2]
-		dateStr := matches[3]
-		timeStr := matches[4]
-		source := matches[5]
-		message := matches[6]
-
-		// Parse timestamp - use ParseInLocation with Local timezone since logs are written in local time
-		timestampStr := fmt.Sprintf("%s %s", dateStr, timeStr)
-		timestamp, err := time.ParseInLocation("2006/01/02 15:04:05", timestampStr, time.Local)
-		if err != nil {
-			// Skip entries with invalid timestamps
+		if !filters.matches(parsed) {
 			continue
-		}
-
-		// Apply level filter (OR logic across multi-level set)
-		if len(levelFilterSet) > 0 {
-			if _, ok := levelFilterSet[strings.ToUpper(level)]; !ok {
-				continue
-			}
-		}
-
-		// Apply time range filters
-		if startTime != nil && timestamp.Before(*startTime) {
-			continue
-		}
-		if endTime != nil && timestamp.After(*endTime) {
-			continue
-		}
-
-		// Apply search query filter (case-insensitive, searches message and source)
-		if searchQuery != "" {
-			messageAndSource := strings.ToLower(message + " " + source)
-			if !strings.Contains(messageAndSource, searchQuery) {
-				continue
-			}
 		}
 
 		// Create log entry
 		entry := &sessionv1.LogEntry{
-			Timestamp: timestamppb.New(timestamp),
-			Level:     level,
-			Message:   message,
-			Source:    &source,
+			Timestamp: timestamppb.New(parsed.Timestamp),
+			Level:     parsed.Level,
+			Message:   parsed.Message,
+			Source:    &parsed.Source,
 		}
 
 		entries = append(entries, entry)

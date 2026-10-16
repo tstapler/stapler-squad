@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,23 +13,55 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // HeadlessPoolClient is the narrow interface AutonomousDriver needs from the headless pool.
 // *headless.Pool satisfies this interface directly.
 type HeadlessPoolClient interface {
-	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions, sink headless.CostSink) (string, error)
 }
 
 // AutonomousDriverOutcome describes how an autonomous driver run concluded.
+//
+// Done/Stuck/Reason are the legacy fields; StopReason is authoritative when set
+// and the driver derives Done/Stuck from it. A zero StopReason is read through
+// NormalizedStopReason so hand-built outcomes keep their meaning.
 type AutonomousDriverOutcome struct {
 	Done   bool
 	Reason string
 	PRUrl  string
 	Turns  int
-	Stuck  bool // true if exited via maxTurns without DONE signal
+	Stuck  bool // true if the run ended without DONE and was not a requested stop
+
+	StopReason domain.StopReason
+	// Snapshot is the pane state captured before the driver tore anything down.
+	// CaptureErr is "skipped" for cancelled stops.
+	Snapshot domain.StopSnapshot
+	// RunID identifies the driver run that produced this outcome.
+	RunID uint64
 }
+
+// NormalizedStopReason returns StopReason, or derives one from the legacy Done
+// flag: Done -> done, otherwise the empty "unspecified" stall reason.
+func (o AutonomousDriverOutcome) NormalizedStopReason() domain.StopReason {
+	if o.StopReason != "" {
+		return o.StopReason
+	}
+	if o.Done {
+		return domain.StopReasonDone
+	}
+	return ""
+}
+
+// Class is the three-way outcome class of NormalizedStopReason.
+func (o AutonomousDriverOutcome) Class() domain.OutcomeClass {
+	return o.NormalizedStopReason().Class()
+}
+
+// driverRunIDs hands out RunID values; process-wide so ids are never reused.
+var driverRunIDs atomic.Uint64
 
 // CompletionCallback is called when the driver exits with a final outcome.
 type CompletionCallback func(instanceName string, outcome AutonomousDriverOutcome)
@@ -39,10 +72,32 @@ type TurnCallback func(turn, maxTurns int, prompt string)
 // DriverOption is a functional option for configuring an AutonomousDriver.
 type DriverOption func(*AutonomousDriver)
 
+// NoopDriverOption changes nothing — a safe DriverOption for callers building an
+// option conditionally (e.g. only when storage is wired) that still need a value
+// to pass, rather than branching on whether to include the option at all.
+func NoopDriverOption(*AutonomousDriver) {}
+
 // WithStartupTimeout overrides the default 60s startup idle-wait timeout.
 // Use a longer timeout for sessions that spawn parallel subagents (e.g. triage).
 func WithStartupTimeout(d time.Duration) DriverOption {
 	return func(a *AutonomousDriver) { a.startupTimeout = d }
+}
+
+// WithCostSink overrides the default headless.DiscardCost sink invoked with the
+// USD cost of each per-turn LLM call. Pass CostSinkForSessionUUID(storage,
+// inst.UUID) to accumulate a running total on the session's ItemSession.
+func WithCostSink(sink headless.CostSink) DriverOption {
+	return func(a *AutonomousDriver) { a.costSink = sink }
+}
+
+// panePreviewer is the narrow interface AutonomousDriver needs to read the
+// current pane content. *Instance satisfies it directly via Preview().
+// Extracted (mirroring paneSettleChecker below) so driver-level tests can
+// substitute a fake that returns scripted pane content per call, instead of
+// only being able to exercise pane/delivery-timing behavior through the
+// pure functions in nudge_dedup_test.go.
+type panePreviewer interface {
+	Preview() (string, error)
 }
 
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
@@ -57,7 +112,59 @@ type AutonomousDriver struct {
 	turnCb         TurnCallback
 	driverRunning  atomic.Bool
 	cancel         context.CancelFunc
-	mu             sync.Mutex
+	// done is closed when run() has fully exited (including via the
+	// panic-recovery path), giving Wait() a real join point instead of
+	// polling driverRunning. Set fresh in Start(); a driver that has never
+	// been started has a nil done, which Wait() treats as "nothing to wait
+	// for."
+	done chan struct{}
+	mu   sync.Mutex
+	// previewer overrides pane content reads when set (used by tests to
+	// script pane content across turns). nil (the zero value, including for
+	// every existing struct-literal-constructed test in this package) falls
+	// back to d.inst.Preview() via previewPane() below.
+	previewer panePreviewer
+
+	// idleSettlePollInterval and idleSettleWindow default to 500ms/60s (set in
+	// NewAutonomousDriver) and can be overridden via WithIdleSettlePollInterval/
+	// WithIdleSettleWindow — instance fields (not package vars) so tests shrink
+	// them per-driver instead of mutating shared state races could read
+	// concurrently with a still-running driver goroutine.
+	idleSettlePollInterval time.Duration
+	idleSettleWindow       time.Duration
+	// paneSettlePollInterval and paneSettleMaxWait default to 150ms/2s and can
+	// be overridden via WithPaneSettlePollInterval/WithPaneSettleMaxWait.
+	paneSettlePollInterval time.Duration
+	paneSettleMaxWait      time.Duration
+
+	// costSink receives the USD cost of each per-turn LLM call. Defaults to
+	// headless.DiscardCost (set in NewAutonomousDriver) — override via WithCostSink.
+	costSink headless.CostSink
+
+	// stopRequested is set first thing in Stop(), so run() can tell a requested
+	// cancel from a parent-context (shutdown) cancel.
+	stopRequested atomic.Bool
+	// completed makes finish() fire the completion callback at most once.
+	completed atomic.Bool
+	runID     atomic.Uint64
+	// source overrides the Instance-backed stop-snapshot reads (tests). nil
+	// falls back to instanceStopSource.
+	source stopSource
+	// Zero values fall back to the production defaults, so struct-literal
+	// drivers in tests need no setup.
+	captureTimeout   time.Duration
+	turnLeaseWait    time.Duration
+	rateLimitWaitMax time.Duration
+}
+
+// previewPane returns the current pane content, preferring d.previewer when
+// set (tests may substitute a scripted fake) and falling back to d.inst
+// otherwise — see the panePreviewer doc comment.
+func (d *AutonomousDriver) previewPane() (string, error) {
+	if d.previewer != nil {
+		return d.previewer.Preview()
+	}
+	return d.inst.Preview()
 }
 
 // NewAutonomousDriver creates an AutonomousDriver for inst.
@@ -79,6 +186,21 @@ func NewAutonomousDriver(inst *Instance, pool HeadlessPoolClient, goal string, m
 	}
 	if d.startupTimeout == 0 {
 		d.startupTimeout = 60 * time.Second
+	}
+	if d.idleSettlePollInterval == 0 {
+		d.idleSettlePollInterval = 500 * time.Millisecond
+	}
+	if d.idleSettleWindow == 0 {
+		d.idleSettleWindow = 60 * time.Second
+	}
+	if d.paneSettlePollInterval == 0 {
+		d.paneSettlePollInterval = 150 * time.Millisecond
+	}
+	if d.paneSettleMaxWait == 0 {
+		d.paneSettleMaxWait = 2 * time.Second
+	}
+	if d.costSink == nil {
+		d.costSink = headless.DiscardCost
 	}
 	return d
 }
@@ -117,18 +239,23 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	d.runID.Store(driverRunIDs.Add(1))
 	d.mu.Lock()
 	d.cancel = cancel
+	d.done = done
 	d.controller = d.inst.GetController()
 	d.mu.Unlock()
 
 	if d.controller == nil {
 		d.driverRunning.Store(false)
 		cancel()
+		close(done)
 		return fmt.Errorf("AutonomousDriver: no controller available for session %q", d.inst.Title)
 	}
 
 	go func() {
+		defer close(done)
 		defer d.driverRunning.Store(false)
 		defer cancel()
 		d.run(ctx)
@@ -140,7 +267,9 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 // Context cancellation propagates into CallBlocking: the headless pool passes ctx
 // to runner.Run (which kills the subprocess) and the stream reader selects on ctx.Done,
 // so Stop returns control to the caller nearly immediately — no blocking LLM call delay.
+// Stop does not wait for the goroutine to exit — use Wait for that.
 func (d *AutonomousDriver) Stop() {
+	d.stopRequested.Store(true)
 	d.mu.Lock()
 	cancel := d.cancel
 	d.mu.Unlock()
@@ -150,11 +279,97 @@ func (d *AutonomousDriver) Stop() {
 	d.driverRunning.Store(false)
 }
 
+// RunID identifies the current (or last) run; 0 before the first Start.
+func (d *AutonomousDriver) RunID() uint64 { return d.runID.Load() }
+
+// Finished reports, without blocking, whether a started run has fully exited.
+// A driver that was never started is not finished.
+func (d *AutonomousDriver) Finished() bool {
+	d.mu.Lock()
+	done := d.done
+	d.mu.Unlock()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+// cancelReason classifies a context cancellation: Stop() records the request
+// first, so anything else is the parent context going away (service shutdown).
+func (d *AutonomousDriver) cancelReason() domain.StopReason {
+	if d.stopRequested.Load() {
+		return domain.StopReasonCancelledExternal
+	}
+	return domain.StopReasonCancelledShutdown
+}
+
+// stopReasonFor picks the cancel reason when ctx is done, else the site's own.
+func (d *AutonomousDriver) stopReasonFor(ctx context.Context, siteReason domain.StopReason) domain.StopReason {
+	if ctx.Err() != nil {
+		return d.cancelReason()
+	}
+	return siteReason
+}
+
+// finish is the single exit: it captures the pane snapshot (skipped for
+// requested stops, which no recovery decision consumes and which must not wait
+// on tmux), derives the legacy flags and fires the completion callback once.
+func (d *AutonomousDriver) finish(sessionName string, reason domain.StopReason, base AutonomousDriverOutcome) {
+	if !d.completed.CompareAndSwap(false, true) {
+		return
+	}
+	base.StopReason = reason
+	base.Done = reason.IsDone()
+	base.Stuck = reason.IsStall()
+	base.RunID = d.runID.Load()
+	if reason.Class() == domain.OutcomeClassCancelled {
+		base.Snapshot = domain.StopSnapshot{CaptureErr: "skipped"}
+	} else {
+		src := d.source
+		if src == nil {
+			src = instanceStopSource{inst: d.inst, controller: d.controller}
+		}
+		base.Snapshot = captureStopSnapshot(src, d.captureTimeout)
+	}
+	d.fireCompletion(sessionName, base)
+}
+
+// Wait blocks until the run() goroutine started by Start has fully exited
+// (including via the panic-recovery path), or ctx is done, whichever comes
+// first. It returns true if run() exited, false if ctx expired first. A
+// driver that was never started has a nil done channel and returns true
+// immediately, since there is nothing to wait for.
+//
+// One known best-effort gap: the SendKeys calls in run() are not
+// ctx-cancellable, so a PTY write that blocks forever (e.g. a full kernel
+// pipe buffer) can keep run() from exiting even after Stop(); Wait() still
+// returns false once its own ctx expires in that case rather than hanging.
+func (d *AutonomousDriver) Wait(ctx context.Context) bool {
+	d.mu.Lock()
+	done := d.done
+	d.mu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // run is the main driver loop. Must only be called from Start's goroutine.
 func (d *AutonomousDriver) run(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("AutonomousDriver: recovered from panic", "session", d.inst.Title, "panic", r)
+			log.Error("AutonomousDriver: recovered from panic", "session", d.inst.Snapshot().Title, "panic", r)
+			d.finish(d.inst.Snapshot().Title, domain.StopReasonPanic, AutonomousDriverOutcome{Reason: fmt.Sprintf("panic: %v", r)})
 		}
 	}()
 
@@ -177,65 +392,111 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	if startupTimeout == 0 {
 		startupTimeout = 60 * time.Second
 	}
+	// costSink mirrors startupTimeout's zero-value fallback above: tests across this
+	// file construct &AutonomousDriver{} directly (bypassing NewAutonomousDriver's
+	// defaulting), so this can't assume the constructor ran.
+	costSink := d.costSink
+	if costSink == nil {
+		costSink = headless.DiscardCost
+	}
 	startupCtx, startupCancel := context.WithTimeout(ctx, startupTimeout)
 	// No settle window here: startup only needs to observe the session's
 	// first idle signal after launch, not debounce against a background
 	// fork — nothing has been injected yet, so there's no premature-nudge
 	// risk to guard against.
-	if !waitForIdle(startupCtx, statusCh, d.controller, 0) {
+	if !waitForIdle(startupCtx, statusCh, d.controller, 0, d.idleSettlePollInterval) {
 		startupCancel()
 		log.Warn("AutonomousDriver: timed out waiting for initial idle state", "session", sessionName)
-		d.fireCompletion(sessionName, AutonomousDriverOutcome{Stuck: true, Reason: "startup timeout"})
+		d.finish(sessionName, d.stopReasonFor(ctx, domain.StopReasonStartupTimeout), AutonomousDriverOutcome{Reason: "startup timeout"})
 		return
 	}
 	startupCancel()
 
-	outcome := AutonomousDriverOutcome{}
+	// exit is set at each abnormal break; an unset exit after the loop means the
+	// loop ran out of turns.
+	var exit AutonomousDriverOutcome
 	malformedResponseCount := 0
+	// lastSentNudge tracks the most recent nudge actually delivered (both SendKeys
+	// writes succeeded). It's a run()-local, not a struct field: every caller
+	// constructs a fresh *AutonomousDriver per Start(), so no cross-restart
+	// persistence is needed and a local avoids any d.mu entanglement.
+	var lastSentNudge lastNudge
 
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
+			exit = AutonomousDriverOutcome{StopReason: d.cancelReason(), Turns: turnCount + 1}
 			break
 		}
 
 		// Respect rate limit: wait until cleared.
 		if err := d.waitForRateLimitClear(ctx); err != nil {
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonRateLimitExhausted), Reason: err.Error(), Turns: turnCount + 1}
 			break
 		}
 
-		tail, _ := d.inst.Preview()
-		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns)
+		tail, _ := d.previewPane()
+		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns, lastSentNudge)
 
 		keyLen := 8
 		if len(sessionID) < keyLen {
 			keyLen = len(sessionID)
 		}
 		featureKey := headless.FeatureKey("autonomous_fix-" + sessionID[:keyLen])
-		resp, _, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
+		resp, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{}, costSink)
 		if err != nil {
 			log.Warn("AutonomousDriver: LLM call failed", "session", sessionName, "turn", turnCount+1, "err", err)
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonOrchestratorError), Reason: err.Error(), Turns: turnCount + 1}
 			break
 		}
 
-		nextMsg, done, reason, parseErr := parseOrchestrationResponse(resp)
+		directive, payload, parseErr := parseOrchestrationResponse(resp)
 		if parseErr != nil {
 			malformedResponseCount++
 			log.Warn("AutonomousDriver: malformed LLM response, retrying", "session", sessionName, "turn", turnCount+1, "resp", resp)
 			continue
 		}
 
-		if done {
-			sessionOutput, _ := d.inst.Preview()
-			outcome = AutonomousDriverOutcome{
-				Done:   true,
-				Reason: reason,
+		if directive == directiveDone {
+			sessionOutput, _ := d.previewPane()
+			outcome := AutonomousDriverOutcome{
+				Reason: payload,
 				PRUrl:  ExtractPRURL(sessionOutput),
 				Turns:  turnCount + 1,
 			}
-			log.Info("AutonomousDriver: DONE signal received", "session", sessionName, "turn", turnCount+1, "reason", reason)
-			d.fireCompletion(sessionName, outcome)
+			log.Info("AutonomousDriver: DONE signal received", "session", sessionName, "turn", turnCount+1, "reason", payload)
+			d.finish(sessionName, domain.StopReasonDone, outcome)
 			return
 		}
+
+		// A WAIT directive or an exact-repeat of the last delivered nudge both mean
+		// "don't inject anything this turn" — the orchestrator (or the deterministic
+		// backstop) has recognized the agent already has this guidance. The turn
+		// still counts against maxTurns (bounds a runaway/looping orchestrator, same
+		// as a malformed response burning a turn) but skips SendKeys/fireTurnCallback
+		// entirely, and lastSentNudge is left unchanged since nothing new was sent.
+		suppressed := directive == directiveWait || isDuplicateNudge(payload, lastSentNudge, time.Now(), tail)
+		if suppressed {
+			log.Info("AutonomousDriver: suppressed nudge", "session", sessionName, "turn", turnCount+1, "directive", directive)
+			if ctx.Err() != nil {
+				exit = AutonomousDriverOutcome{StopReason: d.cancelReason(), Turns: turnCount + 1}
+				break
+			}
+			// Proceed on the same idle-settle cadence a real send uses, instead of
+			// blocking the full nudgeCooldown (3min production default): a
+			// suppressed turn means the agent is still working, so waiting for it
+			// to go idle again is what re-arms the dedup guard (isDuplicateNudge
+			// re-checks the cooldown next turn) and lets the orchestrator re-poll
+			// promptly rather than stalling on an arbitrary fixed timer.
+			turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
+			idleReached := waitForIdle(turnCtx, statusCh, d.controller, d.idleSettleWindow, d.idleSettlePollInterval)
+			turnCancel()
+			if !idleReached {
+				log.Warn("AutonomousDriver: session did not become idle after suppressed turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
+			}
+			continue
+		}
+
+		nextMsg := payload
 
 		// Use SendKeys (raw PTY write) instead of SendCommandImmediate so that only
 		// "\r" is sent. SendCommandImmediate goes through the command executor which
@@ -243,42 +504,66 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// text into the multiline buffer without submitting — identical to steer_session
 		// which uses inst.SendKeys(msg + "\r") directly and is known to work.
 		//
-		// content and "\r" are sent as two SEPARATE writes, not concatenated into one
-		// (BUG-031): a single large write lands its trailing "\r" inside the TUI's
-		// paste-detection window for sufficiently long prompts, folding it into the
-		// pasted block instead of submitting — live-confirmed via a stuck session
-		// showing an unsubmitted "[Pasted text #N +1 lines]" block at the input line.
-		// waitForPaneSettle gives the TUI's paste detector a chance to close before
-		// the submit keystroke arrives as its own write.
-		if sendErr := d.inst.SendKeys(nextMsg); sendErr != nil {
-			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+		// SubmitDriverContent sends content and the submit keystroke as two SEPARATE
+		// writes, not concatenated into one (BUG-031): see its doc comment
+		// (pane_submit.go) for why a single write is unsafe for long content.
+		//
+		// The turn is this chain's acquirer (Story 5.0): a bounded blocking
+		// acquire, because a Reply or a steer holds the lease for a short time
+		// only, and a timeout takes the existing submit-error path.
+		leaseWait := d.turnLeaseWait
+		if leaseWait <= 0 {
+			leaseWait = AutonomousTurnLeaseWait
+		}
+		lease, leaseErr := d.inst.AcquireTerminalWriteLease(ctx, LeaseWriterAutonomous, leaseWait)
+		if leaseErr != nil {
+			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", leaseErr)
+			siteReason := domain.StopReasonSubmitFailed
+			if errors.Is(leaseErr, ErrLeaseBusy) {
+				siteReason = domain.StopReasonLeaseTimeout
+			}
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, siteReason), Reason: leaseErr.Error(), Turns: turnCount + 1}
 			break
 		}
-		waitForPaneSettle(ctx, d.inst)
-		if sendErr := d.inst.SendKeys(EnterKeySequence); sendErr != nil {
-			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+		if sendErr := SubmitDriverContent(ctx, d.inst, lease, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
+			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonSubmitFailed), Reason: sendErr.Error(), Turns: turnCount + 1}
 			break
 		}
+		// Re-capture the pane AFTER delivery completes, rather than reusing the
+		// pre-call `tail` captured before the blocking LLM call and both SendKeys
+		// writes. Real pane activity (agent output, prompt redraw) almost always
+		// occurs during that round-trip, so recording the stale pre-call snapshot
+		// as if it reflected delivery-time state made the next turn's
+		// isDuplicateNudge re-arm check fire on ordinary pane movement, defeating
+		// the suppression cooldown this feature exists to provide.
+		deliveryPane, _ := d.previewPane()
+		// Only recorded once both writes above have succeeded — a failed send must
+		// not be treated as delivered for future dedup checks. Isolated into
+		// nextLastNudge (a pure function) so this invariant is directly unit
+		// testable without needing a tmux-backed Instance to force a partial
+		// SendKeys failure.
+		lastSentNudge = nextLastNudge(lastSentNudge, nextMsg, true, deliveryPane)
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
 		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
 		// Wait for idle before the next turn.
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-		idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
+		idleReached := waitForIdle(turnCtx, statusCh, d.controller, d.idleSettleWindow, d.idleSettlePollInterval)
 		turnCancel()
 		if !idleReached {
 			log.Warn("AutonomousDriver: session did not become idle after turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
 		}
 	}
 
-	if !outcome.Done {
+	if exit.StopReason == "" {
 		reason := "max turns reached"
 		if malformedResponseCount > 0 {
 			reason = fmt.Sprintf("max turns reached (%d malformed orchestrator responses)", malformedResponseCount)
 		}
-		outcome = AutonomousDriverOutcome{Stuck: true, Reason: reason, Turns: d.maxTurns}
+		exit = AutonomousDriverOutcome{StopReason: domain.StopReasonMaxTurns, Reason: reason, Turns: d.maxTurns}
 	}
-	d.fireCompletion(sessionName, outcome)
+	d.finish(sessionName, exit.StopReason, exit)
 }
 
 // paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
@@ -287,30 +572,23 @@ type paneSettleChecker interface {
 	HasUpdated() (updated bool, hasPrompt bool)
 }
 
-// paneSettlePollInterval and paneSettleMaxWait are vars (not consts) so tests
-// can shrink them instead of waiting out real timers.
-var (
-	paneSettlePollInterval = 150 * time.Millisecond
-	paneSettleMaxWait      = 2 * time.Second
-)
-
 // waitForPaneSettle polls inst until its pane content stops changing for two
-// consecutive polls, or paneSettleMaxWait elapses — whichever first. Used
-// between writing a turn's content and sending the submit keystroke (BUG-031):
-// a large paste can still be landing/rendering in the TUI's paste-detection
+// consecutive polls, or maxWait elapses — whichever first. Used between
+// writing a turn's content and sending the submit keystroke (BUG-031): a
+// large paste can still be landing/rendering in the TUI's paste-detection
 // window when a follow-up "\r" arrives, so giving the pane a chance to settle
 // first shrinks the race that folds the submit keystroke into the paste block
 // instead of ending it. Best-effort: a pane that never settles (e.g. a
 // permanently busy session) is left alone once the deadline passes — the
 // caller still sends "\r" either way.
-func waitForPaneSettle(ctx context.Context, inst paneSettleChecker) {
-	deadline := time.Now().Add(paneSettleMaxWait)
+func waitForPaneSettle(ctx context.Context, inst paneSettleChecker, pollInterval, maxWait time.Duration) {
+	deadline := time.Now().Add(maxWait)
 	stableCount := 0
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(paneSettlePollInterval):
+		case <-time.After(pollInterval):
 		}
 		updated, _ := inst.HasUpdated()
 		if updated {
@@ -330,13 +608,17 @@ const maxRateLimitWait = 4 * time.Hour
 // waitForRateLimitClear blocks until the controller's rate limit state is StateNone.
 // Returns an error if ctx is cancelled or the total wait exceeds maxRateLimitWait.
 func (d *AutonomousDriver) waitForRateLimitClear(ctx context.Context) error {
-	deadline := time.Now().Add(maxRateLimitWait)
+	maxWait := d.rateLimitWaitMax
+	if maxWait <= 0 {
+		maxWait = maxRateLimitWait
+	}
+	deadline := time.Now().Add(maxWait)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("rate limit wait exceeded %v", maxRateLimitWait)
+			return fmt.Errorf("rate limit wait exceeded %v", maxWait)
 		}
 		state := d.controller.GetRateLimitState()
 		if state == ratelimit.StateNone {
@@ -370,14 +652,6 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 	}
 }
 
-// idleSettlePollInterval and idleSettleWindow are vars (not consts) so tests
-// can shrink them instead of waiting out real timers, matching the
-// waitForPaneSettle pattern above.
-var (
-	idleSettlePollInterval = 500 * time.Millisecond
-	idleSettleWindow       = 60 * time.Second
-)
-
 // waitForIdle blocks until the session needs a new orchestrator turn, or ctx
 // is cancelled. Two paths satisfy it:
 //   - An explicit status arrives (approval pending, input required, error,
@@ -397,7 +671,7 @@ var (
 // redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
 //
 // Returns true if a turn is warranted, false if ctx expired first.
-func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow time.Duration) bool {
+func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow, pollInterval time.Duration) bool {
 	if settleWindow <= 0 {
 		if cc.IsIdle() {
 			return true
@@ -424,7 +698,7 @@ func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, 
 			return true
 		}
 
-		wait := idleSettlePollInterval
+		wait := pollInterval
 		if !idleSince.IsZero() {
 			if remaining := settleWindow - time.Since(idleSince); remaining < wait {
 				wait = remaining
@@ -471,54 +745,107 @@ const autonomousSystemPrompt = `You are an orchestrator directing a Claude Code 
 Reply with exactly one of:
   NEXT_MESSAGE: <message to inject into the session>
   DONE: <reason the goal is complete>
+  WAIT: <reason the agent already has a plan and needs no new nudge>
+Use WAIT when the <last_nudge> shows the agent already acknowledged the same guidance and
+stated a plan to act on it (e.g. "I'll wait for CI") — do not repeat NEXT_MESSAGE with the
+same content just because the session still looks idle.
 No other text.`
 
 // buildOrchestrationPrompt constructs the user prompt for the orchestrator LLM call.
 // Goal and session output are wrapped in XML-style delimiters so that user-controlled
 // content (e.g., GitHub PR body embedded in the goal) cannot escape its section and
-// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text.
-func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int) string {
+// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text. lastSent describes
+// the most recent nudge actually delivered (both SendKeys calls succeeded); a zero
+// lastSent (lastSent.at.IsZero()) means none has been sent yet. Bundled into one
+// struct param (rather than two same-shaped text/time.Time args) per
+// the `primitive-obsession-checklist` skill — the two values are always read
+// and passed together, so a struct removes the chance of them being supplied out of
+// order at a call site. lastSent.text is LLM-generated content from a prior turn, so
+// it's wrapped in its own <last_nudge> tag (same anti-spoofing rationale as
+// <goal>/<session_output>) rather than interpolated directly into the instruction text.
+// lastNudgeTagEscaper neutralizes the two characters that could otherwise let
+// lastSent.text close its <last_nudge> block early.
+var lastNudgeTagEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+
+func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int, lastSent lastNudge) string {
 	const maxTailBytes = 80 * 120 // ~80 lines × 120 chars
 	if len(tail) > maxTailBytes {
 		tail = tail[len(tail)-maxTailBytes:]
 	}
+	// The whole <last_nudge> section is omitted (not just given placeholder
+	// content) on turn 1 / whenever no nudge has been delivered yet — an
+	// absent section is unambiguous to the orchestrator LLM, whereas a
+	// present-but-empty tag risks being mistaken for "a nudge with empty
+	// text was sent".
+	lastNudgeSection := ""
+	if lastSent.text != "" && !lastSent.at.IsZero() {
+		// Escape "<"/">" before interpolating: lastSent.text is the system's own
+		// prior LLM output being round-tripped back into the prompt, so a nudge
+		// containing "</last_nudge>" (or another tag) could otherwise close the
+		// block early and spoof content into the surrounding instruction text —
+		// the same anti-spoofing rationale as the <goal>/<session_output> wrapping.
+		escapedNudgeText := lastNudgeTagEscaper.Replace(lastSent.text)
+		lastNudgeSection = fmt.Sprintf("\n\n<last_nudge>\n%s\n(sent %s ago)\n</last_nudge>",
+			escapedNudgeText, time.Since(lastSent.at).Round(time.Second))
+	}
 	return fmt.Sprintf(
-		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text> or DONE: <reason>.",
-		goal, tail, turnCount, maxTurns)
+		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>%s\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text>, DONE: <reason>, or WAIT: <reason>.",
+		goal, tail, lastNudgeSection, turnCount, maxTurns)
 }
 
-// orchestrationDirectiveMarker matches "DONE:" or "NEXT_MESSAGE:" case-insensitively,
-// anywhere in the response — not just as an exact prefix of the whole string. Confirmed
-// live (2026-08-01, BUG-056): despite the system prompt's "no other text" instruction,
-// the orchestrator model routinely writes a full free-text explanation and appends the
-// directive directly onto the end of its last sentence with no separating newline at
-// all (e.g. "...reflecting real findings rather than guesswork.DONE: Reached the
-// 20-turn limit..."), which the old exact-prefix match rejected outright, burning the
-// turn (see AutonomousDriver's malformedResponseCount — 8 of 20 turns wasted this way
-// on one live item). Matching case-insensitively anywhere handles this plus markdown
-// fencing and preamble-before-the-directive without needing separate handling for each.
-var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE)\s*:`)
+// orchestrationDirectiveMarker matches "DONE:", "NEXT_MESSAGE:", or "WAIT:"
+// case-insensitively, anywhere in the response — not just as an exact prefix of the
+// whole string. Confirmed live (2026-08-01, BUG-056): despite the system prompt's "no
+// other text" instruction, the orchestrator model routinely writes a full free-text
+// explanation and appends the directive directly onto the end of its last sentence with
+// no separating newline at all (e.g. "...reflecting real findings rather than
+// guesswork.DONE: Reached the 20-turn limit..."), which the old exact-prefix match
+// rejected outright, burning the turn (see AutonomousDriver's malformedResponseCount —
+// 8 of 20 turns wasted this way on one live item). Matching case-insensitively anywhere
+// handles this plus markdown fencing and preamble-before-the-directive without needing
+// separate handling for each.
+var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE|WAIT)\s*:`)
 
-// parseOrchestrationResponse parses the LLM's reply into a next message or done signal.
+// orchestrationDirective is the 3-way outcome of parsing an orchestrator reply. A
+// dedicated enum (rather than a second bool alongside nextMsg/reason strings) avoids
+// the same same-typed-parameter ambiguity flagged by
+// the `primitive-obsession-checklist` skill for function parameters — here applied
+// to a return value that would otherwise need a second bool to distinguish WAIT from
+// DONE.
+type orchestrationDirective int
+
+const (
+	directiveNextMessage orchestrationDirective = iota
+	directiveDone
+	directiveWait
+)
+
+// parseOrchestrationResponse parses the LLM's reply into a directive plus its payload.
 // Finds the LAST occurrence of a directive marker in the response (not the first): the
 // model's authoritative final answer consistently comes after any preamble/reasoning it
 // writes first, so preferring the last occurrence picks the real directive over an
 // earlier echo of the instructions or an incidental mention. Everything after that
 // marker, to the end of the response, is the payload — preserving a multi-line
-// NEXT_MESSAGE body.
-func parseOrchestrationResponse(resp string) (nextMsg string, done bool, reason string, err error) {
+// NEXT_MESSAGE body. This only ever inspects the model's own reply text, never the
+// prompt it was given, so a <last_nudge> block containing a literal "NEXT_MESSAGE:"-like
+// string in a prior nudge cannot be misparsed as a directive here.
+func parseOrchestrationResponse(resp string) (directive orchestrationDirective, payload string, err error) {
 	trimmed := strings.TrimSpace(resp)
 	matches := orchestrationDirectiveMarker.FindAllStringSubmatchIndex(trimmed, -1)
 	if len(matches) == 0 {
-		return "", false, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
+		return directiveNextMessage, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
 	}
 	last := matches[len(matches)-1]
 	keyword := strings.ToUpper(trimmed[last[2]:last[3]])
-	payload := strings.TrimSpace(trimmed[last[1]:])
-	if keyword == "DONE" {
-		return "", true, payload, nil
+	body := strings.TrimSpace(trimmed[last[1]:])
+	switch keyword {
+	case "DONE":
+		return directiveDone, body, nil
+	case "WAIT":
+		return directiveWait, body, nil
+	default:
+		return directiveNextMessage, body, nil
 	}
-	return payload, false, "", nil
 }
 
 var prURLRegex = regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/pull/\d+`)

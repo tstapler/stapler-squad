@@ -52,4 +52,28 @@ describe("GitHubEnterpriseURLDetector", () => {
     // "githubXexampleXcom" would match if the "." were interpreted as regex wildcard.
     expect(dotted.detect("https://githubXexampleXcom/acme/widgets")).toBeNull();
   });
+
+  it("T-UNIT-TS-205 GitHubEnterpriseURLDetector_should_detectConfiguredHost_When_setHostsCalledAfterConstruction", () => {
+    // Regression test: the detector starts with an empty host list at
+    // createDefaultRegistry() time (before the GHES host RPC resolves), then
+    // OmnibarContext calls setHosts() once the real host list loads. A URL for
+    // a host must be undetectable before setHosts() and detectable after.
+    const lazy = new GitHubEnterpriseURLDetector();
+    expect(lazy.detect("https://github.example.com/acme/widgets/pull/42")).toBeNull();
+
+    lazy.setHosts(["github.example.com"]);
+    const result = lazy.detect("https://github.example.com/acme/widgets/pull/42");
+    expect(result?.type).toBe(InputType.GitHubPR);
+    expect(result?.gitHubRef).toEqual({ owner: "acme", repo: "widgets", prNumber: 42 });
+  });
+
+  it("T-UNIT-TS-206 GitHubEnterpriseURLDetector_should_stopDetectingOldHost_When_setHostsReplacesList", () => {
+    const detector = new GitHubEnterpriseURLDetector(["github.example.com"]);
+    detector.setHosts(["github.other-example.com"]);
+
+    expect(detector.detect("https://github.example.com/acme/widgets/pull/1")).toBeNull();
+    expect(detector.detect("https://github.other-example.com/acme/widgets/pull/1")?.type).toBe(
+      InputType.GitHubPR
+    );
+  });
 });

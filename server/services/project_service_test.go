@@ -23,6 +23,7 @@ func newProjectServiceNilStorage() *ProjectService {
 // ─── CreateProject ───────────────────────────────────────────────────────────
 
 func TestCreateProject_Success(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	resp, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{
 		Name:        "my-project",
@@ -34,6 +35,7 @@ func TestCreateProject_Success(t *testing.T) {
 }
 
 func TestCreateProject_EmptyName(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{}))
 	require.Error(t, err)
@@ -43,6 +45,7 @@ func TestCreateProject_EmptyName(t *testing.T) {
 }
 
 func TestCreateProject_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newProjectServiceNilStorage()
 	_, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{Name: "x"}))
 	require.Error(t, err)
@@ -54,6 +57,7 @@ func TestCreateProject_NilStorage(t *testing.T) {
 // ─── ListProjects ─────────────────────────────────────────────────────────────
 
 func TestListProjects_EmptyInitially(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	resp, err := svc.ListProjects(t.Context(), connect.NewRequest(&sessionv1.ListProjectsRequest{}))
 	require.NoError(t, err)
@@ -61,6 +65,7 @@ func TestListProjects_EmptyInitially(t *testing.T) {
 }
 
 func TestListProjects_AfterCreate(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{Name: "alpha"}))
 	require.NoError(t, err)
@@ -73,6 +78,7 @@ func TestListProjects_AfterCreate(t *testing.T) {
 }
 
 func TestListProjects_NilStorageReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	svc := newProjectServiceNilStorage()
 	resp, err := svc.ListProjects(t.Context(), connect.NewRequest(&sessionv1.ListProjectsRequest{}))
 	require.NoError(t, err)
@@ -82,6 +88,7 @@ func TestListProjects_NilStorageReturnsEmpty(t *testing.T) {
 // ─── UpdateProject ────────────────────────────────────────────────────────────
 
 func TestUpdateProject_Success(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{
 		Name:        "proj",
@@ -98,6 +105,7 @@ func TestUpdateProject_Success(t *testing.T) {
 }
 
 func TestUpdateProject_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newProjectServiceNilStorage()
 	_, err := svc.UpdateProject(t.Context(), connect.NewRequest(&sessionv1.UpdateProjectRequest{Name: "proj"}))
 	require.Error(t, err)
@@ -109,6 +117,7 @@ func TestUpdateProject_NilStorage(t *testing.T) {
 // ─── DeleteProject ────────────────────────────────────────────────────────────
 
 func TestDeleteProject_Success(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{Name: "to-delete"}))
 	require.NoError(t, err)
@@ -122,6 +131,7 @@ func TestDeleteProject_Success(t *testing.T) {
 }
 
 func TestDeleteProject_EmptyID(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.DeleteProject(t.Context(), connect.NewRequest(&sessionv1.DeleteProjectRequest{}))
 	require.Error(t, err)
@@ -131,6 +141,7 @@ func TestDeleteProject_EmptyID(t *testing.T) {
 }
 
 func TestDeleteProject_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newProjectServiceNilStorage()
 	_, err := svc.DeleteProject(t.Context(), connect.NewRequest(&sessionv1.DeleteProjectRequest{Id: "x"}))
 	require.Error(t, err)
@@ -142,6 +153,7 @@ func TestDeleteProject_NilStorage(t *testing.T) {
 // ─── AssignSessionsToProject ──────────────────────────────────────────────────
 
 func TestAssignSessionsToProject_EmptyProjectID(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.AssignSessionsToProject(t.Context(), connect.NewRequest(&sessionv1.AssignSessionsToProjectRequest{
 		ProjectId:  "",
@@ -154,6 +166,7 @@ func TestAssignSessionsToProject_EmptyProjectID(t *testing.T) {
 }
 
 func TestAssignSessionsToProject_NilStorage(t *testing.T) {
+	t.Parallel()
 	svc := newProjectServiceNilStorage()
 	_, err := svc.AssignSessionsToProject(t.Context(), connect.NewRequest(&sessionv1.AssignSessionsToProjectRequest{
 		ProjectId:  "proj",
@@ -166,6 +179,7 @@ func TestAssignSessionsToProject_NilStorage(t *testing.T) {
 }
 
 func TestAssignSessionsToProject_EmptySessions(t *testing.T) {
+	t.Parallel()
 	svc := newProjectService(t)
 	_, err := svc.CreateProject(t.Context(), connect.NewRequest(&sessionv1.CreateProjectRequest{Name: "proj"}))
 	require.NoError(t, err)

@@ -21,9 +21,11 @@ import { test, expect, APIRequestContext } from "@playwright/test";
 import {
   StuckItemsPage,
   seedStuckItem,
+  deleteSeededStuckItems,
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from "./pages/StuckItemsPage";
+import { BacklogPage } from "./pages/BacklogPage";
 
 const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
 
@@ -49,6 +51,23 @@ test.describe("stuck items", () => {
     await disableBacklogFeatureFlag(request);
   });
 
+  test.afterEach(async ({ request }) => {
+    await deleteSeededStuckItems(request);
+  });
+
+  test.beforeEach(async ({ page }) => {
+    // Skip the first-run onboarding modal (shows on any fresh browser context after
+    // 800ms — see web-app/src/components/onboarding/useOnboarding.ts), matching the
+    // convention in triggers-panel.spec.ts / rule-builder-ci-passing.spec.ts.
+    await page.addInitScript(() => {
+      localStorage.setItem("stapler-squad:onboarded", "true");
+      // The backlog page auto-opens its own tour, which covers the detail pane.
+      localStorage.setItem("stapler-squad:backlog-onboarded", "true");
+      // A tab persisted by an earlier test must not hide the Stuck panel.
+      localStorage.removeItem("up-next-tab");
+    });
+  });
+
   test("shows nav badge with no click and full detail within two clicks", async ({ page, request }) => {
     await seedStuckItem(request, {
       itemId: "e2e-pr-ready-1",
@@ -64,8 +83,10 @@ test.describe("stuck items", () => {
     await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("stuck-nav-badge")).toBeVisible();
 
-    // Click 1: navigate to /unfinished via the nav link.
-    await page.getByRole("link", { name: /Unfinished/ }).first().click();
+    // Click 1: navigate to /unfinished via the nav link (nav-pages.ts labels this
+    // route "Up Next", not "Unfinished" — the page's own heading/route name differs
+    // from its nav entry's display label).
+    await page.getByRole("link", { name: /Up Next/ }).first().click();
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
     await expect(stuckPage.section).toBeVisible();
@@ -94,7 +115,7 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    const prChip = page.getByRole("button", { name: /PR ready to merge/ });
+    const prChip = stuckPage.filterChip("1");
     await prChip.click();
     await expect(prChip).toHaveAttribute("aria-pressed", "true");
     await expect(stuckPage.cardByTitle("fix: filter test pr-ready")).toBeVisible();
@@ -130,8 +151,8 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    // pr_ready_unmerged has 0 items in this scenario.
-    await stuckPage.filterChip("1").click(); // STUCK_REASON_PR_READY_UNMERGED = 1
+    // No spec seeds "bouncing" (keep it that way), so this reason is always empty.
+    await stuckPage.filterChip("5").click(); // STUCK_REASON_BOUNCING = 5
     await expect(stuckPage.filteredEmptyState).toBeVisible();
     await expect(stuckPage.clearFilterButton).toBeVisible();
 
@@ -150,7 +171,7 @@ test.describe("stuck items", () => {
 
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
-    await stuckPage.filterChip("1").click(); // 0-count reason
+    await stuckPage.filterChip("5").click(); // STUCK_REASON_BOUNCING: 0-count, never seeded
     await expect(stuckPage.clearFilterButton).toBeVisible();
     await stuckPage.clearFilterButton.click();
     await expect(stuckPage.filterChip("all")).toHaveAttribute("aria-pressed", "true");
@@ -168,7 +189,7 @@ test.describe("stuck items", () => {
     const stuckPage = new StuckItemsPage(page);
     await stuckPage.goto();
 
-    const chip = page.getByRole("button", { name: /PR ready to merge/ });
+    const chip = stuckPage.filterChip("1");
     await chip.focus();
     await page.keyboard.press("Space");
     await expect(chip).toHaveAttribute("aria-pressed", "true");
@@ -211,5 +232,83 @@ test.describe("stuck items", () => {
     await picker.getByTestId("stuck-item-snooze-confirm").click();
 
     await expect(card).not.toBeVisible();
+  });
+
+  test("retries a stuck item from the BlockerChip on the backlog detail page", async ({ page, request }) => {
+    const itemId = await seedStuckItem(request, {
+      itemId: "e2e-blocker-chip-retry-1",
+      title: "fix: blocker chip retry test",
+      reason: "stale_work",
+      context: "no activity for 4 days",
+    });
+
+    // Stub the RPC and hold it: the pending state is transient, and the real action would spawn a
+    // session (failing on the seeded item's missing repo_path) and park the reason for later runs.
+    let releaseRetry!: () => void;
+    const retryHeld = new Promise<void>((resolve) => (releaseRetry = resolve));
+    let retryCalls = 0;
+    await page.route("**/*BacklogService/TriggerRemediationNow", async (route) => {
+      retryCalls++;
+      await retryHeld;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+
+    const backlogPage = new BacklogPage(page);
+    await backlogPage.goto();
+    await backlogPage.waitForPageLoad();
+    await backlogPage.openItemDetail("fix: blocker chip retry test");
+
+    const lifecycleSummary = page.getByTestId("lifecycle-summary");
+    await expect(lifecycleSummary).toBeVisible();
+
+    const retryButton = lifecycleSummary.getByTestId("blocker-chip-retry");
+    await expect(retryButton).toBeEnabled();
+    await retryButton.click();
+
+    await expect(retryButton).toBeDisabled();
+    await expect(lifecycleSummary.getByTestId("blocker-chip-duration")).toHaveText("Retrying…");
+    releaseRetry();
+
+    // A successful response returns the chip to idle with no inline error.
+    await expect(retryButton).toBeEnabled({ timeout: 10_000 });
+    await expect(lifecycleSummary.getByTestId("blocker-chip-error")).not.toBeVisible();
+
+    expect(retryCalls).toBe(1);
+    expect(itemId).toBeTruthy();
+  });
+
+  test("deep-links from /unfinished?item=<id> to an auto-expanded stuck item card", async ({ page, request }) => {
+    const itemId = await seedStuckItem(request, {
+      itemId: "e2e-deep-link-1",
+      title: "fix: deep link auto-expand test",
+      reason: "rework_cap",
+      context: "cap hit",
+    });
+
+    await page.goto(`${BASE_URL}/unfinished?item=${itemId}`, { waitUntil: "domcontentloaded" });
+    const stuckPage = new StuckItemsPage(page);
+    await expect(page.getByRole("tab", { name: /Stuck/ })).toHaveAttribute("aria-selected", "true");
+    await expect(stuckPage.section).toBeVisible();
+
+    // The linked item auto-expands without a manual click.
+    await expect(page.getByTestId("stuck-item-detail")).toBeVisible();
+    await expect(stuckPage.cardByTitle("fix: deep link auto-expand test")).toBeVisible();
+  });
+
+  test("ignores an unknown ?item= id and renders the section normally", async ({ page, request }) => {
+    await seedStuckItem(request, {
+      itemId: "e2e-deep-link-negative-1",
+      title: "fix: deep link negative test",
+      reason: "rework_cap",
+      context: "cap hit",
+    });
+
+    await page.goto(`${BASE_URL}/unfinished?item=does-not-exist`, { waitUntil: "domcontentloaded" });
+    const stuckPage = new StuckItemsPage(page);
+    await expect(stuckPage.section).toBeVisible();
+
+    // No card should be auto-expanded for a non-matching id.
+    await expect(page.getByTestId("stuck-item-detail")).not.toBeVisible();
+    await expect(stuckPage.cardByTitle("fix: deep link negative test")).toBeVisible();
   });
 });

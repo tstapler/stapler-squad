@@ -1,10 +1,10 @@
 package session
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
-	stdlog "log"
 	"reflect"
 	"strings"
 	"sync"
@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -55,17 +54,8 @@ func (f *fakePipelineModeRepository) ListEnabled(ctx context.Context) ([]*ent.Pi
 	return f.listEnabledFn(ctx)
 }
 
-// swapWarningLog redirects log.WarningLog to a buffer for the duration of the
-// calling test, restoring the original on cleanup. Mirrors the established
-// pattern in session/review_gate_test.go.
-func swapWarningLog(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	orig := log.WarningLog
-	log.WarningLog = stdlog.New(&buf, "WARNING: ", 0)
-	t.Cleanup(func() { log.WarningLog = orig })
-	return &buf
-}
+// warningLogMu and swapWarningLog live in session/sync_buffer_test.go, shared
+// with session/review_gate_test.go and session/backlog_lifecycle_test.go.
 
 func assertWarnLogContainsUnresolved(t *testing.T, logOutput, itemID, mode string) {
 	t.Helper()
@@ -83,12 +73,14 @@ func assertWarnLogContainsUnresolved(t *testing.T, logOutput, itemID, mode strin
 // ─── Story 1.3.1: interface shape ───────────────────────────────────────────
 
 func TestPipelineEngine_should_CompileWithSingleConcreteImplementation_When_CachingPipelineEngineSatisfiesInterface(t *testing.T) {
+	t.Parallel()
 	var _ PipelineEngine = (*CachingPipelineEngine)(nil)
 }
 
 // ─── Story 1.3.2: pipelineModeCache concurrency ─────────────────────────────
 
 func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_ConcurrentInvalidateRunsUnderRace(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
@@ -136,9 +128,11 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 		}()
 	}
 
+	invalidatorDone := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(invalidatorDone)
 		for i := 0; i < 20; i++ {
 			if err := cache.Invalidate(context.Background(), repo); err != nil {
 				t.Errorf("Invalidate: %v", err)
@@ -146,7 +140,7 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 		}
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	<-invalidatorDone
 	close(stop)
 	wg.Wait()
 
@@ -156,6 +150,7 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 }
 
 func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing.T) {
+	t.Parallel()
 	cache := &pipelineModeCache{}
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -170,25 +165,35 @@ func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing
 	if ok {
 		t.Fatalf("expected ok=false for missing slug, got rm=%+v", rm)
 	}
-	if rm != (resolvedPipelineMode{}) {
+	// resolvedPipelineMode now holds a StageExecutors map (Story 2.1.1), so it
+	// is no longer comparable via ==/!= — use reflect.DeepEqual instead.
+	if !reflect.DeepEqual(rm, resolvedPipelineMode{}) {
 		t.Fatalf("expected zero-value resolvedPipelineMode, got %+v", rm)
 	}
 }
 
 func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_ConcurrentInvalidateCallsRaceWithAsymmetricLatency(t *testing.T) {
+	t.Parallel()
 	cache := &pipelineModeCache{}
+	aStarted := make(chan struct{})
+	bRead := make(chan struct{})
 
 	repoA := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			// A starts first and is slow — a plain atomic.Pointer (no writer
 			// mutex) would let A's Store land after B's, reverting the cache
 			// to stale v1 data. The writer mutex must prevent that.
-			time.Sleep(50 * time.Millisecond)
+			close(aStarted)
+			select {
+			case <-bRead: // only reachable if B's read overlaps A's (the lost-update bug)
+			case <-time.After(100 * time.Millisecond): // correct impl: B is blocked on writeMu until A returns
+			}
 			return []*ent.PipelineMode{{Slug: "marker-mode", Name: "v1"}}, nil
 		},
 	}
 	repoB := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			close(bRead)
 			return []*ent.PipelineMode{{Slug: "marker-mode", Name: "v2"}}, nil
 		},
 	}
@@ -201,7 +206,7 @@ func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_C
 			t.Errorf("A Invalidate: %v", err)
 		}
 	}()
-	time.Sleep(5 * time.Millisecond)
+	<-aStarted
 	go func() {
 		defer wg.Done()
 		if err := cache.Invalidate(context.Background(), repoB); err != nil {
@@ -220,6 +225,7 @@ func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_C
 }
 
 func TestPipelineModeCache_Load_should_ComputeContentHash_When_BuildingResolvedPipelineMode(t *testing.T) {
+	t.Parallel()
 	mode := &ent.PipelineMode{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
@@ -284,6 +290,7 @@ func TestPipelineModeCache_Load_should_ComputeContentHash_When_BuildingResolvedP
 // ─── Story 1.3.3: CachingPipelineEngine fail-closed resolution ─────────────
 
 func TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_When_ModeIsDefault(t *testing.T) {
+	t.Parallel()
 	// A zero-value CachingPipelineEngine has a nil cache and nil repo. If
 	// SlashCommandSet ever touched e.cache.Get for a default-mode item, the
 	// nil *pipelineModeCache receiver would panic and fail this test — that
@@ -306,6 +313,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_Whe
 }
 
 func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWarnLog_When_ModeSlugUnresolvable(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return nil, nil // no modes: "deleted-mode" can never resolve
@@ -324,8 +332,13 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 		PipelineMode:       "deleted-mode",
 	}
 
+	// These subtests deliberately do not call t.Parallel(): swapWarningLog
+	// reassigns the shared package-level log.WarningLog var, so running them
+	// concurrently races on that global -- one subtest's warn log can land in
+	// another's buffer (or arrive after it's already been read), leaving the
+	// read-back empty.
 	t.Run("SlashCommandSet", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got, err := engine.SlashCommandSet(item)
 		if err != nil {
@@ -342,7 +355,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("TriagePromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.TriagePromptFor(item, "/tmp/plan.md")
 		want := BuildHeadlessTriagePrompt(item, "/tmp/plan.md")
@@ -353,7 +366,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("ReviewPromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.ReviewPromptFor(item, nil, "diff content", false, "notes", ReviewContextExtras{})
 		want := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "notes", ReviewContextExtras{})
@@ -364,7 +377,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InteractiveReviewPromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.InteractiveReviewPromptFor(item, nil, "diff content", false, "review-session-id", "notes")
 		want := BuildReviewPrompt(item, nil, "diff content", false, "review-session-id", "notes")
@@ -375,7 +388,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InitialPromptFor", func(t *testing.T) {
-		buf := swapWarningLog(t)
+		buf := captureWarningLog(t)
 
 		got := engine.InitialPromptFor(item, nil)
 		want := BuildTokenBudgetedPrompt(item, nil)
@@ -387,6 +400,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 }
 
 func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_ModeIsDefaultOrUnresolved(t *testing.T) {
+	t.Parallel()
 	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
 
 	hash, ok := engine.ContentHashFor(PipelineModeDefault)
@@ -394,19 +408,21 @@ func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_Mo
 		t.Fatalf("default mode: got (%q, %v), want (\"\", false)", hash, ok)
 	}
 
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 
-	hash, ok = engine.ContentHashFor("missing")
+	const missingSlug = "missing-slug-contenthash-exemption"
+	hash, ok = engine.ContentHashFor(missingSlug)
 	if hash != "" || ok {
 		t.Fatalf("missing mode: got (%q, %v), want (\"\", false)", hash, ok)
 	}
-	if buf.Len() != 0 {
+	if strings.Contains(buf.String(), missingSlug) {
 		t.Fatalf("ContentHashFor must not emit a Warn log for an unresolved slug (documented exemption), got: %q", buf.String())
 	}
 }
 
 func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_When_InitialCacheLoadFails(t *testing.T) {
-	buf := swapWarningLog(t)
+	t.Parallel()
+	buf := captureWarningLog(t)
 
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -443,12 +459,13 @@ func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_Whe
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected fallback to default output")
 	}
-	if !strings.Contains(buf.String(), "unresolved pipeline_mode") {
+	if !strings.Contains(buf.String(), "unresolved pipeline_mode") || !strings.Contains(buf.String(), nonDefaultItem.ID) {
 		t.Fatalf("expected the normal unresolved-slug fallback Warn log, got: %q", buf.String())
 	}
 }
 
 func TestNewPipelineEngine_should_PopulateCacheFromRepository_When_ListEnabledSucceeds(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -480,6 +497,7 @@ func TestNewPipelineEngine_should_PopulateCacheFromRepository_When_ListEnabledSu
 // ─── Story 1.3.3d/1.3.3e: renderTemplate + resolved-mode rendering ─────────
 
 func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_ModeResolves(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
@@ -543,6 +561,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_M
 // placeholders + criteria_count ReviewPromptFor uses), not the hardcoded
 // BuildReviewPrompt content.
 func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTemplate_When_ModeResolves(t *testing.T) {
+	t.Parallel()
 	repo := &fakePipelineModeRepository{
 		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
@@ -592,6 +611,7 @@ func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTem
 // triggering triage produces the Warn-log-and-default-fallback behavior, not a
 // crash."
 func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugInjectedDirectlyViaSQL(t *testing.T) {
+	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -624,7 +644,7 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 		t.Fatalf("NewPipelineEngine: %v", err)
 	}
 
-	buf := swapWarningLog(t)
+	buf := captureWarningLog(t)
 
 	// Must not panic/crash and must fall back to default-mode output.
 	gotFiles, err := engine.SlashCommandSet(created)
@@ -647,4 +667,124 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 		t.Fatalf("expected default-mode triage prompt fallback")
 	}
 	assertWarnLogContainsUnresolved(t, buf.String(), created.ID, "nonexistent-slug-via-sql")
+}
+
+// ─── Story 2.1.1: ExecutorFor ───────────────────────────────────────────────
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault(t *testing.T) {
+	t.Parallel()
+	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
+	item := &BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
+
+	buf := captureWarningLog(t)
+	program, model := engine.ExecutorFor(item, StageRoleWork)
+	if program != "" || model != "" {
+		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
+	}
+	if strings.Contains(buf.String(), item.ID) {
+		t.Fatalf("expected no Warn log for PipelineModeDefault, got: %q", buf.String())
+	}
+}
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_PipelineModeSlugUnresolved(t *testing.T) {
+	t.Parallel()
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return nil, nil // no modes: "does-not-exist" can never resolve
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+	item := &BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
+
+	buf := captureWarningLog(t)
+	program, model := engine.ExecutorFor(item, StageRoleTriage)
+	if program != "" || model != "" {
+		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
+	}
+	assertWarnLogContainsUnresolved(t, buf.String(), item.ID, "does-not-exist")
+}
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_RoleHasOverride(t *testing.T) {
+	t.Parallel()
+	stageJSON, err := SerializeStageExecutors(map[StageRole]PipelineStageExecutor{
+		StageRoleTriage: {Model: "claude-haiku-4-5"},
+	})
+	if err != nil {
+		t.Fatalf("SerializeStageExecutors: %v", err)
+	}
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return []*ent.PipelineMode{{Slug: "cheap-triage", StageExecutorsJSON: stageJSON}}, nil
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+	item := &BacklogItemData{ID: "item-override", PipelineMode: "cheap-triage"}
+
+	program, model := engine.ExecutorFor(item, StageRoleTriage)
+	if program != "" || model != "claude-haiku-4-5" {
+		t.Fatalf("triage: got (%q, %q), want (\"\", \"claude-haiku-4-5\")", program, model)
+	}
+}
+
+func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeHasNoOverrideForRole(t *testing.T) {
+	t.Parallel()
+	// The mode overrides triage only -- review must inherit the default, not
+	// leak triage's override.
+	stageJSON, err := SerializeStageExecutors(map[StageRole]PipelineStageExecutor{
+		StageRoleTriage: {Model: "claude-haiku-4-5"},
+	})
+	if err != nil {
+		t.Fatalf("SerializeStageExecutors: %v", err)
+	}
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return []*ent.PipelineMode{{Slug: "cheap-triage", StageExecutorsJSON: stageJSON}}, nil
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+	item := &BacklogItemData{ID: "item-no-override", PipelineMode: "cheap-triage"}
+
+	program, model := engine.ExecutorFor(item, StageRoleReview)
+	if program != "" || model != "" {
+		t.Fatalf("review: got (%q, %q), want (\"\", \"\")", program, model)
+	}
+}
+
+// ─── Story 2.1.2: ComputeExecutorHash ───────────────────────────────────────
+
+func TestComputeExecutorHash_should_MatchFixedProgramPipeModelFormula_When_GivenProgramAndModel(t *testing.T) {
+	t.Parallel()
+	sum := sha256.Sum256([]byte("|claude-haiku-4-5"))
+	want := hex.EncodeToString(sum[:])[:16]
+
+	got := ComputeExecutorHash("", "claude-haiku-4-5")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestComputeExecutorHash_should_DifferOnRawAliasVersusResolvedModelID_When_HashingTheSameLogicalStage(t *testing.T) {
+	t.Parallel()
+	// Per ComputeExecutorHash's doc comment: every call site must hash the
+	// raw, pre-ResolveModel value ("family:opus"), never the resolved
+	// concrete ID ("claude-opus-4-8") -- ExecutorFor always returns the raw
+	// value, so these two must NOT collide, or a family-aliased stage would
+	// permanently false-flag drift against its own unedited configuration.
+	raw := ComputeExecutorHash("", "family:opus")
+	resolved := ComputeExecutorHash("", "claude-opus-4-8")
+	if raw == resolved {
+		t.Fatalf("expected raw alias hash to differ from resolved model hash, both were %q", raw)
+	}
 }

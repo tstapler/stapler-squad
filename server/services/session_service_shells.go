@@ -47,8 +47,8 @@ func shellToProto(sh *session.Shell) *sessionv1.Shell {
 		Command:    sh.Command,
 		WorkingDir: sh.WorkingDir,
 		Status:     goShellStatusToProto(sh.Status),
-		ExitCode:   int32(sh.ExitCode),
-		OrderIndex: int32(sh.OrderIndex),
+		ExitCode:   int32(sh.ExitCode),   //#nosec G115 -- POSIX process exit code, always small
+		OrderIndex: int32(sh.OrderIndex), //#nosec G115 -- position within a session's shell list, always small
 	}
 	if !sh.StartedAt.IsZero() {
 		p.StartedAt = timestamppb.New(sh.StartedAt)
@@ -91,6 +91,11 @@ func (s *SessionService) SpawnShell(
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
+	}
+
+	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}
 
 	shell, spawnErr := inst.SpawnShell(ctx, session.SpawnShellRequest{
@@ -176,6 +181,11 @@ func (s *SessionService) RestartShell(
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
+	}
+
+	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}
 
 	// shellTmuxSessionName is deterministic per shell ID, so RestartShell reuses the

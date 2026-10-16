@@ -65,7 +65,7 @@ func (h *ShellTmuxHandle) buildCmd(args ...string) *exec.Cmd {
 		cmdArgs = append(cmdArgs, "-L", h.serverSocket)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	return safeexec.CommandContext(context.Background(), Binary(), cmdArgs...)
+	return safeexec.CommandContext(context.Background(), ResolveClientForSocket(h.serverSocket), cmdArgs...)
 }
 
 // Spawn creates a new independent sibling tmux session running the given command in workDir.
@@ -134,8 +134,9 @@ func (h *ShellTmuxHandle) Resize(cols, rows int) error {
 	if err := h.cmdExec.Run(cmd); err != nil {
 		return fmt.Errorf("ShellTmuxHandle.Resize: %w", err)
 	}
-	h.lastKnownCols.Store(int32(cols))
-	h.lastKnownRows.Store(int32(rows))
+	// Widened from the already-clamped uint16 dimension, so this always fits int32.
+	h.lastKnownCols.Store(int32(ClampWinsizeDim(cols)))
+	h.lastKnownRows.Store(int32(ClampWinsizeDim(rows)))
 	return nil
 }
 

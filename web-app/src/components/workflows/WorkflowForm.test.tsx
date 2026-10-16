@@ -2,6 +2,10 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { WorkflowForm } from "./WorkflowForm";
 
+// jsdom doesn't implement scrollIntoView; AutocompleteInput calls it when the
+// keyboard-highlighted suggestion changes.
+Element.prototype.scrollIntoView = jest.fn();
+
 // RepoPathInput pulls in a Redux-backed hook (useSessionRepoPaths) for path history/
 // autocomplete that isn't relevant to the cron submit-guard behavior under test here —
 // swap it for a plain input so this test doesn't need a Redux <Provider>.
@@ -78,5 +82,37 @@ describe("WorkflowForm cron submit guard", () => {
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("WorkflowForm model field family selection", () => {
+  it("selecting the 'Sonnet (latest)' suggestion stores the resolvable family alias, not the label", async () => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+    render(<WorkflowForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+
+    fillRequiredFields();
+    const modelInput = screen.getByLabelText("Model");
+    fireEvent.change(modelInput, { target: { value: "sonnet" } });
+    fireEvent.click(screen.getByText("Sonnet (latest)"));
+
+    expect(modelInput).toHaveValue("family:sonnet");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Workflow" }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    expect(onSubmit.mock.calls[0][0].model).toBe("family:sonnet");
+  });
+
+  it("keyboard-only selection (arrow down + Enter) resolves the same as a mouse click", () => {
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+    render(<WorkflowForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+
+    const modelInput = screen.getByLabelText("Model");
+    fireEvent.change(modelInput, { target: { value: "sonnet" } });
+    fireEvent.keyDown(modelInput, { key: "ArrowDown" });
+    fireEvent.keyDown(modelInput, { key: "Enter" });
+
+    expect(modelInput).toHaveValue("family:sonnet");
   });
 });

@@ -28,6 +28,8 @@ const DEFAULT_FORM_STATE: OmnibarFormState = {
   firstPrompt: "",
   createIfMissing: false,
   autonomousMode: false,
+  autoApprove: false,
+  extraArgs: [],
 };
 
 function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): OmnibarCreationPanelProps {

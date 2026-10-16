@@ -21,13 +21,18 @@ color/icon with routine `NeedsAttention` reasons).
 
 ```
 Header badge row, left → right (existing precedence + new peer):
-[ status ]  [ rate-limit ]  [ StatusBadge / SubStatusChip ]  [ 🔁 2/3 ]  [ 512 MB RAM ]  [ 🔍 Review ]
+[ status ]  [ rate-limit ]  [ StatusBadge / SubStatusChip ]  [ 512 MB RAM ]  [ 🔍 Review ]  [ 🔁 2/3 ]
 
-                                                                  ^^^^^^
-                                                          new RetryBadge (compact)
-                                                          position: after ReviewQueueBadge
-                                                          per plan Task 4.1.1b
+                                                                                              ^^^^^^
+                                                                                      new RetryBadge (compact)
+                                                                                      position: after ReviewQueueBadge
+                                                                                      per plan Task 4.1.1b
 ```
+
+*(Corrected 2026-08-29 — cross-artifact-consistency pass found this wireframe row drew the badge
+before `ReviewQueueBadge`/`🔍 Review`, contradicting both this caption and plan.md Task 4.1.1b's
+"position after ReviewQueueBadge." The row above now matches the authoritative spec in
+plan.md.)*
 
 Three visual tiers (mirrors `memoryBadge`'s threshold pattern, `SessionCard.tsx:552-554`):
 

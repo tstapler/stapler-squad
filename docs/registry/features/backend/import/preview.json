@@ -1,0 +1,20 @@
+{
+  "id": "import:preview",
+  "type": "backend",
+  "service": "ImportService",
+  "method": "PreviewImportExternalSession",
+  "protoFile": "proto/session/v1/import.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/import_service.go",
+  "tested": true,
+  "testIds": [
+    "TestImportService_PreviewImportExternalSession_ReturnsResolved_When_PIDExactMatch",
+    "TestImportService_PreviewImportExternalSession_ReturnsAmbiguous_When_MultipleHistoryFiles",
+    "TestImportService_PreviewImportExternalSession_ReturnsNotFound_When_NoHistoryFileExists",
+    "TestImportService_PreviewImportExternalSession_ReturnsInvalidArgument_When_CandidateNil",
+    "TestImportService_PreviewImportExternalSession_OmitsPidIdentity_When_ProcessDied",
+    "TestImportService_PreviewImportExternalSession_AlwaysExecutes_When_FeatureFlagUnset",
+    "TestImportService_AllFourRPCs_ExecuteNormally_When_FeatureFlagTrue"
+  ],
+  "lastModified": "2026-07-27T12:45:03.989768954-07:00"
+}

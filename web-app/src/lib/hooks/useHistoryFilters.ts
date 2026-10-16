@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { ClaudeHistoryEntry } from "@/gen/session/v1/session_pb";
 import { isWithinDateFilter } from "@/lib/utils/timestamp";
 import type { DateFilter } from "@/lib/utils/timestamp";
+import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 
 // ============================================================================
 // Types and Constants
@@ -28,38 +29,52 @@ export const GroupingStrategyLabels: Record<HistoryGroupingStrategy, string> = {
   [HistoryGroupingStrategy.Model]: "Model",
 };
 
-// Local storage keys
-const STORAGE_KEYS = {
-  SEARCH_QUERY: 'claude-history-search-query',
-  SELECTED_MODEL: 'claude-history-selected-model',
-  DATE_FILTER: 'claude-history-date-filter',
-  SORT_FIELD: 'claude-history-sort-field',
-  SORT_ORDER: 'claude-history-sort-order',
-  GROUPING_STRATEGY: 'claude-history-grouping-strategy',
-  SEARCH_MODE: 'claude-history-search-mode',
-};
+// Persisted fields — keys unchanged from the hand-rolled implementation this
+// hook used to have, so pre-migration user preferences aren't lost.
+// branchFilter intentionally has no entry here: it was never persisted.
+interface PersistedHistoryFilters {
+  searchQuery: string;
+  selectedModel: string;
+  dateFilter: DateFilter;
+  sortField: SortField;
+  sortOrder: SortOrder;
+  groupingStrategy: HistoryGroupingStrategy;
+  searchMode: SearchMode;
+}
 
-// ============================================================================
-// Storage Helpers
-// ============================================================================
+const DATE_FILTERS: DateFilter[] = ["all", "today", "week", "month"];
+const SORT_FIELDS: SortField[] = ["updated", "created", "messages", "name"];
+const SORT_ORDERS: SortOrder[] = ["asc", "desc"];
+const SEARCH_MODES: SearchMode[] = ["metadata", "fulltext"];
 
-const loadFromStorage = <T,>(key: string, defaultValue: T): T => {
-  if (typeof window === 'undefined') return defaultValue;
-  try {
-    const item = window.localStorage.getItem(key);
-    return item ? JSON.parse(item) : defaultValue;
-  } catch {
-    return defaultValue;
-  }
-};
-
-const saveToStorage = <T,>(key: string, value: T): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore storage errors
-  }
+const HISTORY_FILTER_FIELDS: PersistedFieldsConfig<PersistedHistoryFilters> = {
+  searchQuery: { key: "claude-history-search-query", defaultValue: "" },
+  selectedModel: { key: "claude-history-selected-model", defaultValue: "all" },
+  dateFilter: {
+    key: "claude-history-date-filter",
+    defaultValue: "all",
+    isValid: (v) => DATE_FILTERS.includes(v as DateFilter),
+  },
+  sortField: {
+    key: "claude-history-sort-field",
+    defaultValue: "updated",
+    isValid: (v) => SORT_FIELDS.includes(v as SortField),
+  },
+  sortOrder: {
+    key: "claude-history-sort-order",
+    defaultValue: "desc",
+    isValid: (v) => SORT_ORDERS.includes(v as SortOrder),
+  },
+  groupingStrategy: {
+    key: "claude-history-grouping-strategy",
+    defaultValue: HistoryGroupingStrategy.Date,
+    isValid: (v) => (Object.values(HistoryGroupingStrategy) as string[]).includes(v as string),
+  },
+  searchMode: {
+    key: "claude-history-search-mode",
+    defaultValue: "metadata",
+    isValid: (v) => SEARCH_MODES.includes(v as SearchMode),
+  },
 };
 
 // ============================================================================
@@ -112,39 +127,20 @@ export interface UseHistoryFiltersReturn {
 // ============================================================================
 
 export function useHistoryFilters(entries: ClaudeHistoryEntry[]): UseHistoryFiltersReturn {
-  // Filter state (persisted) - use defaults initially to avoid hydration mismatch
-  const [searchQuery, setSearchQuery] = useState("");
+  // branchFilter is intentionally not persisted, same as before migration.
   const [branchFilter, setBranchFilter] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string>("all");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
-  const [sortField, setSortField] = useState<SortField>("updated");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
-  const [groupingStrategy, setGroupingStrategy] = useState<HistoryGroupingStrategy>(HistoryGroupingStrategy.Date);
-  const [searchMode, setSearchMode] = useState<SearchMode>("metadata");
 
-  // Hydration flag to track when client-side code has run
-  const [isHydrated, setIsHydrated] = useState(false);
-
-  // Load persisted state from localStorage after hydration (client-side only)
-  useEffect(() => {
-    setSearchQuery(loadFromStorage(STORAGE_KEYS.SEARCH_QUERY, ""));
-    setSelectedModel(loadFromStorage(STORAGE_KEYS.SELECTED_MODEL, "all"));
-    setDateFilter(loadFromStorage(STORAGE_KEYS.DATE_FILTER, "all"));
-    setSortField(loadFromStorage(STORAGE_KEYS.SORT_FIELD, "updated"));
-    setSortOrder(loadFromStorage(STORAGE_KEYS.SORT_ORDER, "desc"));
-    setGroupingStrategy(loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, HistoryGroupingStrategy.Date));
-    setSearchMode(loadFromStorage(STORAGE_KEYS.SEARCH_MODE, "metadata"));
-    setIsHydrated(true);
-  }, []);
-
-  // Persist filter preferences
-  useEffect(() => { saveToStorage(STORAGE_KEYS.SEARCH_QUERY, searchQuery); }, [searchQuery]);
-  useEffect(() => { saveToStorage(STORAGE_KEYS.SELECTED_MODEL, selectedModel); }, [selectedModel]);
-  useEffect(() => { saveToStorage(STORAGE_KEYS.DATE_FILTER, dateFilter); }, [dateFilter]);
-  useEffect(() => { saveToStorage(STORAGE_KEYS.SORT_FIELD, sortField); }, [sortField]);
-  useEffect(() => { saveToStorage(STORAGE_KEYS.SORT_ORDER, sortOrder); }, [sortOrder]);
-  useEffect(() => { saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy); }, [groupingStrategy]);
-  useEffect(() => { saveToStorage(STORAGE_KEYS.SEARCH_MODE, searchMode); }, [searchMode]);
+  const { state, setters, isHydrated } = usePersistedViewState<PersistedHistoryFilters>(HISTORY_FILTER_FIELDS);
+  const { searchQuery, selectedModel, dateFilter, sortField, sortOrder, groupingStrategy, searchMode } = state;
+  const {
+    searchQuery: setSearchQuery,
+    selectedModel: setSelectedModel,
+    dateFilter: setDateFilter,
+    sortField: setSortField,
+    sortOrder: setSortOrder,
+    groupingStrategy: setGroupingStrategy,
+    searchMode: setSearchMode,
+  } = setters;
 
   // Extract unique models for filter dropdown
   const uniqueModels = useMemo(() => {

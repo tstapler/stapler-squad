@@ -1,0 +1,16 @@
+{
+  "id": "import:commit",
+  "type": "backend",
+  "service": "ImportService",
+  "method": "CommitImportExternalSession",
+  "protoFile": "proto/session/v1/import.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/import_service.go",
+  "tested": true,
+  "testIds": [
+    "TestImportService_CommitImportExternalSession_ReturnsInvalidArgument_When_CandidateNil",
+    "TestImportService_ThreeMutatingRPCs_ReturnUnimplemented_When_FeatureFlagUnset",
+    "TestImportService_AllFourRPCs_ExecuteNormally_When_FeatureFlagTrue"
+  ],
+  "lastModified": "2026-07-27T12:45:03.989768954-07:00"
+}

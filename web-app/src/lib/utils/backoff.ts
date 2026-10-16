@@ -1,4 +1,4 @@
-import { ConnectError } from "@connectrpc/connect";
+import { Code, ConnectError } from "@connectrpc/connect";
 
 /**
  * Full-jitter exponential backoff delay.
@@ -65,6 +65,59 @@ export function getWsCloseCode(err: unknown): number | null {
   const raw = err.metadata?.get("ws-close-code") ?? "";
   const code = parseInt(raw, 10);
   return isNaN(code) ? null : code;
+}
+
+/**
+ * Returns true if `err` represents a non-retriable failure, across BOTH the
+ * WS-bridge transport (createWatchTransport) and the native ConnectRPC
+ * transport (createConnectTransport).
+ *
+ * The WS-bridge signals this via a `ws-close-code` header (see getWsCloseCode);
+ * createConnectTransport never sets that header, so it's checked first and,
+ * when absent, falls back to comparing the ConnectError's own `code` against
+ * the native transport's equivalent signal for the same underlying
+ * server-side conditions (auth failure, session gone). Mirrors
+ * NON_RETRIABLE_WS_CODES' semantics:
+ *   Code.Unauthenticated — equivalent to ws-close-code 4001 (auth failure)
+ *   Code.NotFound        — equivalent to ws-close-code 4004 (session not found)
+ *
+ * The `Code.*` comparison is deferred until this function actually runs (not
+ * hoisted into a module-level constant) so importing this module never
+ * touches the `Code` enum eagerly — several existing tests mock
+ * `@connectrpc/connect` with only a subset of its exports (e.g. just
+ * `createClient`), and a top-level `Code.Unauthenticated` reference would
+ * throw at import time under those mocks even though the mocked test never
+ * exercises this branch.
+ *
+ * Deliberately does NOT include Code.FailedPrecondition: this helper is
+ * shared by the session-list "watch" stream (useSessionService.ts) as well
+ * as the terminal stream, and FailedPrecondition's one current meaning
+ * (see isWorktreeMissingError below) is specific to the terminal stream's
+ * missing-working-directory case. A future unrelated FailedPrecondition on
+ * the watch stream must not silently stop reconnecting there too — callers
+ * that need the worktree-missing behavior check isWorktreeMissingError
+ * explicitly alongside this function instead.
+ */
+export function isNonRetriableConnectError(err: unknown): err is ConnectError {
+  if (!(err instanceof ConnectError)) return false;
+  const wsCode = getWsCloseCode(err);
+  if (wsCode !== null) {
+    return !isRetriableCloseCode(wsCode);
+  }
+  return err.code === Code.Unauthenticated || err.code === Code.NotFound;
+}
+
+/**
+ * Returns true if `err` is specifically the "session's working directory no
+ * longer exists" stream failure (server/services/connectrpc_websocket.go's
+ * handleTmuxRestoreFailure sends Code.FailedPrecondition only for this
+ * case — see isNonRetriableConnectError above). Lets a caller show a more
+ * actionable message than the generic hard-failed banner: reconnecting the
+ * terminal stream can never fix this on its own, but the session-level
+ * "Retry now" action re-creates the worktree before restarting.
+ */
+export function isWorktreeMissingError(err: unknown): err is ConnectError {
+  return err instanceof ConnectError && err.code === Code.FailedPrecondition;
 }
 
 // ---------------------------------------------------------------------------

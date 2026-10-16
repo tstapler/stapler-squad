@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewCommandQueue(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 	if cq == nil {
 		t.Fatal("NewCommandQueue() returned nil")
@@ -28,6 +29,7 @@ func TestNewCommandQueue(t *testing.T) {
 }
 
 func TestNewCommandQueueWithPersistence(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	cq, err := NewCommandQueueWithPersistence("test-session", tmpDir)
@@ -42,6 +44,7 @@ func TestNewCommandQueueWithPersistence(t *testing.T) {
 }
 
 func TestCommandQueue_Enqueue(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -65,6 +68,7 @@ func TestCommandQueue_Enqueue(t *testing.T) {
 }
 
 func TestCommandQueue_EnqueueDuplicate(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd1 := &Command{
@@ -94,6 +98,7 @@ func TestCommandQueue_EnqueueDuplicate(t *testing.T) {
 }
 
 func TestCommandQueue_Dequeue(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -119,6 +124,7 @@ func TestCommandQueue_Dequeue(t *testing.T) {
 }
 
 func TestCommandQueue_DequeueEmpty(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	dequeued := cq.Dequeue()
@@ -128,6 +134,7 @@ func TestCommandQueue_DequeueEmpty(t *testing.T) {
 }
 
 func TestCommandQueue_PriorityOrdering(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	// Add commands with different priorities
@@ -159,6 +166,7 @@ func TestCommandQueue_PriorityOrdering(t *testing.T) {
 }
 
 func TestCommandQueue_TimestampTieBreaker(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	now := time.Now()
@@ -188,6 +196,7 @@ func TestCommandQueue_TimestampTieBreaker(t *testing.T) {
 }
 
 func TestCommandQueue_Peek(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -214,6 +223,7 @@ func TestCommandQueue_Peek(t *testing.T) {
 }
 
 func TestCommandQueue_PeekEmpty(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	peeked := cq.Peek()
@@ -223,6 +233,7 @@ func TestCommandQueue_PeekEmpty(t *testing.T) {
 }
 
 func TestCommandQueue_Cancel(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -245,6 +256,7 @@ func TestCommandQueue_Cancel(t *testing.T) {
 }
 
 func TestCommandQueue_CancelNonExistent(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	err := cq.Cancel("nonexistent")
@@ -254,6 +266,7 @@ func TestCommandQueue_CancelNonExistent(t *testing.T) {
 }
 
 func TestCommandQueue_CancelExecuting(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -276,6 +289,7 @@ func TestCommandQueue_CancelExecuting(t *testing.T) {
 }
 
 func TestCommandQueue_Get(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -297,6 +311,7 @@ func TestCommandQueue_Get(t *testing.T) {
 }
 
 func TestCommandQueue_GetNonExistent(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	_, err := cq.Get("nonexistent")
@@ -306,6 +321,7 @@ func TestCommandQueue_GetNonExistent(t *testing.T) {
 }
 
 func TestCommandQueue_Update(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -336,6 +352,7 @@ func TestCommandQueue_Update(t *testing.T) {
 }
 
 func TestCommandQueue_UpdateNonExistent(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd := &Command{
@@ -350,6 +367,7 @@ func TestCommandQueue_UpdateNonExistent(t *testing.T) {
 }
 
 func TestCommandQueue_List(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	// Add multiple commands
@@ -369,6 +387,7 @@ func TestCommandQueue_List(t *testing.T) {
 }
 
 func TestCommandQueue_ListByStatus(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	cmd1 := &Command{ID: "cmd-1", Text: "pending", Status: CommandPending}
@@ -389,6 +408,7 @@ func TestCommandQueue_ListByStatus(t *testing.T) {
 }
 
 func TestCommandQueue_Clear(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	// Add commands
@@ -411,6 +431,7 @@ func TestCommandQueue_Clear(t *testing.T) {
 }
 
 func TestCommandQueue_NotifyChannel(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	notifyCh := cq.NotifyChannel()
@@ -429,6 +450,7 @@ func TestCommandQueue_NotifyChannel(t *testing.T) {
 }
 
 func TestCommandQueue_Persistence(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	// Create queue with persistence
@@ -467,6 +489,7 @@ func TestCommandQueue_Persistence(t *testing.T) {
 }
 
 func TestCommandQueue_PersistenceAutoSave(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	cq, err := NewCommandQueueWithPersistence("test-session", tmpDir)
@@ -485,6 +508,7 @@ func TestCommandQueue_PersistenceAutoSave(t *testing.T) {
 }
 
 func TestCommandQueue_LoadNonExistent(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 	cq.SetPersistPath("/nonexistent/path/queue.json")
 
@@ -495,6 +519,7 @@ func TestCommandQueue_LoadNonExistent(t *testing.T) {
 }
 
 func TestCommandQueue_ConcurrentEnqueue(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	var wg sync.WaitGroup
@@ -527,6 +552,7 @@ func TestCommandQueue_ConcurrentEnqueue(t *testing.T) {
 }
 
 func TestCommandQueue_ConcurrentDequeue(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	// Add commands
@@ -576,6 +602,7 @@ func TestCommandQueue_ConcurrentDequeue(t *testing.T) {
 }
 
 func TestCommandQueue_ConcurrentMixedOperations(t *testing.T) {
+	t.Parallel()
 	cq := NewCommandQueue("test-session")
 
 	var wg sync.WaitGroup
@@ -619,6 +646,7 @@ func TestCommandQueue_ConcurrentMixedOperations(t *testing.T) {
 }
 
 func TestCommandStatus_String(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		status   CommandStatus
 		expected string

@@ -43,11 +43,15 @@ function relativeTime(iso?: string): string {
 interface GitHubIssuePickerProps {
   onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void;
   onCancel: () => void;
+  /** True while a previously-selected batch is being imported one issue at a time. */
+  importing?: boolean;
+  /** How far through that batch the import loop has gotten. */
+  importProgress?: { done: number; total: number } | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function GitHubIssuePicker({ onSelect, onCancel }: GitHubIssuePickerProps) {
+export function GitHubIssuePicker({ onSelect, onCancel, importing, importProgress }: GitHubIssuePickerProps) {
   const { searchGitHubRepos, listGitHubIssues } = useBacklogService();
 
   const picker = useGitHubIssuePicker({ searchGitHubRepos, listGitHubIssues, onSelect });
@@ -94,10 +98,10 @@ export function GitHubIssuePicker({ onSelect, onCancel }: GitHubIssuePickerProps
       {picker.phase === "repo" ? (
         <RepoPhase picker={picker} searchRef={searchRef} />
       ) : (
-        <IssuePhase picker={picker} searchRef={searchRef} />
+        <IssuePhase picker={picker} searchRef={searchRef} importing={importing} importProgress={importProgress} />
       )}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button type="button" onClick={onCancel} className={styles.backButton}>
+        <button type="button" onClick={onCancel} className={styles.backButton} disabled={importing}>
           Cancel
         </button>
       </div>
@@ -199,6 +203,7 @@ function RepoPhase({
                   {highlightMatch(`${repo.owner}/${repo.repo}`, picker.repoQuery)}
                 </span>
                 {repo.isLocal && <span className={styles.localBadge}>local</span>}
+                {repo.host && <span className={styles.localBadge}>{repo.host}</span>}
                 {repo.description && (
                   <span className={styles.listItemMeta}>
                     {highlightMatch(repo.description, picker.repoQuery)}
@@ -218,9 +223,13 @@ function RepoPhase({
 function IssuePhase({
   picker,
   searchRef,
+  importing,
+  importProgress,
 }: {
   picker: ReturnType<typeof useGitHubIssuePicker>;
   searchRef: React.RefObject<HTMLInputElement | null>;
+  importing?: boolean;
+  importProgress?: { done: number; total: number } | null;
 }) {
   const states: Array<"open" | "closed" | "all"> = ["open", "closed", "all"];
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -269,6 +278,7 @@ function IssuePhase({
         </button>
         <span className={styles.repoChip} aria-label="Selected repository">
           {picker.selectedRepo?.owner}/{picker.selectedRepo?.repo}
+          {picker.selectedRepo?.host ? ` (${picker.selectedRepo.host})` : ""}
         </span>
       </div>
 
@@ -325,17 +335,19 @@ function IssuePhase({
 
       <div className={styles.importBar}>
         <span className={styles.importBarHint}>
-          {selectedIssues.length > 0
-            ? `${selectedIssues.length} selected`
-            : "Check issues to import, then Import."}
+          {importing && importProgress
+            ? `Importing ${importProgress.done} of ${importProgress.total}…`
+            : selectedIssues.length > 0
+              ? `${selectedIssues.length} selected`
+              : "Check issues to import, then Import."}
         </span>
         <button
           type="button"
           className={styles.importButton}
-          disabled={selectedIssues.length === 0}
+          disabled={selectedIssues.length === 0 || importing}
           onClick={handleImport}
         >
-          Import{selectedIssues.length > 0 ? ` (${selectedIssues.length})` : ""}
+          {importing ? "Importing…" : `Import${selectedIssues.length > 0 ? ` (${selectedIssues.length})` : ""}`}
         </button>
       </div>
     </>

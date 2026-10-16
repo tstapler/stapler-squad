@@ -367,9 +367,12 @@ func (h *goalHandlers) listWorkspacePeers(ctx context.Context, _ mcpgo.CallToolR
 
 // --- helpers ---
 
-// findInstanceByID finds an instance by session title/ID from the store.
-func (h *goalHandlers) findInstanceByID(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
-	instances, err := h.store.LoadInstances()
+// findInstanceByIDInStore finds an instance by session title/ID from store.
+// Shared by goalHandlers and backlogHandlers (both carry a
+// session.InstanceStore field) so the lookup body exists exactly once rather
+// than being copy-pasted onto each new handler struct that needs it.
+func findInstanceByIDInStore(store session.InstanceStore, sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+	instances, err := store.LoadInstances()
 	if err != nil {
 		return nil, errResult(ErrInternalError, "failed to load sessions", "")
 	}
@@ -381,10 +384,11 @@ func (h *goalHandlers) findInstanceByID(sessionID string) (*session.Instance, *m
 	return nil, errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found", sessionID), "Use list_sessions to find available sessions.")
 }
 
-// findInstanceByUUID finds an instance by its UUID (used for cache updates).
-// Returns nil, nil if not found (non-fatal).
-func (h *goalHandlers) findInstanceByUUID(uuid string) (*session.Instance, *mcpgo.CallToolResult) {
-	instances, err := h.store.LoadInstances()
+// findInstanceByUUIDInStore finds an instance by its UUID. Returns nil, nil
+// if not found (non-fatal) — see findInstanceByIDInStore's doc comment for
+// why this is a shared free function rather than a per-handler method body.
+func findInstanceByUUIDInStore(store session.InstanceStore, uuid string) (*session.Instance, *mcpgo.CallToolResult) {
+	instances, err := store.LoadInstances()
 	if err != nil {
 		return nil, nil
 	}
@@ -394,6 +398,17 @@ func (h *goalHandlers) findInstanceByUUID(uuid string) (*session.Instance, *mcpg
 		}
 	}
 	return nil, nil
+}
+
+// findInstanceByID finds an instance by session title/ID from the store.
+func (h *goalHandlers) findInstanceByID(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+	return findInstanceByIDInStore(h.store, sessionID)
+}
+
+// findInstanceByUUID finds an instance by its UUID (used for cache updates).
+// Returns nil, nil if not found (non-fatal).
+func (h *goalHandlers) findInstanceByUUID(uuid string) (*session.Instance, *mcpgo.CallToolResult) {
+	return findInstanceByUUIDInStore(h.store, uuid)
 }
 
 // isValidGoalStatus returns true if s is a recognized goal status value.

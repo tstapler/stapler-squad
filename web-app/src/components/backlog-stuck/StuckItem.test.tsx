@@ -2,6 +2,9 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
+
 import { StuckItem } from "./StuckItem";
 
 function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
@@ -368,6 +371,99 @@ describe("StuckItem", () => {
         />
       );
       expect(screen.getByTestId("stuck-item-retry-now")).toBeDisabled();
+    });
+  });
+
+  describe("StuckItem_should_scrollIntoView_When_FocusItemIdMatchesAndExpanded", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    let scrollIntoView: jest.Mock;
+
+    beforeEach(() => {
+      scrollIntoView = jest.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it("scrolls the card into view when focusItemId matches and the card is expanded", () => {
+      render(
+        <StuckItem
+          item={makeItem()}
+          isExpanded={true}
+          onToggleExpand={jest.fn()}
+          focusItemId="f9fcef32-c27e-434d-b23f-c873c18afa92"
+        />
+      );
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    });
+
+    it("does not scroll when focusItemId does not match this card's itemId", () => {
+      render(
+        <StuckItem
+          item={makeItem()}
+          isExpanded={true}
+          onToggleExpand={jest.fn()}
+          focusItemId="some-other-item-id"
+        />
+      );
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("does not scroll when focusItemId matches but the card is not expanded", () => {
+      render(
+        <StuckItem
+          item={makeItem()}
+          isExpanded={false}
+          onToggleExpand={jest.fn()}
+          focusItemId="f9fcef32-c27e-434d-b23f-c873c18afa92"
+        />
+      );
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("does not scroll when focusItemId is not provided", () => {
+      render(<StuckItem item={makeItem()} isExpanded={true} onToggleExpand={jest.fn()} />);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("StuckItem_should_offerClaimOverrideWithReasonForm_When_BlockedByClaim", () => {
+    const claimItem = () => makeItem({ reason: StuckReason.BLOCKED_BY_CLAIM, prNumber: 0, prUrl: "" });
+
+    it("hides the control for other reasons or when no handler is given", () => {
+      const { rerender } = render(
+        <StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} onOverrideClaimBlock={jest.fn()} />
+      );
+      expect(screen.queryByTestId("stuck-item-override-claim")).toBeNull();
+      rerender(<StuckItem item={claimItem()} isExpanded={false} onToggleExpand={jest.fn()} />);
+      expect(screen.queryByTestId("stuck-item-override-claim")).toBeNull();
+    });
+
+    it("requires a >=5 character reason and calls the override without toggling the card", async () => {
+      const onOverrideClaimBlock = jest.fn().mockResolvedValue(undefined);
+      const onToggleExpand = jest.fn();
+      const item = claimItem();
+      render(<StuckItem item={item} isExpanded={false} onToggleExpand={onToggleExpand} onOverrideClaimBlock={onOverrideClaimBlock} />);
+      fireEvent.click(screen.getByTestId("stuck-item-override-claim"));
+      const confirm = screen.getByTestId("claim-override-confirm");
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "abc" } });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "host is retired" } });
+      fireEvent.click(confirm);
+      await waitFor(() => expect(onOverrideClaimBlock).toHaveBeenCalledWith(item.itemId, "host is retired"));
+      expect(onToggleExpand).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByTestId("claim-override-form")).toBeNull());
+    });
+
+    it("shows the server error on the form when the override rejects", async () => {
+      const onOverrideClaimBlock = jest.fn().mockRejectedValue(new Error("no free work slot"));
+      render(<StuckItem item={claimItem()} isExpanded={false} onToggleExpand={jest.fn()} onOverrideClaimBlock={onOverrideClaimBlock} />);
+      fireEvent.click(screen.getByTestId("stuck-item-override-claim"));
+      fireEvent.change(screen.getByTestId("claim-override-reason"), { target: { value: "host is retired" } });
+      fireEvent.click(screen.getByTestId("claim-override-confirm"));
+      await waitFor(() => expect(screen.getByTestId("claim-override-error")).toHaveTextContent("no free work slot"));
     });
   });
 });

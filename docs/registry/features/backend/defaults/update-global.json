@@ -5,7 +5,10 @@
   "method": "UpdateGlobalDefaults",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "tested": true,
+  "testIds": [
+    "TestUpdateGlobalDefaults_ZeroStaleSessionThreshold_UsesServerDefault",
+    "TestUpdateGlobalDefaults_PersistsExplicitStaleSessionOverride"
+  ],
+  "lastModified": "2026-08-15T00:00:00Z"
 }

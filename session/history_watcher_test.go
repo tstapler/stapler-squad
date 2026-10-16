@@ -14,6 +14,7 @@ import (
 )
 
 func TestHistoryFileWatcher_FiresOnJSONLCreate(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -49,6 +50,7 @@ func TestHistoryFileWatcher_FiresOnJSONLCreate(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_DoesNotFireOnNonJSONL(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -84,6 +86,7 @@ func TestHistoryFileWatcher_DoesNotFireOnNonJSONL(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_FiresOnRename(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex
@@ -119,6 +122,7 @@ func TestHistoryFileWatcher_FiresOnRename(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_DirectoryNotExist_NoError(t *testing.T) {
+	t.Parallel()
 	nonExistentDir := filepath.Join(t.TempDir(), "does-not-exist")
 
 	watcher := NewHistoryFileWatcher(nonExistentDir, func(filePath string) {})
@@ -132,6 +136,7 @@ func TestHistoryFileWatcher_DirectoryNotExist_NoError(t *testing.T) {
 }
 
 func TestHistoryFileWatcher_ContextCancellationStopsWatcher(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	callbackCount := 0
@@ -170,7 +175,46 @@ func TestHistoryFileWatcher_ContextCancellationStopsWatcher(t *testing.T) {
 	assert.Equal(t, 0, callbackCount, "no callbacks should fire after context cancellation")
 }
 
+func TestHistoryFileWatcher_FiresOnJSONLInSubdirCreatedAfterStart(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	var mu sync.Mutex
+	var received []string
+
+	watcher := NewHistoryFileWatcher(tmpDir, func(filePath string) {
+		mu.Lock()
+		defer mu.Unlock()
+		received = append(received, filePath)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := watcher.Start(ctx)
+	require.NoError(t, err)
+
+	// Simulate a new git worktree's own ~/.claude/projects/<encoded-path>/
+	// directory appearing after the watcher's initial boot-time walk.
+	subDir := filepath.Join(tmpDir, "-Users-tstapler--stapler-squad-worktrees-triage-abc123")
+	require.NoError(t, os.Mkdir(subDir, 0755))
+
+	jsonlPath := filepath.Join(subDir, "550e8400-e29b-41d4-a716-446655440000.jsonl")
+	require.NoError(t, os.WriteFile(jsonlPath, []byte(`{"test": true}`), 0600))
+
+	assert.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) > 0
+	}, 2*time.Second, 50*time.Millisecond, "jsonl written into a post-start subdirectory should trigger callback")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Contains(t, received, jsonlPath)
+}
+
 func TestHistoryFileWatcher_FiltersAgentJSONL(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 
 	var mu sync.Mutex

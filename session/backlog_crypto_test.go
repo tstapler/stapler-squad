@@ -11,6 +11,7 @@ import (
 
 // TestEncryptDecryptToken verifies round-trip encryption and decryption
 func TestEncryptDecryptToken(t *testing.T) {
+	t.Parallel()
 	// Generate a test key
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
@@ -43,6 +44,7 @@ func TestEncryptDecryptToken(t *testing.T) {
 
 // TestDecryptWithWrongKey verifies that decryption fails with wrong key
 func TestDecryptWithWrongKey(t *testing.T) {
+	t.Parallel()
 	key1 := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key1); err != nil {
 		t.Fatalf("generate key1: %v", err)
@@ -70,6 +72,7 @@ func TestDecryptWithWrongKey(t *testing.T) {
 
 // TestKeySize verifies that functions reject invalid key sizes with key-size errors.
 func TestKeySize(t *testing.T) {
+	t.Parallel()
 	plaintext := "test"
 
 	// Test with 16-byte key (too small)
@@ -96,6 +99,7 @@ func TestKeySize(t *testing.T) {
 
 // TestEmptyToken verifies encryption of empty strings
 func TestEmptyToken(t *testing.T) {
+	t.Parallel()
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		t.Fatalf("generate key: %v", err)

@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // pipelineModeSlugRe matches the allowed pipeline-mode slug character set:
@@ -72,6 +74,14 @@ type PipelineModeContentFields struct {
 	TriagePromptTemplate  string
 	ReviewPromptTemplate  string
 	InitialPromptTemplate string
+
+	// StageExecutors and ForceUnknownModel are Epic 1.3's stage-executor
+	// checks (see validateStageExecutors). A nil/empty StageExecutors map
+	// trivially passes — an Update request that isn't touching stage
+	// executors at all only needs to leave this unset, same convention as
+	// the 9 content-template fields above.
+	StageExecutors    map[StageRole]PipelineStageExecutor
+	ForceUnknownModel bool
 }
 
 // namedTemplateFields returns the 9 content-template fields paired with
@@ -130,6 +140,86 @@ func ValidatePipelineModeContent(fields PipelineModeContentFields) error {
 		}
 	}
 
+	if err := validateStageExecutors(fields.StageExecutors, fields.ForceUnknownModel); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validStageRoles is the closed set of map keys stage_executors may use —
+// StageRole's 3 exported consts. A typo'd key (e.g. "wrok") would otherwise
+// round-trip silently through JSON/proto (StageRole is a newtype, not a
+// validated sum type) and simply never be consulted by ExecutorFor.
+var validStageRoles = map[StageRole]bool{
+	StageRoleTriage: true,
+	StageRoleReview: true,
+	StageRoleWork:   true,
+}
+
+// headlessOnlyPrograms is the allow-list ADR-002 permits for
+// StageRoleTriage/StageRoleReview's Program field: both roles run
+// exclusively through a headless.PoolClient (Strategy pattern registry),
+// which currently has adapters for "claude" and "gemini" only. Aider has no
+// headless mode, so it's rejected for these two roles but allowed for
+// StageRoleWork, which spawns an interactive Instance instead and is not
+// checked against this allow-list.
+var headlessOnlyPrograms = map[string]bool{
+	"claude": true,
+	"gemini": true,
+}
+
+// validateStageExecutors enforces Story 1.3.1's per-stage program/model
+// checks:
+//  1. Every map key must be one of the 3 known StageRole consts.
+//  2. A non-empty Program on StageRoleTriage/StageRoleReview must be
+//     "claude" or "gemini" (ADR-002); StageRoleWork has no such allow-list.
+//  3. A non-empty Model must pass the shared character-class guard
+//     (ValidateModel, shared with server/workflows to catch
+//     shell-metacharacter/whitespace injection) and, unless
+//     forceUnknownModel is set, must resolve to a known pricing-table entry
+//     when it is not a "family:"-prefixed alias — catching a BUG-062-style
+//     typo (syntactically valid, but not a real model) at save time. A
+//     "family:" alias skips the pricing cross-check entirely; it's already
+//     validated by ResolveModel's own unknown-alias error.
+func validateStageExecutors(executors map[StageRole]PipelineStageExecutor, forceUnknownModel bool) error {
+	for role, executor := range executors {
+		if !validStageRoles[role] {
+			return fmt.Errorf("stage_executors: invalid role %q (must be one of %q, %q, %q)",
+				role, StageRoleTriage, StageRoleReview, StageRoleWork)
+		}
+
+		if executor.Program != "" && (role == StageRoleTriage || role == StageRoleReview) {
+			if !headlessOnlyPrograms[executor.Program] {
+				return fmt.Errorf("stage_executors[%s].program: %q has no headless mode (ADR-002) — must be one of \"claude\", \"gemini\"",
+					role, executor.Program)
+			}
+		}
+
+		if executor.Model == "" {
+			continue
+		}
+		if err := ValidateModel(executor.Model); err != nil {
+			return fmt.Errorf("stage_executors[%s].model: %w", role, err)
+		}
+		if err := validateKnownModel(executor.Model, forceUnknownModel); err != nil {
+			return fmt.Errorf("stage_executors[%s].model: %w", role, err)
+		}
+	}
+	return nil
+}
+
+// validateKnownModel cross-checks a literal (non-"family:"-prefixed) model ID
+// against tokens.DefaultPricingTable(). forceUnknownModel bypasses the check
+// for a real-but-not-yet-priced model (a new model shipped before the
+// pricing table was updated) without silently re-permitting a typo.
+func validateKnownModel(model string, forceUnknownModel bool) error {
+	if strings.HasPrefix(model, "family:") || forceUnknownModel {
+		return nil
+	}
+	if _, ok := tokens.DefaultPricingTable().LookupByModel(model); !ok {
+		return fmt.Errorf("%q is not a recognized model (set force_unknown_model to override)", model)
+	}
 	return nil
 }
 

@@ -7,7 +7,6 @@
 import React from "react";
 import { render, act } from "@testing-library/react";
 import { PaneTilingContainer } from "../PaneTilingContainer";
-import * as usePaneReducerModule from "@/lib/pane/usePaneReducer";
 import type { PaneState, LeafPane, SplitPane } from "@/lib/pane/paneTypes";
 
 // ─── Mock heavy dependencies ──────────────────────────────────────────────────
@@ -22,6 +21,12 @@ jest.mock("../PaneSplitRenderer", () => ({
 }));
 
 // PaneContext is consumed by PaneSplitRenderer (mocked) — no need to mock it.
+
+// Avoid a real RPC call (and its noisy console.error in jsdom) from the
+// backlog-origin-badge index lookup this container now fetches once on mount.
+jest.mock("@/lib/hooks/useBacklogService", () => ({
+  useBacklogSessionIndex: () => ({ index: new Map(), loading: false }),
+}));
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -47,9 +52,6 @@ function makeSession(id: string) {
 function setupReducerMock(root: PaneState["root"], focusedPaneId: string) {
   const dispatch = jest.fn();
   const state: PaneState = { root, focusedPaneId, zoomedPaneId: null };
-  jest
-    .spyOn(usePaneReducerModule, "usePaneReducer")
-    .mockReturnValue([state, dispatch]);
   return { state, dispatch };
 }
 
@@ -65,13 +67,15 @@ describe("triggerPicker", () => {
     const pane1 = makeLeaf("pane-1", "session-detail");
     const pane2 = makeLeaf("pane-2", "session-detail");
     const root = makeSplit("split-1", pane1, pane2);
-    const { dispatch } = setupReducerMock(root, "pane-1");
+    const { state, dispatch } = setupReducerMock(root, "pane-1");
 
     const session = makeSession("session-X");
 
     const { rerender } = render(
       <PaneTilingContainer
         sessions={[session]}
+        paneState={state}
+        dispatch={dispatch}
         externalSessionAssign={null}
       />
     );
@@ -81,6 +85,8 @@ describe("triggerPicker", () => {
       rerender(
         <PaneTilingContainer
           sessions={[session]}
+          paneState={state}
+          dispatch={dispatch}
           externalSessionAssign={{ sessionId: "session-X", version: 1 }}
         />
       );
@@ -98,7 +104,7 @@ describe("triggerPicker", () => {
     const detailPane = makeLeaf("pane-detail", "session-detail");
     const root = makeSplit("split-1", listPane, detailPane);
     // List pane is focused (user clicked session from the list)
-    const { dispatch } = setupReducerMock(root, "pane-list");
+    const { state, dispatch } = setupReducerMock(root, "pane-list");
 
     const session = makeSession("session-X");
 
@@ -106,6 +112,8 @@ describe("triggerPicker", () => {
       render(
         <PaneTilingContainer
           sessions={[session]}
+          paneState={state}
+          dispatch={dispatch}
           externalSessionAssign={{ sessionId: "session-X", version: 1 }}
         />
       );
@@ -127,7 +135,7 @@ describe("triggerPicker", () => {
   it("triggerPicker_should_autoSplit_When_noDetailPanes", async () => {
     // Only a session-list pane — no detail panes.
     const listPane = makeLeaf("pane-list", "session-list");
-    const { dispatch } = setupReducerMock(listPane, "pane-list");
+    const { state, dispatch } = setupReducerMock(listPane, "pane-list");
 
     const session = makeSession("session-X");
 
@@ -135,6 +143,8 @@ describe("triggerPicker", () => {
       render(
         <PaneTilingContainer
           sessions={[session]}
+          paneState={state}
+          dispatch={dispatch}
           externalSessionAssign={{ sessionId: "session-X", version: 1 }}
         />
       );
@@ -153,18 +163,25 @@ describe("triggerPicker", () => {
     const pane2 = makeLeaf("pane-2", "session-detail", null);
     const root = makeSplit("split-1", pane1, pane2);
     // Detail pane-1 is focused — this was the bypass condition before the fix
-    const { dispatch } = setupReducerMock(root, "pane-1");
+    const { state, dispatch } = setupReducerMock(root, "pane-1");
 
     const session = makeSession("session-B");
 
     const { rerender } = render(
-      <PaneTilingContainer sessions={[session]} externalSessionAssign={null} />
+      <PaneTilingContainer
+        sessions={[session]}
+        paneState={state}
+        dispatch={dispatch}
+        externalSessionAssign={null}
+      />
     );
 
     await act(async () => {
       rerender(
         <PaneTilingContainer
           sessions={[session]}
+          paneState={state}
+          dispatch={dispatch}
           externalSessionAssign={{ sessionId: "session-B", version: 1 }}
         />
       );
@@ -181,18 +198,25 @@ describe("triggerPicker", () => {
     const pane1 = makeLeaf("pane-1", "session-detail");
     const pane2 = makeLeaf("pane-2", "session-detail");
     const root = makeSplit("split-1", pane1, pane2);
-    const { dispatch } = setupReducerMock(root, "pane-1");
+    const { state, dispatch } = setupReducerMock(root, "pane-1");
 
     const session = makeSession("session-X");
 
     const { rerender } = render(
-      <PaneTilingContainer sessions={[session]} externalSessionAssign={null} />
+      <PaneTilingContainer
+        sessions={[session]}
+        paneState={state}
+        dispatch={dispatch}
+        externalSessionAssign={null}
+      />
     );
 
     await act(async () => {
       rerender(
         <PaneTilingContainer
           sessions={[session]}
+          paneState={state}
+          dispatch={dispatch}
           externalSessionAssign={{ sessionId: "session-X", version: 1 }}
         />
       );

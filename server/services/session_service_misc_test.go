@@ -22,6 +22,7 @@ import (
 // TestRestartSession_EmptyID verifies that an empty session id returns
 // CodeInvalidArgument without touching storage.
 func TestRestartSession_EmptyID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -39,6 +40,7 @@ func TestRestartSession_EmptyID(t *testing.T) {
 // TestRestartSession_SessionNotFound verifies that a non-existent session id
 // returns CodeNotFound.
 func TestRestartSession_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -60,6 +62,7 @@ func TestRestartSession_SessionNotFound(t *testing.T) {
 // TestClearConversationState_EmptyID verifies that an empty id returns
 // CodeInvalidArgument.
 func TestClearConversationState_EmptyID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -77,6 +80,7 @@ func TestClearConversationState_EmptyID(t *testing.T) {
 // TestClearConversationState_SessionNotFound verifies that a non-existent id
 // returns CodeNotFound.
 func TestClearConversationState_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -95,6 +99,7 @@ func TestClearConversationState_SessionNotFound(t *testing.T) {
 // the ReviewQueuePoller (so FindLiveInstance resolves it), then calls
 // ClearConversationState and expects success=true.
 func TestClearConversationState_Success(t *testing.T) {
+	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -123,6 +128,7 @@ func TestClearConversationState_Success(t *testing.T) {
 // TestListBranches_EmptyPath verifies that an empty repo_path returns
 // CodeInvalidArgument.
 func TestListBranches_EmptyPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -140,6 +146,7 @@ func TestListBranches_EmptyPath(t *testing.T) {
 // TestListBranches_PathOutsideHome verifies that a path outside the user's
 // home directory is rejected with CodeInvalidArgument.
 func TestListBranches_PathOutsideHome(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -158,6 +165,7 @@ func TestListBranches_PathOutsideHome(t *testing.T) {
 // TestListBranches_NonExistentPath verifies that a path that does not exist
 // (but is within the home tree) returns CodeInvalidArgument.
 func TestListBranches_NonExistentPath(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -183,6 +191,7 @@ func TestListBranches_NonExistentPath(t *testing.T) {
 // TestGetTerminalSnapshot_EmptyID verifies that an empty session_id returns
 // CodeInvalidArgument.
 func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -200,6 +209,7 @@ func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
 // TestGetTerminalSnapshot_SessionNotFound verifies that a non-existent session
 // id returns CodeNotFound (both poller and externalDiscovery are nil).
 func TestGetTerminalSnapshot_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	storage := createTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -228,13 +238,14 @@ func newMinimalUnfinishedWorkService(t *testing.T) *UnfinishedWorkService {
 	require.NoError(t, err)
 	bus := events.NewEventBus(16)
 	scanner := unfinished.NewScanner(bus, stateStore)
-	return NewUnfinishedWorkService(scanner, stateStore, bus, nil)
+	return NewUnfinishedWorkService(scanner, stateStore, bus, nil, nil)
 }
 
 // TestGetWorktreeDiff_EmptyRepoPath verifies that missing repo_path or branch
 // yields CodeNotFound (the scanner returns !ok, which the handler maps to
 // CodeNotFound — the handler has no explicit empty-field validation).
 func TestGetWorktreeDiff_EmptyRepoPath(t *testing.T) {
+	t.Parallel()
 	svc := newMinimalUnfinishedWorkService(t)
 
 	_, err := svc.GetWorktreeDiff(context.Background(), connect.NewRequest(&sessionv1.GetWorktreeDiffRequest{
@@ -250,6 +261,7 @@ func TestGetWorktreeDiff_EmptyRepoPath(t *testing.T) {
 // TestGetWorktreeDiff_SessionNotFound verifies that a repo+branch pair that
 // has not been scanned returns CodeNotFound.
 func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
+	t.Parallel()
 	svc := newMinimalUnfinishedWorkService(t)
 
 	_, err := svc.GetWorktreeDiff(context.Background(), connect.NewRequest(&sessionv1.GetWorktreeDiffRequest{
@@ -263,10 +275,11 @@ func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// expandTildePath
+// expandLocalTildePath / rejectRemoteTildePath
 // ---------------------------------------------------------------------------
 
 func TestExpandTildePath(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err, "os.UserHomeDir() must succeed for tilde expansion tests")
 
@@ -315,7 +328,7 @@ func TestExpandTildePath(t *testing.T) {
 			input: "~/../../etc/passwd",
 			check: func(t *testing.T, got string) {
 				// Path traversal escaping the home directory must be rejected:
-				// expandTildePath returns the original input string unmodified.
+				// expandLocalTildePath returns the original input string unmodified.
 				assert.Equal(t, "~/../../etc/passwd", got, "path traversal must return original input")
 			},
 		},
@@ -323,28 +336,49 @@ func TestExpandTildePath(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := expandTildePath(tc.input)
+			t.Parallel()
+			got, err := expandLocalTildePath(tc.input)
+			require.NoError(t, err)
 			tc.check(t, got)
 		})
 	}
 }
 
+// TestExpandTildePath_RemoteRejectsTilde proves the pre-ship review fix: a
+// `~`-prefixed path must be rejected for a remote-targeted session rather than
+// silently expanded against this server process's own local home directory
+// (which names a location on the wrong host entirely).
+func TestExpandTildePath_RemoteRejectsTilde(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"~", "~/foo/bar"} {
+		_, err := rejectRemoteTildePath(input)
+		require.Error(t, err, "rejectRemoteTildePath(%q) must reject tilde expansion", input)
+	}
+	// An absolute path is unaffected.
+	got, err := rejectRemoteTildePath("/absolute/path")
+	require.NoError(t, err)
+	assert.Equal(t, "/absolute/path", got)
+}
+
 // TestExpandTildePath_AliasPathCallSite documents the tilde expansion that
-// occurs at CreateSession (session_service.go:1084) for alias configs that
-// contain tilde-prefixed paths. This test ensures that if the call site is
-// accidentally removed, this scenario will fail explicitly.
+// occurs at CreateSession for alias configs that contain tilde-prefixed
+// paths. This test ensures that if the call site is accidentally removed,
+// this scenario will fail explicitly.
 func TestExpandTildePath_AliasPathCallSite(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	// Simulate the pattern at CreateSession:1083-1084:
+	// Simulate CreateSession's resolveSessionDefaults alias-path pattern:
 	//   if resolvedPath == "" && resolved.Path != "" {
-	//       resolvedPath = expandTildePath(resolved.Path)
+	//       resolvedPath, err = expandLocalTildePath(resolved.Path) // or rejectRemoteTildePath, if remote
 	//   }
 	aliasPath := "~/projects/myrepo"
 	var resolvedPath string
 	if resolvedPath == "" && aliasPath != "" {
-		resolvedPath = expandTildePath(aliasPath)
+		expanded, expandErr := expandLocalTildePath(aliasPath)
+		require.NoError(t, expandErr)
+		resolvedPath = expanded
 	}
 	assert.Equal(t, home+"/projects/myrepo", resolvedPath,
 		"alias path with tilde prefix must be expanded when resolvedPath is initially empty")

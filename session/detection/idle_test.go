@@ -3,6 +3,8 @@ package detection
 import (
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 )
 
 // newDetectorWithFakeClock creates an IdleDetector whose clock is controlled by the
@@ -45,6 +47,7 @@ func (m *mockPTYReader) Clear() {
 
 // TestIdleDetector_PatternMatching tests pattern-based idle detection.
 func TestIdleDetector_PatternMatching(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		output   string
@@ -113,6 +116,7 @@ func TestIdleDetector_PatternMatching(t *testing.T) {
 // TestIdleDetector_PatternMatching_FromContent verifies pattern matching via the production
 // path (DetectStateFromContent / DetectFromLines), which is what the review-queue poller calls.
 func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		content  string
@@ -161,7 +165,7 @@ func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
 				DebounceDelay: 0, // no debounce in these unit tests
 				BufferSize:    4096,
 			}
-			detector := NewIdleDetectorWithConfig("test", buffer, cfg)
+			detector, _ := newDetectorWithFakeClock("test", buffer, cfg)
 			got := detector.DetectStateFromContent(tt.content)
 			if got != tt.expected {
 				t.Errorf("%s: DetectStateFromContent(%q) = %v, want %v", tt.name, tt.content, got, tt.expected)
@@ -172,6 +176,7 @@ func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
 
 // TestIdleDetector_StateTransitions tests state transitions with debouncing.
 func TestIdleDetector_StateTransitions(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -209,6 +214,7 @@ func TestIdleDetector_StateTransitions(t *testing.T) {
 
 // TestIdleDetector_TimeoutDetection tests idle timeout detection.
 func TestIdleDetector_TimeoutDetection(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -238,6 +244,7 @@ func TestIdleDetector_TimeoutDetection(t *testing.T) {
 
 // TestIdleDetector_ActivityTracking tests that activity is tracked correctly.
 func TestIdleDetector_ActivityTracking(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -271,6 +278,7 @@ func TestIdleDetector_ActivityTracking(t *testing.T) {
 
 // TestIdleDetector_GetIdleDuration tests idle duration calculation.
 func TestIdleDetector_GetIdleDuration(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -302,6 +310,7 @@ func TestIdleDetector_GetIdleDuration(t *testing.T) {
 
 // TestIdleDetector_IsIdle tests the simple IsIdle check.
 func TestIdleDetector_IsIdle(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -332,6 +341,7 @@ func TestIdleDetector_IsIdle(t *testing.T) {
 
 // TestIdleDetector_IsActive tests the IsActive check.
 func TestIdleDetector_IsActive(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -362,6 +372,7 @@ func TestIdleDetector_IsActive(t *testing.T) {
 
 // TestIdleDetector_Reset tests state reset functionality.
 func TestIdleDetector_Reset(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -386,6 +397,7 @@ func TestIdleDetector_Reset(t *testing.T) {
 
 // TestIdleDetector_GetStateInfo tests comprehensive state info retrieval.
 func TestIdleDetector_GetStateInfo(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -393,7 +405,7 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test-session", buffer, config)
+	detector, _ := newDetectorWithFakeClock("test-session", buffer, config)
 
 	buffer.Write([]byte("— INSERT —"))
 	detector.DetectState()
@@ -415,6 +427,7 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 
 // TestIdleDetector_ConfigUpdate tests configuration updates.
 func TestIdleDetector_ConfigUpdate(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	config := IdleDetectorConfig{
@@ -456,6 +469,7 @@ func TestIdleDetector_ConfigUpdate(t *testing.T) {
 
 // TestIdleDetector_InitializeFromTimestamp tests timestamp restoration with a frozen clock.
 func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
+	t.Parallel()
 	// Use a fake clock frozen at a specific point so boundary tests are deterministic.
 	buffer := &mockPTYReader{}
 	cfg := IdleDetectorConfig{IdleThreshold: time.Second, DebounceDelay: 0, BufferSize: 4096}
@@ -538,6 +552,7 @@ func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
 
 // TestIdleDetector_TimeoutAfterRestoration verifies timeout detection with restored timestamps.
 func TestIdleDetector_TimeoutAfterRestoration(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	// Simulate session that was idle 10 minutes ago, server restarts
@@ -570,6 +585,7 @@ func TestIdleDetector_TimeoutAfterRestoration(t *testing.T) {
 
 // TestIdleDetector_NoTimeoutForRecentRestoration verifies no false timeout for recent activity.
 func TestIdleDetector_NoTimeoutForRecentRestoration(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 
 	// Simulate session that was active 2 seconds ago, server restarts
@@ -596,6 +612,7 @@ func TestIdleDetector_NoTimeoutForRecentRestoration(t *testing.T) {
 
 // TestIdleDetector_InitializeFromTimestamp_Idempotent tests multiple initialization calls.
 func TestIdleDetector_InitializeFromTimestamp_Idempotent(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 	detector := NewIdleDetector("test", buffer)
 
@@ -621,6 +638,7 @@ func TestIdleDetector_InitializeFromTimestamp_Idempotent(t *testing.T) {
 
 // TestIdleDetector_RecordActivity tests the event-driven activity recording.
 func TestIdleDetector_RecordActivity(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
 
@@ -646,6 +664,7 @@ func TestIdleDetector_RecordActivity(t *testing.T) {
 
 // TestIdleDetector_InitializeFromTimestamp_ThreadSafety tests concurrent initialization.
 func TestIdleDetector_InitializeFromTimestamp_ThreadSafety(t *testing.T) {
+	t.Parallel()
 	buffer := &mockPTYReader{}
 	detector := NewIdleDetector("test", buffer)
 
@@ -675,6 +694,7 @@ func TestIdleDetector_InitializeFromTimestamp_ThreadSafety(t *testing.T) {
 }
 
 func TestNewIdleDetectorWithDetector_should_acceptInjectedDetector(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	sd.SetSessionID("test-session")
 	pa := &mockPTYReader{data: []byte("? for shortcuts")}
@@ -685,6 +705,7 @@ func TestNewIdleDetectorWithDetector_should_acceptInjectedDetector(t *testing.T)
 }
 
 func TestNewIdleDetectorWithDetector_should_useInjected_When_nonNil(t *testing.T) {
+	t.Parallel()
 	sd := NewStatusDetector()
 	sd.SetSessionID("test-session")
 	pa := &mockPTYReader{data: []byte("? for shortcuts")}
@@ -698,8 +719,188 @@ func TestNewIdleDetectorWithDetector_should_useInjected_When_nonNil(t *testing.T
 }
 
 func TestNewIdleDetectorWithDetector_should_createOwn_When_nilInjected(t *testing.T) {
+	t.Parallel()
 	pa := &mockPTYReader{data: []byte("? for shortcuts")}
 	id := NewIdleDetectorWithDetector("test", pa, DefaultIdleDetectorConfig(), nil)
 	state := id.DetectState()
 	_ = state // Should not panic, returns valid state
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_FirstTransitionNeverDebounced(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, _ := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	got := detector.DetectStateFromContentWithOSC("$ ", dtypes.OSCStatusExecuting)
+	if got != IdleStateActive {
+		t.Errorf("first transition out of Unknown: got %v, want IdleStateActive", got)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_BypassesTextDebounceViaShorterWindow(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// Seed currentState = IdleStateWaiting (first transition, no debounce).
+	if got := detector.DetectStateFromContent("$ "); got != IdleStateWaiting {
+		t.Fatalf("seed: DetectStateFromContent(%q) = %v, want IdleStateWaiting", "$ ", got)
+	}
+
+	// 200ms satisfies OSCDebounceDelay (150ms) but not DebounceDelay (500ms).
+	advance(200 * time.Millisecond)
+	got := detector.DetectStateFromContentWithOSC("$ ", dtypes.OSCStatusExecuting)
+	if got != IdleStateActive {
+		t.Errorf("OSC-derived transition at 200ms: got %v, want IdleStateActive", got)
+	}
+}
+
+// TestIdleDetector_DetectStateFromContentWithOSC_IdleDirectionBypassesTextDebounceViaShorterWindow
+// is the OSCStatusIdle-direction counterpart to the OSCStatusExecuting test above — AC9 requires
+// debounce-bypass-window coverage "for both directions (Executing and Idle)", and the code path
+// treats both directions symmetrically (same debounce assignment in DetectStateFromContentWithOSC),
+// so this proves the 150ms OSCDebounceDelay actually governs the Idle direction's timing too, not
+// just Executing's.
+func TestIdleDetector_DetectStateFromContentWithOSC_IdleDirectionBypassesTextDebounceViaShorterWindow(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// "hello world" text-classifies as StatusUnknown (the catch-all pattern), which
+	// is promotable in both directions — unlike "$ " (StatusIdle via command_prompt),
+	// which is already-Idle and therefore NOT in IsOSCIdlePromotable's set.
+	const promotableContent = "hello world"
+
+	// Seed currentState = IdleStateActive (first transition, no debounce).
+	if got := detector.DetectStateFromContentWithOSC(promotableContent, dtypes.OSCStatusExecuting); got != IdleStateActive {
+		t.Fatalf("seed: DetectStateFromContentWithOSC(_, OSCStatusExecuting) = %v, want IdleStateActive", got)
+	}
+
+	// 200ms satisfies OSCDebounceDelay (150ms) but not DebounceDelay (500ms).
+	advance(200 * time.Millisecond)
+	got := detector.DetectStateFromContentWithOSC(promotableContent, dtypes.OSCStatusIdle)
+	if got != IdleStateWaiting {
+		t.Errorf("OSC-derived idle transition at 200ms: got %v, want IdleStateWaiting", got)
+	}
+}
+
+// TestIdleDetector_DetectStateFromContent_IdleDirection_StillBlockedByLongerTextDebounceAtSameElapsed
+// is the contrast case for the test above: the same 200ms elapsed does NOT satisfy a pure
+// text-pattern transition's 500ms DebounceDelay, proving the two windows are independent in the
+// Idle direction too.
+func TestIdleDetector_DetectStateFromContent_IdleDirection_StillBlockedByLongerTextDebounceAtSameElapsed(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// Seed currentState = IdleStateActive (first transition, no debounce).
+	if got := detector.DetectStateFromContent("Running... (esc to interrupt)"); got != IdleStateActive {
+		t.Fatalf("seed: DetectStateFromContent(...) = %v, want IdleStateActive", got)
+	}
+
+	// Same 200ms elapsed as the OSC test above, but a pure text-pattern transition
+	// needs the full 500ms DebounceDelay.
+	advance(200 * time.Millisecond)
+	got := detector.DetectStateFromContent("$ ")
+	if got != IdleStateActive {
+		t.Errorf("text-pattern transition at 200ms (< 500ms DebounceDelay): got %v, want IdleStateActive (blocked)", got)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContent_StillBlockedByLongerTextDebounceAtSameElapsed(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// Seed currentState = IdleStateWaiting (first transition, no debounce).
+	if got := detector.DetectStateFromContent("$ "); got != IdleStateWaiting {
+		t.Fatalf("seed: DetectStateFromContent(%q) = %v, want IdleStateWaiting", "$ ", got)
+	}
+
+	// Same 200ms elapsed as the OSC test above, but a pure text-pattern
+	// transition needs the full 500ms DebounceDelay — proves the two windows
+	// are genuinely independent.
+	advance(200 * time.Millisecond)
+	got := detector.DetectStateFromContent("Running... (esc to interrupt)")
+	if got != IdleStateWaiting {
+		t.Errorf("text-pattern transition at 200ms (< 500ms DebounceDelay): got %v, want IdleStateWaiting (blocked)", got)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_BumpsLastActivity(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	before := detector.GetLastActivityNs()
+	advance(1 * time.Second)
+	detector.DetectStateFromContentWithOSC("$ ", dtypes.OSCStatusExecuting)
+	after := detector.GetLastActivityNs()
+
+	if after <= before {
+		t.Errorf("GetLastActivityNs() did not advance: before=%d after=%d", before, after)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_NoneMatchesPlainDetectStateFromContent(t *testing.T) {
+	t.Parallel()
+	content := "Running... (esc to interrupt)"
+
+	bufferA := &mockPTYReader{}
+	detectorA, _ := newDetectorWithFakeClock("test", bufferA, DefaultIdleDetectorConfig())
+	wantState := detectorA.DetectStateFromContent(content)
+
+	bufferB := &mockPTYReader{}
+	detectorB, _ := newDetectorWithFakeClock("test", bufferB, DefaultIdleDetectorConfig())
+	gotState := detectorB.DetectStateFromContentWithOSC(content, dtypes.OSCStatusNone)
+
+	if gotState != wantState {
+		t.Errorf("DetectStateFromContentWithOSC(_, OSCStatusNone) = %v, want %v (DetectStateFromContent result)", gotState, wantState)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_NonPromotableTextBlocksOverride(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, _ := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// "Do you want to proceed?" -> StatusNeedsApproval -> IdleStateWaiting,
+	// which is not in IsOSCExecutingPromotable's set — a stale/false OSC
+	// spinner must not force IdleStateActive over a state needing user
+	// attention (architecture-review.md BLOCKER 2 regression test).
+	got := detector.DetectStateFromContentWithOSC("Do you want to proceed?", dtypes.OSCStatusExecuting)
+	if got != IdleStateWaiting {
+		t.Errorf("OSCStatusExecuting over StatusNeedsApproval content: got %v, want IdleStateWaiting (not promoted)", got)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_RepeatedSameStatusDoesNotChurnClock(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	detector.DetectStateFromContentWithOSC("$ ", dtypes.OSCStatusExecuting) // first transition, commits
+	firstChange := detector.GetStateInfo().LastStateChange
+
+	advance(10 * time.Millisecond)
+	detector.DetectStateFromContentWithOSC("$ ", dtypes.OSCStatusExecuting) // same state, should not touch the clock
+	secondChange := detector.GetStateInfo().LastStateChange
+
+	if !secondChange.Equal(firstChange) {
+		t.Errorf("lastStateChange churned on repeated same-classification call: first=%v second=%v", firstChange, secondChange)
+	}
+}
+
+func TestIdleDetector_DetectStateFromContentWithOSC_IdleNeverDowngradesActive(t *testing.T) {
+	t.Parallel()
+	buffer := &mockPTYReader{}
+	detector, _ := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
+
+	// "Running... (esc to interrupt)" -> StatusExecuting -> IdleStateActive,
+	// which is not in IsOSCIdlePromotable's set — a stale/nested OSC idle
+	// marker must never downgrade a genuinely active session.
+	got := detector.DetectStateFromContentWithOSC("Running... (esc to interrupt)", dtypes.OSCStatusIdle)
+	if got != IdleStateActive {
+		t.Errorf("OSCStatusIdle over StatusExecuting content: got %v, want IdleStateActive (not downgraded)", got)
+	}
 }

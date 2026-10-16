@@ -45,6 +45,9 @@ type HeadlessTriageResult struct {
 	// sets them after parsing, from server-tracked state, before persisting.
 	Iteration int    `json:"iteration,omitempty"`
 	Feedback  string `json:"feedback,omitempty"`
+	// InputHash fingerprints the item content this result was produced for; automatic
+	// retriage of unchanged content is skipped against it (server/services triage skip policy).
+	InputHash string `json:"input_hash,omitempty"`
 }
 
 // maxHeadlessTriageTasks caps the task list to keep the checklist scannable.
@@ -58,7 +61,7 @@ func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath string) st
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 	if item.AcceptanceCriteria != "" {
 		criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
@@ -120,7 +123,7 @@ func BuildHeadlessRetriagePrompt(item *BacklogItemData, artifactAbsPath string, 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
 	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 
 	sb.WriteString("## Prior triage result (iteration ")
@@ -166,6 +169,23 @@ after):
 `, feedback, artifactAbsPath, artifactAbsPath, researchDir)
 
 	return sb.String()
+}
+
+// BuildHeadlessChatRetriagePrompt wraps BuildHeadlessRetriagePrompt with an
+// instruction to ask at most one clarifying question per turn — used for
+// chat-originated refinement (CreateBacklogItemFromChat's existing_item_id
+// path), where a tightened one-question-at-a-time round trip is expected
+// instead of a batch dump of questions.
+func BuildHeadlessChatRetriagePrompt(item *BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
+	base := BuildHeadlessRetriagePrompt(item, artifactAbsPath, prior, feedback)
+	return base + `
+
+## Chat mode
+This is a live back-and-forth chat conversation, not a batch review. If you
+have any open questions, include AT MOST ONE in suggestions (rationale=
+"question") — never more than one question in a single response. Save any
+other questions for a later turn.
+`
 }
 
 // extractTopLevelJSONObjects returns every complete JSON object found in raw, in

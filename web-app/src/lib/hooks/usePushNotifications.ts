@@ -28,6 +28,31 @@ interface UsePushNotificationsOptions {
   onNotification?: (notification: { title: string; body: string; data?: unknown }) => void;
 }
 
+/** Message the push service worker posts to an open window on `notificationclick` (Story 5.5). */
+export const NOTIFICATION_CLICK_MESSAGE = "notification-click";
+
+/** In-app target of a service-worker click message, or null when it is not one or is not a same-origin path. */
+export function notificationClickTarget(data: unknown): string | null {
+  const msg = data as { type?: unknown; url?: unknown } | null;
+  if (!msg || msg.type !== NOTIFICATION_CLICK_MESSAGE || typeof msg.url !== "string") return null;
+  const url = msg.url;
+  return url.startsWith("/") && !url.startsWith("//") ? url : null;
+}
+
+/** Routes a push click handed off by the service worker through the router, so the page is not reloaded. */
+export function usePushClickHandoff(navigate: (url: string) => void) {
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const sw = navigator.serviceWorker;
+    const onMessage = (event: MessageEvent) => {
+      const target = notificationClickTarget(event.data);
+      if (target) navigate(target);
+    };
+    sw.addEventListener("message", onMessage);
+    return () => sw.removeEventListener("message", onMessage);
+  }, [navigate]);
+}
+
 export function usePushNotifications({ onNotification }: UsePushNotificationsOptions = {}) {
   const [isSupported, setIsSupported] = useState(false);
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);

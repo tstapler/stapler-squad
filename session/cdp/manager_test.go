@@ -193,6 +193,7 @@ func TestSetStateChangeCallback_DoesNotPanic(t *testing.T) {
 // behaviour: calling CheckDependencies() multiple times must return the same
 // Available/ChromePath values (sync.Once is used internally).
 func TestCheckDependencies_ReturnsSameResultOnRepeatedCalls(t *testing.T) {
+	t.Parallel()
 	// Call many times — none should panic and all must return identical values.
 	results := make([]DepsResult, 5)
 	for i := range results {
@@ -214,6 +215,7 @@ func TestCheckDependencies_ReturnsSameResultOnRepeatedCalls(t *testing.T) {
 // TestNoopManager_FullInterface exercises every method on the noop manager to
 // confirm all interface methods are implemented and safe to call.
 func TestNoopManager_FullInterface(t *testing.T) {
+	t.Parallel()
 	mgr := New(CDPConfig{SessionID: "noop-test", ChromePath: ""})
 
 	if err := mgr.Allocate(); err != nil {

@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package session.v1;
+
+// ImportService manages import of externally-created (unmanaged) agent
+// sessions -- e.g. ssq-mux-wrapped Claude processes discovered outside
+// Stapler Squad's own session tracking -- into managed Stapler Squad
+// sessions.
+//
+// Two-phase command pattern (ADR-001): Preview (side-effect-free) -> Commit
+// (persists a managed Instance, starts a resumed session, and SIGSTOPs the
+// original process to prevent two writers touching the same Claude JSONL
+// transcript) -> a separate, explicitly user-issued ConfirmKill or
+// CancelPendingKill to resolve the SIGSTOP'd original process left behind
+// by Commit. Kill confirmation is never bundled into Commit's response --
+// it is always a distinct, separately-issued action.
+//
+// All three RPCs are gated behind the STAPLER_SQUAD_ENABLE_SESSION_IMPORT
+// feature flag (Story 1.3.2) and return CodeUnimplemented when disabled.
+service ImportService {
+  // PreviewImportExternalSession runs correlation against a candidate and
+  // reports what an import WOULD do, without any side effects (no process
+  // signaling, no persistence).
+  rpc PreviewImportExternalSession(PreviewImportExternalSessionRequest) returns (PreviewImportExternalSessionResponse) {}
+
+  // CommitImportExternalSession persists a managed Instance for the
+  // candidate, starts a resumed session, and SIGSTOPs the original process.
+  rpc CommitImportExternalSession(CommitImportExternalSessionRequest) returns (CommitImportExternalSessionResponse) {}
+
+  // ConfirmKillExternalSession terminates the original (SIGSTOP'd) process
+  // after the user has verified the imported session looks correct.
+  rpc ConfirmKillExternalSession(ConfirmKillExternalSessionRequest) returns (ConfirmKillExternalSessionResponse) {}
+
+  // CancelPendingKill abandons an in-progress import: deletes the newly
+  // committed managed Instance, then SIGCONTs the original process so it
+  // resumes exactly as if the import had never happened.
+  rpc CancelPendingKill(CancelPendingKillRequest) returns (CancelPendingKillResponse) {}
+}
+
+// PIDIdentity pins a process identity to a specific PID + creation time so
+// that ProcessInspector.IsAlive can detect PID reuse before signaling.
+// Minted once at preview time (from the original process) and threaded
+// verbatim through the commit request. The commit response mints a FRESH
+// PIDIdentity (re-read from the still-suspended original process) for use
+// by the subsequent ConfirmKillExternalSession/CancelPendingKill call,
+// since more time elapses between commit and kill than between preview and
+// commit.
+message PIDIdentity {
+  int32 pid = 1;
+  int64 create_time_ms = 2;
+}
+
+// ImportSourceKind mirrors session.ImportSourceKind.
+enum ImportSourceKind {
+  IMPORT_SOURCE_KIND_UNSPECIFIED = 0;
+  IMPORT_SOURCE_KIND_MUX_DISCOVERED = 1;
+  IMPORT_SOURCE_KIND_PLAIN_TMUX = 2;
+}
+
+// ExternalSessionCandidateRef identifies the discovered, unmanaged
+// candidate a preview/commit call refers to. The client round-trips this
+// verbatim from whatever discovery list surfaced it.
+message ExternalSessionCandidateRef {
+  ImportSourceKind source_kind = 1;
+  string path = 2;
+  string program = 3;
+  int32 pid = 4;
+  string tmux_session = 5;
+  // socket_path is empty for PLAIN_TMUX candidates.
+  string socket_path = 6;
+}
+
+// CorrelationKind mirrors session.CorrelationKind. Ambiguous and NotFound
+// are valid, non-error outcomes and must never be silently collapsed.
+enum CorrelationKind {
+  CORRELATION_KIND_UNSPECIFIED = 0;
+  CORRELATION_KIND_NOT_FOUND = 1;
+  CORRELATION_KIND_RESOLVED = 2;
+  CORRELATION_KIND_AMBIGUOUS = 3;
+}
+
+// CorrelationConfidence mirrors session.CorrelationConfidence.
+enum CorrelationConfidence {
+  CORRELATION_CONFIDENCE_UNSPECIFIED = 0;
+  CORRELATION_CONFIDENCE_NONE = 1;
+  CORRELATION_CONFIDENCE_PID_EXACT = 2;
+  CORRELATION_CONFIDENCE_PATH_HEURISTIC = 3;
+}
+
+// HistoryFileCandidate mirrors session.HistoryFileInfo, surfaced to the
+// client when CorrelationResult.kind == AMBIGUOUS so the user can pick one.
+message HistoryFileCandidate {
+  string conversation_uuid = 1;
+  string history_file_path = 2;
+  string project_dir = 3;
+}
+
+// CorrelationResultProto mirrors session.CorrelationResult.
+message CorrelationResultProto {
+  CorrelationKind kind = 1;
+  string uuid = 2;
+  CorrelationConfidence confidence = 3;
+  // candidates is populated only when kind == AMBIGUOUS.
+  repeated HistoryFileCandidate candidates = 4;
+}
+
+message PreviewImportExternalSessionRequest {
+  ExternalSessionCandidateRef candidate = 1;
+}
+
+message PreviewImportExternalSessionResponse {
+  string program = 1;
+  string path = 2;
+  CorrelationResultProto correlation = 3;
+  // turn_count and last_message_excerpt are populated only when
+  // correlation.kind == RESOLVED (a single history file could be read).
+  int32 turn_count = 4;
+  string last_message_excerpt = 5;
+  // pid_identity is populated only when candidate.pid > 0 and the process
+  // is currently alive; the client must echo it verbatim in the commit
+  // request.
+  PIDIdentity pid_identity = 6;
+}
+
+message CommitImportExternalSessionRequest {
+  ExternalSessionCandidateRef candidate = 1;
+  // expected_correlation is exactly what PreviewImportExternalSession
+  // returned. Commit re-runs correlation fresh and aborts with
+  // FAILED_PRECONDITION if the fresh result disagrees (correlation drift).
+  CorrelationResultProto expected_correlation = 2;
+  // disambiguation_choice selects one of expected_correlation.candidates by
+  // conversation_uuid when expected_correlation.kind == AMBIGUOUS. Must be
+  // empty when kind == RESOLVED.
+  string disambiguation_choice = 3;
+  PIDIdentity pid_identity = 4;
+}
+
+enum ImportStatus {
+  IMPORT_STATUS_UNSPECIFIED = 0;
+  IMPORT_STATUS_COMMITTED = 1;
+  IMPORT_STATUS_FAILED = 2;
+}
+
+message CommitImportExternalSessionResponse {
+  ImportStatus status = 1;
+  string instance_id = 2;
+  string error = 3;
+  // pid_identity echoes a freshly re-read identity of the original,
+  // now-SIGSTOP'd process for use by a subsequent
+  // ConfirmKillExternalSession/CancelPendingKill call. Absent when status
+  // == FAILED.
+  PIDIdentity pid_identity = 4;
+}
+
+message ConfirmKillExternalSessionRequest {
+  string instance_id = 1;
+  PIDIdentity pid_identity = 2;
+}
+
+enum KillStatus {
+  KILL_STATUS_UNSPECIFIED = 0;
+  KILL_STATUS_KILLED = 1;
+  // already_gone means IsAlive re-verification failed (PID reused or
+  // process already exited) -- no signal was sent.
+  KILL_STATUS_ALREADY_GONE = 2;
+  // failed means the kill primitive (tmux kill-session) itself failed; the
+  // original process is left SIGSTOP'd, never auto-resumed.
+  KILL_STATUS_FAILED = 3;
+}
+
+message ConfirmKillExternalSessionResponse {
+  KillStatus status = 1;
+  string error = 2;
+}
+
+message CancelPendingKillRequest {
+  string instance_id = 1;
+  PIDIdentity pid_identity = 2;
+}
+
+message CancelPendingKillResponse {
+  // resumed is true only if the compensating delete of instance_id
+  // succeeded AND the original process was SIGCONT'd. If the compensating
+  // delete fails, resumed is false and the original process is left
+  // SIGSTOP'd -- ResumeOriginalProcess is never called in that case.
+  bool resumed = 1;
+  string error = 2;
+}

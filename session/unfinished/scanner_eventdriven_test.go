@@ -21,6 +21,7 @@ import (
 // ---- nil-safe fallback (fsnotify unavailable) -----------------------------
 
 func TestScanner_AddRepoRemoveRepo_should_notPanic_When_FsWatcherNil(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	require.Nil(t, s.fsWatcher)
 
@@ -41,6 +42,7 @@ func newRepoWithGitDir(t *testing.T) string {
 }
 
 func TestScanner_watchRepo_should_registerGitDirWithWatcher_When_FsWatcherPresent(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -54,6 +56,7 @@ func TestScanner_watchRepo_should_registerGitDirWithWatcher_When_FsWatcherPresen
 }
 
 func TestScanner_unwatchRepo_should_removeGitDirFromWatcher_When_Called(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -69,6 +72,7 @@ func TestScanner_unwatchRepo_should_removeGitDirFromWatcher_When_Called(t *testi
 }
 
 func TestScanner_AddRepo_should_registerFsnotifyWatch_When_FsWatcherPresent(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -84,6 +88,7 @@ func TestScanner_AddRepo_should_registerFsnotifyWatch_When_FsWatcherPresent(t *t
 // ---- end-to-end: a real .git write triggers a targeted rescan -------------
 
 func TestScanner_fsnotifyLoop_should_enqueueTargetedRescan_When_GitDirFileWritten(t *testing.T) {
+	t.Parallel()
 	w, err := fsnotify.NewWatcher()
 	require.NoError(t, err)
 
@@ -174,6 +179,7 @@ func TestEnqueueRepo_should_clearWarningFlag_When_PressureSubsides(t *testing.T)
 // repo auto-spidered from a session must stop being watched once that
 // session is deleted and nothing else still points at the same repo root.
 func TestScanner_forgetSessionRepo_should_removeRepo_When_NoOtherSessionReferencesIt(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	s.sessionRepos.Store("session-uuid-1", "/repo/a")
 	s.repoSet.Store("/repo/a", true)
@@ -191,6 +197,7 @@ func TestScanner_forgetSessionRepo_should_removeRepo_When_NoOtherSessionReferenc
 // in the same project) don't have scanning cut out from under the surviving
 // one when only one of them is deleted.
 func TestScanner_forgetSessionRepo_should_keepRepo_When_AnotherSessionStillReferencesIt(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	s.sessionRepos.Store("session-uuid-1", "/repo/shared")
 	s.sessionRepos.Store("session-uuid-2", "/repo/shared")
@@ -209,6 +216,7 @@ func TestScanner_forgetSessionRepo_should_keepRepo_When_AnotherSessionStillRefer
 // was disabled, or it's a pinned repo with no session at all) doesn't panic
 // or otherwise misbehave.
 func TestScanner_forgetSessionRepo_should_beNoOp_When_SessionNeverTracked(t *testing.T) {
+	t.Parallel()
 	s := &Scanner{scanQueue: make(chan scanTask, 50)}
 	assert.NotPanics(t, func() {
 		s.forgetSessionRepo("never-seen-uuid")
@@ -223,6 +231,7 @@ func TestScanner_forgetSessionRepo_should_beNoOp_When_SessionNeverTracked(t *tes
 // subscribeToSessionEvents and remove the repo, exactly mirroring how
 // EventSessionCreated already adds one.
 func TestScanner_subscribeToSessionEvents_should_removeRepo_When_SessionDeletedEventReceived(t *testing.T) {
+	t.Parallel()
 	bus := pkgevents.NewEventBus(4)
 	s := &Scanner{scanQueue: make(chan scanTask, 50), eventBus: bus}
 	s.autoSpiderEnabled.Store(true)
@@ -309,9 +318,111 @@ func TestScanner_pruneMissingRepos_should_keepRepo_When_PathStillExists(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	go s.pruneMissingRepos(ctx)
 
-	time.Sleep(50 * time.Millisecond) // let a few ticks fire
+	// A few 10ms prune ticks fire during this window; the repo must stay tracked throughout.
+	require.Never(t, func() bool {
+		_, tracked := s.repoSet.Load(repoPath)
+		return !tracked
+	}, 50*time.Millisecond, 5*time.Millisecond, "an existing repo must survive prune ticks")
 	cancel()
+}
 
-	_, stillTracked := s.repoSet.Load(repoPath)
-	assert.True(t, stillTracked, "an existing repo must survive prune ticks")
+// ---- .git event filtering, scoping and debouncing --------------------------
+
+func TestClassifyGitEvent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		wantScope    gitEventScope
+		wantRelevant bool
+	}{
+		{"index.lock", gitEventRepoRoot, false},
+		{"HEAD.lock", gitEventRepoRoot, false},
+		{"config.lock", gitEventRepoRoot, false},
+		{"packed-refs.lock", gitEventRepoRoot, false},
+		{"next-index-72027.lock", gitEventRepoRoot, false},
+		{".watchman-cookie-host-1-2", gitEventRepoRoot, false},
+		{"index", gitEventRepoRoot, true},
+		{"config", gitEventRepoRoot, true},
+		{"MERGE_RR", gitEventRepoRoot, true},
+		{"HEAD", gitEventAllWorktrees, true},
+		{"COMMIT_EDITMSG", gitEventAllWorktrees, true},
+		{"FETCH_HEAD", gitEventAllWorktrees, true},
+		{"packed-refs", gitEventAllWorktrees, true},
+	}
+	for _, tt := range tests {
+		scope, relevant := classifyGitEvent(tt.name)
+		assert.Equal(t, tt.wantRelevant, relevant, tt.name)
+		if tt.wantRelevant {
+			assert.Equal(t, tt.wantScope, scope, tt.name)
+		}
+	}
+}
+
+func newScannerWithFreshWorktrees(repo string, worktrees ...string) *Scanner {
+	s := &Scanner{scanQueue: make(chan scanTask, 50)}
+	for _, wt := range worktrees {
+		s.cacheStore.Store(wt, &worktreeCache{ttl: time.Hour})
+		s.indexRepoWorktree(repo, wt)
+		c, _ := s.cacheStore.Load(wt)
+		c.(*worktreeCache).Set(ScanResult{WorktreePath: wt})
+	}
+	return s
+}
+
+func freshWorktrees(s *Scanner, worktrees ...string) []bool {
+	out := make([]bool, len(worktrees))
+	for i, wt := range worktrees {
+		c, _ := s.cacheStore.Load(wt)
+		_, out[i] = c.(*worktreeCache).Get()
+	}
+	return out
+}
+
+func TestScanner_scheduleGitEvent_should_scopeInvalidation_ByEventKind(t *testing.T) {
+	t.Parallel()
+	repo, linked := "/r/repo", "/r/linked"
+	s := newScannerWithFreshWorktrees(repo, repo, linked)
+
+	s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot)
+	assert.Equal(t, []bool{false, true}, freshWorktrees(s, repo, linked), "index-style event must leave linked worktrees cached")
+
+	s.scheduleGitEvent(context.Background(), repo, gitEventAllWorktrees)
+	assert.Equal(t, []bool{false, false}, freshWorktrees(s, repo, linked), "HEAD/FETCH_HEAD-style event invalidates every worktree")
+}
+
+func TestScanner_scheduleGitEvent_should_coalesceBurst_When_DebounceSet(t *testing.T) {
+	t.Parallel()
+	repo := "/r/repo"
+	s := newScannerWithFreshWorktrees(repo, repo)
+	s.fsDebounce = time.Hour // never fires: assert only the coalescing state
+
+	for i := 0; i < 10; i++ {
+		s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot)
+	}
+	s.scheduleGitEvent(context.Background(), repo, gitEventAllWorktrees)
+
+	assert.Equal(t, []bool{true}, freshWorktrees(s, repo), "nothing is invalidated before the debounce elapses")
+	assert.Empty(t, s.scanQueue)
+	s.fsMu.Lock()
+	widest, armed := s.fsPending[repo]
+	s.fsMu.Unlock()
+	require.True(t, armed)
+	assert.Equal(t, gitEventAllWorktrees, widest, "burst keeps the widest scope")
+}
+
+func TestScanner_scheduleGitEvent_should_flushOnce_When_DebounceElapses(t *testing.T) {
+	t.Parallel()
+	repo := "/r/repo"
+	s := newScannerWithFreshWorktrees(repo, repo)
+	s.fsDebounce = 5 * time.Millisecond
+
+	s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot)
+
+	err := wait.WaitForCondition(func() bool { return len(s.scanQueue) == 1 }, wait.FastWaitConfig())
+	require.NoError(t, err, "expected exactly one rescan after the debounce")
+	assert.Equal(t, []bool{false}, freshWorktrees(s, repo))
+	s.fsMu.Lock()
+	_, pending := s.fsPending[repo]
+	s.fsMu.Unlock()
+	assert.False(t, pending, "pending marker must clear so the next burst re-arms")
 }

@@ -206,18 +206,6 @@ func (o ContextOptions) ToLoadOptions() LoadOptions {
 	}
 }
 
-// FromLoadOptions creates ContextOptions from the legacy LoadOptions type.
-// This provides backward compatibility when migrating existing code.
-func FromLoadOptions(lo LoadOptions) ContextOptions {
-	return ContextOptions{
-		LoadWorktree:      lo.LoadWorktree,
-		LoadDiffStats:     lo.LoadDiffStats,
-		LoadDiffContent:   lo.LoadDiffContent,
-		LoadTags:          lo.LoadTags,
-		LoadClaudeSession: lo.LoadClaudeSession,
-	}
-}
-
 // Builder methods for fluent configuration
 
 // WithGit returns a copy of options with git context loading enabled.

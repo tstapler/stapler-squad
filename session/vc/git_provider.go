@@ -2,14 +2,14 @@ package vc
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os/exec"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
 type branchCacheEntry struct {
@@ -48,62 +48,73 @@ func (g *GitProvider) WorkDir() string {
 	return g.workDir
 }
 
-// runGit executes a git command and returns the output
-func (g *GitProvider) runGit(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", append([]string{"-C", g.repoRoot}, args...)...)
-	output, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), string(exitErr.Stderr))
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
+const gitCallTimeout = 30 * time.Second
+
+// loc is the repository this provider operates on.
+func (g *GitProvider) loc() backend.RepoLocation {
+	return backend.Local{Root: backend.RepoRoot(g.repoRoot)}
 }
 
+// gitCtx bounds one backend call.
+func gitCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), gitCallTimeout)
+}
+
+// shortHashLen is how many leading hex characters of a full commit OID are
+// shown as the "short" SHA in status/display output -- a fixed prefix rather
+// than git's own core.abbrev=auto disambiguation, acceptable since
+// HeadCommit is display-only, never used to look up objects.
+const shortHashLen = 7
+
+// truncateHash returns oid's leading shortHashLen characters, or oid
+// unchanged if it's already that short or shorter.
+func truncateHash(oid string) string {
+	if len(oid) > shortHashLen {
+		return oid[:shortHashLen]
+	}
+	return oid
+}
+
+// GetStatus reports the working tree's full status in 4 git spawns: one
+// `git status --branch`, one `git log` for the commit description, and the two
+// `git diff --numstat` calls GetChangedFiles already needs. Branch/HEAD/
+// upstream/ahead-behind come from the "# branch.*" header --branch adds to
+// porcelain v2 output (parsed by the backend into StatusResult) instead of
+// four separate branch/rev-parse/rev-list spawns -- each spawn takes the
+// runtime's global syscall.ForkLock, so this count directly drove measured
+// mutex contention under concurrent session polling.
 func (g *GitProvider) GetStatus() (*VCSStatus, error) {
 	status := &VCSStatus{
 		Type: VCSGit,
 	}
 
-	// Get branch name
-	branch, err := g.GetBranch()
-	if err == nil {
-		status.Branch = branch
-	}
-
-	// Get HEAD commit (short)
-	if head, err := g.runGit("rev-parse", "--short", "HEAD"); err == nil {
-		status.HeadCommit = head
-	}
-
-	// Get last commit message
-	if desc, err := g.runGit("log", "-1", "--format=%s"); err == nil {
-		status.Description = desc
-	}
-
-	// Get ahead/behind info
-	if branch != "" {
-		if output, err := g.runGit("rev-list", "--left-right", "--count", branch+"...@{upstream}"); err == nil {
-			parts := strings.Fields(output)
-			if len(parts) == 2 {
-				status.AheadBy, _ = strconv.Atoi(parts[0])
-				status.BehindBy, _ = strconv.Atoi(parts[1])
-			}
-		}
-		// Get upstream name
-		if upstream, err := g.runGit("rev-parse", "--abbrev-ref", branch+"@{upstream}"); err == nil {
-			status.Upstream = upstream
-		}
-	}
-
-	// Get changed files using porcelain v2 format
-	files, err := g.GetChangedFiles()
+	ctx, cancel := gitCtx()
+	defer cancel()
+	res, err := gitprovider.Backend().Status(ctx, g.loc(), backend.IntentDisplay)
 	if err != nil {
 		return status, err
 	}
+
+	if res.Branch == "" && !res.Detached && res.HeadOID == "" && !res.Unborn {
+		// --branch header missing or unparseable (unexpected git version/
+		// locale) -- fall back to GetBranch's own dedicated call rather than
+		// silently leaving status.Branch empty.
+		if branch, err := g.GetBranch(); err == nil {
+			status.Branch = branch
+		}
+	} else {
+		g.applyBranchHeader(status, res)
+	}
+
+	logCtx, logCancel := gitCtx()
+	defer logCancel()
+	if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
+		status.Description = entries[0].Subject
+	}
+
+	// Changed files come from the status result already fetched above --
+	// avoids a second `git status` spawn.
+	files := g.changedFilesFromStatus(res)
 
 	// Categorize files
 	for _, f := range files {
@@ -135,46 +146,66 @@ func (g *GitProvider) GetBranch() (string, error) {
 	if e := g.branchCache.Load(); e != nil && time.Now().UnixNano() < e.expiry {
 		return e.branch, nil
 	}
-	output, err := g.runGit("branch", "--show-current")
-	if err != nil {
-		// Might be in detached HEAD state
-		if output, err := g.runGit("rev-parse", "--short", "HEAD"); err == nil {
-			return "(detached: " + output + ")", nil
-		}
+	ctx, cancel := gitCtx()
+	defer cancel()
+	// HeadRef (symbolic-ref) rather than CurrentBranch (rev-parse --abbrev-ref): the latter
+	// reports "heads/main" when a tag shares the branch's name and fails on an unborn repo.
+	ref, err := gitprovider.Backend().HeadRef(ctx, g.loc())
+	if err != nil && !errors.Is(err, backend.ErrDetachedHead) {
 		return "", err
 	}
-	if output == "" {
-		// Detached HEAD
-		if output, err := g.runGit("rev-parse", "--short", "HEAD"); err == nil {
-			output = "(detached: " + output + ")"
-			g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
-			return output, nil
+	name := strings.TrimPrefix(string(ref), "refs/heads/")
+	branch := name
+	if errors.Is(err, backend.ErrDetachedHead) {
+		// Full OID + truncateHash (not `rev-parse --short`) so this matches
+		// applyBranchHeader's fixed-length format exactly -- both write into
+		// the same branchCache, and a mismatched hash length between them
+		// would make the cached detached-HEAD label's length change depending
+		// on which call happened to populate the cache last.
+		sha, headErr := g.headSHA()
+		if headErr != nil {
+			return "", err
 		}
+		branch = "(detached: " + truncateHash(sha) + ")"
 	}
-	g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
-	return output, nil
+	g.branchCache.Store(&branchCacheEntry{branch, time.Now().Add(branchCacheTTL).UnixNano()})
+	return branch, nil
+}
+
+// headSHA resolves HEAD to a full commit OID through the git backend.
+func (g *GitProvider) headSHA() (string, error) {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	sha, err := gitprovider.Backend().ResolveRef(ctx, g.loc(), "HEAD")
+	return string(sha), err
 }
 
 // GetChangedFiles returns the current working-tree/index status as a flat
-// list of FileChange entries. It orchestrates three pure steps: run the
-// porcelain status + numstat git commands, parse the porcelain output
-// (parsePorcelainV2Z), then merge in per-file insertion/deletion counts
-// (mergeNumstat).
+// list of FileChange entries: the backend's parsed porcelain status, then
+// per-file insertion/deletion counts merged in (mergeNumstat).
 func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
-	// Use porcelain v2 with NUL-delimited (-z) records. Without -z, git only
-	// quotes paths containing "unusual" characters — a plain-ASCII filename
-	// with a literal space is emitted unquoted, which makes any
-	// space-splitting parse ambiguous. With -z, records are NUL-separated and
-	// the path is never itself split, so paths (and rename origPaths)
-	// containing spaces parse correctly. See parsePorcelainV2Z for the
-	// record layout.
-	output, err := g.runGit("status", "--porcelain=v2", "-z", "--untracked-files=all")
+	ctx, cancel := gitCtx()
+	defer cancel()
+	res, err := gitprovider.Backend().Status(ctx, g.loc(), backend.IntentDisplay)
 	if err != nil {
 		return nil, err
 	}
+	return g.changedFilesFromStatus(res), nil
+}
 
-	if output == "" {
-		return nil, nil
+// changedFilesFromStatus converts an already-fetched StatusResult into
+// FileChange entries with numstat counts merged in. Split out from
+// GetChangedFiles so GetStatus can reuse the single status call it already
+// made instead of running `git status` a second time.
+//
+// Numstat is skipped entirely when there are no changed files: with --branch
+// the status output always carries header lines, so only the parsed file
+// list says whether the repo is clean -- otherwise both `git diff --numstat`
+// calls would run unconditionally on every clean-repo poll.
+func (g *GitProvider) changedFilesFromStatus(res backend.StatusResult) []FileChange {
+	files := fileChangesFromStatus(res)
+	if len(files) == 0 {
+		return nil
 	}
 
 	// Best-effort per-file insertion/deletion counts. A numstat failure (e.g. no
@@ -187,131 +218,70 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 		stagedStats = stats
 	}
 
-	files := parsePorcelainV2Z(output)
-	return mergeNumstat(files, unstagedStats, stagedStats), nil
+	return mergeNumstat(files, unstagedStats, stagedStats)
 }
 
-// parsePorcelainV2Z parses the NUL-delimited output of
-// `git status --porcelain=v2 -z --untracked-files=all` into a list of
-// FileChange entries. Additions/Deletions are left zero-valued — merging
-// numstat counts in is a separate step, see mergeNumstat.
-//
-// Record formats (fields within a record are space-separated up to a fixed
-// count; everything after that is the literal, unsplit path):
-//
-//	1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
-//	2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>
-//	u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
-//	? <path>
-//	! <path>
-//
-// With -z, records are NUL-separated instead of newline-separated. Rename
-// and copy ("2 ") records are followed by one extra NUL-delimited token
-// holding <origPath> — that token has no recognized record prefix of its
-// own, so the loop must consume it explicitly as part of the preceding "2 "
-// record rather than mistaking it for the next record.
-func parsePorcelainV2Z(output string) []FileChange {
-	tokens := strings.Split(output, "\x00")
-
-	var files []FileChange
-	for i := 0; i < len(tokens); i++ {
-		token := tokens[i]
-		if token == "" {
-			continue
-		}
-
-		switch {
-		case strings.HasPrefix(token, "? "):
-			files = append(files, FileChange{
-				Path:     token[2:],
-				Status:   FileUntracked,
-				IsStaged: false,
-			})
-
-		case strings.HasPrefix(token, "! "):
-			// Ignored files - skip
-
-		case strings.HasPrefix(token, "1 "), strings.HasPrefix(token, "2 "):
-			isRenameOrCopy := strings.HasPrefix(token, "2 ")
-
-			// Non-path fields before the path: "1"/"2", XY, sub, mH, mI, mW,
-			// hH, hI — 8 fields. Rename/copy records have one extra
-			// "<X><score>" field before the path.
-			fieldCount := 8
-			if isRenameOrCopy {
-				fieldCount = 9
-			}
-
-			// SplitN caps the number of pieces, so the final piece is
-			// whatever remains after the fixed fields — the literal path,
-			// spaces and all, with no further splitting.
-			parts := strings.SplitN(token, " ", fieldCount+1)
-			if len(parts) != fieldCount+1 {
-				continue
-			}
-
-			xy := parts[1] // XY status codes
-			path := parts[fieldCount]
-
-			var oldPath string
-			if isRenameOrCopy && i+1 < len(tokens) {
-				oldPath = tokens[i+1]
-				i++ // consume the origPath token — it is not its own record
-			}
-
-			// X = status in index (staged), Y = status in worktree (unstaged)
-			indexStatus := xy[0]
-			worktreeStatus := xy[1]
-
-			// Check for conflicts (unmerged entries)
-			if indexStatus == 'U' || worktreeStatus == 'U' ||
-				(indexStatus == 'A' && worktreeStatus == 'A') ||
-				(indexStatus == 'D' && worktreeStatus == 'D') {
-				files = append(files, FileChange{
-					Path:     path,
-					Status:   FileConflict,
-					IsStaged: false,
-					OldPath:  oldPath,
-				})
-				continue
-			}
-
-			// Add staged change if present
-			if indexStatus != '.' && indexStatus != ' ' {
-				files = append(files, FileChange{
-					Path:     path,
-					Status:   parseGitStatusChar(indexStatus),
-					IsStaged: true,
-					OldPath:  oldPath,
-				})
-			}
-
-			// Add unstaged change if present
-			if worktreeStatus != '.' && worktreeStatus != ' ' {
-				files = append(files, FileChange{
-					Path:     path,
-					Status:   parseGitStatusChar(worktreeStatus),
-					IsStaged: false,
-					OldPath:  oldPath,
-				})
-			}
-
-		case strings.HasPrefix(token, "u "):
-			// "u" <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path> — 11
-			// fields total; SplitN keeps the path unsplit even with spaces.
-			parts := strings.SplitN(token, " ", 11)
-			if len(parts) != 11 {
-				continue
-			}
-			files = append(files, FileChange{
-				Path:     parts[10],
-				Status:   FileConflict,
-				IsStaged: false,
-			})
-		}
+// applyBranchHeader fills status's branch/HEAD/upstream/ahead-behind fields
+// from the backend's parsed status header, and keeps GetBranch's cache warm
+// with the same result so a standalone GetBranch call after GetStatus is a
+// cache hit instead of another subprocess spawn.
+func (g *GitProvider) applyBranchHeader(status *VCSStatus, res backend.StatusResult) {
+	branch := string(res.Branch)
+	if res.Detached {
+		branch = "(detached: " + truncateHash(string(res.HeadOID)) + ")"
+	}
+	status.Branch = branch
+	if branch != "" {
+		g.branchCache.Store(&branchCacheEntry{branch, time.Now().Add(branchCacheTTL).UnixNano()})
 	}
 
+	if res.HeadOID != "" {
+		status.HeadCommit = truncateHash(string(res.HeadOID))
+	}
+
+	status.Upstream = string(res.Upstream)
+	status.AheadBy = res.Ahead
+	status.BehindBy = res.Behind
+}
+
+// fileChangesFromStatus maps the backend's parsed porcelain v2 records onto
+// FileChange entries. Additions/Deletions are left zero-valued -- merging
+// numstat counts in is a separate step, see mergeNumstat. A path with both an
+// index and a worktree change yields two entries (one staged, one not).
+func fileChangesFromStatus(res backend.StatusResult) []FileChange {
+	var files []FileChange
+	for _, f := range res.Files {
+		path := string(f.Path)
+		switch {
+		case f.Ignored:
+			// Ignored files - skip
+		case f.Untracked:
+			files = append(files, FileChange{Path: path, Status: FileUntracked, IsStaged: false})
+		case f.Unmerged || isConflictCode(f.Index, f.Worktree):
+			oldPath := string(f.OrigPath)
+			if f.Unmerged {
+				oldPath = "" // "u" records carry no original path
+			}
+			files = append(files, FileChange{Path: path, Status: FileConflict, IsStaged: false, OldPath: oldPath})
+		default:
+			oldPath := string(f.OrigPath)
+			// X = status in index (staged), Y = status in worktree (unstaged)
+			if f.Index != '.' && f.Index != ' ' {
+				files = append(files, FileChange{Path: path, Status: parseGitStatusChar(byte(f.Index)), IsStaged: true, OldPath: oldPath})
+			}
+			if f.Worktree != '.' && f.Worktree != ' ' {
+				files = append(files, FileChange{Path: path, Status: parseGitStatusChar(byte(f.Worktree)), IsStaged: false, OldPath: oldPath})
+			}
+		}
+	}
 	return files
+}
+
+// isConflictCode reports the unmerged XY pairs git can emit on a "1"/"2" record.
+func isConflictCode(index, worktree backend.StatusCode) bool {
+	return index == 'U' || worktree == 'U' ||
+		(index == 'A' && worktree == 'A') ||
+		(index == 'D' && worktree == 'D')
 }
 
 // mergeNumstat applies per-file insertion/deletion counts onto files,
@@ -340,67 +310,20 @@ type numstatEntry struct {
 }
 
 // getNumstat returns per-file insertion/deletion counts keyed by the file's
-// current (post-change) path. Pass cached=true for staged changes
-// (`git diff --numstat --cached`), false for unstaged (`git diff --numstat`).
-// Binary files report "-" for both counts, which are treated as 0.
-func (g *GitProvider) getNumstat(cached bool) (map[string]numstatEntry, error) {
-	args := []string{"diff", "--numstat"}
-	if cached {
-		args = append(args, "--cached")
-	}
-	output, err := g.runGit(args...)
+// current (post-change) path. Pass staged=true for staged changes, false for
+// unstaged. Binary files report no counts, which are treated as 0.
+func (g *GitProvider) getNumstat(staged bool) (map[string]numstatEntry, error) {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	rows, err := gitprovider.Backend().DiffNumstat(ctx, g.loc(), backend.DiffSpec{Staged: staged, Intent: backend.IntentDisplay})
 	if err != nil {
 		return nil, err
 	}
-
-	result := make(map[string]numstatEntry)
-	if output == "" {
-		return result, nil
+	result := make(map[string]numstatEntry, len(rows))
+	for _, r := range rows {
+		result[string(r.Path)] = numstatEntry{additions: r.Added, deletions: r.Deleted}
 	}
-
-	for _, line := range strings.Split(output, "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		added, err := strconv.Atoi(parts[0])
-		if err != nil {
-			added = 0 // binary files report "-"
-		}
-		removed, err := strconv.Atoi(parts[1])
-		if err != nil {
-			removed = 0
-		}
-		result[numstatPath(parts[2])] = numstatEntry{additions: added, deletions: removed}
-	}
-
 	return result, nil
-}
-
-// numstatPath extracts the current (post-change) path from a numstat path
-// field, which may be a plain path or a rename, reported either as
-// "old => new" or with a shared prefix/suffix factored out:
-// "common/{old => new}/tail".
-func numstatPath(raw string) string {
-	idx := strings.Index(raw, "=>")
-	if idx == -1 {
-		return strings.TrimSpace(raw)
-	}
-
-	before, after := raw[:idx], raw[idx+2:]
-	if braceStart := strings.LastIndex(before, "{"); braceStart != -1 {
-		if braceEnd := strings.Index(after, "}"); braceEnd != -1 {
-			prefix := before[:braceStart]
-			newSegment := strings.TrimSpace(after[:braceEnd])
-			suffix := after[braceEnd+1:]
-			return strings.TrimSpace(prefix + newSegment + suffix)
-		}
-	}
-
-	return strings.TrimSpace(after)
 }
 
 // parseGitStatusChar converts a git status character to FileStatus
@@ -427,88 +350,100 @@ func parseGitStatusChar(c byte) FileStatus {
 	}
 }
 
+// do runs one backend mutation under the provider's call timeout.
+func (g *GitProvider) do(op func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error) error {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	return op(ctx, gitprovider.Backend(), g.loc())
+}
+
 func (g *GitProvider) Stage(path string) error {
-	_, err := g.runGit("add", "--", path)
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Add(ctx, loc, backend.AddRequest{Paths: []backend.RepoPath{backend.RepoPath(path)}})
+	})
 }
 
 func (g *GitProvider) StageAll() error {
-	_, err := g.runGit("add", "-A")
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Add(ctx, loc, backend.AddRequest{All: true})
+	})
 }
 
 func (g *GitProvider) Unstage(path string) error {
-	_, err := g.runGit("restore", "--staged", "--", path)
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Restore(ctx, loc, backend.RestoreRequest{Paths: []backend.RepoPath{backend.RepoPath(path)}, Staged: true})
+	})
 }
 
 func (g *GitProvider) UnstageAll() error {
-	_, err := g.runGit("reset", "HEAD")
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Reset(ctx, loc, backend.ResetRequest{Mode: backend.ResetMixed})
+	})
 }
 
 func (g *GitProvider) Commit(message string) error {
-	_, err := g.runGit("commit", "-m", message)
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Commit(ctx, loc, backend.CommitRequest{Message: message})
+	})
 }
 
 func (g *GitProvider) AmendCommit(message string) error {
-	if message == "" {
-		_, err := g.runGit("commit", "--amend", "--no-edit")
-		return err
-	}
-	_, err := g.runGit("commit", "--amend", "-m", message)
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Commit(ctx, loc, backend.CommitRequest{Message: message, Amend: true})
+	})
 }
 
 func (g *GitProvider) Push() error {
-	_, err := g.runGit("push")
-	return err
+	return g.PushWithOptions(PushOptions{})
 }
 
 func (g *GitProvider) PushWithOptions(opts PushOptions) error {
-	args := []string{"push"}
-
-	if opts.Force {
-		args = append(args, "--force")
-	}
-	if opts.SetUpstream {
-		args = append(args, "--set-upstream")
-	}
-	if opts.Remote != "" {
-		args = append(args, opts.Remote)
-	}
-	if opts.Branch != "" {
-		args = append(args, opts.Branch)
-	}
-
-	_, err := g.runGit(args...)
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Push(ctx, loc, backend.PushRequest{
+			Remote:      backend.RemoteName(opts.Remote),
+			Branch:      backend.BranchName(opts.Branch),
+			SetUpstream: opts.SetUpstream,
+			Force:       opts.Force,
+		})
+	})
 }
 
 func (g *GitProvider) Pull() error {
-	_, err := g.runGit("pull")
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Pull(ctx, loc, backend.PullRequest{})
+	})
 }
 
 func (g *GitProvider) Fetch() error {
-	_, err := g.runGit("fetch")
-	return err
+	return g.do(func(ctx context.Context, b backend.Backend, loc backend.RepoLocation) error {
+		return b.Fetch(ctx, loc, backend.FetchRequest{})
+	})
+}
+
+// diffText returns a diff trimmed of surrounding whitespace, as the raw
+// `git diff` runner this replaced did.
+func (g *GitProvider) diffText(spec backend.DiffSpec) (string, error) {
+	ctx, cancel := gitCtx()
+	defer cancel()
+	spec.Intent = backend.IntentDisplay
+	out, err := gitprovider.Backend().Diff(ctx, g.loc(), spec)
+	return strings.TrimSpace(out), err
 }
 
 func (g *GitProvider) GetFileDiff(path string) (string, error) {
+	paths := []backend.RepoPath{backend.RepoPath(path)}
 	// Try staged first, then unstaged
-	output, err := g.runGit("diff", "--cached", "--", path)
+	output, err := g.diffText(backend.DiffSpec{Staged: true, Paths: paths})
 	if err == nil && output != "" {
 		return output, nil
 	}
-	return g.runGit("diff", "--", path)
+	return g.diffText(backend.DiffSpec{Paths: paths})
 }
 
 func (g *GitProvider) GetDiff() (string, error) {
 	// Get both staged and unstaged changes
-	staged, _ := g.runGit("diff", "--cached")
-	unstaged, _ := g.runGit("diff")
+	staged, _ := g.diffText(backend.DiffSpec{Staged: true})
+	unstaged, _ := g.diffText(backend.DiffSpec{})
 
 	if staged != "" && unstaged != "" {
 		return staged + "\n" + unstaged, nil

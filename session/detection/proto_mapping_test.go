@@ -13,6 +13,7 @@ import (
 // one (e.g. swapping two semantically adjacent statuses like NeedsApproval and
 // InputRequired). This table pins down the full value-by-value correspondence.
 func TestDetectedStatusToProto(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   DetectedStatus
@@ -29,6 +30,7 @@ func TestDetectedStatusToProto(t *testing.T) {
 		{"StatusExecuting", StatusExecuting, sessionv1.DetectedStatus_DETECTED_STATUS_EXECUTING},
 		{"StatusSuccess", StatusSuccess, sessionv1.DetectedStatus_DETECTED_STATUS_SUCCESS},
 		{"StatusWaitingForAgent", StatusWaitingForAgent, sessionv1.DetectedStatus_DETECTED_STATUS_WAITING_FOR_AGENT},
+		{"StatusCompacting", StatusCompacting, sessionv1.DetectedStatus_DETECTED_STATUS_COMPACTING},
 	}
 
 	for _, tt := range tests {
@@ -46,6 +48,7 @@ func TestDetectedStatusToProto(t *testing.T) {
 // switch's default branch, rather than panicking or silently aliasing to a
 // semantically meaningful status.
 func TestDetectedStatusToProto_OutOfRangeValue(t *testing.T) {
+	t.Parallel()
 	got := DetectedStatusToProto(DetectedStatus(999))
 	want := sessionv1.DetectedStatus_DETECTED_STATUS_UNSPECIFIED
 	if got != want {
@@ -60,6 +63,7 @@ func TestDetectedStatusToProto_OutOfRangeValue(t *testing.T) {
 // both now call this function instead of reimplementing the switch. Exercising all
 // DetectedStatus values here guards against the two call sites drifting apart again.
 func TestDetectedStatusToSubStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   DetectedStatus
@@ -76,6 +80,7 @@ func TestDetectedStatusToSubStatus(t *testing.T) {
 		{"StatusExecuting", StatusExecuting, sessionv1.SubStatus_SUB_STATUS_PROCESSING},
 		{"StatusSuccess", StatusSuccess, sessionv1.SubStatus_SUB_STATUS_SUCCESS},
 		{"StatusWaitingForAgent", StatusWaitingForAgent, sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT},
+		{"StatusCompacting", StatusCompacting, sessionv1.SubStatus_SUB_STATUS_COMPACTING},
 	}
 
 	for _, tt := range tests {
@@ -92,6 +97,7 @@ func TestDetectedStatusToSubStatus(t *testing.T) {
 // outside the defined const set falls back to SUB_STATUS_UNSPECIFIED via the switch's
 // default branch, rather than panicking or silently aliasing to a meaningful status.
 func TestDetectedStatusToSubStatus_OutOfRangeValue(t *testing.T) {
+	t.Parallel()
 	got := DetectedStatusToSubStatus(DetectedStatus(999))
 	want := sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	if got != want {

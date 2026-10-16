@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func Test_parsePluginFile(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		data    string
@@ -135,6 +135,7 @@ id =
 }
 
 func Test_statusField(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		status string
 		get    func(*dtypes.StatusPatterns) *[]dtypes.StatusPattern
@@ -178,6 +179,7 @@ func Test_statusField(t *testing.T) {
 }
 
 func Test_toStatusPatterns(t *testing.T) {
+	t.Parallel()
 	t.Run("toStatusPatterns_should_preserveDeclarationOrder_When_multiplePatternsShareACategory", func(t *testing.T) {
 		pf := &pluginFile{
 			ID:          "my-agent",
@@ -239,6 +241,7 @@ func findErrByField(errs []PluginLoadError, field string) (PluginLoadError, bool
 }
 
 func Test_validatePluginFile(t *testing.T) {
+	t.Parallel()
 	t.Run("validatePluginFile_should_returnFieldId_When_idIsMissing", func(t *testing.T) {
 		pf := &pluginFile{
 			BinaryNames: []string{"my-agent"},
@@ -461,6 +464,7 @@ status = "processing"
 }
 
 func Test_LoadPluginDir(t *testing.T) {
+	t.Parallel()
 	t.Run("LoadPluginDir_should_returnDetectorAndSkipInvalid_When_directoryHasValidAndInvalidFiles", func(t *testing.T) {
 		dir := t.TempDir()
 		writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
@@ -846,7 +850,7 @@ func resetInitPluginsForTest(t *testing.T) {
 }
 
 func Test_InitPlugins(t *testing.T) {
-	builtinNames := []string{"claude", "gemini", "aider", "opencode", "agy"}
+	builtinNames := []string{"claude", "gemini", "aider", "opencode", "agy", "pi"}
 
 	t.Run("InitPlugins_should_bootstrapLoadAndStartWatcher_When_noPluginDirExistsYet", func(t *testing.T) {
 		resetInitPluginsForTest(t)
@@ -880,7 +884,7 @@ func Test_InitPlugins(t *testing.T) {
 		// file after InitPlugins returned and confirming it hot-reloads
 		// without a restart.
 		writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			_, ok := DetectorProvenance()["my-agent"]
 			return ok
 		}, eventuallyTimeout, eventuallyPoll, "watcher started by InitPlugins() did not pick up a new plugin file")
@@ -980,7 +984,7 @@ func Test_InitPlugins(t *testing.T) {
 		// dropped there is still picked up live.
 		firstDetectorsDir := filepath.Join(firstDir, "detectors")
 		writePluginFile(t, firstDetectorsDir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
-		require.Eventually(t, func() bool {
+		wait.RequireEventually(t, func() bool {
 			_, ok := DetectorProvenance()["my-agent"]
 			return ok
 		}, eventuallyTimeout, eventuallyPoll, "the original watcher from the first InitPlugins() call is no longer running after a second InitPlugins() call")

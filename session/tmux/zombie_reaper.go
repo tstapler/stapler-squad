@@ -4,6 +4,7 @@ package tmux
 
 import (
 	"context"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -18,8 +19,14 @@ import (
 //
 // Recommended interval: 60s (half the watcher period is plenty; slower means
 // fewer interference opportunities with in-flight cmd.Wait calls).
-func StartZombieReaper(ctx context.Context, interval time.Duration, logFn func(string, ...any)) {
+//
+// wg is joined by server.Server.Shutdown() (backlog item
+// 81e82fee-9528-4dc9-a513-1040b4dee2ec) — see the note on StartForkPressureLogger
+// in fork_metrics.go for the shutdown-join rationale.
+func StartZombieReaper(ctx context.Context, interval time.Duration, logFn func(string, ...any), wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {

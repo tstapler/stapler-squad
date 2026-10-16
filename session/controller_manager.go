@@ -2,6 +2,8 @@ package session
 
 import (
 	"sync/atomic"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // noCopy prevents ControllerManager from being copied after first use.
@@ -56,7 +58,9 @@ func (cm *ControllerManager) SetController(c *ClaudeController) {
 func (cm *ControllerManager) stopAndClear() {
 	old := cm.controller.Swap(nil)
 	if old != nil {
-		old.Stop() //nolint:errcheck
+		if err := old.Stop(); err != nil {
+			log.Warn("controller_manager: failed to stop controller", "err", err)
+		}
 	}
 }
 

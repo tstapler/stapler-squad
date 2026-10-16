@@ -1,5 +1,6 @@
 "use client";
 
+import type { MouseEvent } from "react";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { VcsWidgetData } from "@/lib/vcs/types";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
@@ -12,8 +13,11 @@ export interface VersionControlSectionProps {
   activeSessionCount: number;
   worktreePath: string | undefined;
   defaultExpanded: boolean;
-  onViewDiff: () => void;
-  onBrowseFiles: () => void;
+  /** Receives the click event so the caller can capture `event.currentTarget`
+   * as the focus-restoration trigger — reading `document.activeElement`
+   * doesn't work on Safari, which doesn't focus buttons on click. */
+  onViewDiff: (event: MouseEvent<HTMLButtonElement>) => void;
+  onBrowseFiles: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 /**
@@ -26,6 +30,10 @@ export interface VersionControlSectionProps {
  * this widget opts its own PR link out via `showPrLink={false}` only in
  * that case, so the link is still visible via this section alone for every
  * other status.
+ *
+ * When the widget has no GitHub block (ship-status missing or stale) the
+ * item's own prUrl is rendered as a plain link rather than synthesizing PR
+ * state the widget would present as fact (merged / CI pending).
  */
 export function VersionControlSection({
   item,
@@ -36,22 +44,30 @@ export function VersionControlSection({
   onViewDiff,
   onBrowseFiles,
 }: VersionControlSectionProps) {
-  if (!widgetData) return null;
-
   const showPrLink = item.status !== "pr_pending";
+  const showItemPrLink = showPrLink && !!item.prUrl && !widgetData?.github;
+
+  if (!widgetData && !showItemPrLink) return null;
 
   return (
     <CollapsibleSection sectionKey="version-control" title="Version Control" defaultExpanded={defaultExpanded}>
       <div className={styles.section}>
-        <VcsWidget
-          data={widgetData}
-          mode="full"
-          onViewDiff={onViewDiff}
-          activeSessionCount={activeSessionCount}
-          worktreePath={worktreePath}
-          onBrowseFiles={onBrowseFiles}
-          showPrLink={showPrLink}
-        />
+        {widgetData && (
+          <VcsWidget
+            data={widgetData}
+            mode="full"
+            onViewDiff={onViewDiff}
+            activeSessionCount={activeSessionCount}
+            worktreePath={worktreePath}
+            onBrowseFiles={onBrowseFiles}
+            showPrLink={showPrLink}
+          />
+        )}
+        {showItemPrLink && (
+          <a href={item.prUrl} target="_blank" rel="noopener noreferrer" data-testid="vcs-section-pr-link">
+            {item.prNumber ? `Pull request #${item.prNumber}` : "Pull request"}
+          </a>
+        )}
       </div>
     </CollapsibleSection>
   );

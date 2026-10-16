@@ -1,0 +1,20 @@
+{
+  "id": "session:draft-pull-request",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DraftPullRequest",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/pr_creation_service.go",
+  "tested": true,
+  "testIds": [
+    "TestDraftPullRequest_should_ReturnNotFound_When_SessionInstanceMissing",
+    "TestDraftPullRequest_should_PrefillTitleBodyBaseBranch_When_SessionHasCommitsAhead",
+    "TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne",
+    "TestDraftPullRequest_should_ReportHasCommitsAhead_False_When_BranchIsUpToDate",
+    "TestDraftPullRequest_should_PreviewWorkingTreeDiff_When_UncommittedChangesPresent",
+    "TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil",
+    "TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty"
+  ],
+  "lastModified": "2026-08-21T00:00:00-07:00"
+}

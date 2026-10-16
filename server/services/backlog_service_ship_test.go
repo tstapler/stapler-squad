@@ -77,6 +77,7 @@ func seedReviewItemWithWorkSession(t *testing.T, svc *BacklogService) (itemID, w
 // delegates to PRRunner.RunOneShotForSession with that session's stable UUID,
 // returning the extracted PR URL.
 func TestTriggerShipPR_HappyPath_RunsOneShotForMostRecentWorkSession(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	runner := &fakePRRunner{prURL: "https://github.com/example/repo/pull/7"}
 	svc.SetOneShotRunner(runner)
@@ -96,6 +97,7 @@ func TestTriggerShipPR_HappyPath_RunsOneShotForMostRecentWorkSession(t *testing.
 // outside review status (e.g. still in_progress) are rejected — Ship PR only
 // makes sense once a review verdict is on record.
 func TestTriggerShipPR_NotInReviewStatus_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	svc.SetOneShotRunner(&fakePRRunner{prURL: "https://github.com/example/repo/pull/7"})
 
@@ -128,6 +130,7 @@ func TestTriggerShipPR_NotInReviewStatus_ReturnsFailedPrecondition(t *testing.T)
 // TestTriggerShipPR_AlreadyHasPR_ReturnsFailedPrecondition verifies an item that
 // already has a PR is rejected rather than kicking off a redundant one-shot run.
 func TestTriggerShipPR_AlreadyHasPR_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	runner := &fakePRRunner{prURL: "https://github.com/example/repo/pull/99"}
 	svc.SetOneShotRunner(runner)
@@ -151,6 +154,7 @@ func TestTriggerShipPR_AlreadyHasPR_ReturnsFailedPrecondition(t *testing.T) {
 // with no work session at all (nothing was ever built) is rejected with a clear
 // error rather than a nil-pointer panic or a confusing internal error.
 func TestTriggerShipPR_NoWorkSession_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	svc.SetOneShotRunner(&fakePRRunner{prURL: "https://github.com/example/repo/pull/7"})
 
@@ -170,6 +174,7 @@ func TestTriggerShipPR_NoWorkSession_ReturnsFailedPrecondition(t *testing.T) {
 // follow (e.g. SessionCreator-dependent handlers) — a server that never wired
 // SetOneShotRunner must reject with CodeUnimplemented, not panic.
 func TestTriggerShipPR_NoOneShotRunnerWired_ReturnsUnimplemented(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 
 	itemID, _ := seedReviewItemWithWorkSession(t, svc)
@@ -183,6 +188,7 @@ func TestTriggerShipPR_NoOneShotRunnerWired_ReturnsUnimplemented(t *testing.T) {
 // run failure (e.g. the work session's tmux instance is no longer running) is
 // surfaced as an actionable error rather than a generic 500.
 func TestTriggerShipPR_RunnerError_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
 	svc := newBacklogService(t)
 	runner := &fakePRRunner{err: errors.New("session not found")}
 	svc.SetOneShotRunner(runner)

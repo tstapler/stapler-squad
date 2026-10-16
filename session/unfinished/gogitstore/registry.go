@@ -287,7 +287,7 @@ func (r *Registry) pruneLocked() {
 	var candidates []candidate
 	for k, s := range r.stores {
 		if s.RefCount() != 0 {
-			log.DebugLog.Printf("[gogitstore.Registry] skipping eviction of %s: refCount=%d (still in use by at least one worktree)", k, s.RefCount())
+			log.DebugLog().Printf("[gogitstore.Registry] skipping eviction of %s: refCount=%d (still in use by at least one worktree)", k, s.RefCount())
 			continue
 		}
 		unusedSince := atomic.LoadInt64(&s.unusedSinceNs)

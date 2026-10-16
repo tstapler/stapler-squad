@@ -15,9 +15,10 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,6 +28,10 @@ const (
 
 	// DefaultOTLPEndpoint is the default endpoint for OTLP gRPC (Datadog Agent)
 	DefaultOTLPEndpoint = "localhost:4317"
+
+	// DefaultOTLPHTTPEndpoint is the default OTLP/HTTP collector endpoint used
+	// to relay browser-originated spans/metrics (see OTLPHTTPEndpoint below).
+	DefaultOTLPHTTPEndpoint = "http://localhost:4318"
 )
 
 // Config holds telemetry configuration
@@ -36,6 +41,13 @@ type Config struct {
 
 	// OTLPEndpoint is the gRPC endpoint for OTLP exporter (e.g., "localhost:4317")
 	OTLPEndpoint string
+
+	// OTLPHTTPEndpoint is the OTLP/HTTP collector endpoint (e.g.,
+	// "http://localhost:4318") that server/handlers.OtelProxyHandler relays
+	// browser-originated OTLP export requests to. Kept separate from
+	// OTLPEndpoint because the Go SDK exports over gRPC while browsers export
+	// over HTTP — same collector, different protocol/port.
+	OTLPHTTPEndpoint string
 
 	// ServiceVersion is the version of the service
 	ServiceVersion string
@@ -54,6 +66,11 @@ func DefaultConfig() Config {
 		endpoint = DefaultOTLPEndpoint
 	}
 
+	httpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_HTTP_ENDPOINT")
+	if httpEndpoint == "" {
+		httpEndpoint = DefaultOTLPHTTPEndpoint
+	}
+
 	env := os.Getenv("OTEL_SERVICE_ENVIRONMENT")
 	if env == "" {
 		env = "development"
@@ -68,11 +85,12 @@ func DefaultConfig() Config {
 	enabled := os.Getenv("OTEL_ENABLED") == "true" || os.Getenv("DD_TRACE_ENABLED") == "true"
 
 	return Config{
-		Enabled:        enabled,
-		OTLPEndpoint:   endpoint,
-		ServiceVersion: version,
-		Environment:    env,
-		SampleRate:     1.0, // Sample all traces by default
+		Enabled:          enabled,
+		OTLPEndpoint:     endpoint,
+		OTLPHTTPEndpoint: httpEndpoint,
+		ServiceVersion:   version,
+		Environment:      env,
+		SampleRate:       1.0, // Sample all traces by default
 	}
 }
 
@@ -103,10 +121,13 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 
 	log.Info("initializing OpenTelemetry", "endpoint", cfg.OTLPEndpoint, "env", cfg.Environment, "version", cfg.ServiceVersion)
 
-	// Create OTLP trace exporter
-	exporter, err := otlptracegrpc.New(ctx,
+	// Create OTLP trace exporter. gzip cuts payload size well below the
+	// receiver's default 4MiB max gRPC message size (see the metric exporter
+	// below for why that matters here).
+	traceExporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
 		otlptracegrpc.WithInsecure(), // Use insecure for localhost (Datadog Agent)
+		otlptracegrpc.WithCompressor("gzip"),
 	)
 	if err != nil {
 		return nil, err
@@ -115,11 +136,10 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	// Create resource with service information
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(ServiceName),
 			semconv.ServiceVersion(cfg.ServiceVersion),
-			semconv.DeploymentEnvironment(cfg.Environment),
+			semconv.DeploymentEnvironmentNameKey.String(cfg.Environment),
 		),
 	)
 	if err != nil {
@@ -128,7 +148,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 
 	// Create trace provider with batch processor
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter,
+		sdktrace.WithBatcher(traceExporter,
 			sdktrace.WithBatchTimeout(5*time.Second),
 		),
 		sdktrace.WithResource(res),
@@ -145,10 +165,14 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	))
 
 	// Create OTLP metric exporter, sharing the same OTLP endpoint/resource as
-	// tracing — one Datadog Agent/OTLP collector receives both.
+	// tracing — one Datadog Agent/OTLP collector receives both. gzip
+	// compression (~5-10x on this mostly-numeric/repetitive payload) is
+	// belt-and-suspenders on top of the exemplar fix below, not the fix
+	// itself.
 	metricExporter, err := otlpmetricgrpc.New(ctx,
 		otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
 		otlpmetricgrpc.WithInsecure(),
+		otlpmetricgrpc.WithCompressor("gzip"),
 	)
 	if err != nil {
 		return nil, err
@@ -159,6 +183,12 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
 			sdkmetric.WithInterval(15*time.Second),
 		)),
+		// The SDK's default TraceBasedFilter attaches an exemplar to every
+		// histogram bucket recorded inside a sampled span, and SampleRate
+		// above samples every span. Nothing reads exemplars, so disable them
+		// instead of paying for them. See commit 13a90ec31 for the incident
+		// this fixes.
+		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 	)
 	otel.SetMeterProvider(mp)
 
@@ -212,6 +242,23 @@ func (p *Provider) IsEnabled() bool {
 	return p.config.Enabled
 }
 
+// IsGloballyEnabled reports whether Initialize has run with tracing/metrics
+// enabled. Safe to call before Initialize (returns false). Used by
+// server/handlers.OtelProxyHandler's registration to decide whether to
+// expose the browser-trace relay endpoints at all.
+func IsGloballyEnabled() bool {
+	return globalProvider != nil && globalProvider.config.Enabled
+}
+
+// GlobalOTLPHTTPEndpoint returns the configured OTLP/HTTP collector endpoint
+// (see Config.OTLPHTTPEndpoint), or "" before Initialize has run.
+func GlobalOTLPHTTPEndpoint() string {
+	if globalProvider != nil {
+		return globalProvider.config.OTLPHTTPEndpoint
+	}
+	return ""
+}
+
 // GetTracer returns the global tracer (convenience function)
 func GetTracer() trace.Tracer {
 	if globalProvider != nil {
@@ -236,27 +283,23 @@ func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) 
 	return GetTracer().Start(ctx, name, opts...)
 }
 
-// SpanFromContext returns the current span from context
-func SpanFromContext(ctx context.Context) trace.Span {
-	return trace.SpanFromContext(ctx)
-}
-
-// AddEvent adds an event to the current span
-func AddEvent(ctx context.Context, name string, attrs ...trace.EventOption) {
-	span := trace.SpanFromContext(ctx)
-	span.AddEvent(name, attrs...)
-}
-
-// RecordError records an error on the current span
-func RecordError(ctx context.Context, err error, opts ...trace.EventOption) {
-	span := trace.SpanFromContext(ctx)
-	span.RecordError(err, opts...)
-}
-
-// SetAttributes sets attributes on the current span
-func SetAttributes(ctx context.Context, attrs ...trace.EventOption) {
-	// Note: SetAttributes takes attribute.KeyValue, not trace.EventOption
-	// This is a convenience wrapper that should be called directly on span
-	span := trace.SpanFromContext(ctx)
-	_ = span // Caller should use span.SetAttributes directly
+// StartLinkedBackgroundSpan starts a new-root span for work that outlives
+// its triggering request (e.g. a goroutine started from an RPC handler that
+// returns before the goroutine finishes), linked back to ctx's existing span
+// (if any) for correlation. See ADR-003
+// (project_plans/async-session-creation/decisions/ADR-003-linked-root-span-for-background-goroutine.md):
+// a plain child span risks rendering as a late/orphaned addition once some
+// APM backends (this repo's target is Datadog) consider the trace complete
+// after its root span closes. Any future "goroutine outlives its request"
+// instrumentation should use this helper rather than hand-rolling
+// trace.WithNewRoot()/trace.WithLinks() at each call site.
+//
+// GetTracer() already returns a working no-op tracer when telemetry is
+// disabled, so this is safe to call unconditionally — it never panics and
+// always returns a usable (context, span) pair.
+func StartLinkedBackgroundSpan(ctx context.Context, name string) (context.Context, trace.Span) {
+	return GetTracer().Start(ctx, name,
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.LinkFromContext(ctx)),
+	)
 }

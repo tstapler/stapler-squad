@@ -1,0 +1,15 @@
+{
+  "id": "insights-activity-breakdown",
+  "type": "frontend",
+  "component": "ActivityBreakdownTable",
+  "path": "web-app/src/app/insights/ActivityBreakdownTable.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "ActivityBreakdownTable > ActivityBreakdownTable_should_renderNoDataMessage_when_rowsEmpty",
+    "ActivityBreakdownTable > ActivityBreakdownTable_should_renderRowsSortedByCostDesc_when_rowsProvidedInCostDescOrder",
+    "ActivityBreakdownTable > ActivityBreakdownTable_should_showHumanLabel_when_activityTypeIsFeatureDev",
+    "ActivityBreakdownTable > ActivityBreakdownTable_should_showEstimatedMarker_when_rowRendered"
+  ],
+  "lastModified": "2026-09-03T00:00:00.000Z"
+}

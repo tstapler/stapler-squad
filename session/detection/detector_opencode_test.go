@@ -5,6 +5,7 @@ import (
 )
 
 func TestOpencode_DetectInputRequired_NumberedOptions(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	testCases := []struct {
@@ -50,6 +51,7 @@ func TestOpencode_DetectInputRequired_NumberedOptions(t *testing.T) {
 }
 
 func TestOpencode_DetectActive_EscInterrupt(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	testCases := []struct {
@@ -85,6 +87,7 @@ func TestOpencode_DetectActive_EscInterrupt(t *testing.T) {
 }
 
 func TestOpencode_DetectPriority_InputRequiredOverActive(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	output := `❯ 1. First option
@@ -98,6 +101,7 @@ esc interrupt`
 }
 
 func TestOpencode_DetectIdle_NoPrompts(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	testCases := []struct {
@@ -135,6 +139,7 @@ func TestOpencode_DetectIdle_NoPrompts(t *testing.T) {
 }
 
 func TestOpencode_DetectRealExamples(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	workingExample := `┃  Thinking: There's no pnpm lock file. The project uses npm (package-lock.json).
@@ -169,6 +174,7 @@ func TestOpencode_DetectRealExamples(t *testing.T) {
 // lists are NOT incorrectly detected as InputRequired. Only the footer/prompt
 // area (prefixed with ┃) should trigger InputRequired.
 func TestOpencode_NoFalsePositives_BodyNumberedLists(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	testCases := []struct {
@@ -234,6 +240,7 @@ func TestOpencode_NoFalsePositives_BodyNumberedLists(t *testing.T) {
 // TestOpencode_DetectProcessing_Thinking verifies OpenCode "Thinking:" output
 // is detected as Processing.
 func TestOpencode_DetectProcessing_Thinking(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	testCases := []struct {
@@ -274,6 +281,7 @@ func TestOpencode_DetectProcessing_Thinking(t *testing.T) {
 
 // TestOpencode_PermissionButtons verifies OpenCode permission dialog detection.
 func TestOpencode_PermissionButtons(t *testing.T) {
+	t.Parallel()
 	detector := NewStatusDetector()
 
 	testCases := []struct {

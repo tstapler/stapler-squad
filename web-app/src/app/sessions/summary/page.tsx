@@ -34,7 +34,13 @@ function SessionSummaryPageInner() {
         ← Back
       </Link>
       <h1 className={styles.title}>Session Summary</h1>
-      {sessionId && <SessionSummaryPanel sessionId={sessionId} />}
+      {sessionId ? (
+        <SessionSummaryPanel sessionId={sessionId} />
+      ) : (
+        <p data-testid="summary-missing-session">
+          No session specified. Open a session&apos;s summary from the session list.
+        </p>
+      )}
     </main>
   );
 }

@@ -17,10 +17,38 @@
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { SequenceHistogram } from "./SequenceHistogram";
 import { MangleRateIndicator } from "./MangleRateIndicator";
 import { EscapeEventTable } from "./EscapeEventTable";
+import { EscapeAnalyticsPage } from "./EscapeAnalyticsPage";
 import type { EscapeSequenceCount, EscapeEventProto } from "@/gen/session/v1/session_pb";
+
+// ---------------------------------------------------------------------------
+// Mocks for EscapeAnalyticsPage's tab-toggle tests (Story 2.4). The
+// sub-component tests above render pieces in isolation and don't need these,
+// but jest.mock calls are hoisted so they apply repo-wide within this file.
+// ---------------------------------------------------------------------------
+
+jest.mock("@/lib/store", () => ({
+  useAppSelector: (selector: unknown) =>
+    (selector as (state: unknown) => unknown)({}),
+}));
+
+jest.mock("@/lib/store/sessionsSlice", () => ({
+  selectAllSessions: () => [],
+}));
+
+const mockUseEscapeAnalyticsSummary = jest.fn();
+const mockUseEscapeAnalyticsGlobalSummary = jest.fn();
+const mockUseEscapeEvents = jest.fn();
+
+jest.mock("@/lib/hooks/useEscapeAnalytics", () => ({
+  useEscapeAnalyticsSummary: (...args: unknown[]) => mockUseEscapeAnalyticsSummary(...args),
+  useEscapeAnalyticsGlobalSummary: (...args: unknown[]) =>
+    mockUseEscapeAnalyticsGlobalSummary(...args),
+  useEscapeEvents: (...args: unknown[]) => mockUseEscapeEvents(...args),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -273,5 +301,77 @@ describe("EscapeEventTable", () => {
     );
 
     expect(screen.getByText("Yes")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EscapeAnalyticsPage tab-toggle tests (Story 2.4)
+// ---------------------------------------------------------------------------
+
+describe("EscapeAnalyticsPage", () => {
+  const defaultSummary = {
+    histogram: [],
+    totalSequences: 0n,
+    totalMangled: 0n,
+    mangleRate: 0,
+    loading: false,
+    error: null,
+    refresh: jest.fn(),
+  };
+
+  const defaultGlobalSummary = {
+    histogram: [],
+    totalSequences: 0n,
+    totalMangled: 0n,
+    mangleRate: 0,
+    perSession: [],
+    loading: false,
+    error: null,
+    refresh: jest.fn(),
+  };
+
+  const defaultEvents = {
+    events: [],
+    nextPageToken: "",
+    totalCount: 0,
+    loading: false,
+    error: null,
+    fetchNextPage: jest.fn(),
+    reset: jest.fn(),
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseEscapeAnalyticsSummary.mockReturnValue(defaultSummary);
+    mockUseEscapeAnalyticsGlobalSummary.mockReturnValue(defaultGlobalSummary);
+    mockUseEscapeEvents.mockReturnValue(defaultEvents);
+  });
+
+  it("EscapeAnalyticsPage_should_SuspendPerSessionHooks_When_AllSessionsTabActive", async () => {
+    const user = userEvent.setup();
+
+    render(<EscapeAnalyticsPage />);
+
+    // Per-session tab is active by default: per-session hooks enabled, global hook disabled.
+    expect(mockUseEscapeAnalyticsSummary).toHaveBeenLastCalledWith("", true);
+    expect(mockUseEscapeAnalyticsGlobalSummary).toHaveBeenLastCalledWith(false);
+
+    await user.click(screen.getByTestId("tab-all_sessions"));
+
+    // After switching to "All Sessions": per-session hooks suspended, global hook enabled.
+    expect(mockUseEscapeAnalyticsSummary).toHaveBeenLastCalledWith("", false);
+    expect(mockUseEscapeEvents).toHaveBeenLastCalledWith("", expect.any(Object));
+    expect(mockUseEscapeAnalyticsGlobalSummary).toHaveBeenLastCalledWith(true);
+  });
+
+  it("EscapeAnalyticsPage_should_KeepFocusOnTabButton_When_TabSwitched", async () => {
+    const user = userEvent.setup();
+
+    render(<EscapeAnalyticsPage />);
+
+    const allSessionsTab = screen.getByTestId("tab-all_sessions");
+    await user.click(allSessionsTab);
+
+    expect(document.activeElement).toBe(allSessionsTab);
   });
 });

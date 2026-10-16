@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession is an
@@ -33,6 +35,7 @@ import (
 //     produces for the same oversized prompt is accepted by tmux, and the
 //     spawned process receives the full, untruncated prompt content.
 func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) {
+	t.Parallel()
 	checkTmuxAvailable(t)
 
 	// Two distinct sockets, not one shared between steps 1 and 2: tmux's
@@ -46,7 +49,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	killSocket := func(socket string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = safeexec.CommandContext(ctx, "tmux", "-L", socket, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, tmux.Binary(), "-L", socket, "kill-server").Run()
 	}
 	reproSocket := fmt.Sprintf("test_cmdlen_repro_%d_%d", os.Getpid(), time.Now().UnixNano())
 	fixedSocket := fmt.Sprintf("test_cmdlen_fixed_%d_%d", os.Getpid(), time.Now().UnixNano())
@@ -75,7 +78,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	// Step 1: reproduce the original bug directly against tmux -- an inline
 	// command embedding the oversized prompt must be rejected.
 	inlineCmd := "echo " + shellQuote(prompt)
-	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", reproSocket,
+	out, err := safeexec.CommandContext(context.Background(), tmux.Binary(), "-L", reproSocket,
 		"new-session", "-d", "-s", "repro-inline", inlineCmd).CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected tmux to reject an inline command embedding a %d-byte prompt with 'command too long', but it succeeded", len(prompt))
@@ -103,7 +106,7 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	}
 
 	newSessionArgs := []string{"-L", fixedSocket, "new-session", "-d", "-s", "repro-fixed", "-e", "OUT_FILE=" + outFile, fixedCmd}
-	if out, err := safeexec.CommandContext(context.Background(), "tmux", newSessionArgs...).CombinedOutput(); err != nil {
+	if out, err := safeexec.CommandContext(context.Background(), tmux.Binary(), newSessionArgs...).CombinedOutput(); err != nil {
 		t.Fatalf("tmux rejected the fixed command (this is the bug re-appearing): %s (%v)\ncommand was: %s", out, err, fixedCmd)
 	}
 
@@ -113,14 +116,9 @@ func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) 
 	// accept a read once its content exactly matches the expected prompt
 	// (matching length alone wouldn't rule out a same-length, wrong-content
 	// torn read).
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if data, readErr := os.ReadFile(outFile); readErr == nil && string(data) == prompt {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("fake claude script never wrote the full %d-byte prompt to %s within the deadline", len(prompt), outFile)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	wait.RequireEventually(t, func() bool {
+		data, readErr := os.ReadFile(outFile)
+		return readErr == nil && string(data) == prompt
+	}, 5*time.Second, 10*time.Millisecond,
+		"fake claude script never wrote the full %d-byte prompt to %s", len(prompt), outFile)
 }

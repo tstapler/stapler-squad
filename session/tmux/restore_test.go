@@ -14,6 +14,7 @@ import (
 
 // TestRestoreWithExistingSession tests that Restore() properly verifies existing sessions
 func TestRestoreWithExistingSession(t *testing.T) {
+	t.Parallel()
 	ptyFactory := NewMockPtyFactory(t)
 
 	// Mock executor that simulates an existing session
@@ -46,6 +47,7 @@ func TestRestoreWithExistingSession(t *testing.T) {
 
 // TestRestoreWithWorkDirParameter tests the new RestoreWithWorkDir method
 func TestRestoreWithWorkDirParameter(t *testing.T) {
+	t.Parallel()
 	ptyFactory := NewMockPtyFactory(t)
 
 	// Create a test worktree directory

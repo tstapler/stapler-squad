@@ -5,6 +5,7 @@ import (
 )
 
 func TestOpencodeDetector_Name(t *testing.T) {
+	t.Parallel()
 	d := NewOpencodeDetector()
 	if d.Name() != "opencode" {
 		t.Errorf("Name() = %q, want %q", d.Name(), "opencode")
@@ -12,6 +13,7 @@ func TestOpencodeDetector_Name(t *testing.T) {
 }
 
 func TestOpencodeDetector_Patterns_should_haveProcessingPattern(t *testing.T) {
+	t.Parallel()
 	d := NewOpencodeDetector()
 	p := d.Patterns()
 	if len(p.Processing) == 0 {
@@ -23,6 +25,7 @@ func TestOpencodeDetector_Patterns_should_haveProcessingPattern(t *testing.T) {
 }
 
 func TestOpencodeDetector_Patterns_should_havePermissionPattern(t *testing.T) {
+	t.Parallel()
 	d := NewOpencodeDetector()
 	p := d.Patterns()
 	if len(p.NeedsApproval) == 0 {
@@ -31,6 +34,7 @@ func TestOpencodeDetector_Patterns_should_havePermissionPattern(t *testing.T) {
 }
 
 func TestOpencodeDetector_Patterns_should_haveInputRequiredPatterns(t *testing.T) {
+	t.Parallel()
 	d := NewOpencodeDetector()
 	p := d.Patterns()
 	if len(p.InputRequired) == 0 {
@@ -39,6 +43,7 @@ func TestOpencodeDetector_Patterns_should_haveInputRequiredPatterns(t *testing.T
 }
 
 func TestOpencodeDetector_FilterContent_should_returnUnchanged(t *testing.T) {
+	t.Parallel()
 	d := NewOpencodeDetector()
 	input := "opencode output"
 	if got := d.FilterContent(input); got != input {
@@ -47,30 +52,35 @@ func TestOpencodeDetector_FilterContent_should_returnUnchanged(t *testing.T) {
 }
 
 func TestOpencodeDetector_arrowAction_pattern(t *testing.T) {
+	t.Parallel()
 	p := NewOpencodeDetector().Patterns().Processing[0].Pattern
 	mustMatch(t, p, "→ Read foo.go")
 	mustNotMatch(t, p, "Read foo.go") // no arrow
 }
 
 func TestOpencodeDetector_permission_pattern(t *testing.T) {
+	t.Parallel()
 	p := NewOpencodeDetector().Patterns().NeedsApproval[0].Pattern
 	mustMatch(t, p, "[ Allow (a) ]")
 	mustNotMatch(t, p, "Allow (a)") // no brackets
 }
 
 func TestOpencodeDetector_barPrefixedOptions_pattern(t *testing.T) {
+	t.Parallel()
 	p := NewOpencodeDetector().Patterns().InputRequired[0].Pattern
 	mustMatch(t, p, "┃  4. Icons:")
 	mustNotMatch(t, p, "4. Icons:") // no bar
 }
 
 func TestOpencodeDetector_permissionButtons_pattern(t *testing.T) {
+	t.Parallel()
 	p := NewOpencodeDetector().Patterns().InputRequired[1].Pattern
 	mustMatch(t, p, "Allow once   Allow always")
 	mustMatch(t, p, "Allow always   Allow once")
 }
 
 func TestOpencodeDetector_brailleSpinner_pattern(t *testing.T) {
+	t.Parallel()
 	active := NewOpencodeDetector().Patterns().Active
 	if len(active) == 0 {
 		t.Fatal("Active patterns empty — expected braille spinner")
@@ -81,6 +91,7 @@ func TestOpencodeDetector_brailleSpinner_pattern(t *testing.T) {
 }
 
 func TestOpencodeDetector_errorPrefix_pattern(t *testing.T) {
+	t.Parallel()
 	errs := NewOpencodeDetector().Patterns().Error
 	if len(errs) == 0 {
 		t.Fatal("Error patterns empty — expected error prefix")

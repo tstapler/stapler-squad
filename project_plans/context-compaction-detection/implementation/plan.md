@@ -150,6 +150,12 @@ Phase 4: Registry + Verification
 - Files: `session/detection/testdata/claude_compacting.txt` (created)
 
 ##### Task 1.1.1c: INFERRED fallback gating — required if 1.1.1a did not produce a live capture (~10 min)
+**Status (2026-08-12): Both gating conditions satisfied.** No live Claude Code compaction
+was reachable in the implementing session's tmux scrollback (checked across all attached
+sessions). Follow-up backlog item filed: `9637b022-a3d7-4639-ba37-fe2842e5d6dc` — "Verify
+context-compaction regex against live Claude Code capture". Canary added to
+`session/detection/detector.go` (`compactingCanary`, called from `detectFromText`).
+
 **Added 2026-08-06 (Phase 4 pre-mortem, P1 #1)**: an INFERRED fixture must not be the basis for a "done" claim on this item — pre-mortem's top-ranked failure mode is that the whole feature ships green (compiles, all tests pass, `make ci` green) while the regex never matches real Claude Code output in production, because nobody re-verifies the guessed string after merge. Two things are both required, not optional, whenever Task 1.1.1a did not yield a real capture:
 - File (or have already filed, if this backlog item was migrated from one) a follow-up backlog item titled "Verify context-compaction regex against live Claude Code capture" before this item is marked complete — link it in the PR description. This item does not close as "done" on an unverified regex; it closes as "shipped with a tracked follow-up."
 - Add a temporary bake-in canary: in `StatusDetector.Detect`/`DetectWithContext` (`session/detection/detector.go`), log (at debug level, via the existing detection logging path — check `detector.go`/`event_sink.go` for the established pattern) the full raw text of any line matching `(?i)compact` that did **not** classify as `StatusCompacting`. This catches a near-miss regex (real string differs slightly from the INFERRED guess) once real usage starts, without waiting for a user bug report. Remove the canary once the follow-up item confirms the regex against a real capture.

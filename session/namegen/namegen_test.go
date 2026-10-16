@@ -14,6 +14,7 @@ import (
 )
 
 func TestGenerate_Format(t *testing.T) {
+	t.Parallel()
 	re := regexp.MustCompile(`^\d{8}-[a-z]+-[a-z]+-\d{2}$`)
 	for i := 0; i < 1000; i++ {
 		name := namegen.Generate()
@@ -23,6 +24,7 @@ func TestGenerate_Format(t *testing.T) {
 }
 
 func TestGenerate_ShellSafe(t *testing.T) {
+	t.Parallel()
 	re := regexp.MustCompile(`^[a-z0-9-]+$`)
 	for i := 0; i < 1000; i++ {
 		name := namegen.Generate()
@@ -32,6 +34,7 @@ func TestGenerate_ShellSafe(t *testing.T) {
 }
 
 func TestGenerate_DatePrefix(t *testing.T) {
+	t.Parallel()
 	name := namegen.Generate()
 	dateStr := name[:8]
 	_, err := time.Parse("20060102", dateStr)
@@ -40,6 +43,7 @@ func TestGenerate_DatePrefix(t *testing.T) {
 }
 
 func TestGenerate_NumberRange(t *testing.T) {
+	t.Parallel()
 	re := regexp.MustCompile(`-(\d{2})$`)
 	for i := 0; i < 1000; i++ {
 		name := namegen.Generate()
@@ -53,6 +57,7 @@ func TestGenerate_NumberRange(t *testing.T) {
 }
 
 func TestGenerateAndCreate_CreatesDir(t *testing.T) {
+	t.Parallel()
 	path, err := namegen.GenerateAndCreate(t.TempDir(), 10)
 	require.NoError(t, err)
 	info, err := os.Stat(path)
@@ -61,6 +66,7 @@ func TestGenerateAndCreate_CreatesDir(t *testing.T) {
 }
 
 func TestGenerateAndCreate_BaseDir_Created(t *testing.T) {
+	t.Parallel()
 	nested := filepath.Join(t.TempDir(), "nested", "subdir")
 	path, err := namegen.GenerateAndCreate(nested, 10)
 	require.NoError(t, err)
@@ -70,6 +76,7 @@ func TestGenerateAndCreate_BaseDir_Created(t *testing.T) {
 }
 
 func TestGenerateAndCreate_BaseDir_IsFile_Error(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "notadir")
 	require.NoError(t, os.WriteFile(filePath, []byte("data"), 0644))
@@ -80,6 +87,7 @@ func TestGenerateAndCreate_BaseDir_IsFile_Error(t *testing.T) {
 }
 
 func TestGenerateAndCreate_RetryOnCollision(t *testing.T) {
+	t.Parallel()
 	baseDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(baseDir, "20260424-brave-falcon-01"), 0755))
 
@@ -102,6 +110,7 @@ func TestGenerateAndCreate_RetryOnCollision(t *testing.T) {
 }
 
 func TestGenerateAndCreate_ErrorAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
 	baseDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(baseDir, "20260424-stuck-owl-00"), 0755))
 
@@ -119,6 +128,7 @@ func TestGenerateAndCreate_ErrorAfterMaxAttempts(t *testing.T) {
 }
 
 func TestWordLists_MinimumSize(t *testing.T) {
+	t.Parallel()
 	adjs, nouns := namegen.ExportedWordLists()
 	assert.GreaterOrEqual(t, len(adjs), 50, "need ≥ 50 adjectives")
 	assert.GreaterOrEqual(t, len(nouns), 50, "need ≥ 50 nouns")

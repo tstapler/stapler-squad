@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
 
 	"connectrpc.com/connect"
 )
@@ -19,8 +20,23 @@ const (
 	pathCompletionDefaultMax = 100
 	pathCompletionHardMax    = 500
 	pathCompletionTimeout    = 2 * time.Second
-	dirCacheMaxSize          = 256
-	dirCacheTTL              = 60 * time.Second
+	// listWorktreesTimeout is longer than pathCompletionTimeout: `git worktree
+	// list` stats every registered worktree (not just one path), so it scales
+	// with how many worktrees the repo has and is more exposed to transient
+	// disk/CPU contention from concurrently-running tests or other git
+	// subprocesses. Under normal conditions this command completes in tens of
+	// milliseconds even for repos with dozens of worktrees (it just reads
+	// `.git/worktrees/*` admin files, no history walk); a genuinely hung git
+	// process (e.g. blocked on an index.lock held by another process) doesn't
+	// resolve itself in single-digit seconds either way. So this bound exists
+	// to catch a truly stuck subprocess, not to budget for expected latency —
+	// raised from 5s (BUG-077: observed timing out under host CPU contention
+	// from an unrelated full-package test run, even though the git command
+	// itself wasn't stuck) to a value with more headroom for scheduling
+	// delay under load.
+	listWorktreesTimeout = 20 * time.Second
+	dirCacheMaxSize      = 256
+	dirCacheTTL          = 60 * time.Second
 )
 
 // PathCompletionService handles RPC methods for filesystem path completion.
@@ -195,14 +211,11 @@ func (p *PathCompletionService) ListWorktrees(
 	expanded = strings.TrimRight(expanded, "/")
 
 	// Bound the git subprocess so a hung/slow filesystem can't block the
-	// omnibar's "existing worktree" dropdown forever — same guard as
-	// ListPathCompletions' pathCompletionTimeout.
-	listCtx, cancel := context.WithTimeout(ctx, pathCompletionTimeout)
+	// omnibar's "existing worktree" dropdown forever.
+	listCtx, cancel := context.WithTimeout(ctx, listWorktreesTimeout)
 	defer cancel()
 
-	cmd := safeexec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
-	cmd.Dir = expanded
-	output, err := cmd.Output()
+	infos, err := gitprovider.Backend().ListWorktrees(listCtx, backend.Local{Root: backend.RepoRoot(expanded)})
 	if err != nil {
 		if listCtx.Err() != nil {
 			return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("listing worktrees timed out"))
@@ -211,32 +224,19 @@ func (p *PathCompletionService) ListWorktrees(
 		return connect.NewResponse(&sessionv1.ListWorktreesResponse{}), nil
 	}
 
-	worktrees := parseWorktreeList(string(output))
-	return connect.NewResponse(&sessionv1.ListWorktreesResponse{Worktrees: worktrees}), nil
+	return connect.NewResponse(&sessionv1.ListWorktreesResponse{Worktrees: worktreeEntries(infos)}), nil
 }
 
-// parseWorktreeList parses the output of 'git worktree list --porcelain'.
-func parseWorktreeList(porcelainOutput string) []*sessionv1.WorktreeEntry {
-	var result []*sessionv1.WorktreeEntry
-	var current *sessionv1.WorktreeEntry
-	isFirst := true
-
-	for _, line := range strings.Split(strings.TrimSpace(porcelainOutput), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			current = nil
-			continue
-		}
-		if strings.HasPrefix(line, "worktree ") {
-			current = &sessionv1.WorktreeEntry{
-				Path:   strings.TrimPrefix(line, "worktree "),
-				IsMain: isFirst,
-			}
-			isFirst = false
-			result = append(result, current)
-		} else if current != nil && strings.HasPrefix(line, "branch ") {
-			current.Branch = strings.TrimPrefix(line, "branch refs/heads/")
-		}
+// worktreeEntries converts backend worktree infos to proto entries; the first listed
+// worktree is the main one.
+func worktreeEntries(infos []backend.WorktreeInfo) []*sessionv1.WorktreeEntry {
+	result := make([]*sessionv1.WorktreeEntry, 0, len(infos))
+	for i, info := range infos {
+		result = append(result, &sessionv1.WorktreeEntry{
+			Path:   string(info.Path),
+			IsMain: i == 0,
+			Branch: strings.TrimPrefix(string(info.Branch), "refs/heads/"),
+		})
 	}
 	return result
 }

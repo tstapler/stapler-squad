@@ -58,15 +58,22 @@ func (BacklogStuckState) Fields() []ent.Field {
 			Comment("Human-readable 'why' string, e.g. 'last verdict: FAIL' or 'PR #148 green & mergeable 3d'."),
 		field.Int32("remediation_attempts").
 			Default(0).
-			Comment("Count of automated remediation attempts actually made for this open row (incremented per attempt, not per detection-sweep tick). Reset to 0 by ResetStuckRemediation/BulkResetStuckRemediation, and implicitly by MarkStuck's reopen-in-place path. remediation_attempts >= maxRemediationAttempts (5) with next_remediation_at NULL is how a 'parked' row is represented — no separate boolean."),
+			Comment("Count of automated FAST remediation attempts actually made for this open row (incremented per attempt, not per detection-sweep tick), pinned at maxRemediationAttempts (5) once reached — a cold retry (see next_remediation_at) does not increment past it. Reset to 0 by ResetStuckRemediation/BulkResetStuckRemediation, and implicitly by MarkStuck's reopen-in-place path. remediation_attempts >= maxRemediationAttempts (5) is how a 'parked' row is represented — no separate boolean."),
 		field.Time("next_remediation_at").
 			Optional().
 			Nillable().
-			Comment("When this row becomes eligible for the next automated remediation attempt. NULL while remediation_attempts is 0 means 'eligible immediately'. Set back to NULL once remediation_attempts reaches the cap (parked)."),
+			Comment("When this row becomes eligible for the next automated remediation attempt. NULL while remediation_attempts is 0 means 'eligible immediately'. Once remediation_attempts reaches the cap (parked), this field is repurposed (BUG-083) to hold the next COLD-retry deadline instead of a fast-schedule entry — set to now + a long interval (session.remediationColdRetryInterval, currently 7 days) on the attempt that parks the row, and pushed out by the same interval on every cold retry thereafter, so a parked row is never permanently stuck without an automatic retry path."),
 		field.Time("grace_boot_time").
 			Optional().
 			Nillable().
 			Comment("The server boot time (session.serverStartTime) of the most recent restart-grace pass consumed by this row, if any. A restart-grace pass lets a remediation action run without consuming remediation_attempts/advancing next_remediation_at when the detected failure coincides with a service restart (in-flight AutonomousDriver goroutines are lost on restart, not a real remediation failure) — at most one free pass per boot, tracked by comparing this field to the current boot time."),
+		field.Int32("diagnose_nudge_count").
+			Default(0).
+			Comment("Count of Diagnose & Nudge nudge attempts actually made for this open row (incremented per nudge, not per Diagnose dispatch — a dispatch that files a bug or posts a note instead of nudging does not increment this), pinned at config.DiagnoseNudgeMaxAttemptsOrDefault() once reached. Mirrors remediation_attempts' own cap-tracking convention but is a distinct counter: Diagnose & Nudge dispatches are user/agent-initiated, not the automated FAST remediation loop remediation_attempts tracks."),
+		field.Time("diagnose_next_eligible_at").
+			Optional().
+			Nillable().
+			Comment("When this row becomes eligible for the next Diagnose & Nudge nudge attempt. NULL while diagnose_nudge_count is 0 means 'eligible immediately'. Mirrors next_remediation_at's cooldown convention. Once diagnose_nudge_count reaches the configured cap, further dispatches are still allowed but the dispatched agent's action space is narrowed to file-a-bug/post-a-note only (AC4) rather than blocked outright."),
 	}
 }
 

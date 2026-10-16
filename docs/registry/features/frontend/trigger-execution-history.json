@@ -1,0 +1,20 @@
+{
+  "id": "trigger-execution-history",
+  "type": "frontend",
+  "name": "Per-trigger execution history — 5-state outcome badges, N received / M matched counter",
+  "component": "TriggerExecutionHistory",
+  "path": "web-app/src/components/sessions/TriggerExecutionHistory.tsx",
+  "filePath": "web-app/src/components/sessions/TriggerExecutionHistory.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "TriggerExecutionHistory_should_showEmptyState_When_noEventsReceived",
+    "TriggerExecutionHistory_should_showReceivedAndMatchedCounts",
+    "TriggerExecutionHistory_should_collapseNoMatchEvents_By_default",
+    "TriggerExecutionHistory_should_renderDistinctBadges_For5States",
+    "TriggerExecutionHistory_should_linkToSession_When_sessionIdPresent",
+    "TriggerExecutionHistory_should_showLoadingState",
+    "TriggerExecutionHistory_should_showError_When_fetchFails"
+  ],
+  "lastModified": "2026-08-06T00:00:00Z"
+}

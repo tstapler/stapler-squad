@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -45,6 +49,7 @@ func newTestClient(srv *httptest.Server) sessionv1connect.SessionServiceClient {
 // title (the value hooks send), the published event carries the session's UUID
 // — not the raw title — so the web client can match it.
 func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
+	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
 	// Wire a ReviewQueuePoller containing an instance whose title differs from its UUID.
@@ -95,9 +100,247 @@ func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
 	}
 }
 
+// TestSendNotification_PollerMissFallsBackToStorage verifies that when the
+// in-memory ReviewQueuePoller hasn't (yet) been seeded with a session — e.g. shortly
+// after a server restart, before the startup instance-load completes — SendNotification
+// still resolves the hook-supplied title to the session's stable UUID via durable
+// storage, instead of permanently recording the raw title. Reproduces the bug where
+// "View Session" in the web UI wrongly concluded a genuinely live session was gone,
+// because its notification's session_id never got past the title.
+func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(32)
+	t.Cleanup(bus.Close)
+	svc := NewSessionServiceWithSearchEngine(storage, bus, nil)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	mux := http.NewServeMux()
+	path, handler := sessionv1connect.NewSessionServiceHandler(svc)
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Wire an empty poller (simulates the poller not having this session yet) — this
+	// is also what wires storage into notificationSvc, via SetReviewQueuePoller.
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "stapler-squad-perf"
+	const sessionUUID = "14c67dc3-a950-4863-b01a-e4abe58045d1"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     sessionTitle,
+		UUID:      sessionUUID,
+		Path:      t.TempDir(),
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle, // hook sends the title; poller doesn't have it yet
+		Title:            "Claude is waiting for your input",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM,
+	}))
+	require.NoError(t, err)
+
+	var gotEvent *events.Event
+	timeout := time.After(2 * time.Second)
+	for gotEvent == nil {
+		select {
+		case e := <-eventCh:
+			if e.Type == events.EventNotification {
+				gotEvent = e
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for notification event on event bus")
+		}
+	}
+
+	if gotEvent.SessionID != sessionUUID {
+		t.Errorf("event.SessionID = %q, want UUID %q (session title was %q, poller miss, storage fallback)",
+			gotEvent.SessionID, sessionUUID, sessionTitle)
+	}
+}
+
+// installOnGate puts a delivery gate (flag on) in front of bus and seeds the
+// hidden entries: hidden-session suppression is the gate's job.
+func installOnGate(bus *events.EventBus, entries ...deliverygate.Entry) {
+	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
+		return deliverygate.FlagSettings{Global: true}, nil
+	}))
+	gate.Flags().Reload()
+	gate.Index().Replace(entries)
+	bus.SetPublishFilter(gate.PublishFilter())
+}
+
+// TestSendNotification_SuppressesLowPriorityForHiddenSession verifies that a
+// LOW-priority notification (the shape ssq-hook-handler's native Claude Code
+// Stop hook sends for routine "Task Complete") is suppressed for a Hidden
+// (headless/review) session. Regression: Hidden review sessions were never
+// taught to any of the hook-installation code, so their routine completion
+// hook fired exactly like a normal session's, landing in notification
+// history/push for a session the UI hides and "View Session" can't open.
+func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
+	t.Parallel()
+	svc, bus, srv := newNotificationTestServer(t)
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "hidden-review-session"
+	inst := &session.Instance{Title: sessionTitle, UUID: "hidden-uuid", Hidden: true}
+	poller.SetInstances([]*session.Instance{inst})
+	installOnGate(bus, deliverygate.Entry{UUID: "hidden-uuid", Title: sessionTitle, Hidden: true, Kind: deliverygate.KindReview})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle,
+		Title:            "Task Complete",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+		Metadata:         map[string]string{pkgevents.MetadataKeySSQNotifySchema: pkgevents.SSQNotifySchemaVersion},
+	}))
+	require.NoError(t, err)
+
+	select {
+	case e := <-eventCh:
+		if e.Type == events.EventNotification {
+			t.Fatalf("expected LOW-priority notification for hidden session to be suppressed, got %+v", e)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// No notification event arrived — suppressed as expected.
+	}
+}
+
+// TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallback combines
+// TestSendNotification_PollerMissFallsBackToStorage's poller-miss setup with
+// TestSendNotification_SuppressesLowPriorityForHiddenSession's suppression assertion:
+// the storage-fallback branch also has to read Hidden off InstanceData, not just the
+// poller's live Instance, or a hidden session's routine notifications leak once it falls
+// out of the poller (e.g. shortly after a server restart).
+func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallback(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(32)
+	t.Cleanup(bus.Close)
+	svc := NewSessionServiceWithSearchEngine(storage, bus, nil)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	mux := http.NewServeMux()
+	path, handler := sessionv1connect.NewSessionServiceHandler(svc)
+	mux.Handle(path, handler)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Wire an empty poller (simulates the poller not having this session yet), same as
+	// TestSendNotification_PollerMissFallsBackToStorage.
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "hidden-review-session-storage-fallback"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     sessionTitle,
+		UUID:      "hidden-uuid-storage-fallback",
+		Path:      t.TempDir(),
+		Status:    session.Paused,
+		Program:   "claude",
+		Hidden:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+	installOnGate(bus, deliverygate.Entry{UUID: "hidden-uuid-storage-fallback", Title: sessionTitle, Hidden: true, Kind: deliverygate.KindReview})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle, // hook sends the title; poller doesn't have it yet
+		Title:            "Task Complete",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+		Metadata:         map[string]string{pkgevents.MetadataKeySSQNotifySchema: pkgevents.SSQNotifySchemaVersion},
+	}))
+	require.NoError(t, err)
+
+	select {
+	case e := <-eventCh:
+		if e.Type == events.EventNotification {
+			t.Fatalf("expected LOW-priority notification for hidden session (via storage fallback) to be suppressed, got %+v", e)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// No notification event arrived — suppressed as expected.
+	}
+}
+
+// TestSendNotification_SurfacesHighPriorityForHiddenSession verifies that a
+// HIGH-priority notification (e.g. ssq-hook-handler's "Task Failed") still
+// publishes for a Hidden session — mirroring ReactiveQueueManager's
+// suppressForHidden, which likewise never suppresses error-shaped reasons:
+// nothing else watches a stuck-in-error hidden session.
+func TestSendNotification_SurfacesHighPriorityForHiddenSession(t *testing.T) {
+	t.Parallel()
+	svc, bus, srv := newNotificationTestServer(t)
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	const sessionTitle = "hidden-review-session-failed"
+	inst := &session.Instance{Title: sessionTitle, UUID: "hidden-uuid-failed", Hidden: true}
+	poller.SetInstances([]*session.Instance{inst})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := bus.Subscribe(ctx)
+
+	client := newTestClient(srv)
+	_, err := client.SendNotification(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{
+		SessionId:        sessionTitle,
+		Title:            "Task Failed",
+		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE,
+		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH,
+	}))
+	require.NoError(t, err)
+
+	var gotEvent *events.Event
+	timeout := time.After(2 * time.Second)
+	for gotEvent == nil {
+		select {
+		case e := <-eventCh:
+			if e.Type == events.EventNotification {
+				gotEvent = e
+			}
+		case <-timeout:
+			t.Fatal("expected HIGH-priority notification for hidden session to still publish")
+		}
+	}
+}
+
 // TestSendNotification_UnknownSessionUsesRawID verifies that when no session
 // matches the incoming ID, the raw value is used as-is (graceful fallback).
 func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
+	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
 	// No poller / no instances — nothing to resolve against.
@@ -113,6 +356,7 @@ func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
 		Title:            "some notification",
 		NotificationType: sessionv1.NotificationType_NOTIFICATION_TYPE_INFO,
 		Priority:         sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW,
+		Metadata:         map[string]string{pkgevents.MetadataKeySSQNotifySchema: pkgevents.SSQNotifySchemaVersion},
 	}))
 	require.NoError(t, err)
 
@@ -135,6 +379,7 @@ func TestSendNotification_UnknownSessionUsesRawID(t *testing.T) {
 }
 
 func TestValidateLocalhostOrigin(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		peerAddr      string
@@ -164,10 +409,54 @@ func TestValidateLocalhostOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := validateLocalhostAddr(tt.peerAddr)
 			if (err != nil) != tt.expectedError {
 				t.Errorf("validateLocalhostAddr(%q) error = %v, expectedError %v", tt.peerAddr, err, tt.expectedError)
 			}
 		})
 	}
+}
+
+// The history record reports the same pending-decision answer as the predicate.
+func TestRecordToProto_ShouldSetIsPendingDecision_WhenUnreadWarningInfoAndAutoRemediatingWarning(t *testing.T) {
+	t.Parallel()
+	mk := func(typ sessionv1.NotificationType, md map[string]string) *notifications.NotificationRecord {
+		return &notifications.NotificationRecord{ID: "n", NotificationType: int32(typ), Metadata: md, CreatedAt: time.Unix(1700000000, 0)}
+	}
+	warning := sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+	require.True(t, recordToProto(mk(warning, nil)).IsPendingDecision)
+	require.False(t, recordToProto(mk(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, nil)).IsPendingDecision)
+	require.False(t, recordToProto(mk(warning, map[string]string{"auto_remediating": "true"})).IsPendingDecision)
+
+	read := mk(warning, nil)
+	read.IsRead = true
+	require.False(t, recordToProto(read).IsPendingDecision)
+}
+
+// T-PR-13: a request listing a pending decision deletes the rest and reports
+// the pending id in kept_ids; the pending row survives.
+func TestClearNotificationHistory_ShouldReturnKeptIds_WhenRequestListsPendingDecision(t *testing.T) {
+	t.Parallel()
+	store, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
+	require.NoError(t, err)
+	for _, r := range []*notifications.NotificationRecord{
+		{ID: "pending", SessionID: "s1", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED), CreatedAt: time.Now()},
+		{ID: "info-1", SessionID: "s2", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), CreatedAt: time.Now()},
+		{ID: "info-2", SessionID: "s3", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), CreatedAt: time.Now()},
+	} {
+		require.NoError(t, store.Append(r))
+	}
+	ns := &NotificationService{notificationStore: store}
+
+	resp, err := ns.ClearNotificationHistory(context.Background(),
+		connect.NewRequest(&sessionv1.ClearNotificationHistoryRequest{NotificationIds: []string{"pending", "info-1"}}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+	require.EqualValues(t, 1, resp.Msg.ClearedCount)
+	require.Equal(t, []string{"pending"}, resp.Msg.KeptIds)
+	_, ok := store.GetByID("pending")
+	require.True(t, ok)
+	_, ok = store.GetByID("info-2")
+	require.True(t, ok, "an unlisted row must survive")
 }

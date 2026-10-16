@@ -1,0 +1,59 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 802,
+        "title": "Add widget caching",
+        "body": "Adds an LRU cache in front of the widget lookup.",
+        "headRefName": "feature/widget-cache",
+        "headRefOid": "def456approved00000000000000000000000000",
+        "baseRefName": "main",
+        "state": "OPEN",
+        "url": "https://github.com/tstapler/stapler-squad/pull/802",
+        "createdAt": "2026-09-02T09:00:00Z",
+        "updatedAt": "2026-09-02T15:30:00Z",
+        "isDraft": false,
+        "mergeable": "MERGEABLE",
+        "additions": 120,
+        "deletions": 18,
+        "changedFiles": 6,
+        "author": { "login": "tstapler" },
+        "labels": {
+          "nodes": [{ "name": "enhancement" }, { "name": "backend" }]
+        },
+        "reviewDecision": "APPROVED",
+        "reviews": {
+          "nodes": [
+            { "author": { "login": "alice" }, "state": "APPROVED", "body": "LGTM" },
+            { "author": { "login": "bob" }, "state": "APPROVED", "body": "" }
+          ]
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS"
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "ci/circleci",
+                        "state": "SUCCESS"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

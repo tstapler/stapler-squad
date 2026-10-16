@@ -13,7 +13,7 @@ export const dropdown = style({
 
 export const item = style({
   display: "flex",
-  alignItems: "center",
+  alignItems: "flex-start",
   gap: 8,
   padding: "7px 16px",
   cursor: "pointer",
@@ -41,9 +41,7 @@ export const icon = style({
 
 export const name = style({
   flex: 1,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
+  overflowWrap: "anywhere",
 });
 
 export const suffix = style({

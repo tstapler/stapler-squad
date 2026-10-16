@@ -246,5 +246,3 @@ export function HistorySearchInput({
     </div>
   );
 }
-
-export default HistorySearchInput;

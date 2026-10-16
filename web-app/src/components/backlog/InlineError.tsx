@@ -14,10 +14,20 @@ import {
 
 interface InlineErrorProps {
   type: "transient" | "timeout" | "permanent";
-  onRetry: () => void;
+  /**
+   * Omit when there is genuinely nothing to retry (e.g. the error handler
+   * only clears local state) — the Retry button is not rendered in that
+   * case, so the UI doesn't offer an affordance that lies about what it
+   * does. Callers that can wire a real retry should still pass it.
+   */
+  onRetry?: () => void;
   onDismiss?: () => void;
   logsSessionId?: string;
   customMessage?: string;
+  /** Overrides the default per-`type` headline (e.g. "Triage failed"). */
+  headline?: string;
+  /** Overrides the default "Retry triage" aria-label on the Retry button. */
+  retryAriaLabel?: string;
 }
 
 const COPY: Record<
@@ -44,9 +54,12 @@ export function InlineError({
   onDismiss,
   logsSessionId,
   customMessage,
+  headline: headlineOverride,
+  retryAriaLabel = "Retry triage",
 }: InlineErrorProps) {
   const copy = COPY[type];
   const bodyText = customMessage ?? copy.body;
+  const headlineText = headlineOverride ?? copy.headline;
 
   if (type === "permanent") {
     return (
@@ -59,7 +72,7 @@ export function InlineError({
           <span className={icon} aria-hidden="true">
             ✕
           </span>
-          <span className={headline}>{copy.headline}</span>
+          <span className={headline}>{headlineText}</span>
           {onDismiss && (
             <button
               className={dismissButton}
@@ -86,14 +99,16 @@ export function InlineError({
               View session logs
             </a>
           )}
-          <button
-            className={actionButton}
-            onClick={onRetry}
-            aria-label="Retry triage"
-            type="button"
-          >
-            Retry ↺
-          </button>
+          {onRetry && (
+            <button
+              className={actionButton}
+              onClick={onRetry}
+              aria-label={retryAriaLabel}
+              type="button"
+            >
+              Retry ↺
+            </button>
+          )}
         </div>
       </div>
     );
@@ -109,18 +124,20 @@ export function InlineError({
         ✕
       </span>
       <span>
-        <span className={headline}>{copy.headline}</span>
+        <span className={headline}>{headlineText}</span>
         {" — "}
         {bodyText}
       </span>
-      <button
-        className={actionButton}
-        onClick={onRetry}
-        aria-label="Retry triage"
-        type="button"
-      >
-        Retry ↺
-      </button>
+      {onRetry && (
+        <button
+          className={actionButton}
+          onClick={onRetry}
+          aria-label={retryAriaLabel}
+          type="button"
+        >
+          Retry ↺
+        </button>
+      )}
       {onDismiss && (
         <button
           className={dismissButton}

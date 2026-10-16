@@ -1,6 +1,6 @@
 # ADR-013: WorkflowEngine Interface Replaces `validTransitions` Map at Runtime
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-05-19
 **Deciders**: Tyler Stapler
 
@@ -75,3 +75,29 @@ The `refining` state is added to `DefaultWorkflowEngine` in Phase 1 without modi
 **Alt B: Load WorkflowConfig on every `TransitionBacklogItemStatus` call** — avoids an interface but creates a per-call DB read (O(n) for list operations). Rejected due to the caching pitfall identified in research.
 
 **Alt C: Store workflow as a proto message, not a Go interface** — over-engineers the seam; proto is the serialization layer, not the runtime policy object. The interface stays in Go.
+
+---
+
+## Phase 2 Implementation Note (2026-09-11)
+
+Phase 2 landed as the `backlog-custom-workflow-stages` project
+(`project_plans/backlog-custom-workflow-stages/`), which implements
+`ConfiguredWorkflowEngine` substantially as this ADR predicted, with two
+divergences from the original proposal above, each resolved by its own ADR:
+
+- **Liveness (staleness/timeout thresholds) is a sibling interface,
+  `LivenessEngine`, not folded into `WorkflowEngine`** — see
+  [ADR-001](../../project_plans/backlog-custom-workflow-stages/decisions/ADR-001-liveness-engine-sibling-interface.md).
+- **Transition gates extend `WorkflowEngine` via a fourth method,
+  `PendingGates`**, rather than being absorbed into `ValidateGates` alone —
+  see [ADR-002](../../project_plans/backlog-custom-workflow-stages/decisions/ADR-002-configured-workflow-engine-and-gates.md),
+  which also covers `ConfiguredWorkflowEngine` itself as this ADR's Phase 2
+  implementation.
+- **Custom/pluggable gate checks are bounded to a pre-registered
+  skill/slash-command allowlist**, never arbitrary code — see
+  [ADR-003](../../project_plans/backlog-custom-workflow-stages/decisions/ADR-003-custom-gate-check-execution-bound.md).
+
+The core decision above — `WorkflowEngine` as an injected interface,
+`DefaultWorkflowEngine` wrapping the static map, `ConfiguredWorkflowEngine` as
+a drop-in Phase 2 substitute — held up unchanged; only the two extensions
+noted needed their own design record.
