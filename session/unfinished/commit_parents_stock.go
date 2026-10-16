@@ -80,7 +80,7 @@ func scanCommitHeader(hr *headerReader, parents []plumbing.Hash) ([]plumbing.Has
 		return parents, when, err
 	}
 	if string(key) == "author" {
-		if line, eof, err = hr.next(); err != nil || len(line) == 0 || isBlankHeader(line) {
+		if line, _, err = hr.next(); err != nil || len(line) == 0 || isBlankHeader(line) {
 			return parents, when, err
 		}
 		key, data = splitHeaderLine(line)

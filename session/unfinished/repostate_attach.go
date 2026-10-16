@@ -27,7 +27,7 @@ func (g *GoGitVCSReader) repoState(entry *cachedRepo) *repostate.RepoState {
 		return nil
 	}
 	ext := h.Extension(func() gogitstore.Extension {
-		return repostate.NewRepoState(repostate.Options{PressureFunc: g.UnderSeverePressure}, repoStateBudgetBytes)
+		return repostate.NewRepoState(repostate.Options{PressureFunc: g.UnderSeverePressure, MaxGraphCommits: g.repoStateMaxGraphCommits}, repoStateBudgetBytes)
 	})
 	rs, _ := ext.(*repostate.RepoState)
 	return rs

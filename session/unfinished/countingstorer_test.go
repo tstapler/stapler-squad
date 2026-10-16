@@ -16,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/storage"
 	"github.com/go-git/go-git/v5/storage/memory"
 
+	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
@@ -49,6 +50,22 @@ func (s *countingStorer) TreeReads() int64 { return s.trees.Load() }
 
 // BlobReads is the number of EncodedObject(BlobObject, _) reads.
 func (s *countingStorer) BlobReads() int64 { return s.blobs.Load() }
+
+// Extension and CommonDirKey forward to the wrapped gogitstore storer so a
+// repo opened through the counting wrapper still engages the shared RepoState.
+func (s *countingStorer) Extension(newFn func() gogitstore.Extension) gogitstore.Extension {
+	if h, ok := s.Storer.(extensionHolder); ok {
+		return h.Extension(newFn)
+	}
+	return nil
+}
+
+func (s *countingStorer) CommonDirKey() string {
+	if k, ok := s.Storer.(commonDirKeyer); ok {
+		return k.CommonDirKey()
+	}
+	return ""
+}
 
 // Close forwards to the wrapped storer so a cachedRepo holding the wrapper
 // still releases its gogitstore registry reference on eviction.

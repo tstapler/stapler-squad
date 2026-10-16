@@ -615,6 +615,10 @@ type GoGitVCSReader struct {
 	// scanSkip holds the scan_skip rollback unit's caches (index, untracked
 	// dirs, DirtyGen) and its clock/flag test seams; see scanskip_state.go.
 	scanSkip scanSkipState
+
+	// repoStateMaxGraphCommits bounds each RepoState's commit graph; zero keeps
+	// the default. Test seam for the ErrGraphFull fallback; nil-op in production.
+	repoStateMaxGraphCommits int
 }
 
 // matcherCacheEntry is the value type stored in GoGitVCSReader.matcherCache.
@@ -985,10 +989,7 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
 		}
 
-		entry.mu.Lock()
-		defer entry.mu.Unlock() // REQUIRED: defer, never explicit unlocks — ensures mutex releases on panic
-
-		ahead, behind, abErr := g.aheadBehindLocked(entry, cacheKey)
+		ahead, behind, abErr := g.aheadBehindCompute(entry, cacheKey)
 		return abResult{ahead, behind}, abErr
 	})
 	if err != nil {
