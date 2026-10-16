@@ -265,10 +265,7 @@ func jiraIssueRequest(ctx context.Context, cfg jiraPluginConfig, method, path st
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, errJiraNotFound
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		if len(data) > 512 {
-			data = data[:512]
-		}
-		return nil, fmt.Errorf("jira: unexpected status %d: %s", resp.StatusCode, string(data))
+		return nil, fmt.Errorf("jira: unexpected status %d: %.512s", resp.StatusCode, strings.ToValidUTF8(string(data), ""))
 	}
 	return data, nil
 }
