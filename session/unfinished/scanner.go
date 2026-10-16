@@ -201,6 +201,11 @@ type Scanner struct {
 	// case, degrading to relying solely on the (still-present) ticker.
 	fsWatcher *fsnotify.Watcher
 
+	// scanRecords holds per-repo scan state (scanstate.go): the Burst's
+	// RefSnapshot while a scan runs.
+	scanRecords sync.Map // map[string]*repoScanRecord (key = repoPath)
+	scanStats   scanStateStats
+
 	// gitwatch holds the Tier A linked-worktree watch state and test seam
 	// (scanner_gitwatch.go).
 	gitwatch gitwatchState
@@ -606,6 +611,10 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 	// Resolve default branch once per repo.
 	defaultBranch := s.reader.ResolveDefaultBranch(repoPath)
 
+	// The Burst's RefSnapshot lives exactly as long as this call.
+	s.beginBurst(repoPath, defaultBranch, worktreePaths(worktrees))
+	defer s.endBurst(repoPath)
+
 	var results []ScanResult
 	for _, wt := range worktrees {
 		if wt.IsBare || wt.IsDetached || wt.IsPrunable {
@@ -686,7 +695,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	result.HasUncommitted = uncommitted
 
 	if defaultBranch != "" {
-		ahead, behind, aErr := s.reader.AheadBehind(wt.Path, defaultBranch)
+		ahead, behind, aErr := s.aheadBehind(s.burstSnapshot(repoPath), wt.Path, defaultBranch)
 		if aErr == nil {
 			result.AheadCount = ahead
 			result.BehindCount = behind
@@ -895,6 +904,7 @@ func (s *Scanner) RemoveRepo(repoPath string) {
 	// removed (not just missing one worktree) — without this, every repo
 	// ever tracked leaves an empty *sync.Map behind for the process lifetime.
 	s.repoWorktrees.Delete(repoPath)
+	s.scanRecords.Delete(repoPath)
 }
 
 // forgetRepoWorktrees drops the reader's cached state, including reachable

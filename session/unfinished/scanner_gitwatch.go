@@ -251,6 +251,7 @@ func (s *Scanner) rescanAllOnOverflow(ctx context.Context) {
 		}
 		if repo, _ := k.(string); repo != "" {
 			s.noteDirtyRepo(repo, EventOverflow)
+			s.dropRefSnapshot(repo)
 			s.invalidateRepo(repo)
 			s.enqueueRepo(repo, true)
 		}
@@ -315,6 +316,7 @@ func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
 	}
 	if t, ok := s.worktreeTargetFor(filepath.Dir(event.Name)); ok {
 		s.noteDirty(t.worktree, EventTrackedPath)
+		s.dropRefSnapshot(t.repoRoot)
 		s.scheduleWorktreeEvent(ctx, t)
 		return
 	}
@@ -326,6 +328,7 @@ func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
 		if filepath.Base(dir) == ".git" {
 			repoRoot := filepath.Dir(dir)
 			s.noteGitEvent(repoRoot, event, scope)
+			s.dropRefSnapshot(repoRoot)
 			s.scheduleGitEvent(ctx, repoRoot, scope)
 			if s.gitwatch.watchWorktreeGitdirs && scope == gitEventAllWorktrees {
 				s.watchRepo(repoRoot) // picks up linked worktrees added since the last pass

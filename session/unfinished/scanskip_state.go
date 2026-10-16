@@ -67,6 +67,7 @@ type scanSkipState struct {
 	untracked  lazyMap[string, *untrackedCache]
 	dirtyGens  lazyMap[string, *DirtyGen]
 	stats      scanSkipCounters
+	refs       refResolveCounters
 
 	// passSF coalesces HasUncommittedPass callers; its result type differs
 	// from hasUncommittedSF's, so it needs its own group.
