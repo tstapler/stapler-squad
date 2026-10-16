@@ -20,8 +20,21 @@ func jiraIssueJSON(key, updated, prio, desc string) string {
 	return fmt.Sprintf(`{"key":%q,"fields":{"summary":"S %s","description":%s,"labels":["l1"],"updated":%q,"priority":%s}}`, key, key, desc, updated, p)
 }
 
-func jiraCfg(ts *httptest.Server) PluginConfig {
-	return PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG","email":"a@b.c","token":"jira_secret"}`, ts.URL)}
+// jiraCfg returns a config for ts and supplies credentials via the env
+// fallback; callers must not be parallel (t.Setenv).
+func jiraCfg(t *testing.T, ts *httptest.Server) PluginConfig {
+	t.Helper()
+	t.Setenv("JIRA_EMAIL", "a@b.c")
+	t.Setenv("JIRA_API_TOKEN", "jira_secret")
+	t.Setenv("JIRA_BASE_URL", "")
+	return PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG"}`, ts.URL)}
+}
+
+func clearJiraEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_BASE_URL"} {
+		t.Setenv(k, "")
+	}
 }
 
 func TestJiraPlugin_PluginID(t *testing.T) {
@@ -30,7 +43,7 @@ func TestJiraPlugin_PluginID(t *testing.T) {
 }
 
 func TestJiraPlugin_Fetch_should_ReturnEmpty_When_CredentialsMissing(t *testing.T) {
-	t.Parallel()
+	clearJiraEnv(t)
 	cfg := PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net","project_key":"ENG"}`}
 	items, cursor, err := NewJiraPlugin().Fetch(context.Background(), cfg, "old")
 	require.NoError(t, err)
@@ -39,11 +52,13 @@ func TestJiraPlugin_Fetch_should_ReturnEmpty_When_CredentialsMissing(t *testing.
 }
 
 func TestJiraPlugin_Fetch_should_Error_When_RequiredConfigMissingOrInvalid(t *testing.T) {
-	t.Parallel()
+	clearJiraEnv(t)
+	t.Setenv("JIRA_EMAIL", "a@b.c")
+	t.Setenv("JIRA_API_TOKEN", "t")
 	for _, raw := range []string{
-		`{"email":"a@b.c","token":"t","project_key":"ENG"}`,
-		`{"email":"a@b.c","token":"t","base_url":"https://x.atlassian.net"}`,
-		`{"email":"a@b.c","token":"t","base_url":"https://x.atlassian.net","project_key":"ENG OR 1=1"}`,
+		`{"project_key":"ENG"}`,
+		`{"base_url":"https://x.atlassian.net"}`,
+		`{"base_url":"https://x.atlassian.net","project_key":"ENG OR 1=1"}`,
 	} {
 		_, _, err := NewJiraPlugin().Fetch(context.Background(), PluginConfig{Raw: raw}, "")
 		require.Error(t, err, raw)
@@ -59,7 +74,7 @@ func TestJiraPlugin_Fetch_should_BuildJQLFromCursor_And_UseBasicAuth(t *testing.
 		fmt.Fprint(w, `{"issues":[],"isLast":true}`)
 	}))
 	defer ts.Close()
-	_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(ts), "2026-07-01 00:00")
+	_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "2026-07-01 00:00")
 	require.NoError(t, err)
 	require.Equal(t, `project = ENG AND updated >= "2026-07-01 00:00" ORDER BY updated ASC`, gotJQL)
 	require.Equal(t, "/rest/api/3/search/jql", gotPath)
@@ -67,7 +82,7 @@ func TestJiraPlugin_Fetch_should_BuildJQLFromCursor_And_UseBasicAuth(t *testing.
 	require.Equal(t, "jira_secret", gotPass)
 	require.Equal(t, "2026-07-01 00:00", cursor)
 
-	_, _, err = NewJiraPlugin().Fetch(context.Background(), jiraCfg(ts), "")
+	_, _, err = NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "")
 	require.NoError(t, err)
 	require.Equal(t, `project = ENG ORDER BY updated ASC`, gotJQL)
 }
@@ -87,7 +102,7 @@ func TestJiraPlugin_Fetch_should_FollowNextPageToken_AcrossAllPages(t *testing.T
 		}
 	}))
 	defer ts.Close()
-	items, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(ts), "")
+	items, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"", "p2", "p3"}, tokens)
 	require.Len(t, items, 3)
@@ -102,7 +117,7 @@ func TestJiraPlugin_Fetch_should_ConvertADFDescriptionToPlainText(t *testing.T) 
 		fmt.Fprintf(w, `{"issues":[%s],"isLast":true}`, jiraIssueJSON("ENG-1", "2026-08-01T10:00:00.000+0000", "Medium", adf))
 	}))
 	defer ts.Close()
-	items, _, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(ts), "")
+	items, _, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "")
 	require.NoError(t, err)
 	got := NewJiraPlugin().MapToBacklogItem(items[0], "src")
 	require.Equal(t, "Fix the login bug", got.Description)
@@ -114,7 +129,7 @@ func TestJiraPlugin_Fetch_should_ClassifyHTTPErrors(t *testing.T) {
 	cases := map[int]string{401: "authentication failed (401)", 429: "rate limited", 500: "unexpected status 500"}
 	for status, want := range cases {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
-		_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(ts), "c0")
+		_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "c0")
 		ts.Close()
 		require.ErrorContains(t, err, want)
 		require.NotContains(t, err.Error(), "jira_secret")
@@ -122,7 +137,18 @@ func TestJiraPlugin_Fetch_should_ClassifyHTTPErrors(t *testing.T) {
 	}
 }
 
+func TestJiraPlugin_Fetch_should_NotReadCredentialsFromConfigJSON(t *testing.T) {
+	clearJiraEnv(t)
+	cfg := PluginConfig{Raw: `{"base_url":"https://plain.atlassian.net","project_key":"ENG","email":"a@b.c","token":"plaintext"}`}
+	items, _, err := NewJiraPlugin().Fetch(context.Background(), cfg, "c0")
+	require.NoError(t, err)
+	require.Empty(t, items, "credentials in Raw must not enable the source")
+}
+
 func TestJiraPlugin_Fetch_should_PreferKeychainCredentials(t *testing.T) {
+	clearJiraEnv(t)
+	t.Setenv("JIRA_EMAIL", "env@x.com")
+	t.Setenv("JIRA_API_TOKEN", "env_tok")
 	var gotUser string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUser, _, _ = r.BasicAuth()
@@ -170,13 +196,14 @@ func TestJiraPlugin_FetchIssue_should_ReturnItem_And_ClassifyErrors(t *testing.T
 		fmt.Fprint(w, jiraIssueJSON("ENG-5", "2026-08-01T10:00:00.000+0000", "High", adf))
 	}))
 	defer ts.Close()
-	cfg := jiraCfg(ts)
+	cfg := jiraCfg(t, ts)
 	item, err := NewJiraPlugin().FetchIssue(context.Background(), cfg, "ENG-5")
 	require.NoError(t, err)
 	require.Equal(t, "hello", item.Description)
 	require.Equal(t, ts.URL+"/browse/ENG-5", item.URL)
 	_, err = NewJiraPlugin().FetchIssue(context.Background(), cfg, "ENG-404")
 	require.ErrorContains(t, err, "not found")
+	clearJiraEnv(t)
 	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net"}`}, "ENG-5")
 	require.ErrorContains(t, err, "not configured")
 	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{}, "ENG-5")

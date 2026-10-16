@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,13 +36,27 @@ var jiraTimeLayouts = []string{"2006-01-02T15:04:05.000-0700", time.RFC3339Nano,
 var jiraProjectKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
 // jiraPluginConfig is the decoded PluginConfig.Raw for the JIRA plugin.
-// Email/token are deliberately absent: they live in the keychain (AC6), with
-// a legacy per-source fallback mirroring the GitHub plugin. Cloud only.
+// Email/token are deliberately not config fields (AC6): they are resolved
+// from the keychain, then JIRA_EMAIL/JIRA_API_TOKEN, and never read from or
+// written to Raw. Cloud only.
 type jiraPluginConfig struct {
 	BaseURL    string `json:"base_url"`
 	ProjectKey string `json:"project_key"`
-	Email      string `json:"email"`
-	Token      string `json:"token"`
+	Email      string `json:"-"`
+	Token      string `json:"-"`
+}
+
+// resolveJiraCredentials fills cfg.Email/Token from the keychain (keyed by
+// base URL), falling back to the JIRA_* environment variables.
+func resolveJiraCredentials(cfg *jiraPluginConfig) {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = os.Getenv("JIRA_BASE_URL")
+	}
+	if email, token, ok := jira.GetKeychainTokenForHost(cfg.BaseURL); ok {
+		cfg.Email, cfg.Token = email, token
+		return
+	}
+	cfg.Email, cfg.Token = os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_API_TOKEN")
 }
 
 type jiraIssue struct {
@@ -74,9 +89,7 @@ func decodeJiraFetchConfig(config PluginConfig) (cfg jiraPluginConfig, disabled 
 			return jiraPluginConfig{}, false, fmt.Errorf("jira: parse config: %w", err)
 		}
 	}
-	if email, token, ok := jira.GetKeychainTokenForHost(cfg.BaseURL); ok {
-		cfg.Email, cfg.Token = email, token
-	}
+	resolveJiraCredentials(&cfg)
 	if cfg.Token == "" || cfg.Email == "" {
 		return jiraPluginConfig{}, true, nil
 	}
@@ -271,11 +284,9 @@ func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key st
 			return ExternalItem{}, fmt.Errorf("jira: parse config: %w", err)
 		}
 	}
+	resolveJiraCredentials(&cfg)
 	if cfg.BaseURL == "" {
 		return ExternalItem{}, fmt.Errorf("jira: base_url is required")
-	}
-	if email, token, ok := jira.GetKeychainTokenForHost(cfg.BaseURL); ok {
-		cfg.Email, cfg.Token = email, token
 	}
 	if cfg.Email == "" || cfg.Token == "" {
 		return ExternalItem{}, fmt.Errorf("jira: credentials not configured for %s (store email and API token in the keychain)", jira.NormalizeHost(cfg.BaseURL))

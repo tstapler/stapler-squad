@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -30,12 +31,12 @@ var linearGraphQLURL = "https://api.linear.app/graphql"
 var linearHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // linearPluginConfig is the decoded PluginConfig.Raw for the Linear plugin.
-// The API key is deliberately absent: it lives in the keychain (AC6), with a
-// legacy "token" fallback mirroring the GitHub plugin.
+// The API key is deliberately not a config field (AC6): it is resolved from
+// the keychain, then LINEAR_API_KEY, and never read from or written to Raw.
 type linearPluginConfig struct {
 	TeamKey string `json:"team_key"`
 	TeamID  string `json:"team_id"`
-	Token   string `json:"token"`
+	Token   string `json:"-"`
 }
 
 type linearIssue struct {
@@ -80,8 +81,9 @@ func decodeLinearFetchConfig(config PluginConfig) (cfg linearPluginConfig, disab
 			return linearPluginConfig{}, false, fmt.Errorf("linear: parse config: %w", err)
 		}
 	}
-	if token := linear.GetKeychainToken(); token != "" {
-		cfg.Token = token
+	cfg.Token = linear.GetKeychainToken()
+	if cfg.Token == "" {
+		cfg.Token = os.Getenv("LINEAR_API_KEY")
 	}
 	if cfg.Token == "" {
 		return linearPluginConfig{}, true, nil

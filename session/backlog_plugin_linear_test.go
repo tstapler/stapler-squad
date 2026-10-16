@@ -29,6 +29,14 @@ func withLinearTestServer(t *testing.T, handler http.HandlerFunc) {
 	})
 }
 
+// setLinearKey provides the API key via the env fallback; callers must not
+// be parallel (t.Setenv).
+func setLinearKey(t *testing.T, key string) {
+	t.Helper()
+	_ = linear.DeleteKeychainToken() // keychain empty unless a test sets it (error = nothing stored)
+	t.Setenv("LINEAR_API_KEY", key)
+}
+
 func linearIssuesResponse(nodes string, hasNext bool, end string) string {
 	return fmt.Sprintf(`{"data":{"issues":{"nodes":[%s],"pageInfo":{"hasNextPage":%v,"endCursor":%q}}}}`, nodes, hasNext, end)
 }
@@ -50,7 +58,7 @@ func TestNewDefaultRegistry_should_IncludeLinearAndJira(t *testing.T) {
 }
 
 func TestLinearPlugin_Fetch_should_ReturnEmpty_When_TokenMissing(t *testing.T) {
-	t.Parallel()
+	setLinearKey(t, "")
 	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"team_key":"ENG"}`}, "old")
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -58,12 +66,13 @@ func TestLinearPlugin_Fetch_should_ReturnEmpty_When_TokenMissing(t *testing.T) {
 }
 
 func TestLinearPlugin_Fetch_should_Error_When_ConfigIsInvalidJSON(t *testing.T) {
-	t.Parallel()
+	setLinearKey(t, "k")
 	_, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{nope`}, "")
 	require.Error(t, err)
 }
 
 func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
+	setLinearKey(t, "lin_key")
 	var gotAuth string
 	var gotVars map[string]any
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +87,7 @@ func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
 {"identifier":"ENG-1","title":"One","description":"d1","url":"https://linear.app/o/issue/ENG-1","priority":1,"updatedAt":"2026-08-01T00:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[{"name":"bug"}]}},
 {"identifier":"ENG-2","title":"Two","description":"","url":"https://linear.app/o/issue/ENG-2","priority":0,"updatedAt":"2026-08-03T00:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}`, false, ""))
 	})
-	cfg := PluginConfig{Raw: `{"token":"lin_key","team_key":"ENG"}`}
+	cfg := PluginConfig{Raw: `{"team_key":"ENG"}`}
 	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), cfg, "2026-07-01T00:00:00.000Z")
 	require.NoError(t, err)
 	require.Equal(t, "lin_key", gotAuth, "raw key, no Bearer prefix")
@@ -95,7 +104,15 @@ func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
 	require.Contains(t, filter, "team")
 }
 
-func TestLinearPlugin_Fetch_should_PreferKeychainToken_OverConfigToken(t *testing.T) {
+func TestLinearPlugin_Fetch_should_NotReadTokenFromConfigJSON(t *testing.T) {
+	setLinearKey(t, "")
+	items, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"token":"plaintext","api_key":"plaintext"}`}, "c0")
+	require.NoError(t, err)
+	require.Empty(t, items, "a token in Raw must not enable the source")
+}
+
+func TestLinearPlugin_Fetch_should_PreferKeychainToken_OverEnv(t *testing.T) {
+	setLinearKey(t, "from_env")
 	require.NoError(t, linear.SetKeychainToken("from_keychain"))
 	t.Cleanup(func() { _ = linear.DeleteKeychainToken() })
 	var gotAuth string
@@ -103,12 +120,13 @@ func TestLinearPlugin_Fetch_should_PreferKeychainToken_OverConfigToken(t *testin
 		gotAuth = r.Header.Get("Authorization")
 		fmt.Fprint(w, linearIssuesResponse("", false, ""))
 	})
-	_, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"token":"from_config"}`}, "")
+	_, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "")
 	require.NoError(t, err)
 	require.Equal(t, "from_keychain", gotAuth)
 }
 
 func TestLinearPlugin_Fetch_should_FollowPagination(t *testing.T) {
+	setLinearKey(t, "k")
 	calls := 0
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -118,7 +136,7 @@ func TestLinearPlugin_Fetch_should_FollowPagination(t *testing.T) {
 		}
 		fmt.Fprint(w, linearIssuesResponse(`{"identifier":"ENG-8","title":"o","priority":3,"updatedAt":"2026-08-08T00:00:00.000Z","labels":{"nodes":[]}}`, false, ""))
 	})
-	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"token":"k"}`}, "")
+	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "")
 	require.NoError(t, err)
 	require.Equal(t, 2, calls)
 	require.Len(t, items, 2)
@@ -126,13 +144,14 @@ func TestLinearPlugin_Fetch_should_FollowPagination(t *testing.T) {
 }
 
 func TestLinearPlugin_Fetch_should_NotAdvanceCursor_When_PageCapHit(t *testing.T) {
+	setLinearKey(t, "k")
 	orig := maxLinearFetchPages
 	maxLinearFetchPages = 2
 	t.Cleanup(func() { maxLinearFetchPages = orig })
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, linearIssuesResponse(`{"identifier":"ENG-1","title":"t","priority":3,"updatedAt":"2026-08-09T00:00:00.000Z","labels":{"nodes":[]}}`, true, "more"))
 	})
-	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"token":"k"}`}, "c0")
+	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "c0")
 	require.Error(t, err)
 	require.Empty(t, items)
 	require.Equal(t, "c0", cursor)
@@ -150,11 +169,12 @@ func TestLinearPlugin_Fetch_should_ClassifyErrors(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			setLinearKey(t, "secret_key")
 			withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(c.status)
 				fmt.Fprint(w, c.body)
 			})
-			_, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"token":"secret_key"}`}, "c0")
+			_, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "c0")
 			require.ErrorContains(t, err, c.want)
 			require.NotContains(t, err.Error(), "secret_key")
 			require.Equal(t, "c0", cursor)
@@ -193,6 +213,7 @@ func TestParseLinearIssueRef(t *testing.T) {
 }
 
 func TestLinearPlugin_FetchIssue_should_ReturnItem_And_ErrorWhenNotFoundOrNoKey(t *testing.T) {
+	setLinearKey(t, "k")
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(b), `"ENG-404"`) {
@@ -201,13 +222,14 @@ func TestLinearPlugin_FetchIssue_should_ReturnItem_And_ErrorWhenNotFoundOrNoKey(
 		}
 		fmt.Fprint(w, `{"data":{"issue":{"identifier":"ENG-5","title":"Five","description":"d","url":"https://linear.app/o/issue/ENG-5","priority":2,"updatedAt":"2026-08-01T00:00:00.000Z","labels":{"nodes":[]}}}}`)
 	})
-	cfg := PluginConfig{Raw: `{"token":"k"}`}
+	cfg := PluginConfig{}
 	item, err := NewLinearPlugin().FetchIssue(context.Background(), cfg, "ENG-5")
 	require.NoError(t, err)
 	require.Equal(t, "ENG-5", item.ExternalID)
 	require.Equal(t, 4, item.Priority)
 	_, err = NewLinearPlugin().FetchIssue(context.Background(), cfg, "ENG-404")
 	require.ErrorContains(t, err, "not found")
-	_, err = NewLinearPlugin().FetchIssue(context.Background(), PluginConfig{}, "ENG-5")
+	t.Setenv("LINEAR_API_KEY", "")
+	_, err = NewLinearPlugin().FetchIssue(context.Background(), cfg, "ENG-5")
 	require.ErrorContains(t, err, "not configured")
 }
