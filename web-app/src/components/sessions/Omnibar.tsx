@@ -72,7 +72,6 @@ import {
 } from "./Omnibar.css";
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
 import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
-import { useBacklogBackgroundCreate } from "@/lib/hooks/useBacklogBackgroundCreate";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
@@ -330,7 +329,6 @@ export function Omnibar({
   // Dedicated multi-line compose mode opened by the "Create backlog item" button;
   // seeded from the current input so typed text is never discarded.
   const [backlogComposeText, setBacklogComposeText] = useState<string | null>(null);
-  const createBacklogInBackground = useBacklogBackgroundCreate();
   // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
   // handleSubmit's closure after React commits the re-render, which leaves a window
   // for a second rapid click (e.g. a fast double-click) to read the same stale
@@ -1745,8 +1743,8 @@ export function Omnibar({
     );
   }
 
-  // Compose mode: dedicated textarea; Create closes the omnibar immediately and
-  // finishes in the background (see useBacklogBackgroundCreate).
+  // Compose mode: dedicated textarea; Create hands the text to the AI intent
+  // review (same step as the "backlog: " prefix path).
   if (backlogComposeText !== null) {
     return (
       <div
@@ -1762,8 +1760,7 @@ export function Omnibar({
             initialText={backlogComposeText}
             onSubmit={(text) => {
               setBacklogComposeText(null);
-              onClose();
-              void createBacklogInBackground(text);
+              setBacklogReviewText(text);
             }}
             onCancel={(draft) => {
               setInput(draft);
