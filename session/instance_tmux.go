@@ -547,6 +547,13 @@ func (i *Instance) initTmuxSession() {
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)
 	}
+	// Tymux has no construction-time equivalent of tmux's "bake the program
+	// into the session object" — CreateSessionRequest.Command must be set
+	// before Start() via SetCommand, or tymuxd spawns $SHELL instead of
+	// enrichedProgram (see tymuxGRPCSession.SetCommand's doc comment).
+	if tb, ok := i.processManager.(*TymuxBackend); ok {
+		tb.TymuxManager().SetCommand(enrichedProgram)
+	}
 }
 
 // KillSession terminates the tmux session only (leaves worktree intact).

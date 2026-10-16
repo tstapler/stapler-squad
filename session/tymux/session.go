@@ -38,6 +38,16 @@ type tymuxGRPCSession struct {
 	// and nothing here assumes single-threaded callers.
 	mu sync.RWMutex
 
+	// command is the program Start() asks tymuxd to spawn in the new pane
+	// (CreateSessionRequest.Command), set via SetCommand before Start() is
+	// called — mirroring TmuxManager's SetSession(session-with-program-baked-in)
+	// idiom (session/instance_tmux.go's initTmuxSession). Empty means "let
+	// tymuxd default to $SHELL" (CreateSessionRequest.Command's documented
+	// default), which was this type's only behavior before SetCommand existed:
+	// Start() never threaded a command through at all, so every tymux-backed
+	// session silently got a bare shell regardless of the requested program.
+	command string
+
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
 	// (v1.0, non-split) pane, cached from CreateSession/ReviveSession's
 	// response — GetSessionIdentifier() needs no RPC (architecture.md §1).
@@ -306,14 +316,30 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := validateWorkDir(dir); err != nil {
 		return err
 	}
+	s.mu.RLock()
+	command := s.command
+	s.mu.RUnlock()
 	resp, err := s.transport.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{
-		Name: dir,
-		Cwd:  dir,
+		Name:    dir,
+		Command: command,
+		Cwd:     dir,
 	}))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
 	return s.cacheFromSession(resp.Msg)
+}
+
+// SetCommand records the program Start() will ask tymuxd to spawn in the
+// new pane. Call it before Start(), the same ordering TmuxManager's
+// SetSession(session-with-program-baked-in) requires — see initTmuxSession's
+// doc comment. Not consulted by RestoreWithWorkDir: a session found still
+// Live already has its process running (ReviveSession and the not-found
+// Start() fallback are the only two paths that ever spawn a process).
+func (s *tymuxGRPCSession) SetCommand(command string) {
+	s.mu.Lock()
+	s.command = command
+	s.mu.Unlock()
 }
 
 // RestoreWithWorkDir reconciles this session against tymuxd after a

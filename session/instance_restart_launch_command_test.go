@@ -100,7 +100,7 @@ func TestKillSessionThenStart_DoesNotRebuildLaunchCommand(t *testing.T) {
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
 	})
-	require.NoError(t, inst.Restart(false), "Restart should succeed")
+	require.NoError(t, inst.Restart(false, ""), "Restart should succeed")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after Restart")
 	assert.Contains(t, inst.LaunchCommand, "--resume", "Restart() is expected to rebuild the launch command with --resume")
 	assert.Contains(t, inst.LaunchCommand, "550e8400-e29b-41d4-a716-446655440000")

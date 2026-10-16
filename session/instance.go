@@ -2174,14 +2174,28 @@ func stopByUserLocked(s *instanceState) error {
 	return nil
 }
 
-// Restart restarts the session by killing and recreating the tmux session.
-// The git worktree is preserved during restart.
+// Restart restarts the session by killing and recreating its process-manager
+// session. The git worktree is preserved during restart.
 // If preserveOutput is true, captures terminal output before killing the session.
 // For Claude sessions, uses --resume flag with the stored session ID.
-func (i *Instance) Restart(preserveOutput bool) error {
+//
+// backendOverride, when non-empty and different from i.Backend, migrates the
+// session to that backend instead of respawning the current one: a fresh
+// ProcessManager is constructed for the target backend (via NewProcessManager,
+// the same factory CreateSession uses) and i.Backend is updated so the switch
+// persists across restarts. This is the only supported way to move a session
+// between tmux and tymux live — the two backends are different daemons, so
+// there is no way to hand off the actual running process; the "migration" is
+// capture-output(optional)/kill/launch-fresh-under-the-new-backend/resume, the
+// same mechanism Restart already used for in-place respawns. An empty
+// backendOverride (or one equal to i.Backend) preserves today's respawn-in-place
+// behavior exactly.
+func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) error {
 	if !i.started.Load() {
 		return ErrCannotRestart
 	}
+
+	migrating := backendOverride != "" && backendOverride != i.Backend
 
 	waspaused := i.Status == Paused
 
@@ -2276,18 +2290,46 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	// Record the full launch command for diagnostics (MCP injection verification, etc.)
 	i.LaunchCommand = program
 
-	// Use server socket isolation if specified, otherwise use prefix-only isolation
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
+	if migrating {
+		// A different backend means a different daemon entirely (tmux vs.
+		// tymuxd) — there is no live handoff, so build a brand-new
+		// ProcessManager via the same factory CreateSession uses, with the
+		// program already known (see newTmuxBackendFromOpts/
+		// newTymuxBackendFromOpts's opts.Program handling) rather than
+		// reusing i.processManager's now-stale backend-specific wiring.
+		newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
+			Backend:      backendOverride,
+			SessionName:  i.Title,
+			Program:      program,
+			Prefix:       tmuxPrefix,
+			ServerSocket: i.TmuxServerSocket,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
+		}
+		// i.processManager is pmMu-guarded (see pm()'s own lazy-init locking) —
+		// unlike the SetSession/SetCommand branches below, which mutate state
+		// *inside* the existing manager, this replaces the pointer itself, so
+		// it must take the same lock pm() does to avoid racing a concurrent
+		// reader's i.pm() call.
+		i.pmMu.Lock()
+		i.processManager = newPM
+		i.pmMu.Unlock()
+		i.Backend = backendOverride
+	} else if tb, ok := i.processManager.(*TmuxBackend); ok {
+		// Use server socket isolation if specified, otherwise use prefix-only isolation
 		if i.TmuxServerSocket != "" {
 			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
 		} else {
 			tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
 		}
+	} else if tb, ok := i.processManager.(*TymuxBackend); ok {
+		tb.TymuxManager().SetCommand(program)
 	}
 
 	// Start the new session
 	if err := i.pm().Start(worktreePath); err != nil {
-		return fmt.Errorf("failed to start new tmux session: %w", err)
+		return fmt.Errorf("failed to start new session: %w", err)
 	}
 
 	// If output was preserved and we have saved output, write it back

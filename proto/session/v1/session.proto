@@ -1486,6 +1486,17 @@ message RestartSessionRequest {
 
   // Optional: preserve terminal output before restart (default: false).
   bool preserve_output = 2;
+
+  // Optional: migrate the session to a different ProcessManager backend
+  // ("tmux", "tymux") as part of this restart, instead of respawning the
+  // current one. Empty, or equal to the session's current backend, is a
+  // same-backend respawn — today's only behavior before this field existed.
+  // There is no live hand-off between backends (they're different daemons):
+  // this kills the current session, builds a fresh one under the target
+  // backend, and resumes (--resume for Claude sessions), the same mechanism
+  // an ordinary restart already uses. Mirrors CreateSessionRequest's
+  // backend_override (field 34) — see session.ResolveSessionBackend.
+  optional string backend_override = 3;
 }
 
 // RestartSessionResponse indicates restart success.
