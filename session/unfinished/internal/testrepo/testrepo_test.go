@@ -12,6 +12,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
@@ -293,5 +294,129 @@ func moduleRoot(t *testing.T) (root, module string) {
 			t.Fatal("go.mod not found")
 		}
 		dir = parent
+	}
+}
+
+func TestRawLinear_ShouldChainCommitsWithoutTouchingRefs_WhenParentGiven(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	tree := testrepo.EmptyTree(t, repo)
+	hashes := testrepo.RawLinear(t, repo, tree, plumbing.ZeroHash, 5)
+	if len(hashes) != 5 {
+		t.Fatalf("got %d commits, want 5", len(hashes))
+	}
+	for i := 1; i < len(hashes); i++ {
+		c, err := repo.CommitObject(hashes[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.ParentHashes) != 1 || c.ParentHashes[0] != hashes[i-1] {
+			t.Errorf("commit %d parents = %v, want [%s]", i, c.ParentHashes, hashes[i-1])
+		}
+	}
+	if _, err := repo.Head(); err == nil {
+		t.Error("RawLinear must leave HEAD unborn")
+	}
+}
+
+func TestNewRepo_ShouldBeUnborn_WhenFreshlyInitialised(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	if _, err := repo.Head(); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("Head() err = %v, want ErrReferenceNotFound", err)
+	}
+}
+
+func TestLinkedWorktrees_ShouldCreateNDistinctWorktrees_WhenMainHasCommit(t *testing.T) {
+	repo, dir := testrepo.NewRepo(t)
+	testrepo.Commit(t, repo, map[string]string{"a.txt": "a\n"}, "init", testrepo.Epoch)
+	dirs := testrepo.LinkedWorktrees(t, dir, 3)
+	if len(dirs) != 3 {
+		t.Fatalf("got %d worktrees, want 3", len(dirs))
+	}
+	seen := map[string]bool{}
+	for _, d := range dirs {
+		if seen[d] {
+			t.Errorf("duplicate worktree dir %s", d)
+		}
+		seen[d] = true
+		if _, err := os.Stat(filepath.Join(d, "a.txt")); err != nil {
+			t.Errorf("worktree %s not populated: %v", d, err)
+		}
+	}
+}
+
+func TestSymlink_ShouldResolveToTarget_WhenCreated(t *testing.T) {
+	_, dir := testrepo.NewRepo(t)
+	link := testrepo.Symlink(t, dir)
+	got, err := filepath.EvalSymlinks(link)
+	if err != nil || got != dir {
+		t.Fatalf("EvalSymlinks(%s) = %q, %v; want %q", link, got, err, dir)
+	}
+}
+
+func TestAddSubmodule_ShouldStageGitlinkAndCommitSubmoduleMode_WhenPathGiven(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	first := testrepo.Commit(t, repo, map[string]string{"a.txt": "a\n"}, "init", testrepo.Epoch)
+	testrepo.AddSubmodule(t, repo, "vendor/sub", first)
+
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := idx.Entry("vendor/sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Mode != filemode.Submodule || e.Hash != first {
+		t.Fatalf("entry = mode %v hash %s, want Submodule/%s", e.Mode, e.Hash, first)
+	}
+}
+
+func TestSparseCheckout_ShouldSetConfigPatternsAndSkipBit_WhenEnabled(t *testing.T) {
+	repo, dir := testrepo.NewRepo(t)
+	testrepo.Commit(t, repo, map[string]string{"keep/a.txt": "a\n", "drop/b.txt": "b\n"}, "init", testrepo.Epoch)
+	testrepo.EnableSparseCheckout(t, repo, dir, "keep/")
+	testrepo.SkipWorktree(t, repo, "drop/b.txt")
+
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Raw.Section("core").Option("sparseCheckout"); got != "true" {
+		t.Errorf("core.sparseCheckout = %q, want true", got)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, ".git", "info", "sparse-checkout"))
+	if err != nil || string(body) != "keep/\n" {
+		t.Errorf("sparse-checkout = %q, %v", body, err)
+	}
+	idx, _ := repo.Storer.Index()
+	if e, _ := idx.Entry("drop/b.txt"); e == nil || !e.SkipWorktree {
+		t.Error("drop/b.txt must carry skip-worktree")
+	}
+	if e, _ := idx.Entry("keep/a.txt"); e == nil || e.SkipWorktree {
+		t.Error("keep/a.txt must not carry skip-worktree")
+	}
+}
+
+func TestRepack_ShouldSucceedTwice_WhenCalledOnSameHandle(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	testrepo.Linear(t, repo, 5)
+	testrepo.Repack(t, repo)
+	testrepo.Commit(t, repo, map[string]string{"more.txt": "x\n"}, "after first repack", testrepo.Epoch.Add(time.Hour))
+	testrepo.Repack(t, repo)
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	iter, err := repo.Log(&git.LogOptions{From: head.Hash()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	if err := iter.ForEach(func(*object.Commit) error { n++; return nil }); err != nil {
+		t.Fatalf("log after second repack: %v", err)
+	}
+	if n != 6 {
+		t.Errorf("log length = %d, want 6", n)
 	}
 }

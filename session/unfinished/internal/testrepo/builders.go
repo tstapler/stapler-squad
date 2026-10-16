@@ -92,12 +92,23 @@ func Shallow(t testing.TB, repo *git.Repository, boundary ...plumbing.Hash) {
 
 // Repack packs every loose object into one packfile, deletes the loose
 // copies and the superseded packs, and prunes unreachable objects.
+// RepackObjects deletes the old packs on disk but the handle's storer keeps
+// them in its pack index, so a second Repack on the same handle failed with
+// "packfile not found"; Reindex drops that stale index before each later read.
 func Repack(t testing.TB, repo *git.Repository) {
 	t.Helper()
+	reindex := func() {
+		if r, ok := repo.Storer.(interface{ Reindex() }); ok {
+			r.Reindex()
+		}
+	}
+	reindex()
 	if err := repo.RepackObjects(&git.RepackConfig{}); err != nil {
 		t.Fatalf("testrepo: RepackObjects: %v", err)
 	}
+	reindex()
 	if err := repo.Prune(git.PruneOptions{Handler: repo.DeleteObject}); err != nil {
 		t.Fatalf("testrepo: Prune: %v", err)
 	}
+	reindex()
 }
