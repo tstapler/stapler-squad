@@ -317,7 +317,7 @@ func (b *blockingStorage) GetItemSessionBySessionUUID(_ context.Context, _ strin
 }
 
 func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*artifacts.SessionArtifactsBlob, error) {
-	return nil, nil
+	return nil, nil //nolint:nilnil // fake: no stored artifacts
 }
 
 // ─── TC-010: FlushSession called before GetRecentLines ────────────────────────

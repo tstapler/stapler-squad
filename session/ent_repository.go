@@ -1107,7 +1107,7 @@ func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUU
 		return nil, fmt.Errorf("GetSessionArtifactsByUUID: %w", err)
 	}
 	if sess.SessionArtifacts == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // documented contract: no stored artifacts is not an error
 	}
 	var blob artifacts.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(sess.SessionArtifacts), &blob); err != nil {
