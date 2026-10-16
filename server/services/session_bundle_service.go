@@ -165,6 +165,33 @@ var dropOrder = []string{
 
 const maxUncompressedBytes = 45 * 1024 * 1024 // 45 MB
 
+// bundleCollector accumulates the sections, manifest entries and non-fatal
+// errors produced by the per-section collection steps.
+type bundleCollector struct {
+	sections []sectionEntry
+	manifest BundleManifest
+	errs     []string
+}
+
+func (c *bundleCollector) addSection(name string, data []byte) {
+	c.sections = append(c.sections, sectionEntry{name: name, data: data})
+	c.manifest.IncludedSections = append(c.manifest.IncludedSections, name)
+}
+
+func (c *bundleCollector) omit(name, reason string) {
+	c.manifest.OmittedSections = append(c.manifest.OmittedSections, omittedSection{Name: name, Reason: reason})
+}
+
+// addMarshaled indents v as JSON into the named section, omitting it on a marshal error.
+func (c *bundleCollector) addMarshaled(name string, v any) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		c.omit(name, fmt.Sprintf("marshal error: %v", err))
+		return
+	}
+	c.addSection(name, data)
+}
+
 // assembleBundle collects all data sources for the given session into a ZIP.
 // inst must not be nil. maxScrollbackLines is capped at 500 internally.
 func (s *SessionBundleService) assembleBundle(
@@ -176,26 +203,15 @@ func (s *SessionBundleService) assembleBundle(
 	snap := inst.Snapshot()
 	sessionUUID := snap.UUID
 
-	manifest := BundleManifest{
+	c := &bundleCollector{manifest: BundleManifest{
 		BundleFormatVersion: 1,
 		SessionUUID:         sessionUUID,
 		GeneratedAt:         time.Now().UTC(),
 		ServerVersion:       runtime.Version(),
 		ServerOS:            runtime.GOOS,
-	}
+	}}
 
-	var sections []sectionEntry
-	var errs []string
-
-	addSection := func(name string, data []byte) {
-		sections = append(sections, sectionEntry{name: name, data: data})
-		manifest.IncludedSections = append(manifest.IncludedSections, name)
-	}
-	omit := func(name, reason string) {
-		manifest.OmittedSections = append(manifest.OmittedSections, omittedSection{Name: name, Reason: reason})
-	}
-
-	// Step 1: Flush scrollback so the subsequent read sees the full tail.
+	// Flush scrollback so the subsequent read sees the full tail.
 	// Non-fatal: log at DEBUG and continue.
 	if s.scrollback != nil {
 		if err := s.scrollback.FlushSession(sessionUUID); err != nil {
@@ -203,7 +219,40 @@ func (s *SessionBundleService) assembleBundle(
 		}
 	}
 
-	// Step 2: Session metadata (required).
+	steps := []func(){
+		func() { c.collectSessionMetadata(snap) },
+		c.collectServerInfo,
+		func() { s.collectBacklogLinkage(ctx, c, sessionUUID) },
+		func() { s.collectScrollback(c, sessionUUID, maxScrollbackLines) },
+		func() { s.collectAnalytics(ctx, c, sessionUUID) },
+		func() { s.collectContextHistory(ctx, c, sessionUUID) },
+	}
+	for _, step := range steps {
+		step()
+		if ctx.Err() != nil {
+			return nil, BundleManifest{}, ctx.Err()
+		}
+	}
+
+	c.collectTracesAndProfiles(clientSpans)
+
+	s.collectArtifacts(ctx, c, sessionUUID)
+	if ctx.Err() != nil {
+		return nil, BundleManifest{}, ctx.Err()
+	}
+
+	c.enforceSizeCap()
+	c.manifest.Errors = c.errs
+
+	zipBytes, err := c.writeZip()
+	if err != nil {
+		return nil, BundleManifest{}, err
+	}
+	return zipBytes, c.manifest, nil
+}
+
+// collectSessionMetadata adds the required session_metadata section.
+func (c *bundleCollector) collectSessionMetadata(snap *session.InstanceSnapshot) {
 	metaPayload := struct {
 		ID          string    `json:"id"`
 		UUID        string    `json:"uuid"`
@@ -233,16 +282,16 @@ func (s *SessionBundleService) assembleBundle(
 		CreatedAt:   snap.CreatedAt,
 		UpdatedAt:   snap.UpdatedAt,
 	}
-	if metaBytes, err := json.MarshalIndent(metaPayload, "", "  "); err == nil {
-		addSection("session_metadata", metaBytes)
-	} else {
-		errs = append(errs, fmt.Sprintf("session_metadata: %v", err))
+	metaBytes, err := json.MarshalIndent(metaPayload, "", "  ")
+	if err != nil {
+		c.errs = append(c.errs, fmt.Sprintf("session_metadata: %v", err))
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
-	}
+	c.addSection("session_metadata", metaBytes)
+}
 
-	// Step 3: Server info (required).
+// collectServerInfo adds the required server_info section.
+func (c *bundleCollector) collectServerInfo() {
 	serverInfo := struct {
 		OS        string `json:"os"`
 		GoVersion string `json:"go_version"`
@@ -252,221 +301,202 @@ func (s *SessionBundleService) assembleBundle(
 		GoVersion: runtime.Version(),
 		PID:       os.Getpid(),
 	}
-	if infoBytes, err := json.MarshalIndent(serverInfo, "", "  "); err == nil {
-		addSection("server_info", infoBytes)
-	} else {
-		errs = append(errs, fmt.Sprintf("server_info: %v", err))
+	infoBytes, err := json.MarshalIndent(serverInfo, "", "  ")
+	if err != nil {
+		c.errs = append(c.errs, fmt.Sprintf("server_info: %v", err))
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
-	}
+	c.addSection("server_info", infoBytes)
+}
 
-	// Step 4: Backlog linkage (omittable).
-	if s.storage != nil {
-		if item, err := s.storage.GetItemSessionBySessionUUID(ctx, sessionUUID); err == nil {
-			if data, merr := json.MarshalIndent(item, "", "  "); merr == nil {
-				addSection("backlog_linkage", data)
-			} else {
-				omit("backlog_linkage", fmt.Sprintf("marshal error: %v", merr))
-			}
-		} else {
-			omit("backlog_linkage", fmt.Sprintf("not available: %v", err))
-		}
-	} else {
-		omit("backlog_linkage", "storage unavailable")
+// collectBacklogLinkage adds the omittable backlog_linkage section.
+func (s *SessionBundleService) collectBacklogLinkage(ctx context.Context, c *bundleCollector, sessionUUID string) {
+	if s.storage == nil {
+		c.omit("backlog_linkage", "storage unavailable")
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
+	item, err := s.storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		c.omit("backlog_linkage", fmt.Sprintf("not available: %v", err))
+		return
 	}
+	c.addMarshaled("backlog_linkage", item)
+}
 
-	// Step 5: Scrollback tail (omittable).
-	// GetRecentLines returns the most-recent N lines — NOT GetScrollback which
-	// returns the oldest N lines (ascending from seq=0).
-	if s.scrollback != nil {
-		lines := maxScrollbackLines
-		if lines <= 0 || lines > 500 {
-			lines = 500
-		}
-		if scrollBytes, err := s.scrollback.GetRecentLines(sessionUUID, lines); err == nil {
-			addSection("scrollback", scrollBytes)
-		} else {
-			omit("scrollback", fmt.Sprintf("read error: %v", err))
-		}
-	} else {
-		omit("scrollback", "scrollback reader unavailable")
+// collectScrollback adds the omittable scrollback tail. GetRecentLines returns
+// the most-recent N lines — NOT GetScrollback, which returns the oldest N.
+func (s *SessionBundleService) collectScrollback(c *bundleCollector, sessionUUID string, maxLines int) {
+	if s.scrollback == nil {
+		c.omit("scrollback", "scrollback reader unavailable")
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
+	lines := maxLines
+	if lines <= 0 || lines > 500 {
+		lines = 500
 	}
+	scrollBytes, err := s.scrollback.GetRecentLines(sessionUUID, lines)
+	if err != nil {
+		c.omit("scrollback", fmt.Sprintf("read error: %v", err))
+		return
+	}
+	c.addSection("scrollback", scrollBytes)
+}
 
-	// Step 6: Analytics (omittable).
-	if s.storage != nil {
-		if analytics, err := s.storage.ListAnalyticsBySessionID(ctx, sessionUUID); err == nil {
-			if data, merr := json.MarshalIndent(analytics, "", "  "); merr == nil {
-				addSection("analytics", data)
-			} else {
-				omit("analytics", fmt.Sprintf("marshal error: %v", merr))
-			}
-		} else {
-			omit("analytics", fmt.Sprintf("query error: %v", err))
-		}
-	} else {
-		omit("analytics", "storage unavailable")
+// collectAnalytics adds the omittable analytics section.
+func (s *SessionBundleService) collectAnalytics(ctx context.Context, c *bundleCollector, sessionUUID string) {
+	if s.storage == nil {
+		c.omit("analytics", "storage unavailable")
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
+	analytics, err := s.storage.ListAnalyticsBySessionID(ctx, sessionUUID)
+	if err != nil {
+		c.omit("analytics", fmt.Sprintf("query error: %v", err))
+		return
 	}
+	c.addMarshaled("analytics", analytics)
+}
 
-	// Step 7: Context history (omittable; nil-guard on ctxHistory).
-	if s.ctxHistory != nil {
-		summary, err := s.ctxHistory.SummarizeSession(ctx, sessionUUID)
-		if err == nil {
-			series, serErr := s.ctxHistory.Series(ctx, sessionUUID)
-			if serErr == nil {
-				compactions, compErr := s.ctxHistory.Compactions(ctx, sessionUUID)
-				if compErr == nil {
-					ctxHistPayload := struct {
-						Summary     contexthistory.SessionSummary `json:"summary"`
-						Series      []contexthistory.Sample       `json:"series"`
-						Compactions []contexthistory.Compaction   `json:"compactions"`
-					}{Summary: summary, Series: series, Compactions: compactions}
-					if data, merr := json.MarshalIndent(ctxHistPayload, "", "  "); merr == nil {
-						addSection("context_history", data)
-					} else {
-						omit("context_history", fmt.Sprintf("marshal error: %v", merr))
-					}
-				} else {
-					omit("context_history", fmt.Sprintf("compactions query error: %v", compErr))
-				}
-			} else {
-				omit("context_history", fmt.Sprintf("series query error: %v", serErr))
-			}
-		} else {
-			omit("context_history", fmt.Sprintf("summary query error: %v", err))
-		}
-	} else {
-		omit("context_history", "context history store unavailable (analytics disabled or store not wired)")
+// collectContextHistory adds the omittable context_history section (nil-guarded).
+func (s *SessionBundleService) collectContextHistory(ctx context.Context, c *bundleCollector, sessionUUID string) {
+	if s.ctxHistory == nil {
+		c.omit("context_history", "context history store unavailable (analytics disabled or store not wired)")
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
+	summary, err := s.ctxHistory.SummarizeSession(ctx, sessionUUID)
+	if err != nil {
+		c.omit("context_history", fmt.Sprintf("summary query error: %v", err))
+		return
 	}
+	series, err := s.ctxHistory.Series(ctx, sessionUUID)
+	if err != nil {
+		c.omit("context_history", fmt.Sprintf("series query error: %v", err))
+		return
+	}
+	compactions, err := s.ctxHistory.Compactions(ctx, sessionUUID)
+	if err != nil {
+		c.omit("context_history", fmt.Sprintf("compactions query error: %v", err))
+		return
+	}
+	c.addMarshaled("context_history", struct {
+		Summary     contexthistory.SessionSummary `json:"summary"`
+		Series      []contexthistory.Sample       `json:"series"`
+		Compactions []contexthistory.Compaction   `json:"compactions"`
+	}{Summary: summary, Series: series, Compactions: compactions})
+}
 
-	// Step 7b: Traces and profiles (omittable).
+// collectTracesAndProfiles adds the omittable client_traces and runtime profile sections.
+func (c *bundleCollector) collectTracesAndProfiles(clientSpans []byte) {
 	if reason := validateClientSpans(clientSpans); reason == "" {
-		addSection("client_traces", clientSpans)
+		c.addSection("client_traces", clientSpans)
 	} else {
-		omit("client_traces", reason)
+		c.omit("client_traces", reason)
 	}
-	if profiles, err := captureProfiles(); err == nil {
-		for _, name := range []string{"profile_heap", "profile_goroutine", "runtime_stats"} {
-			if data, ok := profiles[name]; ok {
-				addSection(name, data)
-			}
+	profiles, err := captureProfiles()
+	if err != nil {
+		c.omit("profiles", fmt.Sprintf("capture error: %v", err))
+		return
+	}
+	for _, name := range []string{"profile_heap", "profile_goroutine", "runtime_stats"} {
+		if data, ok := profiles[name]; ok {
+			c.addSection(name, data)
 		}
-	} else {
-		omit("profiles", fmt.Sprintf("capture error: %v", err))
 	}
+}
 
-	// Step 8: Session artifacts (omittable).
-	if s.storage != nil {
-		if artBlob, err := s.storage.GetSessionArtifactsByUUID(ctx, sessionUUID); err == nil {
-			if artBlob != nil {
-				if data, merr := json.MarshalIndent(artBlob, "", "  "); merr == nil {
-					addSection("artifacts", data)
-				} else {
-					omit("artifacts", fmt.Sprintf("marshal error: %v", merr))
-				}
-			} else {
-				omit("artifacts", "no artifacts recorded for this session")
-			}
-		} else {
-			omit("artifacts", fmt.Sprintf("query error: %v", err))
-		}
-	} else {
-		omit("artifacts", "storage unavailable")
+// collectArtifacts adds the omittable artifacts section.
+func (s *SessionBundleService) collectArtifacts(ctx context.Context, c *bundleCollector, sessionUUID string) {
+	if s.storage == nil {
+		c.omit("artifacts", "storage unavailable")
+		return
 	}
-	if ctx.Err() != nil {
-		return nil, BundleManifest{}, ctx.Err()
+	artBlob, err := s.storage.GetSessionArtifactsByUUID(ctx, sessionUUID)
+	if err != nil {
+		c.omit("artifacts", fmt.Sprintf("query error: %v", err))
+		return
 	}
+	if artBlob == nil {
+		c.omit("artifacts", "no artifacts recorded for this session")
+		return
+	}
+	c.addMarshaled("artifacts", artBlob)
+}
 
-	// Step 9: Size cap — drop omittable sections in reverse priority order
-	// until total uncompressed bytes <= 45 MB.
-	totalUncompressed := func() int {
-		n := 0
-		for _, sec := range sections {
-			n += len(sec.data)
-		}
-		return n
+func (c *bundleCollector) totalUncompressed() int {
+	n := 0
+	for _, sec := range c.sections {
+		n += len(sec.data)
 	}
-	for totalUncompressed() > maxUncompressedBytes {
-		dropped := false
-		for _, name := range dropOrder {
-			for i, sec := range sections {
-				if sec.name == name {
-					sections = append(sections[:i], sections[i+1:]...)
-					for j, n := range manifest.IncludedSections {
-						if n == name {
-							manifest.IncludedSections = append(manifest.IncludedSections[:j], manifest.IncludedSections[j+1:]...)
-							break
-						}
-					}
-					manifest.OmittedSections = append(manifest.OmittedSections, omittedSection{
-						Name:   name,
-						Reason: "dropped: total uncompressed size exceeded 45 MB",
-					})
-					dropped = true
+	return n
+}
+
+// dropOne removes the first present section in dropOrder and records why.
+// It reports false when nothing is left to drop.
+func (c *bundleCollector) dropOne() bool {
+	for _, name := range dropOrder {
+		for i, sec := range c.sections {
+			if sec.name != name {
+				continue
+			}
+			c.sections = append(c.sections[:i], c.sections[i+1:]...)
+			for j, n := range c.manifest.IncludedSections {
+				if n == name {
+					c.manifest.IncludedSections = append(c.manifest.IncludedSections[:j], c.manifest.IncludedSections[j+1:]...)
 					break
 				}
 			}
-			if dropped {
-				break
-			}
-		}
-		if !dropped {
-			// Nothing left to drop — exit to avoid infinite loop.
-			break
+			c.omit(name, "dropped: total uncompressed size exceeded 45 MB")
+			return true
 		}
 	}
+	return false
+}
 
-	manifest.Errors = errs
+// enforceSizeCap drops omittable sections in reverse priority order until
+// total uncompressed bytes <= maxUncompressedBytes.
+func (c *bundleCollector) enforceSizeCap() {
+	for c.totalUncompressed() > maxUncompressedBytes {
+		if !c.dropOne() {
+			return // nothing left to drop
+		}
+	}
+}
 
-	// Step 10: Write ZIP using kzip (klauspost/compress/zip).
+// writeZip writes manifest.json first, then each section, using kzip
+// (klauspost/compress/zip).
+func (c *bundleCollector) writeZip() ([]byte, error) {
 	var buf bytes.Buffer
 	zw := kzip.NewWriter(&buf)
 
-	// manifest.json always first.
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	manifestBytes, err := json.MarshalIndent(c.manifest, "", "  ")
 	if err != nil {
-		return nil, BundleManifest{}, fmt.Errorf("marshal manifest: %w", err)
+		return nil, fmt.Errorf("marshal manifest: %w", err)
 	}
 	mw, err := zw.Create("manifest.json")
 	if err != nil {
-		return nil, BundleManifest{}, fmt.Errorf("create manifest.json in zip: %w", err)
+		return nil, fmt.Errorf("create manifest.json in zip: %w", err)
 	}
 	if _, err := mw.Write(manifestBytes); err != nil {
-		return nil, BundleManifest{}, fmt.Errorf("write manifest.json: %w", err)
+		return nil, fmt.Errorf("write manifest.json: %w", err)
 	}
 
-	// Per-section files.
-	for _, sec := range sections {
+	for _, sec := range c.sections {
 		fname, ok := sectionFileName[sec.name]
 		if !ok {
 			fname = sec.name + ".bin"
 		}
 		fw, err := zw.Create(fname)
 		if err != nil {
-			return nil, BundleManifest{}, fmt.Errorf("create %s in zip: %w", fname, err)
+			return nil, fmt.Errorf("create %s in zip: %w", fname, err)
 		}
 		if _, err := fw.Write(sec.data); err != nil {
-			return nil, BundleManifest{}, fmt.Errorf("write %s: %w", fname, err)
+			return nil, fmt.Errorf("write %s: %w", fname, err)
 		}
 	}
 
 	if err := zw.Close(); err != nil {
-		return nil, BundleManifest{}, fmt.Errorf("close zip: %w", err)
+		return nil, fmt.Errorf("close zip: %w", err)
 	}
-
-	return buf.Bytes(), manifest, nil
+	return buf.Bytes(), nil
 }
 
 // acquireExportSlot caps concurrent in-memory ZIP assemblies (export and save
