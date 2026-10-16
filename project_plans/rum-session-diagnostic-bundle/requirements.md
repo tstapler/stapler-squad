@@ -13,6 +13,12 @@ Users experiencing bugs or performance regressions in the browser app currently 
 2. Support two delivery modes: direct browser download and backend-saved file.
 3. Create a path from a saved bundle to a backlog item so the investigation becomes tracked work.
 
+## Success Metrics
+
+1. Within 4 weeks of launch, at least 50% of bug reports from internal users include a diagnostic bundle (measured by backlog items tagged `diagnostic-bundle` divided by total bug-report items created in the same period).
+2. P95 bundle assembly time ≤ 5 seconds for sessions with ≤ 10,000 scrollback lines and ≤ 1,000 analytics events (measured from the `ExportSessionBundle` / `SaveSessionBundle` RPC start to first byte sent, logged in structured `slog` at INFO level per the Observability Plan).
+3. Zero OOM or server-crash incidents attributable to bundle assembly within the first 30 days, verified by the absence of `bundle-assembly` in crash reports and by the semaphore cap (concurrent export limit of 3) firing no more than 1% of export attempts under normal load.
+
 ## Non-Goals
 
 - Real-time streaming or live dashboards (out of scope; see `analytics-system` plan for that direction).
@@ -32,7 +38,7 @@ Users experiencing bugs or performance regressions in the browser app currently 
 2. The bundle includes: session metadata (UUID, title, branch, status, program, timestamps), analytics events for the session, context history samples and compaction events, session artifacts (PR URLs, commits, commands), the most recent scrollback tail (up to 500 lines), server info (PID, Go version, OS/arch), and backlog linkage if any.
 3. Clicking "Download" in the UI initiates a browser file download of a `.zip` bundle containing a structured JSON manifest.
 4. Clicking "Save on server" invokes a backend RPC that writes the bundle to `~/.stapler-squad/diagnostics/<session-uuid>-<timestamp>.zip` and returns the file path in the response.
-5. A "Create backlog item from bundle" action is available after a bundle is saved on the server; it creates a `BacklogItem` pre-populated with the bundle's session title, a summary, and a link to the saved file path.
+5. A "Create backlog item from bundle" action is available after a bundle is saved on the server; it creates a `BacklogItem` pre-populated with the bundle's session title, a summary, and the bundle's filename plus SHA-256 content hash. Absolute file paths are excluded — they are machine-local and non-portable.
 6. Browser OTel spans emitted by the web app include a `session.uuid` attribute set to the active session's UUID (when a session is in focus), enabling span→session correlation.
 7. Web Vitals (LCP, FID, CLS) reported by `WebVitalsReporter` are attached as analytics events with the current session's ID for session-scoped performance analysis.
 8. The new `ExportSessionDiagnosticBundle` RPC is protected by the same auth middleware as all other ConnectRPC endpoints.

@@ -58,7 +58,8 @@ Weakness: 4 MB ConnectRPC default message limit is exceeded by large sessions; r
 | `ScrollbackTail` newtype | Newtype (`type ScrollbackTail []byte`) | Type-driven design principle | Raw `[]byte` parameter | Prevents passing unscoped byte slices where the semantic is specifically "capped terminal tail" |
 | ZIP library | `klauspost/compress/zip` aliased as `kzip` | `server/middleware/gzip.go` (`kgzip` alias convention) | `stdlib archive/zip` | Already in go.mod; SIMD-accelerated deflate; follows the existing `kgzip` alias convention (ADR-002) |
 | Per-section compaction | Priority-ordered whole-section drop + hard byte ceiling | `session/diagnose_bundle.go` | Mid-section truncation | Partial sections confuse consumers; the whole-section drop pattern already exists and is tested |
-| Backlog hand-off field | Embed content hash + filename in `notes` text field | `proto/session/v1/backlog.proto`:`CreateBacklogItemRequest.notes` | New `diagnostic_bundle_path` proto field | No new proto field needed; avoids machine-local path portability pitfall; `ContentHash` provides identity |
+| Backlog hand-off field | Embed content hash + filename in `notes` text field | `proto/session/v1/backlog.proto`:`CreateBacklogItemRequest.notes` | New `diagnostic_bundle_path` proto field | No new proto field needed; avoids machine-local path portability pitfall; `ContentHash` provides identity. **Note (B4)**: requirements AC5 says "link to the saved file path" — the implementation intentionally substitutes SHA-256 + filename for the absolute path; the absolute path is machine-local and meaningless on any other host. |
+| RPC naming | `ExportSessionBundle` in proto / plan | `proto/session/v1/rum_bundle.proto` | `ExportSessionDiagnosticBundle` | Both names refer to the same RPC. requirements.md AC8 and design/ux.md use the longer `ExportSessionDiagnosticBundle`; the plan standardizes on the shorter `ExportSessionBundle` (service-qualified: `SessionBundleService.ExportSessionBundle`). These are synonyms — no generated-code breakage. |
 
 ---
 
@@ -100,8 +101,8 @@ No data migration required.
 
 ## Unresolved Questions
 
-- [ ] PII consent prompt copy — what exact text should the modal show before allowing a bundle download? Blocks Story 2.1.2 — owner: product/design.
-- [ ] iOS "Download" path — should `ExportBundleModal` use `navigator.share({ files: [...] })` on iOS and fall back to `<a download>` on Android/desktop? The `navigator.canShare` feature-detect is straightforward but adds complexity. Current recommendation (from UX research): mobile-primary = "Save on server"; "Download" on iOS uses Web Share API with `<a download>` fallback. Owner: engineering (no external decision needed).
+- [x] **RESOLVED** — PII consent prompt copy: use the exact text already in the Risk Control section: *"This bundle may contain raw terminal output including typed credentials. Do not share it with untrusted parties."* This is definitive; Story 2.1.2 must render this exact string. No further product/design sign-off required (the adversarial review confirmed: "the text is already written; treat as a design-review checkpoint, not a hard block").
+- [x] **RESOLVED** — iOS "Download" path: `useExportBundle.download()` must implement `navigator.canShare({ files: [new File([blob], filename)] })` feature-detect. If supported (iOS Safari, modern Android), call `navigator.share({ files: [file] })`; otherwise fall back to `<a download>` trigger. Task 2.1.1a is the implementation point. This is an engineering-only decision.
 
 ---
 
@@ -272,7 +273,7 @@ Phase 4 (Verification) ───────────────────
 - Run `make proto-gen` to generate `gen/session/v1/rum_bundle_pb.go` and `web-app/src/gen/session/v1/rum_bundle_pb.ts` (the generated TS file is also gitignored; do not commit it, same policy as other gen output).
 - In `server/server.go`, after the `DiagnosticService` registration block (~line 578), add:
   ```go
-  bundleSvc := services.NewSessionBundleService(deps.Storage, deps.CtxHistoryStore, deps.ScrollbackManager)
+  bundleSvc := services.NewSessionBundleService(deps.Storage, deps.CtxHistoryStore, deps.ScrollbackManager) // Storage and CtxHistoryStore satisfy BundleStorage and ContextHistoryReader respectively
   bundleSvc.SetPoller(deps.ReviewQueuePoller)
   bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
   bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -306,20 +307,22 @@ Phase 4 (Verification) ───────────────────
 
 ##### Task 1.3.1a: Create session_bundle_service.go with assembler (M)
 - Create `server/services/session_bundle_service.go` with:
-  - `SessionBundleService` struct fields: `storage session.Storage`, `ctxHistory *contexthistory.Store` (nil-safe), `scrollback ScrollbackReader` (interface defined in same file), `poller`, `extDiscovery`.
+  - `SessionBundleService` struct fields: `storage BundleStorage` (narrow interface, defined below), `ctxHistory ContextHistoryReader` (nil-safe interface, defined below), `scrollback ScrollbackReader` (interface defined in same file), `poller`, `extDiscovery`, `exportSem chan struct{}` (buffered channel of capacity 3, initialized in constructor). *(pre-mortem P1 fix: concurrent OOM — assembleBundle materializes full ZIP in memory; cap concurrent exports at 3)*
+  - Define a `BundleStorage` interface in `session_bundle_service.go`: `type BundleStorage interface { GetSession(ctx context.Context, uuid string) (*session.Session, error); ListAnalyticsBySessionID(ctx context.Context, uuid string, limit int) ([]AnalyticsData, error); GetItemSessionBySessionUUID(ctx context.Context, uuid string) (*ItemSession, error); GetSessionArtifactsByUUID(ctx context.Context, uuid string) (*artifacts.SessionArtifactsBlob, error) }` — `*session.EntRepository` satisfies this interface; tests inject a fake.
+  - Define a `ContextHistoryReader` interface in `session_bundle_service.go`: `type ContextHistoryReader interface { SummarizeSession(ctx context.Context, uuid string) (SessionSummary, error); Series(ctx context.Context, uuid string) ([]Sample, error); Compactions(ctx context.Context, uuid string) ([]Compaction, error) }` — `*contexthistory.Store` satisfies this interface (method verified: `store.go:230`); nil-safe in production (`ctxHistory` may be nil when analytics is disabled, add nil-guard before any call); tests inject a fake.
   - Define a `ScrollbackReader` interface in `session_bundle_service.go`: `type ScrollbackReader interface { FlushSession(sessionUUID string) error; GetRecentLines(sessionID string, n int) ([]byte, error) }` — `*scrollback.ScrollbackManager` satisfies this interface; tests inject a fake.
-  - Constructor: `NewSessionBundleService(storage session.Storage, ctxHistory *contexthistory.Store, scrollback ScrollbackReader) *SessionBundleService`
+  - Constructor: `NewSessionBundleService(storage BundleStorage, ctxHistory ContextHistoryReader, scrollback ScrollbackReader) *SessionBundleService` — initialize `exportSem: make(chan struct{}, 3)`
   - `SetPoller` / `SetExternalDiscovery` setter-injection methods (matching `DiagnosticService` pattern).
   - `BundleManifest` struct (versioned, timestamped, `SessionUUID`, `ServerVersion`, list of included/omitted sections).
   - `assembleBundle(ctx, sessionUUID string, maxScrollbackLines int) (zipBytes []byte, manifest BundleManifest, err error)` implementing the section pipeline:
     1. Flush scrollback (call `scrollbackMgr.FlushSession(sessionUUID)`)
-    2. Collect session ent metadata (required section)
-    3. Collect server info from `runtime.GOOS`, `runtime.Version()`, `os.Getpid()` (required section)
-    4. Collect backlog linkage via `storage.GetItemSessionBySessionUUID(ctx, sessionUUID)` (singular — returns most-recent link only; omittable — nil-guard, add to omitted_sections on error)
-    5. Collect scrollback tail via `scrollbackMgr.GetRecentLines(sessionUUID, min(maxScrollbackLines, 500))` — this is the correct tail API; do NOT use `GetScrollback(sessionID, 0, N)` which returns the *oldest* N lines (ascending from seq=0), not the tail (omittable — add to omitted_sections on error)
-    6. Collect analytics events via `ListAnalyticsBySessionID`, capped at 2,000 (omittable)
-    7. Collect context history via `ctxHistory.SummarizeSession(ctx, sessionUUID)` for aggregate stats and `ctxHistory.Series(ctx, sessionUUID)` for raw per-turn token samples (omittable — nil-guard `ctxHistory`, add to omitted_sections when nil or on error)
-    8. Collect session artifacts (omittable)
+    2. Collect session ent metadata (required section); after step 2: `if ctx.Err() != nil { return nil, ctx.Err() }`
+    3. Collect server info from `runtime.GOOS`, `runtime.Version()`, `os.Getpid()` (required section); after step 3: `if ctx.Err() != nil { return nil, ctx.Err() }`
+    4. Collect backlog linkage via `storage.GetItemSessionBySessionUUID(ctx, sessionUUID)` (singular — returns most-recent link only; omittable — nil-guard, add to omitted_sections on error); after step 4: `if ctx.Err() != nil { return nil, ctx.Err() }`
+    5. Collect scrollback tail via `scrollbackMgr.GetRecentLines(sessionUUID, min(maxScrollbackLines, 500))` — this is the correct tail API; do NOT use `GetScrollback(sessionID, 0, N)` which returns the *oldest* N lines (ascending from seq=0), not the tail (omittable — add to omitted_sections on error); after step 5: `if ctx.Err() != nil { return nil, ctx.Err() }`
+    6. Collect analytics events via `ListAnalyticsBySessionID`, capped at 2,000 (omittable); after step 6: `if ctx.Err() != nil { return nil, ctx.Err() }`
+    7. Collect context history via `ctxHistory.SummarizeSession(ctx, sessionUUID)` for aggregate stats, `ctxHistory.Series(ctx, sessionUUID)` for raw per-turn token samples, and `ctxHistory.Compactions(ctx, sessionUUID)` for compaction events (all three needed — requirements AC2 explicitly requires "context history samples and compaction events"; omittable — nil-guard `ctxHistory`, add to omitted_sections when nil or on error); after step 7: `if ctx.Err() != nil { return nil, ctx.Err() }`
+    8. Collect session artifacts (omittable); after step 8: `if ctx.Err() != nil { return nil, ctx.Err() }`
     9. Drop omittable sections in reverse priority order if uncompressed bytes exceed 45 MB
     10. Write ZIP using `kzip "github.com/klauspost/compress/zip"` with `manifest.json` + per-section files
     11. Append `errors` list to manifest (non-fatal collection pattern from `debug_snapshot.go`)
@@ -342,6 +345,7 @@ Phase 4 (Verification) ───────────────────
 
 ##### Task 1.3.2a: Implement ExportSessionBundle handler (M)
 - Add `ExportSessionBundle(ctx, req *connect.Request[sessionv1.ExportSessionBundleRequest], stream *connect.ServerStream[sessionv1.BundleChunk]) error` method to `SessionBundleService`.
+- Acquire semaphore slot at start: `select { case s.exportSem <- struct{}{}: defer func() { <-s.exportSem }() default: return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent exports")) }`.
 - Resolve session via `findInstance` (mirroring `DiagnosticService.findInstance` pattern for live + poller lookup).
 - Call `assembleBundle` with `req.Msg.SessionUuid` and `req.Msg.MaxScrollbackLines` (default 500 when 0).
 - Loop over ZIP bytes in 64 KB chunks, sending each via `stream.Send(&sessionv1.BundleChunk{Data: chunk, ChunkIndex: int32(i), Final: i == lastIdx})`.
@@ -368,10 +372,10 @@ Phase 4 (Verification) ───────────────────
 
 ##### Task 1.3.3a: Implement SaveSessionBundle handler (S)
 - Add `SaveSessionBundle(ctx, req *connect.Request[sessionv1.SaveSessionBundleRequest]) (*connect.Response[sessionv1.SaveSessionBundleResponse], error)` to `SessionBundleService`.
-- Resolve the diagnostics output directory from `config.GetConfigDir()` + `"diagnostics/"` (or `req.Msg.OutputDir` when non-empty).
+- Resolve the diagnostics output directory from `config.GetConfigDir()` + `"diagnostics/"` (default). When `req.Msg.OutputDir` is non-empty: call `filepath.Clean(filepath.Abs(req.Msg.OutputDir))` and assert the result has `config.GetConfigDir()` as a prefix; return `connect.CodeInvalidArgument` if the check fails. *(P1 pre-mortem fix: path traversal prevention)*
 - Call `assembleBundle`, then:
-  - Check available disk space via `syscall.Statfs`; return `CodeResourceExhausted` if under 100 MB.
-  - Write ZIP to `<outputDir>/<sessionUUID>-<RFC3339>.zip` atomically (write to a `.tmp` file, then rename).
+  - Check available disk space via platform-specific `diskFreeBytes(outputDir)` (implemented in `disk_space_unix.go` / `disk_space_windows.go` build-tag pair to avoid `syscall.Statfs` Windows compile failure); return `CodeResourceExhausted` if under 100 MB. *(pre-mortem P1 fix: Windows/WSL2 build compatibility)*
+  - Write ZIP to `<outputDir>/<slugifiedTitle>-<YYYYMMDD-HHMMSS>.zip` atomically (write to a `.tmp` file, then rename).
   - Compute SHA-256 of written bytes.
   - Return `SaveSessionBundleResponse{FilePath, FileSizeBytes, ContentHash}`.
 - Files: `server/services/session_bundle_service.go`
@@ -379,7 +383,7 @@ Phase 4 (Verification) ───────────────────
 ##### Task 1.3.3b: Implement DiagnosticsRetention cleanup at startup (S)
 - Add `RunDiagnosticsRetention(dir string, maxAge time.Duration) error` free function in `server/services/session_bundle_service.go`.
 - Deletes files in `dir` matching `*.zip` whose `mtime` is older than `maxAge` (default 30 days); logs a `slog.INFO` per deleted file.
-- In `server/dependencies.go`, call `services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour)` during `BuildRuntimeDeps` (after config dir is established), logging but not hard-failing if the directory does not yet exist.
+- In `server/dependencies.go`, wire retention in two places: (a) wrap the startup call asynchronously: `go func() { if err := services.RunDiagnosticsRetention(ctx, diagnosticsDir, 30*24*time.Hour); err != nil { slog.Warn("diagnostics retention failed", "error", err) } }()` — non-blocking, so a slow or absent diagnostics directory never delays `BuildRuntimeDeps`; (b) launch a goroutine with a `time.NewTicker(24 * time.Hour)` that calls `RunDiagnosticsRetention` on each tick — matching `analytics/retention.go`'s `EnforceRetention` pattern. Log but do not hard-fail if the directory does not yet exist. *(pre-mortem P1 fix: startup-only retention leaves long-lived daemons without cleanup)*
 - Files: `server/services/session_bundle_service.go`, `server/dependencies.go`
 
 ---
@@ -408,7 +412,7 @@ Phase 4 (Verification) ───────────────────
 ##### Task 2.1.1a: Create useExportBundle.ts (S)
 - Create `web-app/src/lib/hooks/useExportBundle.ts` following the `useExportRules.ts` pattern:
   - Import `createClient` from `@connectrpc/connect` and the generated `SessionBundleService` from `@/gen/session/v1/rum_bundle_pb`.
-  - `download(sessionUuid: string)`: call the server-streaming `exportSessionBundle` RPC, collect all `BundleChunk.data` arrays, create `new Blob([...chunks], { type: "application/zip" })`, trigger `<a download="session-<uuid>-<timestamp>.zip">` click, revoke the object URL.
+  - `download(sessionUuid: string, sessionTitle: string)`: call the server-streaming `exportSessionBundle` RPC, collect all `BundleChunk.data` arrays, create `new Blob([...chunks], { type: "application/zip" })`, trigger `<a download="<session-title>-YYYYMMDD-HHMMSS.zip">` click (slugify the session title: lowercase, spaces→hyphens, non-alphanumeric stripped; example: `"Fix login flow-20261016-143022.zip"`), revoke the object URL. **Note (B2 fix)**: requirements and UX align on a title-based human-readable filename, not a UUID-based one.
   - `saveOnServer(sessionUuid: string)`: call the unary `saveSessionBundle` RPC, return the `SaveSessionBundleResponse`.
   - Export `{ download, saveOnServer, loading, error }` state.
 - Files: `web-app/src/lib/hooks/useExportBundle.ts`
@@ -422,7 +426,7 @@ Phase 4 (Verification) ───────────────────
 **Acceptance Criteria**:
 - The modal renders two radio options: "Download .zip" (default on desktop) and "Save on server" (default on mobile, detected via `window.innerWidth < 640`).
   - *Given* the modal is opened on a device with `window.innerWidth = 375`, *When* the modal renders, *Then* "Save on server" radio is pre-selected.
-- A consent notice reading "This bundle may contain raw terminal output including typed credentials. Do not share it with untrusted parties." is visible before the Export button can be clicked.
+- A consent notice reading exactly: **"This bundle may contain raw terminal output including typed credentials. Do not share it with untrusted parties."** is visible before the Export button can be clicked. This copy is final — do not substitute with a draft or placeholder.
   - *Given* the modal just opened, *When* no radio is selected yet, *Then* the "Export" button is disabled.
   - *Given* a delivery mode is selected, *When* the user has not dismissed the consent notice, *Then* the "Export" button is disabled.
 - While export is in flight, the button label changes to "Assembling bundle…" with an inline spinner and the button is disabled.
@@ -488,8 +492,8 @@ Phase 4 (Verification) ───────────────────
 **As a** user who saved a bundle on the server, **I want** to create a pre-populated backlog item in one click, **so that** the investigation is tracked in the backlog without manual copy-pasting.
 
 **Acceptance Criteria**:
-- Clicking "Create backlog item →" calls `CreateBacklogItem` with `title = "Session diagnostic: <first 8 chars of uuid> - <session title>"`, `notes` including the content hash and filename (not the absolute path), and `repo_path` from the session.
-  - *Given* session UUID `"abc12345-..."` with title `"Fix login flow"` and content hash `"a3b4c5d6..."`, *When* "Create backlog item →" is clicked, *Then* the `CreateBacklogItem` RPC is called with `title = "Session diagnostic: abc12345 - Fix login flow"` and `notes` containing `"Bundle: session-abc12345-20261016T120000Z.zip (SHA-256: a3b4c5d6...)"`.
+- Clicking "Create backlog item →" calls `CreateBacklogItem` with `title = "Diagnostic bundle: <session title> (<YYYYMMDD>)"`, `notes` including the content hash and filename (not the absolute path), and `repo_path` from the session. **Note (B3 fix)**: standardized on UX spec title format.
+  - *Given* session UUID `"abc12345-..."` with title `"Fix login flow"` saved on 2026-10-16, *When* "Create backlog item →" is clicked, *Then* the `CreateBacklogItem` RPC is called with `title = "Diagnostic bundle: Fix login flow (20261016)"` and `notes` containing `"Bundle: Fix-login-flow-20261016-143022.zip (SHA-256: a3b4c5d6...)"`.
 - A success toast `"Backlog item created."` appears and a link to the new item is shown in the modal.
   - *Given* `CreateBacklogItem` returns successfully, *When* the handler resolves, *Then* `showActionToast("Backlog item created.", "success", ...)` fires.
 
@@ -500,7 +504,8 @@ Phase 4 (Verification) ───────────────────
 - In `web-app/src/components/sessions/ExportBundleModal.tsx`, add a `handleCreateBacklogItem` callback that:
   - Uses the existing `CreateBacklogItem` ConnectRPC call (same client as `useExportBundle`).
   - Builds the request from the `SaveSessionBundleResponse` and session metadata (`uuid`, `title`, `repoPath`) passed as props.
-  - Populates `notes` as: `"Bundle: <filename> (SHA-256: <contentHash>)"` — no absolute path.
+  - Sets `title = "Diagnostic bundle: <session title> (<YYYYMMDD>)"` (date from SaveSessionBundleResponse or current date).
+  - Populates `notes` as: `"Bundle: <filename> (SHA-256: <contentHash>)"` — no absolute path (B4: intentional deviation from requirements AC5 which says "link to file path"; SHA-256 + filename is portable across machines).
   - On success: fires the toast, shows a "View backlog item →" link in the modal.
 - Files: `web-app/src/components/sessions/ExportBundleModal.tsx`
 
@@ -552,8 +557,8 @@ Phase 4 (Verification) ───────────────────
 - `web-app/src/lib/analytics/WebVitalsReporter.tsx`
 
 ##### Task 3.1.2a: Add sessionId label to WebVitalsReporter (S)
-- In `web-app/src/lib/analytics/WebVitalsReporter.tsx`, obtain the current active session UUID from a React context or the `setActiveSessionUUID` module-level variable (read via a `getActiveSessionUUID()` getter exported from `otel-init.ts`).
-- Pass `sessionId: getActiveSessionUUID() ?? undefined` to `analytics.track()` for each Web Vitals call (LCP, FID, CLS handlers).
+- In `web-app/src/lib/analytics/WebVitalsReporter.tsx`, capture the session UUID in a ref at `WebVitalsReporter` mount time: `const sessionUUIDRef = useRef(getActiveSessionUUID())`. Pass the stable ref value (`sessionUUIDRef.current`) — not a live `getActiveSessionUUID()` call — into each vitals callback's closure. This ensures a CLS/LCP event that fires after navigation still reports the correct session UUID from when it started measuring, rather than the UUID of a different session that became active later.
+- Pass `sessionId: sessionUUIDRef.current ?? undefined` to `analytics.track()` for each Web Vitals call (LCP, FID, CLS handlers).
 - Files: `web-app/src/lib/analytics/WebVitalsReporter.tsx`
 
 ---

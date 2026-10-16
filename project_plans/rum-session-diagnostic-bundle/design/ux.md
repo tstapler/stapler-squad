@@ -241,6 +241,31 @@ showActionToast("Bundle downloaded.", "success", `bundle-export-${sessionId}`)
 ARIA: role="status" aria-live="polite" on the success paragraph
 ```
 
+### Partial Bundle State (omitted_sections non-empty)
+
+When the RPC response manifest contains one or more entries in `omitted_sections`, the success state (download or save-on-server) must show a non-blocking notice before any other success content:
+
+```
+┌─────────────────────────────────────────┐
+│  Export Session Diagnostics          ✕  │
+│  ─────────────────────────────────────  │
+│                                         │
+│  ┌────────────────────────────────────┐ │
+│  │  ⚠  Some data was omitted due to   │ │
+│  │     size or errors — see           │ │
+│  │     manifest.json for details.     │ │
+│  └────────────────────────────────────┘ │
+│                                         │
+│  [remainder of success state]           │
+└─────────────────────────────────────────┘
+
+ARIA: role="status" aria-live="polite" on the notice paragraph (not role="alert" —
+it is informational, not blocking).
+data-testid="partial-bundle-notice"
+```
+
+The notice does not appear when `omitted_sections` is empty or absent. The user may still create a backlog item from a partial bundle — the notice is informational only.
+
 ### Error State
 
 ```
@@ -345,7 +370,7 @@ The backlog item created must include:
 | Field | Value |
 |-------|-------|
 | Title | `Diagnostic bundle: <session title> (<YYYYMMDD>)` |
-| Description | Link to saved file path, session UUID, session status at time of export, timestamp |
+| Description | Bundle filename and SHA-256 content hash, session UUID, session status at time of export, timestamp |
 | Labels / tags | `diagnostic-bundle` |
 
 ---
@@ -452,5 +477,5 @@ showActionToast("Bundle assembly failed: request timed out", "error", `bundle-ex
 ## Open Questions for Implementation
 
 1. **Focus management after download success**: when the modal auto-closes, where should focus return? Recommended: return to the triggering "⋯" button in the session detail header (`SessionDetailView`).
-2. **Backlog item navigation after creation**: should activating "Create backlog item →" navigate the user to the new item, or stay in the modal and show a link? Either is acceptable; pick the pattern used by "Create Checkpoint → View checkpoint" in the existing codebase.
+2. [x] RESOLVED: inline "View backlog item →" link rendered inside modal after creation (Task 2.2.1a).
 3. **Consent text review**: the consent notice copy above is a draft. Final copy should be reviewed by the product owner to confirm scope accuracy before the feature ships.
