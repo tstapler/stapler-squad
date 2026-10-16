@@ -112,6 +112,7 @@ type InstanceSnapshot struct {
 	SessionType           SessionType
 	TmuxPrefix            string
 	TmuxServerSocket      string
+	Backend               ProcessManagerBackend
 	Tags                  []string // defensive deep copy — see buildSnapshot
 
 	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance
@@ -201,6 +202,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		SessionType:               i.SessionType,
 		TmuxPrefix:                i.TmuxPrefix,
 		TmuxServerSocket:          i.TmuxServerSocket,
+		Backend:                   i.Backend,
 		Tags:                      append([]string(nil), i.Tags...),
 		Autonomous: AutonomousModeState{
 			AutonomousMode:       i.AutonomousMode,
