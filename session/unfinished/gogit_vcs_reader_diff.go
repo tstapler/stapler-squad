@@ -172,6 +172,9 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			continue
 		}
 		wtPath := filepath.Join(worktreePath, m.name)
+		if g.statFn != nil {
+			g.statFn(m.name)
+		}
 		info, serr := os.Lstat(wtPath)
 		if serr != nil {
 			if os.IsNotExist(serr) {

@@ -585,6 +585,11 @@ type GoGitVCSReader struct {
 	// against the entry's headTreeHash so a real HEAD move (which can change
 	// .gitignore) still forces a rebuild. Values are *matcherCacheEntry.
 	matcherCache sync.Map
+
+	// statFn, when non-nil, is called with the index-relative path before every
+	// per-file lstat of the tracked-file stat passes (HasUncommitted and
+	// DiffShortstat). Observer-only test seam for StatCount; nil in production.
+	statFn func(rel string)
 }
 
 // matcherCacheEntry is the value type stored in GoGitVCSReader.matcherCache.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -13,10 +14,11 @@ import (
 )
 
 // RawLinear stores n graph-only commits (all on tree) chained on top of parent
-// and returns them oldest first; a zero parent starts a new root. No ref, index
+// and returns them oldest first (tag keeps sibling chains from hashing
+// identically); a zero parent starts a new root. No ref, index
 // or worktree is touched, so a 2,500-commit history costs milliseconds. Move a
 // branch to the returned tip with SetBranch.
-func RawLinear(t testing.TB, repo *git.Repository, tree, parent plumbing.Hash, n int) []plumbing.Hash {
+func RawLinear(t testing.TB, repo *git.Repository, tree, parent plumbing.Hash, n int, tag string) []plumbing.Hash {
 	t.Helper()
 	hashes := make([]plumbing.Hash, 0, n)
 	for i := range n {
@@ -24,7 +26,7 @@ func RawLinear(t testing.TB, repo *git.Repository, tree, parent plumbing.Hash, n
 		if !parent.IsZero() {
 			parents = []plumbing.Hash{parent}
 		}
-		parent = RawCommit(t, repo, tree, parents, fmt.Sprintf("raw %d", i), at(i+1))
+		parent = RawCommit(t, repo, tree, parents, fmt.Sprintf("%s %d", tag, i), at(i+1))
 		hashes = append(hashes, parent)
 	}
 	return hashes
@@ -106,4 +108,66 @@ func SkipWorktree(t testing.TB, repo *git.Repository, paths ...string) {
 	if err := repo.Storer.SetIndex(idx); err != nil {
 		t.Fatalf("testrepo: write index: %v", err)
 	}
+}
+
+// DivergedHashes names the commits of Diverged.
+type DivergedHashes struct {
+	Root, Fork, Head, Base plumbing.Hash
+}
+
+// Diverged builds, with go-git only, a repository whose "main" (checked out)
+// is `ahead` commits past a fork point on top of a `depth`-commit linear
+// history, and whose "base" branch is `behind` commits past the same fork:
+//
+//	root --- ... --- fork --- a1..aN   (main, HEAD)
+//	                    \
+//	                     b1..bM         (base)
+//
+// AheadBehind(main, base) is therefore (ahead, behind). Everything past the
+// first commit is graph-only (RawLinear), so a 2,500-commit history is cheap;
+// the first commit carries README.md and is the tree of every later commit.
+func Diverged(t testing.TB, depth, ahead, behind int) (*git.Repository, string, DivergedHashes) {
+	t.Helper()
+	repo, dir := NewRepo(t)
+	var h DivergedHashes
+	h.Root = Commit(t, repo, map[string]string{"README.md": "hello\n"}, "root", Epoch)
+	rootCommit, err := repo.CommitObject(h.Root)
+	if err != nil {
+		t.Fatalf("testrepo: root commit: %v", err)
+	}
+	tree := rootCommit.TreeHash
+
+	trunk := append([]plumbing.Hash{h.Root}, RawLinear(t, repo, tree, h.Root, depth, "trunk")...)
+	h.Fork = trunk[len(trunk)-1]
+	h.Head = h.Fork
+	if ahead > 0 {
+		h.Head = RawLinear(t, repo, tree, h.Fork, ahead, "ahead")[ahead-1]
+	}
+	h.Base = h.Fork
+	if behind > 0 {
+		h.Base = RawLinear(t, repo, tree, h.Fork, behind, "behind")[behind-1]
+	}
+	SetBranch(t, repo, DefaultBranch, h.Head)
+	SetBranch(t, repo, "base", h.Base)
+	return repo, dir, h
+}
+
+// CommitAll is Commit for many files: it stages the whole worktree with one
+// index rewrite instead of one per file, which keeps 1,000+ file fixtures fast.
+func CommitAll(t testing.TB, repo *git.Repository, files map[string]string, msg string, when time.Time) plumbing.Hash {
+	t.Helper()
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("testrepo: Worktree: %v", err)
+	}
+	WriteFiles(t, wt.Filesystem.Root(), files)
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatalf("testrepo: Add all: %v", err)
+	}
+	sig := Signature(when)
+	h, err := wt.Commit(msg, &git.CommitOptions{Author: sig, Committer: sig, AllowEmptyCommits: true})
+	if err != nil {
+		t.Fatalf("testrepo: Commit: %v", err)
+	}
+	return h
 }

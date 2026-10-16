@@ -2,6 +2,7 @@ package testrepo_test
 
 import (
 	"bufio"
+	"fmt"
 	"go/build"
 	"os"
 	"path/filepath"
@@ -300,7 +301,7 @@ func moduleRoot(t *testing.T) (root, module string) {
 func TestRawLinear_ShouldChainCommitsWithoutTouchingRefs_WhenParentGiven(t *testing.T) {
 	repo, _ := testrepo.NewRepo(t)
 	tree := testrepo.EmptyTree(t, repo)
-	hashes := testrepo.RawLinear(t, repo, tree, plumbing.ZeroHash, 5)
+	hashes := testrepo.RawLinear(t, repo, tree, plumbing.ZeroHash, 5, "raw")
 	if len(hashes) != 5 {
 		t.Fatalf("got %d commits, want 5", len(hashes))
 	}
@@ -418,5 +419,43 @@ func TestRepack_ShouldSucceedTwice_WhenCalledOnSameHandle(t *testing.T) {
 	}
 	if n != 6 {
 		t.Errorf("log length = %d, want 6", n)
+	}
+}
+
+func TestDiverged_ShouldPlaceForkAsMergeBase_WhenAheadAndBehindGiven(t *testing.T) {
+	repo, dir, h := testrepo.Diverged(t, 50, 3, 2)
+	head, _ := repo.CommitObject(h.Head)
+	base, _ := repo.CommitObject(h.Base)
+	bases, err := head.MergeBase(base)
+	if err != nil || len(bases) != 1 || bases[0].Hash != h.Fork {
+		t.Fatalf("MergeBase = %v, %v; want [%s]", bases, err, h.Fork)
+	}
+	n := 0
+	for c := head; c.Hash != h.Fork; n++ {
+		c, _ = c.Parents().Next()
+	}
+	if n != 3 {
+		t.Errorf("ahead = %d, want 3", n)
+	}
+	// The checkout is consistent with main so linked worktrees can be added.
+	dirs := testrepo.LinkedWorktrees(t, dir, 2)
+	if _, err := os.Stat(filepath.Join(dirs[1], "README.md")); err != nil {
+		t.Errorf("linked worktree not populated: %v", err)
+	}
+}
+
+func TestCommitAll_ShouldStageEveryFileInOneCommit_WhenManyFilesGiven(t *testing.T) {
+	repo, _ := testrepo.NewRepo(t)
+	files := map[string]string{}
+	for i := range 200 {
+		files[fmt.Sprintf("d%d/f%d.txt", i%7, i)] = "x\n"
+	}
+	h := testrepo.CommitAll(t, repo, files, "bulk", testrepo.Epoch)
+	c, _ := repo.CommitObject(h)
+	tree, _ := c.Tree()
+	n := 0
+	_ = tree.Files().ForEach(func(*object.File) error { n++; return nil })
+	if n != len(files) {
+		t.Errorf("committed %d files, want %d", n, len(files))
 	}
 }
