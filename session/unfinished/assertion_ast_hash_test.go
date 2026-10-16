@@ -52,7 +52,10 @@ var assertionHashedFiles = []string{
 
 // removedAssertionTests allow-lists golden keys that may be absent from the
 // migrated tree (renamed or deleted tests), each with a reason.
-var removedAssertionTests = []struct{ key, reason string }{}
+var removedAssertionTests = []struct{ key, reason string }{
+	{"gogitstore|gogitstore|TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever", "Task 0.0.3e: tested the native-git subprocess wrapper gitRunErr (fake git binary on PATH); the wrapper is deleted with native git"},
+	{"gogitstore|gogitstore|TestGitRunErrCtx_PreemptedByShorterParentDeadline", "Task 0.0.3e: tested gitRunErrCtx's parent-deadline preemption of a wedged git subprocess; the wrapper is deleted with native git"},
+}
 
 var assertionMethodNames = map[string]bool{
 	"Errorf": true, "Fatalf": true, "Error": true, "Fatal": true,

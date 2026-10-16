@@ -7,11 +7,9 @@ import (
 	"io"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,357 +17,84 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // --- test fixture helpers -------------------------------------------------
 //
-// These shell out to the real `git` binary to BUILD test fixtures only
-// (init/commit/gc/worktree add). This does not conflict with the "no
-// subprocess git in production" constraint this prototype is built around
-// — that constraint is about the read path this package implements
-// in-process; building a repo fixture for a test already uses `git`
-// directly elsewhere in this project (see
-// gogit_vcs_reader_limits_test.go's initRepoInternal/gitRunInternal).
-//
-// The fixture is a SYNTHETIC repo (not a clone of this project's own
-// checkout) deliberately: this checkout's .git is ~17GB, and this test's
-// temp dirs live on a tmpfs (RAM-backed /tmp) — cloning it would exhaust
-// available memory. A few hundred commits is enough to force `git gc` to
-// produce a real multi-hundred-object packfile, which is all that's needed
-// to prove the sharing behavior; it doesn't need to be huge to be real.
+// Fixtures are built entirely in-process with go-git (commits via
+// Worktree.Add/Commit, packing via Repository.RepackObjects + Prune, linked
+// worktrees via internal/testrepo). No native git binary or subprocess is
+// involved, so the tests below no longer prove interoperability with
+// git-written packs and indexes (plan Q13, accepted loss): they exercise
+// go-git-written ones.
 
-func gitRun(t testing.TB, dir string, args ...string) {
+// repackErr packs every object of the repository at dir into a single
+// packfile and prunes loose copies and superseded packs, using go-git only.
+// It returns an error instead of calling *testing.T methods so background
+// goroutines can use it.
+func repackErr(dir string) error {
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		return fmt.Errorf("open %s for repack: %w", dir, err)
+	}
+	if err := repo.RepackObjects(&git.RepackConfig{}); err != nil {
+		return fmt.Errorf("RepackObjects: %w", err)
+	}
+	// RepackObjects deletes the superseded packs, but this handle's storer
+	// still caches them and Prune would fail with "packfile not found";
+	// a fresh handle sees the new pack set.
+	repo, err = git.PlainOpen(dir)
+	if err != nil {
+		return fmt.Errorf("reopen %s for prune: %w", dir, err)
+	}
+	return repo.Prune(git.PruneOptions{Handler: repo.DeleteObject})
+}
+
+// repackRepoErr is repackErr on an already-open repository. Only safe when
+// the repository has no packs yet (a first repack): see repackErr for why.
+func repackRepoErr(repo *git.Repository) error {
+	if err := repo.RepackObjects(&git.RepackConfig{}); err != nil {
+		return fmt.Errorf("RepackObjects: %w", err)
+	}
+	if err := repo.Prune(git.PruneOptions{Handler: repo.DeleteObject}); err != nil {
+		return fmt.Errorf("Prune: %w", err)
+	}
+	return nil
+}
+
+// repackDir is repackErr that fails the test on error; call it only from
+// the goroutine running the test.
+func repackDir(t testing.TB, dir string) {
 	t.Helper()
-	if err := gitRunErr(t.Logf, dir, args...); err != nil {
-		t.Fatalf("%v", err)
+	if err := repackErr(dir); err != nil {
+		t.Fatalf("repackDir(%s): %v", dir, err)
 	}
 }
 
-// gitRunErr is the shared core both gitRun (this file) and runGitCmd
-// (mmap_stage2_test.go — the goroutine-safe variant that can't call
-// *testing.T reporting methods) delegate to. logf may be nil (runGitCmd
-// passes nil since it has no *testing.T to log through).
-//
-// These fixtures deliberately live on a RAM-backed tmpfs (see this file's
-// package doc comment above) rather than real disk, and this package's
-// `git gc --aggressive` calls run alongside every other package's tests
-// under CI's combined `-race -covermode=atomic` sweep. A 2026-07-17 CI run
-// (job 29549848133) showed every gogitstore test that calls
-// buildPackedFixture fail simultaneously with an identical signature —
-// `git gc` itself exiting 128 ("unable to read <hash>", "could not find
-// pack '.tmp-N-pack-....pack'", "failed to run repack") — not a single
-// gogitstore assertion failure among them, and this exact code proved
-// correct across dozens of repeated local runs (including under -race and
-// constrained GOMAXPROCS). That signature is git's repack step losing its
-// own temp pack file mid-write, consistent with transient tmpfs/memory
-// pressure from many concurrent test binaries sharing one runner's RAM.
-//
-// IMPORTANT — this in-place retry is a SEPARATE mitigation from
-// buildPackedFixture's whole-fixture rebuild retry, and only helps with a
-// DIFFERENT failure shape. Re-running `git gc` in place on the SAME repo
-// directory only helps when gc failed cleanly before mutating anything
-// (e.g. losing a `.tmp-N-pack` mid-write, the original 2026-07-17 case).
-// It does NOT help — and CI run 29568195477 proved this empirically — when
-// gc's internal repack+prune+reflog-expire sequence fails PARTWAY through
-// under resource pressure: that run showed all 5 retries fail with the
-// IDENTICAL missing-object hash on every attempt ("fatal: Failed to
-// traverse parents of commit 6764e703...", "error: Could not read
-// 0e5be947..." unchanged across attempts 1-5), proving the repo was
-// already corrupted by attempt 1 and every further retry just rediscovers
-// the same broken state — not a transient condition retrying can wait out.
-// git gc is NOT crash-safe/atomic across those internal steps, so "gc is
-// idempotent, just retry it" does not hold once it has partially mutated
-// the repo. buildPackedFixture's rebuild-from-scratch retry is the layer
-// that actually recovers from THAT failure mode; this in-place retry stays
-// as a cheap first line for the failure modes it does cover.
-//
-// maxAttempts and the backoff schedule were widened on 2026-07-17: CI run
-// 29566220225 hit the "fatal: failed to run repack" signature and
-// exhausted the original 3-attempt/150ms*attempt budget under 5 PRs' CI
-// running concurrently on a resource-shared runner — the flat, unjittered
-// short delays let concurrent retries pile back into the same contention
-// window in lockstep. See gitRetryBackoff.
-// gitCommandTimeout bounds a single git subprocess invocation. Without this,
-// a wedged git process (e.g. blocked on a lock file left by a detached
-// `gc.auto` background process, or genuine tmpfs/resource contention) blocks
-// cmd.Wait() forever: go test's own -timeout panics the *test binary* and
-// dumps goroutines but never signals the child process, so the goroutine
-// calling Wait() — and the fixture build it's part of — hangs past the test
-// timeout instead of failing. Reproduced directly: a fresh, isolated run of
-// TestMmapIndex_HeapAllocation_LowerThanCopyBased under `-timeout 60s` still
-// hit `panic: test timed out after 1m0s` with goroutine 20 blocked in
-// os/exec.(*Cmd).Wait, called from gitRunErr's CombinedOutput.
-func gitRunErr(logf func(format string, args ...any), dir string, args ...string) error {
-	return gitRunErrWithTimeout(logf, dir, gitCommandTimeout(args), args...)
-}
-
-// gitRunErrWithTimeout is gitRunErr with an explicit, caller-supplied
-// per-attempt timeout instead of the gitCommandTimeout(args) default. It
-// exists so TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever
-// can prove the context.WithTimeout path actually bounds and kills a wedged
-// subprocess without paying gitCommandTimeout's real 30s bound — the test
-// only needs *some* finite timeout to fire, not that specific value, since
-// that value is test-helper scaffolding for fixture-building, not shipped
-// production config. It runs with context.Background() as its parent — use
-// gitRunErrCtx directly when an outer deadline (e.g. fixtureBuildTimeout)
-// must also bound this call.
-func gitRunErrWithTimeout(logf func(format string, args ...any), dir string, timeout time.Duration, args ...string) error {
-	return gitRunErrCtx(context.Background(), logf, dir, timeout, args...)
-}
-
-// gitRunErrCtx is gitRunErrWithTimeout with an explicit parent context. Each
-// attempt's context.WithTimeout(parent, timeout) is a CHILD of parent, so it
-// fires at whichever is earlier: this call's own timeout, or parent's
-// existing deadline (e.g. the whole-attempt fixtureBuildTimeout wrapping a
-// whole buildPackedFixtureOnce call in goldenFixtureDir) — a per-call retry
-// here can never blow past an outer deadline it was called under.
-func gitRunErrCtx(parent context.Context, logf func(format string, args ...any), dir string, timeout time.Duration, args ...string) error {
-	const maxAttempts = 5
-	var lastErr error
-	var lastOut []byte
-	var lastTimedOut bool
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		ctx, cancel := context.WithTimeout(parent, timeout)
-		cmd := safeexec.CommandContextPG(ctx, "git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.local",
-		)
-		out, err := cmd.CombinedOutput()
-		timedOut := ctx.Err() == context.DeadlineExceeded
-		cancel()
-		if err == nil {
-			return nil
-		}
-		lastErr, lastOut, lastTimedOut = err, out, timedOut
-		if !gitCommandIsRetryable(args) || attempt == maxAttempts {
-			break
-		}
-		if logf != nil {
-			logf("git %v failed (attempt %d/%d), retrying: %v\n%s", args, attempt, maxAttempts, err, out)
-		}
-		time.Sleep(gitRetryBackoff(attempt)) //nolint:notimesleeptest real-git-subprocess retry backoff (index.lock/gc contention); the wall-clock backoff is the behavior
-	}
-	if lastTimedOut {
-		return fmt.Errorf("git %v timed out after %s (subprocess never exited — killed): %w\n%s", args, timeout, lastErr, lastOut)
-	}
-	return fmt.Errorf("git %v failed: %w\n%s", args, lastErr, lastOut)
-}
-
-// gitCommandTimeout returns how long a single gitRunErr attempt may run
-// before its subprocess is killed. context.Background() previously left
-// gitRunErr's safeexec.CommandContext with no deadline at all — safeexec's
-// WaitDelay only bounds the wait *after* a context is cancelled, so a
-// context that never cancels leaves the subprocess completely unbounded.
-// `git gc --aggressive` on this package's few-hundred-commit fixture is the
-// only command here with a meaningfully large runtime (repack/prune over
-// every object), so it gets a generous timeout; everything else (init,
-// config, add, commit, worktree add) is cheap plumbing and gets a much
-// smaller bound so a genuine hang fails fast.
-func gitCommandTimeout(args []string) time.Duration {
-	for _, a := range args {
-		if a == "gc" {
-			return 90 * time.Second
-		}
-	}
-	return 30 * time.Second
-}
-
-// gitRetryBackoff returns the delay before retrying a failed retryable git
-// command (see gitRun's doc comment above and runGitCmd's in
-// mmap_stage2_test.go, which both call this). attempt is 1-indexed — the
-// attempt number that just failed. Delay grows linearly with attempt, plus
-// random jitter, so that many concurrent test binaries that all started
-// retrying around the same moment (e.g. under CI's -race sweep with
-// several PRs' jobs sharing one runner) don't retry in lockstep back into
-// the exact same tmpfs/memory contention window.
-func gitRetryBackoff(attempt int) time.Duration {
+// retryBackoff returns how long to wait before retry number attempt
+// (1-based) of a filesystem operation: linear in attempt with random jitter
+// so concurrent jobs sharing one runner don't retry in lockstep.
+func retryBackoff(attempt int) time.Duration {
 	const base = 400 * time.Millisecond
 	const maxJitter = 300 * time.Millisecond
 	return time.Duration(attempt)*base + time.Duration(rand.Int63n(int64(maxJitter)))
 }
 
-// gitCommandIsRetryable reports whether args is a git subcommand known to be
-// safe to retry after a transient subprocess failure — currently just `gc`,
-// which is idempotent (re-running it after a failed/partial repack simply
-// redoes the repack) and is the specific command observed failing
-// non-deterministically in CI (see gitRun's doc comment). Deliberately not
-// blanket-applied to every git invocation: a real failure in e.g. `commit`
-// or `add` should still fail the test on the first attempt.
-func gitCommandIsRetryable(args []string) bool {
-	for _, a := range args {
-		if a == "gc" {
-			return true
-		}
-	}
-	return false
-}
-
-// TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever is the
-// synthetic-hang regression test for the bug this file's gitCommandTimeout
-// doc comment describes: gitRunErr previously ran its subprocess under
-// context.Background(), which never cancels, so safeexec's WaitDelay (which
-// only bounds Wait() *after* the context is cancelled) never engaged and a
-// wedged git subprocess could hang indefinitely — this is what produced the
-// observed "test timed out after 5m0s" panic on
-// TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst.
-//
-// It replaces "git" on PATH with a fake binary that never exits on its own
-// (an unkillable-by-cooperation `sleep`), then calls gitRunErrWithTimeout
-// with a non-retryable subcommand ("status") and a short 2s timeout (not
-// gitCommandTimeout's real 30s non-gc bound — this test only needs to prove
-// the context.WithTimeout path fires and kills the subprocess, not that it
-// fires at exactly 30s, so a short timeout gives the same coverage without
-// the wall-clock cost) so exactly one attempt is made. If gitRunErrWithTimeout
-// still bounds the subprocess with a real context.WithTimeout, the call must
-// return an error mentioning the timeout well within that 2s plus safeexec's
-// WaitDelay (executor/safeexec.DefaultWaitDelay, 2s) and process-teardown
-// overhead — asserted here via a generous 15s wall-clock ceiling enforced
-// with a timer, not by trusting gitRunErrWithTimeout to return promptly on
-// its own. Before the fix, this exact test would have hung for the fake
-// process's full sleep duration (or until the outer `go test` timeout
-// killed the whole run), since context.Background() never fires and the
-// fake process never exits voluntarily.
-func TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever(t *testing.T) {
-	fakeBinDir := t.TempDir()
-	fakeGitPath := filepath.Join(fakeBinDir, "git")
-	// A real `sleep` far longer than any timeout this test could plausibly
-	// wait on. Once ctx's deadline fires, exec.CommandContext SIGKILLs this
-	// process directly (SIGKILL can't be trapped/ignored), so the fake
-	// binary doesn't need to trap signals to prove the point — it only
-	// needs to never exit on its own within the test's window.
-	script := "#!/bin/sh\nexec sleep 3600\n"
-	if err := os.WriteFile(fakeGitPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake git binary: %v", err)
-	}
-
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+origPath)
-
-	type result struct {
-		err error
-		dur time.Duration
-	}
-	done := make(chan result, 1)
-	start := time.Now()
-	// A short timeout, not gitCommandTimeout's real 30s: this test only
-	// needs to prove context.WithTimeout fires and kills the subprocess, not
-	// that it fires at exactly 30s. Using the real 30s bound here would cost
-	// this test 30s of wall-clock on every run for no additional coverage.
-	const wedgedTimeout = 2 * time.Second
-	go func() {
-		err := gitRunErrWithTimeout(t.Logf, t.TempDir(), wedgedTimeout, "status")
-		done <- result{err: err, dur: time.Since(start)}
-	}()
-
-	const ceiling = 15 * time.Second
-	select {
-	case r := <-done:
-		if r.err == nil {
-			t.Fatalf("gitRunErr against a wedged subprocess returned nil error (want a timeout error) after %s", r.dur)
-		}
-		if !strings.Contains(r.err.Error(), "timed out") {
-			t.Fatalf("gitRunErr error = %v, want it to mention \"timed out\" (proves the context.WithTimeout path fired, not some other failure)", r.err)
-		}
-		t.Logf("gitRunErr against a wedged subprocess returned in %s: %v", r.dur, r.err)
-	case <-time.After(ceiling):
-		t.Fatalf("gitRunErr did not return within %s against a wedged subprocess — context.WithTimeout is not bounding the subprocess (regression to the context.Background() bug)", ceiling)
-	}
-}
-
-// TestGitRunErrCtx_PreemptedByShorterParentDeadline proves the exact
-// mechanism fixtureBuildTimeout relies on: gitRunErrCtx derives its
-// per-attempt context via context.WithTimeout(parent, timeout), so a
-// parent whose own deadline is shorter than the per-call timeout must still
-// preempt a wedged subprocess — this is what lets fixtureBuildTimeout bound
-// a whole buildPackedFixtureOnce attempt without needing to wait out its
-// full 3-minute value. It reuses the wedged-fake-git-binary technique from
-// TestGitRunErr_WedgedSubprocess_FailsFastInsteadOfHangingForever rather
-// than actually running fixtureBuildTimeout's real duration, so this stays
-// fast and non-flaky.
-func TestGitRunErrCtx_PreemptedByShorterParentDeadline(t *testing.T) {
-	fakeBinDir := t.TempDir()
-	fakeGitPath := filepath.Join(fakeBinDir, "git")
-	script := "#!/bin/sh\nexec sleep 3600\n"
-	if err := os.WriteFile(fakeGitPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake git binary: %v", err)
-	}
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+origPath)
-
-	// parentTimeout is deliberately much shorter than perCallTimeout, mirroring
-	// fixtureBuildTimeout (3m) wrapping a per-call gitCommandTimeout (30s/90s):
-	// the OUTER deadline must be the one that fires.
-	const parentTimeout = 500 * time.Millisecond
-	const perCallTimeout = 2 * time.Second
-	parent, cancel := context.WithTimeout(context.Background(), parentTimeout)
-	defer cancel()
-
-	type result struct {
-		err error
-		dur time.Duration
-	}
-	done := make(chan result, 1)
-	start := time.Now()
-	go func() {
-		err := gitRunErrCtx(parent, t.Logf, t.TempDir(), perCallTimeout, "status")
-		done <- result{err: err, dur: time.Since(start)}
-	}()
-
-	const ceiling = 15 * time.Second
-	select {
-	case r := <-done:
-		if r.err == nil {
-			t.Fatalf("gitRunErrCtx against a wedged subprocess returned nil error (want a timeout error) after %s", r.dur)
-		}
-		if !strings.Contains(r.err.Error(), "timed out") {
-			t.Fatalf("gitRunErrCtx error = %v, want it to mention \"timed out\"", r.err)
-		}
-		if r.dur >= perCallTimeout {
-			t.Fatalf("gitRunErrCtx took %s, want it preempted by parentTimeout (%s) well before perCallTimeout (%s) — the outer deadline fixtureBuildTimeout relies on did not fire first", r.dur, parentTimeout, perCallTimeout)
-		}
-		t.Logf("gitRunErrCtx preempted by the shorter parent deadline in %s: %v", r.dur, r.err)
-	case <-time.After(ceiling):
-		t.Fatalf("gitRunErrCtx did not return within %s — the parent-context deadline that fixtureBuildTimeout depends on is not preempting a wedged subprocess", ceiling)
-	}
-}
-
-// buildPackedFixtureAttempts bounds how many times buildPackedFixture will
-// rebuild the ENTIRE fixture from scratch (wipe dir, replay every commit,
-// re-run gc) after a failure, as opposed to gitRunErr's in-place retry of
-// a single failing git command. These are deliberately separate layers:
-// see gitRunErr's doc comment for the CI evidence (run 29568195477) that
-// in-place retry cannot recover once `git gc --aggressive` has partially
-// mutated the repo — every further in-place retry rediscovers the exact
-// same missing-object corruption, because nothing about the repo's state
-// changes between those retries. Only starting over from a clean directory
-// gives a real chance for a fresh attempt to land outside whatever
-// resource-contention window caused the original partial failure.
+// buildPackedFixtureAttempts bounds how many times buildPackedFixture
+// rebuilds the ENTIRE fixture from scratch (wipe dir, replay every commit,
+// repack) after a failure.
 const buildPackedFixtureAttempts = 3
 
-// fixtureBuildTimeout bounds a SINGLE buildPackedFixtureOnce attempt as a
-// whole, independent of and tighter than the sum of that attempt's
-// individual per-git-call timeouts (gitCommandTimeout: 30s per plumbing
-// call, 90s for gc, itself retried up to 5x by gitRunErrCtx for retryable
-// commands). Without this, a repeatedly-timing-out `gc` call alone could
-// consume up to 5*90s=450s inside ONE buildPackedFixtureOnce call before
-// buildPackedFixtureAttempts's outer whole-fixture-rebuild loop even gets a
-// chance to start over from a clean directory — 3 such wedged attempts would
-// blow well past go test's 10-minute default timeout (see this task's
-// backlog item: TestRegistry_Prune_should_neverEvict_When_RefCountNonzero
-// hit exactly this as a 10-minute hang). fixtureBuildTimeout is passed as
-// the parent context to every gitRunErrCtx call inside one
-// buildPackedFixtureOnce attempt, so a child call's own per-call timeout can
-// never let that one attempt run longer than this bound in total.
+// fixtureBuildTimeout bounds a SINGLE buildPackedFixtureOnce attempt; it is
+// the context deadline passed to that attempt.
 const fixtureBuildTimeout = 3 * time.Minute
 
 // --- golden fixture cache --------------------------------------------------
 //
 // Nearly every test in this package calls buildPackedFixture, and until this
-// cache existed every single call paid the full real-`git init` + N real
-// `git commit`s + `git gc --aggressive` cost from scratch — even when two
+// cache existed every single call paid the full go-git init + N
+// commits + repack cost from scratch — even when two
 // tests requested the exact same numCommits. That made the package's full
 // test suite (and even small targeted subsets) blow well past go test's
 // default and CI's extended timeouts (see this task's PR for the measured
@@ -380,8 +105,8 @@ const fixtureBuildTimeout = 3 * time.Minute
 // serve every buildPackedFixture call — including the first — a fast native
 // recursive copy of that golden directory. A copy is required rather than
 // handing out the golden directory itself (or a shared subdirectory) because
-// several callers go on to mutate their copy afterward: `git worktree add`
-// against it (writes into `.git/worktrees/...`), a further commit + repack
+// several callers go on to mutate their copy afterward: a linked worktree
+// added to it (writes into `.git/worktrees/...`), a further commit + repack
 // (mmap_stage2_test.go's staleness/refresh tests), or a real concurrent
 // repack under -race (TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack).
 // Two tests sharing one on-disk fixture would race on or corrupt each
@@ -476,13 +201,13 @@ func goldenFixtureDir(t testing.TB, numCommits int) string {
 }
 
 // buildPackedFixture creates a repo at dir with numCommits commits across a
-// handful of files, then forces `git gc` so the objects end up in a real
-// packfile (git gc's loose-object threshold is normally higher than this,
-// so gc --aggressive-ish behavior is forced explicitly) — an unpacked
+// handful of files, then repacks so the objects end up in a real
+// packfile (loose objects are not packed on their own at this scale,
+// so the repack is forced explicitly) — an unpacked
 // (all-loose-objects) repo would never exercise the idxfile parsing path
 // this prototype exists to amortize.
 //
-// The expensive part (real git init/commit/gc) runs at most once per
+// The expensive part (go-git init/commit/repack) runs at most once per
 // distinct numCommits for the whole test binary — see the "golden fixture
 // cache" section above. Every call, including the first, gets its own
 // independent copy of that golden fixture at dir, safe for the caller to
@@ -537,7 +262,7 @@ func copyDirWithRetry(src, dst string) error {
 
 // copyDirTree recursively copies src to dst using native file I/O (no git,
 // no subprocess) preserving file mode and symlinks, so a golden fixture
-// built once by real `git gc` can be handed out to many tests cheaply. dst
+// built once by go-git can be handed out to many tests cheaply. dst
 // is created fresh; any pre-existing contents at dst are not merged with,
 // only added to (callers are expected to have removed dst first on a
 // retry — see copyDirWithRetry/buildPackedFixture).
@@ -568,7 +293,7 @@ func copyDirTree(src, dst string) error {
 }
 
 // copyFilePreservingMode copies a single regular file's contents and mode.
-// Some files inside a real git-gc'd .git directory (e.g. pack .idx/.pack
+// Some files inside a go-git-repacked .git directory (e.g. pack .idx/.pack
 // files) can be written with restrictive permissions; preserving mode
 // exactly (rather than defaulting to some fixed 0o644) matters for any test
 // that inspects permissions, and for git's own subsequent operations against
@@ -641,12 +366,7 @@ func hasAnyFixtureCacheEntry() bool {
 // removeAllWithRetry bounded-retries os.RemoveAll(dir) so a transient
 // ENOTEMPTY (something writes a new entry into dir between RemoveAll's
 // internal directory listing and its final rmdir) doesn't hard-fail the
-// caller outright. This mirrors gitRunErr's own bounded-retry-with-backoff
-// shape (see its doc comment) applied to a plain filesystem op instead of a
-// git subprocess — the underlying cause is the same category of transient,
-// external interference this whole file already retries around, just
-// surfacing through a different syscall. Unlike gitRunErr, this does NOT
-// fall back to "start over in a fresh directory" (the alternative the task
+// caller outright. It does NOT fall back to "start over in a fresh directory" (the alternative the task
 // that introduced this function considered): dir here IS the fresh location
 // the caller is about to rebuild into, so there is nowhere further to fall
 // back to short of changing every buildPackedFixture caller's directory
@@ -659,7 +379,7 @@ func removeAllWithRetry(dir string) error {
 	return nil
 }
 
-// retryOpWithBackoff bounded-retries op with gitRetryBackoff's schedule,
+// retryOpWithBackoff bounded-retries op with retryBackoff's schedule,
 // returning op's last error if every attempt fails. Factored out of
 // removeAllWithRetry so its retry/backoff/give-up behavior can be tested
 // directly against a deterministic fake op instead of racing a real
@@ -682,7 +402,7 @@ func retryOpWithBackoff(op func() error) error {
 		if attempt == retryOpMaxAttempts {
 			break
 		}
-		time.Sleep(gitRetryBackoff(attempt)) //nolint:notimesleeptest retry backoff for real filesystem contention is the behavior under test
+		time.Sleep(retryBackoff(attempt)) //nolint:notimesleeptest retry backoff for real filesystem contention is the behavior under test
 	}
 	return lastErr
 }
@@ -766,97 +486,30 @@ func TestRemoveAllWithRetry_RemovesRealDirectory(t *testing.T) {
 
 // buildPackedFixtureOnce is buildPackedFixture's single-attempt body. It
 // returns an error instead of calling *testing.T failure methods so its
-// caller can decide whether to wipe dir and rebuild from scratch rather
-// than retrying any individual git command in place — see
-// buildPackedFixtureAttempts's doc comment for why that distinction
-// matters here specifically.
+// caller can wipe dir and rebuild from scratch. ctx bounds the whole attempt.
 func buildPackedFixtureOnce(ctx context.Context, t testing.TB, dir string, numCommits int) error {
 	t.Helper()
-	gitRun := func(args ...string) error {
-		return gitRunErrCtx(ctx, t.Logf, dir, gitCommandTimeout(args), args...)
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	if err := gitRun("init", "-q", "-b", "main"); err != nil {
-		return err
-	}
-	if err := gitRun("config", "user.name", "test"); err != nil {
-		return err
-	}
-	if err := gitRun("config", "user.email", "test@test.local"); err != nil {
-		return err
-	}
-	// gc.auto=0 disables git's OWN automatic housekeeping — several plumbing
-	// commands (`commit` among them) check the loose-object count after
-	// they run and, past a threshold (6700 by default, but CI runners have
-	// been observed to ship a much lower effective default — see below),
-	// silently kick off `git gc --auto`. Critically, `gc.autoDetach`
-	// defaults to true, so that auto-gc runs in a DETACHED BACKGROUND
-	// process rather than blocking the triggering command — which means it
-	// can still be mid-repack when THIS function's own explicit `git gc
-	// --aggressive` call (below) starts. Two concurrent repacks each
-	// capture their own snapshot of "which packs currently exist to
-	// consolidate and delete"; whichever finishes second deletes only the
-	// packs IT knew about, leaving the other's freshly-written pack behind
-	// — the repo ends up with >1 pack even though every individual git
-	// invocation exits 0. Root-caused via a 64-iteration reproduction with
-	// gc.auto deliberately lowered (see this task's report): with a low
-	// enough gc.auto, the commit loop below reliably produces 2 packs
-	// BEFORE the explicit gc call even runs, and `git gc -q --aggressive`
-	// has no way to detect or wait for a same-repo background gc it didn't
-	// start. This is a distinct failure mode from gitRunErr's own retry
-	// logic (which only helps when a git command itself exits nonzero) —
-	// here every command exits 0, so nothing above would ever detect or
-	// retry it. Setting gc.auto=0 makes this function's own gc call the
-	// ONLY packing operation ever run against this fixture repo.
-	if err := gitRun("config", "gc.auto", "0"); err != nil {
-		return err
-	}
-	// gc.auto=0 (above) only closes off `git gc --auto`'s own trigger path.
-	// Git >= 2.31 has a SEPARATE, independently-configured auto-trigger:
-	// maintenance.auto (default true) makes "commands that add repository
-	// data" — commit very much included, not just gc-family plumbing — run
-	// `git maintenance run --auto` after they finish (git-maintenance(1)).
-	// Without an explicit `git maintenance register`, only the `gc` task is
-	// enabled by default, and that task's own --auto check does fall back to
-	// gc.auto/gc.autoPackLimit — but this is intentional belt-and-suspenders,
-	// not a guess: a 2026-07-20 CI run (PR #200, unrelated diff) hit `git
-	// commit` itself failing with "bad tree object HEAD" mid-fixture-build,
-	// after PR #190 had already set gc.auto=0 — i.e. a NEW auto-trigger
-	// surface, not the one #190 closed. Disabling maintenance.auto here too
-	// removes that entire mechanism as a source of a same-repo concurrent
-	// writer, regardless of which specific task it would have run.
-	if err := gitRun("config", "maintenance.auto", "false"); err != nil {
-		return err
-	}
-
-	// Every iteration rewrites the SAME 3 filenames (file0.txt..file2.txt)
-	// and only their content changes, so this loop never needs the `git`
-	// CLI at all: go-git's Worktree.Add/Commit builds identical commit and
-	// tree objects in-process. This was previously 1-2 `git` subprocess
-	// spawns per commit (up to 2*numCommits, hundreds across the golden
-	// fixtures this builds) and was the dominant cost of this whole
-	// package's tests — a full-suite run timed this single fixture build
-	// at 605s (see git blame / PR discussion for the `go test ./...`
-	// timing that surfaced it). go-git only writes objects/refs; it never
-	// shells out, so it can't trip the gc.auto/maintenance.auto
-	// auto-housekeeping race documented above — that hazard is specific to
-	// the real `git commit` CLI path, which this loop no longer uses. The
-	// repo produced this way is byte-for-byte a normal git repository on
-	// disk, so the explicit `git gc --aggressive` call below (which DOES
-	// need the real binary — go-git's repack support is limited) works
-	// against it unchanged.
-	repo, err := git.PlainOpen(dir)
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")},
+	})
 	if err != nil {
-		return fmt.Errorf("open fixture repo for in-process commits: %w", err)
+		return fmt.Errorf("init fixture repo: %w", err)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("fixture repo worktree: %w", err)
 	}
+
+	// Every iteration rewrites the SAME 3 filenames (file0.txt..file2.txt)
+	// and only their content changes.
 	sig := &object.Signature{Name: "test", Email: "test@test.local", When: time.Unix(1700000000, 0)}
 	for i := 0; i < numCommits; i++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("fixture build aborted at commit %d: %w", i, err)
+		}
 		for f := 0; f < 3; f++ {
 			relPath := fmt.Sprintf("file%d.txt", f)
 			content := fmt.Sprintf("commit %d file %d\n%s\n", i, f, strconvItoaPadded(i*7+f))
@@ -875,44 +528,17 @@ func buildPackedFixtureOnce(ctx context.Context, t testing.TB, dir string, numCo
 
 	// Force everything into a packfile (loose objects alone never touch
 	// idxfile parsing, which is the entire point of this fixture).
-	// -c pack.threads=1 trades repack speed for a smaller resource
-	// footprint: aggressive repack's default (one thread per CPU) adds
-	// meaningfully more memory/CPU pressure on an already-contended CI
-	// runner (many packages' `go test -race` binaries running
-	// concurrently), which is the proximate trigger for gc failing
-	// partway through in the first place (see gitRunErr's doc comment).
-	// Fewer threads means a slower but less failure-prone repack.
-	// -c gc.autoDetach=false belt-and-suspenders this EXPLICIT gc call
-	// itself: gc.auto=0/maintenance.auto=false (above) stop other commands
-	// from ever *triggering* an auto-gc, but if some future change
-	// re-introduces a trigger this repo doesn't yet account for, forcing
-	// this call to run in the foreground (rather than gc.autoDetach's
-	// default background fork) means it can't itself race a concurrent
-	// detached gc the way the comment above describes.
-	if err := gitRun("-c", "pack.threads=1", "-c", "gc.autoDetach=false", "gc", "-q", "--aggressive"); err != nil {
+	if err := repackRepoErr(repo); err != nil {
 		return err
 	}
 
-	// Belt-and-suspenders postcondition, on top of the gc.auto=0 fix above:
-	// every caller of buildPackedFixture assumes "everything lands in
-	// exactly one packfile" (that is the documented purpose of this whole
-	// function), but most callers never actually verify it — they just
-	// read store.dir.ObjectPacks() (or equivalent) downstream and get a
-	// confusing, unrelated-looking failure if that assumption doesn't
-	// hold (e.g. registry_eviction_test.go's pack-handle-cache test
-	// failing with "opened 2 times, want exactly 1" — a real symptom of
-	// this exact precondition being violated, not a pack-handle-caching
-	// bug). Treating a wrong pack count as a hard error here — instead of
-	// only checking it ad hoc in the two or three tests that happened to
-	// add their own assertion — means ANY caller gets it for free, and
-	// gets it fed into buildPackedFixture's existing whole-fixture-rebuild
-	// retry loop rather than a one-off t.Fatalf deep inside a test body.
+	// Every caller assumes "everything lands in exactly one packfile".
 	n, err := countPacks(dir)
 	if err != nil {
-		return fmt.Errorf("buildPackedFixtureOnce: counting packs after gc: %w", err)
+		return fmt.Errorf("buildPackedFixtureOnce: counting packs after repack: %w", err)
 	}
 	if n != 1 {
-		return fmt.Errorf("buildPackedFixtureOnce: gc left %d packs on disk, want exactly 1 (see gc.auto=0 comment above for the known cause)", n)
+		return fmt.Errorf("buildPackedFixtureOnce: repack left %d packs on disk, want exactly 1", n)
 	}
 	return nil
 }
@@ -942,9 +568,12 @@ func strconvItoaPadded(i int) string {
 	return string(out)
 }
 
-func addWorktree(t testing.TB, mainRepo, dst, branch string) {
+// addWorktree adds a go-git-built linked worktree named after dst's base
+// name on a new branch at main's HEAD. testrepo chooses the directory, so
+// callers must use the returned path rather than dst.
+func addWorktree(t testing.TB, mainRepo, dst, branch string) string {
 	t.Helper()
-	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", branch, dst, "main")
+	return testrepo.NewLinkedWorktree(t, mainRepo, filepath.Base(dst), branch)
 }
 
 // --- the actual proof-of-design test --------------------------------------
@@ -965,7 +594,7 @@ func sharedIndexFixture(t testing.TB, dir string, numWorktrees, numCommits int) 
 	repos := make([]*git.Repository, 0, numWorktrees)
 	for i := 0; i < numWorktrees; i++ {
 		wtPath := filepath.Join(dir, "wt"+strconv.Itoa(i))
-		addWorktree(t, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
+		wtPath = addWorktree(t, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
 
 		repo, err := Open(wtPath, reg)
 		if err != nil {
@@ -992,14 +621,11 @@ func sharedIndexFixture(t testing.TB, dir string, numWorktrees, numCommits int) 
 // BenchmarkSharedIndex_WorktreeOpen and BenchmarkUnsharedIndex_WorktreeOpen.
 func TestSharedIndex_ParsesPackfileIndexExactlyOnce(t *testing.T) {
 	if os.Getenv("CI") != "" {
-		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
+		// ponytail: skipped in CI — go-git repack under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
 	}
 	if testing.Short() {
 		t.Skip("skipped under -short: too slow for make test/quick-check")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
 	}
 
 	const numWorktrees = 5
@@ -1028,9 +654,6 @@ func TestSharedIndex_ParsesPackfileIndexExactlyOnce(t *testing.T) {
 // -benchmem to see the win in allocs/op and B/op directly instead of a
 // hand-rolled heap-delta tolerance ratio.
 func BenchmarkSharedIndex_WorktreeOpen(b *testing.B) {
-	if _, err := exec.LookPath("git"); err != nil {
-		b.Skip("git binary not available")
-	}
 
 	const numWorktrees = 5
 	const numCommits = 250
@@ -1064,9 +687,6 @@ func BenchmarkSharedIndex_WorktreeOpen(b *testing.B) {
 // against BenchmarkSharedIndex_WorktreeOpen's is the actual "is sharing
 // cheaper" proof.
 func BenchmarkUnsharedIndex_WorktreeOpen(b *testing.B) {
-	if _, err := exec.LookPath("git"); err != nil {
-		b.Skip("git binary not available")
-	}
 
 	const numWorktrees = 5
 	const numCommits = 250
@@ -1078,7 +698,7 @@ func BenchmarkUnsharedIndex_WorktreeOpen(b *testing.B) {
 	wtPaths := make([]string, numWorktrees)
 	for i := 0; i < numWorktrees; i++ {
 		wtPath := filepath.Join(dir, "wt"+strconv.Itoa(i))
-		addWorktree(b, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
+		wtPath = addWorktree(b, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
 		wtPaths[i] = wtPath
 	}
 
@@ -1125,9 +745,6 @@ func exerciseRepo(t testing.TB, repo *git.Repository) {
 // of calling WorktreeStorer methods, with no other code path capable of
 // touching them.
 func TestWorktreeStorer_UsesSharedStore(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 
 	dir := t.TempDir()
 	mainRepo := filepath.Join(dir, "main")
@@ -1164,7 +781,7 @@ func TestWorktreeStorer_UsesSharedStore(t *testing.T) {
 		t.Errorf("got object hash %s, want %s", obj.Hash(), head.Hash())
 	}
 
-	// If the HEAD commit came from a loose object (git gc leaves recent
+	// If the HEAD commit came from a loose object (repack leaves recent
 	// objects loose by default in some configurations), IndexBuildCount can
 	// legitimately still be 0 here — loose-object reads never touch the
 	// index. What matters is that if it WAS resolved from the packfile, the
@@ -1195,14 +812,11 @@ func TestWorktreeStorer_UsesSharedStore(t *testing.T) {
 // underlying it even on a run that doesn't happen to crash).
 func TestConcurrentReadsAcrossWorktrees_NoDataRace(t *testing.T) {
 	if os.Getenv("CI") != "" {
-		// ponytail: skipped in CI — git gc --aggressive under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
+		// ponytail: skipped in CI — go-git repack under this repo's current CI load reliably corrupts the fixture repo (see PR #162); needs either a lighter non-aggressive gc or serialized/non-parallel test execution to fix properly, not attempted here
 		t.Skip("skipped in CI — see PR #162")
 	}
 	if testing.Short() {
 		t.Skip("skipped under -short: too slow for make test/quick-check")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
 	}
 
 	const numWorktrees = 4
@@ -1217,7 +831,7 @@ func TestConcurrentReadsAcrossWorktrees_NoDataRace(t *testing.T) {
 	var wtPaths []string
 	for i := 0; i < numWorktrees; i++ {
 		wtPath := filepath.Join(dir, "wt"+strconv.Itoa(i))
-		addWorktree(t, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
+		wtPath = addWorktree(t, mainRepo, wtPath, "branch-"+strconv.Itoa(i))
 		wtPaths = append(wtPaths, wtPath)
 	}
 
