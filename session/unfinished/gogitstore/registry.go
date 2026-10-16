@@ -2,7 +2,7 @@ package gogitstore
 
 import (
 	"cmp"
-	"runtime"
+	"runtime/metrics"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -55,10 +55,24 @@ const (
 // pressure deterministically without needing to actually allocate gigabytes
 // — see gogit_vcs_reader_memory_test.go's withHeapInUse for the pattern this
 // mirrors.
+//
+// It reads runtime/metrics rather than runtime.ReadMemStats: ReadMemStats
+// stops the world, and under Registry.mu that was 57% of the scanner's
+// measured mutex delay (baseline.md, SG6). heap/objects + heap/unused is the
+// same quantity as MemStats.HeapInuse, read without stopping the world.
 var readHeapInUse = func() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return m.HeapInuse
+	samples := [2]metrics.Sample{
+		{Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/memory/classes/heap/unused:bytes"},
+	}
+	metrics.Read(samples[:])
+	var total uint64
+	for _, s := range samples {
+		if s.Value.Kind() == metrics.KindUint64 {
+			total += s.Value.Uint64()
+		}
+	}
+	return total
 }
 
 // Registry hands out one *SharedObjectStore per commondir, so every
