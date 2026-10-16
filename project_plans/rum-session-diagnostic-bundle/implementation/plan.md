@@ -101,6 +101,16 @@ No data migration required.
 
 ## Unresolved Questions
 
+### Known Open PM Items (non-blocking)
+
+These were surfaced in the Phase 4 triad review (PM leg, round 3). They do not block implementation but should be addressed before public announcement or external user testing:
+
+- **Success metric denominator undefined**: "50% of bug-report items include a bundle within 4 weeks" — the denominator "bug-report items" has no tag, label, or creation-path convention defined. Before launch, agree on the tagging convention (e.g. backlog items created with the "bug" tag) so the metric is countable.
+- **Target user under-specified**: "internal users" is the implicit persona. A one-sentence description of their debugging workflow (e.g. "operators and developers who triage agent session failures from the stapler-squad UI") would sharpen the motivation for the two delivery modes.
+- **No named behavioral/adoption assumption**: engineering risks are well-documented (P1s in pre-mortem); there is no equivalent behavioral risk assumption (e.g. "users will click Export rather than filing a bug from memory"). Naming this assumption makes the success metric meaningful.
+
+---
+
 - [x] **RESOLVED** — PII consent prompt copy: use the exact text already in the Risk Control section: *"This bundle may contain raw terminal output including typed credentials. Do not share it with untrusted parties."* This is definitive; Story 2.1.2 must render this exact string. No further product/design sign-off required (the adversarial review confirmed: "the text is already written; treat as a design-review checkpoint, not a hard block").
 - [x] **RESOLVED** — iOS "Download" path: `useExportBundle.download()` must implement `navigator.canShare({ files: [new File([blob], filename)] })` feature-detect. If supported (iOS Safari, modern Android), call `navigator.share({ files: [file] })`; otherwise fall back to `<a download>` trigger. Task 2.1.1a is the implementation point. This is an engineering-only decision.
 
@@ -163,7 +173,8 @@ Phase 4 (Verification) ───────────────────
 - `session/ent_repository.go`
 
 ##### Task 1.1.1a: Add interface method to Storage (XS)
-- In `session/repository.go`, add `ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error)` to the `Storage` interface (and to any mock/fake implementations referenced by tests in `session/`).
+- In `session/repository.go`, add `ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error)` to the `Storage` interface.
+- Update any mock/fake `Storage` implementations in the test packages (search: `grep -rn "Storage" session/ --include="*_test.go" -l` or `grep -rn "MockStorage\|FakeStorage\|storageStub" session/ -l`); add a stub returning `nil, nil` so the package still compiles.
 - Files: `session/repository.go`
 
 ##### Task 1.1.1b: Implement in EntRepository (S)
@@ -209,7 +220,8 @@ Phase 4 (Verification) ───────────────────
 ##### Task 1.1.3a: Add interface method and ent implementation (S)
 - In `session/repository.go`, add `GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)` to the `Storage` interface.
 - In `session/ent_repository.go`, implement it: query `r.client.Session.Query().Where(session.UUIDEQ(sessionUUID)).Select(session.FieldSessionArtifacts).Only(ctx)`, then unmarshal the JSON blob from the `session_artifacts` TEXT column.
-- Files: `session/repository.go`, `session/ent_repository.go`
+- Update the same mock/fake `Storage` implementations touched in Task 1.1.1a; add a stub returning `nil, nil`.
+- Files: `session/repository.go`, `session/ent_repository.go`, and any mock/fake files found above
 
 ---
 
@@ -346,7 +358,7 @@ Phase 4 (Verification) ───────────────────
 ##### Task 1.3.2a: Implement ExportSessionBundle handler (M)
 - Add `ExportSessionBundle(ctx, req *connect.Request[sessionv1.ExportSessionBundleRequest], stream *connect.ServerStream[sessionv1.BundleChunk]) error` method to `SessionBundleService`.
 - Acquire semaphore slot at start: `select { case s.exportSem <- struct{}{}: defer func() { <-s.exportSem }() default: return connect.NewError(connect.CodeResourceExhausted, errors.New("too many concurrent exports")) }`.
-- Resolve session via `findInstance` (mirroring `DiagnosticService.findInstance` pattern for live + poller lookup).
+- Resolve session via `findInstance` (copy the private helper verbatim from `server/services/diagnostic_service.go` — search for `func (s *DiagnosticService) findInstance` there; it takes `(ctx, sessionUUID string) (*session.Instance, error)` and checks both the in-memory map and the poller).
 - Call `assembleBundle` with `req.Msg.SessionUuid` and `req.Msg.MaxScrollbackLines` (default 500 when 0).
 - Loop over ZIP bytes in 64 KB chunks, sending each via `stream.Send(&sessionv1.BundleChunk{Data: chunk, ChunkIndex: int32(i), Final: i == lastIdx})`.
 - Return `connect.NewError(connect.CodeNotFound, ...)` when the session is not found.
@@ -374,7 +386,7 @@ Phase 4 (Verification) ───────────────────
 - Add `SaveSessionBundle(ctx, req *connect.Request[sessionv1.SaveSessionBundleRequest]) (*connect.Response[sessionv1.SaveSessionBundleResponse], error)` to `SessionBundleService`.
 - Resolve the diagnostics output directory from `config.GetConfigDir()` + `"diagnostics/"` (default). When `req.Msg.OutputDir` is non-empty: call `filepath.Clean(filepath.Abs(req.Msg.OutputDir))` and assert the result has `config.GetConfigDir()` as a prefix; return `connect.CodeInvalidArgument` if the check fails. *(P1 pre-mortem fix: path traversal prevention)*
 - Call `assembleBundle`, then:
-  - Check available disk space via platform-specific `diskFreeBytes(outputDir)` (implemented in `disk_space_unix.go` / `disk_space_windows.go` build-tag pair to avoid `syscall.Statfs` Windows compile failure); return `CodeResourceExhausted` if under 100 MB. *(pre-mortem P1 fix: Windows/WSL2 build compatibility)*
+  - Check available disk space via package-level `diskFreeBytes(path string) (uint64, error)`. Implement this in two build-tagged files in `server/services/`: `disk_space_unix.go` (`//go:build !windows`, uses `syscall.Statfs`) and `disk_space_windows.go` (`//go:build windows`, returns `^uint64(0), nil` as always-sufficient stub). Pattern: `server/services/exec_unix.go` / `server/services/exec_windows.go` if present, else any existing `*_unix.go` / `*_windows.go` pair in the package.; return `CodeResourceExhausted` if under 100 MB. *(pre-mortem P1 fix: Windows/WSL2 build compatibility)*
   - Write ZIP to `<outputDir>/<slugifiedTitle>-<YYYYMMDD-HHMMSS>.zip` atomically (write to a `.tmp` file, then rename).
   - Compute SHA-256 of written bytes.
   - Return `SaveSessionBundleResponse{FilePath, FileSizeBytes, ContentHash}`.
@@ -633,12 +645,15 @@ All new and modified files across all phases:
 |------|---------------|-------|
 | `session/repository.go` | Modified | 1.1 |
 | `session/ent_repository.go` | Modified | 1.1 |
+| `session/ent_repository_test.go` | Modified (mock/fake update) | 1.1 |
 | `server/dependencies.go` | Modified | 1.1 + 1.3 |
 | `proto/session/v1/rum_bundle.proto` | New | 1.2 |
 | `server/server.go` | Modified | 1.2 |
 | `docs/registry/features/rum-bundle.json` | New (generated) | 1.2 |
 | `server/services/session_bundle_service.go` | New | 1.3 |
 | `server/services/session_bundle_service_test.go` | New | 4.1 |
+| `server/services/disk_space_unix.go` | New (`//go:build !windows`) | 1.3 |
+| `server/services/disk_space_windows.go` | New (`//go:build windows`) | 1.3 |
 | `web-app/src/lib/hooks/useExportBundle.ts` | New | 2.1 |
 | `web-app/src/components/sessions/ExportBundleModal.tsx` | New | 2.1 + 2.2 |
 | `web-app/src/components/sessions/ExportBundleModal.css.ts` | New | 2.1 |
