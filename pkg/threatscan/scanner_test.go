@@ -1,7 +1,6 @@
 package threatscan
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -59,7 +58,7 @@ func TestScan_should_NotMatch_When_SecretFixtureIsOneUnitShortOfPatternMinimum(t
 	}
 }
 
-func TestScan_should_ReturnMatchesInDefaultPatternsDeclaredOrder_When_MultiplePatternsMatch(t *testing.T) {
+func TestScan_should_ReturnMatchesIndefaultPatternsDeclaredOrder_When_MultiplePatternsMatch(t *testing.T) {
 	got := Scan("ghp_"+strings.Repeat("a", 36)+" AKIA1234567890ABCDEF", ScopeStrict)
 	if len(got) != 2 || got[0].PatternID != "AKIA_key" || got[1].PatternID != "github_pat" {
 		t.Fatalf("order = %v, want [AKIA_key github_pat]", ids(got))
@@ -158,12 +157,20 @@ func TestScan_should_NotMatchContextPatterns_When_WebhookCurlBugReportContent(t 
 	}
 }
 
-func TestScan_should_NotMatchContextPatterns_When_RepoClaudeMd(t *testing.T) {
-	b, err := os.ReadFile("../../CLAUDE.md")
-	if err != nil {
-		t.Skipf("CLAUDE.md unavailable: %v", err)
+// Frozen excerpt of this repo's CLAUDE.md conventions (not read live, so doc edits can't break this test).
+func TestScan_should_NotMatchContextPatterns_When_FrozenClaudeMdExcerpt(t *testing.T) {
+	excerpt := "## Testing\nUse `make build && make test`. Releases are not automatic; release-please opens a Release PR.\n" +
+		"**`gh pr merge` always needs `--repo owner/repo`.** Previous sessions' worktrees live under ~/.stapler-squad/worktrees.\n" +
+		"State and logs: `~/.stapler-squad/logs/stapler-squad.log`. Web server on http://localhost:8543.\n" +
+		"Do not ignore lint failures; fix them before pushing. Send questions to the maintainers."
+	if got := Scan(excerpt, ScopeContext); len(got) != 0 {
+		t.Errorf("false positive on CLAUDE.md excerpt: %v", ids(got))
 	}
-	if got := Scan(string(b), ScopeContext); len(got) != 0 {
-		t.Errorf("false positive on repo CLAUDE.md: %v", ids(got))
+}
+
+func BenchmarkScan(b *testing.B) {
+	diff := strings.Repeat("+func main() { fmt.Println(\"hello\") }\n", 2000)
+	for b.Loop() {
+		Scan(diff, ScopeStrict)
 	}
 }

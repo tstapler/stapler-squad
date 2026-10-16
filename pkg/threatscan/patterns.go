@@ -33,9 +33,9 @@ type pattern struct {
 	re     *regexp.Regexp
 }
 
-// DefaultPatterns returns the ordered pattern registry. It is a function, not a var,
+// defaultPatterns returns the ordered pattern registry. It is a function, not a var,
 // to satisfy gochecknoglobals; Scan is not a hot path so recompiling is fine.
-func DefaultPatterns() []pattern {
+func defaultPatterns() []pattern {
 	strict := []Scope{ScopeStrict, ScopeAll}
 	ctx := []Scope{ScopeContext, ScopeAll}
 	return []pattern{

@@ -33,29 +33,39 @@ func goldenSecretSources() map[string]string {
 }
 
 func TestDefaultPatterns_should_MatchGoldenSecretPatternSourceStrings_When_Compared(t *testing.T) {
+	if len(goldenSecretSources()) != 12 {
+		t.Fatalf("golden list has %d entries, want 12", len(goldenSecretSources()))
+	}
 	got := map[string]string{}
-	for _, p := range DefaultPatterns() {
+	strictCount := 0
+	for _, p := range defaultPatterns() {
 		got[p.id] = p.re.String()
+		if slices.Contains(p.scopes, ScopeStrict) {
+			strictCount++
+		}
+	}
+	if strictCount != 12 {
+		t.Errorf("%d ScopeStrict patterns, want exactly the 12 migrated secrets", strictCount)
 	}
 	for id, src := range goldenSecretSources() {
 		if got[id] != src {
 			t.Errorf("pattern %s source = %q, want golden %q", id, got[id], src)
 		}
 	}
-	if len(goldenSecretSources()) != 12 {
-		t.Fatalf("golden list has %d entries, want 12", len(goldenSecretSources()))
-	}
 }
 
 func TestDefaultPatterns_should_HaveUniqueIDsAndScopeTags_When_Called(t *testing.T) {
 	seen := map[string]bool{}
-	for _, p := range DefaultPatterns() {
+	for _, p := range defaultPatterns() {
 		if seen[p.id] {
 			t.Errorf("duplicate pattern id %s", p.id)
 		}
 		seen[p.id] = true
 		if !slices.Contains(p.scopes, ScopeAll) {
 			t.Errorf("pattern %s is not part of ScopeAll", p.id)
+		}
+		if slices.Contains(p.scopes, ScopeStrict) == slices.Contains(p.scopes, ScopeContext) {
+			t.Errorf("pattern %s must be tagged exactly one of ScopeStrict/ScopeContext", p.id)
 		}
 	}
 }
