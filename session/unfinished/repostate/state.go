@@ -41,6 +41,7 @@ type RepoState struct {
 	graph    atomic.Pointer[Graph]
 	shallow  atomic.Pointer[ShallowStamp]
 	scratch  scratchPool
+	reach    atomic.Pointer[ReachCache]
 }
 
 // ShallowStamp fingerprints `<commondir>/shallow`; the zero value means the
@@ -64,6 +65,15 @@ func (s *RepoState) Graph() *Graph {
 	}
 	s.Register(TierGraph, fresh)
 	return fresh
+}
+
+// ShallowStamp returns the last observed stamp (the zero value before the
+// first observation or when `shallow` is absent).
+func (s *RepoState) ShallowStamp() ShallowStamp {
+	if p := s.shallow.Load(); p != nil {
+		return *p
+	}
+	return ShallowStamp{}
 }
 
 // ObserveShallow records the current shallow stamp and returns the stamp

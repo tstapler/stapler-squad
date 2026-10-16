@@ -1023,13 +1023,13 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
 		// only on a cache miss, so repeated calls within the TTL window skip the
 		// O(N) walk entirely and return the cached map without touching the mutex.
-		baseReachable, reachErr := g.cachedReachableSet(entry, worktreePath, baseHash)
+		baseReachable, reachErr := g.reachMembership(entry, worktreePath, baseHash)
 		if reachErr != nil {
 			return nil, reachErr
 		}
 
 		// Phase 3: log walk from HEAD (takes entry.mu itself).
-		result, walkErr := commitMessagesFrom(entry, headHash, baseReachable, max)
+		result, walkErr := commitMessagesFromSet(entry, headHash, baseReachable, max)
 		if walkErr != nil {
 			return nil, walkErr
 		}

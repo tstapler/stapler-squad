@@ -184,10 +184,15 @@ func resolveCommitMessageRefs(entry *cachedRepo, base string) (head, baseHash pl
 	return headRef.Hash(), baseHash, err
 }
 
-// commitMessagesFrom lists up to max "short-hash subject" lines from head back
+// commitMessagesFrom is commitMessagesFromSet over the legacy map.
+func commitMessagesFrom(entry *cachedRepo, head plumbing.Hash, baseReachable map[plumbing.Hash]bool, max int) ([]string, error) {
+	return commitMessagesFromSet(entry, head, hashSet(baseReachable), max)
+}
+
+// commitMessagesFromSet lists up to max "short-hash subject" lines from head back
 // to the first commit already in baseReachable. go-git's packfile reader needs
 // entry.mu, so it is held for the walk.
-func commitMessagesFrom(entry *cachedRepo, head plumbing.Hash, baseReachable map[plumbing.Hash]bool, max int) ([]string, error) {
+func commitMessagesFromSet(entry *cachedRepo, head plumbing.Hash, baseReachable reachSet, max int) ([]string, error) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	iter, err := entry.repo.Log(&git.LogOptions{From: head})
@@ -198,7 +203,7 @@ func commitMessagesFrom(entry *cachedRepo, head plumbing.Hash, baseReachable map
 
 	var result []string
 	err = iter.ForEach(func(c *object.Commit) error {
-		if baseReachable[c.Hash] {
+		if baseReachable.Contains(c.Hash) {
 			return storer.ErrStop
 		}
 		if len(result) < max {

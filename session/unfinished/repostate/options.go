@@ -17,6 +17,9 @@ type Options struct {
 	// holder to publish before decoding the commit itself without publishing;
 	// zero means defaultClaimWait.
 	ClaimWait time.Duration
+	// ReachBudgetBytes bounds the repository's cached reach sets; zero means
+	// defaultReachBudgetBytes.
+	ReachBudgetBytes int64
 }
 
 func (o Options) now() time.Time {
