@@ -96,16 +96,19 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 // named instance) fixed here rather than filed away, since both call sites
 // ultimately need the identical DaemonConfig.Addr to agree.
 //
-// opts.Program, when already known (e.g. Instance.Restart's backend-migration
-// path), is applied via SetCommand here instead of being left to
-// initTmuxSession's later call -- mirrors newTmuxBackendFromOpts's own
-// opts.Program handling below.
+// opts.Program, if set, is applied via SetCommand here (mirrors newTmuxBackendFromOpts below).
 func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
-	b := NewTymuxBackend(tymux.NewTymuxGRPCSession(tymux.NewRealTransport(tymux.ResolveDaemonConfig().Addr)))
+	b := NewTymuxBackend(newTymuxSessionFn())
 	if opts.Program != "" {
 		b.TymuxManager().SetCommand(opts.Program)
 	}
 	return b
+}
+
+// newTymuxSessionFn is the injection seam for constructing a real tymux
+// manager, mirroring backend_tymux.go's ensureDaemonRunningFn.
+var newTymuxSessionFn = func() tymux.TymuxManager {
+	return tymux.NewTymuxGRPCSession(tymux.NewRealTransport(tymux.ResolveDaemonConfig().Addr))
 }
 
 // newTmuxBackendFromOpts constructs a TmuxProcessManager from ProcessManagerOptions

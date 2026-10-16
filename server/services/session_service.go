@@ -4972,6 +4972,9 @@ func (s *SessionService) RestartSession(
 	// comment and session.Instance.Restart's migrating branch.
 	if err := instance.Restart(req.Msg.PreserveOutput, session.ProcessManagerBackend(req.Msg.GetBackendOverride())); err != nil {
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)
+		if errors.Is(err, session.ErrUnrecognizedBackend) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
 	}
 

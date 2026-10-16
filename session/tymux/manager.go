@@ -26,12 +26,9 @@ type TymuxManager interface {
 	Close() error
 	IsAlive() bool
 
-	// SetCommand records the program the next Start() call should spawn
-	// in the pane (CreateSessionRequest.Command) — the tymux-side
-	// equivalent of TmuxManager's SetSession(session-with-program-baked-in),
-	// and (like ReconnectState/BackendRestarted below) a deliberate addition
-	// beyond ProcessManager's mirrored method set, since ProcessManager's
-	// Start(dir) takes no program argument. Call it before Start().
+	// SetCommand records the program the next Start() call should spawn in
+	// the pane -- tymux's equivalent of TmuxManager's baked-in-program
+	// SetSession(). Call it before Start().
 	SetCommand(command string)
 
 	// Identification

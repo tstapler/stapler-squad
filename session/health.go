@@ -281,7 +281,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// their throwaway LoadInstances() copy can never populate real session
 	// state without an RPC round-trip fromInstanceData deliberately skips,
 	// so this probe would only ever misreport them as missing.
-	if instance.Started() && !instance.Backend.SkipsPollBasedLiveness() {
+	if instance.Started() && !instance.Snapshot().Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)
 	}
 

@@ -105,10 +105,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		SessionType:      snap.SessionType,
 		TmuxPrefix:       snap.TmuxPrefix,
 		TmuxServerSocket: snap.TmuxServerSocket,
-		// Backend is set once at construction and never mutated afterward — same
-		// as LaunchCommand below, it isn't in InstanceSnapshot, so read it
-		// directly off the Instance rather than adding it to the snapshot.
-		Backend:                   i.Backend,
+		// Backend — see InstanceSnapshot.Backend.
+		Backend:                   snap.Backend,
 		LastTerminalUpdate:        snap.LastTerminalUpdate,
 		LastMeaningfulOutput:      snap.LastMeaningfulOutput,
 		LastOutputSignature:       snap.LastOutputSignature,

@@ -133,6 +133,26 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 	assert.True(t, sess.HasSession())
 }
 
+func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	dir := t.TempDir()
+	var gotReq *v1.CreateSessionRequest
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			gotReq = req.Msg
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	sess.SetCommand("claude --resume abc")
+
+	err := sess.Start(dir)
+
+	require.NoError(t, err)
+	require.NotNil(t, gotReq)
+	assert.Equal(t, "claude --resume abc", gotReq.GetCommand(),
+		"Start must forward SetCommand's value as CreateSessionRequest.Command, not default to tymuxd's bare $SHELL")
+}
+
 func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 

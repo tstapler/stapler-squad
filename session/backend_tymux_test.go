@@ -216,6 +216,10 @@ func unusedLoopbackAddr(t *testing.T) string {
 // backendOverride must preserve today's respawn-in-place behavior exactly,
 // never touching i.Backend or replacing i.processManager's type.
 func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
+	checkTmuxAvailable(t)
 	// A private server socket means this respawn hits a real but
 	// test-isolated tmux server rather than the host's default one.
 	inst := &Instance{
@@ -248,4 +252,67 @@ func (i *Instance) initializeBaselineForRestartTest() error {
 	}
 	i.processManager = pm
 	return nil
+}
+
+// fakeTymuxManagerForSetCommand is a minimal tymux.TymuxManager fake that
+// records SetCommand's argument and otherwise no-ops Start/HasSession, used
+// both to test newTymuxBackendFromOpts's wiring and Restart's in-place
+// tymux-respawn SetCommand branch.
+type fakeTymuxManagerForSetCommand struct {
+	tymux.TymuxManager // deliberately nil; unused methods must not be called
+	gotCommand         string
+	startErr           error
+}
+
+func (f *fakeTymuxManagerForSetCommand) SetCommand(command string) {
+	f.gotCommand = command
+}
+
+func (f *fakeTymuxManagerForSetCommand) Start(string) error {
+	return f.startErr
+}
+
+func (f *fakeTymuxManagerForSetCommand) HasSession() bool {
+	return false
+}
+
+// TestNewTymuxBackendFromOpts_AppliesProgramViaSetCommand closes the gap
+// where newTymuxBackendFromOpts's opts.Program->SetCommand wiring had no
+// test coverage and, before the newTymuxSessionFn seam existed, no way to
+// get any either.
+func TestNewTymuxBackendFromOpts_AppliesProgramViaSetCommand(t *testing.T) {
+	fake := &fakeTymuxManagerForSetCommand{}
+	orig := newTymuxSessionFn
+	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
+	defer func() { newTymuxSessionFn = orig }()
+
+	newTymuxBackendFromOpts(ProcessManagerOptions{Program: "claude --resume abc"})
+
+	assert.Equal(t, "claude --resume abc", fake.gotCommand)
+}
+
+// TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCommand
+// covers the in-place (non-migrating) tymux-respawn branch of Restart --
+// every tymux-backed session's ordinary restart hits this path, and it had
+// zero coverage (the two existing Restart tests cover only tmux->tymux
+// migration and tmux->tmux no-migration).
+func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCommand(t *testing.T) {
+	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
+		return tymux.TymuxdReady{}, nil
+	})()
+	fake := &fakeTymuxManagerForSetCommand{}
+	inst := &Instance{
+		Title:   "already-tymux-test",
+		Path:    t.TempDir(),
+		Program: "bash",
+		Status:  Active,
+		Backend: BackendTymux,
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTymuxBackend(fake)
+
+	require.NoError(t, inst.Restart(false, ""))
+
+	assert.Equal(t, BackendTymux, inst.Backend)
+	assert.NotEmpty(t, fake.gotCommand, "SetCommand must be called with the rebuilt launch command on an in-place tymux respawn")
 }

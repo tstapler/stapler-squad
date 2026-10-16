@@ -38,14 +38,8 @@ type tymuxGRPCSession struct {
 	// and nothing here assumes single-threaded callers.
 	mu sync.RWMutex
 
-	// command is the program Start() asks tymuxd to spawn in the new pane
-	// (CreateSessionRequest.Command), set via SetCommand before Start() is
-	// called — mirroring TmuxManager's SetSession(session-with-program-baked-in)
-	// idiom (session/instance_tmux.go's initTmuxSession). Empty means "let
-	// tymuxd default to $SHELL" (CreateSessionRequest.Command's documented
-	// default), which was this type's only behavior before SetCommand existed:
-	// Start() never threaded a command through at all, so every tymux-backed
-	// session silently got a bare shell regardless of the requested program.
+	// command is the program Start() asks tymuxd to spawn, set via SetCommand
+	// before Start(). Empty means tymuxd defaults to $SHELL.
 	command string
 
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
@@ -330,12 +324,9 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	return s.cacheFromSession(resp.Msg)
 }
 
-// SetCommand records the program Start() will ask tymuxd to spawn in the
-// new pane. Call it before Start(), the same ordering TmuxManager's
-// SetSession(session-with-program-baked-in) requires — see initTmuxSession's
-// doc comment. Not consulted by RestoreWithWorkDir: a session found still
-// Live already has its process running (ReviveSession and the not-found
-// Start() fallback are the only two paths that ever spawn a process).
+// SetCommand records the program Start() will ask tymuxd to spawn. Call
+// it before Start(); not consulted by RestoreWithWorkDir (a revived
+// session already has its process running).
 func (s *tymuxGRPCSession) SetCommand(command string) {
 	s.mu.Lock()
 	s.command = command
