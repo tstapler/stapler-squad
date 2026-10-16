@@ -2,6 +2,7 @@ package jira
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -71,7 +72,7 @@ func renderADF(b *strings.Builder, n adfNode, prefix string) {
 		}
 	case "orderedList":
 		for i, item := range n.Content {
-			b.WriteString(itoa(i+1) + ". " + inlineText(item) + "\n")
+			b.WriteString(strconv.Itoa(i+1) + ". " + inlineText(item) + "\n")
 		}
 	case "taskList":
 		for _, item := range n.Content {
@@ -109,16 +110,12 @@ func renderADF(b *strings.Builder, n adfNode, prefix string) {
 	}
 }
 
-func itoa(i int) string {
-	b, _ := json.Marshal(i)
-	return string(b)
-}
-
 // PlainTextToADF wraps plaintext in a minimal ADF document (one paragraph per
 // line) for use as an outbound comment body.
 func PlainTextToADF(text string) map[string]any {
-	var paras []any
-	for _, line := range strings.Split(text, "\n") {
+	lines := strings.Split(text, "\n")
+	paras := make([]any, 0, len(lines))
+	for _, line := range lines {
 		p := map[string]any{"type": "paragraph"}
 		if line != "" {
 			p["content"] = []any{map[string]any{"type": "text", "text": line}}

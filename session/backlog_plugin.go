@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 )
 
 // ItemSourcePlugin is the interface all external source integrations must implement.
@@ -88,17 +89,9 @@ func NewDefaultRegistry() *PluginRegistry {
 // mapExternalToBacklogItem is the shared ExternalItem→BacklogItemData mapping
 // used by the tracker plugins (title/description truncated to 200/2000).
 func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
-	title := item.Title
-	if len(title) > 200 {
-		title = title[:200]
-	}
-	desc := item.Description
-	if len(desc) > 2000 {
-		desc = desc[:2000]
-	}
 	return BacklogItemData{
-		Title:       title,
-		Description: desc,
+		Title:       truncateUTF8(item.Title, 200),
+		Description: truncateUTF8(item.Description, 2000),
 		Priority:    item.Priority,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
@@ -106,4 +99,15 @@ func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemDat
 		Labels:      item.Labels,
 		SourceID:    sourceID,
 	}
+}
+
+// truncateUTF8 cuts s to at most max bytes without splitting a multibyte rune.
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }

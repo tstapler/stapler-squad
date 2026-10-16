@@ -18,6 +18,9 @@ import (
 
 const jiraIssuesPerPage = 50
 
+// maxTrackerResponseBytes caps any single tracker API response body.
+const maxTrackerResponseBytes = 8 << 20
+
 // maxJiraFetchPages bounds one sync tick's pagination (var so tests can
 // shrink it). Results are ordered by updated ASC, so a truncated fetch just
 // resumes from the advanced cursor on the next tick.
@@ -48,15 +51,37 @@ type jiraPluginConfig struct {
 
 // resolveJiraCredentials fills cfg.Email/Token from the keychain (keyed by
 // base URL), falling back to the JIRA_* environment variables.
+//
+// The env fallback applies only when cfg.BaseURL is the host named by
+// JIRA_BASE_URL, so a caller-supplied URL (e.g. via the MCP import tool) can
+// never make the env credentials travel to another host.
 func resolveJiraCredentials(cfg *jiraPluginConfig) {
+	envBase := os.Getenv("JIRA_BASE_URL")
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = os.Getenv("JIRA_BASE_URL")
+		cfg.BaseURL = envBase
 	}
 	if email, token, ok := jira.GetKeychainTokenForHost(cfg.BaseURL); ok {
 		cfg.Email, cfg.Token = email, token
 		return
 	}
-	cfg.Email, cfg.Token = os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_API_TOKEN")
+	if envBase != "" && jira.NormalizeHost(cfg.BaseURL) == jira.NormalizeHost(envBase) {
+		cfg.Email, cfg.Token = os.Getenv("JIRA_EMAIL"), os.Getenv("JIRA_API_TOKEN")
+	}
+}
+
+// validateJiraBaseURL requires https (plain http only for loopback, used by
+// tests and local mocks) and a host, so credentials are never sent in clear.
+func validateJiraBaseURL(base string) error {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("jira: invalid base_url %q", base)
+	}
+	host := u.Hostname()
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if u.Scheme != "https" && (u.Scheme != "http" || !loopback) {
+		return fmt.Errorf("jira: base_url must use https")
+	}
+	return nil
 }
 
 type jiraIssue struct {
@@ -99,9 +124,14 @@ func decodeJiraFetchConfig(config PluginConfig) (cfg jiraPluginConfig, disabled 
 	if !jiraProjectKeyRe.MatchString(cfg.ProjectKey) {
 		return jiraPluginConfig{}, false, fmt.Errorf("jira: invalid project_key %q", cfg.ProjectKey)
 	}
+	if err := validateJiraBaseURL(cfg.BaseURL); err != nil {
+		return jiraPluginConfig{}, false, err
+	}
 	cfg.BaseURL = strings.TrimSuffix(strings.TrimSpace(cfg.BaseURL), "/")
 	return cfg, false, nil
 }
+
+var jiraCursorRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`)
 
 func jiraBuildJQL(projectKey, cursor string) string {
 	jql := "project = " + projectKey
@@ -123,9 +153,13 @@ func (j *JiraPlugin) Fetch(ctx context.Context, config PluginConfig, cursor stri
 		return nil, cursor, nil
 	}
 
+	if cursor != "" && !jiraCursorRe.MatchString(cursor) {
+		return nil, cursor, fmt.Errorf("jira: malformed sync cursor %q", cursor)
+	}
 	jql := jiraBuildJQL(cfg.ProjectKey, cursor)
 	var all []jiraIssue
 	pageToken := ""
+	truncated := false
 	for page := 1; page <= maxJiraFetchPages; page++ {
 		issues, next, err := fetchJiraPage(ctx, cfg, jql, pageToken)
 		if err != nil {
@@ -136,9 +170,16 @@ func (j *JiraPlugin) Fetch(ctx context.Context, config PluginConfig, cursor stri
 			break
 		}
 		pageToken = next
+		truncated = page == maxJiraFetchPages
 	}
 
 	items, newCursor := convertJiraIssues(all, cfg.BaseURL, cursor)
+	// Results are updated-ASC, so a truncated tick resumes from the advanced
+	// cursor next time — unless every fetched issue shares the cursor minute,
+	// in which case the next tick would refetch the same pages forever.
+	if truncated && newCursor == cursor {
+		return nil, cursor, fmt.Errorf("jira: more than %d issues share one updated minute; cursor cannot advance", maxJiraFetchPages*jiraIssuesPerPage)
+	}
 	return items, newCursor, nil
 }
 
@@ -178,7 +219,7 @@ func fetchJiraPage(ctx context.Context, cfg jiraPluginConfig, jql, pageToken str
 		NextPageToken string      `json:"nextPageToken"`
 		IsLast        bool        `json:"isLast"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxTrackerResponseBytes)).Decode(&out); err != nil {
 		return nil, "", fmt.Errorf("jira: decode response: %w", err)
 	}
 	if out.IsLast {
@@ -253,25 +294,31 @@ func (j *JiraPlugin) MapToBacklogItem(item ExternalItem, sourceID string) Backlo
 
 var jiraIssueKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*-\d+$`)
 
-// ParseJiraIssueRef extracts (baseURL, key) from a JIRA browse URL
-// (https://org.atlassian.net/browse/ENG-123). A bare key ("ENG-123") returns
-// an empty baseURL, which the caller must supply separately.
-func ParseJiraIssueRef(ref string) (baseURL, key string, err error) {
+// JiraIssueRef identifies one JIRA issue; BaseURL is empty for a bare key.
+type JiraIssueRef struct {
+	BaseURL string
+	Key     string
+}
+
+// ParseJiraIssueRef extracts the ref from a JIRA browse URL
+// (https://org.atlassian.net/browse/ENG-123). A bare key ("ENG-123") yields
+// an empty BaseURL, which the caller must supply separately.
+func ParseJiraIssueRef(ref string) (JiraIssueRef, error) {
 	ref = strings.TrimSpace(ref)
 	if jiraIssueKeyRe.MatchString(ref) {
-		return "", strings.ToUpper(ref), nil
+		return JiraIssueRef{Key: strings.ToUpper(ref)}, nil
 	}
 	u, perr := url.Parse(ref)
 	if perr != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		return "", "", fmt.Errorf("not a JIRA issue URL or key: %q", ref)
+		return JiraIssueRef{}, fmt.Errorf("not a JIRA issue URL or key: %q", ref)
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	for i, p := range parts {
 		if p == "browse" && i+1 < len(parts) && jiraIssueKeyRe.MatchString(parts[i+1]) {
-			return u.Scheme + "://" + u.Host, strings.ToUpper(parts[i+1]), nil
+			return JiraIssueRef{BaseURL: u.Scheme + "://" + u.Host, Key: strings.ToUpper(parts[i+1])}, nil
 		}
 	}
-	return "", "", fmt.Errorf("no issue key found in JIRA URL %q", ref)
+	return JiraIssueRef{}, fmt.Errorf("no issue key found in JIRA URL %q", ref)
 }
 
 // FetchIssue retrieves one JIRA issue by key for one-off import. config needs
@@ -287,6 +334,9 @@ func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key st
 	resolveJiraCredentials(&cfg)
 	if cfg.BaseURL == "" {
 		return ExternalItem{}, fmt.Errorf("jira: base_url is required")
+	}
+	if err := validateJiraBaseURL(cfg.BaseURL); err != nil {
+		return ExternalItem{}, err
 	}
 	if cfg.Email == "" || cfg.Token == "" {
 		return ExternalItem{}, fmt.Errorf("jira: credentials not configured for %s (store email and API token in the keychain)", jira.NormalizeHost(cfg.BaseURL))
@@ -316,8 +366,11 @@ func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key st
 		return ExternalItem{}, fmt.Errorf("jira: unexpected status %d", resp.StatusCode)
 	}
 	var is jiraIssue
-	if err := json.NewDecoder(resp.Body).Decode(&is); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxTrackerResponseBytes)).Decode(&is); err != nil {
 		return ExternalItem{}, fmt.Errorf("jira: decode response: %w", err)
+	}
+	if is.Key == "" {
+		return ExternalItem{}, fmt.Errorf("jira: issue %s: response had no key", key)
 	}
 	items, _ := convertJiraIssues([]jiraIssue{is}, cfg.BaseURL, "")
 	return items[0], nil

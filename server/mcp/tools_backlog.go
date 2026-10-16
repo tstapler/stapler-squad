@@ -310,7 +310,7 @@ type backlogHandlers struct {
 	// Default to the real plugins' FetchIssue when nil; overridable in tests to
 	// avoid real network calls.
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
-	fetchJiraIssue   func(ctx context.Context, baseURL, key string) (session.ExternalItem, error)
+	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)
 
 	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
 	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;

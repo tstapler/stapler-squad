@@ -22,7 +22,7 @@ const linearIssuesPerPage = 50
 // shrink it). Linear can only order by updatedAt descending, so a truncated
 // fetch would lose the oldest changes if the cursor still advanced; Fetch
 // errors out instead.
-var maxLinearFetchPages = 20
+var maxLinearFetchPages = 200
 
 // linearGraphQLURL is overridden in tests to point at an httptest server;
 // tests that mutate it must not run with t.Parallel().
@@ -200,11 +200,7 @@ func doLinearGraphQL(ctx context.Context, token, query string, variables map[str
 		return fmt.Errorf("linear: authentication failed (401): status %d", resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
-		snippet := body
-		if len(snippet) > 512 {
-			snippet = snippet[:512]
-		}
-		return fmt.Errorf("linear: unexpected status %d: %s", resp.StatusCode, string(snippet))
+		return fmt.Errorf("linear: unexpected status %d: %.512s", resp.StatusCode, strings.ToValidUTF8(string(body), ""))
 	}
 	if decodeErr != nil {
 		return fmt.Errorf("linear: decode response: %w", decodeErr)
@@ -310,7 +306,7 @@ func (l *LinearPlugin) FetchIssue(ctx context.Context, config PluginConfig, iden
 	if err := doLinearGraphQL(ctx, cfg.Token, linearIssueByIDQuery, map[string]any{"id": identifier}, &out); err != nil {
 		return ExternalItem{}, err
 	}
-	if out.Issue == nil {
+	if out.Issue == nil || out.Issue.Identifier == "" {
 		return ExternalItem{}, fmt.Errorf("linear: issue %s not found", identifier)
 	}
 	items, _ := convertLinearIssues([]linearIssue{*out.Issue}, "")

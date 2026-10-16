@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -96,23 +97,24 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	baseURL, key, err := session.ParseJiraIssueRef(ref)
+	jref, err := session.ParseJiraIssueRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a JIRA URL like https://org.atlassian.net/browse/ENG-123, or a bare key plus base_url."), nil
 	}
-	if override, _ := args["base_url"].(string); baseURL == "" {
-		baseURL = strings.TrimSpace(override)
+	if override, _ := args["base_url"].(string); jref.BaseURL == "" {
+		jref.BaseURL = strings.TrimSpace(override)
 	}
-	if baseURL == "" {
+	if jref.BaseURL == "" {
 		return errResult(ErrInvalidArgument, "base_url is required when issue_url is a bare issue key", ""), nil
 	}
 	fetch := h.fetchJiraIssue
 	if fetch == nil {
-		fetch = func(ctx context.Context, base, k string) (session.ExternalItem, error) {
-			return session.NewJiraPlugin().FetchIssue(ctx, session.PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q}`, base)}, k)
+		fetch = func(ctx context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
+			raw, _ := json.Marshal(map[string]string{"base_url": r.BaseURL})
+			return session.NewJiraPlugin().FetchIssue(ctx, session.PluginConfig{Raw: string(raw)}, r.Key)
 		}
 	}
-	ext, err := fetch(ctx, baseURL, key)
+	ext, err := fetch(ctx, jref)
 	if err != nil {
 		return trackerFetchError("JIRA", err), nil
 	}

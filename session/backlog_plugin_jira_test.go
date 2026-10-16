@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/jira"
@@ -26,7 +27,7 @@ func jiraCfg(t *testing.T, ts *httptest.Server) PluginConfig {
 	t.Helper()
 	t.Setenv("JIRA_EMAIL", "a@b.c")
 	t.Setenv("JIRA_API_TOKEN", "jira_secret")
-	t.Setenv("JIRA_BASE_URL", "")
+	t.Setenv("JIRA_BASE_URL", ts.URL)
 	return PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG"}`, ts.URL)}
 }
 
@@ -55,10 +56,11 @@ func TestJiraPlugin_Fetch_should_Error_When_RequiredConfigMissingOrInvalid(t *te
 	clearJiraEnv(t)
 	t.Setenv("JIRA_EMAIL", "a@b.c")
 	t.Setenv("JIRA_API_TOKEN", "t")
+	t.Setenv("JIRA_BASE_URL", "https://x.atlassian.net")
 	for _, raw := range []string{
-		`{"project_key":"ENG"}`,
 		`{"base_url":"https://x.atlassian.net"}`,
 		`{"base_url":"https://x.atlassian.net","project_key":"ENG OR 1=1"}`,
+		`{"base_url":"http://x.atlassian.net","project_key":"ENG"}`,
 	} {
 		_, _, err := NewJiraPlugin().Fetch(context.Background(), PluginConfig{Raw: raw}, "")
 		require.Error(t, err, raw)
@@ -129,11 +131,11 @@ func TestJiraPlugin_Fetch_should_ClassifyHTTPErrors(t *testing.T) {
 	cases := map[int]string{401: "authentication failed (401)", 429: "rate limited", 500: "unexpected status 500"}
 	for status, want := range cases {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
-		_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "c0")
+		_, cursor, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "2026-01-01 00:00")
 		ts.Close()
 		require.ErrorContains(t, err, want)
 		require.NotContains(t, err.Error(), "jira_secret")
-		require.Equal(t, "c0", cursor)
+		require.Equal(t, "2026-01-01 00:00", cursor)
 	}
 }
 
@@ -168,20 +170,20 @@ func TestJiraPlugin_MapToBacklogItem_should_TruncateLongText(t *testing.T) {
 	got := NewJiraPlugin().MapToBacklogItem(ExternalItem{Title: strings.Repeat("a", 300), Description: strings.Repeat("b", 3000)}, "s")
 	require.Len(t, got.Title, 200)
 	require.Len(t, got.Description, 2000)
+	multi := NewJiraPlugin().MapToBacklogItem(ExternalItem{Title: strings.Repeat("é", 150)}, "s")
+	require.True(t, utf8.ValidString(multi.Title), "truncation must not split a rune")
 }
 
 func TestParseJiraIssueRef(t *testing.T) {
 	t.Parallel()
-	base, key, err := ParseJiraIssueRef("https://acme.atlassian.net/browse/ENG-123?focusedCommentId=1")
+	ref, err := ParseJiraIssueRef("https://acme.atlassian.net/browse/ENG-123?focusedCommentId=1")
 	require.NoError(t, err)
-	require.Equal(t, "https://acme.atlassian.net", base)
-	require.Equal(t, "ENG-123", key)
-	base, key, err = ParseJiraIssueRef("eng-7")
+	require.Equal(t, JiraIssueRef{BaseURL: "https://acme.atlassian.net", Key: "ENG-123"}, ref)
+	ref, err = ParseJiraIssueRef("eng-7")
 	require.NoError(t, err)
-	require.Equal(t, "", base)
-	require.Equal(t, "ENG-7", key)
+	require.Equal(t, JiraIssueRef{Key: "ENG-7"}, ref)
 	for _, bad := range []string{"", "ftp://x/browse/ENG-1", "https://acme.atlassian.net/projects/ENG", "nope"} {
-		_, _, err := ParseJiraIssueRef(bad)
+		_, err := ParseJiraIssueRef(bad)
 		require.Error(t, err, bad)
 	}
 }
@@ -208,4 +210,43 @@ func TestJiraPlugin_FetchIssue_should_ReturnItem_And_ClassifyErrors(t *testing.T
 	require.ErrorContains(t, err, "not configured")
 	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{}, "ENG-5")
 	require.ErrorContains(t, err, "base_url")
+}
+
+func TestJiraPlugin_should_NotSendEnvCredentialsToOtherHost(t *testing.T) {
+	var hit bool
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer evil.Close()
+	clearJiraEnv(t)
+	t.Setenv("JIRA_EMAIL", "a@b.c")
+	t.Setenv("JIRA_API_TOKEN", "jira_secret")
+	t.Setenv("JIRA_BASE_URL", "https://acme.atlassian.net")
+	_, err := NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q}`, evil.URL)}, "ENG-1")
+	require.ErrorContains(t, err, "not configured")
+	require.False(t, hit, "no request may reach a host other than JIRA_BASE_URL")
+}
+
+func TestJiraPlugin_should_RejectPlainHTTPToNonLoopbackHost(t *testing.T) {
+	require.Error(t, validateJiraBaseURL("http://acme.atlassian.net"))
+	require.NoError(t, validateJiraBaseURL("https://acme.atlassian.net"))
+	require.NoError(t, validateJiraBaseURL("http://127.0.0.1:8080"))
+}
+
+func TestJiraPlugin_Fetch_should_ErrorOnMalformedCursor(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("must not call API") }))
+	defer ts.Close()
+	_, c, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), `x" OR 1=1`)
+	require.Error(t, err)
+	require.Equal(t, `x" OR 1=1`, c)
+}
+
+func TestJiraPlugin_Fetch_should_ErrorWhenCapHitAndCursorCannotAdvance(t *testing.T) {
+	orig := maxJiraFetchPages
+	maxJiraFetchPages = 2
+	t.Cleanup(func() { maxJiraFetchPages = orig })
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"issues":[%s],"nextPageToken":"more","isLast":false}`, jiraIssueJSON("ENG-1", "2026-08-01T10:00:00.000+0000", "", "null"))
+	}))
+	defer ts.Close()
+	_, _, err := NewJiraPlugin().Fetch(context.Background(), jiraCfg(t, ts), "2026-08-01 10:00")
+	require.ErrorContains(t, err, "cannot advance")
 }

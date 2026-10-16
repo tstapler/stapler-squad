@@ -508,6 +508,8 @@ linters:
         linters: [gochecknoglobals]
       - path: "^github/"
         linters: [gochecknoglobals]
+      - path: "^(linear|jira)/"
+        linters: [gochecknoglobals] # package-level keychain mutex, mirrors github/
       - path: "^daemon/"
         linters: [gochecknoglobals]
       - path: "^telemetry/"

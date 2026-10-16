@@ -59,9 +59,9 @@ func TestImportLinearIssue_should_RejectBadInput_And_SurfaceFetchErrors(t *testi
 func TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	var gotBase, gotKey string
-	h := &backlogHandlers{storage: storage, fetchJiraIssue: func(_ context.Context, base, key string) (session.ExternalItem, error) {
-		gotBase, gotKey = base, key
-		return session.ExternalItem{ExternalID: key, Title: "Crash", Description: "stack", Priority: 4, URL: base + "/browse/" + key}, nil
+	h := &backlogHandlers{storage: storage, fetchJiraIssue: func(_ context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
+		gotBase, gotKey = r.BaseURL, r.Key
+		return session.ExternalItem{ExternalID: r.Key, Title: "Crash", Description: "stack", Priority: 4, URL: r.BaseURL + "/browse/" + r.Key}, nil
 	}}
 
 	res, err := h.importJiraIssue(context.Background(), makeToolReq(map[string]interface{}{"issue_url": "https://acme.atlassian.net/browse/ENG-9"}))
