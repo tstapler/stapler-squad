@@ -421,3 +421,23 @@ func TestReach_ShouldDropWithGraphTier_WhenPrunedSevere(t *testing.T) {
 		t.Errorf("Bytes = %d after severe prune, want 0", rs.ReachCache().Bytes())
 	}
 }
+
+// BenchmarkReachScratch50000 times one cold single-builder reach build over a
+// primed 50,000-commit graph, the evidence for closing Story 2.3.2 (advisory).
+func BenchmarkReachScratch50000(b *testing.B) {
+	const n = 50_000
+	d, _, base := chain(n, n-1, 0)
+	rs := NewRepoState(Options{MaxGraphCommits: 100_000}, 1<<30)
+	src := &mapSource{d: d}
+	want := reachKey(base, n)
+	if _, err := rs.Reach(context.Background(), src, 0, want); err != nil { // prime the graph rows
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		rs.ReachCache().Drop()
+		if _, err := rs.Reach(context.Background(), src, 0, want); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
