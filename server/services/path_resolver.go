@@ -13,6 +13,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -41,6 +42,19 @@ type SymlinkDeniedError struct {
 
 func (e *SymlinkDeniedError) Error() string {
 	return fmt.Sprintf("symlink %q points outside the worktree or into .git (target %q)", e.Link, e.Target)
+}
+
+// symlinkDenied builds the PermissionDenied error for a refused link, carrying
+// the typed ReadOnlyReasonDetail (SYMLINK plus the raw target string).
+func symlinkDenied(link, target string) *connect.Error {
+	ce := connect.NewError(connect.CodePermissionDenied, &SymlinkDeniedError{Link: link, Target: target})
+	if d, err := connect.NewErrorDetail(&sessionv1.ReadOnlyReasonDetail{
+		Reason:     sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK,
+		LinkTarget: target,
+	}); err == nil {
+		ce.AddDetail(d)
+	}
+	return ce
 }
 
 // WorktreeRoot confines filesystem access to one worktree directory via os.Root.
@@ -146,8 +160,7 @@ func expandLinks(root *WorktreeRoot, p string, mode AccessMode) (ResolvedPath, b
 			continue
 		}
 		if mode == AccessWrite {
-			return "", false, connect.NewError(connect.CodePermissionDenied,
-				&SymlinkDeniedError{Link: nextPath})
+			return "", false, symlinkDenied(nextPath, "")
 		}
 		if hops++; hops > maxSymlinkHops {
 			return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("too many symlinks"))
@@ -157,7 +170,7 @@ func expandLinks(root *WorktreeRoot, p string, mode AccessMode) (ResolvedPath, b
 		if err != nil {
 			return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read symlink"))
 		}
-		denied := connect.NewError(connect.CodePermissionDenied, &SymlinkDeniedError{Link: nextPath, Target: target})
+		denied := symlinkDenied(nextPath, target)
 		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
 			return "", false, denied
 		}

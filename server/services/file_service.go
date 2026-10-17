@@ -264,79 +264,146 @@ func (fs *FileService) GetFileContent(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetFileContentRequest],
 ) (*connect.Response[sessionv1.GetFileContentResponse], error) {
-	if req.Msg.SessionId == "" {
+	fr, err := fs.readFileFacts(ctx, req.Msg.SessionId, req.Msg.Path)
+	if err != nil {
+		return nil, err
+	}
+	if fr.TooLarge && !fr.IsBinary {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("file too large (%d bytes); maximum is %d bytes", fr.Size, maxFileSize))
+	}
+	return connect.NewResponse(fr.contentResponse()), nil
+}
+
+// StatFile returns the version token, size and read-only reason of a file
+// without its content.
+func (fs *FileService) StatFile(
+	ctx context.Context,
+	req *connect.Request[sessionv1.StatFileRequest],
+) (*connect.Response[sessionv1.StatFileResponse], error) {
+	fr, err := fs.readFileFacts(ctx, req.Msg.SessionId, req.Msg.Path)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&sessionv1.StatFileResponse{
+		VersionToken:   fr.Token.String(),
+		Size:           fr.Size,
+		ReadOnlyReason: fr.Reason,
+	}), nil
+}
+
+// fileRead is everything one read of a file establishes; GetFileContent and
+// StatFile both project it.
+type fileRead struct {
+	Size        int64
+	ContentType string
+	IsBinary    bool
+	TooLarge    bool
+	Truncated   bool
+	HasBOM      bool
+	LineEnding  sessionv1.LineEnding
+	Reason      sessionv1.ReadOnlyReason
+	Token       FileVersionToken
+	Body        []byte // raw bytes read (at most truncateSize), BOM stripped
+}
+
+func (fr *fileRead) contentResponse() *sessionv1.GetFileContentResponse {
+	resp := &sessionv1.GetFileContentResponse{
+		IsBinary:       fr.IsBinary,
+		Size:           fr.Size,
+		ContentType:    fr.ContentType,
+		VersionToken:   fr.Token.String(),
+		LineEnding:     fr.LineEnding,
+		HasBom:         fr.HasBOM,
+		ReadOnlyReason: fr.Reason,
+	}
+	if fr.IsBinary {
+		return resp
+	}
+	resp.Content = strings.ToValidUTF8(string(fr.Body), "\uFFFD")
+	resp.Encoding = "utf-8"
+	resp.IsTruncated = fr.Truncated
+	return resp
+}
+
+// readFileFacts resolves, opens and classifies one file. Binary files are
+// never read past the sniff window; text above maxFileSize is reported TooLarge
+// without reading it.
+func (fs *FileService) readFileFacts(ctx context.Context, sessionID, relPath string) (*fileRead, error) {
+	if sessionID == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
 	}
-	if req.Msg.Path == "" {
+	if relPath == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
-
-	rr, err := resolveFileRequest(ctx, fs.workspace, FileRef{SessionID: req.Msg.SessionId, Path: req.Msg.Path}, AccessRead)
+	rr, err := resolveFileRequest(ctx, fs.workspace, FileRef{SessionID: sessionID, Path: relPath}, AccessRead)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rr.Root.Close() }()
 
-	// Stat first to get size and check existence.
-	info, statErr := rr.Root.Lstat(rr.Resolved)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file not found: %s", req.Msg.Path))
-		}
-		if os.IsPermission(statErr) {
-			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", req.Msg.Path))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat file"))
+	info, err := lstatForRead(rr, relPath)
+	if err != nil {
+		return nil, err
 	}
-
-	if info.IsDir() {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is a directory, not a file"))
-	}
-
-	size := info.Size()
-
-	isText := isKnownTextFile(req.Msg.Path)
-
-	// Open file and read enough bytes for content-type detection.
 	f, openErr := rr.Root.Open(rr.Resolved)
 	if openErr != nil {
 		if os.IsNotExist(openErr) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", req.Msg.Path))
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", relPath))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open file"))
 	}
 	defer func() { _ = f.Close() }()
 
-	contentType, isBinary := sniffContent(f, isText)
-
-	// Binary files: return metadata only — no size limit applies because no content is read.
-	if isBinary {
-		return connect.NewResponse(&sessionv1.GetFileContentResponse{
-			IsBinary:    true,
-			Size:        size,
-			ContentType: contentType,
-		}), nil
+	fr := &fileRead{Size: info.Size()}
+	mtimeNs := info.ModTime().UnixNano()
+	fr.ContentType, fr.IsBinary = sniffContent(f, isKnownTextFile(relPath))
+	if fr.IsBinary {
+		fr.Reason = sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY
+		fr.Token = NonEditableToken(fr.Size, mtimeNs)
+		return fr, nil
 	}
-
-	// Text files: enforce the hard size limit to prevent unbounded memory use.
-	if size > maxFileSize {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("file too large (%d bytes); maximum is %d bytes", size, maxFileSize))
+	if fr.Size > maxFileSize {
+		fr.TooLarge = true
+		fr.Reason = sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE
+		fr.Token = NonEditableToken(fr.Size, mtimeNs)
+		return fr, nil
 	}
-
-	buf, isTruncated, readErr := readTextCapped(f, size)
+	raw, truncated, readErr := readTextCapped(f, fr.Size)
 	if readErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file content"))
 	}
+	if truncated {
+		raw = truncateOnRuneBoundary(raw)
+	}
+	var body []byte
+	fr.HasBOM, body = detectBOM(raw)
+	fr.Truncated, fr.Body = truncated, body
+	fr.LineEnding = detectLineEnding(body)
+	fr.Reason = classifyReadOnly(readFacts{Truncated: truncated, ViaLink: rr.ViaLink, Body: body})
+	fr.Token = NonEditableToken(fr.Size, mtimeNs)
+	if fr.Reason == sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE {
+		fr.Token = NewFileVersionToken(fr.Size, mtimeNs, raw)
+	}
+	return fr, nil
+}
 
-	return connect.NewResponse(&sessionv1.GetFileContentResponse{
-		Content:     string(buf),
-		Encoding:    "utf-8",
-		IsBinary:    false,
-		Size:        size,
-		ContentType: contentType,
-		IsTruncated: isTruncated,
-	}), nil
+// lstatForRead stats the resolved path and maps failures to Connect errors.
+func lstatForRead(rr *resolvedRequest, relPath string) (os.FileInfo, error) {
+	info, err := rr.Root.Lstat(rr.Resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file not found: %s", relPath))
+		}
+		if os.IsPermission(err) {
+			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", relPath))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat file"))
+	}
+	if info.IsDir() {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is a directory, not a file"))
+	}
+	return info, nil
 }
 
 // readFull reads up to len(buf) bytes from r. Returns bytes read and any non-EOF error.
