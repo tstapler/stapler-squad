@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useFilesFlags } from "@/lib/hooks/useFilesFlags";
 import { useOpenBuffers } from "@/lib/hooks/useOpenBuffers";
+import { useFilesShortcuts } from "@/lib/hooks/useFilesShortcuts";
+import { useFilesDeepLink } from "@/lib/hooks/useFilesDeepLink";
 import { FileTransportProvider } from "@/lib/hooks/useFileTransport";
 import { FileTree } from "./FileTree";
 import type { FileTreeHandle, SortMode } from "./FileTree";
@@ -140,34 +142,9 @@ function FilesTabView({
     [onOpen]
   );
 
-  // Reveal the cross-linked path (VCS panel) in the tree.
-  useEffect(() => {
-    if (initialSelectedPath) fileTreeRef.current?.revealPath(initialSelectedPath);
-  }, [initialSelectedPath]);
-
-  // Cmd+F / Ctrl+F focuses the search input.
-  // Cmd+P / Ctrl+P opens quick open palette.
-  // Guard: only intercept when the files tab is actually visible (offsetParent is null when
-  // an ancestor has display:none, which happens when the tab panel is inactive).
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        if (!searchInputRef.current) return;
-        if (searchInputRef.current.offsetParent === null) return;
-        if (panel.collapsed) return;
-        e.preventDefault();
-        searchInputRef.current.focus();
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
-        if (!searchInputRef.current || searchInputRef.current.offsetParent === null) return;
-        if (panel.collapsed) return;
-        e.preventDefault();
-        setIsQuickOpenOpen(true);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [panel.collapsed]);
+  useFilesDeepLink(initialSelectedPath, fileTreeRef);
+  const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
+  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen });
 
   // Build tree pane class names
   const treePaneClasses = [
