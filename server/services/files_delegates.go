@@ -43,12 +43,21 @@ func (fs *FileService) SetTelemetry(t FilesTelemetry) {
 	}
 }
 
-// SearchContent is a placeholder until the handler lands (Task 1.1.2b).
-// +api: files:content-search
+// SearchContent streams content-search matches for a session's worktree.
+// +api: SearchContent
 func (s *SessionService) SearchContent(
-	_ context.Context,
-	_ *connect.Request[sessionv1.SearchContentRequest],
-	_ *connect.ServerStream[sessionv1.SearchContentResponse],
+	ctx context.Context,
+	req *connect.Request[sessionv1.SearchContentRequest],
+	stream *connect.ServerStream[sessionv1.SearchContentResponse],
 ) error {
-	return connect.NewError(connect.CodeUnimplemented, nil)
+	return s.fileSvc.SearchContent(ctx, req, stream)
+}
+
+// SearchContent is the wire adapter over SearchHandler: peer address and stream in, policy out.
+func (fs *FileService) SearchContent(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SearchContentRequest],
+	stream *connect.ServerStream[sessionv1.SearchContentResponse],
+) error {
+	return fs.search.Handle(ctx, req.Msg, req.Peer().Addr, stream.Send)
 }

@@ -16,6 +16,10 @@ const (
 	filesWriteEventName  = "files.server.write"
 	filesSearchEventName = "files.server.search"
 	filesEventCategory   = "rpc"
+
+	filesSearchFirstEventName = "files.server.search_first_result"
+	filesPerfCategory         = "performance"
+
 	telemetryRecordLimit = 500 * time.Millisecond
 )
 
@@ -23,6 +27,7 @@ const (
 type FilesTelemetry interface {
 	RecordWrite(ctx context.Context, sessionID string, ev WriteOutcomeEvent)
 	RecordSearch(ctx context.Context, sessionID string, ev SearchOutcomeEvent)
+	RecordSearchFirstResult(ctx context.Context, sessionID string, ev SearchFirstResultEvent)
 }
 
 type (
@@ -32,8 +37,9 @@ type (
 	EOLLabel      string
 	BOMLabel      string
 	SearchOutcome string
-	SearchMode    string
+	SearchBackend string
 	CountBucket   string
+	ScaleBucket   string
 )
 
 const (
@@ -65,12 +71,14 @@ const (
 	BOMNo  BOMLabel = "no"
 
 	SearchOutcomeOK        SearchOutcome = "ok"
+	SearchOutcomeTruncated SearchOutcome = "truncated"
 	SearchOutcomeCancelled SearchOutcome = "cancelled"
-	SearchOutcomeDisabled  SearchOutcome = "disabled"
+	SearchOutcomeInvalid   SearchOutcome = "invalid"
 	SearchOutcomeError     SearchOutcome = "error"
+	SearchOutcomeDisabled  SearchOutcome = "disabled"
+	SearchOutcomeBusy      SearchOutcome = "busy"
 
-	SearchModeLiteral SearchMode = "literal"
-	SearchModeRegex   SearchMode = "regex"
+	SearchBackendWalker SearchBackend = "walker"
 )
 
 // WriteOutcomeEvent is the labels-only record of one WriteFile call.
@@ -83,13 +91,35 @@ type WriteOutcomeEvent struct {
 	Duration time.Duration
 }
 
-// SearchOutcomeEvent is the labels-only record of one SearchContent call.
+// SearchOutcomeEvent is the labels-only record of one SearchContent call (ADR-035).
 type SearchOutcomeEvent struct {
-	Outcome   SearchOutcome
-	Mode      SearchMode
-	Hits      CountBucket
-	Truncated bool
-	Duration  time.Duration
+	Outcome  SearchOutcome
+	Results  CountBucket
+	Scale    ScaleBucket
+	Queued   bool
+	Backend  SearchBackend
+	Large    bool
+	Duration time.Duration
+}
+
+// SearchFirstResultEvent records the latency to the first batch of one search.
+type SearchFirstResultEvent struct {
+	Scale    ScaleBucket
+	Duration time.Duration
+}
+
+// BucketScale maps the number of files a search scanned to its scale bucket.
+func BucketScale(files int) ScaleBucket {
+	switch {
+	case files < 1000:
+		return "lt1k"
+	case files < 10000:
+		return "1k-10k"
+	case files < 50000:
+		return "10k-50k"
+	default:
+		return "50k+"
+	}
 }
 
 // BucketSize maps a byte count to its size bucket.
@@ -128,6 +158,8 @@ type noopFilesTelemetry struct{}
 
 func (noopFilesTelemetry) RecordWrite(context.Context, string, WriteOutcomeEvent)   {}
 func (noopFilesTelemetry) RecordSearch(context.Context, string, SearchOutcomeEvent) {}
+func (noopFilesTelemetry) RecordSearchFirstResult(context.Context, string, SearchFirstResultEvent) {
+}
 
 // NewFilesTelemetry adapts an AnalyticsProvider; nil gives the no-op default.
 func NewFilesTelemetry(provider analytics.AnalyticsProvider) FilesTelemetry {
@@ -155,9 +187,18 @@ func (a *analyticsFilesTelemetry) RecordSearch(ctx context.Context, sessionID st
 		EventName: filesSearchEventName, EventCategory: filesEventCategory, SessionID: sessionID,
 		DurationMs: durationMs(ev.Duration),
 		Labels: map[string]string{
-			"outcome": string(ev.Outcome), "mode": string(ev.Mode), "hits": string(ev.Hits),
-			"truncated": strconv.FormatBool(ev.Truncated),
+			"outcome": string(ev.Outcome), "results": string(ev.Results), "scale": string(ev.Scale),
+			"queued": strconv.FormatBool(ev.Queued), "backend": string(ev.Backend),
+			"large": strconv.FormatBool(ev.Large),
 		},
+	})
+}
+
+func (a *analyticsFilesTelemetry) RecordSearchFirstResult(ctx context.Context, sessionID string, ev SearchFirstResultEvent) {
+	a.record(ctx, analytics.Event{
+		EventName: filesSearchFirstEventName, EventCategory: filesPerfCategory, SessionID: sessionID,
+		DurationMs: durationMs(ev.Duration),
+		Labels:     map[string]string{"scale": string(ev.Scale)},
 	})
 }
 

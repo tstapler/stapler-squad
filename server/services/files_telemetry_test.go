@@ -67,11 +67,28 @@ func TestFilesTelemetryAdapter_ShouldRecordOneEventWithEnumLabels_When_WriteConf
 func TestFilesTelemetryAdapter_ShouldRecordSearchOutcomeWithBucketedHits(t *testing.T) {
 	p := &recordingProvider{}
 	NewFilesTelemetry(p).RecordSearch(context.Background(), "s", SearchOutcomeEvent{
-		Outcome: SearchOutcomeOK, Mode: SearchModeRegex, Hits: BucketCount(250), Truncated: true, Duration: time.Second,
+		Outcome: SearchOutcomeTruncated, Results: BucketCount(250), Scale: BucketScale(60000),
+		Queued: true, Backend: SearchBackendWalker, Duration: time.Second,
 	})
 	require.Len(t, p.events, 1)
 	assert.Equal(t, "files.server.search", p.events[0].EventName)
-	assert.Equal(t, map[string]string{"outcome": "ok", "mode": "regex", "hits": "100-999", "truncated": "true"}, p.events[0].Labels)
+	assert.Equal(t, map[string]string{
+		"outcome": "truncated", "results": "100-999", "scale": "50k+", "queued": "true", "backend": "walker", "large": "false",
+	}, p.events[0].Labels)
+	for k, v := range p.events[0].Labels {
+		assert.Regexp(t, labelValueShape, v, k)
+	}
+}
+
+func TestFilesTelemetryAdapter_ShouldRecordFirstResultAsPerformanceEvent(t *testing.T) {
+	p := &recordingProvider{}
+	NewFilesTelemetry(p).RecordSearchFirstResult(context.Background(), "s", SearchFirstResultEvent{Scale: BucketScale(5), Duration: 40 * time.Millisecond})
+	require.Len(t, p.events, 1)
+	assert.Equal(t, "files.server.search_first_result", p.events[0].EventName)
+	assert.Equal(t, "performance", p.events[0].EventCategory)
+	assert.Equal(t, map[string]string{"scale": "lt1k"}, p.events[0].Labels)
+	require.NotNil(t, p.events[0].DurationMs)
+	assert.EqualValues(t, 40, *p.events[0].DurationMs)
 }
 
 func TestFilesTelemetryAdapter_ShouldLogWarnNotReturnError_When_RecordFails(t *testing.T) {

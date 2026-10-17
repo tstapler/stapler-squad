@@ -252,7 +252,7 @@ func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (
 	}
 	dir := ws.ExistingDir
 	if mode == AccessWrite {
-		if ws.ActiveDir == "" || ws.ActiveDir != ws.ExistingDir {
+		if !worktreeOnDisk(ws) {
 			return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("WorktreeMissing: session worktree is not on disk"))
 		}
 		dir = ws.ActiveDir
@@ -261,6 +261,12 @@ func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (
 		return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("session has no working directory"))
 	}
 	return ws, dir, nil
+}
+
+// worktreeOnDisk is false once the session's active directory is gone and ExistingDir
+// has fallen back to the repo root. Writes and content search both refuse that state.
+func worktreeOnDisk(ws session.Workspace) bool {
+	return ws.ActiveDir != "" && ws.ActiveDir == ws.ExistingDir
 }
 
 func openRootError(err error) error {
