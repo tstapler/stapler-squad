@@ -59,6 +59,8 @@ interface FeatureFlagsContextValue {
   isLoading: boolean;
   error: string | null;
   setFlag: (name: string, change: boolean | FlagChange) => Promise<void>;
+  /** Re-reads GetFeatureFlags without flipping isLoading back on. */
+  refresh?: () => Promise<void>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
@@ -67,6 +69,7 @@ const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
   isLoading: true,
   error: null,
   setFlag: async () => {},
+  refresh: async () => {},
 });
 
 export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
@@ -91,6 +94,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       }
       setFlags(map);
       setFlagList(list);
+      setError(null);
     } catch {
       setError("Failed to load feature flags");
     } finally {
@@ -136,8 +140,8 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   }, [client, fetchFlags]);
 
   const value = useMemo(
-    () => ({ flags, flagList, isLoading, error, setFlag }),
-    [flags, flagList, isLoading, error, setFlag]
+    () => ({ flags, flagList, isLoading, error, setFlag, refresh: fetchFlags }),
+    [flags, flagList, isLoading, error, setFlag, fetchFlags]
   );
 
   return (
