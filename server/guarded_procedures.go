@@ -29,6 +29,11 @@ const updateFlagProcedurePath = "/api" + sessionv1connect.SessionServiceUpdateFe
 // rebinding profile (the in-handler local-caller gate adds the peer check).
 const replyProcedurePath = "/api" + sessionv1connect.SessionServiceReplyToPendingQuestionProcedure
 
+// writeFileProcedurePath is the full request path of WriteFile, the save primitive of the
+// Files tab: an unauthenticated :8543 listener must give it the POST-only and
+// Origin/rebinding verdict like every other write RPC (ADR-031).
+const writeFileProcedurePath = "/api" + sessionv1connect.SessionServiceWriteFileProcedure
+
 // guardedProcedures is the LocalWriteGuard set. A new member names its profile;
 // ProbeProgram and the nudge keep the original probe verdict byte for byte.
 var guardedProcedures = map[string]middleware.GuardProfile{
@@ -38,6 +43,20 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 
 	updateFlagProcedurePath: middleware.ProfileRebinding,
 	replyProcedurePath:      middleware.ProfileRebinding,
+
+	writeFileProcedurePath: middleware.ProfileRebinding,
+}
+
+// writeFileBodyLimit caps a WriteFile body: 1 MiB of content grows to about 1.34 MiB as
+// base64 JSON, plus the path, token and framing (ADR-031 "Request-size cap").
+const writeFileBodyLimit = 1536 * 1024
+
+// withFileBodyLimits wraps the session Connect handler so both listeners share the
+// WriteFile body cap. It sits around the handler, not beside guardedProcedures: that map
+// feeds only localChainWith, so a limit registered there would leave :8444 unbounded.
+// The path is the one the handler sees (the mux has already stripped "/api").
+func withFileBodyLimits(h http.Handler) http.Handler {
+	return middleware.BodyLimit(sessionv1connect.SessionServiceWriteFileProcedure, writeFileBodyLimit)(h)
 }
 
 // localChain is the :8543 middleware chain (inside otelhttp):

@@ -494,6 +494,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	_ = streamhub.DefaultTapRegistry()
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
 	handler = services.WithRequestHost(handler)
+	handler = withFileBodyLimits(handler)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
