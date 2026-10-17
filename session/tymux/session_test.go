@@ -300,6 +300,19 @@ func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	return sess
 }
 
+func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid: []*v1.Row{{Cells: []*v1.Cell{{Text: "r", Fg: 1}, {Text: "e", Fg: 1}, {Text: "d"}}}},
+	}
+	sess := startedSession(t, snap)
+
+	content, err := sess.CapturePaneContentRaw()
+
+	require.NoError(t, err)
+	assert.Contains(t, content, "\x1b[", "first-paint capture must carry color attributes")
+	assert.Contains(t, content, "re")
+}
+
 func TestTymuxGRPCSession_CapturePaneContentRaw_JoinsRowCellText(t *testing.T) {
 	snap := &v1.PaneSnapshot{
 		Grid: []*v1.Row{
