@@ -528,10 +528,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			instance.started.Store(true)
 		} else {
 			paneExited := false
-			if tb, ok := instance.processManager.(*TmuxBackend); ok {
-				if tm := tb.TmuxManager(); tm != nil {
-					_, _, paneExited = tm.PaneExitStatus()
-				}
+			if r, ok := capabilityOf[ExitStatusReporter](instance.processManager); ok {
+				_, _, paneExited = r.PaneExitStatus()
 			}
 			if instance.processManager.IsAlive() && !paneExited {
 				log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)

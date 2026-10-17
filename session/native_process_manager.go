@@ -65,6 +65,9 @@ func (n *NativeProcessManager) WireLaunch(spec LaunchSpec) {
 	n.opts.Program = spec.Program
 }
 
+// AppendLaunchEnv is a no-op: the native backend launches with the parent environment.
+func (n *NativeProcessManager) AppendLaunchEnv(...string) {}
+
 // --- Lifecycle ---
 
 // Start launches the configured program under a PTY in the given directory.

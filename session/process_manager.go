@@ -16,6 +16,10 @@ type ProcessManager interface {
 	// type-switch on the concrete backend to do this.
 	WireLaunch(spec LaunchSpec)
 
+	// AppendLaunchEnv adds environment (KEY=VALUE) for the program the next Start
+	// launches. A backend that cannot pass env must say so by doing nothing, explicitly.
+	AppendLaunchEnv(env ...string)
+
 	// Lifecycle
 	Start(dir string) error
 	RestoreWithWorkDir(workDir string) error

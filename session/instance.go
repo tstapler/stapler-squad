@@ -1482,13 +1482,9 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		// under us. Without this, "the process exited" was previously a dead end --
 		// remain-on-exit keeps tmux showing "[exited]" in the pane, but nothing ever
 		// read *why*.
-		if tb, ok := i.pm().(*TmuxBackend); ok {
-			if tm := tb.TmuxManager(); tm != nil {
-				if sess := tm.Session(); sess != nil {
-					if code, signal, ok := sess.ExitStatus(); ok {
-						log.Warn("session exited", "session", i.Title, "reason", reason, "exitCode", code, "signal", signal)
-					}
-				}
+		if r, ok := capabilityOf[ExitStatusReporter](i.pm()); ok {
+			if code, signal, exited := r.PaneExitStatus(); exited {
+				log.Warn("session exited", "session", i.Title, "reason", reason, "exitCode", code, "signal", signal)
 			}
 		}
 		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
@@ -1668,20 +1664,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
-			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-				if tb, ok := i.processManager.(*TmuxBackend); ok {
-					if sess := tb.TmuxManager().Session(); sess != nil {
-						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
-					}
-				}
-			}
-			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-				if tb, ok := i.processManager.(*TmuxBackend); ok {
-					if sess := tb.TmuxManager().Session(); sess != nil {
-						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
-					}
-				}
-			}
+			i.applyLaunchEnv()
 			if err := i.pm().Start(startPath); err != nil {
 				setupErr = fmt.Errorf("cold restore Start failed for '%s': %w", i.Title, err)
 				return setupErr
@@ -1795,37 +1778,19 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			// i.pm().Start(startPath) would in any case fail: it validates startPath
 			// via a local os.Stat, and startPath here is a path on the remote host.
 			// Re-confirm the remote session is still up (idempotent) instead.
-			tb, ok := i.processManager.(*TmuxBackend)
+			ensurer, ok := capabilityOf[RemoteSessionEnsurer](i.processManager)
 			if !ok {
 				setupErr = fmt.Errorf("remote execution target requires a tmux-backed process manager")
 				return setupErr
 			}
-			sess := tb.TmuxManager().Session()
-			if sess == nil {
-				setupErr = fmt.Errorf("remote tmux session was not initialized")
-				return setupErr
-			}
-			if ensureErr := sess.EnsureRemoteSession(context.Background(), startPath); ensureErr != nil {
+			if ensureErr := ensurer.EnsureRemoteSession(context.Background(), startPath); ensureErr != nil {
 				setupErr = fmt.Errorf("remote tmux session unavailable: %w", ensureErr)
 				return setupErr
 			}
 		} else {
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
-			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-				if tb, ok := i.processManager.(*TmuxBackend); ok {
-					if sess := tb.TmuxManager().Session(); sess != nil {
-						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
-					}
-				}
-			}
-			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-				if tb, ok := i.processManager.(*TmuxBackend); ok {
-					if sess := tb.TmuxManager().Session(); sess != nil {
-						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
-					}
-				}
-			}
+			i.applyLaunchEnv()
 			if err := i.pm().Start(startPath); err != nil {
 				if i.gitManager.HasWorktree() {
 					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
@@ -1979,20 +1944,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// Allocate CDP port before creating the tmux session so CDP_PORT and the
 			// updated PATH (wrapper dir) can be injected via ExtraEnv at new-session time.
 			i.allocateCDPPort()
-			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-				if tb, ok := i.processManager.(*TmuxBackend); ok {
-					if sess := tb.TmuxManager().Session(); sess != nil {
-						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
-					}
-				}
-			}
-			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-				if tb, ok := i.processManager.(*TmuxBackend); ok {
-					if sess := tb.TmuxManager().Session(); sess != nil {
-						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
-					}
-				}
-			}
+			i.applyLaunchEnv()
 			if err := i.pm().Start(startPath); err != nil {
 				setupErr = fmt.Errorf("cold restore Start failed for '%s': %w", i.Title, err)
 				return setupErr
@@ -2080,20 +2032,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// Allocate CDP port before creating the tmux session so CDP_PORT and the
 		// updated PATH (wrapper dir) can be injected via ExtraEnv at new-session time.
 		i.allocateCDPPort()
-		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
-				}
-			}
-		}
-		if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
-			if tb, ok := i.processManager.(*TmuxBackend); ok {
-				if sess := tb.TmuxManager().Session(); sess != nil {
-					sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
-				}
-			}
-		}
+		i.applyLaunchEnv()
 		if err := i.pm().Start(startPath); err != nil {
 			if i.gitManager.HasWorktree() {
 				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
