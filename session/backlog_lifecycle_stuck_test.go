@@ -1944,14 +1944,55 @@ func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHit
 	}
 }
 
+// TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget_When_RetriageIsPointless
+// pins the fix for items 404b362c/ec050b7d: content-unchanged (needs a human to approve the
+// plan or edit the item) is just as deterministic a dead end as a fan-out/cost-ceiling abort,
+// but — unlike that case — the self-skip itself is free, so AutoRespawnTriage IS still called
+// (it idempotently posts the real "needs human action" note) while RemediationDue's
+// attempt/park bookkeeping is never touched, so the row can never reach the misleading
+// "use Reset to try again automatically" park notification for a retry that could not have
+// helped regardless of how many times it ran.
+func TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget_When_RetriageIsPointless(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	respawner.pointlessIDs = map[string]bool{item.ID: true}
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID, "the free self-skip must still run so it can post its note")
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the pointless-retriage self-skip")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	require.True(t, ok, "the orphaned_triage row must stay open")
+	assert.Zero(t, row.RemediationAttempts, "a pointless retriage must never spend the shared remediation budget")
+}
+
 // fakeTriageRespawner is a test double implementing TriageRespawner, recording
 // every AutoRespawnTriage call on a buffered channel (not a plain counter)
 // because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
 // mirrors fakeStaleWorkRemediator's identical rationale.
 type fakeTriageRespawner struct {
-	calls   chan string
-	err     error
-	liveIDs map[string]bool
+	calls        chan string
+	err          error
+	liveIDs      map[string]bool
+	pointlessIDs map[string]bool
 }
 
 func newFakeTriageRespawner() *fakeTriageRespawner {
@@ -1965,6 +2006,10 @@ func (f *fakeTriageRespawner) AutoRespawnTriage(ctx context.Context, itemID stri
 
 func (f *fakeTriageRespawner) IsTriageLive(itemID string) bool {
 	return f.liveIDs[itemID]
+}
+
+func (f *fakeTriageRespawner) IsRetriagePointless(ctx context.Context, itemID string) bool {
+	return f.pointlessIDs[itemID]
 }
 
 // TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds
