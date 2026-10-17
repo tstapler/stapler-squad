@@ -19,10 +19,12 @@ import { QuickOpenPalette } from "./QuickOpenPalette";
 import { FilesV2Chrome } from "./files/FilesV2Chrome";
 import { FilesV2Footer } from "./files/FilesV2Footer";
 import { useActiveBufferWait } from "./files/ActiveBufferWait";
+import { SearchPanel, SearchPaneTabs } from "./files/SearchPanel";
+import { useSearchPane } from "@/lib/hooks/useSearchPane";
 import { tabPanel } from "./files/FilesV2Chrome.css";
 import { FilesTreeToolbar } from "./FilesTreeToolbar";
 import {
-  container, treePane, treePaneCollapsed, contentPane, treeWrapper,
+  container, treePane, treePaneCollapsed, contentPane, treeWrapper, leftView,
   mobilePaneHidden, mobilePaneVisible, mobileBackButton, mobileSearchButton,
 } from "./FilesTab.css";
 
@@ -36,6 +38,10 @@ interface FilesTabProps {
   onSelectedPathChange?: (path: string | null) => void;
   /** Whether the session's agent is running, for the "this may be the agent" stale-banner wording. */
   sessionRunning?: boolean;
+  /** Shown in the Search panel's empty state. */
+  sessionName?: string;
+  /** Resume action for a paused session (Search refuses without a worktree). */
+  onResumeSession?: (trigger: HTMLElement) => void;
 }
 
 // ---- Component ----
@@ -112,6 +118,8 @@ function FilesTabView({
   recentPaths,
   onOpen,
   v2,
+  sessionName,
+  onResumeSession,
 }: FilesTabViewProps) {
   const [includeIgnored, setIncludeIgnored] = useState(false);
   const [sortBy, setSortBy] = useState<SortMode>("name");
@@ -156,8 +164,12 @@ function FilesTabView({
   const onDeepLink = useMemo(() => jumpTo && ((path: string, line = 1) => jumpTo(path, line, { pinned: true, source: "deeplink" })), [jumpTo]);
   useFilesDeepLink({ initialSelectedPath, tree: fileTreeRef, selectedPath, onJump: onDeepLink });
   const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
-  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, ...v2?.shortcuts });
-
+  const search = useSearchPane(v2, {
+    expandPanel: panel.expand,
+    showTreePane: useCallback(() => setMobilePane("tree"), []),
+    showContentPane: useCallback(() => setMobilePane("content"), []),
+  });
+  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, onSearch: v2 ? search.openSearch : undefined, ...v2?.shortcuts });
   const wait = useActiveBufferWait(v2, fileTreeRef);
 
   // Build tree pane class names
@@ -186,49 +198,66 @@ function FilesTabView({
         data-testid="files-tree-pane"
         style={{ width: panel.collapsed ? 0 : panel.width }}
       >
-        <FilesTreeToolbar
-          searchInputRef={searchInputRef}
-          fileTreeRef={fileTreeRef}
-          searchTerm={searchTerm}
-          onSearchTerm={setSearchTerm}
-          searchResultCount={searchResultCount}
-          searchResultTruncated={searchResultTruncated}
-          includeIgnored={includeIgnored}
-          onIncludeIgnored={setIncludeIgnored}
-          filterChangedOnly={filterChangedOnly}
-          onFilterChangedOnly={setFilterChangedOnly}
-          sortBy={sortBy}
-          onToggleSort={() => setSortBy((prev) => (prev === "name" ? "type" : "name"))}
-          collapsed={panel.collapsed}
-          onCollapse={panel.collapse}
-          onExpand={panel.expand}
-          vcsLoading={vcsLoading}
-          onRefreshStatus={refreshStatus}
-        />
-        <RecentFilesSection
-          paths={recentPaths}
-          selectedPath={selectedPath}
-          onSelect={(path) => handleFileSelect(path, "recent")}
-        />
-        <div className={treeWrapper}>
-          <FileTree
-            ref={fileTreeRef}
-            sessionId={sessionId}
-            baseUrl={baseUrl}
-            onFileSelect={handleFileSelect}
-            gitStatusMap={gitStatusMap}
-            lineStatsMap={lineStatsMap}
-            sortBy={sortBy}
-            filterChangedOnly={filterChangedOnly}
-            selectedPath={selectedPath}
-            includeIgnored={includeIgnored}
+        {v2 && <SearchPaneTabs pane={search.leftPane} onPane={search.chooseLeftPane} />}
+        <div className={leftView} hidden={search.leftPane === "search"}>
+          <FilesTreeToolbar
+            searchInputRef={searchInputRef}
+            fileTreeRef={fileTreeRef}
             searchTerm={searchTerm}
-            onSearchResults={(count, truncated) => {
-              setSearchResultCount(count);
-              setSearchResultTruncated(truncated);
-            }}
+            onSearchTerm={setSearchTerm}
+            searchResultCount={searchResultCount}
+            searchResultTruncated={searchResultTruncated}
+            includeIgnored={includeIgnored}
+            onIncludeIgnored={setIncludeIgnored}
+            filterChangedOnly={filterChangedOnly}
+            onFilterChangedOnly={setFilterChangedOnly}
+            sortBy={sortBy}
+            onToggleSort={() => setSortBy((prev) => (prev === "name" ? "type" : "name"))}
+            collapsed={panel.collapsed}
+            onCollapse={panel.collapse}
+            onExpand={panel.expand}
+            vcsLoading={vcsLoading}
+            onRefreshStatus={refreshStatus}
           />
+          <RecentFilesSection
+            paths={recentPaths}
+            selectedPath={selectedPath}
+            onSelect={(path) => handleFileSelect(path, "recent")}
+          />
+          <div className={treeWrapper}>
+            <FileTree
+              ref={fileTreeRef}
+              sessionId={sessionId}
+              baseUrl={baseUrl}
+              onFileSelect={handleFileSelect}
+              gitStatusMap={gitStatusMap}
+              lineStatsMap={lineStatsMap}
+              sortBy={sortBy}
+              filterChangedOnly={filterChangedOnly}
+              selectedPath={selectedPath}
+              includeIgnored={includeIgnored}
+              searchTerm={searchTerm}
+              onSearchResults={(count, truncated) => {
+                setSearchResultCount(count);
+                setSearchResultTruncated(truncated);
+              }}
+            />
+          </div>
         </div>
+        {v2 && (
+          <div className={leftView} hidden={search.leftPane !== "search"}>
+            <SearchPanel
+              sessionId={sessionId}
+              sessionName={sessionName}
+              visible={search.leftPane === "search"}
+              focusToken={search.focusToken}
+              dirtyPaths={search.dirtyPaths}
+              openHit={search.openHit}
+              onEscape={v2.bridge.focusEditor}
+              onResumeSession={onResumeSession ? () => onResumeSession(document.activeElement as HTMLElement) : undefined}
+            />
+          </div>
+        )}
       </div>
 
       {!panel.collapsed && <TreeResizeHandle {...panel.handleProps} />}

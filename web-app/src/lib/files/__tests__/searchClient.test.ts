@@ -1,48 +1,14 @@
 import { act, renderHook } from "@testing-library/react";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { createFilesTestHarness } from "./fixtures";
+import { controllableSearchStream, searchHit, searchQuery, searchStats } from "./fixtures/controllableSearchStream";
 import { useContentSearch } from "@/lib/hooks/useContentSearch";
-import { classifySearchError, connectSearchStream, type SearchEvent, type SearchQuery, type SearchStream } from "../searchClient";
+import { classifySearchError, connectSearchStream, type SearchEvent } from "../searchClient";
 
-const q = (pattern: string, extra: Partial<SearchQuery> = {}): SearchQuery => ({
-  pattern, regex: false, caseSensitive: false, wholeWord: false, include: [], exclude: [], includeIgnored: false, largeFiles: false, ...extra,
-});
-const hit = (path: string, line: number) => ({ path, line, text: `line ${line}`, start: 0, end: 4, byteOffset: 0 });
-const stats = (over: Partial<Extract<SearchEvent, { type: "stats" }>> = {}): SearchEvent => ({
-  type: "stats", filesScanned: 12, binarySkipped: 0, truncated: false, durationMs: 5, largeFilesSkipped: 0, ...over,
-});
-
-/** A stream the test drives by hand; records the pattern and signal of every request. */
-function controllable() {
-  const requests: { pattern: string; signal: AbortSignal; push: (e: SearchEvent) => void; end: () => void; fail: (e: unknown) => void }[] = [];
-  const stream: SearchStream = (query, signal) => ({
-    [Symbol.asyncIterator]() {
-      const queue: SearchEvent[] = [];
-      let wake: (() => void) | null = null;
-      let done = false;
-      let error: unknown = null;
-      const poke = () => { wake?.(); wake = null; };
-      requests.push({
-        pattern: query.pattern, signal,
-        push: (e) => { queue.push(e); poke(); },
-        end: () => { done = true; poke(); },
-        fail: (e) => { error = e; done = true; poke(); },
-      });
-      signal.addEventListener("abort", () => { done = true; poke(); });
-      return {
-        async next() {
-          for (;;) {
-            if (queue.length) return { value: queue.shift()!, done: false };
-            if (error) throw error;
-            if (done) return { value: undefined, done: true };
-            await new Promise<void>((r) => { wake = r; });
-          }
-        },
-      };
-    },
-  });
-  return { stream, requests };
-}
+const q = searchQuery;
+const hit = searchHit;
+const stats = searchStats;
+const controllable = controllableSearchStream;
 
 function setup(opts: { enabled?: boolean } = {}) {
   const h = createFilesTestHarness();

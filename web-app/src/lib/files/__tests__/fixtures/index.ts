@@ -5,7 +5,7 @@ export type { FilesHarness, FilesHarnessOverrides, SessionHandlers } from "./fil
 export { createFakeAnalytics } from "./fakeAnalytics";
 export type { FakeAnalytics } from "./fakeAnalytics";
 export { HARNESS_MOCKED_MODULES, findDuplicateMocks } from "./mockGuard";
-export { installJsdomLayoutShims } from "./jsdomLayout";
+export { installJsdomLayoutShims, installVirtualViewport } from "./jsdomLayout";
 export { CANARIES, LABEL_VALUE_SHAPE, MAX_LABELS, canaryLeaks, labelProblems, fixtureLabels } from "./privacyHarness";
 export { fakeClock } from "./fakeClock";
 export { createFakeTransport, fakeCapabilities, DEFAULT_OPS } from "./fakeTransport";

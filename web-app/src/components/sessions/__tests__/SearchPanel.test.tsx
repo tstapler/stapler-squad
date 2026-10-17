@@ -1,6 +1,10 @@
 import React from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { Code, ConnectError } from "@connectrpc/connect";
 import type { SearchHit } from "@/lib/files/searchClient";
+import { createFilesTestHarness, installVirtualViewport as installViewport } from "@/lib/files/__tests__/fixtures";
+import { controllableSearchStream, searchHit, searchStats } from "@/lib/files/__tests__/fixtures/controllableSearchStream";
+import { SearchPanel } from "../files/SearchPanel";
 import { SearchResults } from "../files/SearchResults";
 import { accessibleName, buildRows, type ResultRow } from "../files/searchRows";
 
@@ -12,16 +16,9 @@ function sample(): SearchHit[] {
   return counts.flatMap((n, f) => Array.from({ length: n }, (_, i) => hit(`pkg/f${f + 1}.go`, 10 + i)));
 }
 
-/** jsdom has no layout; give the scroll container a viewport so the virtualizer mounts a window. */
 function withViewport<T>(fn: () => T): T {
-  const proto = HTMLElement.prototype;
-  const old = { h: Object.getOwnPropertyDescriptor(proto, "offsetHeight"), w: Object.getOwnPropertyDescriptor(proto, "offsetWidth") };
-  Object.defineProperty(proto, "offsetHeight", { configurable: true, get: () => 400 });
-  Object.defineProperty(proto, "offsetWidth", { configurable: true, get: () => 300 });
-  try { return fn(); } finally {
-    if (old.h) Object.defineProperty(proto, "offsetHeight", old.h); else delete (proto as { offsetHeight?: unknown }).offsetHeight;
-    if (old.w) Object.defineProperty(proto, "offsetWidth", old.w); else delete (proto as { offsetWidth?: unknown }).offsetWidth;
-  }
+  const restore = installViewport();
+  try { return fn(); } finally { restore(); }
 }
 
 const baseProps = { stale: false, busy: false, activeKey: null as string | null, dirtyPaths: new Set<string>(), coarse: false, treeId: "t1", onToggleGroup: jest.fn(), onActivate: jest.fn() };
@@ -133,5 +130,213 @@ describe("SearchResults", () => {
     await act(async () => { group.click(); firstHit.click(); });
     expect(onToggleGroup).toHaveBeenCalledWith("pkg/f1.go");
     expect(onActivate).toHaveBeenCalledWith(expect.objectContaining({ line: 10, path: "pkg/f1.go" }), 0, "tap");
+  });
+});
+
+
+describe("SearchPanel", () => {
+  const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  function mount(extra: Partial<React.ComponentProps<typeof SearchPanel>> = {}) {
+    const h = createFilesTestHarness();
+    const c = controllableSearchStream();
+    const openHit = jest.fn(() => false);
+    const onEscape = jest.fn();
+    const props = { sessionId: "s1", sessionName: "my-session", visible: true, focusToken: 0, dirtyPaths: new Set<string>(), openHit, onEscape, stream: c.stream, ...extra };
+    const view = render(<SearchPanel {...props} />, { wrapper: h.wrapper });
+    const input = screen.getByRole("searchbox", { name: "Search file contents" });
+    const type = (value: string) => fireEvent.change(input, { target: { value } });
+    const fire = async (value: string) => { type(value); act(() => { jest.advanceTimersByTime(300); }); await flush(); };
+    return { h, c, openHit, onEscape, input, type, fire, view, rerender: (p: Partial<typeof props>) => view.rerender(<SearchPanel {...props} {...p} />) };
+  }
+  const status = () => screen.getByTestId("search-status");
+
+  let restoreViewport: () => void = () => undefined;
+  beforeEach(() => { jest.useFakeTimers(); restoreViewport = installViewport(); });
+  afterEach(() => { restoreViewport(); jest.useRealTimers(); });
+
+  it("searchResults_should_GroupAndAnnounceCounts_When_27MatchesIn6Files", async () => {
+    const { c, fire, input } = mount();
+    await fire("foo");
+    input.focus();
+    act(() => c.requests[0].push({ type: "batch", matches: sample() }));
+    act(() => c.requests[0].push(searchStats({ filesScanned: 40 })));
+    await flush();
+    expect(status()).toHaveTextContent("27 results in 6 files");
+    expect(status()).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("tree", { name: "Search results" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("searchPanel_should_ShowMinCharsHintAndSendOneRequest_When_TypingOneThenFoo", async () => {
+    const { c, type, fire } = mount();
+    expect(screen.getByText("Search file contents in my-session")).toBeInTheDocument();
+    type("f");
+    act(() => { jest.advanceTimersByTime(1000); });
+    expect(screen.getByText("Type at least 2 characters")).toBeInTheDocument();
+    expect(c.requests).toHaveLength(0);
+    type("fo"); type("foo");
+    act(() => { jest.advanceTimersByTime(300); });
+    await flush();
+    expect(c.requests.map((r) => r.pattern)).toEqual(["foo"]);
+    void fire;
+  });
+
+  it("searchPanel_should_ShowInlineErrorKeepResults_When_InvalidRegex", async () => {
+    const { c, fire } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
+    await flush();
+    act(() => c.requests[1].fail(new ConnectError("error parsing regexp: missing closing )", Code.InvalidArgument)));
+    await flush();
+    expect(screen.getByText(/Invalid regular expression: error parsing regexp: missing closing \)/)).toBeInTheDocument();
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
+    await flush();
+    expect(screen.queryByText(/Invalid regular expression/)).toBeNull();
+    expect(c.requests[2].query.regex).toBe(false);
+  });
+
+  it("searchPanel_should_ListActiveTogglesAndClearFilters_When_NoMatches", async () => {
+    const { c, fire } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "Match case" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
+    await fire("foo");
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    expect(screen.getByText("No matches for `foo` (case-sensitive, regex)")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await flush();
+    expect(c.requests.at(-1)!.query).toMatchObject({ pattern: "foo", caseSensitive: false, regex: false });
+    expect(screen.getByRole("button", { name: "Match case" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("searchPanel_should_FocusIncludeField_When_AddFiltersClickedOnTruncated", async () => {
+    const { c, fire } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    act(() => c.requests[0].push(searchStats({ truncated: true })));
+    await flush();
+    expect(screen.getByText("Showing first 1000 - refine your query")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add filters" }));
+    expect(screen.getByLabelText("Files to include")).toHaveFocus();
+  });
+
+  it("searchPanel_should_ShowPausedStateWithResume_When_WorktreeUnavailable", async () => {
+    const onResumeSession = jest.fn();
+    const { c, fire } = mount({ onResumeSession });
+    await fire("foo");
+    act(() => c.requests[0].fail(new ConnectError("WorktreeMissing: session worktree is not on disk", Code.FailedPrecondition)));
+    await flush();
+    expect(screen.getByText("Session paused; worktree unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("tree")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    expect(onResumeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("searchPanel_should_ShowWaitingAheadAndCancel_When_QueuedState", async () => {
+    const { c, fire } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    await fire("foob");
+    act(() => c.requests[1].push({ type: "queued", ahead: 1 }));
+    await flush();
+    expect(status()).toHaveTextContent("Waiting for other searches (1 ahead)...");
+    expect(screen.getByRole("tree")).toHaveClass("treeDimmed");
+    fireEvent.click(screen.getByTestId("search-cancel"));
+    expect(c.requests[1].signal.aborted).toBe(true);
+    expect(screen.queryByTestId("search-cancel")).toBeNull();
+  });
+
+  it("searchPanel_should_KeepPartialResultsAndSayCancelled_When_CancelPressed", async () => {
+    const { c, fire } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: Array.from({ length: 312 }, (_, i) => searchHit(`p/f${i % 6}.go`, i + 1)) }));
+    await flush();
+    fireEvent.click(screen.getByTestId("search-cancel"));
+    expect(status()).toHaveTextContent("Search cancelled - 312 results so far");
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
+  });
+
+  it("searchPanel_should_ShowRetryAndKeepResults_When_RpcFailsOrBusy", async () => {
+    const { c, fire } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    await fire("foob");
+    act(() => c.requests[1].fail(new ConnectError("down", Code.Unavailable)));
+    await flush();
+    expect(screen.getByText("Search failed - check your connection")).toBeInTheDocument();
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await flush();
+    act(() => c.requests[2].fail(new ConnectError("busy", Code.ResourceExhausted)));
+    await flush();
+    expect(screen.getByText("Too many searches are running - try again in a moment")).toBeInTheDocument();
+    act(() => { jest.advanceTimersByTime(60_000); });
+    expect(c.requests).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await flush();
+    expect(c.requests).toHaveLength(4);
+  });
+
+  it("searchPanel_should_OpenActiveHitOnEnterAndEmitOpenHitWithThreeInteractions_When_OpenTypeEnter", async () => {
+    const openHit = jest.fn(() => true);
+    const { h, c, fire, input } = mount({ openHit });
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 12), searchHit("a.go", 30)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input).toHaveAttribute("aria-activedescendant", screen.getAllByRole("treeitem")[1].id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(openHit).toHaveBeenCalledWith(expect.objectContaining({ path: "a.go", line: 12 }), "enter");
+    const open = h.analytics.events.filter((e) => e.name === "files.search.open_hit");
+    expect(open).toHaveLength(1);
+    expect(open[0].labels).toMatchObject({ rank: "1", interactions: "3", via: "enter", reused_tab: "true" });
+    expect(h.analytics.events.filter((e) => e.name === "files.search.results")).toHaveLength(1);
+  });
+
+  it("searchPanel_should_EmitNoOpenHit_When_FlowCancelledBeforeAHit", async () => {
+    const { h, c, fire } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    await flush();
+    fireEvent.click(screen.getByTestId("search-cancel"));
+    expect(h.analytics.events.filter((e) => e.name === "files.search.open_hit")).toHaveLength(0);
+  });
+
+  it("searchPanel_should_CollapseGroupsAndReturnFocusToEditor_When_ToggledOrEscape", async () => {
+    const { c, fire, input, onEscape } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: sample() }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    expect(screen.getAllByRole("treeitem")[1]).toHaveAttribute("aria-level", "2");
+    fireEvent.click(screen.getAllByRole("treeitem")[0]);
+    expect(screen.getAllByRole("treeitem")[0]).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getAllByRole("treeitem")[1]).toHaveAttribute("aria-level", "1");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  it("searchPanel_should_FocusQueryAndRetainState_When_FocusTokenBumpedAndPanelHiddenAndShown", async () => {
+    const { c, fire, input, rerender } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    await flush();
+    rerender({ visible: false });
+    expect(c.requests[0].signal.aborted).toBe(true);
+    rerender({ visible: true, focusToken: 1 });
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("foo");
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
   });
 });

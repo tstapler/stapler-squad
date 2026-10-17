@@ -2,7 +2,7 @@ import React, { forwardRef, useImperativeHandle } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Code, ConnectError } from "@connectrpc/connect";
-import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
+import { createFilesTestHarness, installVirtualViewport } from "@/lib/files/__tests__/fixtures";
 import { fakeCodeEditorProps } from "@/lib/files/__tests__/fixtures/mockCodeEditor";
 import { FilesTab } from "../FilesTab";
 
@@ -166,6 +166,79 @@ describe("FilesTab", () => {
       } finally {
         delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
       }
+    });
+  });
+
+  describe("search (viewer-v2)", () => {
+    let restoreViewport: () => void = () => undefined;
+    beforeEach(() => {
+      restoreViewport = installVirtualViewport();
+      Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get() { return this.parentNode; } });
+    });
+    afterEach(() => {
+      restoreViewport();
+      delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
+    });
+
+    const searchable = (matches: { path: string; line: number }[]) => ({
+      "files:viewer-v2": true as const,
+      handlers: {
+        async *searchContent() {
+          yield { message: { case: "batch", value: { matches: matches.map((m) => ({ ...m, text: `needle at ${m.line}`, startUtf16: 0, endUtf16: 6, byteOffset: 0n })) } } };
+          yield { message: { case: "stats", value: { filesScanned: 1, binarySkipped: 0, truncated: false, durationMs: 1n, largeFilesSkipped: 0 } } };
+        },
+      },
+    });
+    function mountSearch(matches: { path: string; line: number }[]) {
+      const cfg = searchable(matches);
+      const h = createFilesTestHarness({
+        flags: { "files:viewer-v2": true },
+        handlers: { getFileContent: text("hello"), statFile: () => ({ versionToken: "v1:1:1:x", size: 5n }), ...cfg.handlers } as never,
+      });
+      render(<FilesTab sessionId={h.sessionId} baseUrl="http://x" sessionName="demo" />, { wrapper: h.wrapper });
+      return h;
+    }
+    const lines = (n: number) => Array.from({ length: n }, () => "l").join("\n");
+
+    it("filesTab_should_ShowSearchPaneAndFocusQuery_When_CtrlShiftF_And_KeepExplorerMounted", async () => {
+      mountSearch([]);
+      const pick = await screen.findByTestId("pick");
+      await userEvent.keyboard("{Control>}{Shift>}f{/Shift}{/Control}");
+      const query = await screen.findByRole("searchbox", { name: "Search file contents" });
+      expect(query).toHaveFocus();
+      expect(screen.getByRole("tab", { name: "Search" })).toHaveAttribute("aria-selected", "true");
+      expect(pick.closest("[hidden]")).not.toBeNull();
+      await userEvent.click(screen.getByRole("tab", { name: "Explorer" }));
+      expect(pick.closest("[hidden]")).toBeNull();
+    });
+
+    it("filesTab_should_OpenHitAtLineInAPreviewTab_And_KeepResultsVisible_When_EnterOnAHit", async () => {
+      mountSearch([{ path: "src/a.go", line: 42 }]);
+      await userEvent.click(await screen.findByRole("tab", { name: "Search" }));
+      const query = await screen.findByRole("searchbox", { name: "Search file contents" });
+      await userEvent.type(query, "needle");
+      expect(await screen.findByText("1 result in 1 file")).toBeInTheDocument();
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+      expect(await screen.findByRole("tab", { name: "a.go, preview" })).toBeInTheDocument();
+      const handle = { ...({ getText: () => lines(100), getCursor: () => ({ line: 1, col: 0 }), gotoLine: jest.fn(), scrollSnapshot: jest.fn(), restoreScroll: jest.fn(), focus: jest.fn() }) };
+      await screen.findByTestId("fake-code-editor");
+      act(() => (fakeCodeEditorProps.last?.onReady as (h: unknown) => void)(handle));
+      await waitFor(() => expect(handle.gotoLine).toHaveBeenCalledWith(42));
+      expect(screen.getByTestId("search-results")).toBeInTheDocument();
+      expect(screen.queryByText(/beyond the loaded portion/)).toBeNull();
+    });
+
+    it("searchPanel_should_ShowBeyondLoadedBanner_When_HitBeyondTruncatedFile", async () => {
+      mountSearch([{ path: "src/big.go", line: 40000 }]);
+      await userEvent.click(await screen.findByRole("tab", { name: "Search" }));
+      await userEvent.type(await screen.findByRole("searchbox", { name: "Search file contents" }), "needle");
+      await screen.findByText("1 result in 1 file");
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+      await screen.findByTestId("fake-code-editor");
+      const handle = { getText: () => lines(20000), getCursor: () => ({ line: 1, col: 0 }), gotoLine: jest.fn(), scrollSnapshot: jest.fn(), restoreScroll: jest.fn() };
+      act(() => (fakeCodeEditorProps.last?.onReady as (h: unknown) => void)(handle));
+      expect(await screen.findByText("Line 40000 is beyond the loaded portion")).toBeInTheDocument();
+      await waitFor(() => expect(handle.gotoLine).toHaveBeenCalledWith(40000));
     });
   });
 });

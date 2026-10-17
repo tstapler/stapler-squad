@@ -1205,6 +1205,8 @@ export function SessionDetailView({
             initialSelectedPath={filesSelectedPath}
             onSelectedPathChange={setFilesSelectedPath}
             sessionRunning={session.status === SessionStatus.RUNNING}
+            sessionName={session.title}
+            onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
           />
         </div>
         {activeTab === "logs" && (

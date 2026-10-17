@@ -211,3 +211,12 @@ export const toolbarDivider = style({
   flexShrink: 0,
   margin: "2px 2px",
 });
+
+// A left-pane view (Explorer or Search); `hidden` keeps its state mounted while the other shows.
+export const leftView = style({
+  display: "flex",
+  flexDirection: "column",
+  flex: 1,
+  minHeight: 0,
+  selectors: { "&[hidden]": { display: "none" } },
+});

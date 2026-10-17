@@ -25,6 +25,7 @@ export function useEditorBridge(buffers: OpenBuffers) {
   const [editor, setEditor] = useState<{ handle: CodeEditorHandle; path: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const [beyond, setBeyond] = useState<{ path: string; line: number } | null>(null);
   const keepScroll = useRef<{ path: string; snapshot: ScrollSnapshot } | null>(null);
   const { state, active, revealed, recordViewState } = buffers;
 
@@ -34,6 +35,9 @@ export function useEditorBridge(buffers: OpenBuffers) {
   useEffect(() => {
     if (!pendingReveal || !editor || editor.path !== pendingReveal.path) return;
     try {
+      // The engine clamps; a hit past the loaded text (truncated read) says so instead of landing silently.
+      const lines = editor.handle.getText().split("\n").length;
+      setBeyond(pendingReveal.line > lines ? { path: pendingReveal.path, line: pendingReveal.line } : null);
       editor.handle.gotoLine(pendingReveal.line);
       const keep = keepScroll.current;
       if (keep?.path === pendingReveal.path) {
@@ -143,5 +147,12 @@ export function useEditorBridge(buffers: OpenBuffers) {
     try { return editor.handle.getText(); } catch { return null; }
   }, [editor, active]);
 
-  return { onEditorReady, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
+  const focusEditor = useCallback(() => {
+    if (!editor || !active || editor.path !== active.path) return;
+    try { editor.handle.focus(); } catch { /* engine torn down */ }
+  }, [editor, active]);
+
+  const dismissBeyond = useCallback(() => setBeyond(null), []);
+
+  return { onEditorReady, focusEditor, beyond: beyond && active && beyond.path === active.path ? beyond : null, dismissBeyond, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
 }

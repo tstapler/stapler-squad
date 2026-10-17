@@ -41,6 +41,11 @@ export function FilesV2Chrome({ v2, fileTreeRef, panelId }: FilesV2ChromeProps) 
         })]
       : []),
   ];
+  if (bridge.beyond) {
+    banners.push({
+      id: `beyond:${bridge.beyond.path}`, kind: "beyond_loaded", seq: 2, body: `Line ${bridge.beyond.line} is beyond the loaded portion`, onDismiss: bridge.dismissBeyond,
+    });
+  }
   const closeOthers = (keep: string) => state.buffers.forEach((b) => { if (b.path !== keep) buffers.close(b.path); });
   const jumpToSymbol = (line: number) => {
     if (buffers.active) bridge.jumpTo(buffers.active.path, line, { source: "outline" });
