@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -239,3 +240,9 @@ func resolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileR
 	}
 	return &resolvedRequest{Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
 }
+
+// FS returns an fs.FS rooted at the worktree for walking; it cannot follow a link out of the root.
+func (w *WorktreeRoot) FS() fs.FS { return w.root.FS() }
+
+// Readlink reads a symlink's raw target (metadata only) through the root.
+func (w *WorktreeRoot) Readlink(rel string) (string, error) { return w.root.Readlink(rel) }

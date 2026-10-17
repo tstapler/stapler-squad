@@ -1165,3 +1165,54 @@ func TestServeFileRaw_ShouldRefuseEscapingSymlinkAndServeInTreeLink(t *testing.T
 		t.Fatalf("in-tree link: status %d body %q", resp.StatusCode, body)
 	}
 }
+func realListFiles(t *testing.T, root, rel string) (*sessionv1.ListFilesResponse, error) {
+	t.Helper()
+	resp, err := realFileService(root).ListFiles(context.Background(), connect.NewRequest(
+		&sessionv1.ListFilesRequest{SessionId: "test-session", Path: rel, IncludeIgnored: true}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+func TestListFiles_ShouldListInTreeDirSymlinkAndRefuseEscapingOrGitLink_When_RetrofittedToOsRoot(t *testing.T) {
+	dir, _ := newResolverFixture(t)
+	got, err := realListFiles(t, dir, "shared")
+	if err != nil || len(got.Files) != 1 || got.Files[0].Name != "x.txt" || got.Files[0].Path != "shared/x.txt" {
+		t.Fatalf("shared: %+v, %v", got, err)
+	}
+	for _, rel := range []string{"dir_leak", "gitlink", "linkdir", ".git", "src/.git"} {
+		got, err = realListFiles(t, dir, rel)
+		if got != nil || connect.CodeOf(err) != connect.CodePermissionDenied {
+			t.Errorf("%s: got=%v err=%v", rel, got, err)
+		}
+	}
+	got, err = realListFiles(t, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, f := range got.Files {
+		names[f.Name] = f.IsSymlink
+	}
+	if !names["AGENTS.md"] || names["src"] || names[".git"] {
+		t.Errorf("root listing: %v", names)
+	}
+}
+
+func TestSearchFiles_ShouldNotFollowSymlinkOutOfRoot_When_TreeSearchWalksOsRoot(t *testing.T) {
+	dir, _ := newResolverFixture(t)
+	resp, err := realFileService(dir).SearchFiles(context.Background(), connect.NewRequest(
+		&sessionv1.SearchFilesRequest{SessionId: "test-session", Query: "secret", IncludeIgnored: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range resp.Msg.Files {
+		t.Errorf("unexpected match %q: the only %q file is outside the root", f.Path, "secret")
+	}
+	resp, err = realFileService(dir).SearchFiles(context.Background(), connect.NewRequest(
+		&sessionv1.SearchFilesRequest{SessionId: "test-session", Query: "a.go", IncludeIgnored: true}))
+	if err != nil || len(resp.Msg.Files) != 1 || resp.Msg.Files[0].Path != "src/a.go" {
+		t.Fatalf("legit match lost: %+v, %v", resp, err)
+	}
+}

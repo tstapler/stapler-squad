@@ -119,36 +119,27 @@ func (fs *FileService) ListFiles(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListFilesRequest],
 ) (*connect.Response[sessionv1.ListFilesResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-
-	ws, err := fs.workspace.GetWorkspace(req.Msg.SessionId)
-	if err != nil {
-		return nil, err
-	}
-
-	basePath := ws.ExistingDir
-	if basePath == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
-	}
-
 	requestedPath := req.Msg.Path
 	if requestedPath == "" {
 		requestedPath = "."
 	}
-
-	fullPath, err := resolveAndValidatePath(basePath, requestedPath)
+	rr, err := resolveFileRequest(ctx, fs.workspace, FileRef{SessionID: req.Msg.SessionId, Path: requestedPath}, AccessRead)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rr.Root.Close() }()
+
+	basePath := rr.Root.Dir()
+	fullPath := filepath.Join(basePath, string(rr.Resolved))
+	// Entries are named under the path the client asked for, not the link target's path.
+	displayDir := path.Clean(filepath.ToSlash(requestedPath))
 
 	var entries []os.DirEntry
 	if cached, ok := fs.dirCache.Get(fullPath); ok {
 		entries = cached
 	} else {
 		var readErr error
-		entries, readErr = os.ReadDir(fullPath)
+		entries, readErr = rr.Root.ReadDir(rr.Resolved)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
 				return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("directory not found: %s", requestedPath))
@@ -158,23 +149,14 @@ func (fs *FileService) ListFiles(
 			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read directory: %w", readErr))
 		}
-		if stat, statErr := os.Stat(fullPath); statErr == nil {
+		if stat, statErr := rr.Root.Stat(rr.Resolved); statErr == nil {
 			fs.dirCache.Put(fullPath, entries, stat.ModTime())
 		}
 	}
 
-	// Build gitignore matcher for this directory (patterns from root down to fullPath).
 	var matcher gitignore.Matcher
 	if !req.Msg.IncludeIgnored {
-		giKey := basePath + ":" + fullPath
-		var patterns []gitignore.Pattern
-		if cached, ok := fs.gitignoreCache.Get(giKey); ok {
-			patterns = cached
-		} else {
-			patterns = loadGitignorePatterns(basePath, fullPath)
-			fs.gitignoreCache.Put(giKey, patterns, time.Now())
-		}
-		matcher = gitignore.NewMatcher(patterns)
+		matcher = fs.dirGitignoreMatcher(basePath, fullPath)
 	}
 
 	totalCount := 0
@@ -196,7 +178,7 @@ func (fs *FileService) ListFiles(
 		symlinkTarget := ""
 
 		if isSymlink {
-			target, readErr := os.Readlink(filepath.Join(fullPath, name))
+			target, readErr := rr.Root.Readlink(path.Join(string(rr.Resolved), name))
 			if readErr == nil {
 				symlinkTarget = target
 			}
@@ -205,12 +187,8 @@ func (fs *FileService) ListFiles(
 		}
 
 		// Build relative path segments for gitignore matching.
-		entryFullPath := filepath.Join(fullPath, name)
-		relPath, relErr := filepath.Rel(basePath, entryFullPath)
-		if relErr != nil {
-			continue
-		}
-		relSegments := strings.Split(filepath.ToSlash(relPath), "/")
+		relPath := path.Join(displayDir, name)
+		relSegments := strings.Split(relPath, "/")
 
 		// Gitignore check.
 		isIgnored := false
@@ -262,20 +240,23 @@ func (fs *FileService) ListFiles(
 
 	allNodes := append(dirs, files...)
 
-	// Compute base_path as the relative path from the worktree root.
-	baseFull := filepath.Clean(basePath)
-	relBase, relErr := filepath.Rel(baseFull, fullPath)
-	if relErr != nil {
-		relBase = requestedPath
-	}
-	relBase = filepath.ToSlash(relBase)
-
 	return connect.NewResponse(&sessionv1.ListFilesResponse{
 		Files:      allNodes,
-		BasePath:   relBase,
+		BasePath:   displayDir,
 		Truncated:  truncated,
 		TotalCount: int32(totalCount),
 	}), nil
+}
+
+// dirGitignoreMatcher builds (and caches) the matcher for patterns from basePath down to fullPath.
+func (fs *FileService) dirGitignoreMatcher(basePath, fullPath string) gitignore.Matcher {
+	giKey := basePath + ":" + fullPath
+	patterns, ok := fs.gitignoreCache.Get(giKey)
+	if !ok {
+		patterns = loadGitignorePatterns(basePath, fullPath)
+		fs.gitignoreCache.Put(giKey, patterns, time.Now())
+	}
+	return gitignore.NewMatcher(patterns)
 }
 
 // GetFileContent retrieves the content of a file in the session's worktree.
@@ -447,7 +428,13 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 	truncated := false
 	totalMatches := int32(0)
 
-	walkErr := filepath.WalkDir(basePath, func(path string, d fs.DirEntry, err error) error {
+	root, rootErr := OpenWorktreeRoot(basePath)
+	if rootErr != nil {
+		return nil, false, 0, rootErr
+	}
+	defer func() { _ = root.Close() }()
+
+	walkErr := fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		// Respect context cancellation (e.g. client disconnect).
 		if ctx.Err() != nil {
 			return filepath.SkipAll
@@ -460,7 +447,7 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 
 		name := d.Name()
 
-		// Skip symlinks to prevent traversal loops.
+		// Skip symlinks: never follow a link out of the root or into a loop.
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
@@ -471,16 +458,12 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 		}
 
 		// Skip the root itself.
-		if path == basePath {
+		if path == "." {
 			return nil
 		}
 
 		// Build relative path for gitignore matching.
-		relPath, relErr := filepath.Rel(basePath, path)
-		if relErr != nil {
-			return nil
-		}
-		relPath = filepath.ToSlash(relPath)
+		relPath := path
 		relSegments := strings.Split(relPath, "/")
 
 		// Apply gitignore filter.
