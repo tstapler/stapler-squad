@@ -268,7 +268,7 @@ func TestAnalyticsHandler_ShouldDropFilesEventsWithBadLabelShapeAndRecordOthers_
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", w.Code)
 	}
-	var names []string
+	names := make([]string, 0, len(p.events))
 	for _, e := range p.events {
 		names = append(names, e.EventName)
 	}
