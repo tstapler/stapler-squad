@@ -16,3 +16,22 @@ func (s *SessionService) StatFile(
 ) (*connect.Response[sessionv1.StatFileResponse], error) {
 	return s.fileSvc.StatFile(ctx, req)
 }
+
+// GetFileTransportCapabilities reports which file operations and wires this server serves.
+// +api: GetFileTransportCapabilities
+func (s *SessionService) GetFileTransportCapabilities(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetFileTransportCapabilitiesRequest],
+) (*connect.Response[sessionv1.GetFileTransportCapabilitiesResponse], error) {
+	return s.fileSvc.GetFileTransportCapabilities(ctx, req)
+}
+
+// GetFileTransportCapabilities is the wire adapter over FileOps.Capabilities.
+func (fs *FileService) GetFileTransportCapabilities(
+	ctx context.Context,
+	_ *connect.Request[sessionv1.GetFileTransportCapabilitiesRequest],
+) (*connect.Response[sessionv1.GetFileTransportCapabilitiesResponse], error) {
+	return connect.NewResponse(&sessionv1.GetFileTransportCapabilitiesResponse{
+		Capabilities: fs.ops.Capabilities(ctx),
+	}), nil
+}
