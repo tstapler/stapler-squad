@@ -55,6 +55,36 @@ describe("solid-fill text tokens meet WCAG AA on their fill", () => {
   }
 });
 
+/** Composite an rgba() token over an opaque hex background. */
+function compositeRgba(rgba: string, bgHex: string): string {
+  const m = rgba.match(/rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+  if (!m) throw new Error(`not an rgba: ${rgba}`);
+  const alpha = Number(m[4]);
+  const out = [1, 2, 3].map((i, ch) => {
+    const bg = parseInt(bgHex.slice(1 + ch * 2, 3 + ch * 2), 16);
+    return Math.round(Number(m[i]) * alpha + bg * (1 - alpha));
+  });
+  return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function rgbaToken(block: string, key: string): string {
+  const match = block.match(new RegExp(`\\b${key}: "(rgba\\([^"]+\\))"`));
+  if (!match) throw new Error(`token ${key} not found`);
+  return match[1];
+}
+
+// WCAG 1.4.11: primary borders on accentBg surfaces need 3:1 (axe's color-contrast doesn't check this).
+describe("primary border on accentBg meets WCAG 1.4.11 non-text contrast", () => {
+  const NON_TEXT = 3.0;
+  for (const theme of THEME_NAMES) {
+    it(`${theme}: primary vs accentBg over cardBackground`, () => {
+      const block = themeBlock(theme);
+      const surface = compositeRgba(rgbaToken(block, "accentBg"), token(block, "cardBackground"));
+      expect(contrast(token(block, "primary"), surface)).toBeGreaterThanOrEqual(NON_TEXT);
+    });
+  }
+});
+
 describe("terminal pane chrome stays under the tray and toast layers", () => {
   const level = (name: string) => {
     const match = CONTRACT_SRC.match(new RegExp(`\\b${name}: (\\d+)`));
