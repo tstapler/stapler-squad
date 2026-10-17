@@ -1,7 +1,9 @@
 # Tune, observe and roll back the unfinished-work scanner caches
 
-The scanner's shared caches sit behind four rollback-unit flags, all default `false`
-(`config/config.go:199`, `session/unfinished/flags.go:24`). Flags are read once at startup, so every
+The scanner's shared caches sit behind four rollback-unit flags. A unit's default flips to `true` in
+`config.DefaultUnfinishedCaches` (`config/config.go`) after its own manual A/B passes (`baseline.md`,
+"S2 A/B"); today `diff_counter` is on and the rest are off. The config key is the off-switch: an absent
+key keeps the default, an explicit `false` disables the unit (`session/unfinished/flags.go:24`). Flags are read once at startup, so every
 change below needs a restart (`SetFlags`, `session/unfinished/flags.go:72`, called from `server/dependencies.go`).
 
 ## Read the counters (no OpenTelemetry needed)

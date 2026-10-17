@@ -13,3 +13,5 @@ Machine load is 110-160, so wall-clock is meaningless. `benchmark.yml:120` runs 
 
 ## Consequences
 CI will not block on benchmark regressions; the hard gates are deterministic tests in `make ready`. Fewer, dependency-aware flags are testable; legacy code and flags are removed after the soak instead of lingering.
+
+**Status update 2026-10-16 (flips, no live watch).** Per-unit defaults flip in `config.DefaultUnfinishedCaches` after the manual A/B recorded in `baseline.md` "S2 A/B"; the config key stays the off-switch (absent keeps the default, explicit `false` disables). Flipped so far: `diff_counter`. The 24 h live watch of Story 5.2.2 did not happen (owner answer Q4/Q11: no live deploy), so each flip commit states that and the live watch remains the Story 5.3.1 precondition.

@@ -44,7 +44,7 @@ event invalidates it, and the scanner multiplies it by W.
 
 ## Flags
 
-Four rollback units, all default off, read once at startup (restart-only reload): `shared_commit_state`,
+Four rollback units, read once at startup (restart-only reload); each defaults on only after its own manual A/B (`config.DefaultUnfinishedCaches`, currently `diff_counter` only) and its config key stays the off-switch: `shared_commit_state`,
 `diff_counter`, `scan_skip`, `watch_worktree_gitdirs` (`flags.go`, `FlagSpecs`; each has a `RemoveBy` date
 that `flags_test.go` enforces). `normalizeFlags` turns dependent sub-features off with a startup WARN.
 Operator runbook: `docs/how-to/tune-unfinished-scanner-caches.md`.

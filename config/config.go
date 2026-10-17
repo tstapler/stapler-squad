@@ -28,7 +28,7 @@ func NewConfigWithExecutor(exec CommandExecutor) *Config {
 			exec = newTimeoutCommandExecutor(5 * time.Second)
 		}
 	}
-	return &Config{executor: exec}
+	return &Config{executor: exec, UnfinishedCaches: DefaultUnfinishedCaches()}
 }
 
 // NewConfig creates a Config with the default timeout executor.
@@ -209,6 +209,14 @@ type UnfinishedCaches struct {
 	WatchWorktreeGitdirs bool `json:"watch_worktree_gitdirs"`
 }
 
+// DefaultUnfinishedCaches returns the shipped rollback-unit defaults. A unit is
+// on here only after its own manual A/B passed (baseline.md "S2 A/B"); its
+// config.json key stays the off-switch, and LoadConfigFromPath seeds this value
+// before unmarshalling so an absent key keeps the default.
+func DefaultUnfinishedCaches() UnfinishedCaches {
+	return UnfinishedCaches{DiffCounter: true}
+}
+
 // Config represents the application configuration
 type Config struct {
 	// executor is the command executor used for shell command discovery.
@@ -310,8 +318,8 @@ type Config struct {
 	// Example: "http://localhost:4040"
 	PyroscopeServerAddress string `json:"pyroscope_server_address,omitempty"`
 	// UnfinishedCaches holds the rollback-unit flags for the unfinished-work
-	// scanner's shared caches. Read once at startup (restart-only); every flag
-	// defaults to false. See session/unfinished/flags.go for dependencies.
+	// scanner's shared caches. Read once at startup (restart-only); defaults come
+	// from DefaultUnfinishedCaches. See session/unfinished/flags.go for dependencies.
 	UnfinishedCaches UnfinishedCaches `json:"unfinished_caches"`
 	// NewProjectBaseDir is the base directory where new project directories are created.
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
@@ -1615,7 +1623,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		return nil, err
 	}
 
-	var cfg Config
+	cfg := Config{UnfinishedCaches: DefaultUnfinishedCaches()}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
