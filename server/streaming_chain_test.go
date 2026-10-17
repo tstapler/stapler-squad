@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,4 +175,58 @@ func bisectBufferingLayer(t *testing.T, srv *Server) {
 		ts.Close()
 		t.Logf("without %s: gaps %v", skip, gaps)
 	}
+}
+
+type protoSpy struct {
+	rt    http.RoundTripper
+	proto atomic.Value
+}
+
+func (p *protoSpy) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := p.rt.RoundTrip(r)
+	if resp != nil {
+		p.proto.Store(resp.Proto)
+	}
+	return resp, err
+}
+
+// startRealRemoteListener runs the production StartRemote (TLS, HTTP/2 via
+// ServeTLS, otelhttp, remoteChain) on a free loopback port.
+func startRealRemoteListener(t *testing.T, srv *Server) (baseURL string, spy *protoSpy) {
+	t.Helper()
+	dummy := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(dummy.Close)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	admit := func(next http.Handler) http.Handler { return next }
+	require.NoError(t, srv.StartRemote(ctx, addr, &tls.Config{Certificates: dummy.TLS.Certificates}, admit, false))
+
+	spy = &protoSpy{rt: &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // throwaway self-signed listener
+		ForceAttemptHTTP2: true,
+	}}
+	return "https://" + addr, spy
+}
+
+func TestStreamingChain_ShouldDeliverIncrementally_OverRealRemoteTLSListener(t *testing.T) {
+	srv := newStreamChainServer(t)
+	base, spy := startRealRemoteListener(t, srv)
+	c := sessionv1connect.NewSessionServiceClient(&http.Client{Transport: spy}, base+"/api")
+	st, err := c.WatchSessions(context.Background(), connect.NewRequest(&sessionv1.WatchSessionsRequest{}))
+	require.NoError(t, err)
+	defer st.Close()
+	var gaps []time.Duration
+	last := time.Now()
+	for st.Receive() {
+		gaps = append(gaps, time.Since(last))
+		last = time.Now()
+	}
+	require.NoError(t, st.Err())
+	t.Logf("real StartRemote listener, negotiated %v, arrival gaps %v", spy.proto.Load(), gaps)
+	assertIncremental(t, gaps)
 }
