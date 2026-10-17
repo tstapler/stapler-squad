@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // loggedMissingWorktree suppresses repeat "worktree directory missing"
@@ -415,11 +417,24 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// decoder leaves as the Go zero value ("") on data.Backend — identical to
 	// today's pre-persistence behavior, it falls through to whatever
 	// NewProcessManager's process-wide default resolves to.
+	// Sessions created before a per-session tymux override was configured have no
+	// persisted backend; honor the override here or it is silently ignored forever.
+	if instance.Backend == "" {
+		sessionName := tmux.NewSessionName(instance.Title, tmux.TmuxPrefix).String()
+		if _, ok := config.LoadConfig().GetTymuxSessionOverride(sessionName); ok {
+			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
+		}
+	}
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
+	// Baseline command so a RestoreWithWorkDir->Start fallback (tymuxd lost the
+	// session) never spawns a bare $SHELL; Start paths later overwrite it with the full launch command.
+	if tb, ok := pm.(*TymuxBackend); ok && instance.Program != "" {
+		tb.TymuxManager().SetCommand(instance.Program)
+	}
 
 	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
 	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(
