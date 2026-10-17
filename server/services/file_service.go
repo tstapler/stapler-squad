@@ -323,17 +323,7 @@ func (fs *FileService) GetFileContent(
 
 	size := info.Size()
 
-	// Binary detection: known text extension → skip checks.
-	ext := strings.ToLower(filepath.Ext(fullPath))
-	if ext == "" {
-		// Check basename for files like "Dockerfile", "Makefile"
-		base := strings.ToLower(filepath.Base(fullPath))
-		if knownTextExtensions["."+base] {
-			ext = "." + base
-		}
-	}
-
-	isText := knownTextExtensions[ext]
+	isText := isKnownTextFile(fullPath)
 
 	// Open file and read enough bytes for content-type detection.
 	// #nosec G304 -- fullPath was already validated above via resolveAndValidatePath,
@@ -347,37 +337,7 @@ func (fs *FileService) GetFileContent(
 	}
 	defer func() { _ = f.Close() }()
 
-	// Read up to 512 bytes for content-type detection.
-	sniffBuf := make([]byte, 512)
-	sniffN, _ := f.Read(sniffBuf)
-	sniffBuf = sniffBuf[:sniffN]
-
-	contentType := http.DetectContentType(sniffBuf)
-
-	isBinary := false
-	if !isText {
-		// Layer 2: MIME sniffing.
-		if !strings.HasPrefix(contentType, "text/") {
-			isBinary = true
-		}
-		// Layer 3: null-byte scan on first 8000 bytes (overrides MIME if null found).
-		if !isBinary {
-			scanBuf := sniffBuf
-			if len(sniffBuf) < 8000 {
-				// Need to read more for the null scan (reopen from start).
-				_, _ = f.Seek(0, 0)
-				scanBuf = make([]byte, 8000)
-				n, _ := f.Read(scanBuf)
-				scanBuf = scanBuf[:n]
-			}
-			for _, b := range scanBuf {
-				if b == 0 {
-					isBinary = true
-					break
-				}
-			}
-		}
-	}
+	contentType, isBinary := sniffContent(f, isText)
 
 	// Binary files: return metadata only — no size limit applies because no content is read.
 	if isBinary {
@@ -394,25 +354,10 @@ func (fs *FileService) GetFileContent(
 			fmt.Errorf("file too large (%d bytes); maximum is %d bytes", size, maxFileSize))
 	}
 
-	// Determine read limit (truncate text files >1MB).
-	readLimit := size
-	isTruncated := false
-	if size > truncateSize {
-		readLimit = truncateSize
-		isTruncated = true
-	}
-
-	// Seek back to beginning and read up to readLimit bytes.
-	if _, seekErr := f.Seek(0, 0); seekErr != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file"))
-	}
-
-	buf := make([]byte, readLimit)
-	n, readErr := readFull(f, buf)
-	if readErr != nil && n == 0 {
+	buf, isTruncated, readErr := readTextCapped(f, size)
+	if readErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file content"))
 	}
-	buf = buf[:n]
 
 	return connect.NewResponse(&sessionv1.GetFileContentResponse{
 		Content:     string(buf),
