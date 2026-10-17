@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +15,12 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
+
+// fileReadSeeker is what the sniff and capped-read helpers need from a handle.
+type fileReadSeeker interface {
+	io.Reader
+	io.Seeker
+}
 
 // isKnownTextFile reports whether the file's extension (or, for extension-less
 // names like Makefile, its basename) is on the always-text allowlist.
@@ -32,9 +38,9 @@ func isKnownTextFile(fullPath string) bool {
 // sniffContent returns the sniffed content type and whether the file is binary:
 // MIME sniff first, then a null-byte scan of the first 8000 bytes (which overrides
 // a text MIME). Known-text files skip both checks. Leaves f's offset unspecified.
-func sniffContent(f *os.File, isText bool) (contentType string, isBinary bool) {
+func sniffContent(f fileReadSeeker, isText bool) (contentType string, isBinary bool) {
 	sniffBuf := make([]byte, 512)
-	sniffN, _ := f.Read(sniffBuf)
+	sniffN, _ := readFull(f, sniffBuf)
 	sniffBuf = sniffBuf[:sniffN]
 	contentType = http.DetectContentType(sniffBuf)
 	if isText {
@@ -47,7 +53,7 @@ func sniffContent(f *os.File, isText bool) (contentType string, isBinary bool) {
 	if len(sniffBuf) < 8000 {
 		_, _ = f.Seek(0, 0)
 		scanBuf = make([]byte, 8000)
-		n, _ := f.Read(scanBuf)
+		n, _ := readFull(f, scanBuf)
 		scanBuf = scanBuf[:n]
 	}
 	for _, b := range scanBuf {
@@ -60,7 +66,7 @@ func sniffContent(f *os.File, isText bool) (contentType string, isBinary bool) {
 
 // readTextCapped reads f from the start, capped at truncateSize; truncated reports
 // that the file was longer than the cap. The caller has already enforced maxFileSize.
-func readTextCapped(f *os.File, size int64) (buf []byte, truncated bool, err error) {
+func readTextCapped(f fileReadSeeker, size int64) (buf []byte, truncated bool, err error) {
 	readLimit := size
 	if size > truncateSize {
 		readLimit = truncateSize

@@ -44,6 +44,13 @@ func (e *SymlinkDeniedError) Error() string {
 	return fmt.Sprintf("symlink %q points outside the worktree or into .git (target %q)", e.Link, e.Target)
 }
 
+// linkProber is the part of a root the resolver needs to expand symlinks. It sees
+// raw, not-yet-confined components, so only the resolver may call it.
+type linkProber interface {
+	lstatRel(rel string) (os.FileInfo, error)
+	Readlink(rel string) (string, error)
+}
+
 // symlinkDenied builds the PermissionDenied error for a refused link, carrying
 // the typed ReadOnlyReasonDetail (SYMLINK plus the raw target string).
 func symlinkDenied(link, target string) *connect.Error {
@@ -104,14 +111,14 @@ func (w *WorktreeRoot) ReadDir(p ResolvedPath) ([]os.DirEntry, error) {
 // in AccessRead mode and refused in AccessWrite mode, so a write can never be
 // redirected through a link. A missing leaf is not an error here: the open
 // reports NotFound, and a write may create it.
-func resolveInWorktree(root *WorktreeRoot, rel string, mode AccessMode) (ResolvedPath, error) {
+func resolveInWorktree(root linkProber, rel string, mode AccessMode) (ResolvedPath, error) {
 	resolved, _, err := resolveInWorktreeLinks(root, rel, mode)
 	return resolved, err
 }
 
 // resolveInWorktreeLinks is resolveInWorktree that also reports whether any
 // component was a symlink, which callers surface as ReadOnlyReason=Symlink.
-func resolveInWorktreeLinks(root *WorktreeRoot, rel string, mode AccessMode) (ResolvedPath, bool, error) {
+func resolveInWorktreeLinks(root linkProber, rel string, mode AccessMode) (ResolvedPath, bool, error) {
 	if strings.ContainsRune(rel, 0) {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("path contains NUL"))
 	}
@@ -139,7 +146,7 @@ func hasGitComponent(p string) bool {
 
 // expandLinks walks p component by component, replacing each symlink by its
 // target (re-checked for escape and .git) until no link remains.
-func expandLinks(root *WorktreeRoot, p string, mode AccessMode) (ResolvedPath, bool, error) {
+func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool, error) {
 	pending := splitComponents(p)
 	var cur []string
 	viaLink := false
@@ -148,7 +155,7 @@ func expandLinks(root *WorktreeRoot, p string, mode AccessMode) (ResolvedPath, b
 		pending = pending[1:]
 		next := append(append([]string(nil), cur...), comp)
 		nextPath := strings.Join(next, "/")
-		fi, err := root.root.Lstat(nextPath)
+		fi, err := root.lstatRel(nextPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				return finishResolved(append(next, pending...), viaLink), viaLink, nil
@@ -166,7 +173,7 @@ func expandLinks(root *WorktreeRoot, p string, mode AccessMode) (ResolvedPath, b
 			return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("too many symlinks"))
 		}
 		viaLink = true
-		target, err := root.root.Readlink(nextPath)
+		target, err := root.Readlink(nextPath)
 		if err != nil {
 			return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read symlink"))
 		}
@@ -218,35 +225,15 @@ type resolvedRequest struct {
 // ActiveDir and requires it to equal ExistingDir, which blocks the silent
 // fallback to the repo root after a worktree has been cleaned up.
 func resolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileRef, mode AccessMode) (*resolvedRequest, error) {
-	if ref.SessionID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
-	}
-	ws, err := provider.GetWorkspace(ref.SessionID)
+	ws, dir, err := workspaceDirFor(provider, ref, mode)
 	if err != nil {
 		return nil, err
 	}
-	dir := ws.ExistingDir
-	if mode == AccessWrite {
-		if ws.ActiveDir == "" || ws.ActiveDir != ws.ExistingDir {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("WorktreeMissing: session worktree is not on disk"))
-		}
-		dir = ws.ActiveDir
-	}
-	if dir == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("session has no working directory"))
-	}
 	root, err := OpenWorktreeRoot(dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, connect.NewError(connect.CodeNotFound, errors.New("working directory not found"))
-		}
-		return nil, connect.NewError(connect.CodeInternal, errors.New("failed to open working directory"))
+		return nil, openRootError(err)
 	}
-	rel := ref.Path
-	if rel == "" {
-		rel = "."
-	}
-	resolved, viaLink, err := resolveInWorktreeLinks(root, rel, mode)
+	resolved, viaLink, err := resolveInWorktreeLinks(root, refPathOrDot(ref), mode)
 	if err != nil {
 		_ = root.Close()
 		return nil, err
@@ -254,8 +241,46 @@ func resolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileR
 	return &resolvedRequest{Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
 }
 
+// workspaceDirFor looks up the session's workspace and picks the directory for mode.
+func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (session.Workspace, string, error) {
+	if ref.SessionID == "" {
+		return session.Workspace{}, "", connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
+	}
+	ws, err := provider.GetWorkspace(ref.SessionID)
+	if err != nil {
+		return session.Workspace{}, "", err
+	}
+	dir := ws.ExistingDir
+	if mode == AccessWrite {
+		if ws.ActiveDir == "" || ws.ActiveDir != ws.ExistingDir {
+			return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("WorktreeMissing: session worktree is not on disk"))
+		}
+		dir = ws.ActiveDir
+	}
+	if dir == "" {
+		return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("session has no working directory"))
+	}
+	return ws, dir, nil
+}
+
+func openRootError(err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return connect.NewError(connect.CodeNotFound, errors.New("working directory not found"))
+	}
+	return connect.NewError(connect.CodeInternal, errors.New("failed to open working directory"))
+}
+
+func refPathOrDot(ref FileRef) string {
+	if ref.Path == "" {
+		return "."
+	}
+	return ref.Path
+}
+
 // FS returns an fs.FS rooted at the worktree for walking; it cannot follow a link out of the root.
 func (w *WorktreeRoot) FS() fs.FS { return w.root.FS() }
+
+func (w *WorktreeRoot) lstatRel(rel string) (os.FileInfo, error) { return w.root.Lstat(rel) }
 
 // Readlink reads a symlink's raw target (metadata only) through the root.
 func (w *WorktreeRoot) Readlink(rel string) (string, error) { return w.root.Readlink(rel) }
