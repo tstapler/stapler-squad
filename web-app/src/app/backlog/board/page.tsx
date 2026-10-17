@@ -42,11 +42,12 @@ function BacklogBoardPageInner() {
   // Shared filter state with the list view (AC 3, 4) — same localStorage
   // keys via useBacklogFilters. Sort/group-by remain list-only (AC 6).
   const filterState = useBacklogFilters();
-  const { search, statusFilter, priorityFilter, showArchived } = filterState.state;
+  const { search, statusFilter, priorityFilter, sourceFilter, showArchived } = filterState.state;
   const {
     search: setSearch,
     statusFilter: setStatusFilter,
     priorityFilter: setPriorityFilter,
+    sourceFilter: setSourceFilter,
     showArchived: setShowArchived,
   } = filterState.setters;
   const resetView = filterState.resetToDefaults;
@@ -140,6 +141,8 @@ function BacklogBoardPageInner() {
         onStatusFilterChange={setStatusFilter}
         priorityFilter={priorityFilter}
         onPriorityFilterChange={setPriorityFilter}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
         showArchived={showArchived}
         onShowArchivedChange={setShowArchived}
         onResetView={resetView}
@@ -153,7 +156,7 @@ function BacklogBoardPageInner() {
           pending={pending}
           stuckItems={stuckItems}
           foreignClaims={foreignClaims}
-          filters={{ search, statusFilter, priorityFilter, showArchived }}
+          filters={{ search, statusFilter, priorityFilter, sourceFilter, showArchived }}
         />
         {selectedItemId && (
           <aside className={styles.detailPane} aria-label="Item detail">

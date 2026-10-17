@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/pricing"
 	"github.com/tstapler/stapler-squad/session/scanbuf"
 )
 
@@ -150,6 +151,9 @@ func (p *Parser) processAssistantEntry(entry jsonlEntry, result *ParseResult, mo
 
 	turn := TurnStats{
 		Model: msg.Model,
+	}
+	if msg.Usage != nil && msg.Usage.Speed != "standard" {
+		turn.Speed = pricing.Speed(msg.Usage.Speed)
 	}
 
 	// Parse timestamp from outer entry.

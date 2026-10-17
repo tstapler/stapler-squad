@@ -90,6 +90,28 @@ func unchangedRetriageSkipReason(item *session.BacklogItemData, sessions []sessi
 	return "title, description and criteria are unchanged since the last completed triage"
 }
 
+// IsRetriagePointless implements session.TriageRespawner (crossing the
+// session/server-services package boundary the same way IsTriageLive does):
+// it reports whether itemID would hit unchangedRetriageSkipReason right now,
+// so session.BacklogLifecycleListener's orphaned-triage reconciler can treat it
+// as a deterministic dead end — see TriageRespawner's doc comment for why that
+// matters. Best-effort: a lookup failure returns false (not pointless) rather
+// than block the retry, matching this file's other skip checks' fail-open style.
+func (s *BacklogService) IsRetriagePointless(ctx context.Context, itemID string) bool {
+	if s.storage == nil {
+		return false
+	}
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return false
+	}
+	sessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		return false
+	}
+	return unchangedRetriageSkipReason(item, sessions) != ""
+}
+
 // recordTriageSkip makes a skip visible on the item (activity note) and in the log.
 // Idempotent: the orphan sweeper can re-reach the same skip every tick, so an identical
 // latest gate note is not repeated.

@@ -25,6 +25,35 @@ loop (`session/backlog_sync.go`), not a CLI verb. This plan follows the
 existing plugin architecture instead of inventing a CLI surface — see
 `research/existing-patterns.md` for the full comparison once written.
 
+## Target user and evidence
+
+The originating request (GitHub issue #51, migrated 2026-04-09, labeled `p1`)
+is itself the only concrete evidence of demand available in this repo — there
+is no ticket count, quoted user, or usage log showing anyone has hit this gap
+in practice. Named target user: **a stapler-squad operator whose team's
+tracker of record is Linear or JIRA rather than GitHub Issues** — the same
+persona the existing `GitHubIssuesPlugin` already serves, just on a different
+tracker. This is a real but unvalidated assumption; see Risky Assumption
+below.
+
+**Risky assumption**: that a stapler-squad operator whose team is on
+Linear/JIRA will actually configure an `ItemSource` for it once built, rather
+than continuing to paste ticket context into a session prompt by hand (the
+zero-integration-cost status quo). If nobody configures a Linear/JIRA source
+post-ship, the two new plugins are dead code with a maintenance cost (API
+surface drift, credential-handling security surface) and no offsetting value.
+
+**Success metrics** (falsifiable, checkable without new instrumentation):
+- At least one `ItemSource` with `plugin_id` `linear` or `jira` exists in a
+  real (non-test) `~/.stapler-squad/` config within 60 days of shipping —
+  checkable via `config.json`/backlog storage inspection, no new telemetry
+  required.
+- Zero regressions in the existing GitHub forward-sync path post-ship
+  (pre-mortem P1 #2's regression gate is the direct check for this).
+- If neither Linear nor JIRA gains a configured `ItemSource` within 60 days,
+  treat this as evidence the risky assumption above was wrong and do not
+  invest further (e.g. Asana/Trello) without new demand evidence.
+
 ## Goals
 
 1. Linear and JIRA are sourceable as backlog items through the same

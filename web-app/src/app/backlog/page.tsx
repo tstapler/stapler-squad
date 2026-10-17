@@ -52,6 +52,7 @@ interface BacklogViewState {
   search: string;
   statusFilter: BacklogItemStatus[];
   priorityFilter: number[];
+  sourceFilter: string[];
   showArchived: boolean;
   sortCol: SortColumn;
   sortAsc: boolean;
@@ -254,6 +255,7 @@ function BacklogPageInner() {
     search,
     statusFilter,
     priorityFilter,
+    sourceFilter,
     // showArchived: archived items are excluded client-side by default (Epic
     // 5.1 — see filteredItems below); enabling this reveals them from the
     // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
@@ -266,6 +268,7 @@ function BacklogPageInner() {
     search: setSearch,
     statusFilter: setStatusFilter,
     priorityFilter: setPriorityFilter,
+    sourceFilter: setSourceFilter,
     showArchived: setShowArchived,
     sortCol: setSortCol,
     sortAsc: setSortAsc,
@@ -347,8 +350,8 @@ function BacklogPageInner() {
   // mirroring what the server-side listBacklogItems filter used to do before
   // this page moved to the shared live stream (design/ux.md Surface 1).
   const filteredItems = useMemo(
-    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, showArchived }),
-    [items, search, statusFilter, priorityFilter, showArchived],
+    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, sourceFilter, showArchived }),
+    [items, search, statusFilter, priorityFilter, sourceFilter, showArchived],
   );
 
   // Epic 6.3 (backlog-event-driven-updates): when an item's fields change
@@ -718,6 +721,8 @@ function BacklogPageInner() {
         onStatusFilterChange={setStatusFilter}
         priorityFilter={priorityFilter}
         onPriorityFilterChange={setPriorityFilter}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
         showArchived={showArchived}
         onShowArchivedChange={setShowArchived}
         onResetView={resetViewState}

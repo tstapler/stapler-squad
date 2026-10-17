@@ -3438,17 +3438,37 @@ func TestSpawnSessionFromItem_should_Refuse_When_WronglyTombstonedSessionIsConfi
 	assert.Len(t, creator.calls, 1, "no duplicate work session may be spawned while the original is confirmed live — only the initial spawn from spawnReadyItemWithActiveWorkSession should be recorded")
 }
 
+// endWorkSessionRoundsThrough ends the item's current (round 1) work session, then creates
+// and ends further historical work-session rounds 2..throughRound — shared by the rework-cap
+// tests below that each need several dead historical rounds already on record.
+func endWorkSessionRoundsThrough(t *testing.T, storage *session.Storage, ctx context.Context, itemID string, throughRound int) {
+	t.Helper()
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
+
+	for i := 2; i <= throughRound; i++ {
+		is, createErr := storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      itemID,
+			SessionUUID: fmt.Sprintf("round-%d-uuid", i),
+			SessionRole: session.SessionRoleWork,
+		})
+		require.NoError(t, createErr)
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
+}
+
 // TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds
 // is AC2's (1-indexed AC3) regression test: the concurrent-liveness cap must
 // find and block on the ONE confirmed-live session among many historical
 // rework rounds, independent of how many rounds exist. reworkCap
-// (effectiveReworkCap) is a historical-attempt-count cap enforced only by the
-// Auto* respawn paths (AutoReopenAfterFailedReview et al.) — SpawnSessionFromItem
-// itself never consults it (see effectiveReworkCap's four call sites, none in
-// spawnSessionAfterGates) — so this test calls SpawnSessionFromItem directly
-// with five historical rounds (well beyond any typical rework cap) to prove
-// the concurrent-liveness block fires independent of that mechanism entirely,
-// not merely under a cap it happens not to hit.
+// (effectiveReworkCap) is checked at spawnSessionAfterGates' 8b3 gate, but only
+// AFTER the active/live-session guards (8b/8b2/8b Jules) — a currently-live session
+// is the real blocker and must be reported as such, not masked by a cap message — so
+// this test calls SpawnSessionFromItem directly with five historical rounds (at the
+// default cap) to prove the concurrent-liveness block still wins over the cap when
+// both conditions are true at once.
 func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds(t *testing.T) {
 	t.Parallel()
 	storage := createTestStorage(t)
@@ -3458,27 +3478,11 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 	svc.SetSessionStopper(stopper)
 	ctx := t.Context()
 
-	itemID, round1UUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	itemID, _ := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
 
-	// Round 1 (the initial spawn) ends normally.
-	sessions, err := storage.ListItemSessions(ctx, itemID)
-	require.NoError(t, err)
-	require.Len(t, sessions, 1)
-	require.NoError(t, storage.UpdateItemSessionEnded(ctx, sessions[0].ID, time.Now()))
-	require.False(t, stopper.liveUUIDs[round1UUID], "round 1 must not be live")
-
-	// Rounds 2-4: further historical rework rounds, all ended normally and
-	// all genuinely dead — noise the cap must see through to find the one
-	// live round among several.
-	for i := 2; i <= 4; i++ {
-		is, createErr := storage.CreateItemSession(ctx, session.ItemSessionData{
-			ItemID:      itemID,
-			SessionUUID: fmt.Sprintf("round-%d-uuid", i),
-			SessionRole: session.SessionRoleWork,
-		})
-		require.NoError(t, createErr)
-		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
-	}
+	// Rounds 1-4: historical rework rounds, all ended normally and all genuinely
+	// dead — noise the cap must see through to find the one live round among several.
+	endWorkSessionRoundsThrough(t, storage, ctx, itemID, 4)
 
 	// Round 5: the current round, wrongly tombstoned in the DB but confirmed
 	// live via tmux/process truth — same shape as
@@ -3508,6 +3512,49 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 	assert.Contains(t, err.Error(), round5UUID, "the error must name the actually-live round, not an arbitrary or earlier one")
 	assert.NotContains(t, strings.ToLower(err.Error()), "cap", "the block must come from the concurrent-liveness check, not a rework-cap message")
 	assert.Len(t, creator.calls, 1, "no duplicate work session may be spawned while any round is confirmed live")
+}
+
+// TestSpawnSessionFromItem_should_RefuseWithReworkCapError_When_WorkSessionCountAtCap pins
+// the fix for item 9dd2793e: effectiveReworkCap used to be checked only by
+// AutoReopenAfterFailedReview/AutoRespawnAutonomousWork before they called into this
+// function — a direct SpawnSessionFromItem call (e.g. a manual "Reopen for Revision") bypassed
+// it entirely, letting the item's work-session count climb past the cap with no rework_cap row
+// ever recorded. Five ended, non-live work-session rounds (the default cap) must now block a
+// 6th spawn with a clear rework-cap error and the same durable row/notification
+// notifyReworkCapHit's other two call sites already produce.
+func TestSpawnSessionFromItem_should_RefuseWithReworkCapError_When_WorkSessionCountAtCap(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
+	ctx := t.Context()
+
+	itemID, _ := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	// Rounds 1-5: all ended normally and all genuinely dead, bringing the total to the
+	// default cap (5) with none confirmed live.
+	endWorkSessionRoundsThrough(t, storage, ctx, itemID, 5)
+
+	allSessions, err := storage.ListItemSessions(ctx, itemID)
+	require.NoError(t, err)
+	require.Len(t, allSessions, 5, "five historical work-session rounds (the default cap) must be on record")
+
+	_, err = svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "a 6th round must be refused once the work-session count reaches the cap")
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, strings.ToLower(err.Error()), "rework cap")
+	assert.Len(t, creator.calls, 1, "no 6th work session may be spawned past the cap")
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	var found bool
+	for _, row := range open {
+		if row.ItemID == itemID && row.Reason == domain.StuckReasonReworkCap {
+			found = true
+		}
+	}
+	assert.True(t, found, "hitting the cap at the shared spawn gate must still record a rework_cap stuck row")
 }
 
 // TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession

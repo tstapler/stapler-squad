@@ -2087,14 +2087,26 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 //	abandoned_review   -> anchor {review}               resolve when status not in anchor
 //	stale_work         -> anchor {in_progress}          resolve when status not in anchor
 //	bouncing           -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
+//	autonomous_stuck   -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
 //	orphaned_triage    -> anchor {idea}                 resolve when status not in anchor
 //
-// autonomous_stuck, push_failed, and rework_cap have no non-terminal anchor
-// at all — before the item reaches done/archived they stay open, relying
-// entirely on the blanket terminal rule above (or, for autonomous_stuck and
-// push_failed, their own faster event-driven resolution paths — see
-// resolveAutonomousStuck in server/services/autonomous_orchestration_service.go
-// and resolveToPRPending respectively — which typically resolve the row
+// autonomous_stuck shares bouncing's two-status anchor rather than a single
+// {in_progress} one: onAutonomousDriverComplete's SessionRoleWork turn-cap-stop
+// path can force an in_progress->review transition while the item is still
+// genuinely stuck (the exact false-resolve risk the original PR #200
+// investigation ruled out for a naive {in_progress} anchor — see below), so
+// review has to stay IN the anchor, not outside it, for the same reason
+// bouncing already treats it that way. Added here because resolveAutonomousStuck's
+// point-of-success call (server/services/autonomous_orchestration_service.go) and
+// the blanket terminal rule above only cover two of the row's actual close paths —
+// confirmed live on item a0fb3466: its autonomous_stuck row stayed open after the
+// item cycled all the way back to "ready" (via its abandoned_review resolving,
+// not a driver success), a transition neither of those two paths observes.
+//
+// push_failed and rework_cap have no non-terminal anchor at all — before the
+// item reaches done/archived they stay open, relying entirely on the blanket
+// terminal rule above (or, for push_failed, its own faster event-driven
+// resolution path — see resolveToPRPending — which typically resolves the row
 // before this sweep's next tick even runs). Any future StuckReason added
 // without an explicit case here behaves the same way: excluded from
 // non-terminal anchoring, covered by the blanket rule once the item finishes.
@@ -2159,6 +2171,15 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			// transition that bypasses reconcileBouncingItems' explicit
 			// resolve-alongside-bouncing call sites above.
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonAutonomousStuck:
+			// Shares bouncing's two-status anchor, not a single {in_progress}
+			// one — see this function's doc comment for why review must stay
+			// IN the anchor (a turn-cap-stop can force in_progress->review
+			// while genuinely still stuck) and for the live item (a0fb3466)
+			// this backstops: a row left open after the item cycled all the
+			// way back to "ready" through a path resolveAutonomousStuck's
+			// point-of-success call never observes.
+			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			// Generalized 2026-08-03 to also anchor at queued (see
 			// reconcileOrphanedTriageItems' doc comment): a retry that
@@ -2179,9 +2200,9 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			// else-branch (same-status, invisible to this sweep).
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		default:
-			// autonomous_stuck, push_failed, rework_cap, multiple_reasons, and
-			// any future reason with no non-terminal anchor: stays open until
-			// the blanket terminal rule above catches it, or its own
+			// push_failed, rework_cap, multiple_reasons, and any future
+			// reason with no non-terminal anchor: stays open until the
+			// blanket terminal rule above catches it, or its own
 			// event-site resolves it first. multiple_reasons specifically is
 			// resolved by its own detector (reconcileMultiReasonEscalation's
 			// de-escalate branch), not a status-anchor case here — its

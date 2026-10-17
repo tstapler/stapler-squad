@@ -1,0 +1,15 @@
+{
+  "id": "session:save-bundle",
+  "type": "backend",
+  "service": "SessionBundleService",
+  "method": "SaveSessionBundle",
+  "protoFile": "proto/session/v1/rum_bundle.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_bundle_service.go",
+  "tested": true,
+  "testIds": [
+    "TestSaveSessionBundle_WritesFileAndHash",
+    "TestRunDiagnosticsRetention_PrunesOldFiles"
+  ],
+  "lastModified": "2026-10-16T12:42:44.51953433-07:00"
+}
