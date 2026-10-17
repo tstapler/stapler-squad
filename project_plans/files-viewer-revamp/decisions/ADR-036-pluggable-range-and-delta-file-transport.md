@@ -66,10 +66,41 @@ Tests: `server/services/transport_spike_test.go` (`go test ./server/services -ru
   | 1 MiB real Go source | 1,110,024 | 292,029 (0.263) | 4.01 ms | 46.70 ms |
   | 128 KiB repetitive words (best case) | 134,343 | 1,334 (0.010) | 0.57 ms | 0.88 ms |
   | 1 MiB repetitive words (best case) | 1,074,527 | 6,801 (0.006) | 2.35 ms | 6.61 ms |
-  Real source compresses to about 26-28 percent of identity; the repetitive samples are a ceiling, not a typical case. Server CPU cost of default gzip is about 40 ms per 1 MiB response on this host (the median gap above), so a 64-window ring of 128 KiB windows costs about 6 ms each.
+  Real source compresses to about 26-28 percent of identity; the repetitive samples are a ceiling, not a typical case. Server CPU cost of default gzip is about 40 ms per 1 MiB response on this host (the median gap above), so a 128 KiB window costs about 6.6 ms extra.
 - **Decision (evidence-backed, recommended): Connect-level gzip as is.** Range responses need no per-RPC compression setting and the `/api/` bypass in `Compress` stays untouched. Revisit only if a measurement on the phone path shows gzip CPU on the server, not bandwidth, as the bottleneck (then a `connect.WithCompressMinBytes` threshold is the lever).
 - **WebSocket path (`StreamingWSBridge`, gorilla/websocket, `connectrpc_websocket.go:94`):** the production `wsUpgrader` does not set `EnableCompression`, so a client offering `permessage-deflate` gets no `Sec-WebSocket-Extensions` header back (test `TestTransportSpike_WebSocket_ShouldReportPermessageDeflateNegotiation`: production `""`, with `EnableCompression: true` `"permessage-deflate; server_no_context_takeover; client_no_context_takeover"`). Library availability is therefore VERIFIED, enablement is a one-field change, and no range traffic rides the WS bridge in the current design (range reads are unary on the Connect adapter), so it stays off.
 - **PENDING-OWNER: the phone/LAN/Tailscale leg of S-T1** (response size on the wire and latency from the phone over `:62872`) is not measured here; the Go numbers above predict the same bytes. The jest half (Task 0.1.7a web) is owned by another worker.
+
+### S-T2 index/hash/splice throughput and the 64 MiB scan (Task 0.1.7b; 2026-10-16)
+Host: AMD Ryzen 9 7900X (24 threads), 61 GB RAM, Linux 6.6, Go 1.26.6, files on NVMe btrfs (`/home`), page cache warm, 3 iterations per case (`-benchtime 3x`; the timing noise at this count is visible in the 1 MB rows). Command: `TMPDIR=$HOME/.cache/ssq-bench-tmp go test -bench 'BenchmarkTransport|BenchmarkScan64' -run '^$' -benchmem -benchtime 3x ./server/services &` (run in the background and waited on); code `server/services/transport_bench_test.go`, with prototype correctness pinned by `TestTransportSpike_SpliceAndIndex_ShouldMatchInMemoryOracle` (PASS). Files: deterministic seed 42 in three shapes: LF (60-char lines), CRLF (60-char lines), and `long200` (200-char lines). The index is sparse (one offset per 1,024 lines) with a 1 MiB read buffer.
+
+Single-pass index + sha256 (ns/op, MB/s, B/op; allocs/op 6-18):
+| shape | 1 MB | 16 MB | 64 MB | 256 MB |
+|---|---|---|---|---|
+| LF | 1.23 ms, 854 MB/s | 12.4 ms, 1357 MB/s | 53.6 ms, 1252 MB/s | 209 ms, 1283 MB/s |
+| CRLF | 1.14 ms, 921 MB/s | 12.0 ms, 1394 MB/s | 48.9 ms, 1372 MB/s | 203 ms, 1323 MB/s |
+| long200 | 0.72 ms, 1465 MB/s | 12.3 ms, 1363 MB/s | 47.2 ms, 1422 MB/s | 188 ms, 1429 MB/s |
+`B/op` is flat at 1.05-1.18 MB for every size (the read buffer plus the sparse index): memory does not grow with file size.
+
+Streaming splice (read old, write prefix, insert 100 bytes, skip 10, write suffix to a temp file in the same directory, `fsync`, hash old and new in the same pass; `B/op` 1.05-1.06 MB, 20-22 allocs for every size):
+| shape | 1 MB | 16 MB | 64 MB | 256 MB |
+|---|---|---|---|---|
+| LF | 12.3 ms, 85 MB/s | 49.2 ms, 341 MB/s | 193 ms, 348 MB/s | 626 ms, 429 MB/s |
+| CRLF | 13.3 ms, 79 MB/s | 47.9 ms, 350 MB/s | 160 ms, 420 MB/s | 661 ms, 406 MB/s |
+| long200 | 12.5 ms, 84 MB/s | 49.7 ms, 338 MB/s | 165 ms, 408 MB/s | 619 ms, 434 MB/s |
+The 1 MB rows are dominated by the temp-file `fsync` (about 12 ms on this btrfs volume), not by copying or hashing. Temp-file and free-space behavior: the temp file lives in the target's directory and needs free space equal to the new file's size on top of the original (peak about 2x); it is removed on success (rename consumes it) and on any error through `defer os.Remove` (the oracle test finds exactly one directory entry after a splice). ENOSPC mid-splice was not injected here (UNVERIFIED; the conformance suite's in-memory `FileBackend` covers it per validation.md).
+
+64 MiB literal scan with the per-file cap lifted (the Task 0.1.2b prototype scanner; `BenchmarkScan64MiB`):
+| scanner | ns/op | MB/s | B/op |
+|---|---|---|---|
+| read whole file + `regexp` | 43.5 ms | 1,543 | 67,121,589 |
+| stream 1 MiB chunks + `bytes.Count` | 17.7 ms | 3,795 | 1,056,962 |
+
+**Constants (confirm / replace):**
+- `hash_cap_bytes` = 64 MiB: **confirmed.** Hashing plus indexing 64 MB costs about 50 ms and a 64 MB splice with fsync about 160-190 ms on this host, so neither is binding; the cap is a policy and memory-safety line, not a throughput one. Hash throughput scales with CPU SHA extensions: slower hosts (older laptops, the work macOS machine, a Pi-class host) are UNMEASURED; a 5x slower host would still index+hash 64 MiB in about 0.25 s.
+- Read ceiling = 1 GiB: **confirmed as proposed, with an INFERRED cost.** Extrapolating the linear 256 MB rows (about 1.3 GB/s) gives roughly 0.8 s to index a 1 GiB file warm and 2.5 s to splice it, both measured only up to 256 MB. Windowed reads themselves are O(window). Because the analysis pass is paid once per file and then cached by token, 1 GiB stays acceptable, but cold-cache disk throughput is not measured here.
+- Scan: **replace the whole-file read with streaming for any file above the old per-file cap.** Reading a 64 MiB file whole costs 64 MiB of heap per worker (67 MB/op; 24 parallel workers could pin 1.6 GB), against 1 MB/op streaming, and streaming is also 2.5x faster here. Proposed scan constants for the Story 1.1 implementation: stream files up to 64 MiB (about 20-45 ms each warm); skip larger files with a counted "too large" outcome unless `IncludeIgnored`-style opt-in is added. UNVERIFIED on a cold cache.
+- **PENDING-OWNER: the phone/LAN leg of S-T1** (on-the-wire range response from the phone over `:62872` or Tailscale) remains unmeasured; S-T2 is host-only by nature and does not need the phone.
 
 ## Editor engine (added 2026-10-16 after owner decision: the engine is not fixed)
 Full comparison: `research/transport.md` section 11. Evidence limits: `web-app/package.json` VERIFIED to carry CodeMirror 6, `@lezer/highlight`, `@monaco-editor/react` + `monaco-editor` (used by `web-app/src/app/config/ConfigPageContent.tsx:8`) and `@xterm/*`; `node_modules` is absent in this worktree so engine behavior is INFERRED from public APIs until extended Spike S-T3 runs.

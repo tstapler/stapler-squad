@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"io"
 	"math/rand"
 	"net/http"
@@ -157,4 +158,30 @@ func TestTransportSpike_WebSocket_ShouldReportPermessageDeflateNegotiation(t *te
 	t.Logf("production wsUpgrader: Sec-WebSocket-Extensions=%q; with EnableCompression: %q", prod, enabled)
 	require.Empty(t, prod, "production upgrader does not enable permessage-deflate")
 	require.Contains(t, enabled, "permessage-deflate")
+}
+
+// The S-T2 prototypes must be right before their speed means anything.
+func TestTransportSpike_SpliceAndIndex_ShouldMatchInMemoryOracle(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	old := bytes.Repeat([]byte("line of text\n"), 5000)
+	require.NoError(t, os.WriteFile(src, old, 0o644))
+
+	sum, lines, index, err := indexAndHash(bytes.NewReader(old))
+	require.NoError(t, err)
+	require.Equal(t, sha256.Sum256(old), sum)
+	require.Equal(t, 5000, lines)
+	require.Len(t, index, 5000/indexEveryLine)
+	require.EqualValues(t, 13*indexEveryLine, index[0])
+
+	insert := []byte("INSERTED")
+	off, del := int64(1000), int64(20)
+	oldSum, newSum, err := splice(src, dir, off, del, insert)
+	require.NoError(t, err)
+	want := append(append(append([]byte{}, old[:off]...), insert...), old[off+del:]...)
+	require.Equal(t, sha256.Sum256(old), oldSum)
+	require.Equal(t, sha256.Sum256(want), newSum)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "temp file is removed after the splice")
 }
