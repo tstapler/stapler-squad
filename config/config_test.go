@@ -1893,7 +1893,7 @@ func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T)
 // verifies the shipped rollback-unit defaults (only units whose own A/B passed
 // are on), that absent keys keep them, and that an explicit false turns one off.
 func TestUnfinishedCachesConfig_ShouldDefaultToFlippedUnits_AndKeepConfigKeyAsOffSwitch(t *testing.T) {
-	want := UnfinishedCaches{DiffCounter: true}
+	want := UnfinishedCaches{DiffCounter: true, WatchWorktreeGitdirs: true}
 	assert.Equal(t, want, DefaultUnfinishedCaches())
 	assert.Equal(t, want, DefaultConfig().UnfinishedCaches)
 
@@ -1908,9 +1908,9 @@ func TestUnfinishedCachesConfig_ShouldDefaultToFlippedUnits_AndKeepConfigKeyAsOf
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
 	cfg, err = LoadConfigFromPath(path)
 	require.NoError(t, err)
-	assert.Equal(t, UnfinishedCaches{SharedCommitState: true, DiffCounter: true, ScanSkip: true}, cfg.UnfinishedCaches, "absent keys keep their default")
+	assert.Equal(t, UnfinishedCaches{SharedCommitState: true, DiffCounter: true, ScanSkip: true, WatchWorktreeGitdirs: true}, cfg.UnfinishedCaches, "absent keys keep their default")
 
-	content = `{"unfinished_caches": {"diff_counter": false}}`
+	content = `{"unfinished_caches": {"diff_counter": false, "watch_worktree_gitdirs": false}}`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
 	cfg, err = LoadConfigFromPath(path)
 	require.NoError(t, err)
