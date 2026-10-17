@@ -10,8 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"encoding/json"
+
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -1090,6 +1094,28 @@ func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]
 	return result, nil
 }
 
+// GetSessionArtifactsByUUID loads and parses the artifact blob for the session
+// identified by its stable UUID (not its title). Returns (nil, nil) when the
+// session exists but has no stored artifacts. Returns ErrNotFound when no
+// session with that UUID exists.
+func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.UUIDEQ(sessionUUID)).
+		Select(session.FieldSessionArtifacts).
+		Only(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetSessionArtifactsByUUID: %w", err)
+	}
+	if sess.SessionArtifacts == "" {
+		return nil, nil //nolint:nilnil // documented contract: no stored artifacts is not an error
+	}
+	var blob artifacts.SessionArtifactsBlob
+	if err := json.Unmarshal([]byte(sess.SessionArtifacts), &blob); err != nil {
+		return nil, fmt.Errorf("GetSessionArtifactsByUUID: unmarshal: %w", err)
+	}
+	return &blob, nil
+}
+
 // UpdateReviewQueueState efficiently updates only the review-queue interaction fields
 // for a session, avoiding the full read-modify-write cycle of updateFieldInRepo.
 func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error {
@@ -1947,6 +1973,47 @@ func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program
 		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
 	}
 	return convertAnalyticsEntries(entries), nil
+}
+
+// ListAnalyticsBySessionID returns up to 2000 analytics events recorded for
+// the given session UUID, ordered by created_at DESC (most-recent first).
+// The 2000-row cap prevents unbounded reads for long-lived sessions.
+func (r *EntRepository) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error) {
+	entries, err := r.client.AnalyticsEvent.Query().
+		Where(analyticsevent.SessionIDEQ(sessionID)).
+		Order(ent.Desc(analyticsevent.FieldCreatedAt)).
+		Limit(2000).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListAnalyticsBySessionID %q: %w", sessionID, err)
+	}
+	return convertAnalyticsEventEntries(entries), nil
+}
+
+// convertAnalyticsEventEntry maps a single ent.AnalyticsEvent row to AnalyticsData.
+// Fields that have no counterpart in AnalyticsEvent are left as zero values.
+func convertAnalyticsEventEntry(e *ent.AnalyticsEvent) AnalyticsData {
+	var durationMs int64
+	if e.DurationMs != nil {
+		durationMs = *e.DurationMs
+	}
+	return AnalyticsData{
+		ID:              e.ID,
+		SessionID:       e.SessionID,
+		ToolName:        e.EventName,
+		CommandCategory: e.EventCategory,
+		DurationMs:      durationMs,
+		CreatedAt:       e.CreatedAt,
+	}
+}
+
+// convertAnalyticsEventEntries maps a slice of ent.AnalyticsEvent rows to the domain model.
+func convertAnalyticsEventEntries(es []*ent.AnalyticsEvent) []AnalyticsData {
+	out := make([]AnalyticsData, len(es))
+	for i, e := range es {
+		out[i] = convertAnalyticsEventEntry(e)
+	}
+	return out
 }
 
 func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {

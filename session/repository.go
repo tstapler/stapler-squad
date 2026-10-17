@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -782,6 +783,17 @@ type ShellRepository interface {
 type InitialPromptRepository interface {
 	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
 	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
+}
+
+// BundleStorage is the narrow persistence interface SessionBundleService needs
+// to assemble a RUM session diagnostic bundle. *Storage satisfies this interface.
+type BundleStorage interface {
+	// ListAnalyticsBySessionID returns up to 2000 analytics events for the given
+	// session UUID, ordered by created_at DESC (most-recent first).
+	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error)
+	// GetSessionArtifactsByUUID returns the artifact blob for the session with
+	// the given UUID, or (nil, nil) when the session has no stored artifacts.
+	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
 }
 
 // RepositoryOption is a function that configures a repository

@@ -38,6 +38,7 @@ var notTerminalWriteReasons = map[string]string{
 
 // notTerminalWriteRPCs lists every other RPC, per service.
 var notTerminalWriteRPCs = map[string][]string{
+	"SessionBundleService": {"ExportSessionBundle", "SaveSessionBundle"}, // assemble and read a diagnostic ZIP; type nothing
 	"BacklogService": {
 		"AddBacklogItemDependency", "ApprovePlan", "ArchiveBacklogItem", "AttachSessionToItem",
 		"BulkResetStuckRemediation", "CancelTriage", "CheckCrossHostClaim", "CreateBacklogItem",

@@ -268,6 +268,9 @@ type InstanceStore interface {
 // Compile-time assertion: *Storage must satisfy InstanceStore.
 var _ InstanceStore = (*Storage)(nil)
 
+// Compile-time assertion: *Storage must satisfy BundleStorage.
+var _ BundleStorage = (*Storage)(nil)
+
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
 	repo *EntRepository
@@ -808,6 +811,13 @@ func (s *Storage) GetAllInstanceArtifacts() (map[string]string, error) {
 	return s.repo.GetAllSessionArtifacts(context.Background())
 }
 
+// GetSessionArtifactsByUUID loads and parses the artifact blob for the session
+// identified by its stable UUID. Returns (nil, nil) when the session exists but
+// has no stored artifacts.
+func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error) {
+	return s.repo.GetSessionArtifactsByUUID(ctx, sessionUUID)
+}
+
 // --- Session-first convenience methods (Task 2.5) ---
 // These delegate directly to the Repository's Session-based methods.
 // Prefer these over the deprecated InstanceData-based methods for new code.
@@ -926,6 +936,12 @@ func (s *Storage) ListRecentCommandsByProgram(ctx context.Context, program, subc
 // GetSubcommandTrend returns raw analytics rows for (program, subcommand) since a time.
 func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error) {
 	return s.repo.GetSubcommandTrend(ctx, program, subcommand, since)
+}
+
+// ListAnalyticsBySessionID returns up to 2000 analytics events for the given
+// session UUID, ordered by created_at DESC (most-recent first).
+func (s *Storage) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error) {
+	return s.repo.ListAnalyticsBySessionID(ctx, sessionID)
 }
 
 // --- Projects ---
