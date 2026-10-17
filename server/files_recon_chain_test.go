@@ -169,3 +169,34 @@ func TestReconRemoteChain_ShouldRequireAuthForFileBytesGET(t *testing.T) {
 	chain := srv.remoteChain(middleware.Auth(reconValidator{}), true)
 	assert.Equal(t, http.StatusUnauthorized, rawGet(chain, "onyx.staplerhome.internal:8444", ""), "unauthenticated /api/ GET is a 401")
 }
+
+type bigResponseStub struct {
+	sessionv1connect.UnimplementedSessionServiceHandler
+}
+
+func (bigResponseStub) GetFileContent(context.Context, *connect.Request[sessionv1.GetFileContentRequest]) (*connect.Response[sessionv1.GetFileContentResponse], error) {
+	return connect.NewResponse(&sessionv1.GetFileContentResponse{Content: strings.Repeat("func main() { println(\"hello\") }\n", 4096)}), nil
+}
+
+// S-T1: through the real localChain and remoteChain a browser's Accept-Encoding
+// yields Connect-level gzip (connect-go), while middleware.Compress stays out of /api/.
+func TestReconChains_ShouldReturnConnectLevelGzip_When_BrowserAcceptEncodingOnUnaryAPI(t *testing.T) {
+	srv, _ := newServerBase("localhost:8543")
+	t.Cleanup(srv.connCtxCancel)
+	path, h := sessionv1connect.NewSessionServiceHandler(bigResponseStub{}, ConnectOptions(nil)...)
+	srv.RegisterConnectHandler("/api"+path, http.StripPrefix("/api", h))
+	admit := func(next http.Handler) http.Handler { return next }
+	for name, chain := range map[string]http.Handler{"local": srv.localChain(), "remote": srv.remoteChain(admit, false)} {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/session.v1.SessionService/GetFileContent", strings.NewReader(`{"sessionId":"s","path":"a"}`))
+			r.Host = "localhost:8543"
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+			w := httptest.NewRecorder()
+			chain.ServeHTTP(w, r)
+			require.Equal(t, http.StatusOK, w.Code)
+			t.Logf("%s: content-encoding=%q vary=%q wire=%d bytes", name, w.Header().Get("Content-Encoding"), w.Header().Get("Vary"), w.Body.Len())
+			assert.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
+		})
+	}
+}
