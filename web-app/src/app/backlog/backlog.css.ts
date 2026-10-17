@@ -202,6 +202,7 @@ export const rowCheckbox = style({
     [`${tableRow}:focus-within &`]: { opacity: 1 },
     "&:checked": { opacity: 1 },
   },
+  "@media": { "(hover: none)": { opacity: 1 } },
 });
 
 export const rowCheckboxVisible = style({

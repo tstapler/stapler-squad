@@ -188,7 +188,7 @@ function BacklogTableRow({
         onRowClick(item.id);
       }}
       onKeyDown={(e) => {
-        if (isExiting) return;
+        if (isExiting || e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           if (isSelectMode) onToggleSelect(item.id);
@@ -670,20 +670,30 @@ function BacklogPageInner() {
   const selectedIds = useAppSelector((st) => st.backlogBulkSelection.selectedIds);
   const selectMode = useAppSelector((st) => st.backlogBulkSelection.selectMode);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  // Selection can outlive filter changes or live removals; act only on rows still visible.
+  const visibleSelectedIds = useMemo(() => {
+    const visible = new Set(sortedItems.map((i) => i.id));
+    return selectedIds.filter((id) => visible.has(id));
+  }, [selectedIds, sortedItems]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleToggleSelect = useCallback((id: string) => dispatch(toggleSelection(id)), [dispatch]);
 
   const showBulkFeedback = useCallback((msg: string) => {
+    if (!mountedRef.current) return;
     setBulkFeedback(msg);
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     feedbackTimerRef.current = setTimeout(() => setBulkFeedback(null), 4000);
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
       dispatch(clearSelection());
     };
@@ -696,17 +706,19 @@ function BacklogPageInner() {
 
   const runBulkAction = useCallback(
     async (verb: string, ids: string[], action: (id: string) => Promise<unknown>) => {
-      if (ids.length === 0 || bulkBusy) return;
+      if (ids.length === 0 || busyRef.current) return;
+      busyRef.current = true;
       setBulkBusy(true);
       try {
         const result = await runBulk(ids, action);
         showBulkFeedback(formatBulkFeedback(verb, result));
         return result;
       } finally {
-        setBulkBusy(false);
+        busyRef.current = false;
+        if (mountedRef.current) setBulkBusy(false);
       }
     },
-    [bulkBusy, showBulkFeedback]
+    [showBulkFeedback]
   );
 
   const handleArchiveDone = useCallback(
@@ -716,20 +728,27 @@ function BacklogPageInner() {
 
   const handleArchiveSelected = useCallback(async () => {
     const byId = new Map(items.map((i) => [i.id, i]));
-    const ids = selectedIds.filter((id) => {
+    const ids = visibleSelectedIds.filter((id) => {
       const it = byId.get(id);
       return it !== undefined && it.status !== "archived";
     });
+    if (ids.length === 0) {
+      showBulkFeedback("Nothing to archive");
+      dispatch(clearSelection());
+      return;
+    }
     const result = await runBulkAction("Archived", ids, archiveBacklogItem);
-    if (result && result.failed.length === 0) dispatch(clearSelection());
-    else if (result) dispatch(selectAll(result.failed));
-  }, [items, selectedIds, runBulkAction, archiveBacklogItem, dispatch]);
+    if (!result || !mountedRef.current) return;
+    if (result.failed.length === 0) dispatch(clearSelection());
+    else dispatch(selectAll(result.failed));
+  }, [items, visibleSelectedIds, runBulkAction, showBulkFeedback, archiveBacklogItem, dispatch]);
 
   const handleDeleteSelected = useCallback(async () => {
-    const result = await runBulkAction("Deleted", selectedIds, deleteBacklogItem);
-    if (result && result.failed.length > 0) dispatch(selectAll(result.failed));
+    const result = await runBulkAction("Deleted", visibleSelectedIds, deleteBacklogItem);
+    if (!result || !mountedRef.current) return;
+    if (result.failed.length > 0) dispatch(selectAll(result.failed));
     else dispatch(clearSelection());
-  }, [selectedIds, runBulkAction, deleteBacklogItem, dispatch]);
+  }, [visibleSelectedIds, runBulkAction, deleteBacklogItem, dispatch]);
 
   const renderItemRow = (item: BacklogItem) => {
     const isActive = selectedItemId === item.id;
@@ -826,7 +845,7 @@ function BacklogPageInner() {
         archiveDoneBusy={bulkBusy}
       />
       <BacklogBulkActions
-        selectedCount={selectedIds.length}
+        selectedCount={visibleSelectedIds.length}
         totalCount={sortedItems.length}
         busy={bulkBusy}
         feedback={bulkFeedback}
