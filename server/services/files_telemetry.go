@@ -17,6 +17,7 @@ const (
 	filesSearchEventName = "files.server.search"
 	filesEventCategory   = "rpc"
 
+	filesPatchEventName       = "files.server.patch"
 	filesSearchFirstEventName = "files.server.search_first_result"
 	filesPerfCategory         = "performance"
 
@@ -28,24 +29,31 @@ type FilesTelemetry interface {
 	RecordWrite(ctx context.Context, sessionID string, ev WriteOutcomeEvent)
 	RecordSearch(ctx context.Context, sessionID string, ev SearchOutcomeEvent)
 	RecordSearchFirstResult(ctx context.Context, sessionID string, ev SearchFirstResultEvent)
+	RecordPatch(ctx context.Context, sessionID string, ev PatchOutcomeEvent)
 }
 
 type (
-	WriteOutcome  string
-	WriteReason   string
-	SizeBucket    string
-	EOLLabel      string
-	BOMLabel      string
-	SearchOutcome string
-	SearchBackend string
-	CountBucket   string
-	ScaleBucket   string
+	WriteOutcome   string
+	WriteReason    string
+	SizeBucket     string
+	EOLLabel       string
+	BOMLabel       string
+	SearchOutcome  string
+	SearchBackend  string
+	CountBucket    string
+	ScaleBucket    string
+	PatchOutcome   string
+	PatchTier      string
+	TransportLabel string
+	OpsBucket      string
 )
 
 const (
 	WriteOutcomeOK               WriteOutcome = "ok"
 	WriteOutcomeConflictRejected WriteOutcome = "conflict_rejected"
 	WriteOutcomeRejected         WriteOutcome = "rejected"
+	WriteOutcomeDenied           WriteOutcome = "denied"
+	WriteOutcomeDisabled         WriteOutcome = "disabled"
 	WriteOutcomeError            WriteOutcome = "error"
 
 	WriteReasonNone            WriteReason = "none"
@@ -79,7 +87,55 @@ const (
 	SearchOutcomeBusy      SearchOutcome = "busy"
 
 	SearchBackendWalker SearchBackend = "walker"
+
+	PatchOutcomeOK              PatchOutcome = "ok"
+	PatchOutcomeConflict        PatchOutcome = "conflict"
+	PatchOutcomeOffsetMismatch  PatchOutcome = "offset_mismatch"
+	PatchOutcomeResultMismatch  PatchOutcome = "result_mismatch"
+	PatchOutcomeOutOfOrder      PatchOutcome = "out_of_order"
+	PatchOutcomeAnalysisPending PatchOutcome = "analysis_pending"
+	PatchOutcomeTooLarge        PatchOutcome = "too_large"
+	PatchOutcomeRejected        PatchOutcome = "rejected"
+	PatchOutcomeDisabled        PatchOutcome = "disabled"
+	PatchOutcomeError           PatchOutcome = "error"
+
+	PatchTierT0 PatchTier = "t0"
+	PatchTierT1 PatchTier = "t1"
+	PatchTierT2 PatchTier = "t2"
+
+	TransportFull          TransportLabel = "full"
+	TransportConnectUnary  TransportLabel = "connect_unary"
+	TransportConnectStream TransportLabel = "connect_stream"
+	TransportWSStream      TransportLabel = "ws_stream"
+	TransportHTTPRange     TransportLabel = "http_range"
 )
+
+// PatchOutcomeEvent is the labels-only record of one ApplyFilePatch call (ADR-035
+// "Transport extension"): no path, offset, line or byte-count field exists.
+type PatchOutcomeEvent struct {
+	Outcome   PatchOutcome
+	Tier      PatchTier
+	Transport TransportLabel
+	Payload   SizeBucket
+	Ops       OpsBucket
+	Duration  time.Duration
+}
+
+// BucketOps maps the number of edits in one patch to its bucket.
+func BucketOps(n int) OpsBucket {
+	switch {
+	case n <= 1:
+		return "1"
+	case n < 10:
+		return "2-9"
+	case n < 100:
+		return "10-99"
+	case n < 1000:
+		return "100-999"
+	default:
+		return "1000+"
+	}
+}
 
 // WriteOutcomeEvent is the labels-only record of one WriteFile call.
 type WriteOutcomeEvent struct {
@@ -160,6 +216,7 @@ func (noopFilesTelemetry) RecordWrite(context.Context, string, WriteOutcomeEvent
 func (noopFilesTelemetry) RecordSearch(context.Context, string, SearchOutcomeEvent) {}
 func (noopFilesTelemetry) RecordSearchFirstResult(context.Context, string, SearchFirstResultEvent) {
 }
+func (noopFilesTelemetry) RecordPatch(context.Context, string, PatchOutcomeEvent) {}
 
 // NewFilesTelemetry adapts an AnalyticsProvider; nil gives the no-op default.
 func NewFilesTelemetry(provider analytics.AnalyticsProvider) FilesTelemetry {
@@ -199,6 +256,17 @@ func (a *analyticsFilesTelemetry) RecordSearchFirstResult(ctx context.Context, s
 		EventName: filesSearchFirstEventName, EventCategory: filesPerfCategory, SessionID: sessionID,
 		DurationMs: durationMs(ev.Duration),
 		Labels:     map[string]string{"scale": string(ev.Scale)},
+	})
+}
+
+func (a *analyticsFilesTelemetry) RecordPatch(ctx context.Context, sessionID string, ev PatchOutcomeEvent) {
+	a.record(ctx, analytics.Event{
+		EventName: filesPatchEventName, EventCategory: filesEventCategory, SessionID: sessionID,
+		DurationMs: durationMs(ev.Duration),
+		Labels: map[string]string{
+			"outcome": string(ev.Outcome), "tier": string(ev.Tier), "transport": string(ev.Transport),
+			"payload": string(ev.Payload), "ops": string(ev.Ops),
+		},
 	})
 }
 

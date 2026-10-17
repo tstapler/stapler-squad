@@ -121,7 +121,7 @@ func TestFilesTelemetry_ShouldDefaultToNoop_When_NoProvider(t *testing.T) {
 }
 
 func TestFilesTelemetryEvents_ShouldHaveNoFreeFormStringField_When_ReflectedOver(t *testing.T) {
-	for _, ev := range []any{WriteOutcomeEvent{}, SearchOutcomeEvent{}} {
+	for _, ev := range []any{WriteOutcomeEvent{}, SearchOutcomeEvent{}, PatchOutcomeEvent{}} {
 		typ := reflect.TypeOf(ev)
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
@@ -142,5 +142,58 @@ func TestBuckets_ShouldMapBoundaries(t *testing.T) {
 	}
 	for n, want := range map[int]CountBucket{0: "0", 1: "1-9", 9: "1-9", 10: "10-99", 999: "100-999", 1000: "1000+"} {
 		assert.Equal(t, want, BucketCount(n), n)
+	}
+}
+
+func TestFilesTelemetry_ShouldRecordOnePatchOutcomePerCall_WithEnumLabelsOnly_And_NotAlterResponseOnError(t *testing.T) {
+	outcomes := []PatchOutcome{
+		PatchOutcomeOK, PatchOutcomeConflict, PatchOutcomeOffsetMismatch, PatchOutcomeResultMismatch,
+		PatchOutcomeOutOfOrder, PatchOutcomeAnalysisPending, PatchOutcomeTooLarge, PatchOutcomeRejected,
+		PatchOutcomeDisabled, PatchOutcomeError,
+	}
+	p := &recordingProvider{}
+	tel := NewFilesTelemetry(p)
+	for _, o := range outcomes {
+		tel.RecordPatch(context.Background(), "sess-1", PatchOutcomeEvent{
+			Outcome: o, Tier: PatchTierT1, Transport: TransportConnectUnary,
+			Payload: BucketSize(2048), Ops: BucketOps(12), Duration: 7 * time.Millisecond,
+		})
+	}
+
+	require.Len(t, p.events, len(outcomes), "exactly one event per call")
+	for i, e := range p.events {
+		assert.Equal(t, "files.server.patch", e.EventName)
+		assert.Equal(t, "rpc", e.EventCategory)
+		assert.Equal(t, "sess-1", e.SessionID)
+		require.NotNil(t, e.DurationMs)
+		assert.EqualValues(t, 7, *e.DurationMs)
+		assert.Equal(t, map[string]string{
+			"outcome": string(outcomes[i]), "tier": "t1", "transport": "connect_unary",
+			"payload": "1k-10k", "ops": "10-99",
+		}, e.Labels)
+		for k, v := range e.Labels {
+			assert.Regexp(t, labelValueShape, v, k)
+		}
+	}
+
+	t.Run("recorder error is logged at Warn and never returned", func(t *testing.T) {
+		failing := &recordingProvider{err: errors.New("db down")}
+		var logs strings.Builder
+		prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
+		NewFilesTelemetry(failing).RecordPatch(context.Background(), "s", PatchOutcomeEvent{Outcome: PatchOutcomeOK})
+		require.Len(t, failing.events, 1)
+		assert.Contains(t, logs.String(), "level=WARN")
+	})
+	t.Run("no-op default does not panic", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			NewFilesTelemetry(nil).RecordPatch(context.Background(), "s", PatchOutcomeEvent{})
+		})
+	})
+}
+
+func TestBucketOps_ShouldMapBoundaries(t *testing.T) {
+	for n, want := range map[int]OpsBucket{0: "1", 1: "1", 2: "2-9", 9: "2-9", 10: "10-99", 99: "10-99", 100: "100-999", 999: "100-999", 1000: "1000+"} {
+		assert.Equal(t, want, BucketOps(n), n)
 	}
 }
