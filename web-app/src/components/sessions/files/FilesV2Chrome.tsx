@@ -22,6 +22,11 @@ export function FilesV2Chrome({ v2, fileTreeRef, panelId }: FilesV2ChromeProps) 
   const { state } = buffers;
   const back = canGoBack(state);
   const forward = canGoForward(state);
+  const reopen = () => {
+    const top = state.closed[state.closed.length - 1];
+    buffers.reopenClosed();
+    if (top) v2.feedback.announceSuccess("reopened", top.path.slice(top.path.lastIndexOf("/") + 1));
+  };
   const closeOthers = (keep: string) => state.buffers.forEach((b) => { if (b.path !== keep) buffers.close(b.path); });
   const jumpToSymbol = (line: number) => {
     if (buffers.active) bridge.jumpTo(buffers.active.path, line, { source: "outline" });
@@ -43,7 +48,7 @@ export function FilesV2Chrome({ v2, fileTreeRef, panelId }: FilesV2ChromeProps) 
         onCloseOthers={closeOthers}
         onCopyPath={(path) => void navigator.clipboard?.writeText(path)}
         onReveal={(path) => fileTreeRef.current?.revealPath(path)}
-        onUndoEvict={buffers.reopenClosed}
+        onUndoEvict={reopen}
       />
       <div className={navRow}>
         <button type="button" className={navButton} aria-label="Back" aria-disabled={!back} title={back ? "Back (Alt+[)" : "No earlier location"} onClick={() => bridge.back("button")}>←</button>

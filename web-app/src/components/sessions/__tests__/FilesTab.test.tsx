@@ -89,5 +89,23 @@ describe("FilesTab", () => {
         delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
       }
     });
+
+    it("filesTab_should_ShowStatusBarAndRunGoToLineFromThePalette_When_ViewerV2On", async () => {
+      Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get() { return this.parentNode; } });
+      try {
+        mount({ "files:viewer-v2": true });
+        await userEvent.click(await screen.findByTestId("pick"));
+        const handle = { ...editor("a\nb\r\nc"), getCursor: () => ({ line: 3, col: 4 }) };
+        await ready(handle);
+        expect(await screen.findByText("Ln 3, Col 5")).toBeInTheDocument();
+        expect(screen.getByText("mixed")).toBeInTheDocument();
+        expect(screen.getByText("Go")).toBeInTheDocument();
+        await userEvent.keyboard("{Control>}p{/Control}");
+        await userEvent.type(await screen.findByRole("combobox", { name: "Quick open file" }), ">go to line{Enter}");
+        expect(await screen.findByRole("textbox", { name: "Go to line" })).toBeInTheDocument();
+      } finally {
+        delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
+      }
+    });
   });
 });

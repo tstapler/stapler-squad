@@ -17,6 +17,7 @@ import { TreeResizeHandle } from "./TreeResizeHandle";
 import { RecentFilesSection } from "./RecentFilesSection";
 import { QuickOpenPalette } from "./QuickOpenPalette";
 import { FilesV2Chrome } from "./files/FilesV2Chrome";
+import { FilesV2Footer } from "./files/FilesV2Footer";
 import { tabPanel } from "./files/FilesV2Chrome.css";
 import { FilesTreeToolbar } from "./FilesTreeToolbar";
 import {
@@ -255,6 +256,7 @@ function FilesTabView({
             onEditorReady={v2?.bridge.onEditorReady}
           />
         </div>
+        {v2 && <FilesV2Footer v2={v2} />}
       </div>
 
       {isQuickOpenOpen && (
@@ -262,6 +264,7 @@ function FilesTabView({
           sessionId={sessionId}
           baseUrl={baseUrl}
           recentPaths={recentPaths}
+          commands={v2?.paletteCommands}
           onSelect={(path) => {
             setIsQuickOpenOpen(false);
             handleFileSelect(path, "palette");

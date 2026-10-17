@@ -54,4 +54,18 @@ describe("useFilesShortcuts", () => {
     fireEvent.keyDown(window, { key: "p", ctrlKey: true });
     expect(h.onQuickOpen).toHaveBeenCalledTimes(1);
   });
+
+  it("filesShortcuts_should_RouteSearchAndQuickfixChords_And_IgnoreAltGr_When_FilesTabVisible", () => {
+    const h = { onSearch: jest.fn(), onNextHit: jest.fn(), onPrevHit: jest.fn(), onBack: jest.fn() };
+    render(<Probe visible handlers={h} />);
+    expect(press({ key: "F", ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(true);
+    expect(press({ key: "F4" }).defaultPrevented).toBe(true);
+    expect(press({ key: "F4", shiftKey: true }).defaultPrevented).toBe(true);
+    expect(h.onSearch).toHaveBeenCalledTimes(1);
+    expect(h.onNextHit).toHaveBeenCalledTimes(1);
+    expect(h.onPrevHit).toHaveBeenCalledTimes(1);
+    // AltGr+8 types "[" on a German layout and must not run Back.
+    expect(press({ code: "Digit8", key: "[", altKey: true, ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(h.onBack).not.toHaveBeenCalled();
+  });
 });

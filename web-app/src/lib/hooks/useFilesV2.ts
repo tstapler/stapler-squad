@@ -1,11 +1,16 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
+import type { PaletteCommand } from "@/components/sessions/QuickOpenPalette";
 import { useBufferFreshness, type StaleAction } from "./useBufferFreshness";
 import { useEditorBridge } from "./useEditorBridge";
+import { useFileTransport } from "./useFileTransport";
+import { useFilesFeedback } from "./useFilesFeedback";
 import { useOpenBuffers, type UseOpenBuffersOptions } from "./useOpenBuffers";
+import { useStatusModel } from "./useStatusModel";
 
 const RECENT_LIMIT = 8;
+const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 /** Everything the buffered (files:viewer-v2) Files tab needs, composed once so FilesTab stays a thin root. */
 export function useFilesV2(sessionId: string, sessionRunning: boolean, options: UseOpenBuffersOptions) {
@@ -15,6 +20,10 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   const { active, close } = buffers;
   const { stale, resolve } = freshness;
   const { back, forward, setOverlay, reload } = bridge;
+  const transport = useFileTransport();
+  const feedback = useFilesFeedback();
+  const status = useStatusModel(bridge);
+  const { announceSuccess, announceError } = feedback;
 
   const shortcuts = useMemo(() => ({
     onBack: () => back("keyboard"),
@@ -24,12 +33,32 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   }), [back, forward, setOverlay, active, close]);
 
   const onStaleAction = useCallback((action: StaleAction) => {
-    if (action === "reload" && stale) reload(stale.token);
+    if (action === "reload" && stale) {
+      reload(stale.token);
+      announceSuccess("reloaded", baseName(stale.path));
+    }
     resolve(action);
-  }, [stale, reload, resolve]);
+  }, [stale, reload, resolve, announceSuccess]);
+
+  // The palette's "Reload from disk": stat first so the adopted token is the one the new text carries.
+  const reloadFromDisk = useCallback(() => {
+    if (!active || active.status !== "loaded") return;
+    const { sessionId, path } = active;
+    transport.stat({ sessionId, path }).then(
+      (r) => { reload(r.token); announceSuccess("reloaded", baseName(path)); },
+      () => announceError("Could not check the file: network error"),
+    );
+  }, [active, transport, reload, announceSuccess, announceError]);
+
+  const dirty = active?.status === "loaded" && active.dirty;
+  const paletteCommands = useMemo<PaletteCommand[]>(() => [
+    { id: "goto_line", label: "Go to line", shortcut: "Ctrl+G", disabledReason: active ? undefined : "no file open", run: () => setOverlay("goto") },
+    { id: "reload", label: "Reload from disk", disabledReason: active?.status === "loaded" ? undefined : "no file open", run: reloadFromDisk },
+    { id: "save", label: "Save", shortcut: "Ctrl+S", disabledReason: dirty ? "saving is not available yet" : "no changes", run: () => undefined },
+  ], [active, dirty, setOverlay, reloadFromDisk]);
 
   const recentPaths = useMemo(() => buffers.mru.slice(0, RECENT_LIMIT), [buffers.mru]);
-  return { buffers, bridge, stale, sessionRunning, shortcuts, recentPaths, onStaleAction };
+  return { buffers, bridge, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands };
 }
 
 export type FilesV2 = ReturnType<typeof useFilesV2>;

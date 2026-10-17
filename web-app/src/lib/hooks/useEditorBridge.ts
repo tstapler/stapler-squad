@@ -116,5 +116,27 @@ export function useEditorBridge(buffers: OpenBuffers) {
     }
   }, [editor, active]);
 
-  return { onEditorReady, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
+  /** Cursor and line endings of the buffer on screen, or null while its editor is not ready. */
+  const inspect = useCallback((): { line: number; col: number; eol: "LF" | "CRLF" | "mixed" | null } | null => {
+    if (!editor || !active || editor.path !== active.path) return null;
+    try {
+      const { line, col } = editor.handle.getCursor();
+      return { line, col, eol: null };
+    } catch {
+      return null;
+    }
+  }, [editor, active]);
+  const eol = useCallback((): "LF" | "CRLF" | "mixed" | null => {
+    if (!editor || !active || editor.path !== active.path) return null;
+    try {
+      const text = editor.handle.getText();
+      const crlf = (text.match(/\r\n/g) ?? []).length;
+      if (crlf === 0) return "LF";
+      return crlf === (text.match(/\n/g) ?? []).length ? "CRLF" : "mixed";
+    } catch {
+      return null;
+    }
+  }, [editor, active]);
+
+  return { onEditorReady, inspect, eol, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type RefObject } from "react";
+import { matchChord } from "./filesChords";
 
 interface Options {
   searchInputRef: RefObject<HTMLInputElement | null>;
@@ -11,33 +12,39 @@ interface Options {
   onForward?: () => void;
   onGoToLine?: () => void;
   onCloseTab?: () => void;
+  /** Ctrl/Cmd+Shift+F: open the Search panel. */
+  onSearch?: () => void;
+  onNextHit?: () => void;
+  onPrevHit?: () => void;
 }
 
 /**
- * Files-tab chords, active only while the tab is visible (`offsetParent` is null under an inactive
- * `display: none` panel). Ctrl/Cmd+F and +P need the tree pane; Ctrl/Cmd+G go-to-line, Alt+[ / Alt+]
- * (never Alt+Left/Right, which are the browser's history keys) and Alt+W (never Ctrl+W) do not.
- * Alt chords match the physical key so Option on macOS still works.
+ * Files-tab chords (the table and matcher live in filesChords.ts), active only while the tab is visible
+ * (`offsetParent` is null under an inactive `display: none` panel). Ctrl/Cmd+F and +P need the tree pane;
+ * the rest do not. A chord with no handler is left to the browser.
  */
 export function useFilesShortcuts(options: Options): void {
   const live = useRef(options);
   live.current = options;
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const { searchInputRef, collapsed, onQuickOpen, onBack, onForward, onGoToLine, onCloseTab } = live.current;
-      const input = searchInputRef.current;
+      const o = live.current;
+      const input = o.searchInputRef.current;
       if (!input || input.offsetParent === null) return;
-      const mod = e.metaKey || e.ctrlKey;
-      let run: (() => void) | undefined;
-      if (e.altKey && !mod && !e.shiftKey) {
-        if (e.code === "BracketLeft") run = onBack;
-        else if (e.code === "BracketRight") run = onForward;
-        else if (e.code === "KeyW") run = onCloseTab;
-      } else if (mod && !e.altKey && !e.shiftKey) {
-        if (e.key === "g") run = onGoToLine;
-        else if (!collapsed && e.key === "f") run = () => input.focus();
-        else if (!collapsed && e.key === "p") run = onQuickOpen;
-      }
+      const chord = matchChord(e);
+      if (!chord) return;
+      const run: (() => void) | undefined = {
+        back: o.onBack,
+        forward: o.onForward,
+        closeTab: o.onCloseTab,
+        gotoLine: o.onGoToLine,
+        search: o.onSearch,
+        nextHit: o.onNextHit,
+        prevHit: o.onPrevHit,
+        treeFilter: o.collapsed ? undefined : () => input.focus(),
+        quickOpen: o.collapsed ? undefined : o.onQuickOpen,
+        save: undefined,
+      }[chord.id];
       if (!run) return;
       e.preventDefault();
       run();
