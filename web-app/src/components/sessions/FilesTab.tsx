@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useFilesFlags } from "@/lib/hooks/useFilesFlags";
-import { useOpenBuffers } from "@/lib/hooks/useOpenBuffers";
+import { useFilesV2, type FilesV2 } from "@/lib/hooks/useFilesV2";
+import type { OpenSource } from "@/lib/hooks/useOpenBuffers";
 import { useFilesShortcuts } from "@/lib/hooks/useFilesShortcuts";
 import { useFilesDeepLink } from "@/lib/hooks/useFilesDeepLink";
 import { FileTransportProvider } from "@/lib/hooks/useFileTransport";
@@ -15,6 +16,8 @@ import { buildGitStatusMap, buildLineStatsMap } from "@/lib/utils/gitStatus";
 import { TreeResizeHandle } from "./TreeResizeHandle";
 import { RecentFilesSection } from "./RecentFilesSection";
 import { QuickOpenPalette } from "./QuickOpenPalette";
+import { FilesV2Chrome } from "./files/FilesV2Chrome";
+import { tabPanel } from "./files/FilesV2Chrome.css";
 import { FilesTreeToolbar } from "./FilesTreeToolbar";
 import {
   container, treePane, treePaneCollapsed, contentPane, treeWrapper,
@@ -29,17 +32,22 @@ interface FilesTabProps {
   /** Path to pre-select when the tab opens (e.g. from VCS panel cross-link). */
   initialSelectedPath?: string | null;
   onSelectedPathChange?: (path: string | null) => void;
+  /** Whether the session's agent is running, for the "this may be the agent" stale-banner wording. */
+  sessionRunning?: boolean;
 }
 
 // ---- Component ----
 
 const RECENT_LIMIT = 8;
+const PANEL_ID = "files-editor-panel";
 
 /** Shared layout; where the selection and recent list come from is the caller's business. */
 interface FilesTabViewProps extends FilesTabProps {
   selectedPath: string | null;
   recentPaths: string[];
-  onOpen: (path: string) => void;
+  onOpen: (path: string, source?: OpenSource) => void;
+  /** Present only with files:viewer-v2: tabs, jumplist, outline and stale detection. */
+  v2?: FilesV2;
 }
 
 export function FilesTab(props: FilesTabProps) {
@@ -57,19 +65,19 @@ function FilesTabGate(props: FilesTabProps) {
 }
 
 /** files:viewer-v2 on: selection is the active buffer of the open-buffers reducer. */
-function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, ...rest }: FilesTabProps) {
-  const buffers = useOpenBuffers(sessionId, { initialSelectedPath, onSelectedPathChange });
-  const recentPaths = useMemo(() => buffers.mru.slice(0, RECENT_LIMIT), [buffers.mru]);
-  const { open } = buffers;
-  const onOpen = useCallback((path: string) => open(path), [open]);
+function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, sessionRunning = false, ...rest }: FilesTabProps) {
+  const v2 = useFilesV2(sessionId, sessionRunning, { initialSelectedPath, onSelectedPathChange });
+  const { open } = v2.bridge;
+  const onOpen = useCallback((path: string, source?: OpenSource) => open(path, { source }), [open]);
   return (
     <FilesTabView
       {...rest}
       sessionId={sessionId}
       initialSelectedPath={initialSelectedPath}
-      selectedPath={buffers.selectedPath}
-      recentPaths={recentPaths}
+      selectedPath={v2.buffers.selectedPath}
+      recentPaths={v2.recentPaths}
       onOpen={onOpen}
+      v2={v2}
     />
   );
 }
@@ -101,6 +109,7 @@ function FilesTabView({
   selectedPath,
   recentPaths,
   onOpen,
+  v2,
 }: FilesTabViewProps) {
   const [includeIgnored, setIncludeIgnored] = useState(false);
   const [sortBy, setSortBy] = useState<SortMode>("name");
@@ -134,16 +143,18 @@ function FilesTabView({
   const lineStatsMap = useMemo(() => buildLineStatsMap(changedFiles), [changedFiles]);
 
   const handleFileSelect = useCallback(
-    (path: string) => {
-      onOpen(path);
+    (path: string, source?: OpenSource) => {
+      onOpen(path, source);
       setMobilePane("content");
     },
     [onOpen]
   );
 
-  useFilesDeepLink(initialSelectedPath, fileTreeRef);
+  const jumpTo = v2?.bridge.jumpTo;
+  const onDeepLink = useMemo(() => jumpTo && ((path: string, line = 1) => jumpTo(path, line, { pinned: true, source: "deeplink" })), [jumpTo]);
+  useFilesDeepLink({ initialSelectedPath, tree: fileTreeRef, selectedPath, onJump: onDeepLink });
   const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
-  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen });
+  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, ...v2?.shortcuts });
 
   // Build tree pane class names
   const treePaneClasses = [
@@ -192,7 +203,7 @@ function FilesTabView({
         <RecentFilesSection
           paths={recentPaths}
           selectedPath={selectedPath}
-          onSelect={handleFileSelect}
+          onSelect={(path) => handleFileSelect(path, "recent")}
         />
         <div className={treeWrapper}>
           <FileTree
@@ -232,12 +243,17 @@ function FilesTabView({
         >
           🔍
         </button>
-        <FileContentViewer
-          sessionId={sessionId}
-          filePath={selectedPath}
-          baseUrl={baseUrl}
-          diffContent={diff?.content}
-        />
+        {v2 && <FilesV2Chrome v2={v2} fileTreeRef={fileTreeRef} panelId={PANEL_ID} />}
+        <div className={tabPanel} role={v2 ? "tabpanel" : undefined} id={PANEL_ID} aria-labelledby={v2 ? `files-tab-${v2.buffers.state.activeIndex}` : undefined}>
+          <FileContentViewer
+            sessionId={sessionId}
+            filePath={selectedPath}
+            baseUrl={baseUrl}
+            diffContent={diff?.content}
+            reloadKey={v2?.bridge.reloadKey}
+            onEditorReady={v2?.bridge.onEditorReady}
+          />
+        </div>
       </div>
 
       {isQuickOpenOpen && (
@@ -247,7 +263,7 @@ function FilesTabView({
           recentPaths={recentPaths}
           onSelect={(path) => {
             setIsQuickOpenOpen(false);
-            handleFileSelect(path);
+            handleFileSelect(path, "palette");
             fileTreeRef.current?.revealPath(path);
           }}
           onClose={() => setIsQuickOpenOpen(false)}

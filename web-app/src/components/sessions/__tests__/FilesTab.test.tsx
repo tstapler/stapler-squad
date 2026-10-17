@@ -1,8 +1,8 @@
 import React, { forwardRef, useImperativeHandle } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
-import "@/lib/files/__tests__/fixtures/mockCodeEditor";
+import { fakeCodeEditorProps } from "@/lib/files/__tests__/fixtures/mockCodeEditor";
 import { FilesTab } from "../FilesTab";
 
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
@@ -53,5 +53,41 @@ describe("FilesTab", () => {
     expect(onSelectedPathChange).toHaveBeenCalledWith("pick.go");
     expect(h.calls).not.toContain("statFile");
     expect(Object.keys(window.localStorage).filter((k) => k.startsWith("ssq.files."))).toEqual([]);
+  });
+
+  describe("navigation (viewer-v2)", () => {
+    const editor = (text: string) => ({ getText: () => text, getCursor: () => ({ line: 1, col: 0 }), gotoLine: jest.fn(), scrollSnapshot: jest.fn(), restoreScroll: jest.fn() });
+    const ready = async (handle: ReturnType<typeof editor>) => {
+      await screen.findByTestId("fake-code-editor");
+      act(() => (fakeCodeEditorProps.last?.onReady as (h: unknown) => void)(handle));
+    };
+
+    afterEach(() => window.history.replaceState(null, "", "/"));
+
+    it("filesTab_should_OpenPinnedAtLine_When_QueryDeepLinkOnLoad", async () => {
+      window.history.replaceState(null, "", "/session?file=src/main.go&line=42");
+      mount({ "files:viewer-v2": true });
+      expect(await screen.findByRole("tab", { name: "main.go, pinned" })).toBeInTheDocument();
+      const handle = editor("x");
+      await ready(handle);
+      await waitFor(() => expect(handle.gotoLine).toHaveBeenCalledWith(42));
+    });
+
+    it("filesTab_should_ClampCtrlGLine_And_DisableBackAtStart_When_FilesTabVisible", async () => {
+      Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get() { return this.parentNode; } });
+      try {
+        mount({ "files:viewer-v2": true });
+        await userEvent.click(await screen.findByTestId("pick"));
+        const handle = editor(Array.from({ length: 300 }, () => "l").join("\n"));
+        await ready(handle);
+        await userEvent.keyboard("{Control>}g{/Control}");
+        await userEvent.type(await screen.findByRole("textbox", { name: "Go to line" }), "9999{Enter}");
+        await waitFor(() => expect(handle.gotoLine).toHaveBeenLastCalledWith(300));
+        expect(screen.getByRole("tab", { name: /pick\.go/ })).toHaveAttribute("aria-selected", "true");
+        expect(screen.getByRole("button", { name: "Back" })).toHaveAttribute("aria-disabled", "true");
+      } finally {
+        delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
+      }
+    });
   });
 });

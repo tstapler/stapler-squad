@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useGetFileContent } from "@/lib/hooks/useFileService";
-import { CodeEditor } from "./CodeEditor";
+import { CodeEditor, type CodeEditorHandle } from "./CodeEditor";
 import { buildGutterMarks, type GutterMarkType } from "@/lib/utils/parseDiff";
 import {
   container, emptyState, emptyIcon, emptyHint,
@@ -75,7 +75,7 @@ const EXT_TO_LANG: Record<string, string> = {
   patch: "diff",
 };
 
-function detectLanguage(filePath: string): string {
+export function detectLanguage(filePath: string): string {
   const base = filePath.split("/").pop() || "";
   const lower = base.toLowerCase();
 
@@ -197,11 +197,15 @@ interface FileContentViewerProps {
   baseUrl: string;
   /** Raw unified diff for the whole session — used to derive gutter markers for the open file. */
   diffContent?: string;
+  /** Changes when the open file must be fetched again (stale-banner Reload). */
+  reloadKey?: number;
+  /** Called with each editor instance as it mounts, with the path it shows. */
+  onEditorReady?: (handle: CodeEditorHandle, path: string) => void;
 }
 
 // +feature: file-content-viewer
-export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }: FileContentViewerProps) {
-  const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl);
+export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, reloadKey, onEditorReady }: FileContentViewerProps) {
+  const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl, reloadKey);
   const [wrapLines, setWrapLines] = useState(false);
   const gutterMarks = useMemo(
     () => (diffContent && filePath ? buildGutterMarks(diffContent, filePath) : new Map<number, GutterMarkType>()),
@@ -352,12 +356,14 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }:
       )}
       <div className={viewer}>
         <CodeEditor
+          key={`${filePath}:${reloadKey ?? 0}`}
           content={data.content}
           language={lang}
           path={filePath}
           mode="Read"
           wrapLines={wrapLines}
           gutterMarks={hasGutterMarks ? gutterMarks : undefined}
+          onReady={onEditorReady && ((handle) => onEditorReady(handle, filePath))}
         />
       </div>
     </div>

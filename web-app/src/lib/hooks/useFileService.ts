@@ -19,6 +19,11 @@ interface FileContentCacheEntry {
 const fileContentCache = new Map<string, FileContentCacheEntry>();
 const FILE_CONTENT_CACHE_TTL_MS = 30_000;
 
+/** Drops a cached read so the next fetch hits the server (reload after an on-disk change). */
+export function invalidateFileContent(sessionId: string, filePath: string): void {
+  fileContentCache.delete(`${sessionId}:${filePath}`);
+}
+
 interface UseGetFileContentResult {
   data: GetFileContentResponse | null;
   loading: boolean;
@@ -88,7 +93,9 @@ export async function fetchFileContent(
 export function useGetFileContent(
   sessionId: string,
   filePath: string | null,
-  baseUrl: string
+  baseUrl: string,
+  /** Bump to refetch the same file; pair it with `invalidateFileContent`. */
+  reloadKey = 0
 ): UseGetFileContentResult {
   const [data, setData] = useState<GetFileContentResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -137,7 +144,7 @@ export function useGetFileContent(
           setLoading(false);
         }
       });
-  }, [sessionId, filePath, baseUrl]);
+  }, [sessionId, filePath, baseUrl, reloadKey]);
 
   return { data, loading, error };
 }
