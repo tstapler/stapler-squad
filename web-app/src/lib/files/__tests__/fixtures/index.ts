@@ -8,3 +8,5 @@ export { HARNESS_MOCKED_MODULES, findDuplicateMocks } from "./mockGuard";
 export { installJsdomLayoutShims } from "./jsdomLayout";
 export { CANARIES, LABEL_VALUE_SHAPE, MAX_LABELS, canaryLeaks, labelProblems, fixtureLabels } from "./privacyHarness";
 export { fakeClock } from "./fakeClock";
+export { createFakeTransport, fakeCapabilities, DEFAULT_OPS } from "./fakeTransport";
+export type { FakeTransport, FakeTransportOptions } from "./fakeTransport";
