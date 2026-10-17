@@ -1309,6 +1309,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("could not determine config dir for analytics DB", "err", configErr)
 	}
 
+	var filesAnalytics analytics.AnalyticsProvider = analytics.NewLogAnalyticsProvider()
+	if analyticsClient != nil {
+		filesAnalytics = analytics.NewSQLiteAnalyticsProvider(analyticsClient)
+	}
+	sessionService.GetFileService().SetTelemetry(services.NewFilesTelemetry(filesAnalytics))
+
 	// One-time startup backfill: seed durable BacklogStuckState rows (with
 	// notified_at pre-set) for items that are already stuck, so the first
 	// genuine reconcile tick does not re-notify for conditions already known

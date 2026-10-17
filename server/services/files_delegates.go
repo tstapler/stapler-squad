@@ -35,3 +35,10 @@ func (fs *FileService) GetFileTransportCapabilities(
 		Capabilities: fs.ops.Capabilities(ctx),
 	}), nil
 }
+
+// SetTelemetry wires the Files outcome port; call at startup, before serving.
+func (fs *FileService) SetTelemetry(t FilesTelemetry) {
+	if t != nil {
+		fs.ops.policy.Telemetry = t
+	}
+}

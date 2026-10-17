@@ -28,10 +28,12 @@ func (globalFilesFlags) DeltaWrite(ctx context.Context) bool { return FilesDelta
 func (globalFilesFlags) EditLarge(ctx context.Context) bool  { return FilesEditLargeEnabled(ctx) }
 
 // FilePolicy holds the collaborators every file operation shares. The hidden-session
-// guard and telemetry ports join it with their first consumer, the FileWriter (Task 2.1.2b).
+// guard joins it with its first consumer, the FileWriter (Task 2.1.2b); Telemetry is
+// held for that writer and the search handler and is not read by reads.
 type FilePolicy struct {
 	Workspace WorkspaceProvider
 	Flags     FilesFlags
+	Telemetry FilesTelemetry
 }
 
 // FileOps is the single home of file policy (confinement, flags, tokens, limits)
@@ -42,10 +44,14 @@ type FileOps struct {
 	epoch   flagEpoch
 }
 
-// NewFileOps builds FileOps over a backend; a nil Flags reads the live global flags.
+// NewFileOps builds FileOps over a backend; a nil Flags reads the live global flags
+// and a nil Telemetry records nothing.
 func NewFileOps(policy FilePolicy, backend FileBackend) *FileOps {
 	if policy.Flags == nil {
 		policy.Flags = globalFilesFlags{}
+	}
+	if policy.Telemetry == nil {
+		policy.Telemetry = noopFilesTelemetry{}
 	}
 	return &FileOps{policy: policy, backend: backend}
 }
