@@ -304,6 +304,10 @@ service SessionService {
   // Files over 10MB are rejected; files over 1MB are served truncated with is_truncated=true.
   rpc GetFileContent(GetFileContentRequest) returns (GetFileContentResponse) {}
 
+  // StatFile returns the version token, size and read-only reason of a file
+  // without its content. Reads at most the 1 MiB editable window to hash it.
+  rpc StatFile(StatFileRequest) returns (StatFileResponse) {}
+
   // SearchFiles performs a recursive name-substring search in a session's worktree.
   // Returns matching files with full relative paths for frontend tree reconstruction.
   // Results are capped at max_results (default 500). Minimum query length is 2 characters.
@@ -2334,6 +2338,65 @@ message GetFileContentResponse {
 
   // True if the file exceeded 1MB and was truncated to the first 1MB.
   bool is_truncated = 6;
+
+  // Optimistic-concurrency token "v1:<size>:<mtime_ns>:<sha256hex>". The hash
+  // segment is "-" when read_only_reason is anything but NONE.
+  string version_token = 7;
+
+  // Line endings of the on-disk file; content keeps them as read.
+  LineEnding line_ending = 8;
+
+  // True if the on-disk file starts with a UTF-8 BOM (stripped from content).
+  bool has_bom = 9;
+
+  // Why the file cannot be edited; NONE when it can.
+  ReadOnlyReason read_only_reason = 10;
+}
+
+// LineEnding is the end-of-line convention detected on read.
+enum LineEnding {
+  LINE_ENDING_UNSPECIFIED = 0;
+  LINE_ENDING_LF = 1;
+  LINE_ENDING_CRLF = 2;
+  // Both kinds, or a lone CR; such files are read-only.
+  LINE_ENDING_MIXED = 3;
+}
+
+// ReadOnlyReason explains why a file is not editable (or why an operation was refused).
+enum ReadOnlyReason {
+  READ_ONLY_REASON_UNSPECIFIED = 0;
+  READ_ONLY_REASON_NONE = 1;
+  READ_ONLY_REASON_FLAG_OFF = 2;
+  READ_ONLY_REASON_BINARY = 3;
+  READ_ONLY_REASON_TRUNCATED = 4;
+  READ_ONLY_REASON_TOO_LARGE = 5;
+  READ_ONLY_REASON_NON_UTF8 = 6;
+  READ_ONLY_REASON_MIXED_EOL = 7;
+  READ_ONLY_REASON_SYMLINK = 8;
+  READ_ONLY_REASON_WORKTREE_MISSING = 9;
+  READ_ONLY_REASON_HIDDEN_SESSION = 10;
+  READ_ONLY_REASON_GIT_INTERNAL = 11;
+  // File gone from disk; used only inside a conflict's Unavailable arm.
+  READ_ONLY_REASON_DELETED = 12;
+}
+
+// ReadOnlyReasonDetail is the typed Connect error detail attached to a refusal.
+message ReadOnlyReasonDetail {
+  ReadOnlyReason reason = 1;
+  // For SYMLINK refusals: the link's raw target string (metadata only).
+  string link_target = 2;
+}
+
+message StatFileRequest {
+  string session_id = 1;
+  // File path relative to session worktree root.
+  string path = 2;
+}
+
+message StatFileResponse {
+  string version_token = 1;
+  int64 size = 2;
+  ReadOnlyReason read_only_reason = 3;
 }
 
 message SearchFilesRequest {
