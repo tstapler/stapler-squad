@@ -110,6 +110,11 @@
   },
   "overrides": [
     {
+      "files": ["src/components/sessions/**/*.ts", "src/components/sessions/**/*.tsx", "src/lib/files/**/*.ts", "src/lib/files/**/*.tsx"],
+      "excludedFiles": ["src/lib/files/analytics/**", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": { "analytics/no-direct-files-track": "error" }
+    },
+    {
       "files": ["**/*.ts", "**/*.tsx"],
       "rules": {
         "@typescript-eslint/no-non-null-assertion": "warn",

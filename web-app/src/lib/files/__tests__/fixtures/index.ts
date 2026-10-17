@@ -6,3 +6,5 @@ export { createFakeAnalytics } from "./fakeAnalytics";
 export type { FakeAnalytics } from "./fakeAnalytics";
 export { HARNESS_MOCKED_MODULES, findDuplicateMocks } from "./mockGuard";
 export { installJsdomLayoutShims } from "./jsdomLayout";
+export { CANARIES, LABEL_VALUE_SHAPE, MAX_LABELS, canaryLeaks, labelProblems, fixtureLabels } from "./privacyHarness";
+export { fakeClock } from "./fakeClock";
