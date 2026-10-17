@@ -290,23 +290,14 @@ func (fs *FileService) GetFileContent(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
-	ws, err := fs.workspace.GetWorkspace(req.Msg.SessionId)
+	rr, err := resolveFileRequest(ctx, fs.workspace, FileRef{SessionID: req.Msg.SessionId, Path: req.Msg.Path}, AccessRead)
 	if err != nil {
 		return nil, err
 	}
-
-	basePath := ws.ExistingDir
-	if basePath == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
-	}
-
-	fullPath, err := resolveAndValidatePath(basePath, req.Msg.Path)
-	if err != nil {
-		return nil, err
-	}
+	defer func() { _ = rr.Root.Close() }()
 
 	// Stat first to get size and check existence.
-	info, statErr := os.Lstat(fullPath)
+	info, statErr := rr.Root.Lstat(rr.Resolved)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file not found: %s", req.Msg.Path))
@@ -323,12 +314,10 @@ func (fs *FileService) GetFileContent(
 
 	size := info.Size()
 
-	isText := isKnownTextFile(fullPath)
+	isText := isKnownTextFile(req.Msg.Path)
 
 	// Open file and read enough bytes for content-type detection.
-	// #nosec G304 -- fullPath was already validated above via resolveAndValidatePath,
-	// which rejects any result escaping basePath (the session's worktree).
-	f, openErr := os.Open(fullPath)
+	f, openErr := rr.Root.Open(rr.Resolved)
 	if openErr != nil {
 		if os.IsNotExist(openErr) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", req.Msg.Path))
@@ -640,6 +629,21 @@ func loadGitignorePatterns(rootPath, targetDir string) []gitignore.Pattern {
 	return patterns
 }
 
+// httpStatusForFileError maps a resolveFileRequest error to the HTTP status ServeFileRaw
+// has always used; an unclassified workspace-lookup error stays a 404 ("session not found").
+func httpStatusForFileError(err error) int {
+	switch connect.CodeOf(err) {
+	case connect.CodePermissionDenied:
+		return http.StatusForbidden
+	case connect.CodeInvalidArgument, connect.CodeFailedPrecondition:
+		return http.StatusBadRequest
+	case connect.CodeInternal:
+		return http.StatusInternalServerError
+	default:
+		return http.StatusNotFound
+	}
+}
+
 // ServeFileRaw serves a file's raw bytes over HTTP, with optional Content-Disposition
 // for browser-triggered downloads. It validates the path against the session's worktree
 // root to prevent path traversal.
@@ -659,25 +663,14 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := fs.workspace.GetWorkspace(sessionID)
+	rr, err := resolveFileRequest(r.Context(), fs.workspace, FileRef{SessionID: sessionID, Path: relPath}, AccessRead)
 	if err != nil {
-		http.Error(w, "session not found", http.StatusNotFound)
+		http.Error(w, err.Error(), httpStatusForFileError(err))
 		return
 	}
+	defer func() { _ = rr.Root.Close() }()
 
-	basePath := ws.ExistingDir
-	if basePath == "" {
-		http.Error(w, "session has no working directory", http.StatusBadRequest)
-		return
-	}
-
-	absPath, err := resolveAndValidatePath(basePath, relPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	info, err := os.Stat(absPath)
+	info, err := rr.Root.Stat(rr.Resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "file not found", http.StatusNotFound)
@@ -692,7 +685,8 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(absPath))
+	absName := filepath.Base(relPath)
+	ext := strings.ToLower(filepath.Ext(relPath))
 
 	// PDF and video are streamed by http.ServeContent without buffering — no size cap.
 	// All other binary types retain the 10 MB limit (same as GetFileContent).
@@ -703,9 +697,7 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #nosec G304 -- absPath was already validated above via resolveAndValidatePath,
-	// which rejects any result escaping basePath (the session's worktree).
-	f, err := os.Open(absPath)
+	f, err := rr.Root.Open(rr.Resolved)
 	if err != nil {
 		http.Error(w, "could not open file", http.StatusInternalServerError)
 		return
@@ -738,14 +730,14 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 	if isPDF {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		cd := mime.FormatMediaType("inline", map[string]string{
-			"filename": filepath.Base(absPath),
+			"filename": absName,
 		})
 		w.Header().Set("Content-Disposition", cd)
 	}
 
 	if download {
 		cd := mime.FormatMediaType("attachment", map[string]string{
-			"filename": filepath.Base(absPath),
+			"filename": absName,
 		})
 		w.Header().Set("Content-Disposition", cd)
 	}
@@ -780,7 +772,7 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
+	http.ServeContent(w, r, absName, info.ModTime(), f)
 }
 
 // htmlLinkAttrRe matches src/href attribute values in HTML markup, e.g. src="foo.png" or href='bar.css'.
