@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useFilesFlags } from "@/lib/hooks/useFilesFlags";
+import { useOpenBuffers } from "@/lib/hooks/useOpenBuffers";
+import { FileTransportProvider } from "@/lib/hooks/useFileTransport";
 import { FileTree } from "./FileTree";
 import type { FileTreeHandle, SortMode } from "./FileTree";
 import { FileContentViewer } from "./FileContentViewer";
@@ -29,13 +32,75 @@ interface FilesTabProps {
 
 // ---- Component ----
 
-export function FilesTab({
+const RECENT_LIMIT = 8;
+
+/** Shared layout; where the selection and recent list come from is the caller's business. */
+interface FilesTabViewProps extends FilesTabProps {
+  selectedPath: string | null;
+  recentPaths: string[];
+  onOpen: (path: string) => void;
+}
+
+export function FilesTab(props: FilesTabProps) {
+  return (
+    <FileTransportProvider>
+      <FilesTabGate {...props} />
+    </FileTransportProvider>
+  );
+}
+
+function FilesTabGate(props: FilesTabProps) {
+  const { status, viewerV2 } = useFilesFlags();
+  if (status === "loading") return <div className={container} data-testid="files-tab-skeleton" aria-busy="true" />;
+  return viewerV2 ? <BufferedFilesTab {...props} /> : <LegacyFilesTab {...props} />;
+}
+
+/** files:viewer-v2 on: selection is the active buffer of the open-buffers reducer. */
+function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, ...rest }: FilesTabProps) {
+  const buffers = useOpenBuffers(sessionId, { initialSelectedPath, onSelectedPathChange });
+  const recentPaths = useMemo(() => buffers.mru.slice(0, RECENT_LIMIT), [buffers.mru]);
+  const { open } = buffers;
+  const onOpen = useCallback((path: string) => open(path), [open]);
+  return (
+    <FilesTabView
+      {...rest}
+      sessionId={sessionId}
+      initialSelectedPath={initialSelectedPath}
+      selectedPath={buffers.selectedPath}
+      recentPaths={recentPaths}
+      onOpen={onOpen}
+    />
+  );
+}
+
+/** files:viewer-v2 off: the pre-revamp single-selection behavior. */
+function LegacyFilesTab({ initialSelectedPath, onSelectedPathChange, ...rest }: FilesTabProps) {
+  const [selectedPath, setSelectedPath] = useState<string | null>(initialSelectedPath ?? null);
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
+  const onOpen = useCallback(
+    (path: string) => {
+      setSelectedPath(path);
+      onSelectedPathChange?.(path);
+      setRecentPaths((prev) => [path, ...prev.filter((p) => p !== path)].slice(0, RECENT_LIMIT));
+    },
+    [onSelectedPathChange]
+  );
+  useEffect(() => {
+    if (initialSelectedPath !== undefined) setSelectedPath(initialSelectedPath);
+  }, [initialSelectedPath]);
+  return (
+    <FilesTabView {...rest} initialSelectedPath={initialSelectedPath} selectedPath={selectedPath} recentPaths={recentPaths} onOpen={onOpen} />
+  );
+}
+
+function FilesTabView({
   sessionId,
   baseUrl,
   initialSelectedPath,
-  onSelectedPathChange,
-}: FilesTabProps) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(initialSelectedPath ?? null);
+  selectedPath,
+  recentPaths,
+  onOpen,
+}: FilesTabViewProps) {
   const [includeIgnored, setIncludeIgnored] = useState(false);
   const [sortBy, setSortBy] = useState<SortMode>("name");
   const [filterChangedOnly, setFilterChangedOnly] = useState(false);
@@ -43,7 +108,6 @@ export function FilesTab({
   const [searchResultCount, setSearchResultCount] = useState<number | null>(null);
   const [searchResultTruncated, setSearchResultTruncated] = useState(false);
   const [mobilePane, setMobilePane] = useState<"tree" | "content">("tree");
-  const [recentPaths, setRecentPaths] = useState<string[]>([]);
   const [isQuickOpenOpen, setIsQuickOpenOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fileTreeRef = useRef<FileTreeHandle>(null);
@@ -68,26 +132,18 @@ export function FilesTab({
   const gitStatusMap = useMemo(() => buildGitStatusMap(changedFiles), [changedFiles]);
   const lineStatsMap = useMemo(() => buildLineStatsMap(changedFiles), [changedFiles]);
 
-  // Notify parent when selection changes.
   const handleFileSelect = useCallback(
     (path: string) => {
-      setSelectedPath(path);
-      onSelectedPathChange?.(path);
+      onOpen(path);
       setMobilePane("content");
-      setRecentPaths((prev) => [path, ...prev.filter((p) => p !== path)].slice(0, 8));
     },
-    [onSelectedPathChange]
+    [onOpen]
   );
 
-  // Apply initialSelectedPath changes from parent (VCS cross-link).
+  // Reveal the cross-linked path (VCS panel) in the tree.
   useEffect(() => {
-    if (initialSelectedPath !== undefined && initialSelectedPath !== selectedPath) {
-      setSelectedPath(initialSelectedPath);
-      if (initialSelectedPath) {
-        fileTreeRef.current?.revealPath(initialSelectedPath);
-      }
-    }
-  }, [initialSelectedPath]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (initialSelectedPath) fileTreeRef.current?.revealPath(initialSelectedPath);
+  }, [initialSelectedPath]);
 
   // Cmd+F / Ctrl+F focuses the search input.
   // Cmd+P / Ctrl+P opens quick open palette.

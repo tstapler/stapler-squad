@@ -1206,6 +1206,7 @@ export function SessionDetailView({
           data-active={activeTab === "files"}
         >
           <FilesTab
+            key={session.id}
             sessionId={session.id}
             baseUrl={getApiBaseUrl()}
             initialSelectedPath={filesSelectedPath}
