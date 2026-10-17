@@ -312,6 +312,11 @@ service SessionService {
   // listener serves right now. Read-only; an older server returns Unimplemented.
   rpc GetFileTransportCapabilities(GetFileTransportCapabilitiesRequest) returns (GetFileTransportCapabilitiesResponse) {}
 
+  // WriteFile atomically replaces a file in a session's worktree after verifying the
+  // caller's version token. A changed file yields a Conflict arm; every refusal is a
+  // Connect error carrying a ReadOnlyReasonDetail. Gated by the global files:editing flag.
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse) {}
+
   // SearchFiles performs a recursive name-substring search in a session's worktree.
   // Returns matching files with full relative paths for frontend tree reconstruction.
   // Results are capped at max_results (default 500). Minimum query length is 2 characters.
@@ -2471,6 +2476,49 @@ message GetFileTransportCapabilitiesRequest {
 
 message GetFileTransportCapabilitiesResponse {
   FileTransportCapabilities capabilities = 1;
+}
+
+message WriteFileRequest {
+  string session_id = 1;
+  // File path relative to the session's active directory.
+  string path = 2;
+  // New content: LF-normalized UTF-8 without BOM. The server re-applies the on-disk
+  // file's own line ending and BOM; NUL or any CR is rejected.
+  bytes content = 3;
+  // FileVersionToken of the content the edit started from.
+  string expected_token = 4;
+}
+
+// WriteFileResponse has exactly two arms; every refusal is a Connect error.
+message WriteFileResponse {
+  oneof outcome {
+    WriteFileSaved saved = 1;
+    WriteFileConflict conflict = 2;
+  }
+}
+
+message WriteFileSaved {
+  // Token of the bytes now on disk.
+  string token = 1;
+}
+
+// WriteFileConflict carries the current on-disk version when it is safe to show.
+message WriteFileConflict {
+  oneof theirs {
+    WriteFileFullText full_text = 1;
+    WriteFileUnavailable unavailable = 2;
+  }
+}
+
+message WriteFileFullText {
+  // Current disk text, LF-normalized, BOM stripped.
+  string content = 1;
+  string token = 2;
+}
+
+message WriteFileUnavailable {
+  // One of DELETED, TOO_LARGE, BINARY, NON_UTF8, MIXED_EOL, SYMLINK.
+  ReadOnlyReason reason = 1;
 }
 
 message SearchFilesRequest {
