@@ -459,7 +459,7 @@ func TestContentSearch_ShouldMatchGitCheckIgnoreOracle_WhenGeneratedRepo(t *test
 		files[p] = "needle\n"
 	}
 	dir, root := writeTree(t, files)
-	var all []string
+	all := make([]string, 0, len(files))
 	for p := range files {
 		all = append(all, p)
 	}

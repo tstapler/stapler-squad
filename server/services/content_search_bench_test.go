@@ -23,6 +23,7 @@ const (
 	benchRareQuery   = "RAREWORD-ONLY-IN-LAST-DIR" // forces a walk to the end of the tree
 	benchRareDir     = "zzz_last"                  // sorts after every generated directory
 	benchCancelAfter = 5 * time.Millisecond        // inside the first 100 ms
+	benchFiles       = 50000
 	benchSLOFirstMS  = 2000.0
 )
 
@@ -33,7 +34,7 @@ type benchResult struct {
 
 func benchFixture(b *testing.B, opts ...fixtureOption) string {
 	b.Helper()
-	dir := genFixtureTree(b, 50000, opts...)
+	dir := genFixtureTree(b, benchFiles, opts...) // only benchmarks call this helper, so no Short() guard
 	rare := filepath.Join(dir, benchRareDir)
 	if err := os.MkdirAll(rare, 0o755); err != nil {
 		b.Fatal(err)
