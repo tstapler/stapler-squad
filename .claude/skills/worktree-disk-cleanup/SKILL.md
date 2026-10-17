@@ -19,6 +19,51 @@ abandoned experiments — but naive heuristics (e.g. "no PR = delete") are
 wrong often enough that blind automation would lose real unshipped work.
 GitHub PR state is the only ground truth strong enough to auto-delete on.
 
+## Step 0 — Exclude backlog triage worktrees first, before any other check
+
+`server/services/backlog_service_trigger_triage.go`'s `TriggerTriage` creates
+a dedicated git worktree per headless SDD triage run (branch name
+`<prefix>triage-<item-id>`, path matching `*/worktrees/triage-<item-id>*`)
+purely at the git level — it has no `Instance` row, no `Worktree` ent row, and
+is therefore invisible to every one of stapler-squad's own automated sweeps
+(`session/worktree_consistency_sweep.go`, `SessionRetentionSweeper`,
+`HibernationSweeper`). **This skill is the only thing in the whole system
+that can see it, which makes it the only thing that can protect it.**
+
+"No PR ever opened" is the *expected, healthy* state for one of these, not a
+staleness signal: triage deliberately stops at committing
+`project_plans/<name>/implementation/plan.md` and leaves the backlog item
+unapproved until a human reviews the plan — a PR, and the work-session
+worktree that would carry it, don't exist yet by design, sometimes for
+months. Likely root cause (2026-10-17 investigation, inferred — no sweep
+logs survive from the relevant window to directly confirm it): this skill's
+own Step 3 guidance used to list "SDD planning artifacts" as an example of
+a *trivial* diff, which is backwards — that commit is the entire
+deliverable of the triage run, not boilerplate. Applying this skill (or the
+same heuristic, pre-dating the skill's 2026-09-15 write-up — see the
+2026-09-11 sweep noted above) to a worktree shaped like this would correctly
+observe "no PR, clean, old," then have a review agent see only a plan.md
+diff and call it trivial — matching four backlog items whose triage
+worktrees were found deleted (directory gone, branch/commits intact, since
+this skill never deletes branches) after sitting ~2 months idle with an
+unapproved plan. Every automated sweep in the Go codebase was independently
+ruled out (none of them can even see a triage worktree — see above), making
+this skill the only mechanism left that explains the symptom.
+
+Before running Step 1's inventory, or classifying any worktree in Step 2:
+- Flag any worktree whose branch matches `triage-<uuid>` (with or without a
+  configured branch prefix) or whose path contains `/worktrees/triage-`.
+- If the stapler-squad backlog API/MCP tools are reachable, look up the
+  matching backlog item (by item-id suffix of the branch/path) and check
+  its `plan_approved`/status. Route to **Keep** unconditionally if the plan
+  is unapproved or the item is still `idea`/`queued`/`ready`.
+- If the API isn't reachable, still route to **Keep** by default — the
+  presence of `project_plans/<name>/implementation/` content with no PR is
+  itself the signal, not an input to a triviality judgment. Only fall
+  through to Step 2's normal classification once a human confirms the
+  linked item's plan was approved and superseded (e.g. the work session
+  already shipped a PR off a *different* worktree).
+
 ## Step 1 — Inventory
 
 ```bash
@@ -28,7 +73,8 @@ gh pr list --repo <owner>/<repo> --state all --json number,state,headRefName,mer
 
 Parse the porcelain output into `{path, branch, head}` records (skip the
 `bare`/main entry). Cross-reference each branch against `prs.json` by
-`headRefName`.
+`headRefName`. Exclude every worktree Step 0 flagged as Keep before doing
+anything else with the remaining list.
 
 ## Step 2 — Classify each worktree
 
@@ -76,8 +122,13 @@ in parallel to make an individual call. Give each agent:
   `git log --all --grep='<commit message>'` for duplicate/superseded
   content (batch worktree-creation tooling sometimes re-does the same
   planning/setup commit across many branches under different SHAs), or
-  whether the diff is trivial (single boilerplate file, SDD planning
-  artifacts, CI experiment)
+  whether the diff is genuinely trivial boilerplate (a single
+  auto-generated scaffold file, a CI experiment with no real content).
+  **SDD planning artifacts (`project_plans/**/plan.md` and siblings) are
+  never trivial** — they are triage's actual deliverable; a worktree whose
+  only diff is one of these should already have been excluded in Step 0,
+  so seeing one here at all means Step 0's check was skipped or failed, not
+  that the content is disposable
 - Instruction to check `git status --porcelain` in the worktree itself for
   uncommitted work
 - A hard requirement to end the reply with exactly one line:
