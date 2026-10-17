@@ -768,7 +768,7 @@ func (i *Instance) claudeSettingsEnvOverrideArgs() (string, string) {
 
 // wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
 // and sets it on the instance's process manager.
-func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
+func (i *Instance) wireTmuxSession(program string) {
 	snap := i.Snapshot()
 	tmuxPrefix := snap.TmuxPrefix
 	if tmuxPrefix == "" {
@@ -776,35 +776,22 @@ func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
 	}
 
 	runner := i.executionTarget().Runner()
-	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
-			// Kills a leftover pane process before a restart so it can't race the new one.
-			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+	newTmuxSession := func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession {
+		opts := append([]tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}, extra...)
+		var session *tmux.TmuxSession
+		if snap.TmuxServerSocket != "" {
+			// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
+			session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
+				append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
+		} else {
+			session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
 		}
+		if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
+			session.SetExtraEnv(extraEnv)
+		}
+		return session
 	}
-	var session *tmux.TmuxSession
-	if snap.TmuxServerSocket != "" {
-		// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
-		session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
-			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
-	} else {
-		session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
-	}
-	if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
-		session.SetExtraEnv(extraEnv)
-	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		tb.TmuxManager().SetSession(session)
-	}
-	// Tymux has no construction-time equivalent of tmux's "bake the program
-	// into the session object" — CreateSessionRequest.Command must be set
-	// before Start() via SetCommand, or tymuxd spawns $SHELL instead of
-	// program (see tymuxGRPCSession.SetCommand's doc comment).
-	if tb, ok := i.processManager.(*TymuxBackend); ok {
-		tb.TymuxManager().SetCommand(program)
-	}
-	return session
+	i.processManager.WireLaunch(LaunchSpec{Program: program, NewTmuxSession: newTmuxSession})
 }
 
 // updateProcessManagerForRestart swaps i.processManager and persists

@@ -1,6 +1,6 @@
 # BUG-113: tymux backend never passes the target program — every session launches `$SHELL` instead [SEVERITY: High]
 
-**Status**: 🐛 Open
+**Status**: ✅ Fixed — `Start` forwards `Command` (session/tymux/session_test.go); restore and resume paths now deliver it through `ProcessManager.WireLaunch`
 **Discovered**: 2026-09-16, user report: "our implementation of the stapler-squad tymux integration doesn't start the right target program", plus a related report that streaming logs don't work.
 
 ## Problem Description

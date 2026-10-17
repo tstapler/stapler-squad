@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"os"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TmuxBackend implements ProcessManager by delegating to TmuxManager.
@@ -19,6 +21,16 @@ func NewTmuxBackend(mgr TmuxManager) *TmuxBackend {
 // TmuxManager returns the underlying TmuxManager for type assertions in
 // reconciliation paths that need tmux-specific operations (e.g. Session(), SetSession()).
 func (b *TmuxBackend) TmuxManager() TmuxManager { return b.mgr }
+
+// WireLaunch builds the tmux session for spec.Program and installs it on the manager.
+func (b *TmuxBackend) WireLaunch(spec LaunchSpec) {
+	var opts []tmux.TmuxSessionOption
+	if mgr, ok := b.mgr.(*TmuxProcessManager); ok {
+		// Kills a leftover pane process before a restart so it can't race the new one.
+		opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+	}
+	b.mgr.SetSession(spec.NewTmuxSession(opts...))
+}
 
 // GetSessionIdentifier implements ProcessManager by delegating to GetTmuxSessionName.
 // This is the name-mapping method: backend-agnostic callers use GetSessionIdentifier,

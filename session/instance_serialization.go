@@ -430,11 +430,6 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
-	// Baseline command so a RestoreWithWorkDir->Start fallback (tymuxd lost the
-	// session) never spawns a bare $SHELL; Start paths later overwrite it with the full launch command.
-	if tb, ok := pm.(*TymuxBackend); ok && instance.Program != "" {
-		tb.TymuxManager().SetCommand(instance.Program)
-	}
 
 	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
 	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(
@@ -491,14 +486,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 
 	if instance.Paused() {
 		instance.started.Store(true)
-		if _, ok := instance.processManager.(*TmuxBackend); ok {
-			instance.wireTmuxSession(instance.Program)
-		}
+		instance.wireTmuxSession(instance.Program)
 	} else if instance.Status == Stopped {
 		// Wire the tmux session object so IsAlive() can be called.
-		if _, ok := instance.processManager.(*TmuxBackend); ok {
-			instance.wireTmuxSession(instance.Program)
-		}
+		instance.wireTmuxSession(instance.Program)
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
 		// or exit callback fired falsely), recover it rather than leave it stuck as
 		// Stopped. IsAlive() alone can't see remain-on-exit: it keeps the tmux
@@ -560,9 +551,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
 		// but do NOT call Start — hibernated sessions resume only on explicit request.
-		if _, ok := instance.processManager.(*TmuxBackend); ok {
-			instance.wireTmuxSession(instance.Program)
-		}
+		instance.wireTmuxSession(instance.Program)
 		instance.started.Store(true)
 	} else if instance.Status == Crashed {
 		// Wire the tmux session object (for IsAlive checks) but do NOT call Start --
@@ -574,9 +563,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// silently auto-resuming every Crashed session on the very next server
 		// restart, exactly what the new Crashed status is designed to prevent
 		// (see session/health.go's "must not be silently respawned" comment).
-		if _, ok := instance.processManager.(*TmuxBackend); ok {
-			instance.wireTmuxSession(instance.Program)
-		}
+		instance.wireTmuxSession(instance.Program)
 		instance.started.Store(true)
 	} else {
 		// Wire the tmux session object first (mirrors the Paused/Stopped/Hibernated
@@ -587,9 +574,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
 		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
-		if _, ok := instance.processManager.(*TmuxBackend); ok {
-			instance.wireTmuxSession(instance.Program)
-		}
+		instance.wireTmuxSession(instance.Program)
 		// Raw ArchivedAt read, not IsArchived(): this runs before
 		// finishInstanceConstruction publishes the first snapshot, so
 		// Snapshot() is not populated yet. The instance is still

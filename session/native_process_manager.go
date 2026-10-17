@@ -58,6 +58,13 @@ func NewNativeProcessManager(opts ProcessManagerOptions) *NativeProcessManager {
 // compile-time check that *NativeProcessManager satisfies ProcessManager.
 var _ ProcessManager = (*NativeProcessManager)(nil)
 
+// WireLaunch sets the program Start launches.
+func (n *NativeProcessManager) WireLaunch(spec LaunchSpec) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.opts.Program = spec.Program
+}
+
 // --- Lifecycle ---
 
 // Start launches the configured program under a PTY in the given directory.

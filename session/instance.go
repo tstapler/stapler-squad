@@ -2484,13 +2484,9 @@ func (i *Instance) Resume() error {
 		}
 		program := i.buildLaunchCommand(claudeSessionID)
 		i.LaunchCommand = program
-		if _, ok := i.processManager.(*TmuxBackend); ok {
-			i.wireTmuxSession(program)
-			if claudeSessionID != "" {
-				log.Info("resume: reinitializing tmux session with --resume", "session", i.Title, "uuid", claudeSessionID)
-			}
-		} else {
-			log.Warn("resume: non-TmuxBackend process manager — --resume flag not injected", "session", i.Title)
+		i.wireTmuxSession(program)
+		if claudeSessionID != "" {
+			log.Info("resume: reinitializing session with --resume", "session", i.Title, "uuid", claudeSessionID)
 		}
 		if err := i.pm().Start(worktreePath); err != nil {
 			log.Error("failed to start new tmux session on resume", "err", err)

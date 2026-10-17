@@ -57,3 +57,27 @@ func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "claude", fake.gotCommand)
 }
+
+// wireTmuxSession must reach every backend through ProcessManager.WireLaunch; before it
+// did, Resume skipped non-tmux backends and tymux relaunched without --resume.
+func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	fake := &fakeTymuxManagerForSetCommand{}
+	inst := &Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: BackendTymux}
+	inst.processManager = NewTymuxBackend(fake)
+
+	inst.wireTmuxSession("claude --resume abc")
+
+	assert.Equal(t, "claude --resume abc", fake.gotCommand)
+}
+
+func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	mgr := &TmuxProcessManager{}
+	inst := &Instance{Title: "wire-tmux", Path: t.TempDir(), Program: "claude"}
+	inst.processManager = NewTmuxBackend(mgr)
+
+	inst.wireTmuxSession("claude")
+
+	assert.NotNil(t, mgr.Session())
+}
