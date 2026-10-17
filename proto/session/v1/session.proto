@@ -308,6 +308,10 @@ service SessionService {
   // without its content. Reads at most the 1 MiB editable window to hash it.
   rpc StatFile(StatFileRequest) returns (StatFileResponse) {}
 
+  // GetFileTransportCapabilities reports which file operations and wires this
+  // listener serves right now. Read-only; an older server returns Unimplemented.
+  rpc GetFileTransportCapabilities(GetFileTransportCapabilitiesRequest) returns (GetFileTransportCapabilitiesResponse) {}
+
   // SearchFiles performs a recursive name-substring search in a session's worktree.
   // Returns matching files with full relative paths for frontend tree reconstruction.
   // Results are capped at max_results (default 500). Minimum query length is 2 characters.
@@ -2391,12 +2395,77 @@ message StatFileRequest {
   string session_id = 1;
   // File path relative to session worktree root.
   string path = 2;
+  // Ask for whole-file analysis to be started or reported; default is the cheap path.
+  bool want_analysis = 3;
+  // Ask for the sha256 even above the cheap hashing cap.
+  bool want_sha256 = 4;
 }
 
 message StatFileResponse {
   string version_token = 1;
   int64 size = 2;
   ReadOnlyReason read_only_reason = 3;
+  // Whole-file analysis state; UNSPECIFIED on the cheap path.
+  FileAnalysisState analysis = 4;
+}
+
+enum FileAnalysisState {
+  FILE_ANALYSIS_STATE_UNSPECIFIED = 0;
+  FILE_ANALYSIS_STATE_PENDING = 1;
+  FILE_ANALYSIS_STATE_READY = 2;
+  FILE_ANALYSIS_STATE_FAILED = 3;
+}
+
+enum FileOp {
+  FILE_OP_UNSPECIFIED = 0;
+  FILE_OP_STAT = 1;
+  FILE_OP_READ_ALL = 2;
+  FILE_OP_READ_LINES = 3;
+  FILE_OP_READ_BYTES = 4;
+  FILE_OP_READ_STREAM = 5;
+  FILE_OP_PATCH = 6;
+  FILE_OP_WRITE_FULL = 7;
+}
+
+enum FileWire {
+  FILE_WIRE_UNSPECIFIED = 0;
+  FILE_WIRE_CONNECT_UNARY = 1;
+  FILE_WIRE_CONNECT_STREAM = 2;
+  FILE_WIRE_WS_STREAM = 3;
+  FILE_WIRE_HTTP_RANGE = 4;
+}
+
+message FileTransportLimits {
+  int64 max_range_bytes = 1;
+  int32 max_range_lines = 2;
+  int32 preferred_chunk_bytes = 3;
+  int32 max_patch_ops = 4;
+  int64 max_patch_body_bytes = 5;
+  int64 max_insert_bytes = 6;
+  int64 max_write_full_bytes = 7;
+  // Editable ceiling: files above this get the "-" token.
+  int64 hash_cap_bytes = 8;
+  int32 max_concurrent_ranges = 9;
+}
+
+message FileTransportCapabilities {
+  // Major version; breaking changes only.
+  uint32 protocol_version = 1;
+  // Additive feature strings; clients ignore unknown ones.
+  repeated string features = 2;
+  repeated FileOp ops = 3;
+  repeated FileWire wires = 4;
+  FileTransportLimits limits = 5;
+  // Bumps whenever a files flag changes.
+  uint64 caps_epoch = 6;
+}
+
+message GetFileTransportCapabilitiesRequest {
+  string session_id = 1;
+}
+
+message GetFileTransportCapabilitiesResponse {
+  FileTransportCapabilities capabilities = 1;
 }
 
 message SearchFilesRequest {
