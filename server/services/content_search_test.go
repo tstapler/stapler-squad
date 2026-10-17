@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -572,7 +573,7 @@ func (c *concurrencyFS) Open(name string) (fs.File, error) {
 }
 
 // peakHeapGrowth runs fn while sampling HeapAlloc every 10 ms and returns the peak
-// growth over the pre-run baseline.
+// growth over the pre-run baseline; each sample follows a GC so it reflects live data.
 func peakHeapGrowth(fn func()) uint64 {
 	runtime.GC()
 	var base runtime.MemStats
@@ -589,6 +590,7 @@ func peakHeapGrowth(fn func()) uint64 {
 			case <-stop:
 				return
 			case <-tick.C:
+				runtime.GC() // measure live memory: uncollected garbage is relative to the whole test binary's heap
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
 				if m.HeapAlloc > base.HeapAlloc && m.HeapAlloc-base.HeapAlloc > peak.Load() {
@@ -604,7 +606,13 @@ func peakHeapGrowth(fn func()) uint64 {
 }
 
 func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t *testing.T) {
-	const ceiling = 64 << 20
+	ceiling := uint64(64 << 20)
+	if raceDetectorOn() {
+		// The race runtime slows the GC so allocate-black garbage from the sampler's own
+		// cycle inflates HeapAlloc (observed 23-83 MiB on 5k files vs 2 MiB without -race),
+		// so the strict 64 MiB ceiling is only asserted in the non-race run.
+		ceiling = 192 << 20
+	}
 	sizes := []int{5000}
 	if !testing.Short() {
 		sizes = append(sizes, 50000)
@@ -620,11 +628,24 @@ func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t
 				require.NoError(t, err)
 			})
 			t.Logf("files=%d query=%q peak heap growth=%d KiB", n, q, peak/kibibyte)
-			assert.Less(t, peak, uint64(ceiling), "files=%d query=%q", n, q)
+			assert.Less(t, peak, ceiling, "files=%d query=%q", n, q)
 			peaks[n] = max(peaks[n], peak)
 		}
 	}
 	if big, ok := peaks[50000]; ok {
 		assert.Less(t, big, 5*max(peaks[5000], 8<<20), "heap must not scale with file count (no retained path list)")
 	}
+}
+
+func raceDetectorOn() bool {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return false
+	}
+	for _, s := range info.Settings {
+		if s.Key == "-race" {
+			return s.Value == "true"
+		}
+	}
+	return false
 }

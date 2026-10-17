@@ -379,7 +379,11 @@ func TestSearchContentHandler_ShouldBoundWalksAndSendQueued_WhenSixSearchesAcros
 		return n == 4
 	}, "the four later searches are told they are queued")
 	assert.EqualValues(t, 2, gs.current.Load())
-	assert.EqualValues(t, 2, runs[2].out.snapshot()[0].GetQueued().GetAhead(), "third search has both running walks ahead")
+	var aheads []int32
+	for _, r := range runs[2:] {
+		aheads = append(aheads, r.out.snapshot()[0].GetQueued().GetAhead())
+	}
+	assert.ElementsMatch(t, []int32{2, 3, 4, 5}, aheads, "each queued search counts the two running walks plus those queued before it")
 
 	runs[5].stop() // cancel while queued: never walks
 	require.Equal(t, connect.CodeCanceled, connect.CodeOf(<-runs[5].err))
