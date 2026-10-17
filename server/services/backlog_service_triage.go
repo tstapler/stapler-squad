@@ -989,6 +989,36 @@ func (s *BacklogService) spawnSessionAfterGates(
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a Jules session (%s) is already running for this item; wait for it to finish before starting a local session", activeJules.SessionUUID))
 	}
 
+	// 8b3. Rework-cap backstop, checked only once every "is something already running"
+	// guard above (8b/8b2/8b Jules) has cleared — a currently-live session is the real
+	// blocker and must be reported as such, not masked by a cap message, when both
+	// conditions happen to be true at once. AutoReopenAfterFailedReview and
+	// AutoRespawnAutonomousWork each already check effectiveReworkCap before ever
+	// calling into this function — this re-check is their "now or in the future, no
+	// matter which call site reaches this function" backstop, mirroring step 3b's
+	// identical planning-gate re-check precedent above. Without it, the cap was
+	// enforced per-caller rather than by this shared primitive: confirmed live on
+	// item 9dd2793e, whose work-session count reached a 6th round (buildRevisionTitle's
+	// "-r6" title suffix, one past the default cap of 5) with no rework_cap row ever
+	// recorded — 11 review bounces and real session cost burned past the point the cap
+	// exists to stop, through whichever call path reached here without its own check.
+	// Scoped to isReopen only: a fresh spawn from "ready" has no prior work-session
+	// history to exceed a cap against.
+	if isReopen {
+		workCount := 0
+		for _, is := range priorSessions {
+			if is.Role == session.SessionRoleWork {
+				workCount++
+			}
+		}
+		if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
+			log.Info("[spawnSessionAfterGates] hit work session cap; refusing spawn", "item", item.ID, "count", workCount, "cap", reworkCap)
+			s.notifyReworkCapHit(ctx, item.ID, item.Title, session.BacklogStatus(item.Status), "at the shared spawn gate", reworkCap)
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("item has reached its %d-round rework cap; raise the cap in Settings or via the item's rework-cap override before spawning again", reworkCap))
+		}
+	}
+
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
 	// non-default PipelineMode changes what inst.Prompt / AutonomousDriver's goal sees.
 	prompt := s.initialPromptFor(ctx, item, priorSessions)
