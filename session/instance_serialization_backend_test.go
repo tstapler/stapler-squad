@@ -81,3 +81,30 @@ func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
 
 	assert.NotNil(t, mgr.Session())
 }
+
+// deadTymuxManager reports no live session so restore branches that probe liveness don't panic.
+type deadTymuxManager struct{ fakeTymuxManagerForSetCommand }
+
+func (*deadTymuxManager) IsAlive() bool { return false }
+
+// Every persisted status takes its own branch in fromInstanceData; each must hand the
+// program to a tymux backend, or that branch regresses to a bare $SHELL (BUG-113).
+func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
+	for _, status := range []Status{Paused, Stopped, Hibernated, Crashed, Active} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+			fake := &deadTymuxManager{}
+			orig := newTymuxSessionFn
+			newTymuxSessionFn = func() tymux.TymuxManager { return fake }
+			defer func() { newTymuxSessionFn = orig }()
+			data := restoredPausedData(t, "branch-"+status.String())
+			data.Status = status
+			data.Backend = BackendTymux
+
+			_, err := FromInstanceDataDeferred(data)
+
+			require.NoError(t, err)
+			assert.Equal(t, "claude", fake.gotCommand)
+		})
+	}
+}
