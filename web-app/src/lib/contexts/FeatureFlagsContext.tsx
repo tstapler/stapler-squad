@@ -134,8 +134,9 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
+      // Re-read first: a successful fetch clears the error, and this one must outlive it.
+      await fetchFlags();
       setError("Failed to update feature flag");
-      void fetchFlags();
     }
   }, [client, fetchFlags]);
 
