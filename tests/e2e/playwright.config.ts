@@ -6,6 +6,12 @@ import { defineConfig, devices } from '@playwright/test';
  * Set TEST_SERVER_URL env var to override the target (e.g. for CI with a pre-started server).
  */
 
+// Files viewer mobile specs (and the lazy-doc/transport spikes) run in these projects as well as `chromium`.
+// Task 0.1.4b decision: WebKit ran green in the Playwright Noble image but is not yet proven on the CI runner, so
+// `mobile-chromium` (Pixel-class, 390x844, touch) is the gating mobile project and `mobile-webkit` is informational,
+// opt-in with PW_WEBKIT=1 (CI needs `npx playwright install webkit --with-deps` first).
+const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
+
 export default defineConfig({
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',
@@ -111,6 +117,20 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: 'mobile-chromium',
+      testMatch: MOBILE_SPECS,
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
+    },
+    ...(process.env.PW_WEBKIT === '1'
+      ? [
+          {
+            name: 'mobile-webkit',
+            testMatch: MOBILE_SPECS,
+            use: { ...devices['iPhone 14'] },
+          },
+        ]
+      : []),
     {
       // DOM-renderer project: disables WebGL entirely so xterm.js falls back to
       // its built-in DOM renderer.  Text content appears in real .xterm-rows > div
