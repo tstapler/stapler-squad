@@ -5,7 +5,7 @@ import {
   DESKTOP_CAP, MOBILE_CAP, bufferReducer, initialBufferState, mruPaths, selectedPath as selectedPathOf, activeBuffer,
   type BufferAction, type BufferMode, type BufferState, type FailureKind, type ReadOnlyKind, type ViewState,
 } from "@/lib/files/bufferReducer";
-import { bucketTabs } from "@/lib/files/analytics/events";
+import { bucketBytes, bucketTabs, extClass, type LabelsOf } from "@/lib/files/analytics/events";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { Rejected } from "@/lib/files/transport/fileTransport";
 import { useFileTransport } from "./useFileTransport";
@@ -60,6 +60,8 @@ function writePersisted(sessionId: string, state: BufferState): boolean {
   }
 }
 
+export type OpenSource = LabelsOf<"files.tab.open">["source"];
+
 export interface UseOpenBuffersOptions {
   initialSelectedPath?: string | null;
   onSelectedPathChange?: (path: string | null) => void;
@@ -92,6 +94,14 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
     return () => window.removeEventListener("resize", update);
   }, []);
 
+  // Where each newly opened path came from; consumed by `files.tab.open` once its stat lands.
+  const sources = useRef(new Map<string, { source: OpenSource; pinned: boolean }>());
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const noteSource = useCallback((path: string, source: OpenSource, pinned: boolean) => {
+    if (!stateRef.current.buffers.some((b) => b.path === path)) sources.current.set(path, { source, pinned });
+  }, []);
+
   // Load each new buffer once; a stat is enough, the viewer owns the text.
   const inflight = useRef(new Map<string, AbortController>());
   useEffect(() => {
@@ -102,11 +112,17 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
       const ctl = new AbortController();
       inflight.current.set(key, ctl);
       transport.stat({ sessionId: b.sessionId, path: b.path }, undefined, ctl.signal).then(
-        (r) => { if (!ctl.signal.aborted) dispatchRaw({ type: "markLoaded", path: b.path, token: r.token, readOnly: r.readOnly }); },
+        (r) => {
+          if (ctl.signal.aborted) return;
+          dispatchRaw({ type: "markLoaded", path: b.path, token: r.token, readOnly: r.readOnly });
+          const origin = sources.current.get(b.path);
+          sources.current.delete(b.path);
+          if (origin) analytics.emit("files.tab.open", { kind: origin.pinned ? "pinned" : "preview", source: origin.source, ext_class: extClass(b.path), size: bucketBytes(r.size) });
+        },
         (err) => { if (!ctl.signal.aborted) dispatchRaw({ type: "markFailed", path: b.path, reason: classify(err) }); },
       ).finally(() => inflight.current.delete(key));
     }
-  }, [state.buffers, transport]);
+  }, [state.buffers, transport, analytics]);
   useEffect(() => {
     const map = inflight.current;
     return () => {
@@ -116,8 +132,6 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
   }, []);
 
   // Persist paths, active index and positions; text is never stored.
-  const stateRef = useRef(state);
-  stateRef.current = state;
   const flush = useCallback(() => {
     if (!writePersisted(sessionId, stateRef.current)) setStorageFailed(true);
   }, [sessionId]);
@@ -136,7 +150,10 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
   // Back-compat with the single-path props (VCS cross-link).
   const selected = selectedPathOf(state);
   useEffect(() => {
-    if (initialSelectedPath && initialSelectedPath !== selected) dispatchRaw({ type: "open", path: initialSelectedPath, sessionId });
+    if (initialSelectedPath && initialSelectedPath !== selected) {
+      noteSource(initialSelectedPath, "deeplink", false);
+      dispatchRaw({ type: "open", path: initialSelectedPath, sessionId });
+    }
     // Only a changed prop opens a file; selection changes must not re-open the old prop.
   }, [initialSelectedPath]); // eslint-disable-line react-hooks/exhaustive-deps
   const notified = useRef<string | null | undefined>(undefined);
@@ -147,7 +164,17 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
   }, [selected, onSelectedPathChange]);
 
   const actions = useMemo(() => ({
-    open: (path: string, opts: { pinned?: boolean } = {}) => dispatchRaw({ type: "open", path, sessionId, pinned: opts.pinned }),
+    open: (path: string, opts: { pinned?: boolean; source?: OpenSource } = {}) => {
+      noteSource(path, opts.source ?? "tree", !!opts.pinned);
+      dispatchRaw({ type: "open", path, sessionId, pinned: opts.pinned });
+    },
+    jump: (path: string, line: number, opts: { col?: number; pinned?: boolean; source?: OpenSource; chain?: "start" | "step" } = {}) => {
+      noteSource(path, opts.source ?? "jumplist", !!opts.pinned);
+      dispatchRaw({ type: "jump", path, sessionId, line, col: opts.col ?? 0, pinned: opts.pinned, chain: opts.chain });
+    },
+    move: (path: string, delta: -1 | 1) => dispatchRaw({ type: "move", path, delta }),
+    adoptToken: (path: string, token: string) => dispatchRaw({ type: "adoptToken", path, token }),
+    revealed: (seq: number) => dispatchRaw({ type: "revealed", seq }),
     close: (path: string, discardConfirmed = false) => dispatchRaw({ type: "close", path, discardConfirmed }),
     activate: (path: string) => dispatchRaw({ type: "activate", path }),
     pin: (path: string) => dispatchRaw({ type: "pin", path }),
@@ -159,7 +186,7 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
     markDirty: (path: string, dirty: boolean) => dispatchRaw({ type: "markDirty", path, dirty }),
     reopenClosed: () => dispatchRaw({ type: "reopenClosed" }),
     clearNotice: () => dispatchRaw({ type: "clearNotice" }),
-  }), [sessionId]);
+  }), [sessionId, noteSource]);
 
   return {
     state,

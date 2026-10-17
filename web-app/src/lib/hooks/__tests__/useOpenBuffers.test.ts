@@ -105,4 +105,19 @@ describe("useOpenBuffers", () => {
     act(() => result.current.open("a.go"));
     await waitFor(() => expect(result.current.active).toMatchObject({ status: "failed", reason: "not_found" }));
   });
+
+  it("useOpenBuffers_should_EmitTabOpenOncePerNewBufferWithEnumLabels_When_OpenedFromSources", async () => {
+    const { result, h } = setup();
+    act(() => result.current.open("src/main.go", { source: "palette", pinned: true }));
+    await waitFor(() => expect(result.current.active?.status).toBe("loaded"));
+    act(() => result.current.open("src/main.go", { source: "tree" }));
+    act(() => result.current.jump("b.go", 7, { source: "jumplist" }));
+    await waitFor(() => expect(result.current.state.buffers.every((b) => b.status === "loaded")).toBe(true));
+    const opens = h.analytics.events.filter((e) => e.name === "files.tab.open").map((e) => e.labels);
+    expect(opens).toHaveLength(2);
+    expect(opens[0]).toMatchObject({ kind: "pinned", source: "palette", ext_class: "code", size: "lt10k" });
+    expect(opens[1]).toMatchObject({ kind: "preview", source: "jumplist" });
+    expect(JSON.stringify(opens)).not.toMatch(/main\.go|b\.go/);
+    expect(result.current.state.pendingReveal).toMatchObject({ path: "b.go", line: 7 });
+  });
 });
