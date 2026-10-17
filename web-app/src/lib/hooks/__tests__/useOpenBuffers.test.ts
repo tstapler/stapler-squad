@@ -1,15 +1,20 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
-import { BufferLoadError, storageKey, useOpenBuffers, type StatFn } from "../useOpenBuffers";
+import { createFakeTransport, createFilesTestHarness, type FakeTransport } from "@/lib/files/__tests__/fixtures";
+import { readFileSync } from "fs";
+import { resolve } from "path";
+import { Rejected } from "@/lib/files/transport/fileTransport";
+import { storageKey, useOpenBuffers } from "../useOpenBuffers";
 
-const okStat: StatFn = async () => ({ token: "v1:1:1:x", readOnly: "none" });
 const KEY = storageKey("s1", "desktop");
 const vs = (line: number) => ({ line, col: 2, scrollTop: line * 5 });
 
-function setup(stat: StatFn = okStat, extra: { initialSelectedPath?: string | null; onSelectedPathChange?: (p: string | null) => void } = {}) {
-  const h = createFilesTestHarness({ sessionId: "s1" });
-  const view = renderHook(() => useOpenBuffers("s1", { stat, ...extra }), { wrapper: h.wrapper });
-  return { h, ...view };
+const FILES = { "a.go": "a", "b.go": "b", "c.go": "c", "ok.go": "ok", "src/main.go": "m", "other.go": "o", "img.png": "p" };
+
+function setup(extra: { initialSelectedPath?: string | null; onSelectedPathChange?: (p: string | null) => void; transport?: FakeTransport } = {}) {
+  const transport = extra.transport ?? createFakeTransport({ files: FILES });
+  const h = createFilesTestHarness({ sessionId: "s1", transport });
+  const view = renderHook(() => useOpenBuffers("s1", extra), { wrapper: h.wrapper });
+  return { h, transport, ...view };
 }
 
 describe("useOpenBuffers", () => {
@@ -51,11 +56,7 @@ describe("useOpenBuffers", () => {
 
   it("openBuffers_should_ShowNotFoundTabsAndOneTimeNotice_When_FileMissingOrStorageThrows", async () => {
     window.localStorage.setItem(KEY, JSON.stringify({ v: 1, active: 0, tabs: [{ path: "gone.go", line: 1, col: 0, scrollTop: 0 }, { path: "ok.go", line: 3, col: 0, scrollTop: 0 }] }));
-    const stat: StatFn = async ({ path }) => {
-      if (path === "gone.go") throw new BufferLoadError("not_found");
-      return { token: "t", readOnly: "none" };
-    };
-    const { result } = setup(stat);
+    const { result } = setup();
     await waitFor(() => expect(result.current.state.buffers.map((b) => b.status)).toEqual(["failed", "loaded"]));
     expect(result.current.state.buffers[0]).toMatchObject({ status: "failed", reason: "not_found" });
     expect(result.current.storageUnavailable).toBe(false);
@@ -63,7 +64,7 @@ describe("useOpenBuffers", () => {
 
   it("useOpenBuffers_should_KeepBackCompat_When_InitialSelectedPathProvided", async () => {
     const onChange = jest.fn();
-    const { result, rerender } = setup(okStat, { initialSelectedPath: "src/main.go", onSelectedPathChange: onChange });
+    const { result, rerender } = setup({ initialSelectedPath: "src/main.go", onSelectedPathChange: onChange });
     expect(result.current.selectedPath).toBe("src/main.go");
     expect(onChange).toHaveBeenCalledWith("src/main.go");
     act(() => result.current.open("other.go", { pinned: true }));
@@ -73,10 +74,35 @@ describe("useOpenBuffers", () => {
   });
 
   it("useOpenBuffers_should_StatWithTheBufferSession_And_CarryReadOnlyKind", async () => {
-    const stat = jest.fn<ReturnType<StatFn>, Parameters<StatFn>>(async () => ({ token: "t", readOnly: "binary" }));
-    const { result } = setup(stat);
+    const transport = createFakeTransport({ files: FILES });
+    const original = transport.stat;
+    transport.stat = async (ref, o, signal) => ({ ...(await original(ref, o, signal)), readOnly: "binary" });
+    const { result } = setup({ transport });
     act(() => result.current.open("img.png"));
     await waitFor(() => expect(result.current.active).toMatchObject({ status: "loaded", readOnly: "binary" }));
-    expect(stat.mock.calls[0][0]).toEqual({ sessionId: "s1", path: "img.png" });
+    expect(transport.calls).toEqual(["stat:img.png"]);
+  });
+
+  it("hooks_should_ObtainTransportFromContext_And_ImportNoGeneratedClient", async () => {
+    const transport = createFakeTransport({ files: FILES });
+    const { result } = setup({ transport });
+    act(() => result.current.open("a.go"));
+    await waitFor(() => expect(result.current.active?.status).toBe("loaded"));
+    expect(transport.calls).toContain("stat:a.go");
+
+    const hooks = ["useOpenBuffers.ts", "useBufferFreshness.ts", "useSaveBuffer.ts"];
+    for (const file of hooks) {
+      let src = "";
+      try { src = readFileSync(resolve(__dirname, "..", file), "utf8"); } catch { continue; }
+      expect([file, src.match(/createClient|session_connect|getConnectTransport|useFileService|SessionService/)]).toEqual([file, null]);
+    }
+  });
+
+  it("useOpenBuffers_should_MarkFailed_When_TransportRejectsNotFound", async () => {
+    const transport = createFakeTransport({ files: FILES });
+    transport.failures.stat = [new Rejected("not_found")];
+    const { result } = setup({ transport });
+    act(() => result.current.open("a.go"));
+    await waitFor(() => expect(result.current.active).toMatchObject({ status: "failed", reason: "not_found" }));
   });
 });

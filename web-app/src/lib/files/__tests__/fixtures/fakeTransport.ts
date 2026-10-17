@@ -32,6 +32,8 @@ export interface FakeTransport extends FileTransport {
   calls: string[];
   /** Errors thrown by the next calls of an op, consumed one per call. */
   failures: Partial<Record<FileOpName, unknown[]>>;
+  /** Creates or replaces a file. */
+  seed(path: string, text: string): void;
 }
 
 /** In-memory FileTransport; tests pass it through the harness and run `runTransportConformance` on it. */
@@ -43,26 +45,29 @@ export function createFakeTransport(opts: FakeTransportOptions = {}): FakeTransp
     id: opts.id ?? "full",
     calls: [],
     failures: {},
+    seed: (path, text) => void files.set(path, text),
     capabilities: () => fakeCapabilities({ ops, wires: [fake.id] }),
-    stat: async (ref) => step("stat", ref, () => ({ token: tokenOf(ref.path), size: sizeOf(ref.path), readOnly: "none", analysis: "unspecified", capsEpoch: epoch() })),
-    read: async (ref, req) => step("read", ref, () => readResult(ref, req)),
-    writeFull: async (ref, w) => step("write_full", ref, () => {
+    stat: async (ref, _o, signal) => step("stat", ref, signal, () => ({ token: tokenOf(ref.path), size: sizeOf(ref.path), readOnly: "none", analysis: "unspecified", capsEpoch: epoch() })),
+    read: async (ref, req, signal) => step("read", ref, signal, () => readResult(ref, req)),
+    writeFull: async (ref, w, signal) => step("write_full", ref, signal, () => {
       files.set(ref.path, w.text);
       return { token: tokenOf(ref.path), capsEpoch: epoch() };
     }),
   };
-  if (opts.withPatch) fake.patch = async (ref) => step("patch", ref, () => ({ token: tokenOf(ref.path), capsEpoch: epoch() }));
+  if (opts.withPatch) fake.patch = async (ref, _p, signal) => step("patch", ref, signal, () => ({ token: tokenOf(ref.path), capsEpoch: epoch() }));
 
   const tokenOf = (path: string) => `v1:${sizeOf(path)}:1:fake`;
   const sizeOf = (path: string) => (files.get(path) ?? "").length;
-  function step<T>(op: FileOpName, ref: FileRef, ok: () => T): T {
+  function step<T>(op: FileOpName, ref: FileRef, signal: AbortSignal | undefined, ok: () => T): T {
     fake.calls.push(`${op}:${ref.path}`);
+    signal?.throwIfAborted();
     const queued = fake.failures[op]?.shift();
     if (queued !== undefined) throw queued;
     if (!files.has(ref.path) && op !== "write_full") throw new Rejected("not_found");
     return ok();
   }
   function readResult(ref: FileRef, req: ReadRequest): ReadResult {
+    if (!ops.includes(`read_${req.kind}` as AdvertisedOp)) throw new Rejected("unsupported");
     const text = files.get(ref.path) ?? "";
     return {
       text, token: tokenOf(ref.path), size: text.length, lineEnding: "lf", hasBom: false, readOnly: "none", isBinary: false,

@@ -81,6 +81,9 @@ export interface FileTransport {
   writeFull(ref: FileRef, w: WriteRequest, signal?: AbortSignal): Promise<WriteResult>;
 }
 
+/** What hooks consume: a single adapter or the router (which has no single id). */
+export type FileTransportPort = Omit<FileTransport, "id">;
+
 export type RejectReason = Exclude<ReadOnlyKind, "none"> | "not_found" | "unsupported";
 
 /** The server (or the active rung) refused with a reason the UI can state; never triggers demotion. */

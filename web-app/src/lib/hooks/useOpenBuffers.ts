@@ -1,32 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Code, ConnectError } from "@connectrpc/connect";
 import {
   DESKTOP_CAP, MOBILE_CAP, bufferReducer, initialBufferState, mruPaths, selectedPath as selectedPathOf, activeBuffer,
   type BufferAction, type BufferMode, type BufferState, type FailureKind, type ReadOnlyKind, type ViewState,
 } from "@/lib/files/bufferReducer";
 import { bucketTabs } from "@/lib/files/analytics/events";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
+import { Rejected } from "@/lib/files/transport/fileTransport";
+import { useFileTransport } from "./useFileTransport";
 
 const MOBILE_WIDTH = 768;
 const PERSIST_DEBOUNCE_MS = 300;
 const STORAGE_VERSION = 1;
 
-export interface StatOutcome { token: string; readOnly: ReadOnlyKind }
-export type StatFn = (req: { sessionId: string; path: string }, signal: AbortSignal) => Promise<StatOutcome>;
-
-/** Thrown by a StatFn that already knows the failure class; other errors are classified here. */
-export class BufferLoadError extends Error {
-  constructor(readonly kind: FailureKind, message?: string) {
-    super(message ?? kind);
-  }
-}
-
 function classify(err: unknown): FailureKind {
-  if (err instanceof BufferLoadError) return err.kind;
-  if (err instanceof ConnectError && err.code === Code.NotFound) return "not_found";
-  return "rpc_error";
+  if (!(err instanceof Rejected)) return "rpc_error";
+  return err.reason === "not_found" || err.reason === "too_large" || err.reason === "binary" ? err.reason : "rpc_error";
 }
 
 const formFactor = () => (typeof window !== "undefined" && window.innerWidth < MOBILE_WIDTH ? "mobile" : "desktop");
@@ -71,13 +61,11 @@ function writePersisted(sessionId: string, state: BufferState): boolean {
 }
 
 export interface UseOpenBuffersOptions {
-  /** Resolves a path to its token and read-only class. Task 1.2.3c supplies the transport port. */
-  stat: StatFn;
   initialSelectedPath?: string | null;
   onSelectedPathChange?: (path: string | null) => void;
 }
 
-export function useOpenBuffers(sessionId: string, { stat, initialSelectedPath, onSelectedPathChange }: UseOpenBuffersOptions) {
+export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelectedPathChange }: UseOpenBuffersOptions = {}) {
   const restoredRef = useRef<Restored | null>(null);
   const [state, dispatchRaw] = useReducer(bufferReducer, undefined, () => {
     const base = initialBufferState(capFor(formFactor(), coarsePointer()));
@@ -87,6 +75,7 @@ export function useOpenBuffers(sessionId: string, { stat, initialSelectedPath, o
   });
   const [storageFailed, setStorageFailed] = useState(restoredRef.current?.outcome === "storage_unavailable");
   const analytics = useFilesAnalytics({ component: "FilesTab", sessionId });
+  const transport = useFileTransport();
   const dispatch = useCallback((a: BufferAction) => dispatchRaw(a), []);
 
   // One restore event per mount, after the buffers exist.
@@ -112,12 +101,12 @@ export function useOpenBuffers(sessionId: string, { stat, initialSelectedPath, o
       if (inflight.current.has(key)) continue;
       const ctl = new AbortController();
       inflight.current.set(key, ctl);
-      stat({ sessionId: b.sessionId, path: b.path }, ctl.signal).then(
+      transport.stat({ sessionId: b.sessionId, path: b.path }, undefined, ctl.signal).then(
         (r) => { if (!ctl.signal.aborted) dispatchRaw({ type: "markLoaded", path: b.path, token: r.token, readOnly: r.readOnly }); },
         (err) => { if (!ctl.signal.aborted) dispatchRaw({ type: "markFailed", path: b.path, reason: classify(err) }); },
       ).finally(() => inflight.current.delete(key));
     }
-  }, [state.buffers, stat]);
+  }, [state.buffers, transport]);
   useEffect(() => {
     const map = inflight.current;
     return () => {

@@ -3,6 +3,8 @@ import { createRouterTransport, type ServiceImpl } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { AnalyticsContextProvider } from "@/lib/contexts/AnalyticsContext";
+import { FileTransportProvider } from "@/lib/hooks/useFileTransport";
+import type { FileTransportPort } from "@/lib/files/transport/fileTransport";
 import { fakeTransportRef } from "./mockTransport";
 import { createFakeAnalytics, type FakeAnalytics } from "./fakeAnalytics";
 
@@ -14,6 +16,8 @@ export interface FilesHarnessOverrides {
   flags?: Record<string, boolean>;
   /** Replaces or adds SessionService RPC handlers (e.g. getFileContent). */
   handlers?: SessionHandlers;
+  /** FileTransport the hooks under test receive; defaults to the production router over the fake Connect transport. */
+  transport?: FileTransportPort;
 }
 
 export interface FilesHarness {
@@ -44,7 +48,9 @@ export function createFilesTestHarness(overrides: FilesHarnessOverrides = {}): F
   });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <AnalyticsContextProvider provider={analytics}>
-      <FeatureFlagsProvider>{children}</FeatureFlagsProvider>
+      <FeatureFlagsProvider>
+        <FileTransportProvider value={overrides.transport}>{children}</FileTransportProvider>
+      </FeatureFlagsProvider>
     </AnalyticsContextProvider>
   );
   return { sessionId: overrides.sessionId ?? "session-1", analytics, calls, wrapper };
