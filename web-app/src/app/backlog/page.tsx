@@ -29,7 +29,10 @@ import {
 } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
-import { useAppDispatch } from "@/lib/store";
+import { useAppDispatch, useAppSelector } from "@/lib/store";
+import { toggleSelection, selectAll, clearSelection } from "@/lib/store/backlogBulkSelectionSlice";
+import { BacklogBulkActions } from "@/components/backlog/BacklogBulkActions";
+import { runBulk, formatBulkFeedback } from "@/lib/backlog/bulkActions";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
@@ -137,12 +140,18 @@ function BacklogTableRow({
   item,
   isActive,
   isExiting,
+  isSelected,
+  isSelectMode,
   onRowClick,
+  onToggleSelect,
 }: {
   item: BacklogItem;
   isActive: boolean;
   isExiting: boolean;
+  isSelected: boolean;
+  isSelectMode: boolean;
   onRowClick: (itemId: string) => void;
+  onToggleSelect: (itemId: string) => void;
 }) {
   const acDone = item.acCriteria.filter((c) => c.status === "done").length;
 
@@ -172,16 +181,31 @@ function BacklogTableRow({
       data-exiting={isExiting ? "true" : undefined}
       onClick={() => {
         if (isExiting) return;
+        if (isSelectMode) {
+          onToggleSelect(item.id);
+          return;
+        }
         onRowClick(item.id);
       }}
       onKeyDown={(e) => {
         if (isExiting) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onRowClick(item.id);
+          if (isSelectMode) onToggleSelect(item.id);
+          else onRowClick(item.id);
         }
       }}
     >
+      <td className={`${styles.tableCell} ${styles.checkboxCell}`} onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          className={`${styles.rowCheckbox} ${isSelectMode ? styles.rowCheckboxVisible : ""}`}
+          checked={isSelected}
+          onChange={() => onToggleSelect(item.id)}
+          aria-label={`Select ${item.title}`}
+          data-testid="backlog-row-checkbox"
+        />
+      </td>
       <td className={`${styles.tableCell} ${styles.titleCell}`}>
         {item.title}
       </td>
@@ -225,7 +249,7 @@ function BacklogTableRow({
 function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
-  const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { createBacklogItem, importGitHubIssue, triggerTriage, archiveBacklogItem, deleteBacklogItem } = useBacklogService();
   const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -642,6 +666,71 @@ function BacklogPageInner() {
     return sortAsc ? " ↑" : " ↓";
   };
 
+  // Bulk selection (backlogBulkSelectionSlice) and fan-out actions.
+  const selectedIds = useAppSelector((st) => st.backlogBulkSelection.selectedIds);
+  const selectMode = useAppSelector((st) => st.backlogBulkSelection.selectMode);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleToggleSelect = useCallback((id: string) => dispatch(toggleSelection(id)), [dispatch]);
+
+  const showBulkFeedback = useCallback((msg: string) => {
+    setBulkFeedback(msg);
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setBulkFeedback(null), 4000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      dispatch(clearSelection());
+    };
+  }, [dispatch]);
+
+  const doneItemIds = useMemo(
+    () => filteredItems.filter((i) => i.status === "done").map((i) => i.id),
+    [filteredItems]
+  );
+
+  const runBulkAction = useCallback(
+    async (verb: string, ids: string[], action: (id: string) => Promise<unknown>) => {
+      if (ids.length === 0 || bulkBusy) return;
+      setBulkBusy(true);
+      try {
+        const result = await runBulk(ids, action);
+        showBulkFeedback(formatBulkFeedback(verb, result));
+        return result;
+      } finally {
+        setBulkBusy(false);
+      }
+    },
+    [bulkBusy, showBulkFeedback]
+  );
+
+  const handleArchiveDone = useCallback(
+    () => runBulkAction("Archived", doneItemIds, archiveBacklogItem),
+    [runBulkAction, doneItemIds, archiveBacklogItem]
+  );
+
+  const handleArchiveSelected = useCallback(async () => {
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ids = selectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && it.status !== "archived";
+    });
+    const result = await runBulkAction("Archived", ids, archiveBacklogItem);
+    if (result && result.failed.length === 0) dispatch(clearSelection());
+    else if (result) dispatch(selectAll(result.failed));
+  }, [items, selectedIds, runBulkAction, archiveBacklogItem, dispatch]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const result = await runBulkAction("Deleted", selectedIds, deleteBacklogItem);
+    if (result && result.failed.length > 0) dispatch(selectAll(result.failed));
+    else dispatch(clearSelection());
+  }, [selectedIds, runBulkAction, deleteBacklogItem, dispatch]);
+
   const renderItemRow = (item: BacklogItem) => {
     const isActive = selectedItemId === item.id;
     const isExiting = exitingItems.has(item.id);
@@ -651,7 +740,10 @@ function BacklogPageInner() {
         item={item}
         isActive={isActive}
         isExiting={isExiting}
+        isSelected={selectedSet.has(item.id)}
+        isSelectMode={selectMode}
         onRowClick={handleRowClick}
+        onToggleSelect={handleToggleSelect}
       />
     );
   };
@@ -729,6 +821,19 @@ function BacklogPageInner() {
         showSortGroupControls={true}
         groupBy={groupBy}
         onGroupByChange={setGroupBy}
+        doneCount={doneItemIds.length}
+        onArchiveDone={handleArchiveDone}
+        archiveDoneBusy={bulkBusy}
+      />
+      <BacklogBulkActions
+        selectedCount={selectedIds.length}
+        totalCount={sortedItems.length}
+        busy={bulkBusy}
+        feedback={bulkFeedback}
+        onArchiveSelected={handleArchiveSelected}
+        onDeleteSelected={handleDeleteSelected}
+        onSelectAll={() => dispatch(selectAll(sortedItems.map((i) => i.id)))}
+        onClear={() => dispatch(clearSelection())}
       />
 
       {/* Content */}
@@ -746,6 +851,9 @@ function BacklogPageInner() {
             <table className={styles.table} aria-label="Backlog items">
               <thead className={styles.tableHead}>
                 <tr>
+                  <th scope="col" className={styles.tableHeaderCell}>
+                    <span className={styles.srOnly}>Select</span>
+                  </th>
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
@@ -827,7 +935,7 @@ function BacklogPageInner() {
                   <tbody key={group.groupKey}>
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className={styles.groupHeaderCell}
                         data-testid="backlog-group-header"
                       >

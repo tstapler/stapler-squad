@@ -74,6 +74,8 @@ jest.mock("@/lib/config", () => ({
 
 jest.mock("@/lib/store", () => ({
   useAppDispatch: () => jest.fn(),
+  useAppSelector: (selector: (s: unknown) => unknown) =>
+    selector({ backlogBulkSelection: { selectedIds: [], selectMode: false } }),
 }));
 
 jest.mock("@/lib/hooks/useBacklogService", () => {
@@ -84,6 +86,8 @@ jest.mock("@/lib/hooks/useBacklogService", () => {
       createBacklogItem: jest.fn(),
       importGitHubIssue: jest.fn(),
       triggerTriage: jest.fn(),
+      archiveBacklogItem: jest.fn(),
+      deleteBacklogItem: jest.fn(),
     }),
   };
 });

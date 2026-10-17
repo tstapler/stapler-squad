@@ -137,6 +137,10 @@ export interface BacklogFilterBarProps {
    * there — default true (list view keeps it), board passes false.
    */
   showArchivedControl?: boolean;
+  /** List-view only: the "Archive done (N)" button renders when onArchiveDone is provided. */
+  doneCount?: number;
+  onArchiveDone?: () => void;
+  archiveDoneBusy?: boolean;
 }
 
 export function BacklogFilterBar({
@@ -155,7 +159,11 @@ export function BacklogFilterBar({
   groupBy,
   onGroupByChange,
   showArchivedControl = true,
+  doneCount = 0,
+  onArchiveDone,
+  archiveDoneBusy = false,
 }: BacklogFilterBarProps) {
+  const { track } = useAnalytics();
   return (
     <div className={styles.filterBar} role="search" aria-label="Filter backlog items">
       <input
@@ -198,6 +206,17 @@ export function BacklogFilterBar({
             <option value="repoPath">Repository</option>
           </select>
         </label>
+      )}
+      {onArchiveDone && (
+        <button
+          type="button"
+          className={styles.resetViewButton}
+          disabled={doneCount === 0 || archiveDoneBusy}
+          onClick={() => { track({ name: "backlog_archive_done", category: "user_action", component: "BacklogFilterBar", labels: { count: String(doneCount) } }); onArchiveDone(); }}
+          data-testid="backlog-archive-done-button"
+        >
+          Archive done ({doneCount})
+        </button>
       )}
       <button
         type="button"
