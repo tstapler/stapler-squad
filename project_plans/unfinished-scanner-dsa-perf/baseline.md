@@ -229,7 +229,7 @@ Alloc target proposed for owner confirmation: scanner `alloc_space` S2/S1 <= 0.5
 | SG5 | 3.3.1 | `getOrBuildUntrackedMatcher`/`gitignore.ReadPatterns` >= 1% of scanner CPU | S1 CPU profile | 0.0% (0 samples; 0 MB) | **CLOSED** ("not worthwhile") |
 | SG6 | 2.3.1; 2.3.2 (also needs SG3) | scanner frames >= the Q14 fraction (5%) of total S1 mutex delay | Task 0.1.1e | 21.4% of mutex delay (see caveat) | **OPEN by the literal rule** (owner flag below) |
 | SG7 | 4.2.4 | duplicate stat pass >= 20% of total stats | Task 4.2.4a measurement (`TestDuplicateStatFraction_ShouldBeRecorded_BeforeBuilding`; corpus run: `SSQ_SG7_CORPUS=<corpus>/manifest.json go test ./session/unfinished -run TestDuplicateStatFraction_ShouldMeasureWorkloadCorpus -v`) | **35.3%** on the Story 0.1.5 corpus (24 scan targets, 22 dirty: 9,162 lstat calls, 3,237 of them the second pass re-statting files `HasUncommitted` had already stat'ed; read-only run against the S1 corpus copy). Synthetic 5,000-file worktree: first-file edit 0.0%, middle-file edit 33.3%, last-file edit 50.0%, untracked-only 50.0% (`HasUncommitted` exits at the first changed file; `DiffShortstat` always stats every unstaged file) | **MET (>= 20%): Story 4.2.4 built** (handoff behind `scan_skip`; dirty scans drop to <= 1 lstat per tracked file, e.g. 400-file fixture: 501-800 -> 400) |
-| SG8 | 4.1.2 projection credit | signature-skip engagement >= 10% of scans | Story 5.2.1 soak | **0.9%** (2 hits / 234 checks, MEASURED, see "S2 A/B") | **CLOSED for credit**: below 10%, so the 4.1.2 CPU credit in the projection stays 0 |
+| SG8 | 4.1.2 projection credit | signature-skip engagement >= 10% of scans | Story 5.2.1 soak | **0.9%** (2 hits / 234 checks, MEASURED, round 1) | **CLOSED for credit in round 1** (below 10%, so the 4.1.2 CPU credit stayed 0); **round 2 (age bounds fixed): 33.3% in the 30 min window, 49.1% over the soak (MEASURED, see "S2 A/B round 2")**, so SG8 is met and the 4.1.2 credit is no longer zero (the S2 vs S1 CPU credit itself is not re-derived here) |
 | SG9 | 4.4.1 scope | every non-decode `alloc_space` bucket >= 3% needs an owner or an "accepted" note | S1 alloc profile | buckets >= 3% of scanner: read buffers 75.9%, `genSplit` 6.7%, `continuationCont` 3.6% (decode) | **scope fixed**: read buffers -> 4.2.3/3.2.3/4.4.1, `genSplit` -> 3.2.2/4.4.1; no unowned bucket |
 
 Reading note for SG1/SG2/SG3: on this S1 profile the commit-walk is gone from CPU (0 to 0.4%), and what remains is decode allocation inside `CommitMessages` (33.5 MB, 4.7% of scanner allocations). The plan's thresholds are met on the alloc column only; the scheduling decision (run 1.2.1/2.1.x/2.2.1 or defer) is the owner's, with the numbers above.
@@ -365,3 +365,52 @@ The A/B toggled all four units at once, not singly (attribution below is by coun
 | T4 | `scan_skip` | engagement (SG8), G6/G8, CPU | engagement 0 (index) and 0.9% (signature), 2.7% (dirs) | **INCONCLUSIVE, stays off**: engagement cannot be demonstrated |
 
 The 24 h live watch of Story 5.2.2 did not happen (owner answer Q4/Q11: no live deploy); it remains the Story 5.3.1 precondition.
+
+## S2 A/B round 2 (MEASURED 2026-10-16, Story 5.2.1 trigger T4, `scan_skip`)
+
+**Why a round 2.** Round 1 showed `scan_skip` idle. Root cause (CONFIRMED by deterministic injected-clock tests, ADR-006 addendum): every staleness bound was exactly the 5 min scan tick, so each scheduled scan arrived at or past the limit and was a forced full walk. Four fixes: (1) `fullWalkMaxAge`/`scanSkipMaxAge` = 3 ticks = 15 min; (2) `signatureMaxAge` (committed-state reuse) was also one tick, so signature skips could never hit; (3) `DirtyGen.Arm` reset `lastFullWalk` on every `watchRepo` call (`AddRepo`, ref events), a spurious `unarmed` full walk; (4) a worktree dirty by a tracked file returns before the untracked walk, never completed a full walk and re-forced the index parse every scan (`CompleteIndexWalk`).
+
+**Setup.** One binary from HEAD `bd673dbed` (`~/.stapler-squad/manual-builds/manual-3/stapler-squad`), run twice on fresh corpora (`scanner-workload corpus`, 6 repos x 3 linked worktrees = 24 targets; `verify`: PinnedRepos identical). Control `claude-manual-ctl2` `:62871`, tmux `ssq-manual-1`, pprof `:62875`, `unfinished_caches` all explicit false. Candidate `claude-manual-cand2` `:62873`, `ssq-manual-2`, pprof `:62877`, all four true, `STAPLER_SQUAD_SHADOW_VERIFY_EVERY=3`. Drivers `drive -seed 1 -duration 40m` on both. Started 19:25:53; **measured window 19:37:53 to 20:07:55 PDT (1800 s)**, same capture and analysis as round 1 (pprof CPU 1800 s, allocs/heap/mutex/block deltas, `loadsample`, actuator every 5 min); soak continued to 21:21 for parity samples. A first round-2 pass on an intermediate binary (`f85556b54`, age bound and `Arm` fixed only; flags on, same method) is kept as a data point: signature 0/120, dirs skipped 12%, index hits 13/72 in the window, which is what led to fixes (2) and (4). Raw data in `/tmp/s2r2/` and `/tmp/s2r2a/` (not committed). Swapped-port repeat: not run, so instance bias is unquantified.
+
+### Results (window unless noted)
+
+| Quantity | Control | Candidate | Ratio |
+|---|---|---|---|
+| Scanner CPU (`Scanner.worker` cum) | 3.46 s | 3.08 s, of which oracle 1.34 s; 1.74 s without it | 0.89 with oracle at 1 in 3; **0.503 without** |
+| Scanner `alloc_space` | 196.9 MB | 612.7 MB, of which oracle 557.8 MB; 54.9 MB without it | 3.11 with oracle at 1 in 3; **0.279 without** |
+| Scan cycles | 18 | 19 | 1.06 |
+| Scanner CPU / alloc per cycle (without oracle) | 0.192 s / 10.9 MB | 0.092 s / 2.9 MB | 0.48 / 0.26 |
+| Process CPU samples (pprof) | 17.67 s | 16.70 s | 0.945 |
+| Process CPU (`loadsample`, 30 min) | 19.77 s | 18.99 s | 0.96 |
+| `stat_calls_total` | 26,661 | 17,859 | 0.67 |
+| Process `inuse_space` start to end | 79.4 to 84.6 MB | 102.4 to 109.6 MB | both +6.6 to +7%; candidate baseline is higher (repostate 1.16 MB plus un-collected oracle garbage, INFERRED) |
+| Goroutines start / end | 109 / 109 | 109 / 109 (111 at 21:21; control 111) | flat |
+| Panics / fatal in instance logs | 0 | 0 | |
+
+The oracle share is computed from the profile split (frames under the shadow-verify oracle), not from a separate default-rate window: with 1 in 3 sampling it is 30 sampled scans in the window, so the with-oracle figures are the worst case and are not representative of the new 1-in-200 default; the without-oracle figures are the steady-state estimate (INFERRED for steady state, MEASURED for the split). No separate 10 min default-rate window was taken.
+
+### Engagement (candidate; MEASURED)
+
+| Counter | Window | Soak total (to 21:21) |
+|---|---|---|
+| Index cache hits / (hits + misses) | 23 / 72 = 31.9% | 141 / 293 = 48.1% |
+| `signature_skip` hits / checks | 24 / 72 = 33.3% | 144 / 293 = 49.1% (round 1: 0.9%) |
+| Untracked dirs skipped / (skipped + walked) | 3,911 / 7,790 = 50.2% | 14,766 / 31,707 = 46.6% (round 1: 2.7%) |
+| `dirty_full_walk_total` | age 48, unarmed 0 | age 124, unarmed 24 (one per worktree, the first walk after arming; round 1 had 157 age and 76 unarmed) |
+
+The 24 `unarmed` walks equal the 24 targets, so the re-arm bug is gone. Remaining forced walks are the 3-tick age backstop (about one scan in three per worktree).
+
+### Parity (MEASURED)
+
+101 oracle samples over the candidate's life (`shadow_verify.sampled` 101, `oracle_errors` 0, `skipped_pressure` 0): `parity_mismatch_total` 0 for `ahead`, `behind`, `dirty`, `messages`, `shortstat`; `parity_transient_total` 0 for all five. The sampler counts per scan, not per field value, so each field has at most 101 comparisons.
+
+### T4 verdict
+
+| Criterion | Result |
+|---|---|
+| parity 0 over >= 100 samples | PASS (101, 0 mismatches) |
+| engagement materially above 0 | PASS (index 32 to 48%, signature 33 to 49%, dirs 47 to 50%) |
+| scanner CPU and alloc per cycle not worse than control | PASS without the oracle (0.503 and 0.279); the oracle at 1 in 3 dominates the with-oracle allocation ratio, not representative of the 1-in-200 default |
+| no panics, heap and goroutines flat | PASS |
+
+**`scan_skip` default flipped on** in the next commit. The 24 h live watch of Story 5.2.2 did not happen (owner answer Q4/Q11: no live deploy); it remains the Story 5.3.1 precondition. Limits: one 30 min window, one seed, one instance order (no swapped-port repeat), all 24 targets copied from the owner's repos at run time.

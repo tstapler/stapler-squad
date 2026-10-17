@@ -214,7 +214,7 @@ type UnfinishedCaches struct {
 // config.json key stays the off-switch, and LoadConfigFromPath seeds this value
 // before unmarshalling so an absent key keeps the default.
 func DefaultUnfinishedCaches() UnfinishedCaches {
-	return UnfinishedCaches{SharedCommitState: true, DiffCounter: true, WatchWorktreeGitdirs: true}
+	return UnfinishedCaches{SharedCommitState: true, DiffCounter: true, ScanSkip: true, WatchWorktreeGitdirs: true}
 }
 
 // Config represents the application configuration
