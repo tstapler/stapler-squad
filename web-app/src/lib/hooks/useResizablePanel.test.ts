@@ -1,3 +1,4 @@
+import type React from "react";
 import { renderHook, act } from "@testing-library/react";
 import { useResizablePanel, ResizablePanelOptions } from "./useResizablePanel";
 
@@ -374,6 +375,55 @@ describe("useResizablePanel", () => {
       const { result } = renderHook(() => useResizablePanel(options));
 
       expect(result.current.width).toBe(150); // clamped to minWidth
+    });
+  });
+
+  describe("keyboard resizing (separator)", () => {
+    const key = (k: string, shiftKey = false) => ({ key: k, shiftKey, preventDefault: jest.fn() }) as unknown as React.KeyboardEvent;
+
+    function mountWide() {
+      const view = renderHook(() => useResizablePanel(defaultOptions));
+      (view.result.current.containerRef as { current: unknown }).current = { clientWidth: 1000 };
+      view.rerender();
+      return view;
+    }
+
+    it("useResizablePanel_should_ResizeBy16And64_And_JumpHomeEnd_When_ArrowKeysOnSeparator", () => {
+      const { result } = mountWide();
+      const props = () => result.current.handleProps;
+      expect(props()).toMatchObject({
+        role: "separator", "aria-orientation": "vertical", tabIndex: 0, "aria-label": "Resize file panel",
+        "aria-valuenow": 300, "aria-valuemin": 200, "aria-valuemax": 500,
+      });
+      act(() => props().onKeyDown(key("ArrowRight")));
+      expect(result.current.width).toBe(316);
+      expect(props()["aria-valuenow"]).toBe(316);
+      act(() => props().onKeyDown(key("ArrowRight", true)));
+      expect(result.current.width).toBe(380);
+      act(() => props().onKeyDown(key("ArrowLeft")));
+      expect(result.current.width).toBe(364);
+      act(() => props().onKeyDown(key("ArrowLeft", true)));
+      expect(result.current.width).toBe(300);
+      act(() => props().onKeyDown(key("End")));
+      expect(result.current.width).toBe(500);
+      act(() => props().onKeyDown(key("ArrowRight", true)));
+      expect(result.current.width).toBe(500);
+      act(() => props().onKeyDown(key("Home")));
+      expect(result.current.width).toBe(200);
+      act(() => props().onKeyDown(key("ArrowLeft")));
+      expect(result.current.width).toBe(200);
+      expect(localStorageMock.getItem("test-panel")).toBe("200");
+    });
+
+    it("useResizablePanel_should_IgnoreOtherKeys_And_NotPreventDefault", () => {
+      const { result } = mountWide();
+      const e = key("a");
+      act(() => result.current.handleProps.onKeyDown(e));
+      expect(e.preventDefault).not.toHaveBeenCalled();
+      expect(result.current.width).toBe(300);
+      const arrow = key("ArrowRight");
+      act(() => result.current.handleProps.onKeyDown(arrow));
+      expect(arrow.preventDefault).toHaveBeenCalled();
     });
   });
 });

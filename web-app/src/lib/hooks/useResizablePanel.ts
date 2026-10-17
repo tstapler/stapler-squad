@@ -7,6 +7,9 @@ export interface ResizablePanelOptions {
   defaultWidth: number;
   minWidth: number;
   maxWidthFraction: number;
+  /** Arrow-key step in px (Shift uses `largeStep`). */
+  step?: number;
+  largeStep?: number;
 }
 
 export interface ResizablePanelResult {
@@ -18,6 +21,14 @@ export interface ResizablePanelResult {
     onPointerMove: (e: React.PointerEvent) => void;
     onPointerUp: (e: React.PointerEvent) => void;
     onPointerCancel: (e: React.PointerEvent) => void;
+    onKeyDown: (e: React.KeyboardEvent) => void;
+    role: "separator";
+    "aria-orientation": "vertical";
+    "aria-label": string;
+    tabIndex: 0;
+    "aria-valuenow": number;
+    "aria-valuemin": number;
+    "aria-valuemax": number;
   };
   collapse: () => void;
   expand: () => void;
@@ -53,6 +64,8 @@ export function useResizablePanel({
   defaultWidth,
   minWidth,
   maxWidthFraction,
+  step = 16,
+  largeStep = 64,
 }: ResizablePanelOptions): ResizablePanelResult {
   const collapsedKey = storageKey + "Collapsed";
 
@@ -139,6 +152,25 @@ export function useResizablePanel({
     }
   }, []);
 
+  const maxPx = () => (containerRef.current?.clientWidth ?? 0) * maxWidthFraction;
+
+  // The separator pattern: Arrow keys step, Shift+Arrow takes a large step, Home/End jump to the drag bounds.
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const max = maxPx();
+      const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!dir && e.key !== "Home" && e.key !== "End") return;
+      e.preventDefault();
+      setWidth((w) => {
+        const raw = e.key === "Home" ? minWidth : e.key === "End" ? max : w + dir * (e.shiftKey ? largeStep : step);
+        return Math.max(minWidth, max > 0 ? Math.min(max, raw) : raw);
+      });
+    },
+    // maxPx reads refs only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [minWidth, maxWidthFraction, step, largeStep]
+  );
+
   const collapse = useCallback(() => {
     lastWidthRef.current = width;
     setCollapsed(true);
@@ -158,6 +190,14 @@ export function useResizablePanel({
       onPointerMove,
       onPointerUp,
       onPointerCancel: onPointerUp,
+      onKeyDown,
+      role: "separator",
+      "aria-orientation": "vertical",
+      "aria-label": "Resize file panel",
+      tabIndex: 0,
+      "aria-valuenow": Math.round(width),
+      "aria-valuemin": minWidth,
+      "aria-valuemax": Math.round(Math.max(maxPx(), minWidth)),
     },
     collapse,
     expand,
