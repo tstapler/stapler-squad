@@ -124,28 +124,6 @@ export const wrapToggleButtonActive = style({
   borderColor: vars.color.primary,
 });
 
-export const codeMirrorEditor = style({
-  height: "100%",
-});
-
-globalStyle(`${codeMirrorEditor} .cm-editor`, {
-  height: "100%",
-  fontSize: 13,
-});
-
-globalStyle(`${codeMirrorEditor} .cm-changeGutter`, {
-  width: 4,
-});
-
-const gutterMarker = style({
-  width: 4,
-  height: "100%",
-});
-
-export const gutterMarkerAdd = style([gutterMarker, { background: vars.color.gitAdded }]);
-export const gutterMarkerDelete = style([gutterMarker, { background: vars.color.gitDeleted }]);
-export const gutterMarkerModify = style([gutterMarker, { background: vars.color.gitModified }]);
-
 export const binaryPlaceholder = style({
   display: "flex",
   flexDirection: "column",

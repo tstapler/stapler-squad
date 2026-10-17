@@ -135,7 +135,7 @@ class CmHandle implements EngineHandle {
   private queued: Array<() => void> = [];
   private readonly onCompositionEnd = () => setTimeout(() => this.flushQueued(), 0);
 
-  constructor(private engine: CmEngine, el: HTMLElement, options: EngineOptions) {
+  constructor(private engine: CmEngine, private readonly el: HTMLElement, options: EngineOptions) {
     this.buffer = options.buffer as CmBuffer;
     this.config = { mode: options.mode, wrap: options.wrap, ariaLabel: options.ariaLabel };
     this.view = new EditorView({
@@ -146,7 +146,8 @@ class CmHandle implements EngineHandle {
         for (const tr of trs) if (tr.docChanged) this.recordChange(tr.changes);
       },
     });
-    this.view.contentDOM.addEventListener("compositionend", this.onCompositionEnd);
+    // compositionend bubbles from contentDOM; listening on the host runs after CM has cleared its own state.
+    el.addEventListener("compositionend", this.onCompositionEnd);
   }
 
   private recordChange(changes: ChangeSet) {
@@ -277,7 +278,7 @@ class CmHandle implements EngineHandle {
   }
 
   destroy() {
-    this.view.contentDOM.removeEventListener("compositionend", this.onCompositionEnd);
+    this.el.removeEventListener("compositionend", this.onCompositionEnd);
     this.view.destroy();
   }
 }

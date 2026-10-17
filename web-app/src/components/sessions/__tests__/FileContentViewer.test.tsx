@@ -38,6 +38,7 @@ jest.mock("@codemirror/view", () => {
   class EditorView {
     static lineWrapping = {};
     static theme = jest.fn(() => ({}));
+    static contentAttributes = { of: (attrs: unknown) => ({ attrs }) };
     constructor(opts: unknown) {
       mockEditorViewCtor(opts);
     }

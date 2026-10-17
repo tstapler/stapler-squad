@@ -9,13 +9,7 @@ import {
   selectPageDown, selectPageUp,
 } from "@codemirror/commands";
 import { openSearchPanel, findNext, findPrevious } from "@codemirror/search";
-
-// Vim-style "gg" needs two "g" presses in a short window; a lone "g" is swallowed.
-export const DOUBLE_G_WINDOW_MS = 400;
-
-export function isDoubleGPress(lastGPressAt: number, now: number, windowMs: number = DOUBLE_G_WINDOW_MS): boolean {
-  return now - lastGPressAt < windowMs;
-}
+import { isDoubleGPress } from "./doubleG";
 
 // Temporary hand-rolled hjkl keymap; Story 2.4.1 replaces it with @replit/codemirror-vim.
 export function legacyVimKeymap(): Extension {
