@@ -15,11 +15,10 @@ import { buildGitStatusMap, buildLineStatsMap } from "@/lib/utils/gitStatus";
 import { TreeResizeHandle } from "./TreeResizeHandle";
 import { RecentFilesSection } from "./RecentFilesSection";
 import { QuickOpenPalette } from "./QuickOpenPalette";
+import { FilesTreeToolbar } from "./FilesTreeToolbar";
 import {
-  container, treePane, treePaneCollapsed, contentPane, toolbar, searchInput,
-  toolbarLabel, toolbarButton, searchCount, treeWrapper,
-  mobilePaneHidden, mobilePaneVisible, mobileBackButton,
-  toolbarButtonMobileHidden, mobileSearchButton, toolbarDivider,
+  container, treePane, treePaneCollapsed, contentPane, treeWrapper,
+  mobilePaneHidden, mobilePaneVisible, mobileBackButton, mobileSearchButton,
 } from "./FilesTab.css";
 
 // ---- Props ----
@@ -171,95 +170,25 @@ function FilesTabView({
         className={treePaneClasses}
         style={{ width: panel.collapsed ? 0 : panel.width }}
       >
-        <div className={toolbar}>
-          <input
-            ref={searchInputRef}
-            type="search"
-            className={searchInput}
-            placeholder="Search files…"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setSearchTerm("");
-                searchInputRef.current?.blur();
-              }
-            }}
-            enterKeyHint="search"
-            aria-label="Search files"
-          />
-          {searchResultCount !== null && searchTerm.length >= 2 && (
-            <span
-              className={searchCount}
-              title={searchResultTruncated ? "Results truncated at 500" : undefined}
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {searchResultCount}{searchResultTruncated ? "+" : ""} match{searchResultCount !== 1 ? "es" : ""}
-            </span>
-          )}
-          <label className={toolbarLabel} title="Show gitignored files">
-            <input
-              type="checkbox"
-              checked={includeIgnored}
-              onChange={(e) => setIncludeIgnored(e.target.checked)}
-            />
-            Ignored
-          </label>
-          <label className={toolbarLabel} title="Show only files with git changes">
-            <input
-              type="checkbox"
-              checked={filterChangedOnly}
-              onChange={(e) => setFilterChangedOnly(e.target.checked)}
-            />
-            Changed
-          </label>
-          <button
-            className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-            onClick={() => setSortBy((prev) => (prev === "name" ? "type" : "name"))}
-            title={`Sort by ${sortBy === "name" ? "type" : "name"}`}
-            aria-label={`Sort by ${sortBy === "name" ? "type" : "name"}`}
-          >
-            Sort: {sortBy === "name" ? "Name" : "Type"}
-          </button>
-          <button
-            className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-            onClick={() => fileTreeRef.current?.collapseAll()}
-            title="Collapse all directories"
-            aria-label="Collapse all directories"
-          >
-            ⊟
-          </button>
-          <div className={toolbarDivider} />
-          {panel.collapsed ? (
-            <button
-              className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-              onClick={() => panel.expand()}
-              title="Expand file tree panel"
-              aria-label="Expand file tree panel"
-            >
-              ⊞
-            </button>
-          ) : (
-            <button
-              className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-              onClick={() => panel.collapse()}
-              title="Collapse file tree panel"
-              aria-label="Collapse file tree panel"
-            >
-              ⊠
-            </button>
-          )}
-          <button
-            className={toolbarButton}
-            onClick={() => refreshStatus()}
-            title="Refresh git status"
-            aria-label="Refresh git status"
-            disabled={vcsLoading}
-          >
-            {vcsLoading ? "⟳" : "↺"}
-          </button>
-        </div>
+        <FilesTreeToolbar
+          searchInputRef={searchInputRef}
+          fileTreeRef={fileTreeRef}
+          searchTerm={searchTerm}
+          onSearchTerm={setSearchTerm}
+          searchResultCount={searchResultCount}
+          searchResultTruncated={searchResultTruncated}
+          includeIgnored={includeIgnored}
+          onIncludeIgnored={setIncludeIgnored}
+          filterChangedOnly={filterChangedOnly}
+          onFilterChangedOnly={setFilterChangedOnly}
+          sortBy={sortBy}
+          onToggleSort={() => setSortBy((prev) => (prev === "name" ? "type" : "name"))}
+          collapsed={panel.collapsed}
+          onCollapse={panel.collapse}
+          onExpand={panel.expand}
+          vcsLoading={vcsLoading}
+          onRefreshStatus={refreshStatus}
+        />
         <RecentFilesSection
           paths={recentPaths}
           selectedPath={selectedPath}
