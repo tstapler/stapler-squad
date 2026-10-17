@@ -54,6 +54,13 @@ describe("useFilesAnalytics", () => {
     expect(typeof h.analytics.events[0].durationMs).toBe("number");
   });
 
+  it("filesAnalytics_should_CarryAnExternallyMeasuredDuration_When_EmitTimedIsUsed", () => {
+    const h = createFilesTestHarness();
+    const { result } = renderHook(() => useFilesAnalytics({ component: "SearchPanel" }), { wrapper: h.wrapper });
+    result.current.emitTimed("files.perf.search_first_result_ms", 123, { scale: "lt1k", queued: "false" });
+    expect(h.analytics.events[0]).toMatchObject({ name: "files.perf.search_first_result_ms", durationMs: 123, labels: { scale: "lt1k", queued: "false" } });
+  });
+
   it("filesAnalytics_should_FlushAggregatedKeysOnPagehide", () => {
     const h = createFilesTestHarness();
     const { result } = renderHook(() => useFilesAnalytics(), { wrapper: h.wrapper });

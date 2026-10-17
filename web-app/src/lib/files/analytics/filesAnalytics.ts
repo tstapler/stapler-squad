@@ -30,6 +30,8 @@ export interface FilesEmitter {
   emit<N extends EmitName>(name: N, ...labels: EmitArgs<N>): void;
   /** Starts a timer; the returned function emits the performance event with `durationMs` set. */
   time<N extends TimedName>(name: N): (...labels: EmitArgs<N>) => void;
+  /** For a duration measured elsewhere because a label (such as scale) is only known afterwards. */
+  emitTimed<N extends TimedName>(name: N, durationMs: number, ...labels: EmitArgs<N>): void;
   emitExtraKey(keyClass: KeyClass): void;
   /** Flushes aggregated events now (call on `pagehide`). */
   flush(): void;
@@ -87,6 +89,7 @@ function createCore(track: (e: AnalyticsEvent) => void, clock: Clock): Core {
     };
     const emitter: FilesEmitter = {
       emit: (name, ...args) => emitAt(name, args[0]),
+      emitTimed: (name, durationMs, ...args) => emitAt(name, args[0], durationMs),
       time: (name) => {
         const startedAt = clock.now();
         return (...args) => emitAt(name, args[0], clock.now() - startedAt);
@@ -112,7 +115,7 @@ export function createFilesEmitter(track: (e: AnalyticsEvent) => void, clock: Cl
 
 const cores = new WeakMap<object, Core>();
 
-const NOOP: FilesEmitter = { emit: () => undefined, time: () => () => undefined, emitExtraKey: () => undefined, flush: () => undefined };
+const NOOP: FilesEmitter = { emit: () => undefined, emitTimed: () => undefined, time: () => () => undefined, emitExtraKey: () => undefined, flush: () => undefined };
 
 export function useFilesAnalytics(opts: { component?: FilesComponent; sessionId?: string } = {}): FilesEmitter {
   const ctx = useContext(AnalyticsContext);
