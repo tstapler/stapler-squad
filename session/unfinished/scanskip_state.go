@@ -13,9 +13,9 @@ import (
 // granule leaves (mtime, size, inode) equal (ADR-006 addendum, Story 4.2.1).
 const racyWindow = 2 * time.Second
 
-// scanSkipMaxAge bounds how long any scan_skip verdict is trusted; equal to the
-// backstop tick so a change that leaves every cache key equal is corrected
-// within one tick (ADR-006).
+// scanSkipMaxAge bounds how long any scan_skip verdict is trusted: a few
+// backstop ticks (see scanSkipAgeTicks), so a change that leaves every cache
+// key equal is corrected within that bound (ADR-006).
 const scanSkipMaxAge = fullWalkMaxAge
 
 // statSig is the stat signature a scan_skip cache compares: (mtime, ctime,

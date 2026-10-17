@@ -36,9 +36,15 @@ func (r FullWalkReason) String() string {
 	}
 }
 
-// fullWalkMaxAge bounds how long a clean verdict can be trusted: equal to the
-// backstop tick, so a missed event is corrected within one tick (ADR-006).
-const fullWalkMaxAge = 5 * time.Minute
+// scanSkipAgeTicks is how many backstop ticks a clean verdict may be trusted
+// for. At one tick the bound equalled the scan cadence, so every scheduled scan
+// was already past it and nothing was ever served from cache (ADR-006 addendum).
+const scanSkipAgeTicks = 3
+
+// fullWalkMaxAge bounds how long a clean verdict can be trusted: a multiple of
+// the backstop tick, so a missed event is corrected within scanSkipAgeTicks
+// ticks (ADR-006).
+const fullWalkMaxAge = scanSkipAgeTicks * defaultScanTickInterval
 
 // EventKind classifies one watcher observation fed into DirtyGen.
 type EventKind uint8
@@ -126,8 +132,14 @@ func NewDirtyGen(clock func() time.Time) *DirtyGen {
 func (d *DirtyGen) Gen() uint64 { return d.gen.Load() }
 
 // Arm marks the watcher live. The first scan afterwards is a full walk.
+// Re-arming an armed DirtyGen is a no-op: watchRepo re-registers watches on
+// every AddRepo and ref event, and resetting lastFullWalk each time forced an
+// "unarmed" full walk on the next scan even though the watch never lapsed.
 func (d *DirtyGen) Arm() {
-	d.lastFullWalk.Store(0)
+	if d.armed.Load() {
+		return
+	}
+	d.lastFullWalk.Store(0) // before armed flips, so no scan trusts a pre-disarm walk
 	d.armed.Store(true)
 	d.gen.Add(1)
 }

@@ -51,7 +51,7 @@ func TestDirtyGenPolicy_ShouldFullWalk_WhenWatcherNotArmedOrFirstScanAfterArming
 
 func TestDirtyGenPolicy_ShouldFullWalk_When5MinElapsedOnInjectedClock(t *testing.T) {
 	d, clk := armedAfterFirstWalk(t)
-	clk.t = clk.t.Add(5*time.Minute - time.Nanosecond)
+	clk.t = clk.t.Add(fullWalkMaxAge - time.Nanosecond)
 	assert.False(t, d.Decide().FullWalk)
 	clk.t = clk.t.Add(time.Nanosecond)
 	dec := d.Decide()
@@ -107,4 +107,27 @@ func TestDirtyGenPolicy_ShouldKeepEventsArrivingDuringWalk(t *testing.T) {
 func TestFullWalkReason_ShouldPrioritiseOverflowOverOthers(t *testing.T) {
 	r := FullWalkFallback{MaxAge: time.Minute}.Evaluate(false, time.Time{}, time.Unix(100, 0), pendOverflow|pendError|pendDirEvent)
 	assert.Equal(t, ReasonOverflow, r)
+}
+
+func TestDirtyGenPolicy_ShouldServeFromCache_WhenScansSpacedAtScanInterval(t *testing.T) {
+	d, clk := armedAfterFirstWalk(t)
+	for i := 1; i <= 2; i++ { // at least two scheduled scans per full walk
+		clk.t = clk.t.Add(defaultScanTickInterval)
+		dec := d.Decide()
+		assert.False(t, dec.FullWalk, "scan %d ticks after the last full walk is still inside the staleness bound", i)
+	}
+	clk.t = clk.t.Add(fullWalkMaxAge)
+	assert.Equal(t, ReasonAge, d.Decide().Reason, "the staleness bound still holds")
+}
+
+func TestDirtyGenPolicy_ShouldNotRefireUnarmed_WhenArmedAgainAfterFirstWalk(t *testing.T) {
+	d, _ := armedAfterFirstWalk(t)
+	gen := d.Gen()
+	d.Arm() // watchRepo re-registers on every AddRepo and ref event
+	assert.False(t, d.Decide().FullWalk, "an unbroken watch is not a new arming")
+	assert.Equal(t, gen, d.Gen())
+
+	d.Disarm()
+	d.Arm()
+	assert.Equal(t, ReasonUnarmed, d.Decide().Reason, "a real disarm/arm cycle still needs a fresh walk")
 }

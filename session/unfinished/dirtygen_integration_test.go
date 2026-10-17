@@ -54,6 +54,23 @@ func TestDirtyGenIntegration_ShouldRunStatPassEveryScan_WhenTierAArmedAndCachesH
 	assert.True(t, rescan(t, g, dir))
 }
 
+func TestDirtyGenIntegration_ShouldHitCaches_WhenScansSpacedAtScanInterval(t *testing.T) {
+	t.Parallel()
+	_, dir := trackedRepo(t, map[string]string{"a.txt": "a\n", "d/b.txt": "b\n"})
+	g, offset := dirtyGenReader()
+	g.ArmDirty(dir)
+	require.False(t, rescan(t, g, dir)) // first scan after arming: full walk
+
+	for i := 1; i <= 2; i++ {
+		offset.Add(int64(defaultScanTickInterval))
+		before := g.ScanSkipStats()
+		require.False(t, rescan(t, g, dir))
+		after := g.ScanSkipStats()
+		assert.Greater(t, after.IndexHits, before.IndexHits, "scan %d at exactly the scan interval reached the index cache", i)
+		assert.Greater(t, after.DirsSkipped, before.DirsSkipped, "scan %d reached the untracked-dir verdict cache", i)
+	}
+}
+
 func TestDirtyGenIntegration_ShouldFullWalk_WhenWatcherUnarmed(t *testing.T) {
 	t.Parallel()
 	_, dir := trackedRepo(t, map[string]string{"a.txt": "a\n"})
@@ -106,7 +123,7 @@ func TestDirtyGenIntegration_ShouldFullWalkAndCount_WhenOverflowOrAgeElapses(t *
 	age := DirtyFullWalkTotal(ReasonAge)
 	offset.Add(int64(fullWalkMaxAge))
 	rescan(t, g, dir)
-	assert.Equal(t, decodes+2, g.ScanSkipStats().IndexDecodes, "5 minutes force a full walk regardless of events")
+	assert.Equal(t, decodes+2, g.ScanSkipStats().IndexDecodes, "fullWalkMaxAge forces a full walk regardless of events")
 	assert.GreaterOrEqual(t, DirtyFullWalkTotal(ReasonAge)-age, int64(1))
 }
 

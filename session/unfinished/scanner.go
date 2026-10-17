@@ -31,6 +31,10 @@ const (
 	ScanResultStatusError      ScanResultStatus = 3
 )
 
+// defaultScanTickInterval is the backstop scan cadence; scan_skip's staleness
+// bound is a multiple of it (scanSkipAgeTicks).
+const defaultScanTickInterval = 5 * time.Minute
+
 // ScanResult holds the complete unfinished-work state for a single git worktree.
 type ScanResult struct {
 	RepoPath     string
@@ -266,7 +270,7 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		// this ticker is a backstop for anything fsnotify misses (e.g. a
 		// worktree mtime change with no .git write), so it no longer needs
 		// to run every 30s. Tests override via SetTickInterval.
-		tickInterval:            5 * time.Minute,
+		tickInterval:            defaultScanTickInterval,
 		maintenanceTickInterval: 1 * time.Minute,
 		fsDebounce:              fsnotifyDebounce,
 	}
