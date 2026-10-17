@@ -159,6 +159,8 @@ func (fs *FileService) ListFiles(
 		}
 	}
 
+	entries = withoutAtomicTemps(entries)
+
 	var matcher gitignore.Matcher
 	if !req.Msg.IncludeIgnored {
 		matcher = fs.dirGitignoreMatcher(basePath, fullPath)
