@@ -71,6 +71,7 @@ require (
 
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
+	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect

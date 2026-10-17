@@ -42,3 +42,13 @@ func (fs *FileService) SetTelemetry(t FilesTelemetry) {
 		fs.ops.policy.Telemetry = t
 	}
 }
+
+// SearchContent is a placeholder until the handler lands (Task 1.1.2b).
+// +api: files:content-search
+func (s *SessionService) SearchContent(
+	_ context.Context,
+	_ *connect.Request[sessionv1.SearchContentRequest],
+	_ *connect.ServerStream[sessionv1.SearchContentResponse],
+) error {
+	return connect.NewError(connect.CodeUnimplemented, nil)
+}
