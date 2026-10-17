@@ -241,3 +241,57 @@ func TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers(t *t
 		})
 	}
 }
+
+// TestTransitionGuard_should_RejectQueuedToInProgress_When_PlanArtifactsPathIsStale
+// is the defense-in-depth half of the fix for backlog item
+// 1cfae441-8953-41e6-803d-959062119d4f: even once TriggerTriage only ever
+// persists a plan_artifacts_path that existed at the time triage completed
+// (the primary fix, in server/services/backlog_service_trigger_triage.go), a
+// path that was valid then can still be deleted later — e.g. its triage
+// worktree reaped by CleanupTerminalItem after the item went terminal and was
+// then reopened. This package does no I/O itself (see its doc comment), so
+// TransitionGuard trusts the caller-supplied PlanArtifactsPathMissing bool
+// rather than os.Stat-ing PlanArtifactsPath directly — mirroring how
+// HasUnresolvedBlockers above is also computed by the caller, not here.
+func TestTransitionGuard_should_RejectQueuedToInProgress_When_PlanArtifactsPathIsStale(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		from    BacklogStatus
+		missing bool
+		wantErr error
+	}{
+		{
+			name:    "ready to in_progress blocked by stale plan path",
+			from:    BacklogStatusReady,
+			missing: true,
+			wantErr: ErrPlanArtifactsMissing,
+		},
+		{
+			name:    "queued to in_progress blocked by stale plan path",
+			from:    BacklogStatusQueued,
+			missing: true,
+			wantErr: ErrPlanArtifactsMissing,
+		},
+		{
+			name:    "queued to in_progress allowed when plan path still exists",
+			from:    BacklogStatusQueued,
+			missing: false,
+			wantErr: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := BacklogItemTransitionInput{
+				Status:                   tc.from,
+				PlanApproved:             true,
+				PlanArtifactsPath:        "/some/path/that/once/existed",
+				PlanArtifactsPathMissing: tc.missing,
+			}
+			err := TransitionGuard(item, BacklogStatusInProgress)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("TransitionGuard(%+v, in_progress) = %v, want %v", item, err, tc.wantErr)
+			}
+		})
+	}
+}
