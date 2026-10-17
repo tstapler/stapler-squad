@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { PaletteCommand } from "@/components/sessions/QuickOpenPalette";
 import { useBufferFreshness, type StaleAction } from "./useBufferFreshness";
 import { useEditorBridge } from "./useEditorBridge";
@@ -23,7 +23,7 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   const transport = useFileTransport();
   const feedback = useFilesFeedback();
   const status = useStatusModel(bridge);
-  const { announceSuccess, announceError } = feedback;
+  const { announceSuccess, announceProgress, announceError } = feedback;
 
   const shortcuts = useMemo(() => ({
     onBack: () => back("keyboard"),
@@ -41,15 +41,18 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   }, [stale, reload, resolve, announceSuccess]);
 
   // The palette's "Reload from disk": stat first so the adopted token is the one the new text carries.
+  // A failure never touches the buffer; it raises a banner with a way out (ux.md 8.5).
+  const [reloadFailed, setReloadFailed] = useState<{ path: string; seq: number } | null>(null);
   const reloadFromDisk = useCallback(() => {
     if (!active || active.status !== "loaded") return;
     const { sessionId, path } = active;
+    announceProgress("Checking the file on disk...");
+    setReloadFailed(null);
     transport.stat({ sessionId, path }).then(
       (r) => { reload(r.token); announceSuccess("reloaded", baseName(path)); },
-      () => announceError("Could not check the file: network error"),
+      () => { announceError("Could not check the file: network error"); setReloadFailed({ path, seq: Date.now() }); },
     );
-  }, [active, transport, reload, announceSuccess, announceError]);
-
+  }, [active, transport, reload, announceSuccess, announceProgress, announceError]);
   const dirty = active?.status === "loaded" && active.dirty;
   const paletteCommands = useMemo<PaletteCommand[]>(() => [
     { id: "goto_line", label: "Go to line", shortcut: "Ctrl+G", disabledReason: active ? undefined : "no file open", run: () => setOverlay("goto") },
@@ -58,7 +61,7 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   ], [active, dirty, setOverlay, reloadFromDisk]);
 
   const recentPaths = useMemo(() => buffers.mru.slice(0, RECENT_LIMIT), [buffers.mru]);
-  return { buffers, bridge, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands };
+  return { buffers, bridge, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands, reloadFailed, reloadFromDisk, clearReloadFailed: () => setReloadFailed(null) };
 }
 
 export type FilesV2 = ReturnType<typeof useFilesV2>;

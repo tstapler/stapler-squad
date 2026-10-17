@@ -5,6 +5,7 @@ export const BANNER_PRIORITY = {
   save_rejected: 1,
   save_unknown: 1,
   draft_not_stored: 1,
+  reload_failed_dirty: 1,
   deleted: 2,
   flag_off: 3,
   stale_dirty: 4,
@@ -12,6 +13,7 @@ export const BANNER_PRIORITY = {
   readonly_reason: 6,
   beyond_loaded: 7,
   stale_clean: 8,
+  reload_failed: 8,
   informational: 9,
 } as const;
 

@@ -1,6 +1,7 @@
 import React, { forwardRef, useImperativeHandle } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
 import { fakeCodeEditorProps } from "@/lib/files/__tests__/fixtures/mockCodeEditor";
 import { FilesTab } from "../FilesTab";
@@ -103,6 +104,65 @@ describe("FilesTab", () => {
         await userEvent.keyboard("{Control>}p{/Control}");
         await userEvent.type(await screen.findByRole("combobox", { name: "Quick open file" }), ">go to line{Enter}");
         expect(await screen.findByRole("textbox", { name: "Go to line" })).toBeInTheDocument();
+      } finally {
+        delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
+      }
+    });
+  });
+
+  describe("waits and failures (viewer-v2)", () => {
+    function mountWith(statFile: () => unknown) {
+      const h = createFilesTestHarness({
+        flags: { "files:viewer-v2": true },
+        handlers: { getFileContent: text("hello"), statFile: statFile as never },
+      });
+      render(<FilesTab sessionId={h.sessionId} baseUrl="http://x" />, { wrapper: h.wrapper });
+      return h;
+    }
+
+    it("filesTab_should_ShowFailureWithRetryAndCloseTab_And_EmitOneOpenFailed_When_StatNotFound", async () => {
+      const h = mountWith(() => { throw new ConnectError("gone", Code.NotFound); });
+      await userEvent.click(await screen.findByTestId("pick"));
+      expect(await screen.findByText("Could not open pick.go: not found")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Reveal in tree" })).toBeInTheDocument();
+      const failed = h.analytics.events.filter((e) => e.name === "files.open.failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0].labels).toMatchObject({ reason: "not_found" });
+      expect(JSON.stringify(failed[0])).not.toContain("pick.go");
+      await userEvent.click(screen.getByRole("button", { name: "Close tab" }));
+      expect(screen.queryByText(/Could not open/)).toBeNull();
+    });
+
+    it("filesTab_should_ShowOpeningPanelAfter150ms_And_RemoveItWhenStatLands", async () => {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => { release = r; });
+      mountWith(async () => { await gate; return { versionToken: "v1:1:1:x", size: 5n }; });
+      await userEvent.click(await screen.findByTestId("pick"));
+      expect(screen.queryByText("Opening pick.go...")).toBeNull();
+      const region = await screen.findByText("Opening pick.go...");
+      expect(region.closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+      act(() => release());
+      await waitFor(() => expect(screen.queryByText("Opening pick.go...")).toBeNull());
+    });
+
+    it("filesTab_should_RaiseReloadFailedBannerAndKeepBuffer_When_PaletteReloadStatFails", async () => {
+      Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get() { return this.parentNode; } });
+      try {
+        let calls = 0;
+        mountWith(() => {
+          calls += 1;
+          if (calls > 1) throw new ConnectError("down", Code.Unavailable);
+          return { versionToken: "v1:1:1:x", size: 5n };
+        });
+        await userEvent.click(await screen.findByTestId("pick"));
+        await screen.findByTestId("fake-code-editor");
+        await userEvent.keyboard("{Control>}p{/Control}");
+        await userEvent.type(await screen.findByRole("combobox", { name: "Quick open file" }), ">reload{Enter}");
+        expect(await screen.findByText("Could not reload: network error")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+        expect(screen.getByTestId("fake-code-editor")).toHaveAttribute("data-path", "pick.go");
+        expect(screen.getByTestId("files-status-message")).toHaveTextContent("Could not check the file: network error");
       } finally {
         delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;
       }

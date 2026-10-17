@@ -18,6 +18,7 @@ import { RecentFilesSection } from "./RecentFilesSection";
 import { QuickOpenPalette } from "./QuickOpenPalette";
 import { FilesV2Chrome } from "./files/FilesV2Chrome";
 import { FilesV2Footer } from "./files/FilesV2Footer";
+import { useActiveBufferWait } from "./files/ActiveBufferWait";
 import { tabPanel } from "./files/FilesV2Chrome.css";
 import { FilesTreeToolbar } from "./FilesTreeToolbar";
 import {
@@ -157,6 +158,8 @@ function FilesTabView({
   const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
   useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, ...v2?.shortcuts });
 
+  const wait = useActiveBufferWait(v2, fileTreeRef);
+
   // Build tree pane class names
   const treePaneClasses = [
     treePane,
@@ -247,14 +250,17 @@ function FilesTabView({
         </button>
         {v2 && <FilesV2Chrome v2={v2} fileTreeRef={fileTreeRef} panelId={PANEL_ID} />}
         <div className={tabPanel} role={v2 ? "tabpanel" : undefined} id={PANEL_ID} aria-labelledby={v2 ? `files-tab-${v2.buffers.state.activeIndex}` : undefined}>
-          <FileContentViewer
-            sessionId={sessionId}
-            filePath={selectedPath}
-            baseUrl={baseUrl}
-            diffContent={diff?.content}
-            reloadKey={v2?.bridge.reloadKey}
-            onEditorReady={v2?.bridge.onEditorReady}
-          />
+          {wait.node}
+          <div hidden={wait.hideViewer} style={wait.hideViewer ? undefined : { display: "contents" }}>
+            <FileContentViewer
+              sessionId={sessionId}
+              filePath={selectedPath}
+              baseUrl={baseUrl}
+              diffContent={diff?.content}
+              reloadKey={v2?.bridge.reloadKey}
+              onEditorReady={v2?.bridge.onEditorReady}
+            />
+          </div>
         </div>
         {v2 && <FilesV2Footer v2={v2} />}
       </div>

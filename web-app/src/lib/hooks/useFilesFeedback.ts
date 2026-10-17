@@ -6,7 +6,7 @@ export type SuccessKind = "saved" | "merge_saved" | "reloaded" | "draft_restored
 
 export interface FeedbackMessage {
   id: number;
-  kind: "success" | "error";
+  kind: "success" | "error" | "progress";
   text: string;
   /** Offered with a success (eviction undone): keeps the toast up longer. */
   undo?: () => void;
@@ -60,6 +60,11 @@ export function useFilesFeedback() {
     start(opts.undo ? UNDO_MS : SUCCESS_MS);
   }, [start]);
 
+  /** A wait in flight ("Checking the file on disk..."); the next success or error replaces it. */
+  const announceProgress = useCallback((text: string) => {
+    setMessage((m) => (m?.kind === "error" ? m : { id: ++seq.current, kind: "progress", text }));
+  }, []);
+
   const announceError = useCallback((text: string) => {
     setMessage({ id: ++seq.current, kind: "error", text });
   }, []);
@@ -76,7 +81,7 @@ export function useFilesFeedback() {
     if (toast || message?.kind === "success") start(lifetime.current);
   }, [toast, message, start]);
 
-  return { message, toast, announceSuccess, announceError, dismiss, pause, resume };
+  return { message, toast, announceSuccess, announceProgress, announceError, dismiss, pause, resume };
 }
 
 export type FilesFeedback = ReturnType<typeof useFilesFeedback>;

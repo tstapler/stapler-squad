@@ -138,5 +138,10 @@ export function useEditorBridge(buffers: OpenBuffers) {
     }
   }, [editor, active]);
 
-  return { onEditorReady, inspect, eol, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
+  const text = useCallback((): string | null => {
+    if (!editor || !active || editor.path !== active.path) return null;
+    try { return editor.handle.getText(); } catch { return null; }
+  }, [editor, active]);
+
+  return { onEditorReady, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
 }
