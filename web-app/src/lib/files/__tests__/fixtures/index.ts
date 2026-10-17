@@ -5,3 +5,4 @@ export type { FilesHarness, FilesHarnessOverrides, SessionHandlers } from "./fil
 export { createFakeAnalytics } from "./fakeAnalytics";
 export type { FakeAnalytics } from "./fakeAnalytics";
 export { HARNESS_MOCKED_MODULES, findDuplicateMocks } from "./mockGuard";
+export { installJsdomLayoutShims } from "./jsdomLayout";
