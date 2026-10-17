@@ -19,7 +19,7 @@ The owner wants long-term understanding of how the Files viewer is used (adoptio
 ### 2. Privacy rules (hard rules, enforced by types and tests)
 Allowed label values: closed enums, booleans (`"true"`/`"false"`), count/size/length **buckets**, extension **class** buckets, form factor, input profile, flag state. Forbidden anywhere in an event (name, labels, `component`, `page`): file paths, directory names, file names, extensions as such, file contents, query text, glob text, branch names, session titles, draft text, error message strings, git refs.
 - Every label value is typed as a string-literal union produced by a helper (`bucketCount`, `bucketBytes`, `bucketQueryLen`, `extClass(path)` which returns only the class and never stores the path). There is no `string`-typed label field in the registry.
-- Shape limits (also enforced server-side for `files.*` events in the handler, see Consequences): at most 8 labels per event; key `^[a-z][a-z0-9_]{0,23}$`; value `^[a-z0-9_+-]{1,24}$` (rules out `/`, `.`, spaces, upper case, so paths and file names cannot pass). Shape checks cannot catch a short lowercase query word; the type system and the canary test are the real guard.
+- The cap counts the four stamps: an event's own labels are therefore at most 4, which is why `files.search.run` packs its options into `opts` and `files.tab.open` carries no `open_tabs`. Shape limits (also enforced server-side for `files.*` events in the handler, see Consequences): at most 8 labels per event; key `^[a-z][a-z0-9_]{0,23}$`; value `^[a-z0-9_+-]{1,24}$` (rules out `/`, `.`, spaces, upper case, so paths and file names cannot pass). Shape checks cannot catch a short lowercase query word; the type system and the canary test are the real guard.
 - Cardinality: every label has a finite value set declared in the registry (largest set: `ext_class` with 7 values). No unbounded ids; no per-event random correlation ids (the find-and-open metric is measured with a client-side interaction meter, section 5).
 - Stamped on every event by the helper (not by call sites): `form` = `mobile|desktop` (the same 768 px breakpoint as the layout), `input` = `touch|hardware` (`InputProfile`), `editing` = `on|off` (`files:editing`), `v2` = `on|off` (`files:viewer-v2`). These are the only dimensions for the mobile/desktop split.
 
@@ -28,15 +28,15 @@ Labels shown per event are in addition to the four stamped labels. `dur` = `dura
 
 | Event | Cat | Labels (enum / bucket) | Notes |
 |---|---|---|---|
-| `files.search.run` | user_action | `query_len` {2-3,4-8,9-32,33+}, `regex`, `case_sensitive`, `whole_word`, `has_globs`, `include_ignored` (bool) | Fires once per request actually sent (after the 300 ms debounce) |
+| `files.search.run` | user_action | `query_len` {2-3,4-8,9-32,33+}, `opts` | Fires once per request actually sent (after the 300 ms debounce). `opts` packs the six option booleans (regex, case-sensitive, whole-word, has-globs, include-ignored, large-files) as `r<0/1>c<0/1>w<0/1>g<0/1>i<0/1>l<0/1>` (64 values) so the event plus the four stamps fits the 8-label cap |
 | `files.search.results` | user_action | `outcome` {ok,empty,truncated,invalid_regex,error,worktree_unavailable,flag_off,busy}, `results` {0,1-9,10-99,100-999,1000+}, `files` {0,1-9,10-99,100+}, `queued` (bool) | Fires on the final `stats` or the error |
 | `files.search.open_hit` | user_action | `rank` {1,2-5,6-20,21+}, `interactions` {1,2,3,4,5+}, `via` {tap,enter,quickfix}, `reused_tab` (bool) | `interactions` is the find-and-open meter (section 5) |
 | `files.search.cancel` | user_action | `phase` {queued,running}, `results` bucket | |
 | `files.search.queued` | user_action | `ahead` {1,2+} | |
-| `files.tab.open` | user_action | `kind` {preview,pinned}, `source` {tree,search,palette,recent,deeplink,outline,jumplist,restore}, `ext_class` {code,markup,config,doc,data,other,none}, `size` {lt10k,10k-100k,100k-1m,gt1m}, `open_tabs` {1,2-3,4-9,10+} | |
+| `files.tab.open` | user_action | `kind` {preview,pinned}, `source` {tree,search,palette,recent,deeplink,outline,jumplist,restore}, `ext_class` {code,markup,config,doc,data,other,none}, `size` {lt10k,10k-100k,100k-1m,gt1m} | |
 | `files.tab.close` | user_action | `dirty` (bool), `method` {button,keyboard,context_menu,close_others,evict}, `open_tabs` bucket | |
 | `files.tab.switch` | navigation | `via` {strip,sheet,jumplist,keyboard,quickfix} | Coalesced within 250 ms |
-| `files.tab.evict` | user_action | `outcome` {evicted_clean_preview,refused_all_pinned_or_dirty} | Pinned and dirty tabs are never evicted (ux.md section 5) |
+| `files.tab.evict` | user_action | `outcome` {evicted_clean_preview,refused_pinned_dirty} | Pinned and dirty tabs are never evicted (ux.md section 5) |
 | `files.tab.evict_undo` | user_action | none | Undo after an eviction announcement |
 | `files.tab.restore` | navigation | `outcome` {ok,partial,storage_unavailable}, `tabs` bucket | On Files tab mount |
 | `files.open.failed` | user_action | `reason` {not_found,too_large,binary,encoding,worktree_unavailable,rpc_error} | Loading-state failure (ux.md section 8.5) |
@@ -66,13 +66,13 @@ Labels shown per event are in addition to the four stamped labels. `dur` = `dura
 | `files.mobile.pane_switch` | navigation | `from`/`to` {files,editor,search}, `via` {bottom_bar,back_arrow,system_back,tap_hit} | |
 | `files.mobile.extra_key_used` | user_action | `key_class` {esc,tab,modifier,arrow,bracket,punct,undo_redo,save,vim_row}, `count` {1,2-5,6-20,21+} | Aggregated per 30 s window per class, never per keystroke |
 | `files.mobile.keyboard_open` | user_action | `trigger` {edit_enter,tap}, `bar_visible` (bool) | Coalesced within 2 s |
-| `files.perf.open_ms` | performance | `size` bucket, `degraded` (bool) | `durationMs` = RPC-return to first paint (the 300 ms SLO) |
+| `files.perf.open_ms` | performance | `size` bucket, `degraded` (bool), `tier` {t0,t1,t2} | `durationMs` = RPC-return to first paint (the 300 ms SLO) |
 | `files.perf.search_first_result_ms` | performance | `scale` {lt1k,1k-10k,10k-50k,50k+} files scanned bucket, `queued` (bool) | Client-measured; SLO 2000 ms |
 | `files.perf.search_total_ms` | performance | `outcome` {ok,truncated,cancelled,error}, `scale` | |
 | `files.perf.save_ms` | performance | `outcome` {saved,conflict,rejected}, `size` bucket | |
 | `files.meta.dropped` | performance | `event` {the capped event names}, `count` bucket | Emitted by the rate cap (section 4), so lost events are visible |
 | `files.server.write` | rpc | `outcome` {ok,conflict_rejected,denied,disabled,error}, `reason` {none, ReadOnlyReason values}, `size` bucket, `eol` {lf,crlf,mixed}, `bom` (bool) | Server; `durationMs` = write duration; same outcome enum as the slog line |
-| `files.server.search` | rpc | `outcome` {ok,truncated,cancelled,invalid,error,disabled,busy}, `results` bucket, `scale` bucket, `queued` (bool), `backend` {walker} | Server; `durationMs` = total |
+| `files.server.search` | rpc | `outcome` {ok,truncated,cancelled,invalid,error,disabled,busy}, `results` bucket, `scale` bucket, `queued` (bool), `backend` {walker}, `large` (bool) | Server; `durationMs` = total |
 | `files.server.search_first_result` | performance | `scale` bucket | Server first-batch latency, the authoritative SLO series |
 
 Server events carry no `form`/`input` (the server cannot know them); the client events are the form-factor series.
@@ -112,13 +112,13 @@ New closed-enum labels (all subject to the shape rules of section 2; none is a p
 | Event | Cat | Labels | Notes |
 |---|---|---|---|
 | `files.transport.select` | navigation | `op`, `transport`, `reason` {capabilities,flag,pinned_full,version} | Once per page per op change |
-| `files.transport.fallback` | performance | `op`, `from`, `to` (`transport` values), `fallback_reason` | After three consecutive transport-class failures; once per demotion |
-| `files.read.window` | performance | `transport`, `payload`, `outcome` {ok,torn,stale,error,aborted}, `cache` {hit,miss}, `direction` {around,fwd,back} | Client, sampled by the section 4 token bucket; `durationMs` set |
+| `files.transport.fallback` | performance | `op`, `from`, `to` (each a transport value), `fallback_reason` | After three consecutive transport-class failures; once per demotion |
+| `files.read.window` | performance | `transport`, `payload`, `outcome` {ok,torn,stale,error,aborted}, `cache` {hit,miss} | Client, sampled by the section 4 token bucket; `durationMs` set |
 | `files.edit.patch_rejected` | user_action | `patch_reason`, `tier`, `transport` | Client; no offsets |
 | `files.edit.preflight` | user_action | `outcome` {ok,lines_moved,mismatch,analysis_pending,error} | Same-position rebase attempt (ADR-034 amendment) |
 | `files.server.patch` | rpc | `outcome` {ok,conflict,offset_mismatch,result_mismatch,out_of_order,analysis_pending,too_large,rejected,disabled,error}, `tier`, `transport`, `payload`, `ops` | Server, unthrottled, mirrors `files.server.write`; the same outcome enum as the slog line; `durationMs` set |
 
-`files.edit.save` additionally carries `transport`, `payload` and `ops` when the save went through the transport port, and `files.perf.open_ms` additionally carries `tier`. Section 5 gains the derived series described in plan Story 2.5.3 (adapter mix, fallback rate, patch versus whole-file save share, median payload bucket, patch rejection rate by reason). The server port gains `RecordPatch` (enum-typed `PatchOutcomeEvent`, no path or offset field).
+`files.perf.open_ms` additionally carries `tier` (in the table above). **Open item (found in Task 0.2.5d)**: ADR-036 wanted `files.edit.save` to also carry `transport`, `payload` and `ops`, but its 3 own labels plus those 3 plus the 4 stamps is 10, over the 8-label cap the server guard enforces, so the event would be dropped whole. Not added to the registry; the first emitting call site (Epic 2.x) must pick which labels to give up (candidates: `size`, `via`) or move the three onto `files.perf.save_ms`. Section 5 gains the derived series described in plan Story 2.5.3 (adapter mix, fallback rate, patch versus whole-file save share, median payload bucket, patch rejection rate by reason). The server port gains `RecordPatch` (enum-typed `PatchOutcomeEvent`, no path or offset field).
 
 
 ## Consequences
