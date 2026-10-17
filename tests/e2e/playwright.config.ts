@@ -10,6 +10,10 @@ import { defineConfig, devices } from '@playwright/test';
 // Task 0.1.4b decision: WebKit ran green in the Playwright Noble image but is not yet proven on the CI runner, so
 // `mobile-chromium` (Pixel-class, 390x844, touch) is the gating mobile project and `mobile-webkit` is informational,
 // opt-in with PW_WEBKIT=1 (CI needs `npx playwright install webkit --with-deps` first).
+// Story 1.3.5c: the chord spec also runs on desktop Firefox and WebKit, informational only (real accelerator
+// delivery is the owner's manual check, Story 2.5.2). CI installs the browsers with `npx playwright install
+// firefox webkit --with-deps` and runs these two projects with `continue-on-error`; Chromium stays gating.
+const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
 
 export default defineConfig({
@@ -116,6 +120,16 @@ export default defineConfig({
           args: ['--use-gl=swiftshader', '--disable-gpu-sandbox'],
         },
       },
+    },
+    {
+      name: 'desktop-firefox',
+      testMatch: SHORTCUT_SPECS,
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'desktop-webkit',
+      testMatch: SHORTCUT_SPECS,
+      use: { ...devices['Desktop Safari'] },
     },
     {
       name: 'mobile-chromium',
