@@ -4279,6 +4279,44 @@ func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInRe
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, open[0].Reason)
 }
 
+// TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOrReview pins the
+// fix for item a0fb3466: its autonomous_stuck row stayed open after the item cycled all the
+// way back to "ready" (via its abandoned_review resolving, not a driver success) — a
+// transition resolveAutonomousStuck's point-of-success call never observes. Mirrors
+// StuckReasonBouncing's identical two-status anchor; the negative case (the item merely
+// cycling forward into review, not yet leaving the anchor) is already pinned by
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState.
+func TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOrReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous-stuck item back to ready",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress, "turn-cap stop, awaiting manual attention")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item's abandoned_review resolves and sends it all the way back to "ready" for a
+	// fresh dispatch — not a driver success, and not a status onAutonomousDriverComplete's
+	// forced in_progress->review path ever produces, so the two-status anchor is safe to
+	// resolve here.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "autonomous_stuck row must resolve once the item's status leaves in_progress/review")
+}
+
 // TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
 // verifies rework_cap rows — the one remaining reason with no non-terminal
 // anchor at all — stay open while the item has not yet reached done/archived.
