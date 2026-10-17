@@ -310,7 +310,7 @@ S1 reference (recorded, different corpus state and workload, so INFERRED compara
 | Target | Result | Verdict |
 |---|---|---|
 | CPU: scanner S2/S1 <= `rho` = 0.788 | 0.527 candidate/control, MEASURED (same binary, same window); 0.506 without shadow-verify; the candidate replicate in W1 and the S1-relative figure (0.197) point the same way | **MET** (vs same-binary control) |
-| Alloc: scanner S2/S1 <= 0.50 | 0.838 with the default 1-in-50 shadow-verify counted; 0.473 without it | **MISSED as measured** (default sampler on). The oracle replays the legacy path for sampled scans (18 to 30 MB each), so 43% of the candidate's scanner allocations here are the verifier, not the scanner |
+| Alloc: scanner S2/S1 <= 0.50 | 0.838 with the default 1-in-50 shadow-verify counted; 0.473 without it | **MISSED as measured** (default sampler on). The oracle replays the legacy path for sampled scans (about 18 to 45 MB each), so 43% of the candidate's scanner allocations here are the verifier, not the scanner |
 | `parity_mismatch_total` == 0 for every field | all five fields 0 in start, end, final and every 5-min sample; `parity_transient_total` 0; `oracle_errors` 0 | **MET, thin evidence**: only 5 oracle samples over the whole candidate run (1 in 50 of about 250 scans) |
 | No crashes or panics | `grep -ciE "panic\|fatal"` on both instance logs: 0 | MET |
 | Heap and goroutines bounded | see table | MET |
