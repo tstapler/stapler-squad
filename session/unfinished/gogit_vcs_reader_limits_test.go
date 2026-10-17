@@ -28,6 +28,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/native"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
@@ -68,7 +69,7 @@ func initRepoInternal(t testing.TB) string {
 
 func openInternal(t testing.TB, dir string) *git.Repository {
 	t.Helper()
-	repo, err := git.PlainOpen(dir)
+	repo, err := native.OpenRepo(dir)
 	if err != nil {
 		t.Fatalf("PlainOpen(%s): %v", dir, err)
 	}

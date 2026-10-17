@@ -7,6 +7,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
 // NewLinkedWorktree creates a linked worktree of the repository at
@@ -25,7 +26,7 @@ func NewLinkedWorktree(t testing.TB, mainRepoDir, name, branch string) string {
 	mustMkdir(t, adminDir)
 	mustMkdir(t, linked)
 
-	mainRepo, err := git.PlainOpen(mainRepoDir)
+	mainRepo, err := native.OpenRepo(mainRepoDir)
 	if err != nil {
 		t.Fatalf("testrepo: open main repo: %v", err)
 	}
@@ -43,7 +44,7 @@ func NewLinkedWorktree(t testing.TB, mainRepoDir, name, branch string) string {
 	mustWrite(t, filepath.Join(adminDir, "gitdir"), filepath.Join(linked, ".git")+"\n")
 	mustWrite(t, filepath.Join(linked, ".git"), "gitdir: "+adminDir+"\n")
 
-	repo, err := git.PlainOpenWithOptions(linked, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
+	repo, err := native.OpenRepo(linked)
 	if err != nil {
 		t.Fatalf("testrepo: open linked worktree: %v", err)
 	}
@@ -60,7 +61,7 @@ func NewLinkedWorktree(t testing.TB, mainRepoDir, name, branch string) string {
 // OpenLinked opens a linked worktree directory with commondir support.
 func OpenLinked(t testing.TB, linkedDir string) *git.Repository {
 	t.Helper()
-	repo, err := git.PlainOpenWithOptions(linkedDir, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
+	repo, err := native.OpenRepo(linkedDir)
 	if err != nil {
 		t.Fatalf("testrepo: OpenLinked: %v", err)
 	}

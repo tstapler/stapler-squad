@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/git/native"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
@@ -213,7 +214,7 @@ func TestRepack_ShouldPackObjectsAndKeepThemReadable_WhenLooseObjectsExist(t *te
 	if len(loose) != 0 || len(packs) != 1 {
 		t.Errorf("loose objects = %d, packs = %d, want 0 and 1", len(loose), len(packs))
 	}
-	reopened, err := git.PlainOpen(dir)
+	reopened, err := native.OpenRepo(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

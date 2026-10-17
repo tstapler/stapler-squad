@@ -13,6 +13,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/tstapler/stapler-squad/session/git/native"
 
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
@@ -139,7 +140,7 @@ func checkSource(src string, skip []string, maxMB int64) (reason string, size in
 	if _, aerr := os.Stat(filepath.Join(gitDir, "objects", "info", "alternates")); aerr == nil {
 		return "uses objects/info/alternates (absolute path into another repo)", 0, nil
 	}
-	repo, oerr := git.PlainOpen(src)
+	repo, oerr := native.OpenRepo(src)
 	if oerr != nil {
 		return "go-git cannot open: " + oerr.Error(), 0, nil
 	}
@@ -264,7 +265,7 @@ func addLinkedWorktree(mainRepoDir, name, branch, linkedDir string) error {
 	if err := os.MkdirAll(linkedDir, 0o755); err != nil {
 		return err
 	}
-	mainRepo, err := git.PlainOpen(mainRepoDir)
+	mainRepo, err := native.OpenRepo(mainRepoDir)
 	if err != nil {
 		return err
 	}
@@ -289,7 +290,7 @@ func addLinkedWorktree(mainRepoDir, name, branch, linkedDir string) error {
 			return err
 		}
 	}
-	repo, err := git.PlainOpenWithOptions(linkedDir, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
+	repo, err := native.OpenRepo(linkedDir)
 	if err != nil {
 		return err
 	}

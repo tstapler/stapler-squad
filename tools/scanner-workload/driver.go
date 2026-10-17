@@ -21,6 +21,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
 // OpKind names one scripted event.
@@ -347,7 +348,7 @@ func appendRel(dir, rel, line string) error {
 }
 
 func openRepo(dir string) (*git.Repository, error) {
-	return git.PlainOpenWithOptions(dir, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
+	return native.OpenRepo(dir)
 }
 
 func signature(when time.Time) *object.Signature {

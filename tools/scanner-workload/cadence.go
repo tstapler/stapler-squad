@@ -10,6 +10,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
 // RepoCadence is the read-only measurement of one owner repo.
@@ -43,7 +44,7 @@ func (r CadenceReport) PerDay() map[string]float64 {
 // parameter so tests need no wall clock.
 func MeasureCadence(src string, windowDays int, now time.Time, skip []string) (RepoCadence, error) {
 	c := RepoCadence{Name: filepath.Base(src), Path: src, WindowDays: windowDays}
-	repo, err := git.PlainOpen(src)
+	repo, err := native.OpenRepo(src)
 	if err != nil {
 		return c, err
 	}

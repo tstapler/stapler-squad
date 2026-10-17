@@ -15,6 +15,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/tstapler/stapler-squad/session/git/native"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
@@ -60,7 +61,7 @@ func filledRows(rs *repostate.RepoState) (n int) {
 // counting storer and returns its commit-object reads.
 func oracleDecodes(tb testing.TB, dir string, walk func(repo *git.Repository)) int64 {
 	tb.Helper()
-	plain, err := git.PlainOpen(dir)
+	plain, err := native.OpenRepo(dir)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestAheadBehind_ShouldDecodeOnce_WhenThreeWorktreesShareHeadAndBase(t *test
 // headAndBase resolves a worktree's HEAD and the "base" branch.
 func headAndBase(tb testing.TB, dir string) (head, base plumbing.Hash) {
 	tb.Helper()
-	repo, err := git.PlainOpen(dir)
+	repo, err := native.OpenRepo(dir)
 	if err != nil {
 		tb.Fatal(err)
 	}
