@@ -14,8 +14,10 @@ import (
 // closed mid-walk, so a sampled fraction of live scans also runs the legacy
 // implementation beside the new one and counts any disagreement.
 
-// defaultShadowVerifyEvery samples one scan in fifty.
-const defaultShadowVerifyEvery = 50
+// defaultShadowVerifyEvery samples one scan in 200. 1 in 50 made the oracle 43%
+// of the scanner's allocations in the S2 A/B; STAPLER_SQUAD_SHADOW_VERIFY_EVERY
+// raises the rate for a parity soak.
+const defaultShadowVerifyEvery = 200
 
 // parityField names a ScanResult value the sampler compares.
 type parityField uint8

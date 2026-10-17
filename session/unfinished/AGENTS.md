@@ -69,7 +69,7 @@ leaves: `xsync` bucket locks and `singleflight` internals. `SharedObjectStore.mu
 
 ## Shadow verify
 
-`shadow_verify.go` samples 1 scan in 50 (`defaultShadowVerifyEvery`) when any rollback unit is on, runs the
+`shadow_verify.go` samples 1 scan in 200 (`defaultShadowVerifyEvery`; `STAPLER_SQUAD_SHADOW_VERIFY_EVERY=N` overrides it at startup, read in `server/dependencies.go`) when any rollback unit is on, runs the
 legacy oracle beside the new path, and counts disagreements in `parity_mismatch_total{field}`
 (`parity_transient_total` when the oracle disagrees with itself). It skips under severe memory pressure.
 `Scanner.SetShadowVerifyEvery(n)` overrides the rate (`n <= 0` off). Zero mismatches is a flip criterion for

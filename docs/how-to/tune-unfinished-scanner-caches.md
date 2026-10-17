@@ -39,9 +39,18 @@ Startup logs one INFO, `unfinished scanner configured`, with the parents reader 
 
 ## Run the shadow verify
 
-With any rollback unit on, the scanner re-runs 1 scan in 50 on the legacy path and compares
+With any rollback unit on, the scanner re-runs 1 scan in 200 on the legacy path and compares
 (`session/unfinished/shadow_verify.go`; skipped under severe memory pressure). It needs no setup.
-Confirm `shadow_verify.sampled` grows and `parity_mismatch_total` stays all zero. A non-zero mismatch
+The legacy replay is expensive (about 18 to 45 MB per sampled scan), so 1 in 50 would add a visible
+share of scanner allocations in steady state; for a parity soak, raise the rate with an environment
+variable read once at startup:
+
+```sh
+STAPLER_SQUAD_SHADOW_VERIFY_EVERY=3 ./stapler-squad   # 1 in 3 scans; 0 turns it off; unset keeps 1 in 200
+```
+
+An invalid or negative value is ignored with a warning. The effective rate is `shadow_verify_every` in the
+actuator. Confirm `shadow_verify.sampled` grows and `parity_mismatch_total` stays all zero. A non-zero mismatch
 is a `HOLD` for flipping any default; the debug log carries both values.
 
 ## Roll back one unit
