@@ -1,6 +1,8 @@
 import React from "react";
 import { act, render, waitFor } from "@testing-library/react";
-import { installJsdomLayoutShims } from "@/lib/files/__tests__/fixtures";
+import fs from "fs";
+import path from "path";
+import { installJsdomLayoutShims } from "@/lib/files/__tests__/fixtures/jsdomLayout";
 import { CodeEditor, type CodeEditorHandle, type EditorMode } from "../CodeEditor";
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
@@ -92,5 +94,10 @@ describe("CodeEditor", () => {
     m.rerenderWith({ mode: "Edit", content: "from props" });
     expect(m.handle().getText()).toMatch(/!/);
     expect(m.handle().getText()).not.toBe("from props");
+  });
+
+  it("codeEditor_should_StayUnder350Lines", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "../CodeEditor.tsx"), "utf8");
+    expect(source.split("\n").length).toBeLessThanOrEqual(350);
   });
 });
