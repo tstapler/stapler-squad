@@ -7,7 +7,8 @@ import type { FilesV2 } from "@/lib/hooks/useFilesV2";
 import { GoToLineDialog } from "./GoToLineDialog";
 import { OpenTabsBar } from "./OpenTabsBar";
 import { OutlinePanel } from "./OutlinePanel";
-import { StaleBanner } from "./StaleBanner";
+import { BannerStack } from "./BannerStack";
+import { staleBannerSpec } from "./StaleBanner";
 import { chrome, navRow, navButton, spacer } from "./FilesV2Chrome.css";
 
 interface FilesV2ChromeProps {
@@ -57,7 +58,7 @@ export function FilesV2Chrome({ v2, fileTreeRef, panelId }: FilesV2ChromeProps) 
         <button type="button" className={navButton} aria-haspopup="dialog" disabled={!buffers.active} onClick={() => bridge.setOverlay("outline")}>Outline</button>
         <button type="button" className={navButton} aria-haspopup="dialog" disabled={!buffers.active} title="Go to line (Ctrl+G)" onClick={() => bridge.setOverlay("goto")}>Go to line</button>
       </div>
-      {stale && <StaleBanner stale={stale} sessionRunning={sessionRunning} onAction={v2.onStaleAction} />}
+      <BannerStack banners={stale ? [staleBannerSpec(stale, sessionRunning, v2.onStaleAction)] : []} />
       {bridge.overlay === "outline" && (
         <OutlinePanel result={bridge.outline()} onSelect={(s) => jumpToSymbol(s.line)} onClose={() => bridge.setOverlay(null)} onGoToLine={() => bridge.setOverlay("goto")} />
       )}
