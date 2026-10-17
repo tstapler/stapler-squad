@@ -171,12 +171,15 @@ func (s *Scanner) now() time.Time {
 	return time.Now()
 }
 
-// signatureMaxAge bounds committed-state reuse to one tick: a change that
-// leaves every signature component equal is corrected within a tick.
+// signatureMaxAge bounds committed-state reuse to scanSkipAgeTicks ticks: a
+// change that leaves every signature component equal is corrected within that
+// bound. At one tick it equalled the scan cadence, so no scheduled scan ever
+// reused (0 of 234 in the S2 A/B); refs are re-resolved every Burst, so the
+// bound only backstops what the signature cannot see.
 func (s *Scanner) signatureMaxAge() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.tickInterval
+	return scanSkipAgeTicks * s.tickInterval
 }
 
 // fillCommittedState sets the committed-state fields of result. When the

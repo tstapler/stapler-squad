@@ -71,6 +71,22 @@ func TestDirtyGenIntegration_ShouldHitCaches_WhenScansSpacedAtScanInterval(t *te
 	}
 }
 
+func TestDirtyGenIntegration_ShouldHitIndexCache_WhenWorktreeDirtyByTrackedFile(t *testing.T) {
+	t.Parallel()
+	_, dir := trackedRepo(t, map[string]string{"a.txt": "a\n", "d/b.txt": "b\n"})
+	require.NoError(t, writeFile(dir, "a.txt", "edited in place\n"))
+	g, offset := dirtyGenReader()
+	g.ArmDirty(dir)
+	require.True(t, rescan(t, g, dir)) // first scan after arming: forced, returns dirty from the stat pass
+
+	for i := 1; i <= 2; i++ {
+		offset.Add(int64(defaultScanTickInterval))
+		before := g.ScanSkipStats()
+		require.True(t, rescan(t, g, dir), "the stat pass still reports the edit")
+		assert.Greater(t, g.ScanSkipStats().IndexHits, before.IndexHits, "scan %d: a dirty worktree no longer re-forces the index parse", i)
+	}
+}
+
 func TestDirtyGenIntegration_ShouldFullWalk_WhenWatcherUnarmed(t *testing.T) {
 	t.Parallel()
 	_, dir := trackedRepo(t, map[string]string{"a.txt": "a\n"})

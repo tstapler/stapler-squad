@@ -29,6 +29,7 @@ func (g *GoGitVCSReader) hasUncommittedSkipPass(entry *cachedRepo, worktreePath 
 		return false, nil, err
 	}
 	if pi.stagedDirty {
+		done(false)
 		return g.storeUncommitted(worktreePath, true), nil, nil
 	}
 
@@ -41,6 +42,7 @@ func (g *GoGitVCSReader) hasUncommittedSkipPass(entry *cachedRepo, worktreePath 
 		return false, nil, err
 	}
 	if changed {
+		done(false)
 		if !collect {
 			pass = nil
 		}
@@ -51,7 +53,7 @@ func (g *GoGitVCSReader) hasUncommittedSkipPass(entry *cachedRepo, worktreePath 
 	if err != nil {
 		return false, nil, err
 	}
-	done()
+	done(true)
 	if !r || !collect {
 		pass = nil
 	}

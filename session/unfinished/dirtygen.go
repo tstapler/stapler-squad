@@ -234,3 +234,18 @@ func (d *DirtyGen) CompleteFullWalk(dec DirtyDecision) {
 	}
 	d.lastFullWalk.Store(dec.at.UnixNano())
 }
+
+// CompleteIndexWalk records a forced scan that re-validated the parsed index
+// but returned dirty before the untracked walk. It restarts the age clock only
+// when no event forced the walk: overflow, error and directory events stay
+// pending until a walk covers the untracked set. Age and unarmed need no such
+// coverage because every untracked-dir verdict carries its own stat signature
+// and age bound (the model-based oracle drops all events and still agrees).
+// Without this a worktree that is dirty by its tracked files never completed a
+// walk and was forced on every scan.
+func (d *DirtyGen) CompleteIndexWalk(dec DirtyDecision) {
+	if dec.pending&(pendOverflow|pendError|pendDirEvent) != 0 {
+		return
+	}
+	d.lastFullWalk.Store(dec.at.UnixNano())
+}

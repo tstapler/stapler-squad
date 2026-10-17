@@ -208,7 +208,26 @@ func TestScanSignature_ShouldRecompute_WhenShallowStampOrBaseHashChanges(t *test
 	}
 }
 
-func TestScanSignature_ShouldExpire_WhenClockAdvancesPastOneTick(t *testing.T) {
+func TestScanSignature_ShouldReuse_WhenScansSpacedAtScanInterval(t *testing.T) {
+	t.Parallel()
+	f := newSigFake("/a")
+	s := NewScannerWithReader(nil, nil, f)
+	s.SetTickInterval(5 * time.Minute)
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0)}
+	s.clock = clk.Now
+
+	scanFake(s)
+	for i := 1; i <= 2; i++ {
+		clk.t = clk.t.Add(5 * time.Minute)
+		scanFake(s)
+		assert.EqualValues(t, 1, f.resolved.Load(), "scan %d at exactly the scan interval reuses the stored committed state", i)
+	}
+	clk.t = clk.t.Add(5 * time.Minute)
+	scanFake(s)
+	assert.EqualValues(t, 2, f.resolved.Load(), "the third tick reaches the bound and recomputes")
+}
+
+func TestScanSignature_ShouldExpire_WhenClockAdvancesPastStalenessBound(t *testing.T) {
 	t.Parallel()
 	f := newSigFake("/a")
 	s := NewScannerWithReader(nil, nil, f)
@@ -221,9 +240,9 @@ func TestScanSignature_ShouldExpire_WhenClockAdvancesPastOneTick(t *testing.T) {
 	scanFake(s)
 	require.EqualValues(t, 1, f.resolved.Load(), "within a tick the stored state is reused")
 
-	clk.t = clk.t.Add(5 * time.Minute)
+	clk.t = clk.t.Add(scanSkipAgeTicks * 5 * time.Minute)
 	scanFake(s)
-	assert.EqualValues(t, 2, f.resolved.Load(), "past one tick the stored signature is expired and recomputed")
+	assert.EqualValues(t, 2, f.resolved.Load(), "past the bound the stored signature is expired and recomputed")
 }
 
 func TestScanOrder_ShouldProcessChangedWorktreesFirst_WhenW1W3ChangedW2Not(t *testing.T) {

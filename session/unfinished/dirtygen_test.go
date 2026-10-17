@@ -131,3 +131,18 @@ func TestDirtyGenPolicy_ShouldNotRefireUnarmed_WhenArmedAgainAfterFirstWalk(t *t
 	d.Arm()
 	assert.Equal(t, ReasonUnarmed, d.Decide().Reason, "a real disarm/arm cycle still needs a fresh walk")
 }
+
+func TestDirtyGenPolicy_CompleteIndexWalk_ShouldClearAgeButKeepEventReasons(t *testing.T) {
+	d, clk := armedAfterFirstWalk(t)
+	clk.t = clk.t.Add(fullWalkMaxAge)
+	dec := d.Decide()
+	require.Equal(t, ReasonAge, dec.Reason)
+	d.CompleteIndexWalk(dec)
+	assert.False(t, d.Decide().FullWalk, "an index-only walk restarts the age clock")
+
+	d.Note(EventDirChange)
+	dec = d.Decide()
+	require.Equal(t, ReasonDirEvent, dec.Reason)
+	d.CompleteIndexWalk(dec)
+	assert.Equal(t, ReasonDirEvent, d.Decide().Reason, "a directory event stays pending until the untracked set was walked")
+}
