@@ -179,6 +179,7 @@ function FilesTabView({
       {/* Left pane: file tree */}
       <div
         className={treePaneClasses}
+        data-testid="files-tree-pane"
         style={{ width: panel.collapsed ? 0 : panel.width }}
       >
         <FilesTreeToolbar
