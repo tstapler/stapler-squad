@@ -21,3 +21,8 @@ func (r osFileRoot) Open(p ResolvedPath) (FileHandle, error) {
 	}
 	return f, nil
 }
+
+// Replace is atomicReplace with a pre-rename check (ADR-031).
+func (r osFileRoot) Replace(p ResolvedPath, data []byte, beforeRename func() error) error {
+	return newAtomicWriter(r.WorktreeRoot).replaceChecked(p, data, beforeRename)
+}

@@ -21,6 +21,10 @@ type FileRoot interface {
 	linkProber
 	Open(p ResolvedPath) (FileHandle, error)
 	Lstat(p ResolvedPath) (os.FileInfo, error)
+	// Replace atomically swaps the bytes of an existing file, keeping its mode.
+	// beforeRename runs once the new bytes are staged; an error from it aborts the
+	// swap, removes the staged bytes and is returned unchanged.
+	Replace(p ResolvedPath, data []byte, beforeRename func() error) error
 	Close() error
 }
 

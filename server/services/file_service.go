@@ -88,6 +88,7 @@ var knownTextExtensions = map[string]bool{
 type FileService struct {
 	workspace      WorkspaceProvider
 	ops            *FileOps
+	writer         *FileWriter
 	search         *SearchHandler
 	dirCache       *DirCache
 	gitignoreCache GitignoreCache
@@ -95,10 +96,13 @@ type FileService struct {
 
 // NewFileService creates a FileService with the given workspace provider.
 func NewFileService(workspace WorkspaceProvider) *FileService {
-	ops := NewFileOps(FilePolicy{Workspace: workspace}, osRootBackend{})
+	guard, _ := workspace.(WriteGuard)
+	invalidator, _ := workspace.(StatusInvalidator)
+	ops := NewFileOps(FilePolicy{Workspace: workspace, Guard: guard}, osRootBackend{})
 	return &FileService{
 		workspace:      workspace,
 		ops:            ops,
+		writer:         NewFileWriter(ops, invalidator),
 		search:         newSearchHandler(ops),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),

@@ -17,6 +17,12 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// errGitInternal and errWorktreeMissing let the write path attach typed reasons to resolver refusals.
+var (
+	errGitInternal     = errors.New(".git is not accessible")
+	errWorktreeMissing = errors.New("WorktreeMissing: session worktree is not on disk")
+)
+
 // maxSymlinkHops bounds symlink expansion so a link cycle cannot loop forever.
 const maxSymlinkHops = 40
 
@@ -130,7 +136,7 @@ func resolveInWorktreeLinks(root linkProber, rel string, mode AccessMode) (Resol
 		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("path traversal detected"))
 	}
 	if hasGitComponent(clean) {
-		return "", false, connect.NewError(connect.CodePermissionDenied, errors.New(".git is not accessible"))
+		return "", false, connect.NewError(connect.CodePermissionDenied, errGitInternal)
 	}
 	return expandLinks(root, clean, mode)
 }
@@ -253,7 +259,7 @@ func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (
 	dir := ws.ExistingDir
 	if mode == AccessWrite {
 		if !worktreeOnDisk(ws) {
-			return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("WorktreeMissing: session worktree is not on disk"))
+			return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errWorktreeMissing)
 		}
 		dir = ws.ActiveDir
 	}

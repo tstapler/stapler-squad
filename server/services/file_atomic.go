@@ -70,7 +70,13 @@ func atomicReplace(root *WorktreeRoot, rel ResolvedPath, data []byte) error {
 	return newAtomicWriter(root).replace(rel, data)
 }
 
-func (w atomicWriter) replace(rel ResolvedPath, data []byte) (err error) {
+func (w atomicWriter) replace(rel ResolvedPath, data []byte) error {
+	return w.replaceChecked(rel, data, nil)
+}
+
+// replaceChecked is replace with a hook that runs once the temp file is durable and
+// just before the rename; its error aborts the swap (the temp is removed) and is returned as is.
+func (w atomicWriter) replaceChecked(rel ResolvedPath, data []byte, beforeRename func() error) (err error) {
 	dir, base := path.Split(string(rel))
 	if dir == "" {
 		dir = "."
@@ -103,6 +109,11 @@ func (w atomicWriter) replace(rel ResolvedPath, data []byte) (err error) {
 	}
 	if err := w.root.Chmod(tmpRel, mode); err != nil {
 		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return err
+		}
 	}
 	if err := w.root.Rename(tmpRel, string(rel)); err != nil {
 		return fmt.Errorf("rename temp: %w", err)

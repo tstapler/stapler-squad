@@ -25,6 +25,21 @@ var (
 		metric.WithUnit("ms"))
 )
 
+var (
+	filesWriteTotal = mustInt64Counter(telemetry.GetMeter(), "files.write.total",
+		metric.WithDescription("WriteFile calls by outcome (ok, conflict_rejected, denied, disabled, rejected, error)"))
+
+	filesWriteDurationMS = mustFloat64Histogram(telemetry.GetMeter(), "files.write.duration_ms",
+		metric.WithDescription("Wall-clock duration of a WriteFile call, in milliseconds"),
+		metric.WithUnit("ms"))
+)
+
+func recordWriteMetrics(ctx context.Context, outcome WriteOutcome, total time.Duration) {
+	attrs := metric.WithAttributes(attribute.String("outcome", string(outcome)))
+	filesWriteTotal.Add(ctx, 1, attrs)
+	filesWriteDurationMS.Record(ctx, float64(total.Milliseconds()), attrs)
+}
+
 func recordSearchMetrics(ctx context.Context, outcome SearchOutcome, total time.Duration, firstResult time.Duration) {
 	attrs := metric.WithAttributes(attribute.String("outcome", string(outcome)))
 	filesSearchTotal.Add(ctx, 1, attrs)

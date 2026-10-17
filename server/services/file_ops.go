@@ -27,13 +27,14 @@ func (globalFilesFlags) RangeRead(ctx context.Context) bool  { return FilesRange
 func (globalFilesFlags) DeltaWrite(ctx context.Context) bool { return FilesDeltaWriteEnabled(ctx) }
 func (globalFilesFlags) EditLarge(ctx context.Context) bool  { return FilesEditLargeEnabled(ctx) }
 
-// FilePolicy holds the collaborators every file operation shares. The hidden-session
-// guard joins it with its first consumer, the FileWriter (Task 2.1.2b); Telemetry is
-// held for that writer and the search handler and is not read by reads.
+// FilePolicy holds the collaborators every file operation shares. Guard is read by
+// the FileWriter only; Telemetry serves that writer and the search handler.
 type FilePolicy struct {
 	Workspace WorkspaceProvider
 	Flags     FilesFlags
 	Telemetry FilesTelemetry
+	// Guard gates writes by session (hidden, archived). Nil refuses every write.
+	Guard WriteGuard
 }
 
 // FileOps is the single home of file policy (confinement, flags, tokens, limits)

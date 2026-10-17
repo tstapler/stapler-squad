@@ -61,3 +61,20 @@ func (fs *FileService) SearchContent(
 ) error {
 	return fs.search.Handle(ctx, req.Msg, req.Peer().Addr, stream.Send)
 }
+
+// WriteFile atomically replaces a file in the session's worktree, guarded by a version token.
+// +api: WriteFile
+func (s *SessionService) WriteFile(
+	ctx context.Context,
+	req *connect.Request[sessionv1.WriteFileRequest],
+) (*connect.Response[sessionv1.WriteFileResponse], error) {
+	return s.fileSvc.WriteFile(ctx, req)
+}
+
+// WriteFile is the wire adapter over FileWriter.
+func (fs *FileService) WriteFile(
+	ctx context.Context,
+	req *connect.Request[sessionv1.WriteFileRequest],
+) (*connect.Response[sessionv1.WriteFileResponse], error) {
+	return fs.writer.WriteFile(ctx, req)
+}

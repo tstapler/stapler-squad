@@ -45,9 +45,22 @@ type recordingTelemetry struct {
 	mu       sync.Mutex
 	searches []SearchOutcomeEvent
 	firsts   []SearchFirstResultEvent
+	writes   []WriteOutcomeEvent
+	patches  []PatchOutcomeEvent
 }
 
-func (r *recordingTelemetry) RecordWrite(context.Context, string, WriteOutcomeEvent) {}
+func (r *recordingTelemetry) RecordWrite(_ context.Context, _ string, ev WriteOutcomeEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.writes = append(r.writes, ev)
+}
+
+func (r *recordingTelemetry) RecordPatch(_ context.Context, _ string, ev PatchOutcomeEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.patches = append(r.patches, ev)
+}
+
 func (r *recordingTelemetry) RecordSearch(_ context.Context, _ string, ev SearchOutcomeEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -379,7 +392,7 @@ func TestSearchContentHandler_ShouldBoundWalksAndSendQueued_WhenSixSearchesAcros
 		return n == 4
 	}, "the four later searches are told they are queued")
 	assert.EqualValues(t, 2, gs.current.Load())
-	var aheads []int32
+	aheads := make([]int32, 0, len(runs)-2)
 	for _, r := range runs[2:] {
 		aheads = append(aheads, r.out.snapshot()[0].GetQueued().GetAhead())
 	}

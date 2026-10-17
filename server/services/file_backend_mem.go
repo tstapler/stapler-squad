@@ -152,3 +152,25 @@ func (h *memFileHandle) ReadAt(p []byte, off int64) (int, error)   { return h.r.
 func (h *memFileHandle) Seek(off int64, whence int) (int64, error) { return h.r.Seek(off, whence) }
 func (h *memFileHandle) Close() error                              { return nil }
 func (h *memFileHandle) Stat() (os.FileInfo, error)                { return memFileInfo{name: h.name, n: h.n}, nil }
+
+// Replace swaps the node's bytes after the pre-rename check, keeping its mode.
+func (r *memRoot) Replace(p ResolvedPath, data []byte, beforeRename func() error) error {
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return err
+		}
+	}
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	key := path.Clean(string(p))
+	mode := os.FileMode(0o644)
+	if old, ok := r.t.nodes[key]; ok {
+		if !old.mode.IsRegular() {
+			return &fs.PathError{Op: "replace", Path: key, Err: errors.New("not a regular file")}
+		}
+		mode = old.mode
+	}
+	r.t.mkParents(key)
+	r.t.nodes[key] = &memNode{data: append([]byte(nil), data...), mode: mode, mtime: time.Now()}
+	return nil
+}
