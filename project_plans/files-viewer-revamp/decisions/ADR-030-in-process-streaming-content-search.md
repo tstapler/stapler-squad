@@ -45,3 +45,26 @@ Unary-only RPC (cannot become streaming without a new RPC); `rg` first (availabi
 
 Same run with the fixture on the NVMe btrfs home (`TMPDIR=$HOME/.cache/ssq-bench-tmp`), still warm: single 916.9 / 778.8 ms, pool 420.8 / 298.8 ms (1 / 200 `.gitignore`). `first_result_ms` is near zero because `TODO` appears in most files, so it says nothing about a rare query; `total_ms` is the number to compare against the 2 s SLO. Reading: warm 50k-file tree walks finish in about 0.3-0.9 s on this desktop, well under 2 s, and 200 nested `.gitignore` files cost nothing measurable in the prototype (it reads each directory's file once). The 2 s SLO on a cold cache, on the work macOS machine, and on the phone path is UNVERIFIED. Timing comparisons across runs vary by about 30 percent (tmpfs vs btrfs, same code), so treat the figures as order-of-magnitude.
 
+
+### Story 1.1.3 / Task 1.1.3a: production walker benchmark (2026-10-16; host: AMD Ryzen 9 7900X, 12 cores / 24 threads, Linux 6.6.128, Go 1.26.6, GOMAXPROCS=24 so 4 scan workers)
+Command (compiled test binary run in the background, one run per filesystem): `go test -c ./server/services` then `services.test -test.bench BenchmarkContentSearch -test.run '^$' -test.benchtime 5x -test.benchmem`, with `TMPDIR` unset (tmpfs `/tmp`) and `TMPDIR=$HOME/.cache/ssq-bench-tmp` (btrfs on NVMe). Production `NewWalkSearcher()` (incremental `IgnoreMatcher`, `os.Root` `fs.FS`, pooled scanner), 50,000 files plus 20,000 ignored `node_modules` files, warm page cache. `common` is the plan's `TODO` query (matches most files, so the 1000-result cap ends the walk after about 1 ms and `first_result_ms` says little); `rare` matches one file in the last directory, so the whole 50k tree is walked before the first result and `first_result_ms` equals `total_ms`, the true worst case.
+
+| fs | fixture | query | first_result_ms | total_ms | B/op | allocs/op |
+|---|---|---|---|---|---|---|
+| tmpfs | 1 `.gitignore` | common | 0.63 | 1.28 | 788,990 | 5,063 |
+| tmpfs | 1 `.gitignore` | rare | 679.3 | 679.3 | 44,107,017 | 841,451 |
+| tmpfs | 200 `.gitignore` | common | 0.54 | 1.27 | 776,736 | 4,676 |
+| tmpfs | 200 `.gitignore` | rare | 732.5 | 732.5 | 59,445,664 | 849,011 |
+| btrfs | 1 `.gitignore` | common | 0.80 | 1.93 | 749,652 | 4,893 |
+| btrfs | 1 `.gitignore` | rare | 642.3 | 642.3 | 46,300,419 | 841,495 |
+| btrfs | 200 `.gitignore` | common | 0.87 | 2.36 | 797,556 | 4,946 |
+| btrfs | 200 `.gitignore` | rare | 804.3 | 804.4 | 60,810,718 | 848,971 |
+
+Cancel latency (`BenchmarkContentSearchCancel`, rare query, `cancel()` fired 5 ms into the walk, measured from `cancel()` to `Search` returning): tmpfs 0.034 ms mean / 0.049 ms worst (1 `.gitignore`) and 0.047 / 0.110 ms (200); btrfs 0.110 / 0.417 ms and 0.033 / 0.061 ms. All far under the 200 ms bound (the Go tests also assert it with `goleak`: `TestContentSearch_ShouldReturnContextCanceled_WhenCancelledMidWalk`, `TestContentSearch_ShouldCancelWithin200ms_When_CancelledWhileLoadingIgnoreRules200Gitignores`).
+
+Reading: the worst-case `first_result_ms` is 0.64-0.80 s warm on this desktop, under the 2000 ms SLO on both filesystems and on the 200-`.gitignore` fixture; `BenchmarkContentSearch` fails itself if a `rare` run reaches 2000 ms. B/op is about 45-60 MB per full-tree walk, almost all short-lived garbage from `fs.ReadDir`/`Open` (about 17 allocations per file); the peak live-heap growth is separate and measured at 7.0 MB for 50k files without `-race` (`TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches` logs it; ceiling 64 MB). No tuning task was needed. The production walker is slower than the throwaway prototype's pooled run on tmpfs (679 vs 435 ms) because it does the real work (per-directory `.gitignore` parsing, confined `Open`, chunked scan); not pursued since the SLO holds with a 2.5x margin.
+**rg accelerator: not needed.**
+NOT measured (UNVERIFIED): cold cache (`SSQ_BENCH_COLD=1` needs root to drop caches; this session is uid 1000), the work macOS machine, and the phone path. The owner can run the cold variant with `sudo SSQ_BENCH_COLD=1 services.test -test.bench BenchmarkContentSearch -test.run '^$' -test.benchtime 5x`. The "re-check batch cadence through the real handler on `:62871`/`:62872`/phone" half of Task 1.1.3a is PENDING-OWNER (needs a manual instance and a phone; the handler's wire behavior is covered in-process by `TestStreamLimiter_ShouldKeyOnRemoteAddr_And_IgnoreForwardedHeaders`, which streams over a real HTTP server).
+
+### Implementation notes (Stories 1.1.1, 1.1.2)
+Path (a) is confirmed by the Spike outcomes above, so Task 1.1.2d (WS-bridge registration) was not built and `server/server.go` was not touched; `TestEveryServerStreamingWatchRPCHasAWebSocketBridge` still passes with `SearchContent` registered (it covers `Watch*` RPCs only). Deviations: the walk gate is a small FIFO (`walkGate`) instead of `x/sync/semaphore`, because `Queued{ahead}` must be re-sent when the position changes and a plain semaphore cannot report position; the walker is a hand-written recursion over `fs.ReadDir` instead of `fs.WalkDir`, because the `IgnoreMatcher` needs a callback on leaving a directory; `SearchOptions.large_files` is accepted on the wire and recorded in telemetry but the raised cap is Task 1.6.6a; `SearchLimits.context_lines` is accepted and ignored.
