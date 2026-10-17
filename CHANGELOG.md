@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.7.1](https://github.com/tstapler/stapler-squad/compare/v2.7.0...v2.7.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **a11y:** retint cleanTheme accentBg/accentHover to current primary (WCAG 1.4.11) ([#1069](https://github.com/tstapler/stapler-squad/issues/1069)) ([cc55228](https://github.com/tstapler/stapler-squad/commit/cc55228c8856510975de6da8a14a2e291af8f350))
+* **backlog:** enforce the rework cap in the shared spawn gate, not just per-caller ([1ef5464](https://github.com/tstapler/stapler-squad/commit/1ef54646380782b884ec9a202559b296573e5642))
+* **backlog:** resolve stale autonomous_stuck rows once an item leaves in_progress/review ([dc9e42c](https://github.com/tstapler/stapler-squad/commit/dc9e42c67802f43f008b8040529b2f5b2c21fa8a))
+* **backlog:** stop burning remediation budget on pointless retriage retries ([639cc62](https://github.com/tstapler/stapler-squad/commit/639cc62e1291ef0729b001188451264d6500fc1f))
+* **skills:** stop worktree-disk-cleanup from deleting idle triage worktrees ([#1071](https://github.com/tstapler/stapler-squad/issues/1071)) ([10e515e](https://github.com/tstapler/stapler-squad/commit/10e515ee3b6259c906371f31f934d288a717fa2c))
+
 ## [2.7.0](https://github.com/tstapler/stapler-squad/compare/v2.6.0...v2.7.0) (2026-10-17)
 
 
