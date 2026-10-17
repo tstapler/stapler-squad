@@ -15,13 +15,13 @@ const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 /** Everything the buffered (files:viewer-v2) Files tab needs, composed once so FilesTab stays a thin root. */
 export function useFilesV2(sessionId: string, sessionRunning: boolean, options: UseOpenBuffersOptions) {
   const buffers = useOpenBuffers(sessionId, options);
-  const bridge = useEditorBridge(buffers);
+  const feedback = useFilesFeedback();
+  const bridge = useEditorBridge(buffers, { announce: feedback.announceInfo });
   const freshness = useBufferFreshness({ active: buffers.active, enabled: true, sessionRunning, onAdoptToken: buffers.adoptToken });
   const { active, close } = buffers;
   const { stale, resolve } = freshness;
   const { back, forward, setOverlay, reload } = bridge;
   const transport = useFileTransport();
-  const feedback = useFilesFeedback();
   const status = useStatusModel(bridge);
   const { announceSuccess, announceProgress, announceError } = feedback;
 

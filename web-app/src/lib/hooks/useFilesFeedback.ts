@@ -60,6 +60,12 @@ export function useFilesFeedback() {
     start(opts.undo ? UNDO_MS : SUCCESS_MS);
   }, [start]);
 
+  /** A polite status-bar note with no toast (e.g. "Moved to line 15"); clears like a success. */
+  const announceInfo = useCallback((text: string) => {
+    setMessage((m) => (m?.kind === "error" ? m : { id: ++seq.current, kind: "success", text }));
+    start(SUCCESS_MS);
+  }, [start]);
+
   /** A wait in flight ("Checking the file on disk..."); the next success or error replaces it. */
   const announceProgress = useCallback((text: string) => {
     setMessage((m) => (m?.kind === "error" ? m : { id: ++seq.current, kind: "progress", text }));
@@ -81,7 +87,7 @@ export function useFilesFeedback() {
     if (toast || message?.kind === "success") start(lifetime.current);
   }, [toast, message, start]);
 
-  return { message, toast, announceSuccess, announceProgress, announceError, dismiss, pause, resume };
+  return { message, toast, announceSuccess, announceInfo, announceProgress, announceError, dismiss, pause, resume };
 }
 
 export type FilesFeedback = ReturnType<typeof useFilesFeedback>;

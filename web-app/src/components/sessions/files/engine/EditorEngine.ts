@@ -10,6 +10,13 @@ export interface LineRange {
   endLine: number;
 }
 
+/** A matched range inside one line: 1-based line, UTF-16 columns relative to the line start, end exclusive. */
+export interface HitRange {
+  line: number;
+  from: number;
+  to: number;
+}
+
 /** 0-based line and UTF-16 column, in absolute (whole-file) coordinates. */
 export interface EditPos {
   line: number;
@@ -90,6 +97,8 @@ export interface EngineHandle {
   /** Inserts at the cursor like typing; false (and no change) while read-only or composing. */
   insertText(text: string): boolean;
   reveal(line: number, col?: number): void;
+  /** Marks a search hit until the user moves the cursor, or clears it with null. */
+  highlight(range: HitRange | null): void;
   getViewport(): LineRange;
   scrollSnapshot(): ScrollSnapshot;
   restoreScroll(snapshot: ScrollSnapshot): void;

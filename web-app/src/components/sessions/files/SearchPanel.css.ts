@@ -108,4 +108,24 @@ export const chip = style({
   borderTop: `1px solid ${vars.color.borderColor}`,
   background: vars.color.cardBackground,
   color: vars.color.textSecondary,
+  "@media": {
+    "(pointer: coarse)": {
+      position: "fixed",
+      right: "12px",
+      bottom: "calc(64px + env(safe-area-inset-bottom, 0px))",
+      zIndex: 35,
+      border: `1px solid ${vars.color.borderMuted}`,
+      borderRadius: vars.radii.md,
+      boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
+    },
+  },
+});
+export const chipButton = style({
+  border: "none",
+  background: "transparent",
+  color: "inherit",
+  font: "inherit",
+  cursor: "pointer",
+  padding: "0 6px",
+  "@media": { "(pointer: coarse)": { minWidth: "44px", minHeight: "44px" } },
 });

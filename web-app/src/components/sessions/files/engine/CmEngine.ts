@@ -5,12 +5,12 @@ import type { GutterMarkType } from "@/lib/utils/parseDiff";
 import { gutterMarkerAdd, gutterMarkerDelete, gutterMarkerModify } from "../../CodeEditor.css";
 import { readOnlyExtension } from "../extensions/readOnlyFacet";
 import { degradeExtension } from "../extensions/degrade";
-import { searchHighlightExtension } from "../extensions/searchHighlight";
+import { searchHighlightExtension, setSearchHit } from "../extensions/searchHighlight";
 import { vimExtension } from "../extensions/vim";
 import { mergeExtension } from "../extensions/merge";
 import type {
   BufferInit, BufferState, EditBatch, EditorEngine, EngineFeatures, EngineHandle, EngineOptions,
-  LineRange, ModeConfig, PendingEdits, ScrollSnapshot, VirtualDoc,
+  HitRange, LineRange, ModeConfig, PendingEdits, ScrollSnapshot, VirtualDoc,
 } from "./EditorEngine";
 import { loadCodemirrorLang } from "./languages";
 import { legacyVimKeymap } from "./legacyKeymap";
@@ -248,6 +248,10 @@ class CmHandle implements EngineHandle {
     const target = doc.line(Math.min(Math.max(1, Math.floor(line)), doc.lines));
     const pos = Math.min(target.from + Math.max(0, col), target.to);
     this.view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+  }
+
+  highlight(range: HitRange | null) {
+    this.view.dispatch({ effects: setSearchHit.of(range) });
   }
 
   getViewport(): LineRange {

@@ -240,5 +240,22 @@ describe("FilesTab", () => {
       expect(await screen.findByText("Line 40000 is beyond the loaded portion")).toBeInTheDocument();
       await waitFor(() => expect(handle.gotoLine).toHaveBeenCalledWith(40000));
     });
+
+    it("quickfix_should_StepToTheNextHitWithF4_And_ShowTheChip_When_AHitIsOpen", async () => {
+      mountSearch([{ path: "src/a.go", line: 3 }, { path: "src/b.go", line: 9 }]);
+      await userEvent.click(await screen.findByRole("tab", { name: "Search" }));
+      await userEvent.type(await screen.findByRole("searchbox", { name: "Search file contents" }), "needle");
+      await screen.findByText("2 results in 2 files");
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+      expect(await screen.findByRole("tab", { name: "a.go, preview" })).toBeInTheDocument();
+      expect(screen.getByText("Hit 1/2")).toBeInTheDocument();
+      await userEvent.keyboard("{F4}");
+      expect(await screen.findByRole("tab", { name: "b.go, preview" })).toBeInTheDocument();
+      expect(screen.getByText("Hit 2/2")).toBeInTheDocument();
+      await userEvent.keyboard("{F4}");
+      expect(await screen.findByText("Wrapped to first hit")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Dismiss hit navigation" }));
+      expect(screen.queryByTestId("quickfix-chip")).toBeNull();
+    });
   });
 });

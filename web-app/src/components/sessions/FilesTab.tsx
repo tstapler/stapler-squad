@@ -19,7 +19,8 @@ import { QuickOpenPalette } from "./QuickOpenPalette";
 import { FilesV2Chrome } from "./files/FilesV2Chrome";
 import { FilesV2Footer } from "./files/FilesV2Footer";
 import { useActiveBufferWait } from "./files/ActiveBufferWait";
-import { SearchPanel, SearchPaneTabs } from "./files/SearchPanel";
+import { SearchPanel, SearchPaneTabs, type SearchPanelHandle } from "./files/SearchPanel";
+import type { QuickfixView } from "./files/SearchResults";
 import { useSearchPane } from "@/lib/hooks/useSearchPane";
 import { tabPanel } from "./files/FilesV2Chrome.css";
 import { FilesTreeToolbar } from "./FilesTreeToolbar";
@@ -164,12 +165,15 @@ function FilesTabView({
   const onDeepLink = useMemo(() => jumpTo && ((path: string, line = 1) => jumpTo(path, line, { pinned: true, source: "deeplink" })), [jumpTo]);
   useFilesDeepLink({ initialSelectedPath, tree: fileTreeRef, selectedPath, onJump: onDeepLink });
   const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
+  const searchRef = useRef<SearchPanelHandle>(null);
+  const [quickfix, setQuickfix] = useState<QuickfixView | null>(null);
   const search = useSearchPane(v2, {
     expandPanel: panel.expand,
     showTreePane: useCallback(() => setMobilePane("tree"), []),
     showContentPane: useCallback(() => setMobilePane("content"), []),
   });
-  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, onSearch: v2 ? search.openSearch : undefined, ...v2?.shortcuts });
+  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, onSearch: v2 ? search.openSearch : undefined,
+    onNextHit: v2 ? () => searchRef.current?.step(1) : undefined, onPrevHit: v2 ? () => searchRef.current?.step(-1) : undefined, ...v2?.shortcuts });
   const wait = useActiveBufferWait(v2, fileTreeRef);
 
   // Build tree pane class names
@@ -247,6 +251,8 @@ function FilesTabView({
         {v2 && (
           <div className={leftView} hidden={search.leftPane !== "search"}>
             <SearchPanel
+              ref={searchRef}
+              onQuickfix={setQuickfix}
               sessionId={sessionId}
               sessionName={sessionName}
               visible={search.leftPane === "search"}
@@ -291,7 +297,7 @@ function FilesTabView({
             />
           </div>
         </div>
-        {v2 && <FilesV2Footer v2={v2} />}
+        {v2 && <FilesV2Footer v2={v2} quickfix={quickfix} />}
       </div>
 
       {isQuickOpenOpen && (

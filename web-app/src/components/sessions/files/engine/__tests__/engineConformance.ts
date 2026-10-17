@@ -111,6 +111,17 @@ export function runEngineConformance(name: string, makeEngine: () => EditorEngin
       expect(handle.getCursor().line).toBe(3);
     });
 
+    it("highlight_should_MarkTheRangeTransiently_And_ClearOnUserMove", async () => {
+      await open("Read");
+      const marked = () => Array.from(host.querySelectorAll(".cm-search-hit")).map((el) => el.textContent);
+      handle.highlight({ line: 2, from: 1, to: 3 });
+      expect(marked()).toEqual(["et"]);
+      handle.highlight({ line: 3, from: 0, to: 99 });
+      expect(marked()).toEqual(["gamma"]);
+      handle.highlight(null);
+      expect(marked()).toEqual([]);
+    });
+
     it("features_should_DescribeTheEngineHonestly", () => {
       const f = makeEngine().features;
       expect(typeof f.vim).toBe("boolean");

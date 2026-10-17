@@ -6,12 +6,18 @@ import { detectLanguage } from "@/components/sessions/FileContentViewer";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { clampLine } from "@/lib/files/deepLink";
 import { buildOutline, type OutlineResult } from "@/lib/files/outline";
+import { jumpToMatchNear } from "@/components/sessions/files/extensions/jumpToMatchNear";
 import { invalidateFileContent } from "./useFileService";
 import type { OpenSource, useOpenBuffers } from "./useOpenBuffers";
 
 type OpenBuffers = ReturnType<typeof useOpenBuffers>;
 type NavVia = "button" | "keyboard" | "long_press_menu";
 export type Overlay = "goto" | "outline" | null;
+
+/** The matched line of a search hit: highlighted once revealed; `dirty` means the buffer may no longer match the disk. */
+export interface HitInfo { line: number; text: string; start: number; end: number; dirty: boolean }
+interface BridgeHooks { announce?: (text: string) => void }
+const NEAR_RADIUS_LINES = 200;
 
 const depthBucket = (n: number) => (n <= 1 ? "1" : n <= 5 ? "2-5" : "6+") as "1" | "2-5" | "6+";
 
@@ -20,12 +26,13 @@ const depthBucket = (n: number) => (n <= 1 ? "1" : n <= 5 ? "2-5" : "6+") as "1"
  * once the right editor is on screen, records the cursor before leaving a buffer, and owns go-to-line,
  * jumplist moves, outline text and reload-in-place.
  */
-export function useEditorBridge(buffers: OpenBuffers) {
+export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks = {}) {
   const analytics = useFilesAnalytics({ component: "FileContentViewer" });
   const [editor, setEditor] = useState<{ handle: CodeEditorHandle; path: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [beyond, setBeyond] = useState<{ path: string; line: number } | null>(null);
+  const pendingHit = useRef<(HitInfo & { path: string }) | null>(null);
   const keepScroll = useRef<{ path: string; snapshot: ScrollSnapshot } | null>(null);
   const { state, active, revealed, recordViewState } = buffers;
 
@@ -36,9 +43,28 @@ export function useEditorBridge(buffers: OpenBuffers) {
     if (!pendingReveal || !editor || editor.path !== pendingReveal.path) return;
     try {
       // The engine clamps; a hit past the loaded text (truncated read) says so instead of landing silently.
-      const lines = editor.handle.getText().split("\n").length;
-      setBeyond(pendingReveal.line > lines ? { path: pendingReveal.path, line: pendingReveal.line } : null);
+      const all = editor.handle.getText().split("\n");
+      setBeyond(pendingReveal.line > all.length ? { path: pendingReveal.path, line: pendingReveal.line } : null);
       editor.handle.gotoLine(pendingReveal.line);
+      const hit = pendingHit.current?.path === pendingReveal.path ? pendingHit.current : null;
+      pendingHit.current = null;
+      if (hit && hit.line <= all.length) {
+        const matched = hit.text.slice(hit.start, hit.end);
+        let at = { line: hit.line, from: hit.start };
+        const here = all[hit.line - 1] ?? "";
+        if (hit.dirty && !here.includes(matched)) {
+          const near = jumpToMatchNear(all, hit.line, matched, NEAR_RADIUS_LINES);
+          if (near) {
+            at = { line: near.line, from: near.col };
+            editor.handle.gotoLine(near.line);
+            announce?.(`Moved to line ${near.line} (buffer has unsaved changes)`);
+          } else {
+            announce?.("Match not found in your unsaved version");
+            at = { line: 0, from: 0 };
+          }
+        }
+        if (at.line > 0) editor.handle.highlightRange?.({ line: at.line, from: at.from, to: at.from + matched.length });
+      }
       const keep = keepScroll.current;
       if (keep?.path === pendingReveal.path) {
         editor.handle.restoreScroll(keep.snapshot);
@@ -48,7 +74,7 @@ export function useEditorBridge(buffers: OpenBuffers) {
       return; // the engine was torn down; the next onReady retries
     }
     revealed(pendingReveal.seq);
-  }, [pendingReveal, editor, revealed]);
+  }, [pendingReveal, editor, revealed, announce]);
 
   /** Saves the cursor of the buffer on screen so leaving it and coming back lands on the same line. */
   const capture = useCallback(() => {
@@ -66,9 +92,11 @@ export function useEditorBridge(buffers: OpenBuffers) {
     buffers.open(path, opts);
   }, [capture, buffers]);
   const activate = useCallback((path: string) => { capture(); buffers.activate(path); }, [capture, buffers]);
-  const jumpTo = useCallback((path: string, line: number, opts: Parameters<OpenBuffers["jump"]>[2] = {}) => {
+  const jumpTo = useCallback((path: string, line: number, opts: Parameters<OpenBuffers["jump"]>[2] & { hit?: HitInfo } = {}) => {
+    const { hit, ...rest } = opts;
     capture();
-    buffers.jump(path, line, opts);
+    pendingHit.current = hit ? { ...hit, path } : null;
+    buffers.jump(path, line, rest);
   }, [capture, buffers]);
 
   const move = useCallback((delta: -1 | 1, via: NavVia) => {

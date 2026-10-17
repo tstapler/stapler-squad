@@ -106,4 +106,69 @@ describe("useEditorBridge", () => {
     act(() => result.current.bridge.setOverlay("outline"));
     expect(result.current.bridge.overlay).toBe("outline");
   });
+
+  describe("search hits", () => {
+    const hit = (line: number, text = "x needle y") => ({ text, start: text.indexOf("needle"), end: text.indexOf("needle") + 6, dirty: false, line });
+    const withHighlight = (h: ReturnType<typeof fakeHandle>) => Object.assign(h, { highlightRange: jest.fn() });
+
+    it("editorBridge_should_HighlightTheMatchAfterReveal_When_AHitIsOpened", async () => {
+      const { result } = setup();
+      const text = Array.from({ length: 30 }, (_, i) => (i === 11 ? "x needle y" : `l${i + 1}`)).join("\n");
+      act(() => result.current.bridge.jumpTo("a.go", 12, { source: "search", hit: hit(12) }));
+      const editor = withHighlight(fakeHandle(text));
+      act(() => result.current.bridge.onEditorReady(asHandle(editor), "a.go"));
+      expect(editor.gotoLine).toHaveBeenCalledWith(12);
+      expect(editor.highlightRange).toHaveBeenCalledWith({ line: 12, from: 2, to: 8 });
+    });
+
+    it("searchPanel_should_MarkDirtyBufferHitsAndJumpToNearestMatch_When_BufferHasUnsavedChanges", async () => {
+      const notices: string[] = [];
+      const h = createFilesTestHarness({ sessionId: "s1", transport: createFakeTransport({ files: FILES }) });
+      const { result } = renderHook(() => {
+        const buffers = useOpenBuffers("s1");
+        return { buffers, bridge: useEditorBridge(buffers, { announce: (t) => notices.push(t) }) };
+      }, { wrapper: h.wrapper });
+      // the buffer moved: the matched text now sits at line 15, not at the disk hit line 12
+      const text = Array.from({ length: 30 }, (_, i) => (i === 14 ? "x needle y" : `l${i + 1}`)).join("\n");
+      act(() => result.current.bridge.jumpTo("a.go", 12, { source: "search", hit: { ...hit(12), dirty: true } }));
+      const editor = withHighlight(fakeHandle(text));
+      act(() => result.current.bridge.onEditorReady(asHandle(editor), "a.go"));
+      expect(editor.gotoLine).toHaveBeenLastCalledWith(15);
+      expect(editor.highlightRange).toHaveBeenCalledWith({ line: 15, from: 2, to: 8 });
+      expect(notices).toEqual(["Moved to line 15 (buffer has unsaved changes)"]);
+    });
+
+    it("searchPanel_should_ClampToHitLineAndSayNotFound_When_DirtyBufferLacksTheMatch", async () => {
+      const notices: string[] = [];
+      const h = createFilesTestHarness({ sessionId: "s1", transport: createFakeTransport({ files: FILES }) });
+      const { result } = renderHook(() => {
+        const buffers = useOpenBuffers("s1");
+        return { buffers, bridge: useEditorBridge(buffers, { announce: (t) => notices.push(t) }) };
+      }, { wrapper: h.wrapper });
+      act(() => result.current.bridge.jumpTo("a.go", 12, { source: "search", hit: { ...hit(12), dirty: true } }));
+      const editor = withHighlight(fakeHandle(lines(30)));
+      act(() => result.current.bridge.onEditorReady(asHandle(editor), "a.go"));
+      expect(editor.gotoLine).toHaveBeenLastCalledWith(12);
+      expect(editor.highlightRange).not.toHaveBeenCalledWith(expect.objectContaining({ line: expect.any(Number), from: expect.any(Number) }));
+      expect(notices).toEqual(["Match not found in your unsaved version"]);
+    });
+
+    it("editorBridge_should_NotHighlight_When_HitLineIsBeyondTheLoadedText", async () => {
+      const { result } = setup();
+      act(() => result.current.bridge.jumpTo("a.go", 400, { source: "search", hit: hit(400) }));
+      const editor = withHighlight(fakeHandle(lines(20)));
+      act(() => result.current.bridge.onEditorReady(asHandle(editor), "a.go"));
+      expect(editor.highlightRange).not.toHaveBeenCalledWith(expect.objectContaining({ from: expect.any(Number) }));
+      expect(result.current.bridge.beyond).toMatchObject({ line: 400 });
+    });
+
+    it("editorBridge_should_StillReveal_When_TheHandleHasNoHighlightMethod", async () => {
+      const { result } = setup();
+      act(() => result.current.bridge.jumpTo("a.go", 5, { source: "search", hit: hit(5) }));
+      const editor = fakeHandle(lines(20));
+      act(() => result.current.bridge.onEditorReady(asHandle(editor), "a.go"));
+      expect(editor.gotoLine).toHaveBeenCalledWith(5);
+      expect(result.current.buffers.state.pendingReveal).toBeNull();
+    });
+  });
 });

@@ -31,7 +31,8 @@ export function useSearchPane(v2: FilesV2 | undefined, { expandPanel, showTreePa
   const openHit = useCallback((hit: SearchHit) => {
     if (!jumpTo) return false;
     const reused = !!buffers?.some((b) => b.path === hit.path);
-    jumpTo(hit.path, hit.line, { source: "search" });
+    const dirty = !!buffers?.some((b) => b.path === hit.path && b.status === "loaded" && b.dirty);
+    jumpTo(hit.path, hit.line, { source: "search", hit: { line: hit.line, text: hit.text, start: hit.start, end: hit.end, dirty } });
     showContentPane();
     return reused;
   }, [jumpTo, buffers, showContentPane]);

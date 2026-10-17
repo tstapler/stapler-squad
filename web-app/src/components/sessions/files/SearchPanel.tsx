@@ -10,7 +10,7 @@ import type { SearchHit, SearchQuery, SearchStream } from "@/lib/files/searchCli
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useContentSearch } from "@/lib/hooks/useContentSearch";
 import { usePendingDelay } from "./PendingState";
-import { SearchResults, rowDomId, type ActivateVia, type SearchResultsHandle } from "./SearchResults";
+import { SearchResults, rowDomId, type ActivateVia, type QuickfixView, type SearchResultsHandle } from "./SearchResults";
 import { buildRows, hitKey } from "./searchRows";
 import {
   checkLabel, emptyMessage, fieldLabel, filters, form as formClass, header, headerTab, helper, inlineError, note, panel,
@@ -76,6 +76,8 @@ export function SearchIdleState({ sessionName }: { sessionName?: string }) {
 
 export interface SearchPanelHandle {
   focusQuery(): void;
+  /** F4 / Shift+F4: open the next or previous hit without leaving the editor. */
+  step(delta: 1 | -1): void;
 }
 
 interface SearchPanelProps {
@@ -91,6 +93,8 @@ interface SearchPanelProps {
   /** Esc: focus goes back to the editor. */
   onEscape: () => void;
   onResumeSession?: () => void;
+  /** The quickfix chip's state (null when there is nothing to step through); the chip lives beside the editor. */
+  onQuickfix?: (view: QuickfixView | null) => void;
   /** Test seam. */
   stream?: SearchStream;
 }
@@ -110,6 +114,8 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [includeFocusRequest, setIncludeFocusRequest] = useState(0);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [wrapNote, setWrapNote] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const includeRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<SearchResultsHandle>(null);
@@ -120,7 +126,6 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   const files = useMemo(() => new Set(search.hits.map((h) => h.path)).size, [search.hits]);
   const slow = usePendingDelay(search.status === "searching", 1000);
 
-  useImperativeHandle(ref, () => ({ focusQuery: () => inputRef.current?.focus() }), []);
 
   // Opening the panel starts a find flow; closing it discards the flow without an event.
   useEffect(() => {
@@ -157,16 +162,47 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
     }
   }, [requested]);
 
+  // Callbacks below stay stable across renders (the quickfix effect depends on `step`), so props go through a ref.
+  const props = useRef(p);
+  props.current = p;
   const activate = useCallback((hit: SearchHit, hitIndex: number, via: ActivateVia) => {
-    const reused = p.openHit(hit, via);
+    const reused = props.current.openHit(hit, via);
+    setCursor(hitIndex);
+    setWrapNote(null);
     const interactions = meter.current.finish();
     if (interactions !== null) {
       analytics.emit("files.search.open_hit", {
         rank: bucketRank(hitIndex + 1), interactions: bucketInteractions(interactions), via, reused_tab: String(reused) as "true" | "false",
       });
     }
-    meter.current.open();
-  }, [p, analytics]);
+  }, [analytics]);
+
+  const hitsRef = useRef(search.hits);
+  hitsRef.current = search.hits;
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
+  const step = useCallback((delta: 1 | -1) => {
+    const n = hitsRef.current.length;
+    if (n === 0) return;
+    const at = cursorRef.current;
+    const next = at === null ? (delta > 0 ? 0 : n - 1) : (at + delta + n) % n;
+    const wrapped = at !== null && (delta > 0 ? next < at : next > at);
+    activate(hitsRef.current[next], next, "quickfix");
+    if (wrapped) setWrapNote(delta > 0 ? "Wrapped to first hit" : "Wrapped to last hit");
+  }, [activate]);
+
+  useImperativeHandle(ref, () => ({ focusQuery: () => inputRef.current?.focus(), step }), [step]);
+
+  // A new search or cleared results end the walk through the old hits.
+  const answered = search.answered;
+  useEffect(() => { setCursor(null); setWrapNote(null); }, [answered]);
+  const { onQuickfix } = p;
+  const total = search.hits.length;
+  useEffect(() => {
+    onQuickfix?.(cursor === null || total === 0 ? null : {
+      position: cursor + 1, total, note: wrapNote, step, dismiss: () => { setCursor(null); setWrapNote(null); },
+    });
+  }, [cursor, total, wrapNote, step, onQuickfix]);
 
   const toggleGroup = useCallback((path: string) => {
     setCollapsed((cur) => {

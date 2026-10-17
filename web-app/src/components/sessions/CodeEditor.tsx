@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import type { GutterMarkType } from "@/lib/utils/parseDiff";
 import type {
-  BufferInit, BufferState, EditorMode, EngineFeatures, EngineHandle, ModeConfig, ScrollSnapshot,
+  BufferInit, BufferState, EditorMode, EngineFeatures, EngineHandle, HitRange, ModeConfig, ScrollSnapshot,
 } from "./files/engine/EditorEngine";
 import { codeEditor } from "./CodeEditor.css";
 
@@ -19,6 +19,8 @@ export interface CodeEditorHandle {
   /** Inserts at the cursor like typing; false (and no change) while read-only. */
   insertText(text: string): boolean;
   gotoLine(line: number): void;
+  /** Marks a search hit until the cursor moves; null clears it. */
+  highlightRange(range: HitRange | null): void;
   scrollSnapshot(): ScrollSnapshot;
   restoreScroll(snapshot: ScrollSnapshot): void;
   focus(): void;
@@ -61,6 +63,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       getCursor: () => e().getCursor(),
       insertText: (t) => e().insertText(t),
       gotoLine: (n) => e().reveal(n),
+      highlightRange: (r) => e().highlight(r),
       scrollSnapshot: () => e().scrollSnapshot(),
       restoreScroll: (s) => e().restoreScroll(s),
       focus: () => e().focus(),

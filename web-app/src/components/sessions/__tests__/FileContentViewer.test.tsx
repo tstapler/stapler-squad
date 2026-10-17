@@ -38,6 +38,8 @@ jest.mock("@codemirror/view", () => {
   class EditorView {
     static lineWrapping = {};
     static theme = jest.fn(() => ({}));
+    static baseTheme = jest.fn(() => ({}));
+    static decorations = { from: () => ({}) };
     static contentAttributes = { of: (attrs: unknown) => ({ attrs }) };
     constructor(opts: unknown) {
       mockEditorViewCtor(opts);
@@ -55,7 +57,8 @@ jest.mock("@codemirror/view", () => {
       return { __keymap: bindings };
     }),
   };
-  return { EditorView, gutter, GutterMarker, keymap };
+  const Decoration = { none: {}, mark: () => ({ range: () => ({}) }), set: () => ({}) };
+  return { EditorView, gutter, GutterMarker, keymap, Decoration };
 });
 
 jest.mock("@codemirror/state", () => ({
@@ -63,6 +66,9 @@ jest.mock("@codemirror/state", () => ({
     readOnly: { of: (v: unknown) => ({ readOnly: v }) },
     create: (opts: unknown) => opts,
   },
+  // Module-scope definitions in extensions/searchHighlight.ts need these to exist.
+  StateEffect: { define: () => ({ of: (value: unknown) => ({ value }), is: () => false }) },
+  StateField: { define: () => ({}) },
   // Minimal stand-in for CodeMirror's Compartment: of()/reconfigure() just
   // need to be callable and return something dispatch() (also mocked) can
   // accept; the real reconfiguration behavior is CodeMirror's own, not this

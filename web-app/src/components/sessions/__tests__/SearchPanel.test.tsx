@@ -4,8 +4,8 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import type { SearchHit } from "@/lib/files/searchClient";
 import { createFilesTestHarness, installVirtualViewport as installViewport } from "@/lib/files/__tests__/fixtures";
 import { controllableSearchStream, searchHit, searchStats } from "@/lib/files/__tests__/fixtures/controllableSearchStream";
-import { SearchPanel } from "../files/SearchPanel";
-import { SearchResults } from "../files/SearchResults";
+import { SearchPanel, type SearchPanelHandle } from "../files/SearchPanel";
+import { QuickfixChip, SearchResults, type QuickfixView } from "../files/SearchResults";
 import { accessibleName, buildRows, type ResultRow } from "../files/searchRows";
 
 const hit = (path: string, line: number, text = `func foo_bar(x int) // ${line}`): SearchHit => ({ path, line, text, start: text.indexOf("foo_bar"), end: text.indexOf("foo_bar") + 7, byteOffset: 0 });
@@ -142,12 +142,15 @@ describe("SearchPanel", () => {
     const c = controllableSearchStream();
     const openHit = jest.fn(() => false);
     const onEscape = jest.fn();
-    const props = { sessionId: "s1", sessionName: "my-session", visible: true, focusToken: 0, dirtyPaths: new Set<string>(), openHit, onEscape, stream: c.stream, ...extra };
-    const view = render(<SearchPanel {...props} />, { wrapper: h.wrapper });
+    const panelRef = React.createRef<SearchPanelHandle>();
+    const quickfix: { last: QuickfixView | null } = { last: null };
+    const onQuickfix = jest.fn((q: QuickfixView | null) => { quickfix.last = q; });
+    const props = { sessionId: "s1", sessionName: "my-session", visible: true, focusToken: 0, dirtyPaths: new Set<string>(), openHit, onEscape, onQuickfix, stream: c.stream, ...extra };
+    const view = render(<SearchPanel ref={panelRef} {...props} />, { wrapper: h.wrapper });
     const input = screen.getByRole("searchbox", { name: "Search file contents" });
     const type = (value: string) => fireEvent.change(input, { target: { value } });
     const fire = async (value: string) => { type(value); act(() => { jest.advanceTimersByTime(300); }); await flush(); };
-    return { h, c, openHit, onEscape, input, type, fire, view, rerender: (p: Partial<typeof props>) => view.rerender(<SearchPanel {...props} {...p} />) };
+    return { h, c, openHit, onEscape, input, type, fire, view, panelRef, quickfix, rerender: (p: Partial<typeof props>) => view.rerender(<SearchPanel ref={panelRef} {...props} {...p} />) };
   }
   const status = () => screen.getByTestId("search-status");
 
@@ -380,5 +383,61 @@ describe("SearchPanel", () => {
     fireEvent.pointerDown(row1, { clientX: 5, clientY: 5, pointerId: 1 });
     fireEvent.pointerUp(row1, { clientX: 5, clientY: 40, pointerId: 1 });
     expect(openHit).toHaveBeenCalledTimes(1);
+  });
+
+  it("quickfixCursor_should_StepHits_When_F4AndShiftF4Pressed", async () => {
+    const { c, fire, openHit, panelRef, quickfix } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: sample() }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    // open hit 3 of 27 by tapping its row (rows: group, hit1, hit2, hit3 ...)
+    fireEvent.click(screen.getAllByRole("treeitem")[3]);
+    expect(openHit).toHaveBeenLastCalledWith(expect.objectContaining({ path: "pkg/f1.go", line: 12 }), "tap");
+    expect(quickfix.last).toMatchObject({ position: 3, total: 27 });
+    act(() => panelRef.current!.step(1));
+    expect(openHit).toHaveBeenLastCalledWith(expect.objectContaining({ path: "pkg/f1.go", line: 13 }), "quickfix");
+    expect(quickfix.last).toMatchObject({ position: 4, total: 27 });
+    act(() => panelRef.current!.step(-1));
+    expect(openHit).toHaveBeenLastCalledWith(expect.objectContaining({ line: 12 }), "quickfix");
+    expect(quickfix.last).toMatchObject({ position: 3 });
+  });
+
+  it("quickfix_should_StepAndAnnounceWrap_When_F4ShiftF4OrChipChevrons", async () => {
+    const { c, fire, panelRef, quickfix } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1), searchHit("a.go", 2), searchHit("b.go", 3)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    act(() => panelRef.current!.step(-1));
+    expect(quickfix.last).toMatchObject({ position: 3, total: 3 });
+    act(() => panelRef.current!.step(1));
+    expect(quickfix.last).toMatchObject({ position: 1, note: "Wrapped to first hit" });
+    act(() => panelRef.current!.step(-1));
+    expect(quickfix.last).toMatchObject({ position: 3, note: "Wrapped to last hit" });
+    act(() => quickfix.last!.dismiss());
+    expect(quickfix.last).toBeNull();
+  });
+
+  it("quickfix_should_ResetWhenANewSearchStarts_And_RenderChipControls", async () => {
+    const { c, fire, panelRef, quickfix } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1), searchHit("a.go", 2)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    act(() => panelRef.current!.step(1));
+    const onStep = jest.fn();
+    const onDismiss = jest.fn();
+    const chip = render(<QuickfixChip view={{ position: 3, total: 27, note: null, step: onStep, dismiss: onDismiss }} />);
+    expect(chip.getByText("Hit 3/27")).toBeInTheDocument();
+    fireEvent.click(chip.getByRole("button", { name: "Next hit" }));
+    fireEvent.click(chip.getByRole("button", { name: "Previous hit" }));
+    fireEvent.click(chip.getByRole("button", { name: "Dismiss hit navigation" }));
+    expect(onStep.mock.calls).toEqual([[1], [-1]]);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    await fire("foob");
+    act(() => c.requests[1].push({ type: "batch", matches: [searchHit("a.go", 9)] }));
+    await flush();
+    expect(quickfix.last).toBeNull();
   });
 });

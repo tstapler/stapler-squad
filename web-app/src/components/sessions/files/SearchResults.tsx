@@ -6,7 +6,7 @@ import type { SearchHit } from "@/lib/files/searchClient";
 import { useFirstTapActivation } from "@/lib/hooks/useFirstTapActivation";
 import { DIRTY_NOTE, accessibleName, type ResultRow } from "./searchRows";
 import {
-  count as countClass, dirtyNote, groupPath, groupRow, hitText, lineNo, mark, rowBase, tree, treeDimmed, treeInner,
+  chip, chipButton, count as countClass, dirtyNote, groupPath, groupRow, hitText, lineNo, mark, rowBase, tree, treeDimmed, treeInner,
 } from "./SearchPanel.css";
 
 export interface SearchResultsHandle {
@@ -129,3 +129,26 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
     </div>
   );
 });
+
+export interface QuickfixView {
+  /** 1-based position of the hit last opened. */
+  position: number;
+  total: number;
+  /** "Wrapped to first hit" and the like, announced politely. */
+  note: string | null;
+  step: (delta: 1 | -1) => void;
+  dismiss: () => void;
+}
+
+/** Next/previous-hit chip: a status segment on desktop, a floating 44 px control on touch (ux.md S2). */
+export function QuickfixChip({ view }: { view: QuickfixView }) {
+  return (
+    <div className={chip} role="group" aria-label="Search hits" data-testid="quickfix-chip">
+      <span>Hit {view.position}/{view.total}</span>
+      <button type="button" className={chipButton} aria-label="Previous hit" onClick={() => view.step(-1)}>↑</button>
+      <button type="button" className={chipButton} aria-label="Next hit" onClick={() => view.step(1)}>↓</button>
+      <button type="button" className={chipButton} aria-label="Dismiss hit navigation" onClick={view.dismiss}>×</button>
+      <span role="status" aria-live="polite">{view.note}</span>
+    </div>
+  );
+}
