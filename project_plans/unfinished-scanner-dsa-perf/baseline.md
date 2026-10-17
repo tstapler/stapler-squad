@@ -229,7 +229,7 @@ Alloc target proposed for owner confirmation: scanner `alloc_space` S2/S1 <= 0.5
 | SG5 | 3.3.1 | `getOrBuildUntrackedMatcher`/`gitignore.ReadPatterns` >= 1% of scanner CPU | S1 CPU profile | 0.0% (0 samples; 0 MB) | **CLOSED** ("not worthwhile") |
 | SG6 | 2.3.1; 2.3.2 (also needs SG3) | scanner frames >= the Q14 fraction (5%) of total S1 mutex delay | Task 0.1.1e | 21.4% of mutex delay (see caveat) | **OPEN by the literal rule** (owner flag below) |
 | SG7 | 4.2.4 | duplicate stat pass >= 20% of total stats | Task 4.2.4a measurement (`TestDuplicateStatFraction_ShouldBeRecorded_BeforeBuilding`; corpus run: `SSQ_SG7_CORPUS=<corpus>/manifest.json go test ./session/unfinished -run TestDuplicateStatFraction_ShouldMeasureWorkloadCorpus -v`) | **35.3%** on the Story 0.1.5 corpus (24 scan targets, 22 dirty: 9,162 lstat calls, 3,237 of them the second pass re-statting files `HasUncommitted` had already stat'ed; read-only run against the S1 corpus copy). Synthetic 5,000-file worktree: first-file edit 0.0%, middle-file edit 33.3%, last-file edit 50.0%, untracked-only 50.0% (`HasUncommitted` exits at the first changed file; `DiffShortstat` always stats every unstaged file) | **MET (>= 20%): Story 4.2.4 built** (handoff behind `scan_skip`; dirty scans drop to <= 1 lstat per tracked file, e.g. 400-file fixture: 501-800 -> 400) |
-| SG8 | 4.1.2 projection credit | signature-skip engagement >= 10% of scans | Story 5.2.1 soak | **deferred to the soak** | **deferred to the soak** (credit 0 in the projection until measured) |
+| SG8 | 4.1.2 projection credit | signature-skip engagement >= 10% of scans | Story 5.2.1 soak | **0.9%** (2 hits / 234 checks, MEASURED, see "S2 A/B") | **CLOSED for credit**: below 10%, so the 4.1.2 CPU credit in the projection stays 0 |
 | SG9 | 4.4.1 scope | every non-decode `alloc_space` bucket >= 3% needs an owner or an "accepted" note | S1 alloc profile | buckets >= 3% of scanner: read buffers 75.9%, `genSplit` 6.7%, `continuationCont` 3.6% (decode) | **scope fixed**: read buffers -> 4.2.3/3.2.3/4.4.1, `genSplit` -> 3.2.2/4.4.1; no unowned bucket |
 
 Reading note for SG1/SG2/SG3: on this S1 profile the commit-walk is gone from CPU (0 to 0.4%), and what remains is decode allocation inside `CommitMessages` (33.5 MB, 4.7% of scanner allocations). The plan's thresholds are met on the alloc column only; the scheduling decision (run 1.2.1/2.1.x/2.2.1 or defer) is the owner's, with the numbers above.
@@ -274,3 +274,94 @@ Wave B was unblocked by the owner's 2026-10-16 answers (Q1 confirmed S1-relative
 | Alloc projection `SHORTFALL` | the 75.9% read-buffer bucket has no gated reduction | owner decision to proceed to Wave B on the 4.2.3/3.2.3/4.4.1 stories regardless, or require a measured cut first |
 | SG1/SG2/SG3 open on the alloc column only | decode CPU is 0.0%; decode allocation is 4.9% of scanner | run or defer 1.2.1, 2.1.x, 2.2.1 |
 | SG6 open at 21.4% of 0.63 s total | absolute delay negligible; 57% is a runtime STW | schedule or close 2.3.x |
+
+## S2 A/B (MEASURED 2026-10-16, Story 5.2.1 and Tasks 3.2.3c, 4.3.2c, 5.2.1c)
+
+**Setup.** One binary, built once from HEAD `fd17bd07c` (`go build -o ~/.stapler-squad/manual-builds/manual-2/stapler-squad .`, 140,889,426 bytes, 16:57 PDT), run twice. Control `claude-manual-ctl`: `PORT=62871`, tmux socket `ssq-manual-1`, `--tmux-keep-server --profile --profile-port 62875`, config `unfinished_caches` all false. Candidate `claude-manual-cand`: `PORT=62873`, `ssq-manual-2`, pprof `62877`, `unfinished_caches` `{shared_commit_state, diff_counter, scan_skip, watch_worktree_gitdirs}` all true (actuator `flags` confirmed all six effective flags true; control all false). Remote access off. Shadow-verify at its default (1 in 50; `SetShadowVerifyEvery` has no caller outside tests and no config key, so no supported knob to raise it). Corpus: `scanner-workload corpus -config-dir <instance dir>` run back to back for each instance (6 repos, 3 linked worktrees each, 24 scan targets; copied from the live repos at run time, so not byte-identical to the S1 corpus), `scanner-workload verify` printed `PinnedRepos identical on both instances`. Driver: `scanner-workload drive -config-dir <dir> -seed 1 -duration 40m` on both (op logs `oplog-seed1.jsonl` md5-identical). Tools built to `/tmp/ssq-workload`, `/tmp/ssq-loadsample`; raw data in `/tmp/s2-profiles/` (not committed).
+
+**Windows.** Warm-up 40 min (instances started 17:02; a first window W1 ran 17:09 to 17:39 with a harness bug, see below). **Measured window W2: 17:42:04 to 18:12:05 PDT (1800 s)**: `curl .../debug/pprof/profile?seconds=1800` on both concurrently, `allocs`/`heap`/`mutex`/`block` snapshots at start and end (delta via `pprof -base`), `loadsample -pid <pid> -interval 60s -duration 30m`, actuator sampled at start, every 5 min and end. Analysis scripts as in S1 (`cpubuckets.py`, `allocbuckets.py`, plus a shadow-verify split); `$B` passed to every `go tool pprof`.
+
+**Harness bug, disclosed.** W1 used a bash 3.2 script with `declare -A`, which macOS bash does not support, so every pprof/actuator fetch for both instances hit the candidate's port; W1's control profiles are therefore invalid and were discarded. Only W1's candidate CPU profile (a replicate: scanner 3.38 s, 3.11 s excluding shadow-verify; 170.1 MB scanner `alloc_space`, 78.8 MB excluding shadow) and its `loadsample` CSVs (taken by pid, valid) are kept as a candidate-only replicate. All numbers below are W2, where each fetch was verified to hit its own process.
+
+### Headline (W2; same binary, flags off vs on)
+
+| Quantity | Control (flags off) | Candidate (flags on) | Candidate / control |
+|---|---|---|---|
+| Process CPU samples | 14.39 s | 12.72 s | 0.88 |
+| Process CPU (`loadsample`, 30 min) | 16.4 s | 14.3 s | 0.87 |
+| **Scanner CPU (`Scanner.worker` cum)** | **3.62 s** | **1.91 s** (0.08 s is the shadow-verify oracle; 1.83 s without it) | **0.527** (0.506 without the oracle) |
+| Scanner share of process CPU samples | 25.2% | 15.0% | |
+| Scan cycles (`scan_cycles_total` delta) | 18 | 18 | 1.00 |
+| Scanner CPU per cycle | 0.201 s | 0.106 s | 0.527 |
+| Scanner `alloc_space` | 152.5 MB | 127.8 MB (55.6 MB is the oracle's legacy walk over 3 sampled scans; 72.2 MB without it) | **0.838** (0.473 without the oracle) |
+| Scanner `alloc_space` per cycle | 8.47 MB | 7.10 MB (4.01 MB without the oracle) | |
+| Process `alloc_space` | 1237.6 MB | 1318.9 MB | (mux discovery dominates both, ~935 MB) |
+| `inuse_space` end (total / scanner) | 76.56 MB / 56.31 MB | 86.39 MB / 62.44 MB | scanner +10.9% vs control; +3.4% vs the S1 60.39 MB |
+| `inuse_space` start to end | 74.91 to 76.56 MB | 85.28 to 86.39 MB | no unbounded growth (+2.2%, +1.3%) |
+| Goroutines start to end | 115 to 111 | 112 to 113 | stable (both log `high goroutine count` ERROR at ~110, identical on the control) |
+| Mutex delay total (scanner share) | 22.0 ms (5.8%, 1 ms) | 128.0 ms (1.5%, 2 ms); the delta is `runtime.unlock` in the scheduler | scanner delay negligible on both |
+| `stat_calls_total` delta | 25,310 | 17,860 | 0.71 |
+| Panics / fatal in instance logs | 0 | 0 | |
+
+S1 reference (recorded, different corpus state and workload, so INFERRED comparability only): scanner CPU 9.69 s, 720.2 MB scanner `alloc_space`, 72 per-target rescans (that is about 18 cycles at four targets per repo task, INFERRED, matching the 18 measured here, so S1 was about 0.54 CPU-s and 40 MB per cycle). The control here is already 0.37 of S1 CPU and 0.21 of S1 alloc; the always-on changes cannot be separated from the corpus and workload difference (the S1 corpus copy had `kibitzer` at 5555 changed files), so N-off/W0 is not established (W0 binary not re-run) and the vs-S1 ratios (candidate 0.197 CPU, 0.177 alloc) are not gates.
+
+### Targets
+
+| Target | Result | Verdict |
+|---|---|---|
+| CPU: scanner S2/S1 <= `rho` = 0.788 | 0.527 candidate/control, MEASURED (same binary, same window); 0.506 without shadow-verify; the candidate replicate in W1 and the S1-relative figure (0.197) point the same way | **MET** (vs same-binary control) |
+| Alloc: scanner S2/S1 <= 0.50 | 0.838 with the default 1-in-50 shadow-verify counted; 0.473 without it | **MISSED as measured** (default sampler on). The oracle replays the legacy path for sampled scans (18 to 30 MB each), so 43% of the candidate's scanner allocations here are the verifier, not the scanner |
+| `parity_mismatch_total` == 0 for every field | all five fields 0 in start, end, final and every 5-min sample; `parity_transient_total` 0; `oracle_errors` 0 | **MET, thin evidence**: only 5 oracle samples over the whole candidate run (1 in 50 of about 250 scans) |
+| No crashes or panics | `grep -ciE "panic\|fatal"` on both instance logs: 0 | MET |
+| Heap and goroutines bounded | see table | MET |
+| Swapped-port repeat | not run | **not done**: instance-bias direction is unconfirmed, so N-on/N-off is MEASURED once, not replicated |
+
+### Bucket table (W2, CPU and scanner `alloc_space`)
+
+| Bucket | CPU control to candidate | alloc control to candidate |
+|---|---|---|
+| `diffShortstatUncached` | 3.42 s to 1.46 s (-57.3%) | 118.5 MB to 56.6 MB (-52%) |
+| `lcsLengthBytes` + `linesDiffBytes` | 1.23 s + 1.26 s to 0 | 19.7 MB (lcs) and 46.4 MB (`bytes.genSplit`) to 0 |
+| `walkUntracked` | 1.00 s to 1.08 s | 22.5 MB to 31.0 MB |
+| `HasUncommitted` | 0.15 s to 0.32 s (+0.17 s) | 12.0 MB to 15.1 MB |
+| `AheadBehind` / `DecodeCommit` | 0.00 / 0.01 s to 0.08 / 0.06 s (includes the oracle) | 2.5 / 17.5 MB to 54.6 / 51.0 MB (includes the oracle) |
+| shadow-verify oracle (candidate only) | 0.08 s | 55.6 MB |
+
+`DecodeCommit` is not a gate here (`d1` = 1.95% < 0.5: "not applicable, d1 < 0.5").
+
+### Engagement counters (candidate, W2 delta unless noted; final value in brackets)
+
+| Unit | Counter | Value |
+|---|---|---|
+| `diff_counter` | `diffmemo` hits / misses | 4,463 / 15 in W2 (99.7%) |
+| `shared_commit_state` | `graph` hits / misses; `reach` hits / misses; `messages`; `aheadbehind`; `repostate_bytes` | 4,804 / 1; 48 / 0 (all `scratch` builds, 4); 51 / 2; 3 / 1; 1.16 MB; `graph_full_fallbacks_total` 0; `cas_retries_total` 0; `decoded_commits_total` +1 |
+| `scan_skip` | `index` hits / misses | **0 / 234** (final) |
+| `scan_skip` | `signature_skip` hits / checks | **2 / 234 = 0.9%** (final; SG8 needs 10%) |
+| `scan_skip` | untracked-dir skips / walked | 662 / 24,513 = 2.7% (final) |
+| `scan_skip` + `watch_worktree_gitdirs` | `dirty_full_walk_total` | age 157, unarmed 76, dir_event 0, error 0, overflow 0 (final) |
+
+**Why `scan_skip` does not engage (INFERRED from `dirtygen.go:41` and the counters).** `fullWalkMaxAge` is 5 min, the same as the backstop tick, so a quiet worktree's next scan is already past the age limit and is forced to a full walk (`age` 157 of about 233 scans); the rest are `unarmed` (main repos, no working-tree watch since Tier B is skipped). A forced walk bypasses the parsed-index and untracked-dir caches, and the signature skip only fires when the committed state and the index signature are unchanged between scans. Under this workload nearly every scan is forced, so the units' skip paths are structurally idle; a different cadence (watcher-driven scans well inside 5 min) might engage them, but that is UNVERIFIED here.
+
+### Tier A latency probe (Task 4.3.2c, MEASURED)
+
+`probe.py` rewrote a linked worktree's `.git/worktrees/<name>/HEAD` with identical content (a Write event, no state change) and polled `scan_cycles_total` every 0.2 s, 3 rounds alternating instances, 20 s apart (`rtk-w1..w3`):
+
+| Instance | Time to a new scan cycle after the HEAD write |
+|---|---|
+| Candidate (`watch_worktree_gitdirs` on) | 2.33 s, 2.28 s, 2.35 s |
+| Control (off) | none within 45 s (waits for the 5-minute tick), 3 of 3 |
+
+No `overflow` or `error` walks. The scripted stream itself had one `move-base` and no linked-worktree HEAD/index event in 40 min, so the op-log latency form of the criterion could not be measured; the probe replaces it.
+
+### Per-unit verdicts (trigger table results)
+
+The A/B toggled all four units at once, not singly (attribution below is by counter and bucket, INFERRED where marked).
+
+| Trigger | Unit | Pass criteria | Result | Verdict |
+|---|---|---|---|---|
+| T1 | `diff_counter` | parity 0, bucket cut measured, G5 test | `diffShortstatUncached` CPU -57.3%, LCS buckets to 0 (only this unit replaces `lcsLength`, so the attribution is direct), memo 99.7% hit, `shortstat` parity 0 | **PASS** |
+| T2 | `watch_worktree_gitdirs` | latency, no overflow storm, verdicts identical | 2.3 s vs no scan in 45 s, 0 overflow/error, parity 0 | **PASS** |
+| T3 | `shared_commit_state` | engagement, `RepoState` bytes under budget, no CPU regression | graph/reach/messages hits, 1.16 MB, 0 fallbacks, scanner CPU not worse (AheadBehind 0.08 s incl. oracle); `ahead`/`behind`/`messages` parity sampled only a handful of times | **PASS (thin parity evidence)** |
+| T4 | `scan_skip` | engagement (SG8), G6/G8, CPU | engagement 0 (index) and 0.9% (signature), 2.7% (dirs) | **INCONCLUSIVE, stays off**: engagement cannot be demonstrated |
+
+The 24 h live watch of Story 5.2.2 did not happen (owner answer Q4/Q11: no live deploy); it remains the Story 5.3.1 precondition.
