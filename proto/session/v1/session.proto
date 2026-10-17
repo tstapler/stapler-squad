@@ -317,6 +317,11 @@ service SessionService {
   // Results are capped at max_results (default 500). Minimum query length is 2 characters.
   rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse) {}
 
+  // SearchContent greps file contents in a session's worktree and streams batches
+  // of matches followed by one final stats message. Newest search per
+  // (session_id, client_id) wins; the repo-root fallback is never searched.
+  rpc SearchContent(SearchContentRequest) returns (stream SearchContentResponse) {}
+
   // Path Completion RPCs
 
   // ListPathCompletions returns filesystem directory entries matching a path prefix.
@@ -2492,6 +2497,109 @@ message SearchFilesResponse {
 
   // Total matches found before the cap was applied.
   int32 total_matches = 3;
+}
+
+// SearchMatchMode says how SearchOptions.pattern is interpreted.
+enum SearchMatchMode {
+  SEARCH_MATCH_MODE_UNSPECIFIED = 0;
+  SEARCH_MATCH_MODE_LITERAL = 1;
+  // RE2 syntax.
+  SEARCH_MATCH_MODE_REGEX = 2;
+}
+
+enum SearchCaseMode {
+  SEARCH_CASE_MODE_UNSPECIFIED = 0;
+  SEARCH_CASE_MODE_SENSITIVE = 1;
+  SEARCH_CASE_MODE_INSENSITIVE = 2;
+}
+
+enum SearchWordMode {
+  SEARCH_WORD_MODE_UNSPECIFIED = 0;
+  // Match anywhere in a line.
+  SEARCH_WORD_MODE_ANY = 1;
+  // Match only on word boundaries.
+  SEARCH_WORD_MODE_WHOLE = 2;
+}
+
+message SearchScope {
+  // doublestar globs on slash-separated, root-relative paths. Empty include = all files.
+  repeated string include_globs = 1;
+  repeated string exclude_globs = 2;
+  // Search gitignored and hard-skipped (build, dist, vendor...) directories; .git is never searched.
+  bool include_ignored = 3;
+}
+
+message SearchLimits {
+  // Total matches to emit; 0 uses the server default (1000), larger values are clamped to it.
+  int32 max_results = 1;
+  // Reserved for context lines around a match; not yet honoured by the server.
+  int32 context_lines = 2;
+}
+
+message SearchOptions {
+  // 2 to 1024 bytes.
+  string pattern = 1;
+  SearchMatchMode match_mode = 2;
+  SearchCaseMode case_mode = 3;
+  SearchWordMode word_mode = 4;
+  SearchScope scope = 5;
+  SearchLimits limits = 6;
+  // Raise the per-file cap above 2 MB under a time budget (ADR-036).
+  bool large_files = 7;
+}
+
+message SearchContentRequest {
+  string session_id = 1;
+  // Per-browser-tab random id; keys newest-wins and nothing else.
+  string client_id = 2;
+  SearchOptions options = 3;
+}
+
+// SearchMatch is one occurrence of the pattern in one line.
+message SearchMatch {
+  // Root-relative, slash-separated.
+  string path = 1;
+  // 1-based.
+  int32 line = 2;
+  // The matched line, clamped to 512 bytes.
+  string text = 3;
+  // Match range inside text, in UTF-16 code units, end exclusive.
+  int32 start_utf16 = 4;
+  int32 end_utf16 = 5;
+  // Raw-file offset of the matched line's start (ADR-036); never logged.
+  int64 byte_offset = 6;
+}
+
+message SearchBatch {
+  repeated SearchMatch matches = 1;
+}
+
+message SearchStats {
+  int32 files_scanned = 1;
+  int32 binary_skipped = 2;
+  bool truncated = 3;
+  int64 duration_ms = 4;
+  // Files past the large-file cap or time budget (ADR-036).
+  int32 large_files_skipped = 5;
+}
+
+// SearchQueued is sent while the search waits for a walk slot.
+message SearchQueued {
+  int32 ahead = 1;
+}
+
+message SearchContentResponse {
+  oneof message {
+    SearchBatch batch = 1;
+    SearchStats stats = 2;
+    SearchQueued queued = 3;
+  }
+}
+
+// SearchBusyDetail is the typed detail on a ResourceExhausted SearchContent refusal.
+message SearchBusyDetail {
+  // "per_ip", "total" or "queue_timeout".
+  string reason = 1;
 }
 
 // ============================================================================
