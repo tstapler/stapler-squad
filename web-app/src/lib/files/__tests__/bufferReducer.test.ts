@@ -1,5 +1,5 @@
 import {
-  bufferReducer, initialBufferState, mruPaths, selectedPath, hasDirty,
+  bufferReducer, initialBufferState, mruPaths, selectedPath, hasDirty, canGoBack, canGoForward,
   type BufferAction, type BufferState, type Buffer, type ViewState,
 } from "../bufferReducer";
 
@@ -179,5 +179,60 @@ describe("bufferReducer", () => {
     expect(selectedPath(s)).toBe("y.go");
     expect(s.buffers.every((b) => b.pinned && b.status === "loading" && b.sessionId === S1)).toBe(true);
     expect(get(s, "x.go").viewState).toEqual(vs(5));
+  });
+
+  it("navHistory_should_RecordOriginOnlyForFirstHit_And_NotPushPane_When_QuickfixStepping", () => {
+    const hit = (path: string, line: number, chain: "start" | "step"): BufferAction => ({ type: "jump", path, sessionId: S1, line, col: 0, chain });
+    let s = run(initialBufferState(), pinned("x.go"), { type: "recordViewState", path: "x.go", viewState: vs(12) });
+    s = run(s, hit("a.go", 3, "start"), hit("b.go", 8, "step"), hit("c.go", 9, "step"));
+    expect(s.nav.map((e) => [e.path, e.line])).toEqual([["x.go", 12], ["c.go", 9]]);
+    expect(selectedPath(s)).toBe("c.go");
+    expect(canGoBack(s)).toBe(true);
+    expect(canGoForward(s)).toBe(false);
+    s = run(s, { type: "navBack" });
+    expect(selectedPath(s)).toBe("x.go");
+    expect(get(s, "x.go").viewState.line).toBe(12);
+    expect(canGoBack(s)).toBe(false);
+  });
+
+  it("bufferReducer_should_RequestOneReveal_When_JumpNavOrActivateChangesTheCursorTarget", () => {
+    let s = run(initialBufferState(), pinned("a.go"), { type: "recordViewState", path: "a.go", viewState: vs(10) }, pinned("b.go"));
+    s = run(s, { type: "jump", path: "a.go", sessionId: S1, line: 42, col: 3 });
+    expect(s.pendingReveal).toMatchObject({ path: "a.go", line: 42, col: 3 });
+    expect(get(s, "a.go").viewState).toMatchObject({ line: 42, col: 3 });
+    const seq = s.pendingReveal!.seq;
+    s = run(s, { type: "revealed", seq });
+    expect(s.pendingReveal).toBeNull();
+    s = run(s, { type: "revealed", seq: seq + 99 }, { type: "activate", path: "b.go" });
+    expect(s.pendingReveal).toBeNull();
+    s = run(s, { type: "activate", path: "a.go" });
+    expect(s.pendingReveal).toMatchObject({ path: "a.go", line: 42 });
+    expect(s.pendingReveal!.seq).toBeGreaterThan(seq);
+  });
+
+  it("bufferReducer_should_OpenPinnedAtLine_When_JumpTargetsANewPath", () => {
+    const s = run(initialBufferState(), { type: "jump", path: "src/main.go", sessionId: S1, line: 42, col: 0, pinned: true });
+    expect(get(s, "src/main.go")).toMatchObject({ pinned: true, status: "loading", viewState: { line: 42 } });
+    expect(s.pendingReveal).toMatchObject({ path: "src/main.go", line: 42 });
+  });
+
+  it("bufferReducer_should_MoveTabAndKeepActive_When_MoveLeftOrRight", () => {
+    let s = run(initialBufferState(), pinned("a.go"), pinned("b.go"), pinned("c.go"), { type: "activate", path: "b.go" });
+    s = run(s, { type: "move", path: "b.go", delta: 1 });
+    expect(paths(s)).toEqual(["a.go", "c.go", "b.go"]);
+    expect(selectedPath(s)).toBe("b.go");
+    s = run(s, { type: "move", path: "b.go", delta: 1 });
+    expect(paths(s)).toEqual(["a.go", "c.go", "b.go"]);
+    s = run(s, { type: "move", path: "a.go", delta: -1 });
+    expect(paths(s)).toEqual(["a.go", "c.go", "b.go"]);
+    expect(selectedPath(s)).toBe("b.go");
+  });
+
+  it("bufferReducer_should_AdoptTokenSilently_When_OnlyMtimeChangedAndLeaveEverythingElse", () => {
+    let s = run(initialBufferState(), pinned("a.go"), loaded("a.go"), { type: "markDirty", path: "a.go", dirty: true });
+    const before = get(s, "a.go");
+    s = run(s, { type: "adoptToken", path: "a.go", token: "v1:5:2:h" });
+    expect(get(s, "a.go")).toEqual({ ...before, token: "v1:5:2:h" });
+    expect(run(s, { type: "adoptToken", path: "missing.go", token: "t" })).toBe(s);
   });
 });

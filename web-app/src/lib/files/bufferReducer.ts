@@ -39,6 +39,9 @@ export type BufferNotice =
   | { kind: "evicted"; path: string; cap: number }
   | { kind: "refused"; path: string; cap: number };
 
+/** Asks the editor to put the cursor at a position once the buffer's text is on screen. */
+export interface PendingReveal { path: string; line: number; col: number; seq: number }
+
 export interface BufferState {
   buffers: readonly Buffer[];
   /** -1 when no buffer is open. */
@@ -49,6 +52,8 @@ export interface BufferState {
   navIndex: number;
   closed: readonly ClosedTab[];
   notice: BufferNotice | null;
+  pendingReveal: PendingReveal | null;
+  revealSeq: number;
 }
 
 export const MOBILE_CAP = 10;
@@ -60,6 +65,11 @@ export type BufferAction =
   | { type: "open"; path: string; sessionId: string; pinned?: boolean; viewState?: ViewState }
   | { type: "restore"; sessionId: string; tabs: readonly { path: string; viewState: ViewState }[]; activeIndex: number }
   | { type: "close"; path: string; discardConfirmed?: boolean }
+  /** `chain: "step"` moves the current jumplist entry (quickfix stepping) instead of pushing one. */
+  | { type: "jump"; path: string; sessionId: string; line: number; col: number; pinned?: boolean; chain?: "start" | "step" }
+  | { type: "move"; path: string; delta: -1 | 1 }
+  | { type: "adoptToken"; path: string; token: string }
+  | { type: "revealed"; seq: number }
   | { type: "reopenClosed" }
   | { type: "activate"; path: string }
   | { type: "pin"; path: string }
@@ -78,7 +88,7 @@ export type BufferAction =
   | { type: "clearNotice" };
 
 export function initialBufferState(cap: number = DESKTOP_CAP): BufferState {
-  return { buffers: [], activeIndex: -1, cap, tick: 0, nav: [], navIndex: -1, closed: [], notice: null };
+  return { buffers: [], activeIndex: -1, cap, tick: 0, nav: [], navIndex: -1, closed: [], notice: null, pendingReveal: null, revealSeq: 0 };
 }
 
 // ---- predicates ----
@@ -175,13 +185,42 @@ function openNew(s: BufferState, path: string, sessionId: string, pinned: boolea
   return pushNav({ ...next, buffers, activeIndex: buffers.length - 1, tick, notice }, path, viewState);
 }
 
-function openAction(s: BufferState, a: Extract<BufferAction, { type: "open" }>): BufferState {
+function openAction(from: BufferState, a: Extract<BufferAction, { type: "open" }>): BufferState {
+  const s = syncCurrentNav(from);
   const existing = indexOf(s, a.path);
   if (existing < 0) return openNew(s, a.path, a.sessionId, a.pinned ?? false, a.viewState ?? ORIGIN);
   let next = touched(s, existing);
   next = a.pinned ? mapBuffer(next, a.path, (b) => (b.pinned ? b : { ...b, pinned: true })) : next;
   next = { ...next, activeIndex: existing };
   return pushNav(next, a.path, next.buffers[existing].viewState);
+}
+
+function jumpAction(from: BufferState, a: Extract<BufferAction, { type: "jump" }>): BufferState {
+  const s = syncCurrentNav(from);
+  const existing = indexOf(s, a.path);
+  const target = (b?: Buffer): ViewState => ({ line: a.line, col: a.col, scrollTop: b?.viewState.scrollTop ?? 0 });
+  let next: BufferState;
+  if (existing < 0) {
+    next = openNew(s, a.path, a.sessionId, a.pinned ?? false, target());
+    if (next.notice?.kind === "refused") return next;
+  } else {
+    next = touched(s, existing);
+    next = mapBuffer(next, a.path, (b) => ({ ...b, pinned: b.pinned || !!a.pinned, viewState: target(b) }));
+    next = pushNav({ ...next, activeIndex: existing }, a.path, target(s.buffers[existing]));
+  }
+  if (a.chain !== "step" || s.navIndex < 0) return next;
+  const nav = s.nav.map((e, i) => (i === s.navIndex ? { path: a.path, line: a.line, col: a.col } : e));
+  return { ...next, nav, navIndex: s.navIndex };
+}
+
+function moveAction(s: BufferState, path: string, delta: -1 | 1): BufferState {
+  const from = indexOf(s, path);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= s.buffers.length) return s;
+  const buffers = s.buffers.slice();
+  [buffers[from], buffers[to]] = [buffers[to], buffers[from]];
+  const activePath = s.buffers[s.activeIndex]?.path;
+  return { ...s, buffers, activeIndex: buffers.findIndex((b) => b.path === activePath) };
 }
 
 function navigate(s: BufferState, delta: -1 | 1): BufferState {
@@ -191,7 +230,10 @@ function navigate(s: BufferState, delta: -1 | 1): BufferState {
   if (!entry) return s;
   const next: BufferState = { ...synced, navIndex: target };
   const index = indexOf(next, entry.path);
-  if (index >= 0) return { ...touched(next, index), activeIndex: index };
+  if (index >= 0) {
+    const seen = mapBuffer(next, entry.path, (b) => ({ ...b, viewState: { ...b.viewState, line: entry.line, col: entry.col } }));
+    return { ...touched(seen, index), activeIndex: index };
+  }
   const sessionId = next.buffers[next.activeIndex]?.sessionId ?? "";
   const opened = openNew(next, entry.path, sessionId, false, { ...ORIGIN, line: entry.line, col: entry.col });
   if (opened.notice?.kind === "refused") return { ...s, notice: opened.notice };
@@ -211,7 +253,18 @@ function setModeAction(s: BufferState, path: string, mode: BufferMode): BufferSt
 /** A notice describes the last action only; any later action replaces it. */
 export function bufferReducer(state: BufferState, a: BufferAction): BufferState {
   const s = state.notice && a.type !== "clearNotice" ? { ...state, notice: null } : state;
-  return apply(s, a);
+  return withReveal(s, apply(s, a), a);
+}
+
+/** A change of active buffer (or an explicit jump) asks the editor to restore that buffer's cursor. */
+function withReveal(prev: BufferState, next: BufferState, a: BufferAction): BufferState {
+  if (a.type === "revealed" || a.type === "clearNotice" || next.notice?.kind === "refused") return next;
+  const active = activeBuffer(next);
+  if (!active || (a.type !== "jump" && activeBuffer(prev)?.path === active.path)) return next;
+  const { line, col } = active.viewState;
+  if (a.type !== "jump" && line <= 1 && col === 0) return next.pendingReveal ? { ...next, pendingReveal: null } : next;
+  const seq = next.revealSeq + 1;
+  return { ...next, revealSeq: seq, pendingReveal: { path: active.path, line, col, seq } };
 }
 
 function apply(s: BufferState, a: BufferAction): BufferState {
@@ -231,6 +284,14 @@ function apply(s: BufferState, a: BufferAction): BufferState {
       if (i < 0 || (isDirty(s.buffers[i]) && !a.discardConfirmed)) return s;
       return removeAt(s, i);
     }
+    case "jump":
+      return jumpAction(s, a);
+    case "move":
+      return moveAction(s, a.path, a.delta);
+    case "adoptToken":
+      return mapBuffer(s, a.path, (b) => (b.status !== "loaded" || b.token === a.token ? b : { ...b, token: a.token }));
+    case "revealed":
+      return s.pendingReveal?.seq === a.seq ? { ...s, pendingReveal: null } : s;
     case "reopenClosed": {
       const top = s.closed[s.closed.length - 1];
       if (!top) return s;
