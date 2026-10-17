@@ -1,8 +1,9 @@
 "use client";
 
-import { forwardRef, useImperativeHandle, useRef, type MouseEvent } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useRef, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { SearchHit } from "@/lib/files/searchClient";
+import { useFirstTapActivation } from "@/lib/hooks/useFirstTapActivation";
 import { DIRTY_NOTE, accessibleName, type ResultRow } from "./searchRows";
 import {
   count as countClass, dirtyNote, groupPath, groupRow, hitText, lineNo, mark, rowBase, tree, treeDimmed, treeInner,
@@ -65,12 +66,20 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
     },
   }), [p.rows, virtualizer]);
 
-  const onClick = (e: MouseEvent<HTMLDivElement>) => {
-    const key = (e.target as HTMLElement).closest<HTMLElement>("[data-row-key]")?.dataset.rowKey;
-    const row = key ? p.rows.find((r) => r.key === key) : undefined;
+  const activateKey = useCallback((key: string, via: ActivateVia) => {
+    const row = p.rows.find((r) => r.key === key);
     if (!row) return;
     if (row.kind === "group") p.onToggleGroup(row.path);
-    else p.onActivate(row.hit, row.hitIndex, "tap");
+    else p.onActivate(row.hit, row.hitIndex, via);
+  }, [p]);
+  const tap = useFirstTapActivation(useCallback((key: string) => activateKey(key, "tap"), [activateKey]));
+  // Rows are focusable on touch devices, where a hardware keyboard may still be attached.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const key = (e.target as HTMLElement).closest<HTMLElement>("[data-row-key]")?.dataset.rowKey;
+    if (!key) return;
+    e.preventDefault();
+    activateKey(key, "enter");
   };
 
   return (
@@ -80,7 +89,8 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
       role="tree"
       aria-label="Search results"
       aria-busy={p.busy}
-      onClick={onClick}
+      {...tap}
+      onKeyDown={onKeyDown}
       data-testid="search-results"
     >
       <div className={treeInner} style={{ height: virtualizer.getTotalSize() }}>

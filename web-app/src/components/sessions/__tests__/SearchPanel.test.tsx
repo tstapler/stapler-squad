@@ -339,4 +339,46 @@ describe("SearchPanel", () => {
     expect(input).toHaveValue("foo");
     expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(0);
   });
+
+  it("searchPanel_should_ShowIdleHelperOrDimmedRetainedResults_When_NoQuery", async () => {
+    const { c, fire, type, h } = mount();
+    expect(screen.getByTestId("search-idle")).toHaveTextContent("Type at least 2 characters");
+    expect(screen.getByTestId("search-idle")).toHaveTextContent("Search file contents in my-session");
+    expect(c.requests).toHaveLength(0);
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    type("");
+    act(() => { jest.advanceTimersByTime(300); });
+    await flush();
+    expect(screen.queryByTestId("search-idle")).toBeNull();
+    expect(screen.getByTestId("search-retained")).toHaveTextContent("Results for `foo` - edit to search again");
+    expect(screen.getByTestId("search-results")).toHaveClass("treeDimmed");
+    expect(c.requests).toHaveLength(1);
+    expect(h.analytics.events.filter((e) => e.name === "files.search.run")).toHaveLength(1);
+  });
+
+  it("searchPanel_should_OpenOnTapWhileQueryFocused_And_IgnoreScroll_When_KeyboardOpen", async () => {
+    class P extends MouseEvent { pointerId: number; constructor(t: string, i: MouseEventInit & { pointerId?: number } = {}) { super(t, i); this.pointerId = i.pointerId ?? 1; } }
+    (window as unknown as { PointerEvent: unknown }).PointerEvent = P;
+    const openHit = jest.fn(() => false);
+    const { c, fire, input } = mount({ openHit });
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 1), searchHit("a.go", 2), searchHit("a.go", 3)] }));
+    act(() => c.requests[0].push(searchStats()));
+    await flush();
+    input.focus();
+    const row3 = screen.getAllByRole("treeitem")[3];
+    fireEvent.pointerDown(row3, { clientX: 5, clientY: 5, pointerId: 1 });
+    expect(document.activeElement).not.toBe(input);
+    fireEvent.pointerUp(row3, { clientX: 5, clientY: 5, pointerId: 1 });
+    fireEvent.click(row3);
+    expect(openHit).toHaveBeenCalledTimes(1);
+    expect(openHit).toHaveBeenCalledWith(expect.objectContaining({ line: 3 }), "tap");
+    const row1 = screen.getAllByRole("treeitem")[1];
+    fireEvent.pointerDown(row1, { clientX: 5, clientY: 5, pointerId: 1 });
+    fireEvent.pointerUp(row1, { clientX: 5, clientY: 40, pointerId: 1 });
+    expect(openHit).toHaveBeenCalledTimes(1);
+  });
 });

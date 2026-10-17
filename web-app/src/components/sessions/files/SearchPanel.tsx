@@ -63,6 +63,17 @@ function activeToggles(q: SearchQuery): string {
   return on.length ? ` (${on.join(", ")})` : "";
 }
 
+/** Never a blank pane: what to type and what the toggles mean (ux.md 3.4). */
+export function SearchIdleState({ sessionName }: { sessionName?: string }) {
+  return (
+    <div className={helper} data-testid="search-idle">
+      <span>Search file contents in {sessionName ?? "this session"}</span>
+      <span>Type at least 2 characters</span>
+      <span>Aa matches case, ab whole words, .* regular expressions. Ignored and binary files are skipped.</span>
+    </div>
+  );
+}
+
 export interface SearchPanelHandle {
   focusQuery(): void;
 }
@@ -203,6 +214,7 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   else if (st === "done" && hasResults) line = resultsText(search.hits.length, files);
 
   const idleCopy = typed < 2 && !busyStream && !worktreeGone;
+  const retained = st === "idle" && hasResults;
   const zero = st === "done" && !hasResults;
 
   return (
@@ -281,18 +293,13 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
           <button type="button" className={textButton} onClick={() => { setShowFilters(true); setIncludeFocusRequest((n) => n + 1); }}>Add filters</button>
         </div>
       )}
-      {idleCopy && !hasResults && (
-        <div className={helper} data-testid="search-idle">
-          <span>Search file contents in {p.sessionName ?? "this session"}</span>
-          <span>Type at least 2 characters</span>
-          <span>Aa matches case, ab whole words, .* regular expressions. Ignored and binary files are skipped.</span>
-        </div>
-      )}
+      {idleCopy && !hasResults && <SearchIdleState sessionName={p.sessionName} />}
+      {retained && <div className={note} data-testid="search-retained">Results for `{search.answered?.pattern}` - edit to search again</div>}
       {hasResults && !worktreeGone && (
         <SearchResults
           ref={resultsRef}
           rows={rows}
-          stale={search.stale || idleCopy}
+          stale={search.stale || retained}
           busy={busyStream}
           activeKey={activeKey}
           dirtyPaths={p.dirtyPaths}

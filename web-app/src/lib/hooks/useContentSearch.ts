@@ -175,6 +175,8 @@ export function useContentSearch({ sessionId, enabled = true, stream }: Options)
     if (!enabled) {
       clearDebounce();
       abort();
+      // A search cut off by closing the panel keeps its partial results and stops claiming to run.
+      setState((cur) => (cur.status === "queued" || cur.status === "searching" ? { ...cur, status: "idle", ahead: 0, stale: cur.hits.length > 0 } : cur));
     }
     return () => {
       mounted.current = false;
