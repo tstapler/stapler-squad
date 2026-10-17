@@ -2,7 +2,7 @@
 
 The scanner's shared caches sit behind four rollback-unit flags. A unit's default flips to `true` in
 `config.DefaultUnfinishedCaches` (`config/config.go`) after its own manual A/B passes (`baseline.md`,
-"S2 A/B"); today `diff_counter` and `watch_worktree_gitdirs` are on and the rest are off. The config key is the off-switch: an absent
+"S2 A/B"); today `shared_commit_state`, `diff_counter` and `watch_worktree_gitdirs` are on and only `scan_skip` is off (its engagement could not be demonstrated). The config key is the off-switch: an absent
 key keeps the default, an explicit `false` disables the unit (`session/unfinished/flags.go:24`). Flags are read once at startup, so every
 change below needs a restart (`SetFlags`, `session/unfinished/flags.go:72`, called from `server/dependencies.go`).
 
