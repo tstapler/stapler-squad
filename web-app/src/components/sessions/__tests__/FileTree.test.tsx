@@ -320,6 +320,33 @@ describe("FileTree – root loading", () => {
   });
 });
 
+describe("FileTree – root wait states", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedData = [];
+  });
+
+  it("fileTree_should_ShowLoadingOnlyAfter150ms_And_FailureWithRetry_When_RootLoadSlowThenFails", async () => {
+    jest.useFakeTimers();
+    try {
+      let reject: (e: Error) => void = () => undefined;
+      mockFetchDirectoryFiles.mockReturnValueOnce(new Promise((_, r) => { reject = r; }));
+      const { queryByText, findByText, getByRole } = render(<FileTree {...defaultProps} />);
+      act(() => { jest.advanceTimersByTime(149); });
+      expect(queryByText("Loading files...")).toBeNull();
+      act(() => { jest.advanceTimersByTime(1); });
+      expect(queryByText("Loading files...")?.closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+      await act(async () => { reject(new Error("boom /secret")); });
+      expect(await findByText("Could not load files: network error")).toBeTruthy();
+      mockFetchDirectoryFiles.mockResolvedValueOnce(makeFileResponse([{ path: "src", isDir: true }]));
+      await act(async () => { fireEvent.click(getByRole("button", { name: "Retry" })); });
+      expect(queryByText(/Could not load files/)).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // FileTree – handleToggle loads directories
 // ---------------------------------------------------------------------------

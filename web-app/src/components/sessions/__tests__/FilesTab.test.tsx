@@ -5,6 +5,7 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import { createFilesTestHarness, installVirtualViewport } from "@/lib/files/__tests__/fixtures";
 import { fakeCodeEditorProps } from "@/lib/files/__tests__/fixtures/mockCodeEditor";
 import { FilesTab } from "../FilesTab";
+import { storageKey } from "@/lib/hooks/useOpenBuffers";
 
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
   useSessionVcsContext: () => ({ status: null, diff: null, statusLoading: false, refreshStatus: jest.fn() }),
@@ -144,6 +145,32 @@ describe("FilesTab", () => {
       expect(region.closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
       act(() => release());
       await waitFor(() => expect(screen.queryByText("Opening pick.go...")).toBeNull());
+    });
+
+    it("filesTab_should_ShowRestoringTabsAfter150ms_When_SeveralRestoredTabsLoad", async () => {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => { release = r; });
+      const h = createFilesTestHarness({
+        flags: { "files:viewer-v2": true },
+        handlers: { getFileContent: text("hello"), statFile: (async () => { await gate; return { versionToken: "v1:1:1:x", size: 5n }; }) as never },
+      });
+      const tabs = ["a.go", "b.go", "c.go"].map((path) => ({ path, line: 1, col: 1, scrollTop: 0 }));
+      window.localStorage.setItem(storageKey(h.sessionId, "desktop"), JSON.stringify({ v: 1, active: 0, tabs }));
+      render(<FilesTab sessionId={h.sessionId} baseUrl="http://x" />, { wrapper: h.wrapper });
+      expect(screen.queryByText("Restoring 3 tabs")).toBeNull();
+      expect((await screen.findByText("Restoring 3 tabs")).closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+      act(() => release());
+      await waitFor(() => expect(screen.queryByText("Restoring 3 tabs")).toBeNull());
+    });
+
+    it("filesTab_should_EmitEnumReasonOnly_When_OpenFailsAsNetworkError", async () => {
+      const h = mountWith(() => { throw new ConnectError("secret/path.go down", Code.Unavailable); });
+      await userEvent.click(await screen.findByTestId("pick"));
+      expect(await screen.findByText("Could not open pick.go: network error")).toBeInTheDocument();
+      const failed = h.analytics.events.filter((e) => e.name === "files.open.failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0].labels).toMatchObject({ reason: "rpc_error" });
+      expect(JSON.stringify(failed)).not.toContain("secret");
     });
 
     it("filesTab_should_RaiseReloadFailedBannerAndKeepBuffer_When_PaletteReloadStatFails", async () => {
