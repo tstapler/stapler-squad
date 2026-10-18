@@ -24,13 +24,13 @@ interface Tracked {
 
 // CreateBacklogItem publishes no live event, so an open list only learns of a
 // new item once it is upserted into the shared store (as the backlog page does).
-async function hydrateItemIntoStore(itemId: string): Promise<void> {
+async function hydrateItemIntoStore(itemId: string, signal: AbortSignal): Promise<void> {
   try {
     const client = createClient(
       BacklogService,
       createConnectTransport({ baseUrl: getApiBaseUrl(), interceptors: [createAuthInterceptor()] })
     );
-    const resp = await client.getBacklogItem({ itemId });
+    const resp = await client.getBacklogItem({ itemId }, { signal });
     if (resp.item) store.dispatch(upsertItem(resp.item));
   } catch (err) {
     console.error("[useBacklogCreationNotifier] failed to hydrate new item into the store:", err);
@@ -53,6 +53,7 @@ export function useBacklogCreationNotifier(): {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlightRef = useRef(false);
   const mountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
 
   const notify = useCallback(
     (id: string, headline: string, title: string, type: "task_complete" | "question" | "error") => {
@@ -116,7 +117,7 @@ export function useBacklogCreationNotifier(): {
 
   const trackItem = useCallback((id: string, title: string) => {
     if (!mountedRef.current) return;
-    void hydrateItemIntoStore(id);
+    if (abortRef.current) void hydrateItemIntoStore(id, abortRef.current.signal);
     trackedRef.current.set(id, { title, startedAt: Date.now(), notifiedComplete: false, notifiedGuidance: false });
     if (timerRef.current) return;
     timerRef.current = setInterval(() => {
@@ -131,8 +132,10 @@ export function useBacklogCreationNotifier(): {
 
   useEffect(() => {
     mountedRef.current = true;
+    abortRef.current = new AbortController();
     return () => {
       mountedRef.current = false;
+      abortRef.current?.abort();
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = null;
     };
