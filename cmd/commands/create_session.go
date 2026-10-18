@@ -2,8 +2,10 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
@@ -57,7 +59,8 @@ get-diff calls can run against a session that is still initializing.`,
 }
 
 func runCreateSession(cmd *cobra.Command, o *createSessionOptions) error {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	serverURL := o.serverURL()
 	client := NewSessionClient(serverURL)
 	resp, err := client.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -71,15 +74,7 @@ func runCreateSession(cmd *cobra.Command, o *createSessionOptions) error {
 	if o.wait {
 		sess, err = waitForActive(ctx, client, sess, o.waitTimeout)
 		if err != nil {
-			cmd.SilenceUsage = true
-			cmd.SilenceErrors = true
-			var cerr *connect.Error
-			if errors.As(err, &cerr) {
-				fmt.Fprintln(cmd.ErrOrStderr(), FormatConnectError(err, serverURL))
-			} else {
-				fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
-			}
-			return err
+			return rpcError(cmd, err, serverURL)
 		}
 	}
 	return printSession(cmd, sess, o.json)
@@ -95,27 +90,30 @@ func printSession(cmd *cobra.Command, sess *sessionv1.Session, asJSON bool) erro
 	return nil
 }
 
-// waitForActive polls GetSession until the session leaves CREATING. Only
-// ACTIVE is success: FAILED/CRASHED/PERMANENTLY_FAILED are terminal errors.
+// waitForActive polls GetSession until ACTIVE (success), a failed terminal
+// state (error), or timeout; any other status keeps polling.
 func waitForActive(ctx context.Context, client sessionv1connect.SessionServiceClient, sess *sessionv1.Session, timeout time.Duration) (*sessionv1.Session, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		if sess.GetStatus() != sessionv1.SessionStatus_SESSION_STATUS_CREATING {
-			switch sess.GetStatus() {
-			case sessionv1.SessionStatus_SESSION_STATUS_FAILED,
-				sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED,
-				sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
-				return sess, fmt.Errorf("session creation failed: %s reached terminal state %s", sess.GetTitle(), sess.GetStatus())
-			}
+		switch sess.GetStatus() {
+		case sessionv1.SessionStatus_SESSION_STATUS_ACTIVE:
 			return sess, nil
+		case sessionv1.SessionStatus_SESSION_STATUS_FAILED,
+			sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED,
+			sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
+			return sess, fmt.Errorf("session creation failed: %s (id %s) reached terminal state %s", sess.GetTitle(), sess.GetId(), sess.GetStatus())
 		}
 		if !time.Now().Before(deadline) {
-			return sess, errors.New("timed out waiting for session to become active")
+			return sess, fmt.Errorf("timed out waiting for session %s to become active (last status %s)", sess.GetId(), sess.GetStatus())
 		}
-		time.Sleep(min(pollInterval, time.Until(deadline)))
+		select {
+		case <-ctx.Done():
+			return sess, ctx.Err()
+		case <-time.After(min(pollInterval, time.Until(deadline))):
+		}
 		resp, err := client.GetSession(ctx, connect.NewRequest(&sessionv1.GetSessionRequest{Id: sess.GetId()}))
 		if err != nil {
-			return sess, err
+			return sess, fmt.Errorf("polling session %s: %w", sess.GetId(), err)
 		}
 		sess = resp.Msg.GetSession()
 	}

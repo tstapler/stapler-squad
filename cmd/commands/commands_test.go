@@ -138,7 +138,7 @@ func TestCreateSession_WaitOutcomes(t *testing.T) {
 		{"failed", []sessionv1.SessionStatus{sessionv1.SessionStatus_SESSION_STATUS_FAILED}, "5s", "terminal state SESSION_STATUS_FAILED"},
 		{"crashed", []sessionv1.SessionStatus{sessionv1.SessionStatus_SESSION_STATUS_CRASHED}, "5s", "terminal state SESSION_STATUS_CRASHED"},
 		{"permanently failed", []sessionv1.SessionStatus{sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED}, "5s", "terminal state"},
-		{"timeout", []sessionv1.SessionStatus{creating}, "50ms", "timed out waiting for session to become active"},
+		{"timeout", []sessionv1.SessionStatus{creating}, "50ms", "timed out waiting for session"},
 	}
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond

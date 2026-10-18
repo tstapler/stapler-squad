@@ -13,13 +13,13 @@ import (
 // NewGetSessionCmd prints one session as JSON. It keeps encoding/json (enums
 // as integers) so existing scripts parsing its output don't break.
 func NewGetSessionCmd() *cobra.Command {
-	var server string
+	var f commandFlags
 	cmd := &cobra.Command{
 		Use:   "get-session [name]",
 		Short: "Get information about a session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			serverURL := ResolveServerURL(server)
+			serverURL := f.serverURL()
 			resp, err := NewSessionClient(serverURL).GetSession(context.Background(),
 				connect.NewRequest(&sessionv1.GetSessionRequest{Id: args[0]}))
 			if err != nil {
@@ -33,6 +33,6 @@ func NewGetSessionCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&server, "server", "s", "", "server URL (default $SSQ_SERVER, then "+defaultServerURL+")")
+	cmd.Flags().StringVarP(&f.server, "server", "s", "", "server URL (default $SSQ_SERVER, then "+defaultServerURL+")")
 	return cmd
 }

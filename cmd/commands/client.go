@@ -69,13 +69,24 @@ func (f *commandFlags) register(cmd *cobra.Command) {
 
 func (f *commandFlags) serverURL() string { return ResolveServerURL(f.server) }
 
-// rpcError converts an RPC failure into a stderr-ready error and silences
-// cobra's own usage/error printing so the message appears once.
+// reportedError marks an error already printed to stderr, so main doesn't print it again.
+type reportedError struct{ error }
+
+func (e reportedError) Unwrap() error { return e.error }
+
+// IsReported reports whether err was already printed by the subcommand.
+func IsReported(err error) bool {
+	var r reportedError
+	return errors.As(err, &r)
+}
+
+// rpcError prints a failure to stderr (once) and returns it marked as reported,
+// silencing cobra's own usage/error printing.
 func rpcError(cmd *cobra.Command, err error, serverURL string) error {
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	fmt.Fprintln(cmd.ErrOrStderr(), FormatConnectError(err, serverURL))
-	return err
+	return reportedError{err}
 }
 
 func printProtoJSON(cmd *cobra.Command, msg proto.Message) error {
