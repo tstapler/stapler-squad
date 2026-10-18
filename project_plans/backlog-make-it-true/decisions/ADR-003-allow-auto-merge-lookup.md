@@ -29,3 +29,8 @@
 - Needs `make proto-gen` and `make registry-generate`.
 - A `httptest` GHE override test (`SetEnterpriseBaseURLOverride`, `github/hosts.go:44-58`) pins that a GHE repo never queries github.com.
 - UNVERIFIED: whether a read-only token returns the field absent (mapped to `NO_PERMISSION`); verified by a token-without-push test case in Task 3.1.1c.
+
+## Spike results (Task 0.1.1c, verified by reading code at `70a2920a3`, 2026-10-18)
+
+- **How an item's `RepoPath` becomes a `RepoRef`.** There is no field on the item that holds a `RepoRef`; it is derived on demand from the local checkout's `origin` remote: `github.GetOwnerRepoFromRemote(repoPath, enterpriseHosts)` (`github/client.go:881-892`) calls `GetRemoteURL` (`:847`, go-git `OpenRepo` plus `Remote("origin")`, cached per path in `remoteURLCache` and de-duplicated by singleflight), then `ParseGitHubRefWithHosts`, then `NewRepoRefWithHost(owner, repo, host)` (`github/repo_ref.go:25-37`). The enterprise host list comes from `enterpriseHostsForRemoteParsing()` (`session/repo_path.go:594-601`, which calls `config.LoadConfig()`). Existing item-level call sites: `session/backlog_lifecycle_pr.go:137`, `:153` and `:1799` (`item.RepoPath`).
+- **Contract that matters for `RepoSettings`.** When the remote is not a GitHub URL the function returns a zero-value `RepoRef{}` and a nil error, so every caller must check `ref.IsValid()` (`github/repo_ref.go`); a remote-less or non-GitHub `RepoPath` (the local-only and Jules items this ADR maps to `UNSPECIFIED`) is exactly that case. A missing or unopenable repository returns an error instead. `RepoRef` carries host, so the GHE-never-queries-github.com test in Consequences applies directly.
