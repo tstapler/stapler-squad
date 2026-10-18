@@ -68,6 +68,9 @@ import {
   pathIndicatorInvalid,
   pathIndicatorLoading,
   createButton,
+  button as buttonClass,
+  buttonSecondary,
+  shortcutsBacklogButton,
   error as errorClass,
 } from "./Omnibar.css";
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
@@ -2211,9 +2214,6 @@ export function Omnibar({
           <span className={shortcut}>
             <span className={shortcutKey}>Esc</span> Close
           </span>
-          {isDiscoveryMode && (
-            <OmnibarBacklogButton onClick={openBacklogCompose} className={createButton} />
-          )}
           {!isDiscoveryMode && (
             <button
               type="button"
@@ -2232,6 +2232,10 @@ export function Omnibar({
               <span className={shortcut}>
                 <span className={shortcutKey}>↵</span> Jump
               </span>
+              <OmnibarBacklogButton
+                onClick={openBacklogCompose}
+                className={`${buttonClass} ${buttonSecondary} ${shortcutsBacklogButton}`}
+              />
             </>
           )}
           {!isDiscoveryMode && isDropdownVisible && (

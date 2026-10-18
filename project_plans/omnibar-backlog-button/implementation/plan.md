@@ -79,7 +79,7 @@ N/A: complexity 1. Not feature-gated; rollback is a revert commit (frontend only
 | a | Enter on a focused backlog button | `stopPropagation` for plain Enter/Space inside `OmnibarBacklogButton`; tests assert Enter opens compose and does not submit. No Tab change | See Finding K and the Pattern table | No |
 | K | Tab-reachability of footer buttons (backlog, Cancel, Create Session) | **Not built.** Pre-existing limitation: Tab cycles session type from the input. Options if wanted: a dedicated shortcut (e.g. Cmd/Ctrl+Shift+B shown in the shortcuts bar), or let Tab leave the input after the last form field | Changing Tab affects Cancel and Create Session too; out of scope for a one-button AC | **Yes (flag):** decide whether to make footer buttons Tab-reachable as a separate change |
 | b | Narrow-width clipping | `flexWrap: "wrap"` on `footer`; `marginRight: "auto"` on the backlog button so it sits left, apart from Cancel/Create Session | Primary stays right-most; wrapping beats clipping | No |
-| c | Discovery has no footer | Keep the list row as the discovery entry point (AC2 satisfied there: top-level, selectable, not nested). Add the button in the discovery shortcuts bar **only when `isAtDropdownVisible`** (row hidden) | Closes the one state with no entry point without duplicating the action elsewhere | **Yes (flag):** if the owner reads AC1 literally ("footer button in discovery too"), change the render condition in Task 2b from `isAtDropdownVisible` to `isDiscoveryMode`; no other task changes |
+| c | Discovery footer button (REVISED) | Keep the list row AND render the button in the discovery shortcuts bar for all of `isDiscoveryMode`, secondary style, after the hints (`Omnibar.tsx`, `shortcutsBacklogButton`) | Review verdict PARTIAL read AC0/AC1 literally: the button must be a top-level action in every state. Original `@`-only gating (`isAtDropdownVisible`) left plain discovery with only the nested list row. The duplicate entry is accepted; decision d (unique locator text) no longer holds, so e2e uses the `option` role for the list row | Resolved by review feedback |
 | d | Label "Create Backlog Item" vs "Create Backlog Item (AI)" | Keep both as-is. The two never render together (row only in discovery, footer only in creation), so no strict-mode locator clash; the existing e2e locator `getByText('Create Backlog Item (AI)')` (`tests/e2e/omnibar-backlog-compose.spec.ts:22`) is untouched | Shorter footer label helps narrow widths; visible text equals accessible name (no `aria-label`) | **Yes (flag, low stakes):** append "(AI)" to the footer label if the owner wants one name |
 | e | Disable while submitting | `disabled={isSubmitting}` only | Avoids switching modes mid-request; stays enabled when the form is invalid | No |
 | f | Focus on compose open / back | No code change; add assertions: textarea has focus on open; after cancel the input has focus and creation form fields are intact | `autoFocus` and the refocus effect already exist (Finding F) | No |
@@ -88,7 +88,7 @@ N/A: complexity 1. Not feature-gated; rollback is a revert commit (frontend only
 
 ## Unresolved Questions
 - [ ] Tab-reachability of footer buttons (decision K) — pre-existing, shared with Cancel/Create Session, not built; blocks nothing — owner: Tyler
-- [ ] AC1 literal reading for discovery (decision c) — blocks nothing; default is built, switch is one condition in Task 2b — owner: Tyler
+- [x] AC1 literal reading for discovery (decision c) — resolved: built as `isDiscoveryMode` after the PARTIAL review verdict
 - [ ] Footer label "(AI)" (decision d) and creation-mode seeding (decision S) — block nothing; defaults chosen — owner: Tyler
 
 ## Dependency Visualization
@@ -154,13 +154,13 @@ Task 2a (Enter isolation, in button component) --> Task 2b (@ fallback)
 **As a** user typing an `@workflow` command in discovery mode, **I want** a visible Create Backlog Item button, **so that** the action is not missing in any state of the card.
 **Acceptance Criteria**:
 - Fallback shows only in the `@` state.
-  - *Given* discovery mode with input `@deploy` (so `isAtDropdownVisible` is true), *When* the omnibar renders, *Then* `omnibar-create-backlog-button` is present in the bottom shortcuts bar; *Given* discovery mode with input `fix login` (list row visible), *Then* the button is absent and the list row is present.
+  - *Given* discovery mode with any input (e.g. `fix login` or `@deploy`), *When* the omnibar renders, *Then* `omnibar-create-backlog-button` is present in the bottom shortcuts bar, and the list row remains when `isAtDropdownVisible` is false.
 - Same behavior on click.
   - *Given* discovery mode with input `@deploy`, *When* the fallback button is clicked, *Then* `backlog-compose-textarea` is visible with value `@deploy`.
 **Files**: `Omnibar.tsx`
 
-##### Task 2b: Render fallback in the discovery shortcuts bar (cost XS)
-- In the `isDiscoveryMode` fragment (`Omnibar.tsx:2223-2232`) render `<OmnibarBacklogButton onClick={openBacklogCompose} className={createButton} />` when `isAtDropdownVisible`. Import the component; reuse existing `Omnibar.css.ts` exports only (`createButton`, already used by the creation-mode "Create Session" button in the same bar at `Omnibar.tsx:2213-2222`, gives it `marginLeft:auto` and the bar's button look). No new CSS. The `@`-state button is a sibling control in the shortcuts bar, which is accepted as slightly off-pattern (the bar is otherwise hints plus that one action) and is covered by the owner flag in decision c.
+##### Task 2b: Render the button in the discovery shortcuts bar (cost XS) — REVISED
+- In the `isDiscoveryMode` fragment render `<OmnibarBacklogButton>` after the Navigate/Jump hints for every discovery state (not only `isAtDropdownVisible`), styled `buttonClass + buttonSecondary + shortcutsBacklogButton` (`marginLeft:auto`). Discovery Tab is not swallowed, so the button is Tab-reachable there; creation mode still swallows Tab (decision K).
 - Single render condition so decision c's alternative is a one-token change.
 - Files: `Omnibar.tsx`
 

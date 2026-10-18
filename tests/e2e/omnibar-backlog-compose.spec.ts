@@ -28,7 +28,7 @@ async function openCreationMode(page: import('@playwright/test').Page) {
 
 async function openCompose(page: import('@playwright/test').Page, typed: string) {
   await openOmnibar(page, typed);
-  await page.getByText('Create Backlog Item (AI)').click();
+  await page.getByRole('option', { name: /Create Backlog Item/ }).click();
   const textarea = page.getByTestId('backlog-compose-textarea');
   await expect(textarea).toBeVisible();
   return textarea;
@@ -89,7 +89,7 @@ for (const profile of [V1_DESKTOP, V2_PORTRAIT]) {
 
     test('discovery shows both the list row and the footer backlog button', async ({ page }) => {
       await openOmnibar(page, 'fix login');
-      await expect(page.getByText('Create Backlog Item (AI)')).toBeVisible();
+      await expect(page.getByRole('option', { name: /Create Backlog Item/ })).toBeVisible();
       await expect(page.getByTestId('omnibar-create-backlog-button')).toBeVisible();
     });
 

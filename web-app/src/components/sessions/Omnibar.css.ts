@@ -248,6 +248,9 @@ export const footer = style({
 // Pushes the backlog action to the left edge of the footer row.
 export const backlogButton = style({ marginRight: "auto" });
 
+// Right-aligns the backlog action at the end of the discovery shortcuts row.
+export const shortcutsBacklogButton = style({ marginLeft: "auto" });
+
 export const button = style({
   padding: "8px 16px",
   borderRadius: 6,
