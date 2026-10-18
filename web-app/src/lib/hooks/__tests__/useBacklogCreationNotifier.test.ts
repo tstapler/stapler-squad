@@ -9,6 +9,12 @@ jest.mock("@/lib/contexts/notificationContexts", () => ({
   useNotificationCommands: () => ({ addNotification: mockAddNotification }),
 }));
 
+jest.mock("@connectrpc/connect", () => ({
+  createClient: () => ({ getBacklogItem: jest.fn().mockResolvedValue({ item: undefined }) }),
+}));
+jest.mock("@connectrpc/connect-web", () => ({ createConnectTransport: jest.fn() }));
+jest.mock("@/lib/config", () => ({ getApiBaseUrl: () => "", createAuthInterceptor: () => ({}) }));
+
 const mockGetBacklogItem = jest.fn();
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({ getBacklogItem: mockGetBacklogItem }),

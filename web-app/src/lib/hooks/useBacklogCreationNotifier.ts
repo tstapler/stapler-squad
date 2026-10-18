@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { store } from "@/lib/store";
+import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 
 const POLL_INTERVAL_MS = 4000;
@@ -14,6 +20,21 @@ interface Tracked {
   startedAt: number;
   notifiedComplete: boolean;
   notifiedGuidance: boolean;
+}
+
+// CreateBacklogItem publishes no live event, so an open list only learns of a
+// new item once it is upserted into the shared store (as the backlog page does).
+async function hydrateItemIntoStore(itemId: string): Promise<void> {
+  try {
+    const client = createClient(
+      BacklogService,
+      createConnectTransport({ baseUrl: getApiBaseUrl(), interceptors: [createAuthInterceptor()] })
+    );
+    const resp = await client.getBacklogItem({ itemId });
+    if (resp.item) store.dispatch(upsertItem(resp.item));
+  } catch (err) {
+    console.error("[useBacklogCreationNotifier] failed to hydrate new item into the store:", err);
+  }
 }
 
 /**
@@ -95,6 +116,7 @@ export function useBacklogCreationNotifier(): {
 
   const trackItem = useCallback((id: string, title: string) => {
     if (!mountedRef.current) return;
+    void hydrateItemIntoStore(id);
     trackedRef.current.set(id, { title, startedAt: Date.now(), notifiedComplete: false, notifiedGuidance: false });
     if (timerRef.current) return;
     timerRef.current = setInterval(() => {
