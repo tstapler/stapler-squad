@@ -16,7 +16,7 @@ Pre-mortem and adversarial review of the research findings and plan. Each challe
 
 **Concern**: `backlog-service-refactor` is the most mature plan in the codebase. `session/backlog_lifecycle.go` may already be addressed in its implementation.
 
-**Response**: The research shows `backlog-service-refactor` targets `server/services/backlog_service.go` and the ORM repository layer (`session/ent_repository_backlog.go`). The `session/backlog_lifecycle.go` file is in the `session/` package (not `server/services/`), coordinates lifecycle events (completion, retry, escalation), and is not explicitly addressed in the existing plan's requirements.md.
+**Response**: The research shows `backlog-service-refactor` targets `server/services/backlog_service.go` and the ORM repository layer (`session/ent_repository_backlog.go`). **Correction (re-checked against source):** this response was wrong. `backlog-service-refactor` names `session/backlog_lifecycle.go` directly (`requirements.md:13`, `implementation/plan.md:324,452,666,708`) — extracting `spawnReviewGate`, removing ent references, and a complexity target. RC-03 is therefore flagged as overlapping and gated in plan.md §5; its scope is limited to the wiring and stuck-reconciler blocks the existing plan does not target.
 
 However, the plan acknowledges this ambiguity explicitly (Task 11: verify existing plans are not stale). Before dispatching RC-03, the implementer should confirm there is no overlap with the in-flight plan. If overlap exists, RC-03 should be merged into `backlog-service-refactor` rather than stand alone.
 

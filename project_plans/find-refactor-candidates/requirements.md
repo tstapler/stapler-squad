@@ -29,7 +29,8 @@ For the top 3–5 unaddressed candidates, produce enough detail that someone can
 3. The top 3 new candidates have a one-paragraph scope description sufficient for a follow-on SDD session to use as its `requirements.md` seed.
 4. Candidates are ranked by a composite score derived from measured data (file size × git-churn frequency), not impression.
 5. The plan distinguishes between same-package file-split refactors (low risk) and cross-package interface extractions (moderate risk) so the dispatcher can set appropriate scope expectations.
-6. Implementation tasks are scoped so each fits within a single PR (≤ ~600 lines of diff).
+6. Implementation tasks are scoped so each fits within a single PR (≤ ~600 lines of diff), each with a named build/test gate.
+7. RC-03 (`backlog_lifecycle`) overlap with `backlog-service-refactor` is explicitly flagged, and the cross-check is listed as a pre-dispatch gate.
 
 ## Non-Goals
 
