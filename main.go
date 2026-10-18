@@ -932,7 +932,11 @@ func init() {
 	rootCmd.AddCommand(newIntegrationCredentialCmd())
 	rootCmd.AddCommand(newContractBundleCmd())
 	rootCmd.AddCommand(printQRCodesCmd)
-	rootCmd.AddCommand(commands.GetSessionCmd)
+	rootCmd.AddCommand(commands.NewGetSessionCmd())
+	rootCmd.AddCommand(commands.NewCreateSessionCmd())
+	rootCmd.AddCommand(commands.NewListSessionsCmd())
+	rootCmd.AddCommand(commands.NewSteerCmd())
+	rootCmd.AddCommand(commands.NewGetDiffCmd())
 	rootCmd.AddCommand(commands.EnsurePortsFreeCmd)
 }
 

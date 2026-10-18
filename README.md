@@ -244,12 +244,16 @@ Usage:
   stapler-squad [command]
 
 Available Commands:
+  create-session   Create a session on a running server
   debug            Print debug information like config paths
+  get-diff         Print a session's unified diff
   get-session      Get information about a session
   help             Help about any command
   list             List all sessions
+  list-sessions    List sessions from a running server
   print-qr-codes   Generate a 1-hour setup token and print QR codes for all detected domains
   reset            Reset all stored instances
+  steer            Send a steering message to a running session
   test-pty         Test PTY initialization and discovery
   version          Print the version number of stapler-squad
 
@@ -272,6 +276,37 @@ Flags:
       --trace                      Enable execution tracing
       --tymuxd-keep-server         Keep the tymuxd daemon running across a stapler-squad restart (default true)
 ```
+
+#### Scripting a running server (CLI reference)
+
+`create-session`, `list-sessions`, `steer`, `get-diff` and `get-session` drive a running server over its API, with no agent or MCP client in the loop. Point them at a server with `--server <url>`, else the `SSQ_SERVER` environment variable, else `http://localhost:8543/api`.
+
+Default output is one `key: value` per line (or a tab-separated table for `list-sessions`) so it pipes into `awk`/`cut`; errors go to stderr only and the exit code is non-zero on failure. `--json` emits JSON with enums as string names (e.g. `SESSION_STATUS_ACTIVE`); `get-session` is the exception and keeps its original integer-enum JSON.
+
+```bash
+# List sessions (tab-separated), or only active ones as JSON
+ssq list-sessions
+ssq list-sessions --status active --json   # --status: active | paused | all
+
+# Create a session and print its ID (use --wait in CI, see below)
+ssq create-session --title "fix-login-bug" --path ~/code/myapp --branch fix/login
+ssq create-session --title "fix-login-bug" --path ~/code/myapp --wait --wait-timeout 5m
+
+# Steer a running session
+ssq steer <session-id> --message "Focus only on the API layer"
+
+# Print the session's unified diff (empty output = no changes)
+ssq get-diff <session-id> | delta
+ssq get-diff <session-id> --json
+
+# Target a non-default server
+ssq list-sessions --server http://myremote:8543/api
+SSQ_SERVER=http://myremote:8543/api ssq get-session <session-id>
+```
+
+> **CI callout:** every `create-session` in automation must use `--wait`. Creation is asynchronous; without `--wait` the session is still `SESSION_STATUS_CREATING` when a following `steer` or `get-diff` runs. With `--wait` the command polls every 2s, exits 0 once the session is `SESSION_STATUS_ACTIVE`, and exits 1 if it reaches `SESSION_STATUS_FAILED`, `CRASHED` or `PERMANENTLY_FAILED`, or is still creating after `--wait-timeout` (default 60s).
+
+`list-sessions` needs a running server; use `ssq list` to read local state when the server is down.
 
 #### Using other AI assistants
 
