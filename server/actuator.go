@@ -29,6 +29,7 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/health", handleActuatorHealth)
 	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
 	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
+	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
 }
 
 // handleActuatorGitBackend serves the git backend shadow-soak counters and the mechanical flip

@@ -1440,6 +1440,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		eventBus,
 	)
 	sessionService.SetQuotaGate(quotaGate)
+	services.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
 	quotaGate.Reconcile(context.Background())
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.

@@ -315,14 +315,19 @@ func TestLocalWriteGuard_ShouldRefuseAHostnameOnlyInDetectedSet_WhenVerifiedSetL
 // T-RP-57: the set holds only the registered procedures and never
 // ClearNotificationHistory.
 func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredProcedures_AndNeverGuardClearNotificationHistory(t *testing.T) {
-	assert.Equal(t, map[string]middleware.GuardProfile{
+	want := map[string]middleware.GuardProfile{
 		probeProcedurePath: middleware.ProfileProbe,
 		nudgeProcedurePath: middleware.ProfileProbe,
 		pruneProcedurePath: middleware.ProfileRebinding,
 
-		updateFlagProcedurePath: middleware.ProfileRebinding,
-		replyProcedurePath:      middleware.ProfileRebinding,
-	}, guardedProcedures)
+		updateFlagProcedurePath:  middleware.ProfileRebinding,
+		replyProcedurePath:       middleware.ProfileRebinding,
+		updateQuotaProcedurePath: middleware.ProfileRebinding,
+	}
+	for _, p := range engineWriteProcedures { // pinned in quota_listener_test.go
+		want[p] = middleware.ProfileRebinding
+	}
+	assert.Equal(t, want, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
 	assert.False(t, hasClear)
 }
