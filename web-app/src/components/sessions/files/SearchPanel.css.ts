@@ -49,7 +49,7 @@ export const toggle = style({
 export const textButton = style({
   border: "none",
   background: "transparent",
-  color: vars.color.accentText,
+  color: vars.color.textPrimary,
   font: "inherit",
   fontSize: "12px",
   textDecoration: "underline",

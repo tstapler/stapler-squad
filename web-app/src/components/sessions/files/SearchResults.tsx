@@ -101,6 +101,7 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
     <div
       ref={scrollRef}
       className={`${tree} ${p.stale ? treeDimmed : ""}`}
+      id={p.treeId}
       role="tree"
       aria-label="Search results"
       aria-busy={p.busy}

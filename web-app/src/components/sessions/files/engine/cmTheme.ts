@@ -18,7 +18,7 @@ const chrome = EditorView.theme(
       backgroundColor: `${vars.color.terminalHoverBg} !important`,
     },
     ".cm-activeLine": { backgroundColor: vars.color.terminalHoverBg },
-    ".cm-activeLineGutter": { backgroundColor: vars.color.terminalHoverBg },
+    ".cm-activeLineGutter": { backgroundColor: vars.color.terminalHoverBg, color: vars.color.terminalForeground },
     ".cm-gutters": {
       backgroundColor: vars.color.terminalBackground,
       color: vars.color.terminalTextMuted,

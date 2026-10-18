@@ -37,7 +37,7 @@ export const barButton = style({
   ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "-2px" },
   selectors: {
     "&[aria-disabled='true']": { opacity: 0.4, cursor: "default" },
-    "&[aria-current='true']": { color: vars.color.primary },
+    "&[aria-current='true']": { boxShadow: `inset 0 2px 0 ${vars.color.primary}` },
   },
 });
 

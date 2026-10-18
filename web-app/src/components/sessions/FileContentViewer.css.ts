@@ -25,7 +25,7 @@ export const emptyState = style({
 
 export const emptyHint = style({
   fontSize: vars.fontSize.sm,
-  opacity: 0.6,
+  color: vars.color.textSecondary,
   margin: 0,
 });
 
