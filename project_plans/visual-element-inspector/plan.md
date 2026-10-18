@@ -209,3 +209,12 @@ Phases 1 and 3 (frontend CDPViewer changes) can proceed in parallel; Phase 2 dep
 | Phase 3: Frontend | 2 | CDPViewer changes + BrowserTab panel |
 | Phase 4: Tests + Docs | 1 | E2E spec + doc edits |
 | **Total** | **5 waves** | |
+
+---
+
+## Implementation Deviations (recorded during Phase 5)
+
+- Short-lived connection targets the first `page` entry from `/json/list`, not `/json/version`'s browser endpoint (the browser endpoint does not serve DOM/CSS).
+- `DOM.getNodeForLocation` yields a `backendNodeId`; the code calls `DOM.getDocument` then `DOM.pushNodesByBackendIdsToFrontend` to obtain a usable `nodeId`.
+- "Send to Agent" uses the existing `WriteToSession` RPC with `pressEnter=false` rather than the terminal stream hook (which lives inside `TerminalOutput`).
+- `InspectAtPoint` takes a `cdp.Point` instead of two ints. Handler returns 502 for unexpected CDP failures, 400 for a bad body.

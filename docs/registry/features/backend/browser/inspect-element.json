@@ -1,0 +1,13 @@
+{
+  "id": "browser:inspect-element",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "POST /api/sessions/{id}/inspect-element",
+  "httpMethod": "POST",
+  "httpPath": "/api/sessions/{id}/inspect-element",
+  "markerFound": true,
+  "handlerFile": "server/services/inspect_element_handler.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-18T00:50:58.211222803-07:00"
+}
