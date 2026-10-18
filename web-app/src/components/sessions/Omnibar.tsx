@@ -280,13 +280,18 @@ export function Omnibar({
   const { addNotification } = useNotificationCommands();
   const createBacklogItemInBackground = useCallback(
     async (text: string) => {
-      const result = await createBacklogItemFromChat(text);
+      let result: Awaited<ReturnType<typeof createBacklogItemFromChat>> = null;
+      try {
+        result = await createBacklogItemFromChat(text);
+      } catch {
+        // fall through to the failure notification
+      }
       if (!result) {
         addNotification({
           sessionId: "",
           sessionName: "",
           title: "Failed to create backlog item",
-          message: "Try again from the backlog page.",
+          message: `Your text was not saved: ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
           notificationType: "error",
         });
         return;

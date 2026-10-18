@@ -523,3 +523,47 @@ func TestGetBacklogItem_HasPendingGuidanceRequests_TracksOpenRequest(t *testing.
 	require.NoError(t, err)
 	assert.False(t, after.HasPendingGuidanceRequests)
 }
+
+type flagRecordingPublisher struct {
+	mu    sync.Mutex
+	flags []bool
+}
+
+func (p *flagRecordingPublisher) PublishItemChanged(item *BacklogItemData, _ BacklogItemChange) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.flags = append(p.flags, item.HasPendingGuidanceRequests)
+}
+
+func TestGuidanceLifecycle_RepublishesItemWithFlag_OnCreateAndCancel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := NewTestEntRepository(t)
+	itemID := createTestBacklogItemForGuidance(t, repo)
+	otherID := createTestBacklogItemForGuidance(t, repo)
+	pub := &flagRecordingPublisher{}
+	repo.SetItemChangePublisher(pub)
+
+	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+		Scope: domain.RequestScopeBacklogItem, ItemID: &itemID, QuestionText: "Q?", QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+
+	other, err := repo.GetBacklogItem(ctx, otherID.String())
+	require.NoError(t, err)
+	assert.False(t, other.HasPendingGuidanceRequests, "another item's open request must not set this item's flag")
+
+	applied, err := repo.CancelGuidanceRequest(ctx, uuid.MustParse(created.ID), "test")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	summaries, err := repo.ListBacklogItemSummaries(ctx, BacklogItemFilter{})
+	require.NoError(t, err)
+	for _, s := range summaries {
+		assert.False(t, s.HasPendingGuidanceRequests)
+	}
+
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	assert.Equal(t, []bool{true, false}, pub.flags)
+}

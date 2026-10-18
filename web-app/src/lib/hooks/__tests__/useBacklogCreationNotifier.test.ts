@@ -70,4 +70,49 @@ describe("useBacklogCreationNotifier", () => {
     expect(mockGetBacklogItem).not.toHaveBeenCalled();
     expect(mockAddNotification).not.toHaveBeenCalled();
   });
+
+  it("notifies when triage fails", async () => {
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "failed" });
+    const { result } = renderHook(() => useBacklogCreationNotifier());
+    act(() => result.current.trackItem("a", "Dark mode"));
+
+    await tick();
+
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    expect(mockAddNotification.mock.calls[0][0].title).toBe("Triage failed — Dark mode");
+  });
+
+  it("keeps polling after a failed fetch", async () => {
+    mockGetBacklogItem.mockRejectedValueOnce(new Error("boom"));
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "completed" });
+    const { result } = renderHook(() => useBacklogCreationNotifier());
+    act(() => result.current.trackItem("a", "Dark mode"));
+
+    await tick();
+    expect(mockAddNotification).not.toHaveBeenCalled();
+    await tick();
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a second poll while one is in flight", async () => {
+    mockGetBacklogItem.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useBacklogCreationNotifier());
+    act(() => result.current.trackItem("a", "Dark mode"));
+
+    await tick();
+    await tick();
+
+    expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops polling after unmount", async () => {
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "running" });
+    const { result, unmount } = renderHook(() => useBacklogCreationNotifier());
+    act(() => result.current.trackItem("a", "Dark mode"));
+    unmount();
+
+    await tick();
+
+    expect(mockGetBacklogItem).not.toHaveBeenCalled();
+  });
 });

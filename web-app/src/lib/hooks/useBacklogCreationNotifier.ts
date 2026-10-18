@@ -30,6 +30,8 @@ export function useBacklogCreationNotifier(): {
   const { getBacklogItem } = useBacklogService();
   const trackedRef = useRef(new Map<string, Tracked>());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const notify = useCallback(
     (id: string, headline: string, title: string, type: "task_complete" | "question" | "error") => {
@@ -37,7 +39,7 @@ export function useBacklogCreationNotifier(): {
         sessionId: "",
         sessionName: "",
         title: `${headline} — ${title}`,
-        message: title,
+        message: "Open the backlog item to review.",
         notificationType: type,
         onView: () => router.push(`/backlog?item=${id}`),
       });
@@ -45,7 +47,7 @@ export function useBacklogCreationNotifier(): {
     [addNotification, router]
   );
 
-  const poll = useCallback(async () => {
+  const pollOnce = useCallback(async () => {
     const tracked = trackedRef.current;
     for (const [id, t] of Array.from(tracked)) {
       if (Date.now() - t.startedAt > MAX_TRACK_MS) {
@@ -58,6 +60,7 @@ export function useBacklogCreationNotifier(): {
       } catch {
         continue;
       }
+      if (!mountedRef.current) return;
       if (!item) continue;
 
       if (item.hasPendingGuidanceRequests) {
@@ -85,23 +88,33 @@ export function useBacklogCreationNotifier(): {
     }
   }, [getBacklogItem, notify]);
 
-  const pollRef = useRef(poll);
-  pollRef.current = poll;
+  const pollRef = useRef(pollOnce);
+  useEffect(() => {
+    pollRef.current = pollOnce;
+  }, [pollOnce]);
 
   const trackItem = useCallback((id: string, title: string) => {
+    if (!mountedRef.current) return;
     trackedRef.current.set(id, { title, startedAt: Date.now(), notifiedComplete: false, notifiedGuidance: false });
-    if (!timerRef.current) {
-      timerRef.current = setInterval(() => void pollRef.current(), POLL_INTERVAL_MS);
-    }
+    if (timerRef.current) return;
+    timerRef.current = setInterval(() => {
+      // A slow RPC must not let the next tick start an overlapping pass.
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      void pollRef.current().finally(() => {
+        inFlightRef.current = false;
+      });
+    }, POLL_INTERVAL_MS);
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = null;
-    },
-    []
-  );
+    };
+  }, []);
 
   return { trackItem };
 }
