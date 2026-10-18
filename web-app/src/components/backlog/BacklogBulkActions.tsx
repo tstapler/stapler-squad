@@ -1,7 +1,8 @@
 "use client";
 // +feature: backlog-bulk-actions
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAnalytics } from "@/lib/analytics";
 import {
   container, selection, count, selectAllButton, clearButton, actions, actionButton, danger, feedback as feedbackClass,
@@ -15,6 +16,11 @@ interface BacklogBulkActionsProps {
   feedback?: string | null;
   onArchiveSelected: () => void;
   onDeleteSelected: () => void;
+  onTriageSelected: () => void;
+  /** Called with the ids frozen when the confirmation dialog opened. */
+  onAutoImplementSelected: (ids: string[]) => void;
+  /** Live eligible ids; snapshotted when the dialog opens so the count shown is the count started. */
+  autoImplementEligibleIds: string[];
   onSelectAll: () => void;
   onClear: () => void;
 }
@@ -26,11 +32,22 @@ export function BacklogBulkActions({
   feedback,
   onArchiveSelected,
   onDeleteSelected,
+  onTriageSelected,
+  onAutoImplementSelected,
+  autoImplementEligibleIds,
   onSelectAll,
   onClear,
 }: BacklogBulkActionsProps) {
   const { track } = useAnalytics();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [autoImplementSnapshot, setAutoImplementSnapshot] = useState<{ ids: string[]; ineligible: number } | null>(null);
+  const autoImplementTriggerRef = useRef<HTMLButtonElement>(null);
+  const autoImplementDialogRef = useRef<HTMLDivElement>(null);
+  // Selection can empty while the dialog is open (live removal, filter change); drop the stale snapshot.
+  useEffect(() => {
+    if (selectedCount === 0) setAutoImplementSnapshot(null);
+  }, [selectedCount]);
+  useFocusTrap(autoImplementDialogRef, autoImplementSnapshot !== null, autoImplementTriggerRef);
 
   if (selectedCount === 0) {
     return feedback ? (
@@ -56,6 +73,28 @@ export function BacklogBulkActions({
           </button>
         </div>
         <div className={actions}>
+          <button
+            type="button"
+            className={actionButton}
+            disabled={busy}
+            onClick={() => { track({ name: "backlog_bulk_triage_selected", category: "user_action", component: "BacklogBulkActions", labels: { count: String(selectedCount) } }); onTriageSelected(); }}
+            data-testid="backlog-bulk-triage-selected"
+          >
+            Triage selected
+          </button>
+          <button
+            type="button"
+            ref={autoImplementTriggerRef}
+            className={actionButton}
+            disabled={busy}
+            onClick={() => {
+              track({ name: "backlog_bulk_auto_implement_open", category: "user_action", component: "BacklogBulkActions", labels: { count: String(selectedCount) } });
+              setAutoImplementSnapshot({ ids: [...autoImplementEligibleIds], ineligible: selectedCount - autoImplementEligibleIds.length });
+            }}
+            data-testid="backlog-bulk-auto-implement-selected"
+          >
+            Auto-implement selected
+          </button>
           <button
             type="button"
             className={actionButton}
@@ -100,6 +139,51 @@ export function BacklogBulkActions({
                 onClick={() => { track({ name: "backlog_bulk_delete_confirm", category: "user_action", component: "BacklogBulkActions", labels: { count: String(selectedCount) } }); setConfirmingDelete(false); onDeleteSelected(); }}
               >
                 Delete {selectedCount} {noun}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {autoImplementSnapshot && (
+        <div className={styles.overlay} onClick={() => setAutoImplementSnapshot(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="backlog-bulk-auto-implement-title"
+            className={styles.dialog}
+            data-testid="backlog-bulk-auto-implement-dialog"
+            ref={autoImplementDialogRef}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setAutoImplementSnapshot(null); }}
+          >
+            <h2 id="backlog-bulk-auto-implement-title">
+              Start autonomous implementation for {autoImplementSnapshot.ids.length} {autoImplementSnapshot.ids.length === 1 ? "item" : "items"}?
+            </h2>
+            {autoImplementSnapshot.ineligible > 0 && (
+              <p data-testid="backlog-bulk-auto-implement-ineligible">
+                {autoImplementSnapshot.ineligible} selected {autoImplementSnapshot.ineligible === 1 ? "item is" : "items are"} ineligible (not ready, or plan not approved) and will be skipped.
+              </p>
+            )}
+            <p className={styles.warningNotice}>
+              Sessions will run autonomously without manual steps.
+            </p>
+            <div className={styles.dialogActions}>
+              <button type="button" autoFocus className={clearButton} onClick={() => { track({ name: "backlog_bulk_auto_implement_cancel", category: "user_action", component: "BacklogBulkActions" }); setAutoImplementSnapshot(null); }}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={actionButton}
+                disabled={busy || autoImplementSnapshot.ids.length === 0}
+                data-testid="backlog-bulk-auto-implement-confirm"
+                onClick={() => {
+                  track({ name: "backlog_bulk_auto_implement_confirm", category: "user_action", component: "BacklogBulkActions", labels: { count: String(autoImplementSnapshot.ids.length) } });
+                  const ids = autoImplementSnapshot.ids;
+                  setAutoImplementSnapshot(null);
+                  onAutoImplementSelected(ids);
+                }}
+              >
+                Start {autoImplementSnapshot.ids.length} {autoImplementSnapshot.ids.length === 1 ? "session" : "sessions"}
               </button>
             </div>
           </div>

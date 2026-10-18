@@ -26,3 +26,10 @@ export const dialogActions = style({
   gap: "0.75rem",
   marginTop: "1rem",
 });
+
+export const warningNotice = style({
+  background: "rgba(234, 179, 8, 0.12)",
+  color: vars.color.textPrimary,
+  padding: "8px 12px",
+  borderRadius: 6,
+});
