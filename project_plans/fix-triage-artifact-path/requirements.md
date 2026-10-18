@@ -49,3 +49,25 @@ Result: the item is left with a non-empty `PlanArtifactsPath` pointing to a dire
 | AC-5 | Existing items already in the DB with a non-empty `PlanArtifactsPath` that no longer exists on disk are surface-able (a migration or startup sweep logs them as warnings). | Yes — manual verification / startup log check. |
 | AC-6 | No regression: items whose `implementation/` directory IS correctly created by the LLM continue to auto-approve and flow through Queued → InProgress without interruption. | Yes — existing full-lifecycle SDD test still passes. |
 | AC-7 | The error message in `ApprovePlan` no longer says "re-run TriggerTriage" when the path was never written; instead it says something like "triage did not produce plan artifacts — re-run triage" (or equivalent). | Yes — inspect error message text in unit test. |
+
+---
+
+## Decisions (recorded at verify)
+
+**No migration for existing stale `plan_artifacts_path` rows.** The guard
+(`ErrPlanArtifactsMissing`), the dequeue `plan_not_approved` stuck row naming the missing
+path, and `ApprovePlan`'s not-on-disk error already surface every affected item and refuse
+to move it into an unresolvable state. A bulk clear was rejected because:
+1. A row can't be classified from the DB alone as "never written" vs. "written, then its
+   worktree was cleaned up", so nulling it discards evidence for no gain.
+2. Recovery is the same either way — re-run triage, which overwrites the path with a real
+   one (a successful triage always persists a path that exists, per AC-1).
+3. A startup sweep that mutates plan state would need its own tests and a concurrency story
+   against in-flight triage, for a population that only shrinks as items are re-triaged.
+
+AC-7 note: new runs can no longer persist a never-written path (AC-1/2), so `ApprovePlan`'s
+"does not exist on disk" error now only describes the "written, now gone" (or pre-fix) case,
+where "re-run TriggerTriage" is the correct instruction.
+
+Test coverage added: `TestDequeueNextQueuedItems_should_MarkPlanNotApprovedStuck_When_PlanArtifactsPathIsStale`
+(fails when the dequeue case is removed, passes with it).

@@ -6622,3 +6622,51 @@ func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementation
 	assert.Equal(t, priorValid, got.PlanArtifactsPath, "a triage run that wrote no plan dir must leave the earlier valid path untouched")
 	assert.False(t, got.PlanApproved, "auto-approve must not fire for a plan path that does not exist")
 }
+
+// TestDequeueNextQueuedItems_should_MarkPlanNotApprovedStuck_When_PlanArtifactsPathIsStale
+// covers the dequeue path for items already in the DB with a recorded
+// plan_artifacts_path whose directory is gone: the claim must be refused (item stays
+// queued, nothing spawned) and the stale path surfaced durably as a plan_not_approved
+// stuck row whose message names the missing path.
+func TestDequeueNextQueuedItems_should_MarkPlanNotApprovedStuck_When_PlanArtifactsPathIsStale(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	stalePath := filepath.Join(t.TempDir(), "gone", "implementation")
+	now := time.Now()
+	approvedAt := now
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:             "queued with stale plan path",
+		RepoPath:          repoPath,
+		Status:            string(session.BacklogStatusQueued),
+		QueuedAt:          &now,
+		PlanApproved:      true,
+		PlanApprovedAt:    &approvedAt,
+		PlanArtifactsPath: stalePath,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(ctx))
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusQueued), final.Status, "a stale-path item must not be claimed off the queue")
+	assert.Empty(t, creator.calls, "no session should be spawned for a stale-path item")
+
+	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	var found *sessionv1.StuckBacklogItem
+	for _, it := range resp.Msg.Items {
+		if it.ItemId == item.ID && it.Reason == sessionv1.StuckReason_STUCK_REASON_PLAN_NOT_APPROVED {
+			found = it
+		}
+	}
+	require.NotNil(t, found, "expected a plan_not_approved stuck row for the stale-path item")
+	assert.Contains(t, found.Context, stalePath, "the stuck message must name the missing path")
+}
