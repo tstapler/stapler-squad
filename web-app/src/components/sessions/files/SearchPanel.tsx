@@ -7,10 +7,12 @@ import { bucketInteractions, bucketRank } from "@/lib/files/analytics/events";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { FindFlowMeter } from "@/lib/files/analytics/findFlowMeter";
 import type { SearchHit, SearchQuery, SearchStream } from "@/lib/files/searchClient";
+import { useLargeFiles, writeLargeFiles } from "@/lib/files/largeFilesPref";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useContentSearch } from "@/lib/hooks/useContentSearch";
 import { usePendingDelay } from "./PendingState";
 import { SearchResults, rowDomId, type ActivateVia, type QuickfixView, type SearchResultsHandle } from "./SearchResults";
+import { EMPTY, toQuery, activeToggles, type FormState } from "./searchForm";
 import { buildRows, hitKey } from "./searchRows";
 import {
   checkLabel, emptyMessage, fieldLabel, filters, form as formClass, header, headerTab, helper, inlineError, note, panel,
@@ -39,28 +41,6 @@ export function SearchPaneTabs({ pane, onPane }: { pane: LeftPane; onPane: (pane
       ))}
     </div>
   );
-}
-
-interface FormState {
-  pattern: string;
-  regex: boolean;
-  caseSensitive: boolean;
-  wholeWord: boolean;
-  include: string;
-  exclude: string;
-  includeIgnored: boolean;
-}
-const EMPTY: FormState = { pattern: "", regex: false, caseSensitive: false, wholeWord: false, include: "", exclude: "", includeIgnored: false };
-const globs = (raw: string) => raw.split(",").map((g) => g.trim()).filter(Boolean);
-const toQuery = (f: FormState): SearchQuery => ({
-  pattern: f.pattern, regex: f.regex, caseSensitive: f.caseSensitive, wholeWord: f.wholeWord,
-  include: globs(f.include), exclude: globs(f.exclude), includeIgnored: f.includeIgnored, largeFiles: false,
-});
-
-/** "(case-sensitive, regex)" style list of the toggles that are on. */
-function activeToggles(q: SearchQuery): string {
-  const on = [q.caseSensitive && "case-sensitive", q.wholeWord && "whole word", q.regex && "regex", q.includeIgnored && "ignored files included"].filter(Boolean);
-  return on.length ? ` (${on.join(", ")})` : "";
 }
 
 /** Never a blank pane: what to type and what the toggles mean (ux.md 3.4). */
@@ -108,6 +88,7 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   const analytics = useFilesAnalytics({ component: "SearchPanel", sessionId: p.sessionId });
   const search = useContentSearch({ sessionId: p.sessionId, enabled: p.visible, stream: p.stream });
   const coarse = useCoarsePointer();
+  const largeFiles = useLargeFiles();
   const treeId = useId();
   const [form, setForm] = useState<FormState>(EMPTY);
   const [showFilters, setShowFilters] = useState(false);
@@ -145,13 +126,17 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
     if (activeKey) resultsRef.current?.scrollToKey(activeKey);
   }, [activeKey]);
 
-  const change = useCallback((next: FormState, immediate: boolean) => {
+  const change = useCallback((next: FormState, immediate: boolean, large = largeFiles) => {
     setForm(next);
     dirtyEdit.current = true;
-    const q = toQuery(next);
+    const q = toQuery(next, large);
     if (immediate) search.runNow(q);
     else search.search(q);
-  }, [search]);
+  }, [search, largeFiles]);
+  const setLargeFiles = (on: boolean) => {
+    writeLargeFiles(on);
+    change(form, true, on);
+  };
 
   // One interaction per edit that leads to a request (typing a query is one, not one per key).
   const requested = search.lastQuery;
@@ -232,11 +217,11 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
       if (row?.kind === "group") toggleGroup(row.path);
       else if (row?.kind === "hit") activate(row.hit, row.hitIndex, "enter");
       else if (search.hits.length > 0 && !activeKey) activate(search.hits[0], 0, "enter");
-      else search.runNow(toQuery(form));
+      else search.runNow(toQuery(form, largeFiles));
     }
   };
 
-  const q = search.answered ?? toQuery(form);
+  const q = search.answered ?? toQuery(form, largeFiles);
   const typed = form.pattern.length;
   const st = search.status;
   const hasResults = search.hits.length > 0;
@@ -288,6 +273,10 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
             <label className={checkLabel}>
               <input type="checkbox" checked={form.includeIgnored} onChange={(e) => change({ ...form, includeIgnored: e.target.checked }, true)} />
               Include ignored files
+            </label>
+            <label className={checkLabel}>
+              <input type="checkbox" checked={largeFiles} onChange={(e) => setLargeFiles(e.target.checked)} />
+              Include large files
             </label>
           </div>
         )}
@@ -344,6 +333,9 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
           onToggleGroup={toggleGroup}
           onActivate={activate}
         />
+      )}
+      {st === "done" && search.stats && search.stats.largeFilesSkipped > 0 && (
+        <div className={note}>{search.stats.largeFilesSkipped} large {search.stats.largeFilesSkipped === 1 ? "file was" : "files were"} too big or too slow to search</div>
       )}
       {st === "done" && search.stats && search.stats.binarySkipped > 0 && (
         <div className={note}>Skipped {search.stats.binarySkipped} binary files</div>

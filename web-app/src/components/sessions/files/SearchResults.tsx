@@ -2,11 +2,11 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { SearchHit } from "@/lib/files/searchClient";
+import { isLargeFileHit, type SearchHit } from "@/lib/files/searchClient";
 import { useFirstTapActivation } from "@/lib/hooks/useFirstTapActivation";
-import { DIRTY_NOTE, accessibleName, type ResultRow } from "./searchRows";
+import { DIRTY_NOTE, LARGE_FILE_BADGE, accessibleName, type ResultRow } from "./searchRows";
 import {
-  chip, chipButton, count as countClass, dirtyNote, groupPath, groupRow, hitText, lineNo, mark, rowBase, tree, treeDimmed, treeInner,
+  chip, chipButton, count as countClass, dirtyNote, groupPath, groupRow, hitText, largeBadge, lineNo, mark, rowBase, tree, treeDimmed, treeInner,
 } from "./SearchPanel.css";
 
 export interface SearchResultsHandle {
@@ -138,6 +138,7 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
             <div key={row.key} {...common} className={rowBase} aria-level={2} aria-label={accessibleName(row, dirty)}>
               <span className={lineNo}>{row.hit.line}</span>
               <span className={hitText}><Highlighted hit={row.hit} /></span>
+              {isLargeFileHit(row.hit) && <span className={largeBadge}>{LARGE_FILE_BADGE}</span>}
               {dirty && <span className={dirtyNote}>{DIRTY_NOTE}</span>}
             </div>
           );

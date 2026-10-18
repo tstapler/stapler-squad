@@ -156,7 +156,7 @@ describe("SearchPanel", () => {
 
   let restoreViewport: () => void = () => undefined;
   beforeEach(() => { jest.useFakeTimers(); restoreViewport = installViewport(); });
-  afterEach(() => { restoreViewport(); jest.useRealTimers(); });
+  afterEach(() => { restoreViewport(); jest.useRealTimers(); window.localStorage.clear(); });
 
   it("searchResults_should_GroupAndAnnounceCounts_When_27MatchesIn6Files", async () => {
     const { c, fire, input } = mount();
@@ -215,6 +215,39 @@ describe("SearchPanel", () => {
     await flush();
     expect(c.requests.at(-1)!.query).toMatchObject({ pattern: "foo", caseSensitive: false, regex: false });
     expect(screen.getByRole("button", { name: "Match case" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("searchPanel_should_SendLargeFilesPerDevice_ListItWhenNoMatches_And_KeepItAfterClearFilters", async () => {
+    const { c, fire, rerender } = mount();
+    await fire("foo");
+    expect(c.requests[0].query.largeFiles).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include large files" }));
+    await flush();
+    expect(c.requests.at(-1)!.query).toMatchObject({ pattern: "foo", largeFiles: true });
+    act(() => c.requests.at(-1)!.push(searchStats({ largeFilesSkipped: 2 })));
+    await flush();
+    expect(screen.getByText("No matches for `foo` (large files included)")).toBeInTheDocument();
+    expect(screen.getByText("2 large files were too big or too slow to search")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await flush();
+    expect(c.requests.at(-1)!.query.largeFiles).toBe(true); // a device preference, not a filter
+
+    // Another mount on the same device starts with it on.
+    rerender({});
+    expect(window.localStorage.getItem("ssq.files.search.largeFiles")).toBe("1");
+  });
+
+  it("searchResults_should_BadgeAndNameHitsPastTheDefaultCap_When_LargeFilesSearch", () => {
+    withViewport(() => {
+      const big = { ...hit("logs/app.log", 900_000), byteOffset: 30 * 1024 * 1024 };
+      const rows = buildRows([hit("a.go", 3), big], new Set());
+      const { container } = render(<SearchResults {...baseProps} rows={rows} />);
+      expect(within(container).getAllByText("large file")).toHaveLength(1);
+      const hitRows = rows.filter((r): r is Extract<ResultRow, { kind: "hit" }> => r.kind === "hit");
+      expect(accessibleName(hitRows[0])).not.toContain("large file");
+      expect(accessibleName(hitRows[1])).toMatch(/result 2 of 2, large file$/);
+    });
   });
 
   it("searchPanel_should_FocusIncludeField_When_AddFiltersClickedOnTruncated", async () => {

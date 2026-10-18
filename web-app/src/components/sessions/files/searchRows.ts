@@ -1,4 +1,4 @@
-import type { SearchHit } from "@/lib/files/searchClient";
+import { isLargeFileHit, type SearchHit } from "@/lib/files/searchClient";
 
 export type ResultRow =
   | { kind: "group"; key: string; path: string; count: number; posinset: number; setsize: number; collapsed: boolean }
@@ -14,6 +14,7 @@ export const groupKey = (path: string) => `g:${path}`;
 export const hitKey = (hitIndex: number) => `h:${hitIndex}`;
 
 export const DIRTY_NOTE = "buffer has unsaved changes; line may differ";
+export const LARGE_FILE_BADGE = "large file";
 
 /** Files in first-seen order, each followed by its hits unless collapsed; hit numbering ignores collapsing. */
 export function buildRows(hits: readonly SearchHit[], collapsed: ReadonlySet<string>): ResultRow[] {
@@ -43,6 +44,7 @@ export function accessibleName(row: ResultRow, dirty = false, collapsed = false)
     const noun = row.count === 1 ? "match" : "matches";
     return `${row.path}, ${row.count} ${noun}, ${collapsed || row.collapsed ? "collapsed" : "expanded"}`;
   }
-  const base = `${row.hit.path} line ${row.hit.line}, ${row.hit.text}, match ${row.posinset} of ${row.setsize}, result ${row.result} of ${row.total}`;
+  const large = isLargeFileHit(row.hit) ? `, ${LARGE_FILE_BADGE}` : "";
+  const base = `${row.hit.path} line ${row.hit.line}, ${row.hit.text}, match ${row.posinset} of ${row.setsize}, result ${row.result} of ${row.total}${large}`;
   return dirty ? `${base}, ${DIRTY_NOTE}` : base;
 }

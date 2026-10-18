@@ -97,6 +97,7 @@ export const count = style({ color: vars.color.textMuted, fontWeight: 400, fontV
 export const lineNo = style({ color: vars.color.textMuted, fontVariantNumeric: "tabular-nums", minWidth: "3ch", textAlign: "right", flexShrink: 0 });
 export const hitText = style({ flex: 1, minWidth: 0, fontFamily: vars.font.mono, whiteSpace: "pre", overflow: "hidden", textOverflow: "ellipsis" });
 export const mark = style({ background: vars.color.warningBg, color: vars.color.warningText, borderRadius: "2px", padding: "0 1px" });
+export const largeBadge = style({ color: vars.color.textSecondary, border: `1px solid ${vars.color.borderMuted}`, borderRadius: "3px", padding: "0 4px", fontSize: "11px", flexShrink: 0 });
 export const dirtyNote = style({ color: vars.color.warningText, fontSize: "11px", flexShrink: 0 });
 
 export const chip = style({

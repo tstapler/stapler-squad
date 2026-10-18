@@ -35,6 +35,11 @@ export type SearchEvent =
 
 export type SearchStream = (query: SearchQuery, signal: AbortSignal) => AsyncIterable<SearchEvent>;
 
+/** The default per-file scan cap (ADR-030); a hit at or past this offset can only come from a large-file search. */
+export const SEARCH_FILE_CAP_BYTES = 2 * 1024 * 1024;
+/** `byteOffset` is the only size signal a hit carries, so files over the cap with an early match show no badge. */
+export const isLargeFileHit = (hit: Pick<SearchHit, "byteOffset">): boolean => hit.byteOffset >= SEARCH_FILE_CAP_BYTES;
+
 /** Longer patterns are refused by the server; a shorter one is never sent. */
 export const MIN_QUERY_LENGTH = 2;
 
