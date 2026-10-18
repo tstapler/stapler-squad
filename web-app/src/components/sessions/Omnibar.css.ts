@@ -263,9 +263,13 @@ export const buttonSecondary = style({
   color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderColor}`,
   selectors: {
-    "&:hover": {
+    "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
       color: vars.color.textPrimary,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
     },
   },
 });

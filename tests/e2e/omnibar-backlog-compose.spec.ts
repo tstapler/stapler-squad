@@ -21,6 +21,11 @@ async function openOmnibar(page: import('@playwright/test').Page, typed: string)
   await input.fill(typed);
 }
 
+async function openCreationMode(page: import('@playwright/test').Page) {
+  await openOmnibar(page, '/tmp');
+  await page.getByRole('group', { name: 'Omnibar mode' }).getByRole('button', { name: 'Create', exact: true }).click();
+}
+
 async function openCompose(page: import('@playwright/test').Page, typed: string) {
   await openOmnibar(page, typed);
   await page.getByText('Create Backlog Item (AI)').click();
@@ -89,8 +94,7 @@ for (const profile of [V1_DESKTOP, V2_PORTRAIT]) {
     });
 
     test('creation-mode footer button opens compose, and Enter on the focused button does too', async ({ page }) => {
-      await openOmnibar(page, '/tmp');
-      await page.getByRole('group', { name: 'Omnibar mode' }).getByRole('button', { name: 'Create', exact: true }).click();
+      await openCreationMode(page);
       const button = page.getByTestId('omnibar-create-backlog-button');
       await expect(button).toBeVisible();
       await button.click();
@@ -103,11 +107,10 @@ for (const profile of [V1_DESKTOP, V2_PORTRAIT]) {
     });
 
     test('creation-mode footer buttons stay inside the viewport and do not overlap', async ({ page }) => {
-      await openOmnibar(page, '/tmp');
-      await page.getByRole('group', { name: 'Omnibar mode' }).getByRole('button', { name: 'Create', exact: true }).click();
+      await openCreationMode(page);
       const buttons = [
         page.getByTestId('omnibar-create-backlog-button'),
-        page.getByRole('button', { name: 'Cancel' }),
+        page.getByRole('button', { name: 'Cancel', exact: true }),
         page.getByTestId('omnibar-create-session-button'),
       ];
       const viewportWidth = page.viewportSize()!.width;

@@ -291,6 +291,11 @@ describe("Omnibar compose mode", () => {
 });
 
 describe("Omnibar footer / fallback Create Backlog Item button", () => {
+  afterEach(() => {
+    const atMock = jest.requireMock("@/lib/hooks/useAtCommandSuggestions").useAtCommandSuggestions as jest.Mock;
+    atMock.mockReturnValue({ isAtCommand: false, suggestions: [], complete: jest.fn() });
+  });
+
   function enterCreationMode() {
     fireEvent.click(screen.getByRole("button", { name: /^Create$/ }));
   }
@@ -320,8 +325,21 @@ describe("Omnibar footer / fallback Create Backlog Item button", () => {
     screen.getByTestId("omnibar-create-backlog-button").focus();
     await user.keyboard("{Enter}");
 
+    // Had Enter also run handleSubmit, the intent review would have replaced the compose widget.
     expect(screen.getByTestId("backlog-compose-textarea")).toBeInTheDocument();
-    expect(screen.queryByText(/Parsing your message into a backlog item/)).not.toBeInTheDocument();
+  });
+
+  it("Cancel from the footer-opened compose returns to the creation form with the input intact", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "/tmp");
+    enterCreationMode();
+
+    fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
+    fireEvent.click(screen.getByTestId("backlog-compose-cancel"));
+
+    expect(screen.getByTestId("omnibar-create-session-button")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /session source input/i })).toHaveValue("/tmp");
   });
 
   it("does not stop Escape on the button, so the modal handler still sees it", async () => {
@@ -350,6 +368,5 @@ describe("Omnibar footer / fallback Create Backlog Item button", () => {
     fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
 
     expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("@deploy");
-    atMock.mockReturnValue({ isAtCommand: false, suggestions: [], complete: jest.fn() });
   });
 });
