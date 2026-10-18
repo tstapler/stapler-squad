@@ -418,13 +418,39 @@ func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string) string {
-	var parts []string
+	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(); d != "" {
 			parts = append(parts, d)
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
+// On does nothing ("inactive: requires <flag>", parsed by the Features page) and
+// whether its value is the registry default or was set explicitly.
+func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
+		return nil
+	}
+	var parts []string
+	if name == config.AutonomousStallNudgeFeatureFlag &&
+		config.EffectiveAutonomousStallNudgeEnabled(cfg) && !config.EffectiveDiagnoseNudgeEnabled(cfg) {
+		parts = append(parts, "inactive: requires "+config.DiagnoseNudgeFeatureFlag)
+	}
+	onOff := func(b bool) string {
+		if b {
+			return "On"
+		}
+		return "Off"
+	}
+	if value, explicit := cfg.FeatureFlags[name]; explicit {
+		parts = append(parts, "Set explicitly: "+onOff(value))
+	} else {
+		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+	}
+	return parts
 }
 
 // SetEnableGuard installs a precondition for enabling name. It is checked only
