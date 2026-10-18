@@ -45,7 +45,7 @@ export class FileTransportRouter {
     return this.caps ?? this.opts.full.capabilities();
   }
 
-  stat(ref: FileRef, o?: { wantAnalysis?: boolean }, signal?: AbortSignal): Promise<FileStat> {
+  stat(ref: FileRef, o?: { wantAnalysis?: boolean; wantSha256?: boolean }, signal?: AbortSignal): Promise<FileStat> {
     return this.run(ref, "stat", "stat", (t) => t.stat(ref, o, signal));
   }
 

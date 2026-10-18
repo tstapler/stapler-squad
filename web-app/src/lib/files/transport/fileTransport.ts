@@ -56,6 +56,14 @@ export interface ReadResult {
   /** Present when the response carries the server's caps epoch (a mismatch makes the router refetch). */
   capsEpoch?: number;
   chunkCrc32c?: number;
+  /** "<size>:<mtime_ns>:<inode>" the window was read from; a change means the file moved under the reader. */
+  validator?: string;
+  /** Exact total only when the server's whole-file analysis is ready. */
+  lineCount?: number;
+  /** The window ends mid-line (byte cap or byte-window mode). */
+  partialLastLine?: boolean;
+  /** A line over 256 KiB put the region in read-only byte-window mode. */
+  longLine?: boolean;
 }
 
 export interface FileStat {
@@ -74,7 +82,7 @@ export interface PatchResult { token: string; capsEpoch?: number }
 export interface FileTransport {
   readonly id: TransportId;
   capabilities(): FileCapabilities;
-  stat(ref: FileRef, o?: { wantAnalysis?: boolean }, signal?: AbortSignal): Promise<FileStat>;
+  stat(ref: FileRef, o?: { wantAnalysis?: boolean; wantSha256?: boolean }, signal?: AbortSignal): Promise<FileStat>;
   read(ref: FileRef, req: ReadRequest, signal?: AbortSignal): Promise<ReadResult>;
   readStream?(ref: FileRef, req: ReadRequest, signal?: AbortSignal): AsyncIterable<ReadResult>;
   patch?(ref: FileRef, p: PatchRequest, signal?: AbortSignal): Promise<PatchResult>;
@@ -84,7 +92,8 @@ export interface FileTransport {
 /** What hooks consume: a single adapter or the router (which has no single id). */
 export type FileTransportPort = Omit<FileTransport, "id">;
 
-export type RejectReason = Exclude<ReadOnlyKind, "none"> | "not_found" | "unsupported";
+/** `busy`: range limiter refusal; `index_pending`: line index still building (read from line 1 or retry); `stale`: window torn twice. */
+export type RejectReason = Exclude<ReadOnlyKind, "none"> | "not_found" | "unsupported" | "busy" | "index_pending" | "stale";
 
 /** The server (or the active rung) refused with a reason the UI can state; never triggers demotion. */
 export class Rejected extends Error {

@@ -36,6 +36,25 @@ export function runTransportConformance(name: string, make: () => ConformanceSub
       }
     });
 
+    it("rangeEdges_should_ClampAtBothEndsAndStayLineAligned_When_ReadLinesIsAdvertised", async () => {
+      const { transport, seed } = make();
+      if (!transport.capabilities().ops.includes("read_lines")) return;
+      seed("n.txt", Array.from({ length: 50 }, (_, i) => `l${i + 1}\n`).join(""));
+      const lines = (r: { text: string }) => r.text.split("\n").filter(Boolean);
+      const at = (anchorLine: number, dir: "around" | "fwd" | "back") => transport.read(REF("n.txt"), { kind: "lines", anchorLine, dir, wantLines: 10, maxBytes: 4096 });
+
+      const head = await at(1, "around");
+      expect(head.range).toMatchObject({ startLine: 1, endLine: 10, startByte: 0, bof: true, eof: false });
+      expect(lines(head)).toHaveLength(10);
+      const tail = await at(50, "fwd");
+      expect(tail.range).toMatchObject({ startLine: 50, endLine: 50, eof: true });
+      expect(lines(tail)).toEqual(["l50"]);
+      const before = await at(20, "back");
+      expect(before.range).toMatchObject({ startLine: 11, endLine: 20 });
+      expect(lines(before)[0]).toBe("l11");
+      expect(head.range.endByte).toBe(new TextEncoder().encode(head.text).length);
+    });
+
     it("errorMapping_should_RejectMissingFilesWithATypedReason", async () => {
       const { transport } = make();
       await expect(transport.read(REF("missing.go"), { kind: "all" })).rejects.toMatchObject({ reason: "not_found" });

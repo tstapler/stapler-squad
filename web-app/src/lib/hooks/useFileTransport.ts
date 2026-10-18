@@ -5,6 +5,8 @@ import { createClient } from "@connectrpc/connect";
 import { FileOp, FileWire, SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
+import { ChunkCache, chunkBudgetFor } from "@/lib/files/transport/chunkCache";
+import { createConnectUnaryTransport } from "@/lib/files/transport/connectUnaryTransport";
 import { createFullFileTransport } from "@/lib/files/transport/fullFileTransport";
 import { FileTransportRouter } from "@/lib/files/transport/router";
 import type { AdvertisedOp, FileCapabilities, FileTransportPort, TransportId } from "@/lib/files/transport/fileTransport";
@@ -22,11 +24,22 @@ const WIRES: Partial<Record<FileWire, TransportId>> = {
 
 const defined = <T,>(x: T | undefined): x is T => x !== undefined;
 
-/** Production router: the `full` floor plus the capability RPC; higher rungs register as adapters land. */
-export function createDefaultFileTransport(analytics?: Pick<ReturnType<typeof useFilesAnalytics>, "emit">): FileTransportPort {
+const isCoarsePointer = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+
+/** Production router: the `full` floor, the `connect_unary` range adapter and the capability RPC; stream rungs register as they land. */
+export function createDefaultFileTransport(analytics?: Pick<ReturnType<typeof useFilesAnalytics>, "emit" | "time">): FileTransportPort {
   const client = createClient(SessionService, getConnectTransport());
-  return new FileTransportRouter({
-    full: createFullFileTransport(client),
+  const full = createFullFileTransport(client);
+  const unary = createConnectUnaryTransport(client, {
+    floor: full,
+    cache: new ChunkCache(chunkBudgetFor(isCoarsePointer())),
+    // Until the server advertises READ_LINES (files:range-read), `all` reads keep using GetFileContent.
+    rangeServed: () => router.capabilities().ops.includes("read_lines"),
+    analytics,
+  });
+  const router = new FileTransportRouter({
+    full,
+    adapters: [unary],
     analytics,
     async fetchCapabilities(sessionId): Promise<FileCapabilities> {
       // One cached page-lifetime fetch with no owning component to cancel it.
@@ -47,6 +60,7 @@ export function createDefaultFileTransport(analytics?: Pick<ReturnType<typeof us
       };
     },
   });
+  return router;
 }
 
 /** One router per mounted Files tab: capability cache and demotion state live and die with it. */
