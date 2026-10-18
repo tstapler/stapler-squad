@@ -180,6 +180,8 @@ describe("BacklogItemDetail — background refresh must not unmount the view", (
   // here rather than dropped.
   it("keeps item content visible when a live update arrives for the open item", async () => {
     getBacklogItem.mockResolvedValue(baseItem);
+    // idea-status criteria default collapsed; expand them so the text is observable
+    localStorage.setItem("backlog-detail-section-item-1-ac-criteria", "true");
 
     const { rerender } = render(<BacklogItemDetail itemId="item-1" />);
 

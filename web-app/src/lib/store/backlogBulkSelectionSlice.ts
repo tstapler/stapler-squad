@@ -37,4 +37,9 @@ const backlogBulkSelectionSlice = createSlice({
 });
 
 export const { toggleSelection, selectAll, clearSelection } = backlogBulkSelectionSlice.actions;
+
+/** Action to apply after a bulk fan-out: clear on full success, otherwise keep only the failed ids selected. */
+export const selectionAfterBulk = (failedIds: string[]) =>
+  failedIds.length === 0 ? clearSelection() : selectAll(failedIds);
+
 export default backlogBulkSelectionSlice.reducer;
