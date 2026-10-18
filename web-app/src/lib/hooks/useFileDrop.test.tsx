@@ -46,6 +46,6 @@ describe("useFileDrop", () => {
     act(() => result.current.dropHandlers.onDrop(e));
     expect(result.current.isDragOver).toBe(false);
     expect(onFiles).not.toHaveBeenCalled();
-    expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(e.preventDefault).toHaveBeenCalled(); // keeps the browser from opening the file
   });
 });
