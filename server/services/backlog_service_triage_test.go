@@ -6623,6 +6623,59 @@ func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementation
 	assert.False(t, got.PlanApproved, "auto-approve must not fire for a plan path that does not exist")
 }
 
+// TestTriggerTriage_should_RecordWherePlanWasWritten_AcrossFlatLayoutRemovalAndRetriage
+// reproduces item f4235050: triage wrote plan.md flat in project_plans/<name>/ (no
+// implementation/), so the recorded <name>/implementation path never existed and
+// ApprovePlan failed. Sequence: triage (flat layout) -> approve succeeds; plan dir
+// removed -> re-triage (standard layout) -> recorded path follows it -> approve succeeds.
+func TestTriggerTriage_should_RecordWherePlanWasWritten_AcrossFlatLayoutRemovalAndRetriage(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repo := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd item with flat plan layout",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repo,
+		PipelineMode: session.DefaultSDDPipelineModeSlug,
+	})
+	require.NoError(t, err)
+
+	planBase := filepath.Join(repo, "project_plans", "item-"+item.ID[:8])
+	writePlan := func(dir string) {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "plan.md"), []byte("# plan"), 0o644))
+	}
+	waitForPath := func(want string) {
+		wait.RequireEventually(t, func() bool {
+			got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+			return getErr == nil && got.PlanArtifactsPath == want
+		}, 5*time.Second, 50*time.Millisecond, "expected plan_artifacts_path %q", want)
+	}
+	approve := func() {
+		_, approveErr := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: item.ID}))
+		require.NoError(t, approveErr)
+	}
+
+	pool.onCall = func(string) { writePlan(planBase) }
+	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	waitForPath(planBase)
+	approve()
+
+	require.NoError(t, os.RemoveAll(planBase))
+	implDir := filepath.Join(planBase, "implementation")
+	pool.onCall = func(string) { writePlan(implDir) }
+	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	waitForPath(implDir)
+	approve()
+}
+
 // TestDequeueNextQueuedItems_should_MarkPlanNotApprovedStuck_When_PlanArtifactsPathIsStale
 // covers the dequeue path for items already in the DB with a recorded
 // plan_artifacts_path whose directory is gone: the claim must be refused (item stays

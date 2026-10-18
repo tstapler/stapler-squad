@@ -77,6 +77,25 @@ func sanitizeTriageTitle(title, itemID string) string {
 	return "item-" + itemID[:min(len(itemID), 8)]
 }
 
+// resolveSDDPlanDir returns the directory holding the plan SDD triage wrote for
+// title under workDir. The prompt asks for project_plans/<name>/implementation/,
+// but the LLM sometimes writes plan.md flat in project_plans/<name>/ (item
+// f4235050: commit 80dcd93e7), so the implementation/ path never existed and the
+// recorded path made ApprovePlan fail. Prefers implementation/, falls back to the
+// flat layout only when it holds a plan.md, and otherwise returns the canonical
+// implementation/ path so callers' existence check reports it as missing.
+func resolveSDDPlanDir(workDir, title string) string {
+	base := filepath.Join(workDir, "project_plans", title)
+	impl := filepath.Join(base, "implementation")
+	if _, err := os.Stat(impl); err == nil {
+		return impl
+	}
+	if _, err := os.Stat(filepath.Join(base, "plan.md")); err == nil {
+		return base
+	}
+	return impl
+}
+
 // retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
 // "triage-<item-id>" name onto the exact "backlog/<repo>-<title>" branch
 // spawnSessionAfterGates will independently compute and look for once this item
@@ -654,7 +673,7 @@ func (s *BacklogService) TriggerTriage(
 		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
 		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
-			pap = filepath.Join(triageWorkDir, "project_plans", sanitizedTitle, "implementation")
+			pap = resolveSDDPlanDir(triageWorkDir, sanitizedTitle)
 		}
 		approvalReset := false
 		clearedReason := ""
