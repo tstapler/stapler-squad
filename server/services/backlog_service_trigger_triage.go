@@ -113,37 +113,6 @@ func resolveSDDPlanArtifactsPath(triageWorkDir, sanitizedTitle string) string {
 	return filepath.Join(base, "implementation")
 }
 
-// sddPlanSnapshotDirName is the subdirectory of an item's durable triage
-// artifact dir that holds the copied SDD plan.
-const sddPlanSnapshotDirName = "sdd-plan"
-
-// snapshotSDDPlanOutOfWorktree copies the plan directory SDD triage wrote inside
-// its worktree into dst, replacing any earlier copy, and returns dst. The
-// worktree is not a stable home for plan_artifacts_path: item worktrees are
-// removed on terminal/reopen cleanup and recreated under a new directory name,
-// which left the recorded absolute path pointing at nothing while the plan
-// itself survived on the branch. dst lives under the durable triage-artifacts
-// dir, like default-mode items' artifacts. The copy goes to a sibling temp dir
-// first so a failed copy never destroys the previous good one.
-func snapshotSDDPlanOutOfWorktree(src, dst string) (string, error) {
-	tmp := dst + ".tmp"
-	if err := os.RemoveAll(tmp); err != nil {
-		return "", fmt.Errorf("clear temp plan snapshot: %w", err)
-	}
-	if err := os.CopyFS(tmp, os.DirFS(src)); err != nil {
-		_ = os.RemoveAll(tmp)
-		return "", fmt.Errorf("copy plan out of worktree: %w", err)
-	}
-	if err := os.RemoveAll(dst); err != nil {
-		_ = os.RemoveAll(tmp)
-		return "", fmt.Errorf("clear previous plan snapshot: %w", err)
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return "", fmt.Errorf("install plan snapshot: %w", err)
-	}
-	return dst, nil
-}
-
 // retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
 // "triage-<item-id>" name onto the exact "backlog/<repo>-<title>" branch
 // spawnSessionAfterGates will independently compute and look for once this item
@@ -754,14 +723,6 @@ func (s *BacklogService) TriggerTriage(
 		// the "Retry Triage" / plan_not_approved stuck-detector paths, rather
 		// than silently marking a nonexistent plan approved.
 		if _, statErr := os.Stat(pap); statErr == nil {
-			if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
-				if durable, snapErr := snapshotSDDPlanOutOfWorktree(pap, filepath.Join(artifactAbsPath, sddPlanSnapshotDirName)); snapErr != nil {
-					// Still exists now, so record it; it may go stale later and ApprovePlan will say so.
-					log.Warn("[TriggerTriage] could not copy SDD plan out of the worktree; recording the in-worktree path", "item", itemID, "path", pap, "error", snapErr)
-				} else {
-					pap = durable
-				}
-			}
 			update.PlanArtifactsPath = &pap
 			if item.AutoApprovePlan {
 				approved := true
