@@ -12,6 +12,8 @@ See all your AI agents at a glance. Status badges, diff stats, tags, and categor
 
 Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.
 
+**Drag-and-drop file upload** — drag one or more files (images, logs, configs, anything) from your OS file manager onto the terminal of a live session. A "Drop to attach" overlay appears while you hover; on release each file is uploaded sequentially through `POST /api/v1/upload-image` (the same path as the toolbar file picker) and its absolute path is inserted into the terminal input. Desktop only: it is disabled on touch-only devices and for read-only sessions, and pane-reorder drags are ignored.
+
 ---
 
 ## Diff Viewer
