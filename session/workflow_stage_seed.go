@@ -15,11 +15,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 )
 
 // builtInStageOrder is the fixed order the 9 built-in BacklogStatus values
@@ -216,10 +219,18 @@ func SeedFingerprint() string {
 // StageConfigFingerprint hashes the live stage configuration in client with
 // the same canonical form as SeedFingerprint, so equality means "still seeded".
 func StageConfigFingerprint(ctx context.Context, client *ent.Client) (string, error) {
+	c, err := liveStageConfigInput(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	return c.hash(), nil
+}
+
+func liveStageConfigInput(ctx context.Context, client *ent.Client) (stageConfigFingerprint, error) {
 	//nolint:entfullscan the fingerprint must cover every row of the stage configuration tables.
 	stages, err := client.BacklogStage.Query().All(ctx)
 	if err != nil {
-		return "", fmt.Errorf("StageConfigFingerprint: query stages: %w", err)
+		return stageConfigFingerprint{}, fmt.Errorf("StageConfigFingerprint: query stages: %w", err)
 	}
 	slugByID := make(map[uuid.UUID]string, len(stages))
 	var c stageConfigFingerprint
@@ -231,7 +242,7 @@ func StageConfigFingerprint(ctx context.Context, client *ent.Client) (string, er
 	//nolint:entfullscan the fingerprint must cover every edge.
 	transitions, err := client.StageTransition.Query().All(ctx)
 	if err != nil {
-		return "", fmt.Errorf("StageConfigFingerprint: query transitions: %w", err)
+		return stageConfigFingerprint{}, fmt.Errorf("StageConfigFingerprint: query transitions: %w", err)
 	}
 	edgeByID := make(map[uuid.UUID]string, len(transitions))
 	for _, t := range transitions {
@@ -243,7 +254,7 @@ func StageConfigFingerprint(ctx context.Context, client *ent.Client) (string, er
 	//nolint:entfullscan the fingerprint must cover every gate.
 	gates, err := client.TransitionGate.Query().All(ctx)
 	if err != nil {
-		return "", fmt.Errorf("StageConfigFingerprint: query gates: %w", err)
+		return stageConfigFingerprint{}, fmt.Errorf("StageConfigFingerprint: query gates: %w", err)
 	}
 	for _, g := range gates {
 		cfg, _ := json.Marshal(g.Config) // map keys marshal sorted: stable
@@ -253,10 +264,160 @@ func StageConfigFingerprint(ctx context.Context, client *ent.Client) (string, er
 	//nolint:entfullscan the fingerprint must cover every liveness row.
 	liveness, err := client.StageLivenessDefinition.Query().All(ctx)
 	if err != nil {
-		return "", fmt.Errorf("StageConfigFingerprint: query liveness: %w", err)
+		return stageConfigFingerprint{}, fmt.Errorf("StageConfigFingerprint: query liveness: %w", err)
 	}
 	for _, l := range liveness {
 		c.Liveness = append(c.Liveness, livenessLine(l))
 	}
-	return c.hash(), nil
+	return c, nil
+}
+
+// SectionDiff lists the lines present only in the live configuration (Added)
+// and only in the seed (Removed).
+type SectionDiff struct {
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+}
+
+// ConfigDiff is the live stage configuration versus the built-in seed.
+type ConfigDiff struct {
+	Label    string      `json:"config"` // seeded | edited
+	Stages   SectionDiff `json:"stages"`
+	Edges    SectionDiff `json:"edges"`
+	Gates    SectionDiff `json:"gates"`
+	Liveness SectionDiff `json:"liveness"`
+}
+
+// StageConfigDiff compares the live configuration in client with the seed.
+func StageConfigDiff(ctx context.Context, client *ent.Client) (ConfigDiff, error) {
+	live, err := liveStageConfigInput(ctx, client)
+	if err != nil {
+		return ConfigDiff{}, err
+	}
+	return diffStageConfig(builtInSeedFingerprintInput(), live), nil
+}
+
+func diffStageConfig(seed, live stageConfigFingerprint) ConfigDiff {
+	d := ConfigDiff{
+		Stages:   diffLines(seed.Stages, live.Stages),
+		Edges:    diffLines(seed.Edges, live.Edges),
+		Gates:    diffLines(redactGateConfigs(seed.Gates), redactGateConfigs(live.Gates)),
+		Liveness: diffLines(seed.Liveness, live.Liveness),
+	}
+	d.Label = ConfigSeeded
+	if seed.hash() != live.hash() {
+		d.Label = ConfigEdited
+	}
+	return d
+}
+
+// redactGateConfigs replaces each gate's free-form config with a short hash so
+// the diff names what changed without echoing prompts or commands.
+func redactGateConfigs(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		if at := strings.Index(l, "|config="); at >= 0 {
+			sum := sha256.Sum256([]byte(l[at+len("|config="):]))
+			l = l[:at] + "|config_hash=" + hex.EncodeToString(sum[:4])
+		}
+		out[i] = l
+	}
+	return out
+}
+
+func diffLines(seed, live []string) SectionDiff {
+	inSeed, inLive := make(map[string]bool, len(seed)), make(map[string]bool, len(live))
+	for _, l := range seed {
+		inSeed[l] = true
+	}
+	for _, l := range live {
+		inLive[l] = true
+	}
+	var d SectionDiff
+	for _, l := range live {
+		if !inSeed[l] {
+			d.Added = append(d.Added, l)
+		}
+	}
+	for _, l := range seed {
+		if !inLive[l] {
+			d.Removed = append(d.Removed, l)
+		}
+	}
+	sort.Strings(d.Added)
+	sort.Strings(d.Removed)
+	return d
+}
+
+// ItemStatusRef is the minimum the stranded-item preview needs about an item.
+type ItemStatusRef struct {
+	ID     string
+	Status BacklogStatus
+}
+
+// StrandedItem is a live item that loses outgoing edges once enforce is on.
+// The id is hashed; no title or id leaves the process.
+type StrandedItem struct {
+	ItemHash        string        `json:"item_hash"`
+	Status          BacklogStatus `json:"status"`
+	LostEdges       []string      `json:"lost_edges"`
+	NoOutgoingEdges bool          `json:"no_outgoing_edges"`
+	InDisabledStage bool          `json:"in_disabled_stage"`
+}
+
+// StrandedItemPreview lists, read-only, every item whose enforce-mode allowed
+// transitions are empty or smaller than Default's. A non-empty OverrideReason
+// skips operator gates only, never the graph, so it cannot free a lost edge.
+func StrandedItemPreview(def WorkflowEngine, cfg *ConfiguredWorkflowEngine, items []ItemStatusRef, disabledStages map[BacklogStatus]bool) []StrandedItem {
+	enf := enforceAnswer{def: def, cfg: cfg}
+	var out []StrandedItem
+	for _, it := range items {
+		before := def.AllowedTransitions(it.Status, nil)
+		after, _ := enf.allowedTransitions(it.Status, nil)
+		kept := make(map[BacklogStatus]bool, len(after))
+		for _, to := range after {
+			kept[to] = true
+		}
+		var lost []string
+		for _, to := range before {
+			if !kept[to] {
+				lost = append(lost, EdgeKey(it.Status, to))
+			}
+		}
+		if len(lost) == 0 && (len(after) > 0 || len(before) == 0) {
+			continue
+		}
+		sort.Strings(lost)
+		out = append(out, StrandedItem{
+			ItemHash: HashItemID(it.ID), Status: it.Status, LostEdges: lost,
+			NoOutgoingEdges: len(after) == 0, InDisabledStage: disabledStages[it.Status],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ItemHash < out[j].ItemHash })
+	return out
+}
+
+// ListItemStatusRefs reads the non-archived items' ids and statuses, plus the
+// slugs of disabled stages, for StrandedItemPreview. Read-only.
+func ListItemStatusRefs(ctx context.Context, client *ent.Client) ([]ItemStatusRef, map[BacklogStatus]bool, error) {
+	//nolint:entfullscan the preview must cover every live item.
+	rows, err := client.BacklogItem.Query().Where(backlogitem.StatusNEQ(string(BacklogStatusArchived))).
+		Select(backlogitem.FieldID, backlogitem.FieldStatus).All(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ListItemStatusRefs: query items: %w", err)
+	}
+	items := make([]ItemStatusRef, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, ItemStatusRef{ID: r.ID.String(), Status: BacklogStatus(r.Status)})
+	}
+	//nolint:entfullscan the preview must cover every stage.
+	stages, err := client.BacklogStage.Query().Where(backlogstage.Enabled(false)).All(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ListItemStatusRefs: query disabled stages: %w", err)
+	}
+	disabled := make(map[BacklogStatus]bool, len(stages))
+	for _, s := range stages {
+		disabled[BacklogStatus(s.Slug)] = true
+	}
+	return items, disabled, nil
 }
