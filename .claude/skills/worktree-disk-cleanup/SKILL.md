@@ -157,6 +157,45 @@ confirmation on removal *scope* (which buckets) before running any
 is a bulk destructive operation over other people's (or your own past
 sessions') work.
 
+## Step 5 — Prune orphaned shared node_modules directories
+
+`web-app/`'s `node_modules` is a symlink into
+`~/.stapler-squad/shared-node-modules/<hash>/node_modules` (see
+`scripts/shared-node-modules.sh` and
+`docs/explanation/package-management-evaluation.md`) rather than a full
+per-worktree install — one directory per distinct `pnpm-lock.yaml` +
+local `file:`-dependency content, shared by every worktree whose
+`web-app/` currently hashes to it. Removing a worktree in Step 4 does not
+clean these up; run this step after Step 4 so a hash's last referencing
+worktree is already gone before judging it orphaned.
+
+```bash
+git worktree list --porcelain | grep '^worktree ' | cut -d' ' -f2- > /tmp/wt-paths.txt
+for d in ~/.stapler-squad/shared-node-modules/*/; do
+  hash=$(basename "$d")
+  referenced=0
+  while IFS= read -r wt; do
+    [ -L "$wt/web-app/node_modules" ] || continue
+    target=$(readlink -f "$wt/web-app/node_modules" 2>/dev/null)
+    [ "$target" = "$(readlink -f "$d/node_modules")" ] && referenced=1 && break
+  done < /tmp/wt-paths.txt
+  if [ "$referenced" = 0 ]; then
+    # Skip anything younger than ~1 hour -- a worktree may be mid-install
+    # (holding the hash's .lock) and not yet registered its symlink.
+    age_secs=$(( $(date +%s) - $(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d") ))
+    [ "$age_secs" -lt 3600 ] && continue
+    echo "orphaned, no referencing worktree, older than 1h: $d"
+    # rm -rf "$d" "$d".lock  -- uncomment once you've eyeballed the list
+  fi
+done
+```
+
+Same confirmation rule as Step 4: list candidates, get the scope confirmed,
+then delete. This is the one GC mechanism for this directory — nothing in
+the Go codebase's own sweepers knows it exists (it's pure filesystem state
+outside any `Instance`/`Worktree` row), the same reasoning as Step 0 above
+for triage worktrees.
+
 ## Notes
 
 - Removing a worktree does not delete its branch ref — branches are cheap to

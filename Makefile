@@ -191,17 +191,22 @@ else
 endif
 	@echo "✅ stapler-squad built successfully"
 
-# Install web-app pnpm dependencies when pnpm-lock.yaml changes
+# Install web-app pnpm dependencies when pnpm-lock.yaml changes. Delegates to
+# shared-node-modules.sh, which symlinks node_modules into a dir shared
+# across every git worktree with the same lockfile (keyed by lockfile +
+# local file:-dependency content) instead of a full per-worktree install --
+# see that script's header and docs/explanation/package-management-evaluation.md.
+# Opt out with STAPLER_SQUAD_SHARED_NODE_MODULES=0.
 web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml
 	@echo "Installing web-app pnpm dependencies..."
-	@cd web-app && pnpm install --frozen-lockfile
+	@./scripts/shared-node-modules.sh web-app
 
 # Build Next.js app to web-app/out
 web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
 	@# Guard: re-install if node_modules was wiped by external tools without touching pnpm-lock.yaml
 	@test -d web-app/node_modules/next || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
-		cd web-app && pnpm install --frozen-lockfile; \
+		./scripts/shared-node-modules.sh web-app; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
