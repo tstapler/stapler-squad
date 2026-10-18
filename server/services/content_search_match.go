@@ -23,6 +23,7 @@ const (
 	scanReaderSize    = 64 * kibibyte
 	scanCtxEveryLines = 512
 	scanLineKeepCap   = 256 * kibibyte // larger line buffers are not returned to the pool
+	scanLineHardCap   = 4 * mebibyte   // longer lines are matched on their first 4 MiB only
 )
 
 // SearchMatch is one occurrence of the pattern in one line. Start and End are UTF-16
@@ -93,12 +94,16 @@ func scanContent(ctx context.Context, r io.Reader, path string, re *regexp.Regex
 // scanLines splits the buffered reader into lines (joining over-long ones in sb.line)
 // and collects matches until EOF, the per-file cap or ctx cancellation.
 func scanLines(ctx context.Context, sb *scanBuf, path string, re *regexp.Regexp, res *fileScan) error {
-	var offset int64
+	var offset, dropped int64
 	lineNo := 0
 	for {
 		chunk, rerr := sb.br.ReadSlice('\n')
 		if errors.Is(rerr, bufio.ErrBufferFull) {
-			sb.line = append(sb.line, chunk...)
+			if len(sb.line) < scanLineHardCap {
+				sb.line = append(sb.line, chunk...)
+			} else {
+				dropped += int64(len(chunk)) // keeps heap flat on one huge line; offsets stay exact
+			}
 			continue
 		}
 		full := chunk
@@ -109,7 +114,8 @@ func scanLines(ctx context.Context, sb *scanBuf, path string, re *regexp.Regexp,
 		if len(full) > 0 {
 			lineNo++
 			res.Matches = appendLineMatches(res.Matches, lineRef{path, lineNo, offset}, full, re)
-			offset += int64(len(full))
+			offset += int64(len(full)) + dropped
+			dropped = 0
 		}
 		sb.line = sb.line[:0]
 		if len(res.Matches) >= searchMaxPerFile {

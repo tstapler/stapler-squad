@@ -24,6 +24,10 @@ const (
 	defaultSearchResults   = 1000
 	maxSearchWorkers       = 4
 	searchWorkerQueueDepth = 2 // queued jobs/results per worker
+	maxLargeSearchWorkers  = 2
+	// largeFileBudget bounds one file's scan when large_files is on (INFERRED: the 64 MiB
+	// literal scan measured about 44 ms in ADR-036 S-T2, so this leaves slow-disk headroom).
+	largeFileBudget = 10 * time.Second
 )
 
 type (
@@ -67,6 +71,17 @@ type SearchOptions struct {
 	Word    WordMode
 	Scope   SearchScope
 	Limits  SearchLimits
+	// LargeFiles raises the per-file cap from searchFileCap to rangeHashCapBytes under a
+	// per-file time budget (ADR-030 amendment 7a).
+	LargeFiles bool
+}
+
+// fileCap is the request-scoped per-file read cap.
+func (o SearchOptions) fileCap() int64 {
+	if o.LargeFiles {
+		return rangeHashCapBytes
+	}
+	return searchFileCap
 }
 
 // SearchStats summarizes one finished walk.
@@ -96,7 +111,8 @@ func NewSearchOptions(in *sessionv1.SearchOptions) (SearchOptions, error) {
 			ExcludeGlobs:   in.GetScope().GetExcludeGlobs(),
 			IncludeIgnored: in.GetScope().GetIncludeIgnored(),
 		},
-		Limits: SearchLimits{MaxResults: int(in.GetLimits().GetMaxResults())},
+		Limits:     SearchLimits{MaxResults: int(in.GetLimits().GetMaxResults())},
+		LargeFiles: in.GetLargeFiles(),
 	}
 	if in.GetMatchMode() == sessionv1.SearchMatchMode_SEARCH_MATCH_MODE_REGEX {
 		opts.Match = MatchRegex
@@ -169,7 +185,35 @@ func searchWorkerCount(gomaxprocs int) int {
 
 // walkSearcher is the in-process ContentSearcher: one streaming tree walk feeding a
 // bounded worker pool. No path list is built, so memory is independent of file count.
-type walkSearcher struct{ workers int }
+type walkSearcher struct {
+	workers      int
+	largeWorkers int           // 0 derives it from GOMAXPROCS
+	fileBudget   time.Duration // 0 uses largeFileBudget
+}
+
+// searchWorkerCountLarge is the lowered pool for large-file scans: each worker may hold
+// a long-running multi-megabyte scan, so fewer run at once.
+func searchWorkerCountLarge(gomaxprocs int) int {
+	return max(1, min(maxLargeSearchWorkers, gomaxprocs/2))
+}
+
+func (w walkSearcher) poolSize(opts SearchOptions) int {
+	if !opts.LargeFiles {
+		return w.workers
+	}
+	n := w.largeWorkers
+	if n == 0 {
+		n = searchWorkerCountLarge(runtime.GOMAXPROCS(0))
+	}
+	return min(n, w.workers)
+}
+
+func (w walkSearcher) budget() time.Duration {
+	if w.fileBudget > 0 {
+		return w.fileBudget
+	}
+	return largeFileBudget
+}
 
 // NewWalkSearcher returns the production searcher sized for the current GOMAXPROCS.
 func NewWalkSearcher() ContentSearcher {
@@ -199,6 +243,8 @@ type scanEnv struct {
 	root     fs.FS
 	re       *regexp.Regexp
 	counters *searchCounters
+	fileCap  int64
+	budget   time.Duration // per-file time limit, applied only above searchFileCap
 }
 
 func (w walkSearcher) Search(ctx context.Context, root fs.FS, opts SearchOptions, emit func([]SearchMatch) error) (SearchStats, error) {
@@ -210,9 +256,10 @@ func (w walkSearcher) Search(ctx context.Context, root fs.FS, opts SearchOptions
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	env := scanEnv{root: root, re: re, counters: &searchCounters{}}
-	jobs := make(chan string, w.workers*searchWorkerQueueDepth)
-	results := make(chan fileResult, w.workers*searchWorkerQueueDepth)
+	workerCount := w.poolSize(opts)
+	env := scanEnv{root: root, re: re, counters: &searchCounters{}, fileCap: opts.fileCap(), budget: w.budget()}
+	jobs := make(chan string, workerCount*searchWorkerQueueDepth)
+	results := make(chan fileResult, workerCount*searchWorkerQueueDepth)
 
 	g, gctx := errgroup.WithContext(wctx)
 	g.Go(func() error {
@@ -220,7 +267,7 @@ func (w walkSearcher) Search(ctx context.Context, root fs.FS, opts SearchOptions
 		return newTreeWalk(root, opts).run(gctx, jobs)
 	})
 	var workers sync.WaitGroup
-	for range w.workers {
+	for range workerCount {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -293,7 +340,19 @@ func (e scanEnv) scan(ctx context.Context, path string) (fileResult, bool) {
 		return fileResult{}, false // vanished or unreadable: skip, never fatal
 	}
 	defer func() { _ = f.Close() }()
-	scan, err := scanContent(ctx, f, path, e.re, searchFileCap)
+	scanCtx := ctx
+	if e.fileCap > searchFileCap {
+		var cancel context.CancelFunc
+		scanCtx, cancel = context.WithTimeout(ctx, e.budget)
+		defer cancel()
+	}
+	scan, err := scanContent(scanCtx, f, path, e.re, e.fileCap)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		// Budget spent: keep what was found, and count the file so it is never silently missed.
+		e.counters.scanned.Add(1)
+		e.counters.large.Add(1)
+		return fileResult{matches: scan.Matches}, true
+	}
 	if err != nil {
 		return fileResult{}, false
 	}
@@ -303,7 +362,7 @@ func (e scanEnv) scan(ctx context.Context, path string) (fileResult, bool) {
 		return fileResult{}, false
 	}
 	if scan.Capped {
-		if st, serr := f.Stat(); serr == nil && st.Size() > searchFileCap {
+		if st, serr := f.Stat(); serr == nil && st.Size() > e.fileCap {
 			e.counters.large.Add(1)
 		}
 	}

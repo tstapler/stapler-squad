@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -648,4 +649,90 @@ func raceDetectorOn() bool {
 		}
 	}
 	return false
+}
+
+// writeLogFile writes 13-byte filler lines until size bytes, with marker on matchLine.
+func writeLogFile(t testing.TB, path string, size int64, matchLine int, marker string) {
+	t.Helper()
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	w := bufio.NewWriterSize(f, 1<<20)
+	var written int64
+	for n := 1; written < size; n++ {
+		line := "line 0000000\n" // fixed 13 bytes: cheap to generate, offsets stay computable
+		if n == matchLine {
+			line = marker + "\n"
+		}
+		c, err := w.WriteString(line)
+		require.NoError(t, err)
+		written += int64(c)
+	}
+	require.NoError(t, w.Flush())
+	require.NoError(t, f.Close())
+}
+
+func TestContentSearch_ShouldFindMatchIn40MbFile_When_LargeFilesTrue_And_ReportSkippedPastCapOrBudget_And_KeepHeapUnder64Mb(t *testing.T) {
+	dir := t.TempDir()
+	const marker = "needle-at-900k"
+	writeLogFile(t, filepath.Join(dir, "huge.log"), 40<<20, 900_000, marker)
+	root := openRootFS(t, dir)
+
+	t.Run("default cap skips past 2 MB and reports it", func(t *testing.T) {
+		got, stats := runSearch(t, root, literalOpts(marker))
+		assert.Empty(t, got)
+		assert.Equal(t, 1, stats.LargeFilesSkipped)
+	})
+
+	t.Run("large_files finds the match with a flat heap", func(t *testing.T) {
+		opts := literalOpts(marker)
+		opts.LargeFiles = true
+		var got []SearchMatch
+		var stats SearchStats
+		peak := peakHeapGrowth(func() { got, stats = runSearch(t, root, opts) })
+		require.Len(t, got, 1)
+		assert.Equal(t, 900_000, got[0].Line)
+		assert.EqualValues(t, 899_999*int64(len("line 0000000\n")), got[0].ByteOffset)
+		assert.Zero(t, stats.LargeFilesSkipped)
+		ceiling := uint64(64 << 20)
+		if raceDetectorOn() {
+			ceiling = 192 << 20
+		}
+		assert.Less(t, peak, ceiling)
+	})
+
+	t.Run("pool is min(2, GOMAXPROCS/2)", func(t *testing.T) {
+		for gmp, want := range map[int]int{1: 1, 2: 1, 4: 2, 24: 2} {
+			assert.Equal(t, want, searchWorkerCountLarge(gmp), "GOMAXPROCS=%d", gmp)
+		}
+		large := literalOpts("x")
+		large.LargeFiles = true
+		s := walkSearcher{workers: 4, largeWorkers: 2}
+		assert.Equal(t, 2, s.poolSize(large))
+		assert.Equal(t, 4, s.poolSize(literalOpts("x")))
+	})
+
+	t.Run("file past the raised cap is reported", func(t *testing.T) {
+		d := t.TempDir()
+		writeLogFile(t, filepath.Join(d, "over.log"), rangeHashCapBytes+(1<<20), 5_200_000, marker)
+		opts := literalOpts(marker)
+		opts.LargeFiles = true
+		got, stats := runSearch(t, openRootFS(t, d), opts)
+		assert.Empty(t, got)
+		assert.Equal(t, 1, stats.LargeFilesSkipped)
+	})
+
+	t.Run("file past the time budget is reported", func(t *testing.T) {
+		opts := literalOpts(marker)
+		opts.LargeFiles = true
+		_, stats := runSearcher(t, walkSearcher{workers: 1, fileBudget: time.Nanosecond}, root, opts)
+		assert.Equal(t, 1, stats.LargeFilesSkipped)
+	})
+}
+
+func TestNewSearchOptions_ShouldCarryLargeFiles_When_RequestSetsIt(t *testing.T) {
+	opts, err := NewSearchOptions(&sessionv1.SearchOptions{Pattern: "needle", LargeFiles: true})
+	require.NoError(t, err)
+	assert.True(t, opts.LargeFiles)
+	assert.EqualValues(t, rangeHashCapBytes, opts.fileCap())
+	assert.EqualValues(t, searchFileCap, literalOpts("needle").fileCap())
 }
