@@ -312,6 +312,11 @@ service SessionService {
   // listener serves right now. Read-only; an older server returns Unimplemented.
   rpc GetFileTransportCapabilities(GetFileTransportCapabilitiesRequest) returns (GetFileTransportCapabilitiesResponse) {}
 
+  // ReadFileRange returns one line-aligned (or byte-anchored) window of a file
+  // without reading the rest. Dark until the files:range-read flag is on; every
+  // refusal matches GetFileContent's typed refusals.
+  rpc ReadFileRange(ReadFileRangeRequest) returns (ReadFileRangeResponse) {}
+
   // WriteFile atomically replaces a file in a session's worktree after verifying the
   // caller's version token. A changed file yields a Conflict arm; every refusal is a
   // Connect error carrying a ReadOnlyReasonDetail. Gated by the global files:editing flag.
@@ -2476,6 +2481,91 @@ message GetFileTransportCapabilitiesRequest {
 
 message GetFileTransportCapabilitiesResponse {
   FileTransportCapabilities capabilities = 1;
+}
+
+// RangeDir says which way a window extends from its anchor.
+enum RangeDir {
+  RANGE_DIR_UNSPECIFIED = 0;
+  // Centered on the anchor (the default for line anchors).
+  RANGE_DIR_AROUND = 1;
+  // Starts at the anchor and reads toward the end of the file.
+  RANGE_DIR_FORWARD = 2;
+  // Ends at the anchor and reads toward the start of the file.
+  RANGE_DIR_BACKWARD = 3;
+}
+
+// LineAnchor anchors a window on a 1-based line number.
+message LineAnchor {
+  int64 anchor_line = 1;
+  RangeDir dir = 2;
+  // Lines wanted; clamped to 4,000 and by max_bytes.
+  int32 want_lines = 3;
+}
+
+// ByteAnchor anchors a window on a raw-file byte offset; the window start snaps
+// back over at most three continuation bytes to a rune start.
+message ByteAnchor {
+  int64 offset = 1;
+  // Bytes wanted; clamped by max_bytes.
+  int64 length = 2;
+  RangeDir dir = 3;
+}
+
+message ReadFileRangeRequest {
+  string session_id = 1;
+  // File path relative to session worktree root.
+  string path = 2;
+  oneof anchor {
+    LineAnchor lines = 3;
+    ByteAnchor bytes = 4;
+  }
+  // Byte cap for the served window; 0 means the 128 KiB default, above 1 MiB is clamped.
+  int64 max_bytes = 5;
+  // When the file is at most this many bytes, the whole file is served in one response.
+  int64 prefer_full_if_le = 6;
+  // Validator the client last saw; a mismatch is reported through validator, not an error.
+  string if_validator = 7;
+  // caps_epoch the client holds; a stale epoch is answered with the current one.
+  uint64 caps_epoch = 8;
+}
+
+message ReadFileRangeResponse {
+  // Window text: LF-normalized, BOM stripped, invalid UTF-8 replaced.
+  string content = 1;
+  // 1-based first and last line in the window (0 when the window holds no lines).
+  int64 start_line = 2;
+  int64 end_line = 3;
+  // Raw-file byte offsets of the window, [start_byte, end_byte); a BOM never shifts them.
+  int64 start_byte = 4;
+  int64 end_byte = 5;
+  // Window touches the start / end of the file.
+  bool bof = 6;
+  bool eof = 7;
+  // line_count is exact only when line_count_known (whole-file analysis is ready).
+  bool line_count_known = 8;
+  int64 line_count = 9;
+  // "<size>:<mtime_ns>:<inode>" of the file the window was read from.
+  string validator = 10;
+  // Same format as StatFile; the "-" form while analysis is pending or the file is read-only.
+  string version_token = 11;
+  // CRC32C (Castagnoli) of the raw bytes served for the window.
+  uint32 chunk_crc32c = 12;
+  // The file changed between the pre-read and post-read fstat; the window may be torn.
+  bool torn = 13;
+  LineEnding eol_class = 14;
+  bool has_bom = 15;
+  bool is_binary = 16;
+  // Raw offset of the first NUL after the first 8 KiB inside this window.
+  optional int64 contains_nul_at = 17;
+  bool non_utf8 = 18;
+  // A line over 256 KiB switched the region to read-only byte-window mode.
+  bool long_line = 19;
+  // The window ends mid-line (byte-window mode or the byte cap).
+  bool partial_last_line = 20;
+  FileAnalysisState analysis = 21;
+  uint64 caps_epoch = 22;
+  int64 size = 23;
+  ReadOnlyReason read_only_reason = 24;
 }
 
 message WriteFileRequest {
