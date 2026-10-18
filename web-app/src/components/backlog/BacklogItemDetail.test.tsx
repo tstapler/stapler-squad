@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
+import { render, screen, act, fireEvent, within, waitFor, cleanup } from "@testing-library/react";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
@@ -1980,9 +1980,20 @@ describe("BacklogItemDetail — Phase 3: criteria in the accordion, group labels
 
   it("BacklogItemDetail_should_NotRenderDecisionGroupLabel_When_AllDecisionSectionsAreGatedOut", async () => {
     await renderItem({ status: "idea", gateVerdict: undefined });
-    expect(screen.queryByText("Decision")).not.toBeInTheDocument();
-    expect(screen.getByText("Reference")).toBeInTheDocument();
+    expect(screen.queryByTestId("section-group-label-decision")).not.toBeInTheDocument();
+    expect(screen.getByTestId("section-group-label-reference")).toBeInTheDocument();
   });
+
+  it.each([
+    ["pr_pending", undefined],
+    ["idea", "PENDING"],
+  ] as const)(
+    "BacklogItemDetail_should_RenderDecisionGroupLabel_When_StatusIs_%s_AndGateVerdictIs_%j",
+    async (status, gateVerdict) => {
+      await renderItem({ status, gateVerdict } as Partial<BacklogItem>);
+      expect(screen.getByTestId("section-group-label-decision")).toBeInTheDocument();
+    },
+  );
 
   it("BacklogItemDetail_should_DefaultExpandDescriptionSection_When_NoStoredPreference", async () => {
     await renderItem({ status: "in_progress", description: "Some description" });
@@ -1993,7 +2004,15 @@ describe("BacklogItemDetail — Phase 3: criteria in the accordion, group labels
   it("BacklogItemDetail_should_PersistExplicitDescriptionCollapse_AcrossReopen", async () => {
     await renderItem({ status: "in_progress", description: "Some description" });
     fireEvent.click(screen.getByTestId("collapsible-header-description"));
-    expect(localStorage.getItem("backlog-detail-section-item-1-description")).toBe("false");
+    expect(screen.getByTestId("collapsible-header-description")).toHaveAttribute("aria-expanded", "false");
+
+    cleanup();
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("collapsible-header-description")).toHaveAttribute("aria-expanded", "false");
   });
 
   it("BacklogItemDetail_should_RenderDescriptionSectionBeforeAcCriteriaSection_In_Reference_Group", async () => {

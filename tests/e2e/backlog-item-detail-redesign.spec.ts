@@ -137,7 +137,22 @@ test.describe("backlog item detail redesign", () => {
     request,
   }) => {
     const title = `e2e headless-triage groups ${Date.now()}`;
-    await seedHeadlessTriageItem(request, { title, status: "review" });
+    const { itemId } = await seedHeadlessTriageItem(request, { title, status: "review" });
+
+    // Seed known content through the real UpdateBacklogItem RPC so the
+    // assertions below prove the text renders, not merely that a section opened.
+    const description = `Seeded description ${Date.now()}`;
+    const criterionText = `Seeded criterion ${Date.now()}`;
+    const updateResp = await request.post(`${BASE_URL}/api/session.v1.BacklogService/UpdateBacklogItem`, {
+      headers: { "Content-Type": "application/json" },
+      data: {
+        itemId,
+        title,
+        description,
+        acceptanceCriteria: [{ index: 0, text: criterionText, status: "pending" }],
+      },
+    });
+    expect(updateResp.ok()).toBeTruthy();
 
     const backlogPage = new BacklogPage(page);
     await backlogPage.goto();
@@ -147,8 +162,9 @@ test.describe("backlog item detail redesign", () => {
     await detailPage.openItemByTitle(title);
 
     await expect(detailPage.sectionHeader("description")).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByTestId("backlog-description-rendered").or(page.getByText("No description."))).toBeVisible();
+    await expect(page.getByTestId("backlog-description-rendered")).toContainText(description);
     await expect(detailPage.sectionHeader("ac-criteria")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("ac-criteria-section")).toContainText(criterionText);
     for (const label of ["decision", "reference", "monitoring", "audit-trail", "admin"]) {
       await expect(detailPage.pane.getByTestId(`section-group-label-${label}`)).toBeVisible();
     }
