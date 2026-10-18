@@ -141,12 +141,13 @@ type selectorHarness struct {
 func newSelectorHarness(t *testing.T, mode EngineMode, cfg *ConfiguredWorkflowEngine, opts ...SelectorOption) *selectorHarness {
 	t.Helper()
 	h := &selectorHarness{cfg: cfg, recorder: newRecordingShadow(), warns: &lineSink{}, infos: &lineSink{}, clock: newSelectorClock()}
-	base := []SelectorOption{
+	base := make([]SelectorOption, 0, 4+len(opts))
+	base = append(base,
 		WithShadowRecorder(h.recorder),
 		WithSelectorClock(h.clock),
 		WithSelectorLoggers(h.warns.logf, h.infos.logf),
 		WithConfigLabeler(func() string { return "edited" }),
-	}
+	)
 	h.sel = NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, fixedMode{mode}, append(base, opts...)...)
 	return h
 }
@@ -537,7 +538,7 @@ func TestEnforceAnswer_MatchesDefaultOn81PairsAndGateCorpus_ExceptSystemArchiveE
 
 	diff := diffEngines(t, NewDefaultWorkflowEngine(), h.sel, gateFixtureCorpus())
 
-	var want []string
+	want := make([]string, 0, 4)
 	for _, from := range []BacklogStatus{BacklogStatusInProgress, BacklogStatusReview, BacklogStatusPRPending, BacklogStatusArchived} {
 		want = append(want, fmt.Sprintf("CanTransition(%s,archived): reference=false underTest=true", from))
 	}
