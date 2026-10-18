@@ -42,6 +42,7 @@ export type BacklogConnectionState =
   | "polling"
   | "stale";
 
+import { noteDeployId } from "./deployId";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { getWatchTransport } from "@/lib/api/transport";
@@ -146,6 +147,7 @@ export function useWatchBacklogItems(
   // forward/backward-jump full-refetch logic, a backlog-specific business
   // rule useWatchStream has no reason to know about.
   const lastSeqRef = useRef<bigint>(0n);
+  const lastDeployIdRef = useRef<string>("");
   const resyncInFlightRef = useRef(false);
   // Set when useWatchStream reports "stale" (a watchdog- or visibility-
   // triggered reconnect); cleared (and a full refetch fired) on that
@@ -240,6 +242,11 @@ export function useWatchBacklogItems(
       // it must not participate in gap detection (see BacklogItemEvent.seq's
       // proto doc comment).
       const seq = event.seq;
+      if (noteDeployId(lastDeployIdRef, event.deployId, "backlog-items")) {
+        // New server process: seq restarted, so the old cursor is meaningless. Resync, then re-seed below.
+        lastSeqRef.current = 0n;
+        void triggerResync();
+      }
       if (seq > 0n) {
         const prev = lastSeqRef.current;
         if (prev > 0n) {

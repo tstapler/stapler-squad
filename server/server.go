@@ -628,6 +628,32 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered DiagnosticService handler", "path", diagnosticAPIPath)
 	}
 
+	// Register SessionBundleService handler (RUM session diagnostic bundle
+	// export, Epic 1.2): ExportSessionBundle (server-streaming, browser
+	// download) and SaveSessionBundle (unary, server-side write). The assembler
+	// pipeline is wired in Epic 1.3; these stubs return CodeUnimplemented until
+	// then so the registration plumbing can be verified independently.
+	if deps.Storage != nil {
+		// Wrap concrete pointers in their interface types here so a nil concrete
+		// pointer becomes a nil interface value — not a non-nil interface holding
+		// a nil pointer, which would bypass the nil guards inside SessionBundleService.
+		var bundleCtxHistory services.ContextHistoryReader
+		if deps.CtxHistoryStore != nil {
+			bundleCtxHistory = deps.CtxHistoryStore
+		}
+		var bundleScrollback services.ScrollbackReader
+		if deps.ScrollbackManager != nil {
+			bundleScrollback = deps.ScrollbackManager
+		}
+		bundleSvc := services.NewSessionBundleService(deps.Storage, bundleCtxHistory, bundleScrollback)
+		bundleSvc.SetPoller(deps.ReviewQueuePoller)
+		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
+		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
+		bundleAPIPath := "/api" + bundlePath
+		srv.RegisterConnectHandler(bundleAPIPath, http.StripPrefix("/api", bundleHandler))
+		log.Info("Registered SessionBundleService handler", "path", bundleAPIPath)
+	}
+
 	// Register RemoteService handler (ssh-remote-workspaces Epic 3.3: TOFU
 	// host-key confirmation flow for configured SSH remotes). KnownHostsStore
 	// construction is the only fallible step (it touches disk under
@@ -1116,6 +1142,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	services.NewClientLogHandler().RegisterRoutes(srv.mux)
 	log.Info("Registered client-log handler at /api/client-logs")
+	log.Info("server deploy id", "deploy_id", services.DeployID())
 
 	// Register Circuit Breaker debug handler for observability
 	cbHandler := services.NewCircuitBreakerHandler()

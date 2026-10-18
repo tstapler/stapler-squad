@@ -231,6 +231,10 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// id/file (see the SearchGitHubRepos comment above for the failure mode).
 	"CancelSessionCreation": "session:cancel-creation",
 	"RetrySessionCreation":  "session:retry-creation",
+	// Diagnostic bundle RPCs: match the "// +api: session:export-bundle" /
+	// "session:save-bundle" markers in session_bundle_service.go verbatim.
+	"ExportSessionBundle": "session:export-bundle",
+	"SaveSessionBundle":   "session:save-bundle",
 	// Shell RPCs
 	"SpawnShell":   "shell:spawn",
 	"DeleteShell":  "shell:delete",

@@ -71,5 +71,7 @@ export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers): void {
     onEvent,
     isHeartbeat: (event) => event.heartbeat,
     getSeq: (event) => event.seq,
+    getDeployId: (event) => event.deployId,
+    name: "workflows",
   });
 }

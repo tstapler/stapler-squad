@@ -2,6 +2,7 @@ package tokens
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/pricing"
 	"os"
 	"testing"
 	"time"
@@ -91,13 +92,13 @@ func TestEstimateCost_WhenGeminiProModel_ExpectExactPrice(t *testing.T) {
 	result := &ParseResult{
 		PrimaryModel: "gemini-2.5-pro",
 		TurnTimeline: []TurnStats{
-			{Model: "gemini-2.5-pro", Input: 1_000_000, Output: 1_000_000},
+			{Model: "gemini-2.5-pro", Input: 100_000, Output: 100_000}, // under the 200k-prompt tier
 		},
 	}
 
 	cost, unpriced := pt.EstimateCost(result)
-	// gemini-2.5-pro: $1.25/MTok input + $10.00/MTok output = $11.25/MTok for 1M each.
-	assert.InDelta(t, 11.25, cost, 0.0001)
+	// gemini-2.5-pro: $1.25/MTok input + $10.00/MTok output = $1.125 for 100k each.
+	assert.InDelta(t, 1.125, cost, 0.0001)
 	assert.Empty(t, unpriced)
 }
 
@@ -585,4 +586,43 @@ func TestComputeCacheROI_WhenCacheReadWithoutWrite_ExpectPositiveROI(t *testing.
 	require.True(t, ok)
 	// claude-sonnet-4: (input $3.00 - cacheRead $0.30) * 1M/1e6 = $2.70 saved.
 	assert.InDelta(t, 2.70, roi, 0.0001)
+}
+
+func TestDefaultPricingTable_PricesNonAnthropicAndHaiku5(t *testing.T) {
+	pt := DefaultPricingTable()
+	r := &ParseResult{
+		PrimaryModel: "gpt-6.1-sol",
+		TurnTimeline: []TurnStats{
+			{Model: "gpt-6.1-sol", Input: 100_000, Output: 100_000, CacheRead: 100_000},
+			{Model: "gpt-5.6-terra", Input: 100_000, Output: 100_000},
+			{Model: "claude-haiku-5-5", Input: 20_000, Output: 20_000, CacheCreation: 20_000, CacheRead: 20_000},
+		},
+	}
+	costs, unpriced := pt.ModelFamilyCost(r)
+	assert.Empty(t, unpriced)
+	assert.InDelta(t, 1.21, costs["gpt-6.1-sol"], 1e-9)
+	assert.InDelta(t, 1.40, costs["gpt-5.6-terra"], 1e-9)
+	assert.InDelta(t, 0.0147, costs["claude-haiku-5"], 1e-9)
+}
+
+func TestEstimateCost_AppliesLongContextTierPerTurnNotPerSession(t *testing.T) {
+	pt := DefaultPricingTable()
+	// Two 200k-prompt turns: each is under gpt-6.1-sol's 272k tier, though the sum is over it.
+	r := &ParseResult{TurnTimeline: []TurnStats{
+		{Model: "gpt-6.1-sol", Input: 200_000},
+		{Model: "gpt-6.1-sol", Input: 200_000},
+	}}
+	cost, _ := pt.EstimateCost(r)
+	assert.InDelta(t, 0.8, cost, 1e-9)
+
+	over := &ParseResult{TurnTimeline: []TurnStats{{Model: "gpt-6.1-sol", Input: 300_000}}}
+	cost, _ = pt.EstimateCost(over)
+	assert.InDelta(t, 1.2, cost, 1e-9) // 300k * $4/MTok
+}
+
+func TestEstimateCost_FastSpeedMultipliesTurnCost(t *testing.T) {
+	pt := DefaultPricingTable()
+	r := &ParseResult{TurnTimeline: []TurnStats{{Model: "gpt-6.1-sol", Output: 100_000, Speed: pricing.SpeedFast}}}
+	cost, _ := pt.EstimateCost(r)
+	assert.InDelta(t, 2.0, cost, 1e-9) // 100k * $10/MTok * 2x
 }

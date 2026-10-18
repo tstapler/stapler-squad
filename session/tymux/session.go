@@ -38,6 +38,10 @@ type tymuxGRPCSession struct {
 	// and nothing here assumes single-threaded callers.
 	mu sync.RWMutex
 
+	// command is the program Start() asks tymuxd to spawn, set via SetCommand
+	// before Start(). Empty means tymuxd defaults to $SHELL.
+	command string
+
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
 	// (v1.0, non-split) pane, cached from CreateSession/ReviveSession's
 	// response — GetSessionIdentifier() needs no RPC (architecture.md §1).
@@ -306,14 +310,27 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := validateWorkDir(dir); err != nil {
 		return err
 	}
+	s.mu.RLock()
+	command := s.command
+	s.mu.RUnlock()
 	resp, err := s.transport.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{
-		Name: dir,
-		Cwd:  dir,
+		Name:    dir,
+		Command: command,
+		Cwd:     dir,
 	}))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
 	return s.cacheFromSession(resp.Msg)
+}
+
+// SetCommand records the program Start() will ask tymuxd to spawn. Call
+// it before Start(); not consulted by RestoreWithWorkDir (a revived
+// session already has its process running).
+func (s *tymuxGRPCSession) SetCommand(command string) {
+	s.mu.Lock()
+	s.command = command
+	s.mu.Unlock()
 }
 
 // RestoreWithWorkDir reconciles this session against tymuxd after a

@@ -47,6 +47,12 @@ message SessionEvent {
   // do not fold them into afterSeq/gap-detection bookkeeping. See
   // web-app/src/lib/hooks/useWatchStream.ts.
   bool heartbeat = 12;
+
+  // Identifies the server process that produced this event; constant for the process lifetime and
+  // different after every restart or redeploy. A change between events means the server restarted
+  // and seq has reset, so clients can tell a redeploy from a real seq anomaly. Empty from servers
+  // that predate this field.
+  string deploy_id = 13;
 }
 
 // SessionCreatedEvent is emitted when a new session is created

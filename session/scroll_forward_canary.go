@@ -19,8 +19,8 @@ var scrollForwardFalseRedrawNormalizeRegex = regexp.MustCompile(`Cogitated for \
 
 // scrollForwardCanaryLogged guards scrollForwardKeybindingCanary so it fires
 // at most once per session (keyed by Instance.Title), mirroring
-// compactingCanaryLogged's once-per-detector guard
-// (session/detection/detector.go:126-128) -- this is called on every
+// shellMonitorCanaryLogged's once-per-detector guard
+// (session/detection/detector.go) -- this is called on every
 // DELIVERED ForwardScroll outcome, so an unguarded version would log
 // continuously for as long as a session keeps hitting the same false-redraw
 // signature.

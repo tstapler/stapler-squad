@@ -123,10 +123,6 @@ type StatusDetector struct {
 	sink       DetectionEventSink
 	normalizer PTYNormalizer
 
-	// compactingCanaryLogged guards the TEMPORARY compacting-regex drift canary (see
-	// compactingCanary) so it fires at most once per detector/session, not once per scan.
-	compactingCanaryLogged atomic.Bool
-
 	// shellMonitorCanaryLogged guards shellMonitorWordingCanary so it fires at most once
 	// per detector/session, not once per scan.
 	shellMonitorCanaryLogged atomic.Bool
@@ -333,47 +329,8 @@ const StatusDetectionTailBytes = 4096
 func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	ps := sd.patternSet.Load()
 	status, name, desc, count := ps.MatchLines(text, rawPTY)
-	sd.compactingCanary(status, text)
 	sd.shellMonitorWordingCanary(status, text)
 	return status, name, desc, count
-}
-
-// compactingCanary is a TEMPORARY bake-in canary (see project_plans/context-compaction-
-// detection/implementation/plan.md, Task 1.1.1c): the compacting_conversation pattern
-// (binaries/claude.go) was grounded in an INFERRED guess, not a verified live capture.
-// Until the follow-up backlog item confirms the regex against real Claude Code output,
-// log a line mentioning "compact" that did NOT classify as StatusCompacting, so a
-// near-miss regex surfaces during real usage instead of via a silent production gap.
-// Remove this method (and its call site above and the compactingCanaryLogged field)
-// once that follow-up item closes.
-//
-// Mirrors ratelimit.Detector.maybeLogUndetectedWording's two safeguards: fires at most
-// once per detector via compactingCanaryLogged (this is called once per scrollback line
-// per poll via detectFromLines, so an unguarded version would log continuously for as
-// long as an unmatched line sits in the tail), and never logs the raw matched text —
-// terminal output routinely contains secrets, so only the byte offset is logged.
-//
-// The pre-existing "N% until auto-compact" approaching-threshold indicator (present in
-// claude_active.txt, claude_thinking_verb.txt, claude_asterism_active.txt) also contains
-// "compact" and is EXPECTED to classify as StatusExecuting, not StatusCompacting — it is
-// excluded here, or the canary would fire on every near-limit session instead of only on
-// a genuine near-miss.
-func (sd *StatusDetector) compactingCanary(status DetectedStatus, text string) {
-	if status == StatusCompacting || sd.compactingCanaryLogged.Load() {
-		return
-	}
-	lower := strings.ToLower(text)
-	if strings.Contains(lower, "until auto-compact") {
-		return
-	}
-	idx := strings.Index(lower, "compact")
-	if idx == -1 {
-		return
-	}
-	if !sd.compactingCanaryLogged.CompareAndSwap(false, true) {
-		return
-	}
-	log.Debug("detection: line mentions 'compact' but did not classify as StatusCompacting — possible regex near-miss", "byte_offset", idx, "text_len", len(text))
 }
 
 // shellMonitorWordingCanary is a bake-in canary for the shells_still_running/
@@ -385,8 +342,7 @@ func (sd *StatusDetector) compactingCanary(status DetectedStatus, text string) {
 // reversed-order "N monitor, M shell still running" form only partially matching), or (b) the
 // line has the turn-completion marker followed by "running" but no WaitingForAgent pattern
 // matched at all — surfacing the next wording change via logs instead of a silent undercount.
-// Mirrors compactingCanary's two safeguards: fires at most once per detector, and never logs
-// the raw matched text.
+// Fires at most once per detector, and never logs the raw matched text.
 func (sd *StatusDetector) shellMonitorWordingCanary(status DetectedStatus, text string) {
 	if sd.shellMonitorCanaryLogged.Load() {
 		return

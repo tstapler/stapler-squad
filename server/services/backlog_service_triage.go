@@ -649,6 +649,24 @@ func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID strin
 	return unresolved[itemID], nil
 }
 
+// planArtifactsPathMissing reports whether item has a recorded
+// PlanArtifactsPath that no longer exists on disk — e.g. the triage worktree
+// that produced it was reaped by CleanupTerminalItem after the item went
+// terminal and was later reopened. domain.TransitionGuard itself does no I/O
+// (session/domain is a pure package by design — see its doc comment), so
+// every guardInput-building call site performs this os.Stat and sets
+// PlanArtifactsPathMissing, mirroring the existing caller-side
+// hasUnresolvedBlockers query above. Only checked for the ->in_progress
+// guard, so this is a no-op os.Stat for every other transition and for any
+// item without a plan path at all.
+func planArtifactsPathMissing(item *session.BacklogItemData, to session.BacklogStatus) bool {
+	if to != session.BacklogStatusInProgress || item.PlanArtifactsPath == "" {
+		return false
+	}
+	_, statErr := os.Stat(item.PlanArtifactsPath)
+	return statErr != nil
+}
+
 // Returns the same errors storage.TransitionBacklogItemStatus returns
 // (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
 // domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
@@ -667,6 +685,7 @@ func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.
 	}
 	guardInput := session.NewBacklogItemTransitionInput(item, from)
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		return nil, guardErr
 	}
@@ -842,6 +861,14 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// call site regression, or a pre-existing queued/ready row from
 			// before that ordering fix).
 			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+		case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
+			// Genuinely reachable, unlike the two cases above: a path that was
+			// valid when the plan was approved can be deleted later (triage
+			// worktree reaped by CleanupTerminalItem, then the item reopened).
+			// Leave the item queued rather than dequeuing it into a work session
+			// with no readable plan content — an operator sees this via the
+			// item's stuck-review surface and re-runs triage to refresh the path.
+			log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
 		default:
 			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
 		}
@@ -987,6 +1014,36 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// session.HasActiveJulesSession's doc comment.
 	if activeJules := findActiveJulesSession(priorSessions); activeJules != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("a Jules session (%s) is already running for this item; wait for it to finish before starting a local session", activeJules.SessionUUID))
+	}
+
+	// 8b3. Rework-cap backstop, checked only once every "is something already running"
+	// guard above (8b/8b2/8b Jules) has cleared — a currently-live session is the real
+	// blocker and must be reported as such, not masked by a cap message, when both
+	// conditions happen to be true at once. AutoReopenAfterFailedReview and
+	// AutoRespawnAutonomousWork each already check effectiveReworkCap before ever
+	// calling into this function — this re-check is their "now or in the future, no
+	// matter which call site reaches this function" backstop, mirroring step 3b's
+	// identical planning-gate re-check precedent above. Without it, the cap was
+	// enforced per-caller rather than by this shared primitive: confirmed live on
+	// item 9dd2793e, whose work-session count reached a 6th round (buildRevisionTitle's
+	// "-r6" title suffix, one past the default cap of 5) with no rework_cap row ever
+	// recorded — 11 review bounces and real session cost burned past the point the cap
+	// exists to stop, through whichever call path reached here without its own check.
+	// Scoped to isReopen only: a fresh spawn from "ready" has no prior work-session
+	// history to exceed a cap against.
+	if isReopen {
+		workCount := 0
+		for _, is := range priorSessions {
+			if is.Role == session.SessionRoleWork {
+				workCount++
+			}
+		}
+		if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
+			log.Info("[spawnSessionAfterGates] hit work session cap; refusing spawn", "item", item.ID, "count", workCount, "cap", reworkCap)
+			s.notifyReworkCapHit(ctx, item.ID, item.Title, session.BacklogStatus(item.Status), "at the shared spawn gate", reworkCap)
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("item has reached its %d-round rework cap; raise the cap in Settings or via the item's rework-cap override before spawning again", reworkCap))
+		}
 	}
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a

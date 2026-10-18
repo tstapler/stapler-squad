@@ -151,6 +151,46 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 	wait.RequireEventually(t, func() bool { return pool.callCount() == 2 }, 5*time.Second, 20*time.Millisecond, "ResumeTriage must run despite unchanged content")
 }
 
+// newTriageSkipTestService sets up the storage/pool/service trio shared by this file's
+// triage-skip tests, extracted to avoid re-duplicating it a third time (dupl gate).
+func newTriageSkipTestService(t *testing.T) (*session.Storage, *fakeHeadlessPool, *BacklogService) {
+	t.Helper()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	return storage, pool, svc
+}
+
+// IsRetriagePointless implements session.TriageRespawner and must agree with the gate
+// unchangedRetriageSkipReason applies inside respawnTriage: false before any completed
+// triage exists, false immediately after a changed-content retriage, true once the item
+// is unchanged since its last completed triage.
+func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
+	t.Parallel()
+	storage, _, svc := newTriageSkipTestService(t)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title: "pointless-check", Description: "v1", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	assert.False(t, svc.IsRetriagePointless(t.Context(), item.ID), "no completed triage yet — nothing to compare against")
+
+	require.NoError(t, svc.AutoRespawnTriage(t.Context(), item.ID))
+	wait.RequireEventually(t, func() bool {
+		got, e := storage.GetBacklogItem(t.Context(), item.ID)
+		return e == nil && got.Status == string(session.BacklogStatusReady) && !svc.IsTriageLive(item.ID)
+	}, 5*time.Second, 20*time.Millisecond, "first triage completes")
+
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusQueued, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+	assert.True(t, svc.IsRetriagePointless(t.Context(), item.ID), "content unchanged since the completed triage")
+
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{Description: strPtr("v2")}, nil)
+	require.NoError(t, err)
+	assert.False(t, svc.IsRetriagePointless(t.Context(), item.ID), "changed description must no longer read as pointless")
+}
+
 // runBulkTriage creates 3 items under the given concurrency cap and returns the peak
 // number of simultaneously running triage calls. Concurrency is measured with a
 // decrement-on-return counter inside the fake pool. With rendezvous, each call blocks on entry

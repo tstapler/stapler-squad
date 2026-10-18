@@ -29,7 +29,10 @@ import {
 } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
-import { useAppDispatch } from "@/lib/store";
+import { useAppDispatch, useAppSelector } from "@/lib/store";
+import { toggleSelection, selectAll, clearSelection } from "@/lib/store/backlogBulkSelectionSlice";
+import { BacklogBulkActions } from "@/components/backlog/BacklogBulkActions";
+import { runBulk, formatBulkFeedback } from "@/lib/backlog/bulkActions";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
@@ -52,6 +55,7 @@ interface BacklogViewState {
   search: string;
   statusFilter: BacklogItemStatus[];
   priorityFilter: number[];
+  sourceFilter: string[];
   showArchived: boolean;
   sortCol: SortColumn;
   sortAsc: boolean;
@@ -136,12 +140,18 @@ function BacklogTableRow({
   item,
   isActive,
   isExiting,
+  isSelected,
+  isSelectMode,
   onRowClick,
+  onToggleSelect,
 }: {
   item: BacklogItem;
   isActive: boolean;
   isExiting: boolean;
+  isSelected: boolean;
+  isSelectMode: boolean;
   onRowClick: (itemId: string) => void;
+  onToggleSelect: (itemId: string) => void;
 }) {
   const acDone = item.acCriteria.filter((c) => c.status === "done").length;
 
@@ -171,16 +181,31 @@ function BacklogTableRow({
       data-exiting={isExiting ? "true" : undefined}
       onClick={() => {
         if (isExiting) return;
+        if (isSelectMode) {
+          onToggleSelect(item.id);
+          return;
+        }
         onRowClick(item.id);
       }}
       onKeyDown={(e) => {
-        if (isExiting) return;
+        if (isExiting || e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onRowClick(item.id);
+          if (isSelectMode) onToggleSelect(item.id);
+          else onRowClick(item.id);
         }
       }}
     >
+      <td className={`${styles.tableCell} ${styles.checkboxCell}`} onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          className={`${styles.rowCheckbox} ${isSelectMode ? styles.rowCheckboxVisible : ""}`}
+          checked={isSelected}
+          onChange={() => onToggleSelect(item.id)}
+          aria-label={`Select ${item.title}`}
+          data-testid="backlog-row-checkbox"
+        />
+      </td>
       <td className={`${styles.tableCell} ${styles.titleCell}`}>
         {item.title}
       </td>
@@ -224,7 +249,7 @@ function BacklogTableRow({
 function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
-  const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { createBacklogItem, importGitHubIssue, triggerTriage, archiveBacklogItem, deleteBacklogItem } = useBacklogService();
   const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -254,6 +279,7 @@ function BacklogPageInner() {
     search,
     statusFilter,
     priorityFilter,
+    sourceFilter,
     // showArchived: archived items are excluded client-side by default (Epic
     // 5.1 — see filteredItems below); enabling this reveals them from the
     // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
@@ -266,6 +292,7 @@ function BacklogPageInner() {
     search: setSearch,
     statusFilter: setStatusFilter,
     priorityFilter: setPriorityFilter,
+    sourceFilter: setSourceFilter,
     showArchived: setShowArchived,
     sortCol: setSortCol,
     sortAsc: setSortAsc,
@@ -347,8 +374,8 @@ function BacklogPageInner() {
   // mirroring what the server-side listBacklogItems filter used to do before
   // this page moved to the shared live stream (design/ux.md Surface 1).
   const filteredItems = useMemo(
-    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, showArchived }),
-    [items, search, statusFilter, priorityFilter, showArchived],
+    () => filterBacklogItems(items, { search, statusFilter, priorityFilter, sourceFilter, showArchived }),
+    [items, search, statusFilter, priorityFilter, sourceFilter, showArchived],
   );
 
   // Epic 6.3 (backlog-event-driven-updates): when an item's fields change
@@ -639,6 +666,90 @@ function BacklogPageInner() {
     return sortAsc ? " ↑" : " ↓";
   };
 
+  // Bulk selection (backlogBulkSelectionSlice) and fan-out actions.
+  const selectedIds = useAppSelector((st) => st.backlogBulkSelection.selectedIds);
+  const selectMode = useAppSelector((st) => st.backlogBulkSelection.selectMode);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  // Selection can outlive filter changes or live removals; act only on rows still visible.
+  const visibleSelectedIds = useMemo(() => {
+    const visible = new Set(sortedItems.map((i) => i.id));
+    return selectedIds.filter((id) => visible.has(id));
+  }, [selectedIds, sortedItems]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleToggleSelect = useCallback((id: string) => dispatch(toggleSelection(id)), [dispatch]);
+
+  const showBulkFeedback = useCallback((msg: string) => {
+    if (!mountedRef.current) return;
+    setBulkFeedback(msg);
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setBulkFeedback(null), 4000);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      dispatch(clearSelection());
+    };
+  }, [dispatch]);
+
+  const doneItemIds = useMemo(
+    () => filteredItems.filter((i) => i.status === "done").map((i) => i.id),
+    [filteredItems]
+  );
+
+  const runBulkAction = useCallback(
+    async (verb: string, ids: string[], action: (id: string) => Promise<unknown>) => {
+      if (ids.length === 0 || busyRef.current) return;
+      busyRef.current = true;
+      setBulkBusy(true);
+      try {
+        const result = await runBulk(ids, action);
+        showBulkFeedback(formatBulkFeedback(verb, result));
+        return result;
+      } finally {
+        busyRef.current = false;
+        if (mountedRef.current) setBulkBusy(false);
+      }
+    },
+    [showBulkFeedback]
+  );
+
+  const handleArchiveDone = useCallback(
+    () => runBulkAction("Archived", doneItemIds, archiveBacklogItem),
+    [runBulkAction, doneItemIds, archiveBacklogItem]
+  );
+
+  const handleArchiveSelected = useCallback(async () => {
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ids = visibleSelectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && it.status !== "archived";
+    });
+    if (ids.length === 0) {
+      showBulkFeedback("Nothing to archive");
+      dispatch(clearSelection());
+      return;
+    }
+    const result = await runBulkAction("Archived", ids, archiveBacklogItem);
+    if (!result || !mountedRef.current) return;
+    if (result.failed.length === 0) dispatch(clearSelection());
+    else dispatch(selectAll(result.failed));
+  }, [items, visibleSelectedIds, runBulkAction, showBulkFeedback, archiveBacklogItem, dispatch]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const result = await runBulkAction("Deleted", visibleSelectedIds, deleteBacklogItem);
+    if (!result || !mountedRef.current) return;
+    if (result.failed.length > 0) dispatch(selectAll(result.failed));
+    else dispatch(clearSelection());
+  }, [visibleSelectedIds, runBulkAction, deleteBacklogItem, dispatch]);
+
   const renderItemRow = (item: BacklogItem) => {
     const isActive = selectedItemId === item.id;
     const isExiting = exitingItems.has(item.id);
@@ -648,7 +759,10 @@ function BacklogPageInner() {
         item={item}
         isActive={isActive}
         isExiting={isExiting}
+        isSelected={selectedSet.has(item.id)}
+        isSelectMode={selectMode}
         onRowClick={handleRowClick}
+        onToggleSelect={handleToggleSelect}
       />
     );
   };
@@ -718,12 +832,27 @@ function BacklogPageInner() {
         onStatusFilterChange={setStatusFilter}
         priorityFilter={priorityFilter}
         onPriorityFilterChange={setPriorityFilter}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
         showArchived={showArchived}
         onShowArchivedChange={setShowArchived}
         onResetView={resetViewState}
         showSortGroupControls={true}
         groupBy={groupBy}
         onGroupByChange={setGroupBy}
+        doneCount={doneItemIds.length}
+        onArchiveDone={handleArchiveDone}
+        archiveDoneBusy={bulkBusy}
+      />
+      <BacklogBulkActions
+        selectedCount={visibleSelectedIds.length}
+        totalCount={sortedItems.length}
+        busy={bulkBusy}
+        feedback={bulkFeedback}
+        onArchiveSelected={handleArchiveSelected}
+        onDeleteSelected={handleDeleteSelected}
+        onSelectAll={() => dispatch(selectAll(sortedItems.map((i) => i.id)))}
+        onClear={() => dispatch(clearSelection())}
       />
 
       {/* Content */}
@@ -741,6 +870,9 @@ function BacklogPageInner() {
             <table className={styles.table} aria-label="Backlog items">
               <thead className={styles.tableHead}>
                 <tr>
+                  <th scope="col" className={styles.tableHeaderCell}>
+                    <span className={styles.srOnly}>Select</span>
+                  </th>
                   <th
                     scope="col"
                     className={`${styles.tableHeaderCell} ${styles.tableHeaderCellSortable}`}
@@ -822,7 +954,7 @@ function BacklogPageInner() {
                   <tbody key={group.groupKey}>
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className={styles.groupHeaderCell}
                         data-testid="backlog-group-header"
                       >

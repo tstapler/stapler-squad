@@ -162,6 +162,12 @@ type ServerDependencies struct {
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
 	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+
+	// CtxHistoryStore persists per-turn context-window occupancy samples. Nil
+	// when the history directory cannot be resolved at startup (see the
+	// identically-named field on RuntimeDeps for the full comment). Passed to
+	// SessionBundleService so the context_history section is populated when available.
+	CtxHistoryStore *contexthistory.Store
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -213,6 +219,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		HandoffSummaryGenerator:        rt.HandoffSummaryGenerator,
 		BacklogLifecycleListener:       rt.BacklogLifecycleListener,
 		SessionTagClassificationPoller: rt.SessionTagClassificationPoller,
+		CtxHistoryStore:                rt.CtxHistoryStore,
 	}
 }
 
@@ -563,6 +570,11 @@ type RuntimeDeps struct {
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
 	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+
+	// CtxHistoryStore persists per-turn context-window occupancy samples for use
+	// in diagnostic bundles (RUM session bundle Epic 1.1). Nil when analytics is
+	// disabled or when the ent client is unavailable.
+	CtxHistoryStore *contexthistory.Store
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
@@ -1309,6 +1321,26 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("could not determine config dir for analytics DB", "err", configErr)
 	}
 
+	// Diagnostics bundle retention: prune bundles older than 30 days at startup
+	// and then once per day. Non-fatal: a missing directory is silently skipped.
+	if retentionConfigDir, retentionConfigErr := config.GetConfigDir(); retentionConfigErr == nil {
+		diagnosticsDir := filepath.Join(retentionConfigDir, "diagnostics")
+		go func() {
+			if err := services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
+				log.Warn("diagnostics retention startup sweep failed", "error", err)
+			}
+		}()
+		go func() {
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
+					log.Warn("diagnostics retention daily sweep failed", "error", err)
+				}
+			}
+		}()
+	}
+
 	// One-time startup backfill: seed durable BacklogStuckState rows (with
 	// notified_at pre-set) for items that are already stuck, so the first
 	// genuine reconcile tick does not re-notify for conditions already known
@@ -1929,6 +1961,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		HandoffSummaryGenerator:        handoffSummaryGenerator,
 		BacklogLifecycleListener:       backlogLifecycleListener,
 		SessionTagClassificationPoller: sessionTagPoller,
+		CtxHistoryStore:                ctxHistoryStore,
 	}, nil
 }
 
