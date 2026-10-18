@@ -140,7 +140,7 @@ export function MobileBottomBar(p: BottomBarProps) {
       ) : (
         <>
           {item("Go to line", "#", p.onGoToLine, { disabled: !p.hasFile })}
-          <div className={split} role="group" aria-label="Location history">
+          <div className={split} style={{ flex: 2 }} role="group" aria-label="Location history">
             {back}
             {step("Next location", "▶", p.canForward, p.onForward, "No later location")}
           </div>

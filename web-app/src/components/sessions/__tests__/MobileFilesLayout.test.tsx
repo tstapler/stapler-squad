@@ -188,6 +188,20 @@ describe("MobileFilesLayout", () => {
     await waitFor(() => expect(pane()).toBe("search"));
   });
 
+  it("systemBack_should_PopEditorThenResultsThenFiles_When_HitOpenedFromSearch", async () => {
+    mount();
+    const url = window.location.href;
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(screen.getByText("tap-file"));
+    expect(pane()).toBe("editor");
+    act(() => window.history.back());
+    await waitFor(() => expect(pane()).toBe("search"));
+    act(() => window.history.back());
+    await waitFor(() => expect(pane()).toBe("files"));
+    expect(window.location.href).toBe(url);
+  });
+
   it("androidBack_should_NotChangePaneOrModeOrHistory_When_KeyboardDismissedWithoutPopstate", async () => {
     const vv = Object.assign(new EventTarget(), { height: 844, offsetTop: 0 });
     Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
