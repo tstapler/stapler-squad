@@ -659,18 +659,19 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		if item.HasUnresolvedBlockers {
 			return ErrUnresolvedBlockers
 		}
+		// A recorded plan path that is not on disk is rejected whether or not the
+		// plan is approved: re-triage is the actionable fix either way. Only stat
+		// when a path is recorded, keeping this cold for items with no plan yet.
+		if !item.SkipPlanning && item.PlanArtifactsPath != "" {
+			if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+				return ErrPlanArtifactsMissing
+			}
+		}
 		if !item.PlanApproved && !item.SkipPlanning {
 			return ErrPlanRequired
 		}
 		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPath == "" {
 			return ErrPlanArtifactsRequired
-		}
-		// Only stat when a plan path is actually recorded: keeps this cold for items
-		// that skip planning or have no plan yet.
-		if item.PlanApproved && !item.SkipPlanning {
-			if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
-				return ErrPlanArtifactsMissing
-			}
 		}
 		return nil
 

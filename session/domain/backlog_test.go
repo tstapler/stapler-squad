@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -237,6 +238,37 @@ func TestTransitionGuard_should_BlockDequeue_When_ItemHasUnresolvedBlockers(t *t
 			err := TransitionGuard(item, BacklogStatusInProgress)
 			if !errors.Is(err, tc.wantErr) {
 				t.Errorf("TransitionGuard(%+v, in_progress) = %v, want %v", item, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestTransitionGuard_should_RejectWithErrPlanArtifactsMissing_When_RecordedPathNotOnDisk
+// covers the stale-path guard in isolation: the recorded plan directory must exist for
+// Ready/Queued -> InProgress, whether or not the plan is approved, unless planning is skipped.
+func TestTransitionGuard_should_RejectWithErrPlanArtifactsMissing_When_RecordedPathNotOnDisk(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "gone", "implementation")
+	existing := t.TempDir()
+
+	cases := []struct {
+		name string
+		item BacklogItemTransitionInput
+		want error
+	}{
+		{"queued, approved, path missing", BacklogItemTransitionInput{Status: BacklogStatusQueued, PlanApproved: true, PlanArtifactsPath: missing}, ErrPlanArtifactsMissing},
+		{"ready, approved, path missing", BacklogItemTransitionInput{Status: BacklogStatusReady, PlanApproved: true, PlanArtifactsPath: missing}, ErrPlanArtifactsMissing},
+		{"queued, NOT approved, path missing", BacklogItemTransitionInput{Status: BacklogStatusQueued, PlanArtifactsPath: missing}, ErrPlanArtifactsMissing},
+		{"queued, approved, path exists", BacklogItemTransitionInput{Status: BacklogStatusQueued, PlanApproved: true, PlanArtifactsPath: existing}, nil},
+		{"queued, skip planning, path missing", BacklogItemTransitionInput{Status: BacklogStatusQueued, SkipPlanning: true, PlanArtifactsPath: missing}, nil},
+		{"queued, not approved, no path", BacklogItemTransitionInput{Status: BacklogStatusQueued}, ErrPlanRequired},
+		{"queued, approved, no path", BacklogItemTransitionInput{Status: BacklogStatusQueued, PlanApproved: true}, ErrPlanArtifactsRequired},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := TransitionGuard(tc.item, BacklogStatusInProgress); !errors.Is(got, tc.want) {
+				t.Errorf("TransitionGuard = %v; want %v", got, tc.want)
 			}
 		})
 	}
