@@ -29,8 +29,18 @@ func NewInspectElementHandler(finder InstanceFinder) *InspectElementHandler {
 	return &InspectElementHandler{
 		finder:  finder,
 		inspect: cdp.InspectAtPoint,
-		portOf:  func(inst *session.Instance) int { return inst.CDPManager().Port() },
+		portOf:  cdpPortOf,
 	}
+}
+
+// cdpPortOf returns 0 when the instance has no CDP manager; instances restored
+// from storage never run initCDPManager, so CDPManager() can be nil.
+func cdpPortOf(inst *session.Instance) int {
+	m := inst.CDPManager()
+	if m == nil {
+		return 0
+	}
+	return m.Port()
 }
 
 type inspectRequest struct {

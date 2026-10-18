@@ -101,3 +101,8 @@ func TestInspectElementHandler_CDPError_Returns502(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, w.Code)
 	assert.NotContains(t, w.Body.String(), "dial refused", "internal errors are not leaked")
 }
+
+func TestCDPPortOf_NilManager_ReturnsZero(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 0, cdpPortOf(&session.Instance{}))
+}
