@@ -38,3 +38,9 @@ use the same `getStatusLabel` and one `BlockerChip` for the same `stuckItem`.
 - Playwright `tests/e2e/backlog-item-detail-redesign.spec.ts --project=chromium`: 9 passed (1.9m), including "opens a review item with Description visible, criteria expanded and group labels shown, with no interaction". Run against system `/usr/bin/google-chrome-stable` through a temporary uncommitted config override, because Playwright's own `chromium_headless_shell-1194` extraction left only `v8_context_snapshot.bin` (cause undiagnosed).
 - Reproduce on a machine with Playwright Chromium: `cd tests/e2e && npx playwright test backlog-item-detail-redesign.spec.ts --project=chromium`.
 - Exploratory-testing findings and the alternatives comparison are in `research/phase3-exploratory-audit.md` (chosen: Alternative A).
+
+### Re-run on the committed config, no overrides (2026-10-18)
+
+`playwright install` stalls after `pw:install extracting archive` (download completes, 109 MB). Downloading the same zip with `curl` and extracting with `unzip` into `~/.cache/ms-playwright/chromium_headless_shell-1194` works (`headless_shell --version` → Chromium 141.0.7390.37). Why Playwright's own extractor stalls is not diagnosed.
+
+`cd tests/e2e && npx playwright test backlog-item-detail-redesign.spec.ts --project=chromium` with the unmodified `playwright.config.ts`: **9 passed (2.0m)**, including the review-item test for criterion 8.
