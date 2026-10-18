@@ -22,6 +22,8 @@ const (
 	MaxInspectCSSProps = 50
 	htmlTruncationMark = "\n<!-- truncated -->"
 	inspectStepTimeout = time.Second
+	// Screenshot payloads are base64 JPEGs; this bounds a hostile/huge outerHTML too.
+	maxInspectMessageBytes = 16 << 20
 )
 
 // ErrNoElementAtPoint means no DOM node exists at the requested coordinates.
@@ -143,6 +145,7 @@ func InspectAtPoint(ctx context.Context, port int, pt Point) (*InspectResult, er
 		return nil, fmt.Errorf("cdp: dial page target: %w", err)
 	}
 	defer ws.Close()
+	ws.SetReadLimit(maxInspectMessageBytes)
 	c := &inspectConn{conn: ws}
 
 	nodeID, err := resolveNodeAt(ctx, c, pt)
@@ -219,8 +222,13 @@ func boxFor(ctx context.Context, c *inspectConn, nodeID int) BoundingBox {
 	if json.Unmarshal(raw, &r) != nil || len(r.Model.Content) < 8 {
 		return BoundingBox{}
 	}
-	q := r.Model.Content
-	return BoundingBox{X: q[0], Y: q[1], Width: q[2] - q[0], Height: q[5] - q[1]}
+	q := r.Model.Content[:8]
+	minX, maxX, minY, maxY := q[0], q[0], q[1], q[1]
+	for i := 2; i < 8; i += 2 {
+		minX, maxX = min(minX, q[i]), max(maxX, q[i])
+		minY, maxY = min(minY, q[i+1]), max(maxY, q[i+1])
+	}
+	return BoundingBox{X: minX, Y: minY, Width: maxX - minX, Height: maxY - minY}
 }
 
 func outerHTMLFor(ctx context.Context, c *inspectConn, nodeID int) string {
@@ -301,7 +309,29 @@ func selectCSS(all []CSSProperty) []CSSProperty {
 	return out
 }
 
+// scrollOffset returns the visual viewport's page offset: box-model quads are
+// viewport-relative while captureScreenshot clips are page-relative.
+func scrollOffset(ctx context.Context, c *inspectConn) (float64, float64) {
+	raw, err := c.call(ctx, "Page.getLayoutMetrics", nil)
+	if err != nil {
+		return 0, 0
+	}
+	var r struct {
+		Viewport struct {
+			PageX float64 `json:"pageX"`
+			PageY float64 `json:"pageY"`
+		} `json:"cssVisualViewport"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return 0, 0
+	}
+	return r.Viewport.PageX, r.Viewport.PageY
+}
+
 func screenshotFor(ctx context.Context, c *inspectConn, b BoundingBox) string {
+	dx, dy := scrollOffset(ctx, c)
+	b.X += dx
+	b.Y += dy
 	raw, err := c.call(ctx, "Page.captureScreenshot", map[string]any{
 		"format": "jpeg", "quality": 80,
 		"clip": map[string]any{"x": b.X, "y": b.Y, "width": b.Width, "height": b.Height, "scale": 1},

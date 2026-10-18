@@ -298,6 +298,15 @@ describe('BrowserTab — inspect mode', () => {
     expect(req.input.endsWith('\n')).toBe(false);
   });
 
+  it('strips control characters from page content before it reaches the terminal', () => {
+    const out = formatInspectContext(1, 2, { html: '<a title="x\rrm -rf\x1b[2J">', computedCss: [{ name: 'color', value: 'red\n' }] });
+    const [header, html, css] = out.split('\n');
+    expect(header).toBe('[Browser Inspector] Element at (1, 2):');
+    expect(html).toBe('HTML: <a title="x rm -rf [2J">');
+    expect(css).toBe('CSS: color: red ');
+    expect(out).not.toMatch(/[\r\x1b]/);
+  });
+
   it('Escape closes the panel and deactivates inspect mode', async () => {
     await clickAndOpenPanel();
     fireEvent.keyDown(document, { key: 'Escape' });

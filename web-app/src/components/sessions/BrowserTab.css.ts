@@ -1,4 +1,4 @@
-import { style } from '@vanilla-extract/css';
+import { globalStyle, style } from '@vanilla-extract/css';
 import { vars } from '../../styles/theme-contract.css';
 
 export const browserTabContainer = style({
@@ -138,5 +138,6 @@ export const cssTable = style({
   borderCollapse: 'collapse',
   fontFamily: 'monospace',
   fontSize: '0.75rem',
-  selectors: { '& td': { padding: '1px 4px', verticalAlign: 'top', wordBreak: 'break-all' } },
 });
+
+globalStyle(`${cssTable} td`, { padding: '1px 4px', verticalAlign: 'top', wordBreak: 'break-all' });

@@ -166,3 +166,27 @@ func TestSelectCSS_CapAndPriority(t *testing.T) {
 	assert.Equal(t, "display", out[0].Name)
 	assert.Equal(t, "margin-top", out[1].Name, "shorthand falls back to its longhands")
 }
+
+func TestInspectAtPoint_ScreenshotClipIncludesScrollOffset(t *testing.T) {
+	h := okHandlers("<p/>", []float64{10, 20, 110, 20, 110, 60, 10, 60})
+	h["Page.getLayoutMetrics"] = func(map[string]any) (any, string) {
+		return map[string]any{"cssVisualViewport": map[string]any{"pageX": 5, "pageY": 300}}, ""
+	}
+	var clip map[string]any
+	h["Page.captureScreenshot"] = func(p map[string]any) (any, string) {
+		clip, _ = p["clip"].(map[string]any)
+		return map[string]any{"data": "QQ=="}, ""
+	}
+	_, err := InspectAtPoint(context.Background(), fakeChrome(t, h), Point{X: 15, Y: 25})
+	require.NoError(t, err)
+	assert.EqualValues(t, 15, clip["x"])
+	assert.EqualValues(t, 320, clip["y"])
+}
+
+func TestBoxFor_RotatedQuadUsesBounds(t *testing.T) {
+	h := okHandlers("", []float64{50, 0, 100, 50, 50, 100, 0, 50})
+	port := fakeChrome(t, h)
+	res, err := InspectAtPoint(context.Background(), port, Point{X: 1, Y: 1})
+	require.NoError(t, err)
+	assert.Equal(t, BoundingBox{X: 0, Y: 0, Width: 100, Height: 100}, res.BoundingBox)
+}

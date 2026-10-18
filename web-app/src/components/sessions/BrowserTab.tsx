@@ -31,10 +31,18 @@ export function buildInspectUrl(baseUrl: string, sessionId: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/sessions/${sessionId}/inspect-element`;
 }
 
+// Page content is untrusted: a CR would submit the line and ESC could inject
+// terminal escape sequences, so control characters never reach the PTY.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]+/g;
+function stripControlChars(s: string): string {
+  return s.replace(CONTROL_CHARS, ' ');
+}
+
 /** Text injected into the terminal by "Send to Agent" (no trailing newline: the user confirms). */
 export function formatInspectContext(x: number, y: number, r: InspectResult): string {
   const css = (r.computedCss ?? []).map((p) => `${p.name}: ${p.value}`).join('; ');
-  return `[Browser Inspector] Element at (${x}, ${y}):\nHTML: ${r.html}\nCSS: ${css}`;
+  return `[Browser Inspector] Element at (${x}, ${y}):\nHTML: ${stripControlChars(r.html)}\nCSS: ${stripControlChars(css)}`;
 }
 
 export function buildWsUrl(baseUrl: string, sessionId: string): string {
@@ -102,6 +110,8 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
     setInspectError(null);
     setInspectResult(null);
   }, []);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // Stream dropped while inspecting: leave inspect mode.
   useEffect(() => {
