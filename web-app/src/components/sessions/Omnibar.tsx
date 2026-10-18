@@ -68,10 +68,14 @@ import {
   pathIndicatorInvalid,
   pathIndicatorLoading,
   createButton,
+  button as buttonClass,
+  buttonSecondary,
+  shortcutsBacklogButton,
   error as errorClass,
 } from "./Omnibar.css";
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
 import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
@@ -2124,6 +2128,7 @@ export function Omnibar({
             setFormField={setFormField}
             onSubmit={handleSubmit}
             onCancel={onClose}
+            onCreateBacklog={openBacklogCompose}
             worktrees={worktrees}
             isWorktreesLoading={isWorktreesLoading}
             worktreesError={worktreesError}
@@ -2227,6 +2232,10 @@ export function Omnibar({
               <span className={shortcut}>
                 <span className={shortcutKey}>↵</span> Jump
               </span>
+              <OmnibarBacklogButton
+                onClick={openBacklogCompose}
+                className={`${buttonClass} ${buttonSecondary} ${shortcutsBacklogButton}`}
+              />
             </>
           )}
           {!isDiscoveryMode && isDropdownVisible && (

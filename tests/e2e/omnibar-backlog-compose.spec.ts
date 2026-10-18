@@ -5,7 +5,7 @@ import { V1_DESKTOP, V2_PORTRAIT } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || process.env.BASE_URL || 'http://localhost:8544';
 
-async function openCompose(page: import('@playwright/test').Page, typed: string) {
+async function openOmnibar(page: import('@playwright/test').Page, typed: string) {
   // Suppress the app-wide onboarding walkthrough; its overlay intercepts clicks.
   await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
@@ -19,7 +19,16 @@ async function openCompose(page: import('@playwright/test').Page, typed: string)
   const input = page.getByRole('combobox', { name: /session source input/i });
   await expect(input).toBeVisible({ timeout: 10000 });
   await input.fill(typed);
-  await page.getByText('Create Backlog Item (AI)').click();
+}
+
+async function openCreationMode(page: import('@playwright/test').Page) {
+  await openOmnibar(page, '/tmp');
+  await page.getByRole('group', { name: 'Omnibar mode' }).getByRole('button', { name: 'Create', exact: true }).click();
+}
+
+async function openCompose(page: import('@playwright/test').Page, typed: string) {
+  await openOmnibar(page, typed);
+  await page.getByRole('option', { name: /Create Backlog Item/ }).click();
   const textarea = page.getByTestId('backlog-compose-textarea');
   await expect(textarea).toBeVisible();
   return textarea;
@@ -76,6 +85,50 @@ for (const profile of [V1_DESKTOP, V2_PORTRAIT]) {
       await expect(page.getByTestId('backlog-compose-cancel')).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(page.getByTestId('backlog-compose-submit')).toBeFocused();
+    });
+
+    test('discovery shows both the list row and the footer backlog button', async ({ page }) => {
+      await openOmnibar(page, 'fix login');
+      await expect(page.getByRole('option', { name: /Create Backlog Item/ })).toBeVisible();
+      await expect(page.getByTestId('omnibar-create-backlog-button')).toBeVisible();
+    });
+
+    test('creation-mode footer button opens compose, and Enter on the focused button does too', async ({ page }) => {
+      await openCreationMode(page);
+      const button = page.getByTestId('omnibar-create-backlog-button');
+      await expect(button).toBeVisible();
+      await button.click();
+      await expect(page.getByTestId('backlog-compose-textarea')).toBeFocused();
+
+      await page.getByTestId('backlog-compose-cancel').click();
+      await button.focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByTestId('backlog-compose-textarea')).toBeFocused();
+    });
+
+    test('creation-mode footer buttons stay inside the viewport and do not overlap', async ({ page }) => {
+      await openCreationMode(page);
+      const buttons = [
+        page.getByTestId('omnibar-create-backlog-button'),
+        page.getByRole('button', { name: 'Cancel', exact: true }),
+        page.getByTestId('omnibar-create-session-button'),
+      ];
+      const viewportWidth = page.viewportSize()!.width;
+      const boxes = [];
+      for (const b of buttons) {
+        await expect(b).toBeVisible();
+        const box = await b.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth);
+        boxes.push(box!);
+      }
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i], c = boxes[j];
+          const apart = a.x + a.width <= c.x || c.x + c.width <= a.x || a.y + a.height <= c.y || c.y + c.height <= a.y;
+          expect(apart, `buttons ${i} and ${j} overlap`).toBe(true);
+        }
+      }
     });
   });
 }
