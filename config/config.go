@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -388,6 +389,10 @@ type Config struct {
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
+	// QuotaConfiguredAt is stamped when the quota settings page (UpdateQuotaConfig)
+	// saves. LoadConfig persists defaults into Quota, so the stored object alone
+	// cannot tell "never configured" from "configured with default values".
+	QuotaConfiguredAt *time.Time `json:"quota_configured_at,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
@@ -1533,6 +1538,8 @@ func saveConfigLocked(config *Config, configPath string) error {
 	// so the renamed config.json keeps its historical permissions.
 	chmodErr := tmpFile.Chmod(0644)
 	_, writeErr := tmpFile.Write(data)
+	// Sync before rename so a power loss cannot leave a zero-length config.json.
+	syncErr := tmpFile.Sync()
 	closeErr := tmpFile.Close()
 	if chmodErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1541,6 +1548,10 @@ func saveConfigLocked(config *Config, configPath string) error {
 	if writeErr != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if syncErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync temp config: %w", syncErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1556,6 +1567,43 @@ func saveConfigLocked(config *Config, configPath string) error {
 // SaveConfig exports the saveConfig function for use by other packages.
 func SaveConfig(config *Config) error {
 	return saveConfig(config)
+}
+
+// updateConfigMu holds one *sync.Mutex per config path. It is the OUTER lock of
+// UpdateConfig and must stay distinct from saveConfigMu: saveConfig takes that
+// one itself and sync.Mutex is not reentrant.
+var updateConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex
+
+// UpdateConfig is an atomic read-modify-write of config.json: it holds a per-path
+// lock across LoadConfig, fn and the save, so two UpdateConfig callers cannot lose
+// each other's change. Callers that still do an unlocked LoadConfig+SaveConfig can
+// race with it; migrate them here. fn may call setters that save on their own.
+func UpdateConfig(fn func(*Config) error) error {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+	configPath := filepath.Join(configDir, ConfigFileName)
+
+	lock, _ := updateConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	cfg := LoadConfig()
+	if err := fn(cfg); err != nil {
+		return err
+	}
+	return saveConfig(cfg, configPath)
+}
+
+// QuotaIsConfigured reports whether the operator has set quota values: the page
+// stamped QuotaConfiguredAt, or a hand edit made Quota differ from the defaults.
+func (c *Config) QuotaIsConfigured() bool {
+	if c.QuotaConfiguredAt != nil {
+		return true
+	}
+	return !reflect.DeepEqual(c.Quota, QuotaConfig{}.QuotaConfigOrDefault())
 }
 
 // GitBackendCohortsConfig is the raw cohort-name -> mode map from config.json. Decoding is
