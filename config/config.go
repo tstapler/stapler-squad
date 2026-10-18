@@ -576,6 +576,32 @@ func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
 }
 
+// WorkflowEngineShadowFeatureFlag and WorkflowEngineEnforceFeatureFlag select
+// the backlog workflow engine mode (session.ModeFromFlags): shadow compares the
+// configured engine against today's answer without changing anything; enforce
+// makes the configured graph and gates decide. Both are live-settable.
+const (
+	WorkflowEngineShadowFeatureFlag  = "backlog:workflow-engine-shadow"
+	WorkflowEngineEnforceFeatureFlag = "backlog:workflow-engine-enforce"
+
+	// WorkflowEngineShadowDefault is on so the soak accrues evidence from the first boot.
+	WorkflowEngineShadowDefault = true
+	// WorkflowEngineEnforceDefault is off until the soak verdict is READY.
+	WorkflowEngineEnforceDefault = false
+)
+
+// EffectiveWorkflowEngineShadow reports whether shadow comparison is on. Read
+// with the registered default: a plain GetFeatureFlag returns false when unset
+// and would silently switch shadow off.
+func EffectiveWorkflowEngineShadow(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineShadowFeatureFlag, WorkflowEngineShadowDefault)
+}
+
+// EffectiveWorkflowEngineEnforce reports whether the configured engine decides.
+func EffectiveWorkflowEngineEnforce(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceFeatureFlag, WorkflowEngineEnforceDefault)
+}
+
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
 // backend default is active. Resolved fresh on every call (session.getSelectedBackend)
 // via SetTymuxGlobalOverride — live-settable, no process restart required.

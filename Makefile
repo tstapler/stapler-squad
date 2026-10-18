@@ -99,6 +99,10 @@ help: ## Show this help message
 git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
 	@scripts/git-soak-status.sh
 
+.PHONY: workflow-engine-soak-status
+workflow-engine-soak-status: ## Print the workflow engine shadow-soak verdict (running service; ARGS=--config-diff for the live-config diff; exit 1 = not ready)
+	@scripts/workflow-engine-soak-status.sh $(ARGS)
+
 .PHONY: verify-manual-instance
 verify-manual-instance: ## Guarded manual instance for slot N (make verify-manual-instance N=1 [CHECK=1 for a dry run that starts nothing])
 	@test -n "$(N)" || (echo "usage: make verify-manual-instance N=<1-5> [CHECK=1]" && exit 2)

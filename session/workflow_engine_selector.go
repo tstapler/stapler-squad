@@ -1,9 +1,12 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -70,6 +73,42 @@ type ShadowRecorder interface {
 	RecordShadowCall(m EngineMethod, p CallPath)
 	RecordDivergence(m EngineMethod, c DivergenceClass, config string, p CallPath)
 	RecordNotCompared(r NotComparedReason)
+}
+
+// ShadowObservation is one shadowed call as the ledger recorder needs it: the
+// edge (To is empty for AllowedTransitions), both answers rendered as text, and
+// a hash of the item id (never the id itself).
+type ShadowObservation struct {
+	Method           EngineMethod
+	Path             CallPath
+	From, To         BacklogStatus
+	ItemHash         string
+	Class            DivergenceClass // empty: no divergence
+	Config           string
+	Default, Enforce string
+	SkippedStateful  bool
+}
+
+// ObservationRecorder is the optional richer recorder interface; the selector
+// calls it once per shadowed call when the recorder implements it.
+type ObservationRecorder interface {
+	RecordObservation(ShadowObservation)
+}
+
+// shadowResult is what a compare closure reports back to shadow().
+type shadowResult struct {
+	Class            DivergenceClass
+	Default, Enforce string
+	SkippedStateful  bool
+}
+
+// HashItemID returns the redacted item reference used in repro records.
+func HashItemID(id string) string {
+	if id == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:4])
 }
 
 type discardRecorder struct{}
@@ -217,11 +256,13 @@ func (s *SwitchableWorkflowEngine) CanTransition(from, to BacklogStatus, snap *S
 		return allowed
 	case ModeShadow:
 		def := s.def.CanTransition(from, to, snap)
-		s.shadow(MethodCanTransition, PathTransition, func() DivergenceClass {
-			if enf, _ := s.enf.canTransition(from, to, snap); enf != def {
-				return ClassGraph
+		s.shadow(MethodCanTransition, PathTransition, from, to, "", func() shadowResult {
+			enf, _ := s.enf.canTransition(from, to, snap)
+			r := shadowResult{Default: allowText(def), Enforce: allowText(enf)}
+			if enf != def {
+				r.Class = ClassGraph
 			}
-			return ""
+			return r
 		})
 		return def
 	default:
@@ -238,11 +279,13 @@ func (s *SwitchableWorkflowEngine) AllowedTransitions(from BacklogStatus, snap *
 		return out
 	case ModeShadow:
 		def := s.def.AllowedTransitions(from, snap)
-		s.shadow(MethodAllowedTransitions, PathRead, func() DivergenceClass {
-			if enf, _ := s.enf.allowedTransitions(from, snap); fmt.Sprint(enf) != fmt.Sprint(def) {
-				return ClassGraph
+		s.shadow(MethodAllowedTransitions, PathRead, from, "", "", func() shadowResult {
+			enf, _ := s.enf.allowedTransitions(from, snap)
+			r := shadowResult{Default: fmt.Sprint(def), Enforce: fmt.Sprint(enf)}
+			if r.Default != r.Enforce {
+				r.Class = ClassGraph
 			}
-			return ""
+			return r
 		})
 		return def
 	default:
@@ -259,10 +302,13 @@ func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput,
 		return statuses, err
 	case ModeShadow:
 		def, defErr := s.def.PendingGates(item, to, snap)
-		s.shadow(MethodPendingGates, PathRead, func() DivergenceClass {
+		s.shadow(MethodPendingGates, PathRead, item.Status, to, item.ItemID, func() shadowResult {
 			enf, skipped, _, _ := s.enf.pendingGates(item, to, snap, evalStructuralOnly)
 			s.noteSkipped(skipped)
-			return compareGateStatuses(def, enf)
+			return shadowResult{
+				Class:   compareGateStatuses(def, enf),
+				Default: unsatisfiedText(def), Enforce: unsatisfiedText(enf), SkippedStateful: skipped,
+			}
 		})
 		return def, defErr
 	default:
@@ -282,10 +328,13 @@ func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput
 		return ans.Err
 	case ModeShadow:
 		defErr := s.def.ValidateGates(item, to, snap)
-		s.shadow(MethodValidateGates, PathTransition, func() DivergenceClass {
+		s.shadow(MethodValidateGates, PathTransition, item.Status, to, item.ItemID, func() shadowResult {
 			ans := s.enf.validateGates(item, to, snap, evalStructuralOnly)
 			s.noteSkipped(ans.SkippedStateful)
-			return compareGateErrors(defErr, ans.Err)
+			return shadowResult{
+				Class:   compareGateErrors(defErr, ans.Err),
+				Default: errText(defErr), Enforce: errText(ans.Err), SkippedStateful: ans.SkippedStateful,
+			}
 		})
 		return defErr
 	default:
@@ -296,7 +345,7 @@ func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput
 // shadow runs compare under recover, records the call, and records the
 // divergence class compare returns ("" means none). Read-path calls are
 // sampled. Nothing in here may alter the caller's answer.
-func (s *SwitchableWorkflowEngine) shadow(m EngineMethod, p CallPath, compare func() DivergenceClass) {
+func (s *SwitchableWorkflowEngine) shadow(m EngineMethod, p CallPath, from, to BacklogStatus, itemID string, compare func() shadowResult) {
 	if p == PathRead && !s.sampleRead() {
 		return
 	}
@@ -307,8 +356,52 @@ func (s *SwitchableWorkflowEngine) shadow(m EngineMethod, p CallPath, compare fu
 		}
 	}()
 	s.recorder.RecordShadowCall(m, p)
-	if class := compare(); class != "" {
-		s.recorder.RecordDivergence(m, class, s.configLabel(), p)
+	res := compare()
+	label := s.configLabel()
+	if res.Class != "" {
+		s.recorder.RecordDivergence(m, res.Class, label, p)
+	}
+	if or, ok := s.recorder.(ObservationRecorder); ok {
+		or.RecordObservation(ShadowObservation{
+			Method: m, Path: p, From: from, To: to, ItemHash: HashItemID(itemID), Class: res.Class,
+			Config: label, Default: res.Default, Enforce: res.Enforce, SkippedStateful: res.SkippedStateful,
+		})
+	}
+}
+
+func allowText(b bool) string {
+	if b {
+		return "allow"
+	}
+	return "deny"
+}
+
+func errText(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	return err.Error()
+}
+
+func unsatisfiedText(statuses []GateStatus) string {
+	keys := make([]string, 0, len(statuses))
+	for k := range unsatisfiedKeys(statuses) {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return fmt.Sprint(keys)
+}
+
+// ModeFromFlags collapses the shadow and enforce flags to the three legal
+// modes: enforce wins, then shadow, else off.
+func ModeFromFlags(shadow, enforce bool) EngineMode {
+	switch {
+	case enforce:
+		return ModeEnforce
+	case shadow:
+		return ModeShadow
+	default:
+		return ModeOff
 	}
 }
 

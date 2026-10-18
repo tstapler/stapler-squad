@@ -18,12 +18,20 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_QuotaAssumedWindowTokenBudget_ChangesQuotaMode",
 		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
 	},
+	"flag:backlog:workflow-engine-shadow": {
+		testName:   "TestConfigSurfaceProof_WorkflowEngineShadow_ChangesShadowCallsRecorded",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:backlog:workflow-engine-enforce": {
+		testName:   "TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 }
 
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 74
+const pendingCeiling = 72
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -45,8 +53,7 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 		"quota.resume_margin_pct")
 	add("5.1.2a", false, "quota.default_cost_budget_threshold_usd") // field added by Story 2.1.1, consumed by 2.1.3
 	add("5.1.2b", true,
-		"flag:backlog:workflow-engine-shadow", "flag:backlog:workflow-engine-enforce",
-		"flag:backlog:workflow-engine-enforce-agent", "flag:backlog:workflow-engine-enforce-system") // Stories 1.1.3, 1.5.3, 1.5.8
+		"flag:backlog:workflow-engine-enforce-agent", "flag:backlog:workflow-engine-enforce-system") // Stories 1.5.3, 1.5.8
 	add("5.1.2b", false, "proto.StuckBacklogItem.allow_auto_merge")
 	add("5.1.3", false,
 		"flag:autonomous_stall_nudge_enabled", "flag:backlog", "flag:backlog:completion-reviewer",

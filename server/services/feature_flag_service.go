@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -313,6 +314,52 @@ var knownFeatureFlags = []struct {
 		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
 		defaultValue: true,
 	},
+	{
+		name:         config.WorkflowEngineShadowFeatureFlag,
+		description:  "Workflow engine shadow: compare the configured stage graph and gates against today's answer on every status transition and count the differences (see /actuator/workflow-engine). Changes nothing about what is allowed. Applies within about a second. Default: on.",
+		defaultValue: config.WorkflowEngineShadowDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceFeatureFlag,
+		description:  "Workflow engine enforce (operator class): the configured stage graph and operator gates decide status transitions instead of the built-in rules. Turn on only after make workflow-engine-soak-status reads READY. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceDefault,
+	},
+}
+
+// workflowEngineModeTTL is how long a resolved engine mode is reused, so the
+// transition hot path never reads config per call.
+const workflowEngineModeTTL = time.Second
+
+// WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
+// flags with their registered defaults (never the plain GetFeatureFlag, which
+// returns false for an unset flag and would silently turn shadow off).
+func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
+	return session.ModeFromFlags(
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+	)
+}
+
+// NewWorkflowEngineModeSource is the production mode reader: live config,
+// cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
+	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+}
+
+// WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the
+// shadow flag's status line, counted from the ledger's repro ring (the last 200
+// divergences), so a busy day can read as a floor rather than an exact count.
+func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now func() time.Time) func() string {
+	return func() string {
+		cutoff := now().Add(-24 * time.Hour)
+		n := 0
+		for _, r := range snapshot().Repro {
+			if r.At.After(cutoff) {
+				n++
+			}
+		}
+		return fmt.Sprintf("Shadow: %d divergences/24h", n)
+	}
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
