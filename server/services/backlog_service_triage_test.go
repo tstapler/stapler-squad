@@ -5912,6 +5912,43 @@ func TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissin
 	assert.Equal(t, projectPlanRoot, got.PlanArtifactsPath, "plan_artifacts_path must point at the root, not the never-created implementation/ subdirectory")
 }
 
+// TestTriggerTriage_should_PreserveEarlierPlanArtifactsPath_When_ReTriageWritesNoPlan
+// covers backlog item 1cfae441-8953-41e6-803d-959062119d4f criterion 5: a
+// re-triage that produces no plan directory must not overwrite (or clear) a
+// plan_artifacts_path recorded by an earlier successful run. The seeded path
+// exists on disk but is not where this run would look, so only the
+// nil-means-don't-update behavior can keep it.
+func TestTriggerTriage_should_PreserveEarlierPlanArtifactsPath_When_ReTriageWritesNoPlan(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	earlierPlanDir := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:             "sdd item being re-triaged",
+		Status:            string(session.BacklogStatusIdea),
+		Priority:          3,
+		RepoPath:          t.TempDir(), // no project_plans/ here: this run writes nothing
+		PipelineMode:      session.DefaultSDDPipelineModeSlug,
+		PlanArtifactsPath: earlierPlanDir,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return getErr == nil && got.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "re-triage should still finish and reach ready")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, earlierPlanDir, got.PlanArtifactsPath, "a re-triage that wrote no plan must keep the earlier valid path")
+}
+
 // TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown
 // is a regression test for BUG-065: an item whose triage goroutine was still
 // blocked waiting for a free concurrency slot (all 8 taken) when the server's
