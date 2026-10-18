@@ -487,3 +487,39 @@ func TestListGuidanceRequestsForScope_should_UseCapParam_When_ProvidedNonZero(t 
 	require.NoError(t, err)
 	assert.Equal(t, DefaultGuidanceRequestPendingCap, defaultedCap, "zero must fall back to DefaultGuidanceRequestPendingCap")
 }
+
+func TestGetBacklogItem_HasPendingGuidanceRequests_TracksOpenRequest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo := NewTestEntRepository(t)
+	itemID := createTestBacklogItemForGuidance(t, repo)
+
+	before, err := repo.GetBacklogItem(ctx, itemID.String())
+	require.NoError(t, err)
+	assert.False(t, before.HasPendingGuidanceRequests)
+
+	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+		Scope:        domain.RequestScopeBacklogItem,
+		ItemID:       &itemID,
+		QuestionText: "Which approach?",
+		QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+
+	pending, err := repo.GetBacklogItem(ctx, itemID.String())
+	require.NoError(t, err)
+	assert.True(t, pending.HasPendingGuidanceRequests)
+
+	listed, err := repo.ListBacklogItems(ctx, BacklogItemFilter{})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.True(t, listed[0].HasPendingGuidanceRequests)
+
+	applied, err := repo.AnswerGuidanceRequest(ctx, uuid.MustParse(created.ID), "yes")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	after, err := repo.GetBacklogItem(ctx, itemID.String())
+	require.NoError(t, err)
+	assert.False(t, after.HasPendingGuidanceRequests)
+}

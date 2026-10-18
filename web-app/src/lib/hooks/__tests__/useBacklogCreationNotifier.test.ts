@@ -1,0 +1,73 @@
+import { renderHook, act } from "@testing-library/react";
+import { useBacklogCreationNotifier } from "../useBacklogCreationNotifier";
+
+const mockPush = jest.fn();
+jest.mock("next/navigation", () => ({ useRouter: () => ({ push: mockPush }) }));
+
+const mockAddNotification = jest.fn();
+jest.mock("@/lib/contexts/notificationContexts", () => ({
+  useNotificationCommands: () => ({ addNotification: mockAddNotification }),
+}));
+
+const mockGetBacklogItem = jest.fn();
+jest.mock("@/lib/hooks/useBacklogService", () => ({
+  useBacklogService: () => ({ getBacklogItem: mockGetBacklogItem }),
+}));
+
+async function tick() {
+  await act(async () => {
+    jest.advanceTimersByTime(4000);
+  });
+}
+
+beforeEach(() => {
+  jest.useFakeTimers();
+});
+afterEach(() => {
+  jest.useRealTimers();
+  jest.clearAllMocks();
+});
+
+describe("useBacklogCreationNotifier", () => {
+  it("notifies once when triage completes and navigates to the item on view", async () => {
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "completed" });
+    const { result } = renderHook(() => useBacklogCreationNotifier());
+    act(() => result.current.trackItem("a", "Dark mode"));
+
+    await tick();
+    await tick();
+
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    const n = mockAddNotification.mock.calls[0][0];
+    expect(n.title).toBe("Triage complete — Dark mode");
+    n.onView();
+    expect(mockPush).toHaveBeenCalledWith("/backlog?item=a");
+  });
+
+  it("notifies when the AI needs input, and again for a later request", async () => {
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "running", hasPendingGuidanceRequests: true });
+    const { result } = renderHook(() => useBacklogCreationNotifier());
+    act(() => result.current.trackItem("a", "Dark mode"));
+
+    await tick();
+    await tick();
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    expect(mockAddNotification.mock.calls[0][0].title).toBe("AI needs your input — Dark mode");
+
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "running", hasPendingGuidanceRequests: false });
+    await tick();
+    mockGetBacklogItem.mockResolvedValue({ id: "a", triageStatus: "running", hasPendingGuidanceRequests: true });
+    await tick();
+    expect(mockAddNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it("never polls or notifies for items that were not tracked", async () => {
+    mockGetBacklogItem.mockResolvedValue({ id: "other", triageStatus: "completed" });
+    renderHook(() => useBacklogCreationNotifier());
+
+    await tick();
+
+    expect(mockGetBacklogItem).not.toHaveBeenCalled();
+    expect(mockAddNotification).not.toHaveBeenCalled();
+  });
+});

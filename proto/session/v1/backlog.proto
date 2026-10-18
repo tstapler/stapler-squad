@@ -311,6 +311,9 @@ message BacklogItem {
   // the item's source, denormalized for the source badge/filter. Empty for
   // locally-created items.
   string plugin_id = 44;
+  // has_pending_guidance_requests is true while at least one GuidanceRequest
+  // scoped to this item is open (neither answered nor cancelled).
+  bool has_pending_guidance_requests = 45;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency

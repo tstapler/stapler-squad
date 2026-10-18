@@ -26,6 +26,11 @@ function fallbackTitle(message: string): string {
 /** Builds BacklogItemForm's initialValues from a parsed draft, or — when
  * draft is null (parse failed/timed out) — from the raw text, so the user's
  * typed message is never silently lost. */
+/** Image references in the user's text that the LLM may have dropped or rewritten. */
+export function extractImageMarkdown(text: string): string[] {
+  return Array.from(text.matchAll(/!\[[^\]]*\]\([^)]+\)/g), (m) => m[0]);
+}
+
 function draftToInitialValues(
   draft: ParsedBacklogItemDraft | null,
   rawText: string,
@@ -34,9 +39,14 @@ function draftToInitialValues(
   if (!draft) {
     return { title: fallbackTitle(rawText), description: rawText };
   }
+  let description = draft.description;
+  const missingImages = extractImageMarkdown(rawText).filter((img) => !description.includes(img));
+  if (missingImages.length > 0) {
+    description = `${description.trimEnd()}\n\n${missingImages.join("\n")}`;
+  }
   return {
     title: draft.title,
-    description: draft.description,
+    description,
     ...(suggestedRepoPath ? { repoPath: suggestedRepoPath } : {}),
     acCriteria: draft.acceptanceCriteria.map((text, index) => ({
       index,
