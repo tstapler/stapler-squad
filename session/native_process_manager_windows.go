@@ -22,6 +22,8 @@ var _ ProcessManager = (*NativeProcessManager)(nil)
 func (n *NativeProcessManager) Start(_ string) error {
 	return fmt.Errorf("NativeProcessManager: not supported on Windows")
 }
+func (n *NativeProcessManager) AppendLaunchEnv(...string)         {}
+func (n *NativeProcessManager) WireLaunch(_ LaunchSpec)           {}
 func (n *NativeProcessManager) RestoreWithWorkDir(_ string) error { return nil }
 func (n *NativeProcessManager) Close() error                      { return nil }
 func (n *NativeProcessManager) IsAlive() bool                     { return false }

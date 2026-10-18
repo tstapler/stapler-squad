@@ -47,8 +47,7 @@ func (s sgrState) isZero() bool {
 // CellsToSGR renders a PaneSnapshot's cell grid (PaneSnapshot.grid) into an
 // ANSI/SGR-encoded string matching `tmux capture-pane -p -e`'s
 // attribute-preserving output shape — the renderer CapturePaneContent()
-// (Task 2.2.2d) needs and CapturePaneContentRaw() deliberately doesn't
-// (that method only joins Cell.text, no SGR).
+// and CapturePaneContentRaw() share.
 //
 // Rows are newline-joined (mirroring rowsToPlainText's join, and matching
 // the tmux backend's own capture-pane -p -e contract) -- this is a

@@ -170,8 +170,8 @@ func (i *Instance) Preview() (string, error) {
 	// approximation reconstructed from a raw byte stream. CapturePaneContent has
 	// a 1s TTL cache (see TmuxProcessManager), so preferring it here does not add
 	// a subprocess spawn on every poll tick.
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if content, err := tb.CapturePaneContent(); err == nil {
+	if _, ok := capabilityOf[CachedScreenCapturer](i.processManager); ok {
+		if content, err := i.processManager.CapturePaneContent(); err == nil {
 			return content, nil
 		}
 	}
@@ -216,22 +216,20 @@ func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
 		return "", nil
 	}
 
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if tpm, ok := tb.mgr.(*TmuxProcessManager); ok {
-			content, err := tpm.CapturePaneContentContext(ctx)
-			if err == nil {
-				return content, nil
-			}
-			// A cancellation/deadline means the caller no longer wants this
-			// result — falling back to the non-cancellable Preview() here
-			// would silently ignore that and block on a fresh subprocess
-			// call anyway, defeating the whole point of threading ctx
-			// through in the first place (see doc comment above). Only
-			// fall back for genuine capture failures (e.g. subprocess
-			// error, no pane).
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return "", ctx.Err()
-			}
+	if c, ok := capabilityOf[ContextCapturer](i.processManager); ok {
+		content, err := c.CapturePaneContentContext(ctx)
+		if err == nil {
+			return content, nil
+		}
+		// A cancellation/deadline means the caller no longer wants this
+		// result — falling back to the non-cancellable Preview() here
+		// would silently ignore that and block on a fresh subprocess
+		// call anyway, defeating the whole point of threading ctx
+		// through in the first place (see doc comment above). Only
+		// fall back for genuine capture failures (e.g. subprocess
+		// error, no pane).
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", ctx.Err()
 		}
 	}
 
@@ -280,15 +278,11 @@ func (i *Instance) CaptureCurrentState() error {
 		return nil
 	}
 	path, err := func() (string, error) {
-		tb, ok := i.processManager.(*TmuxBackend)
+		r, ok := capabilityOf[PaneCwdReporter](i.processManager)
 		if !ok {
 			return "", nil
 		}
-		sess := tb.TmuxManager().Session()
-		if sess == nil {
-			return "", nil
-		}
-		return sess.GetPaneCurrentPath()
+		return r.PaneCurrentPath()
 	}()
 	if err != nil {
 		return fmt.Errorf("CaptureCurrentState '%s': %w", i.Title, err)
