@@ -834,6 +834,14 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// tick, so a "retry now" would repeat the same check. The only resolution is an
 	// operator marking the item done (or fixing its recorded branch).
 	domain.StuckReasonMergedPRUnverified: true,
+	// StuckReasonVerdictUndelivered: same deliberate gap as StuckReasonSteerFailed
+	// above — force-writing a retry into a busy/dead PTY is unsafe by the same
+	// invariant IsReadyForSteer/SteerSessionGuarded enforce everywhere else, and
+	// the work session always has a second delivery path (its own
+	// wait_for_backlog_event/ScheduleWakeup polling). "Retry now" has nothing
+	// safe to do that a later bounce cycle's fresh verdict wouldn't already do
+	// on its own.
+	domain.StuckReasonVerdictUndelivered: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

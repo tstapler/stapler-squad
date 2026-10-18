@@ -254,6 +254,29 @@ const (
 	// refusal is visible and operator-resolvable (mark done) rather than a
 	// per-tick log line on an item that sits in pr_pending forever.
 	StuckReasonMergedPRUnverified StuckReason = "merged_pr_unverified"
+	// StuckReasonVerdictUndelivered: steerWorkSessionWithVerdict
+	// (server/services/backlog_service_verdict_steer.go) attempted to deliver a
+	// recorded review verdict to the item's live work session as a steer and
+	// could not — the work session never went idle within
+	// defaultVerdictSteerReadyTimeout, is a hidden/background session (read-only
+	// steer target), or the steer delivery itself errored. Before this reason
+	// existed, notifyVerdictSteerFailed only fired a one-shot WARNING
+	// notification with no durable record (confirmed live 2026-10-17: items
+	// 4666bc80, 1cfae441, and 6c24cbab all hit this path and aged out of
+	// NotificationHistoryStore's 7-day/500-row cap). Detection/visibility only,
+	// deliberately with no dedicated automated retry — mirrors
+	// StuckReasonSteerFailed's precedent for the structurally identical
+	// PR-fix-steer failure: force-writing to a busy/dead PTY is unsafe by the
+	// same invariant IsReadyForSteer/SteerSessionGuarded enforce everywhere
+	// else, and the work session always has a second delivery path (its own
+	// wait_for_backlog_event/ScheduleWakeup polling — the steer is an
+	// optimization on top of that, not the only way the verdict reaches it;
+	// see that file's header comment). Set by notifyVerdictSteerFailed,
+	// resolved by resolveVerdictUndeliveredLogged once a later steer succeeds,
+	// and anchored at BacklogStatusReview in selfHealStuck
+	// (session/backlog_lifecycle.go) as a backstop once the item leaves review
+	// for any other reason.
+	StuckReasonVerdictUndelivered StuckReason = "verdict_undelivered"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -282,6 +305,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonWorktreeInconsistent,
 	StuckReasonRepeatedNoopDispatch,
 	StuckReasonMergedPRUnverified,
+	StuckReasonVerdictUndelivered,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -294,7 +318,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
 		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch,
-		StuckReasonMergedPRUnverified:
+		StuckReasonMergedPRUnverified, StuckReasonVerdictUndelivered:
 		return true
 	}
 	return false
