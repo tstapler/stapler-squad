@@ -474,3 +474,15 @@ func TestScanner_treeChange_should_enqueueBeforeBackstopTick_When_TreeWatcherAct
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), time.Minute)
 }
+
+func TestScanner_startTreeWatch_should_watchReposAddedBeforeStart(t *testing.T) {
+	t.Parallel()
+	fw := &fakeTreeWatcher{}
+	s := &Scanner{scanQueue: make(chan scanTask, 50)}
+	s.repoSet.Store("/r/early", true)
+
+	s.installTreeWatcher(context.Background(), fw)
+
+	assert.Equal(t, []string{"/r/early"}, fw.added)
+	assert.Equal(t, 2*time.Minute, func() time.Duration { s.tickInterval = time.Minute; return s.backstopInterval() }())
+}

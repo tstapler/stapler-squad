@@ -9,9 +9,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const (
@@ -72,6 +74,13 @@ func ptrFromAddr(addr uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe
 
 func load() error {
 	loadOnce.Do(func() {
+		// RegisterLibFunc panics on a missing symbol; Once is spent either way,
+		// so record it or later callers would hit nil func vars.
+		defer func() {
+			if r := recover(); r != nil {
+				loadErr = fmt.Errorf("fsevents: load: %v", r)
+			}
+		}()
 		cf, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err != nil {
 			loadErr = fmt.Errorf("fsevents: dlopen CoreFoundation: %w", err)
@@ -120,6 +129,13 @@ func load() error {
 // streamCallback is the FSEventStreamCallback. It runs on the run-loop thread
 // that called CFRunLoopRunInMode, which is a Go-created, locked thread.
 func streamCallback(_ uintptr, info uintptr, numEvents uintptr, paths uintptr, flags uintptr, ids uintptr) {
+	// A panic unwinding through the C frames of the run loop would kill the
+	// process over a file-watch callback.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("fsevents: callback panicked (recovered)", "panic", r)
+		}
+	}()
 	registryMu.Lock()
 	s := registry[info]
 	registryMu.Unlock()
@@ -141,6 +157,10 @@ type Stream struct {
 	handle  uintptr // FSEventStreamRef, valid while running
 	rl      uintptr // run loop ref, valid while running
 	stopReq atomic.Bool
+	// flushMu keeps the stream ref alive across FlushSync: run takes the write
+	// lock to release it. FlushSync must not be called from OnEvents (it waits
+	// on callbacks delivered by the run-loop thread).
+	flushMu sync.RWMutex
 	done    chan struct{}
 }
 
@@ -218,15 +238,21 @@ func (s *Stream) run(ready chan<- error) {
 	ready <- nil
 
 	for !s.stopReq.Load() {
-		cfRunLoopRunInMode(cfRunLoopDefaultMode, runLoopSlice, 0)
+		// 1 == kCFRunLoopRunFinished: nothing left to run, so the call returned
+		// at once; wait out the slice instead of spinning.
+		if cfRunLoopRunInMode(cfRunLoopDefaultMode, runLoopSlice, 0) == 1 {
+			time.Sleep(time.Duration(runLoopSlice * float64(time.Second)))
+		}
 	}
 
+	s.flushMu.Lock()
 	s.mu.Lock()
 	s.handle, s.rl = 0, 0
 	s.mu.Unlock()
 	fsStreamStop(h)
 	fsStreamInvalidate(h)
 	fsStreamRelease(h)
+	s.flushMu.Unlock()
 }
 
 func (s *Stream) makePathArray() (uintptr, error) {
@@ -279,6 +305,8 @@ func (s *Stream) Stop() {
 // FlushSync blocks until all events up to now have been delivered, giving
 // read-your-writes before a query. No-op if the stream isn't running.
 func (s *Stream) FlushSync() {
+	s.flushMu.RLock()
+	defer s.flushMu.RUnlock()
 	s.mu.Lock()
 	h := s.handle
 	s.mu.Unlock()

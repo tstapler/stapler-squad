@@ -54,9 +54,25 @@ func (s *Scanner) startTreeWatch(ctx context.Context) {
 		log.Warn("working-tree watcher unavailable, using backstop tick only", "err", err)
 		return
 	}
+	s.installTreeWatcher(ctx, tw)
+}
+
+// installTreeWatcher publishes tw, replays already-tracked repos into it and
+// ties its lifetime to ctx.
+func (s *Scanner) installTreeWatcher(ctx context.Context, tw treeWatcher) {
 	s.mu.Lock()
 	s.treeWatch = tw
 	s.mu.Unlock()
+	// Repos added before Start would otherwise sit on the stretched backstop
+	// with no event source.
+	s.repoSet.Range(func(k, _ any) bool {
+		if repo, ok := k.(string); ok {
+			if err := tw.Add(repo); err != nil {
+				log.Debug("could not watch working tree", "repo", repo, "err", err)
+			}
+		}
+		return true
+	})
 	s.wg.Go(func() {
 		<-ctx.Done()
 		tw.Close()

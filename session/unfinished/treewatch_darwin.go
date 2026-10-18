@@ -3,12 +3,17 @@
 package unfinished
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/tstapler/stapler-squad/internal/fsevents"
 )
+
+// errTreeWatcherClosed is returned by Add once the watcher has been closed, so
+// a late AddRepo can't start a stream nothing will stop.
+var errTreeWatcherClosed = errors.New("working-tree watcher closed")
 
 // fseventsTreeWatcher runs one FSEvents stream per tracked repo root.
 // Streams start at SinceNow: persisting event IDs across restarts is not done
@@ -17,6 +22,7 @@ type fseventsTreeWatcher struct {
 	onChange treeChangeFunc
 	mu       sync.Mutex
 	streams  map[string]*fsevents.Stream
+	closed   bool
 }
 
 func newTreeWatcher(onChange treeChangeFunc) (treeWatcher, error) {
@@ -26,6 +32,9 @@ func newTreeWatcher(onChange treeChangeFunc) (treeWatcher, error) {
 func (w *fseventsTreeWatcher) Add(repoRoot string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return errTreeWatcherClosed
+	}
 	if _, ok := w.streams[repoRoot]; ok {
 		return nil
 	}
@@ -39,18 +48,20 @@ func (w *fseventsTreeWatcher) Add(repoRoot string) error {
 		Paths:     []string{real},
 		SinceWhen: fsevents.SinceNow,
 		OnEvents: func(evs []fsevents.Event) {
+			// One onChange per batch (a build or checkout delivers thousands).
+			scope, relevant := gitEventRepoRoot, false
 			for _, e := range evs {
-				// .git is already covered (with finer classification) by fsnotifyLoop.
-				if strings.HasPrefix(e.Path+string(filepath.Separator), gitPrefix) && !e.Flags.NeedsRescan() {
-					continue
-				}
-				if e.Flags&fsevents.HistoryDone != 0 {
-					continue
-				}
-				scope := gitEventRepoRoot
 				if e.Flags.NeedsRescan() {
-					scope = gitEventAllWorktrees
+					scope, relevant = gitEventAllWorktrees, true
+					break
 				}
+				// .git is already covered (with finer classification) by fsnotifyLoop.
+				if e.Flags&fsevents.HistoryDone != 0 || strings.HasPrefix(e.Path+string(filepath.Separator), gitPrefix) {
+					continue
+				}
+				relevant = true
+			}
+			if relevant {
 				w.onChange(repoRoot, scope)
 			}
 		},
@@ -77,6 +88,7 @@ func (w *fseventsTreeWatcher) Remove(repoRoot string) {
 
 func (w *fseventsTreeWatcher) Close() {
 	w.mu.Lock()
+	w.closed = true
 	streams := w.streams
 	w.streams = make(map[string]*fsevents.Stream)
 	w.mu.Unlock()
