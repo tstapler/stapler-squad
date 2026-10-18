@@ -41,7 +41,7 @@ VERIFIED population (commands run 2026-10-17 in this worktree):
 
 | | graph | Default built-in guards | Configured operator gates | `override_reason` | on denial |
 |---|---|---|---|---|---|
-| `operator` | Configured graph UNION `SystemRequiredEdges()` | yes | yes | non-empty bypasses guards and gates, never the graph (ADR-001) | error to the human; no stuck reason |
+| `operator` | Configured graph UNION `SystemRequiredEdges()` | yes | yes | Default guards get the input unchanged (their own, narrower override semantics preserved); a non-empty reason additionally bypasses Configured operator gates, never the graph and never a Default guard that ignores override (ADR-001, W0 errata) | error to the human; no stuck reason |
 | `agent` | same | yes | yes | ignored (an agent must not bypass a `human_approval` gate) | error to the agent with a next-step hint, plus reporter call |
 | `system` | same | per caller registry (`BuiltIn` only where the path asks for guards today: `transitionWithGuard` callers, `AttachSessionToItem`; otherwise `None`) | yes | none exists | reporter call; the caller's own handling still runs |
 

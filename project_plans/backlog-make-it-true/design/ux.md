@@ -118,7 +118,7 @@ Also: replace the page description at `backlog-stages/page.tsx:151-154`, which c
 
 ## 4. S3 Quota page: `/settings/backlog-quota` (Story 2.2.1)
 
-**Entry:** a Link tile "Backlog Quota" on the Settings index (`/settings`, `data-testid="settings-backlog-quota-link"`; the Settings layout has no nav list), plus a link from the quota flag row on the Features page. **Exit:** Revert (restores read-back values), nav away; **unsaved edits are guarded (UX-38):** a visible "Unsaved changes" status line (`backlog-quota-status`, announced once per transition) plus Revert, and a leave guard: `beforeunload` while dirty, and an `AlertConfirmDialog` "Discard unsaved changes?" (initial focus "Keep editing", confirm "Discard") for same-origin in-app link clicks and browser Back. Limit: the Next.js app router has no route-change veto, so programmatic `router.push` from other code is not covered. On a phone this stops an accidental back-swipe from losing the edits.
+**Entry:** a Link entry "Backlog Quota" on the Settings index (a plain `<Link>` like the other `helpLink` entries, not a tile; also registered in `web-app/src/lib/nav-pages.ts`) (`/settings`, `data-testid="settings-backlog-quota-link"`; the Settings layout has no nav list), plus a link from the quota flag row on the Features page. **Exit:** Revert (restores read-back values), nav away; **unsaved edits are guarded (UX-38):** a visible "Unsaved changes" status line (`backlog-quota-status`, announced once per transition) plus Revert, and a leave guard: `beforeunload` while dirty, and an `AlertConfirmDialog` "Discard unsaved changes?" (initial focus "Keep editing", confirm "Discard") for same-origin in-app link clicks and browser Back. Limit: the Next.js app router has no route-change veto, so programmatic `router.push` from other code is not covered. On a phone this stops an accidental back-swipe from losing the edits.
 
 ```
 +------------------------------------------------------+
@@ -205,7 +205,7 @@ S2 Features page
 17. UX-17: Loading state shows `aria-busy` skeleton rows with no switch rendered as Off.
 
 S3 Quota page
-18. UX-18: Page is reachable from the Settings index tile (`settings-backlog-quota-link`) and from the Features quota row; both links work.
+18. UX-18: Page is reachable from the Settings index link (`settings-backlog-quota-link`) and from the Features quota row; both links work.
 19. UX-19: With gate on and budget 0, a static warning `getByTestId("backlog-quota-warning")` shows "Gate is on but no budget is set, so the proactive signal never fires" (visible text, no `role`; the budget input's `aria-describedby` resolves to it) and its appearance after an edit is announced once through `backlog-quota-status`; "0 = proactive headroom signal disabled" is always visible text.
 20. UX-20: Cross-field violation (pause 60 + resume 50), or a pause or resume value of 0 (range 1-100), shows an inline error with `aria-invalid` and `aria-describedby` reading "Pause threshold plus resume margin must be at most 100"; entered values and focus are kept; the summary `role="alert"` links to the first invalid field.
 21. UX-21: Save success shows "Applied" only after read-back equals the entered values; a differing read-back shows a `role="alert"` mismatch message instead.
