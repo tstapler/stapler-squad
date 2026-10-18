@@ -1,6 +1,8 @@
 # BUG-112: Production's tymuxd is unpinned (PATH-resolved), and no tagged release has the Unix-socket feature BUG-106's fix depends on [SEVERITY: High]
 
-**Status**: 🐛 Open (gap 2 fixed 2026-09-14; gap 1 remains, blocked on upstream)
+**Status**: ✅ Fixed (gap 2 fixed 2026-09-14; gap 1 fixed 2026-10-18 — `TYMUX_VERSION` bumped to
+`v1.3.0`, the first tagged `tymux` release carrying the Unix-socket feature from
+`tstapler/tymux#44`, first tagged in `v1.2.0`)
 **Discovered**: 2026-09-12, wiring CI to fetch a real tymuxd binary for `session/tymux/supervise_integration_test.go` (BUG-106/BUG-110's coverage): the fetched, checksum-pinned `TYMUX_VERSION` release behaved differently from the `tymuxd` this machine had on `$PATH`, which is what this session's earlier live-incident investigation and manual verification actually exercised. Filed upstream as `tstapler/tymux#46`.
 
 ## Problem Description
@@ -56,12 +58,12 @@ than one that happens to have a newer build lying around.
 Two independent decisions:
 
 1. **Bump `TYMUX_VERSION`** once an upstream `tymux` release ships the Unix-socket feature
-   (tracked: `tstapler/tymux#46`) — `scripts/tymuxd-checksums.txt` needs a new pinned entry per the
-   file's own header instructions once one exists. **Still open.** `TYMUX_VERSION` was bumped to
-   the current latest tag, `v1.1.0` (2026-09-14, `Makefile`), but that release still lacks the
-   feature (confirmed via the same `strings`/two-processes-no-collision checks as `v1.0.0` — see
-   `scripts/tymuxd-checksums.txt`'s v1.1.0 comment block) — this is a version bump, not this gap's
-   fix, done because it was the latest available tag regardless.
+   (tracked: `tstapler/tymux#46`). ✅ Fixed 2026-10-18: the feature (`tstapler/tymux#44`) first
+   shipped in tagged release `v1.2.0`; `TYMUX_VERSION` is now bumped to `v1.3.0` (the latest tag at
+   fix time), with a new pinned `scripts/tymuxd-checksums.txt` entry. Confirmed via
+   `strings tymuxd | grep TYMUXD_SOCKET_PATH` returning real matches (the `--socket-path` flag help
+   text and the bind-collision error message) on all four v1.3.0 release binaries, and
+   `tymuxd --version` reporting `tymuxd 1.3.0`.
 2. **Make `make install-service` actually embed the pinned binary.** ✅ Fixed 2026-09-14:
    `install-service` now depends on `build-embedded-tymux` instead of plain `build`, and
    `build-embedded`/`build-embedded-tymux` gained the `ensure-tools proto-gen ent-gen
