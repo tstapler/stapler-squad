@@ -123,8 +123,16 @@ describe("ConnectionIndicator", () => {
 
   it("ConnectionIndicator_should_showAttemptCountInTooltip_When_reconnectAttemptCountIsThree", async () => {
     renderWithStore("stale", 3);
-    await userEvent.hover(screen.getByRole("button"));
+    await userEvent.hover(screen.getByRole("button").parentElement as HTMLElement);
     expect((await screen.findAllByText(/attempt 3/)).length).toBeGreaterThan(0);
+  });
+
+  it("ConnectionIndicator_should_showTooltip_When_connectedAndButtonIsDisabled", async () => {
+    renderWithStore("connected");
+    const btn = screen.getByRole("button");
+    expect(btn).toBeDisabled();
+    await userEvent.hover(btn.parentElement as HTMLElement);
+    expect((await screen.findAllByText(/Live — session data is up to date/)).length).toBeGreaterThan(0);
   });
 
   it("ConnectionIndicator_should_showReconnectingLabel_When_stateIsStaleOrDisconnected", () => {
