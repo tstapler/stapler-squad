@@ -16,6 +16,8 @@ type memBackend struct {
 	roots map[string]*memTree
 	// ShortRead, when > 0, caps the bytes any single Read returns (ReadAt must stay whole by contract).
 	ShortRead int
+	// OnRead, when set, runs before every handle Read with the buffer length (fault injection: change the file mid-pass).
+	OnRead func(readLen int)
 }
 
 type memNode struct {
@@ -118,7 +120,7 @@ func (r *memRoot) Open(p ResolvedPath) (FileHandle, error) {
 	if n.mode.IsDir() {
 		return nil, &fs.PathError{Op: "open", Path: string(p), Err: errors.New("is a directory")}
 	}
-	return &memFileHandle{name: path.Base(string(p)), n: n, r: bytes.NewReader(n.data), short: r.b.ShortRead}, nil
+	return &memFileHandle{name: path.Base(string(p)), n: n, r: bytes.NewReader(n.data), short: r.b.ShortRead, onRead: r.b.OnRead}, nil
 }
 
 type memFileInfo struct {
@@ -134,10 +136,11 @@ func (i memFileInfo) IsDir() bool        { return i.n.mode.IsDir() }
 func (i memFileInfo) Sys() any           { return nil }
 
 type memFileHandle struct {
-	name  string
-	n     *memNode
-	r     *bytes.Reader
-	short int
+	name   string
+	n      *memNode
+	r      *bytes.Reader
+	short  int
+	onRead func(readLen int)
 }
 
 func (h *memFileHandle) clip(p []byte) []byte {
@@ -147,7 +150,13 @@ func (h *memFileHandle) clip(p []byte) []byte {
 	return p
 }
 
-func (h *memFileHandle) Read(p []byte) (int, error)                { return h.r.Read(h.clip(p)) }
+func (h *memFileHandle) Read(p []byte) (int, error) {
+	if h.onRead != nil {
+		h.onRead(len(p))
+	}
+	return h.r.Read(h.clip(p))
+}
+
 func (h *memFileHandle) ReadAt(p []byte, off int64) (int, error)   { return h.r.ReadAt(p, off) }
 func (h *memFileHandle) Seek(off int64, whence int) (int64, error) { return h.r.Seek(off, whence) }
 func (h *memFileHandle) Close() error                              { return nil }

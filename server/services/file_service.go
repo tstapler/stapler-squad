@@ -288,7 +288,7 @@ func (fs *FileService) StatFile(
 	ctx context.Context,
 	req *connect.Request[sessionv1.StatFileRequest],
 ) (*connect.Response[sessionv1.StatFileResponse], error) {
-	resp, err := fs.ops.Stat(ctx, req.Msg.SessionId, req.Msg.Path)
+	resp, err := fs.ops.StatWith(ctx, req.Msg)
 	if err != nil {
 		return nil, err
 	}

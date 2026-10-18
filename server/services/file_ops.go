@@ -43,6 +43,8 @@ type FileOps struct {
 	policy  FilePolicy
 	backend FileBackend
 	epoch   flagEpoch
+	// analysis caches background whole-file passes for range reads and StatFile.
+	analysis *analysisCache
 }
 
 // NewFileOps builds FileOps over a backend; a nil Flags reads the live global flags
@@ -54,11 +56,12 @@ func NewFileOps(policy FilePolicy, backend FileBackend) *FileOps {
 	if policy.Telemetry == nil {
 		policy.Telemetry = noopFilesTelemetry{}
 	}
-	return &FileOps{policy: policy, backend: backend}
+	return &FileOps{policy: policy, backend: backend, analysis: newAnalysisCache(analysisCacheEntries, analysisDefaultParallel)}
 }
 
 // opsRequest is a request after workspace lookup and path confinement.
 type opsRequest struct {
+	Dir       string // worktree directory the root was opened on
 	Root      FileRoot
 	Resolved  ResolvedPath
 	ViaLink   bool
@@ -80,7 +83,7 @@ func (o *FileOps) resolve(ref FileRef, mode AccessMode) (*opsRequest, error) {
 		_ = root.Close()
 		return nil, err
 	}
-	return &opsRequest{Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
+	return &opsRequest{Dir: dir, Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
 }
 
 // GetContent serves a whole-file read; text above maxFileSize is refused.
@@ -101,18 +104,27 @@ func (o *FileOps) GetContent(ctx context.Context, sessionID, relPath string) (*s
 
 // Stat returns the token, size and read-only reason without content.
 func (o *FileOps) Stat(ctx context.Context, sessionID, relPath string) (*sessionv1.StatFileResponse, error) {
+	return o.StatWith(ctx, &sessionv1.StatFileRequest{SessionId: sessionID, Path: relPath})
+}
+
+// StatWith is Stat plus the whole-file analysis fields the request asks for.
+func (o *FileOps) StatWith(ctx context.Context, req *sessionv1.StatFileRequest) (*sessionv1.StatFileResponse, error) {
 	if err := o.Require(ctx, sessionv1.FileOp_FILE_OP_STAT); err != nil {
 		return nil, err
 	}
-	fr, err := o.readFileFacts(sessionID, relPath)
+	fr, err := o.readFileFacts(req.SessionId, req.Path)
 	if err != nil {
 		return nil, err
 	}
-	return &sessionv1.StatFileResponse{
+	resp := &sessionv1.StatFileResponse{
 		VersionToken:   fr.Token.String(),
 		Size:           fr.Size,
 		ReadOnlyReason: fr.Reason,
-	}, nil
+	}
+	if req.WantAnalysis || req.WantSha256 {
+		o.fillAnalysis(ctx, resp, fr, req.WantSha256)
+	}
+	return resp, nil
 }
 
 // fileRead is everything one read of a file establishes; GetContent and Stat project it.
@@ -127,6 +139,7 @@ type fileRead struct {
 	Reason      sessionv1.ReadOnlyReason
 	Token       FileVersionToken
 	Body        []byte // raw bytes read (at most truncateSize), BOM stripped
+	Src         fileSource
 }
 
 func (fr *fileRead) contentResponse() *sessionv1.GetFileContentResponse {
@@ -175,7 +188,12 @@ func (o *FileOps) readFileFacts(sessionID, relPath string) (*fileRead, error) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open file"))
 	}
 	defer func() { _ = f.Close() }()
-	return classifyOpenFile(f, rr, relPath, info)
+	fr, err := classifyOpenFile(f, rr, relPath, info)
+	if err != nil {
+		return nil, err
+	}
+	fr.Src = newFileSource(rr, info)
+	return fr, nil
 }
 
 // classifyOpenFile sniffs, caps and classifies an opened file.
