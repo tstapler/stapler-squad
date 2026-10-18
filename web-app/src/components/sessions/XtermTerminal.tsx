@@ -29,7 +29,7 @@ import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type Termina
 import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
-import { pointToCell, rafThrottlePoint, getTerminalRowText, type CellGeometry } from "@/lib/terminal/touchDrag";
+import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import {
@@ -997,12 +997,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
           let cancelSelectThrottle: (() => void) | null = null;
 
-          // Fixed size so positioning needs no layout read inside the RAF callback.
-          const MAGNIFIER_WIDTH = 200;
-          const MAGNIFIER_HEIGHT = 32;
-          const MAGNIFIER_GAP = 56; // clears the finger and fingertip occlusion
-          const MAGNIFIER_EDGE = 8;
-
           const hideMagnifier = () => {
             const mag = magnifierRef.current;
             if (mag) mag.style.display = 'none';
@@ -1021,11 +1015,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
               cursorEl,
               document.createTextNode(text.slice(cursorOffset + 1)),
             );
-            const maxLeft = Math.max(MAGNIFIER_EDGE, window.innerWidth - MAGNIFIER_WIDTH - MAGNIFIER_EDGE);
-            mag.style.width = `${MAGNIFIER_WIDTH}px`;
-            mag.style.height = `${MAGNIFIER_HEIGHT}px`;
-            mag.style.left = `${Math.max(MAGNIFIER_EDGE, Math.min(maxLeft, clientX - MAGNIFIER_WIDTH / 2))}px`;
-            mag.style.top = `${Math.max(MAGNIFIER_EDGE, clientY - MAGNIFIER_HEIGHT - MAGNIFIER_GAP)}px`;
+            const { left, top } = computeMagnifierPosition(clientX, clientY, window.innerWidth);
+            mag.style.left = `${left}px`;
+            mag.style.top = `${top}px`;
             mag.style.display = 'block';
           };
 

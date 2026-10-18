@@ -1,4 +1,4 @@
-import { getTerminalRowText, type RowTextSource } from "../touchDrag";
+import { getTerminalRowText, computeMagnifierPosition, type RowTextSource } from "../touchDrag";
 
 const LINE = Array.from({ length: 80 }, (_, i) => String.fromCharCode(97 + (i % 26))).join("");
 
@@ -56,5 +56,17 @@ describe("getTerminalRowText", () => {
     const term = makeTerm({ viewportY: 100, lines: { 0: "wrong", 102: LINE.toUpperCase() } });
     const r = getTerminalRowText(term, 2, 40);
     expect(r.text).toBe(LINE.toUpperCase().slice(30, 50));
+  });
+});
+
+describe('computeMagnifierPosition', () => {
+  it.each([
+    { name: 'centered above touch', x: 400, y: 300, vw: 800, left: 300, top: 212 },
+    { name: 'clamps to left edge', x: 10, y: 300, vw: 800, left: 8, top: 212 },
+    { name: 'clamps to right edge', x: 790, y: 300, vw: 800, left: 592, top: 212 },
+    { name: 'clamps to top edge', x: 400, y: 20, vw: 800, left: 300, top: 8 },
+    { name: 'viewport narrower than bubble', x: 100, y: 300, vw: 150, left: 8, top: 212 },
+  ])('$name', ({ x, y, vw, left, top }) => {
+    expect(computeMagnifierPosition(x, y, vw)).toEqual({ left, top });
   });
 });

@@ -1,4 +1,5 @@
 import { style, globalStyle, keyframes } from "@vanilla-extract/css";
+import { MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT } from "@/lib/terminal/touchDrag";
 import { vars, zIndex } from "@/styles/theme.css";
 
 export const container = style({
@@ -248,6 +249,8 @@ export const selectionHandle = style({
 // Shown/positioned by direct DOM mutation from the RAF-throttled drag handler.
 export const selectionMagnifier = style({
   position: "fixed",
+  width: MAGNIFIER_WIDTH,
+  height: MAGNIFIER_HEIGHT,
   zIndex: 1091,
   pointerEvents: "none",
   userSelect: "none",

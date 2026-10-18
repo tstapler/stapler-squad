@@ -104,3 +104,22 @@ export function getTerminalRowText(
   const text = (line?.translateToString(false, startCol, endCol) ?? '').padEnd(endCol - startCol, ' ');
   return { text, cursorOffset: activeCol - startCol };
 }
+
+/** Fixed bubble size so positioning needs no layout read inside the RAF callback. */
+export const MAGNIFIER_WIDTH = 200;
+export const MAGNIFIER_HEIGHT = 32;
+const MAGNIFIER_GAP = 56; // clears the finger and fingertip occlusion
+const MAGNIFIER_EDGE = 8;
+
+/** Top-left of the magnifier bubble: centered above the touch point, kept inside the viewport width. */
+export function computeMagnifierPosition(
+  clientX: number,
+  clientY: number,
+  viewportWidth: number
+): { left: number; top: number } {
+  const maxLeft = Math.max(MAGNIFIER_EDGE, viewportWidth - MAGNIFIER_WIDTH - MAGNIFIER_EDGE);
+  return {
+    left: Math.max(MAGNIFIER_EDGE, Math.min(maxLeft, clientX - MAGNIFIER_WIDTH / 2)),
+    top: Math.max(MAGNIFIER_EDGE, clientY - MAGNIFIER_HEIGHT - MAGNIFIER_GAP),
+  };
+}
