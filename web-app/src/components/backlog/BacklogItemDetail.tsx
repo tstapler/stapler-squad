@@ -37,7 +37,7 @@ import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
 import { ItemClaimBanner } from "./ItemClaimBanner";
 import { BacklogItemForm } from "./BacklogItemForm";
-import { AcCriteriaList } from "./AcCriteriaList";
+import { AcCriteriaSection } from "./detail/AcCriteriaSection";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
@@ -108,6 +108,19 @@ export const STEER_AUDIT_UNAVAILABLE_MESSAGE = "Audit log unavailable, steer not
 
 export function steerFailureMessage(raw: string): string {
   return /audit log unavailable/i.test(raw) ? STEER_AUDIT_UNAVAILABLE_MESSAGE : raw;
+}
+
+/** Inert divider between accordion groups: aria-hidden, and not an AccordionItem, so it stays out of keyboard nav. */
+function GroupLabel({ children }: { children: string }) {
+  return (
+    <div
+      className={styles.sectionGroupLabel}
+      aria-hidden="true"
+      data-testid={`section-group-label-${children.toLowerCase().replace(/ /g, "-")}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
@@ -466,6 +479,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
   const [sourceExpanded, setSourceExpanded] = useSectionExpandState(itemId, "source", false);
+  // Status-dependent default (review/pr_pending) is applied in the initial-expand effect below.
+  const [acCriteriaExpanded, setAcCriteriaExpanded] = useSectionExpandState(itemId, "ac-criteria", false);
   const [manualOverrideExpanded, setManualOverrideExpanded] = useSectionExpandState(itemId, "manual-override", false);
 
   // Story 3.1.5: applies each status-dependent section's real default
@@ -506,6 +521,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ) {
       setVersionControlExpanded(true);
     }
+    if (["review", "pr_pending"].includes(item.status) && !hasStoredPreference("ac-criteria")) {
+      setAcCriteriaExpanded(true);
+    }
     if (item.notes && !hasStoredPreference("notes")) {
       setNotesExpanded(true);
     }
@@ -528,6 +546,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["activity-log", activityLogExpanded, setActivityLogExpanded],
     ["notes", notesExpanded, setNotesExpanded],
     ["source", sourceExpanded, setSourceExpanded],
+    ["ac-criteria", acCriteriaExpanded, setAcCriteriaExpanded],
     ["manual-override", manualOverrideExpanded, setManualOverrideExpanded],
   ];
   const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
@@ -1757,14 +1776,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           />
         )}
 
-        {/* Acceptance Criteria */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>
-            Acceptance Criteria ({item.acCriteria.filter((c) => c.status === "done").length}/{item.acCriteria.length})
-          </h3>
-          <AcCriteriaList criteria={item.acCriteria} />
-        </div>
-
         {/* Secondary sections — sibling CollapsibleSections sharing one
             CollapsibleGroup so their headers get Home/End/Arrow roving-
             tabindex keyboard nav across all of them (Task 3.1.4i; the
@@ -1781,6 +1792,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             Reviewing/Pull Request, extracted in Story 3.1.2) can share one
             contiguous Radix Root. */}
         <CollapsibleGroup value={openSectionKeys} onValueChange={handleGroupValueChange}>
+          {/* Same gates as the three Decision sections below */}
+          {(item.status === "review" || item.status === "pr_pending" || !!item.gateVerdict) && (
+            <GroupLabel>Decision</GroupLabel>
+          )}
           {item.status === "review" && (
             <ReviewingSection
               item={item}
@@ -1814,6 +1829,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             />
           )}
 
+          <GroupLabel>Reference</GroupLabel>
           {item.externalUrl && (
             <SourceSection
               externalUrl={item.externalUrl}
@@ -1826,10 +1842,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
           <DescriptionSection item={item} defaultExpanded={descriptionExpanded} />
 
+          <AcCriteriaSection item={item} defaultExpanded={acCriteriaExpanded} />
+
           {item.planArtifactsPath && (
             <PlanArtifactsSection item={item} defaultExpanded={planArtifactsExpanded} />
           )}
 
+          <GroupLabel>Monitoring</GroupLabel>
           <VersionControlSection
             item={item}
             widgetData={vcsWidgetData}
@@ -1865,6 +1884,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <ItemStageCostTable rows={itemStageCostRows} />
           )}
 
+          <GroupLabel>Audit Trail</GroupLabel>
           <SessionsSection
             item={item}
             pipelineModes={pipelineModes}
@@ -1883,6 +1903,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
           <ActivityLogSection item={item} defaultExpanded={activityLogExpanded} />
 
+          <GroupLabel>Admin</GroupLabel>
           <NotesSection
             item={item}
             actionLoading={actionLoading}
