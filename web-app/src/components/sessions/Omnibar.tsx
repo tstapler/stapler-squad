@@ -76,7 +76,9 @@ import {
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
 import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
 import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
-import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
+import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -277,6 +279,39 @@ export function Omnibar({
 }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
+  const { createBacklogItemFromChat } = useBacklogService();
+  const { trackItem } = useBacklogCreationNotifier();
+  const { addNotification } = useNotificationCommands();
+  const createBacklogItemInBackground = useCallback(
+    async (text: string) => {
+      let result: Awaited<ReturnType<typeof createBacklogItemFromChat>> = null;
+      try {
+        result = await createBacklogItemFromChat(text);
+      } catch {
+        // fall through to the failure notification
+      }
+      if (!result) {
+        addNotification({
+          sessionId: "",
+          sessionName: "",
+          title: "Failed to create backlog item",
+          message: `Your text was not saved: ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
+          notificationType: "error",
+        });
+        return;
+      }
+      trackItem(result.item.id, result.item.title);
+      addNotification({
+        sessionId: "",
+        sessionName: "",
+        title: "Backlog item created — triage starting",
+        message: result.item.title,
+        notificationType: "info",
+        onView: () => router.push(`/backlog?item=${result.item.id}`),
+      });
+    },
+    [createBacklogItemFromChat, trackItem, addNotification, router]
+  );
 
   // Input state
   const [input, setInput] = useState("");
@@ -1747,8 +1782,8 @@ export function Omnibar({
     );
   }
 
-  // Compose mode: dedicated textarea; Create hands the text to the AI intent
-  // review (same step as the "backlog: " prefix path).
+  // Compose mode: dedicated textarea; Create closes the omnibar and creates the
+  // item in the background, with triage progress reported via notifications.
   if (backlogComposeText !== null) {
     return (
       <div
@@ -1764,7 +1799,8 @@ export function Omnibar({
             initialText={backlogComposeText}
             onSubmit={(text) => {
               setBacklogComposeText(null);
-              setBacklogReviewText(text);
+              onClose();
+              void createBacklogItemInBackground(text);
             }}
             onCancel={(draft) => {
               setInput(draft);

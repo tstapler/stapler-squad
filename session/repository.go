@@ -474,6 +474,8 @@ type BacklogItemData struct {
 	TriggeredByChainDepth int
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+	// HasPendingGuidanceRequests is derived at read/publish time, not stored.
+	HasPendingGuidanceRequests bool
 	// ItemSessions holds the eagerly-loaded item sessions for this backlog item.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	ItemSessions []ItemSessionSummary
@@ -506,28 +508,29 @@ type BacklogItemData struct {
 // setting every one of these fields to stay in parity with the full
 // BacklogItemData/backlogItemToProto path.
 type BacklogItemSummary struct {
-	ID                  string               `json:"id"`
-	PublicIDRaw         string               `json:"public_id"`
-	ExternalID          string               `json:"external_id"`
-	ExternalURL         string               `json:"external_url"`
-	SourcePluginID      string               `json:"source_plugin_id"`
-	Labels              []string             `json:"labels"`
-	Title               string               `json:"title"`
-	Status              BacklogStatus        `json:"status"`
-	Priority            int                  `json:"priority"`
-	RepoPath            string               `json:"repo_path"`
-	AcceptanceCriteria  AcCriteriaJSON       `json:"acceptance_criteria"`
-	Notes               string               `json:"notes"`
-	PrURL               string               `json:"pr_url"`
-	PrNumber            int                  `json:"pr_number"`
-	CreatedAt           time.Time            `json:"created_at"`
-	UpdatedAt           time.Time            `json:"updated_at"`
-	ArchivedAt          *time.Time           `json:"archived_at"`
-	ItemSessions        []ItemSessionSummary `json:"-"`
-	SkipPlanning        bool                 `json:"skip_planning"`
-	PlanApproved        bool                 `json:"plan_approved"`
-	PlanArtifactsPath   string               `json:"plan_artifacts_path"`
-	PlanRejectionReason string               `json:"plan_rejection_reason"`
+	ID                         string               `json:"id"`
+	PublicIDRaw                string               `json:"public_id"`
+	ExternalID                 string               `json:"external_id"`
+	ExternalURL                string               `json:"external_url"`
+	SourcePluginID             string               `json:"source_plugin_id"`
+	HasPendingGuidanceRequests bool                 `json:"-"` // derived at read time
+	Labels                     []string             `json:"labels"`
+	Title                      string               `json:"title"`
+	Status                     BacklogStatus        `json:"status"`
+	Priority                   int                  `json:"priority"`
+	RepoPath                   string               `json:"repo_path"`
+	AcceptanceCriteria         AcCriteriaJSON       `json:"acceptance_criteria"`
+	Notes                      string               `json:"notes"`
+	PrURL                      string               `json:"pr_url"`
+	PrNumber                   int                  `json:"pr_number"`
+	CreatedAt                  time.Time            `json:"created_at"`
+	UpdatedAt                  time.Time            `json:"updated_at"`
+	ArchivedAt                 *time.Time           `json:"archived_at"`
+	ItemSessions               []ItemSessionSummary `json:"-"`
+	SkipPlanning               bool                 `json:"skip_planning"`
+	PlanApproved               bool                 `json:"plan_approved"`
+	PlanArtifactsPath          string               `json:"plan_artifacts_path"`
+	PlanRejectionReason        string               `json:"plan_rejection_reason"`
 }
 
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
