@@ -6,6 +6,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { FilesTabView } from "./pages/files-tab.page";
 
+// Wide enough that the tree and the editor show side by side; a narrow container shows one at a time.
+test.use({ viewport: { width: 1900, height: 1000 } });
+
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 
 /** Counts keydowns and how many were cancelled, as seen after the app's own window listener ran. */
@@ -14,6 +17,8 @@ async function watchKeydowns(page: Page): Promise<void> {
     const w = window as unknown as { __chord: { seen: number; prevented: number } };
     w.__chord = { seen: 0, prevented: 0 };
     window.addEventListener("keydown", (e) => {
+      // Pressing "Alt+KeyW" also fires a keydown for the modifier itself; count only the chord's key.
+      if (["Alt", "Control", "Meta", "Shift"].includes(e.key)) return;
       w.__chord.seen += 1;
       if (e.defaultPrevented) w.__chord.prevented += 1;
     });
@@ -29,14 +34,8 @@ test.describe("Files shortcuts", () => {
     await files.treeFile("long.txt").click();
     await watchKeydowns(page);
 
-    // Alt+W closes the tab; open another first so the chord has something to act on.
     await files.treeFile("a.txt").click();
     await expect(page.getByRole("tab", { name: /^a\.txt/ })).toBeVisible();
-    await files.searchBox.focus();
-    await reset(page);
-    await page.keyboard.press("Alt+KeyW");
-    await expect(page.getByRole("tab", { name: /^a\.txt/ })).toHaveCount(0);
-    expect(await tally(page)).toEqual({ seen: 1, prevented: 1 });
 
     // Alt+[ and Alt+] by physical key: Back, then Forward, each cancelled once.
     await files.searchBox.focus();
@@ -60,6 +59,14 @@ test.describe("Files shortcuts", () => {
     await page.keyboard.press(`${MOD}+p`);
     await expect(page.getByRole("combobox", { name: "Quick open file" })).toBeVisible();
     expect(await tally(page)).toEqual({ seen: 1, prevented: 1 });
+    await page.keyboard.press("Escape");
+
+    // Alt+W closes the tab. Last on purpose: it is also the window-leader chord, which arms and swallows the next key.
+    await files.searchBox.focus();
+    await reset(page);
+    await page.keyboard.press("Alt+KeyW");
+    await expect(page.getByRole("tab", { name: /^a\.txt/ })).toHaveCount(0);
+    expect(await tally(page)).toEqual({ seen: 1, prevented: 1 });
   });
 
   test("shortcuts_should_NotBePrevented_When_FocusOutsideTheFilesTab", async ({ page }) => {
@@ -69,7 +76,8 @@ test.describe("Files shortcuts", () => {
     // Another session tab hides the Files panel; the chords must belong to the browser again.
     await page.getByRole("tab", { name: "Info", exact: true }).click();
     await watchKeydowns(page);
-    for (const chord of ["Alt+BracketLeft", "Alt+BracketRight", "Alt+KeyW", `${MOD}+g`, `${MOD}+p`, `${MOD}+Shift+f`, "F4"]) {
+    // Alt+W is also the global window-leader chord (useWindowShortcuts), which is cancelled on every tab by design.
+    for (const chord of ["Alt+BracketLeft", "Alt+BracketRight", `${MOD}+g`, `${MOD}+p`, `${MOD}+Shift+f`, "F4"]) {
       await reset(page);
       await page.keyboard.press(chord);
       expect(await tally(page), chord).toMatchObject({ prevented: 0 });

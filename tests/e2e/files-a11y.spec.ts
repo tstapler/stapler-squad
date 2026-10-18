@@ -5,6 +5,9 @@
 import { test, expect } from "@playwright/test";
 import { FilesTabView } from "./pages/files-tab.page";
 
+// Wide enough that the tree and the editor show side by side; a narrow container shows one at a time.
+test.use({ viewport: { width: 1900, height: 1000 } });
+
 test.describe("Files panel separator (U-A11Y-4)", () => {
   test("separator_should_ResizeByKeyboard_And_CollapseUnchanged_When_Focused", async ({ page }) => {
     const files = await FilesTabView.create(page);

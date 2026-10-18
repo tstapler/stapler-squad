@@ -1,7 +1,7 @@
-// @feature files:tabs
+// @feature files:content-search, files:tabs
 // Phase 0 spike section of the files-viewer-revamp plan. Order: Task 0.1.1, Task 0.1.4a, Task 0.1.6a.
 import { test, expect } from "@playwright/test";
-import { FilesTabPage } from "./pages/files-tab.page";
+import { FilesTabPage, FilesTabView, seedSearchFixture } from "./pages/files-tab.page";
 
 test.describe("Task 0.1.1: server-streaming RPC delivers incrementally", () => {
   // The throwaway handler is registered by the Go lane (Task 0.1.1b); until it exists this stays skipped.
@@ -79,5 +79,31 @@ test.describe("Task 0.1.6a: accessibility tree of the Accessible view versus Cod
     expect(accessible).toHaveLength(500);
     expect(cm6.length).toBeGreaterThan(0);
     expect(cm6.length).toBeLessThan(500);
+  });
+});
+
+test.describe("Story 1.4.3: two buffers keep their scroll position", () => {
+  // Wide enough that the tree and the editor sit side by side (a narrow container shows one at a time).
+  test.use({ viewport: { width: 1900, height: 1000 } });
+
+  test("tabs_should_KeepLine900Visible_When_SwitchedToOtherBufferAndBack", async ({ page }) => {
+    const files = await FilesTabView.create(page, seedSearchFixture);
+    await files.goto();
+    await files.treeFile("big_a.go").click();
+    await page.getByRole("textbox", { name: "File: big_a.go" }).click();
+    await page.keyboard.press("Control+g");
+    await page.getByRole("textbox", { name: "Go to line" }).fill("900");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => files.activeLineText()).toContain("big_a.go line 900");
+    await expect(page.getByText("big_a.go line 900", { exact: true })).toBeInViewport();
+
+    await files.editorTab("big_a.go").dblclick(); // pin, so opening b does not replace the preview tab
+    await files.treeFile("big_b.go").click();
+    await expect(files.editorTab("big_b.go")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByText("big_a.go line 900", { exact: true })).toHaveCount(0);
+
+    await files.editorTab("big_a.go").click();
+    await expect(files.editorTab("big_a.go")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByText("big_a.go line 900", { exact: true })).toBeInViewport();
   });
 });

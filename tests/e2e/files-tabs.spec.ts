@@ -6,6 +6,9 @@ import * as path from "path";
 import { test, expect } from "@playwright/test";
 import { FilesTabView } from "./pages/files-tab.page";
 
+// Wide enough that the tree and the editor show side by side; a narrow container shows one at a time.
+test.use({ viewport: { width: 1900, height: 1000 } });
+
 test.describe("tab strip", () => {
   test("tabs_should_OpenPreviewThenPin_And_CycleWithArrows_And_CloseWithAltW", async ({ page }) => {
     const files = await FilesTabView.create(page);
@@ -19,7 +22,7 @@ test.describe("tab strip", () => {
     await page.getByRole("tab", { name: "b.txt, preview" }).dblclick();
     await expect(page.getByRole("tab", { name: "b.txt, pinned" })).toBeVisible();
     await files.treeFile("c.txt").click();
-    await expect(page.getByRole("tablist")).toContainText("c.txt");
+    await expect(page.getByRole("tablist", { name: "Open files" })).toContainText("c.txt");
 
     await page.getByRole("tab", { name: "b.txt, pinned" }).focus();
     await page.keyboard.press("ArrowRight");
@@ -55,12 +58,16 @@ test.describe("jumplist, go to line and deep links", () => {
     await page.keyboard.press("Control+g");
     await page.getByRole("textbox", { name: "Go to line" }).fill("9999");
     await page.keyboard.press("Enter");
-    await expect.poll(() => files.activeLineText()).toContain("line 300");
+    // long.txt ends with a newline, so the last line of the document is the empty line 301.
+    await expect(page.getByText(/Ln 301,/)).toBeVisible();
 
+    await page.getByRole("tab", { name: "long.txt, preview" }).dblclick(); // pinned: opening a.txt must not evict its view state
     await files.treeFile("a.txt").click();
+    await expect(page.getByRole("tab", { name: /^a\.txt/ })).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Alt+[");
     await expect(page.getByRole("tab", { name: /^long\.txt/ })).toHaveAttribute("aria-selected", "true");
-    await expect.poll(() => files.activeLineText()).toContain("line 300");
+    await expect(page.getByText(/beyond the loaded portion/)).toHaveCount(0);
+    await expect(page.getByText(/Ln 301,/)).toBeVisible();
   });
 
   test("deepLink_should_OpenPinnedAtLine_When_QueryFileAndLine", async ({ page }) => {
@@ -80,16 +87,16 @@ test.describe("stale banner", () => {
 
     await files.searchBox.focus();
     const target = path.join(files.dir, "long.txt");
-    fs.writeFileSync(target, fs.readFileSync(target, "utf8").replace("line 1\n", "line one rewritten\n"));
+    fs.writeFileSync(target, fs.readFileSync(target, "utf8").replace("line 201\n", "line two-oh-one rewritten\n"));
 
     // The active-buffer poll runs every 10 s and confirms a change one second later.
     await expect(files.staleBanner).toContainText("Changed on disk", { timeout: 20_000 });
     await expect(files.searchBox).toBeFocused();
-    await expect(page.getByText("line one rewritten")).toHaveCount(0);
+    await expect(page.getByText("line 201", { exact: true })).toBeVisible();
 
     await files.staleBanner.getByRole("button", { name: "Reload" }).click();
     await expect(files.staleBanner).toHaveCount(0);
-    await expect(page.getByText("line one rewritten")).toBeVisible();
+    await expect(page.getByText("line two-oh-one rewritten")).toBeVisible();
     await expect.poll(() => files.activeLineText()).toContain("line 200");
   });
 });

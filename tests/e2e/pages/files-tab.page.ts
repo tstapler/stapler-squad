@@ -62,12 +62,26 @@ export function seedFilesFixture(): string {
   return dir;
 }
 
+/** Worktree for the search e2e: `pkg/a.go` holds `needle_fn` on line 12; `big_a.go` and `big_b.go` are 1000 lines each. */
+export function seedSearchFixture(): string {
+  const dir = seedFilesFixture();
+  fs.mkdirSync(path.join(dir, "pkg"));
+  const a = Array.from({ length: 40 }, (_, i) => `// a.go line ${i + 1}`);
+  a[11] = "func needle_fn() {}";
+  fs.writeFileSync(path.join(dir, "pkg", "a.go"), a.join("\n") + "\n");
+  fs.writeFileSync(path.join(dir, "pkg", "b.go"), "package pkg\n");
+  for (const name of ["big_a.go", "big_b.go"]) {
+    fs.writeFileSync(path.join(dir, name), Array.from({ length: 1000 }, (_, i) => `${name} line ${i + 1}`).join("\n") + "\n");
+  }
+  return dir;
+}
+
 /** Page object for the real Files tab of a session detail view (files:viewer-v2 on). */
 export class FilesTabView {
   constructor(readonly page: Page, readonly dir: string) {}
 
-  static async create(page: Page): Promise<FilesTabView> {
-    const dir = seedFilesFixture();
+  static async create(page: Page, seed: () => string = seedFilesFixture): Promise<FilesTabView> {
+    const dir = seed();
     await suppressOnboarding(page);
     const session = await new SessionClient(BASE_URL).createSession({ title: `files-e2e-${Date.now()}`, path: dir, program: "bash" });
     const view = new FilesTabView(page, dir);
@@ -87,6 +101,24 @@ export class FilesTabView {
   get searchBox(): Locator { return this.page.getByRole("searchbox", { name: "Search files" }); }
   get staleBanner(): Locator { return this.page.getByTestId("files-stale-banner"); }
   treeFile(file: string): Locator { return this.page.getByText(file, { exact: true }).first(); }
+
+  get explorerTab(): Locator { return this.page.getByRole("tab", { name: "Explorer", exact: true }); }
+  get searchTab(): Locator { return this.page.getByRole("tab", { name: "Search", exact: true }); }
+  get searchQuery(): Locator { return this.page.getByRole("searchbox", { name: "Search file contents" }); }
+  get searchResults(): Locator { return this.page.getByRole("tree", { name: "Search results" }); }
+  get quickfixChip(): Locator { return this.page.getByRole("group", { name: "Search hits" }); }
+  editorTab(file: string): Locator { return this.page.getByRole("tab", { name: new RegExp(`^${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) }); }
+
+  /** Interaction 1: open the Search pane. */
+  async openSearch(): Promise<void> {
+    await this.searchTab.click();
+  }
+
+  /** Interaction 2: type the query and wait for the streamed hits to land. */
+  async typeQuery(pattern: string, expectedHit: string): Promise<void> {
+    await this.searchQuery.fill(pattern);
+    await this.searchResults.getByRole("treeitem", { name: new RegExp(expectedHit) }).first().waitFor();
+  }
 
   /** Text of the editor's active line; the only way to observe the cursor without CSS-class locators. */
   async activeLineText(): Promise<string> {
