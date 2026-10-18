@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
@@ -111,12 +112,12 @@ func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *eve
 
 	// The work session is never hidden; a hidden target is refused, not written to.
 	if s.sessionSteerer.IsHiddenSession(workUUID) {
-		s.notifyVerdictSteerFailed(itemID, itemTitle, workUUID, "target is a background session and is read-only")
+		s.notifyVerdictSteerFailed(ctx, itemID, itemTitle, workUUID, "target is a background session and is read-only")
 		return
 	}
 
 	if !s.waitForSteerReady(ctx, workUUID) {
-		s.notifyVerdictSteerFailed(itemID, itemTitle, workUUID, "session never went idle")
+		s.notifyVerdictSteerFailed(ctx, itemID, itemTitle, workUUID, "session never went idle")
 		return
 	}
 	// A newer verdict may have landed during the wait; delivering this one
@@ -127,10 +128,11 @@ func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *eve
 	msg := buildVerdictSteerMessage(itemID, p.Verdict)
 	if err := s.sessionSteerer.SteerActiveSession(ctx, workUUID, msg); err != nil {
 		log.WarningLog().Printf("[VerdictSteer] steer session=%s item=%s: %v", workUUID, itemID, err)
-		s.notifyVerdictSteerFailed(itemID, itemTitle, workUUID, err.Error())
+		s.notifyVerdictSteerFailed(ctx, itemID, itemTitle, workUUID, err.Error())
 		return
 	}
 	log.InfoLog().Printf("[VerdictSteer] delivered %s verdict to session=%s item=%s", p.Verdict.OverallOutcome, workUUID, itemID)
+	s.resolveVerdictUndeliveredLogged(ctx, itemID)
 }
 
 func (s *BacklogService) waitForSteerReady(ctx context.Context, sessionUUID string) bool {
@@ -171,7 +173,22 @@ func buildVerdictSteerMessage(itemID string, v *session.ReviewVerdictData) strin
 		itemID, v.OverallOutcome, summary, next)
 }
 
-func (s *BacklogService) notifyVerdictSteerFailed(itemID, itemTitle, sessionUUID, reason string) {
+// notifyVerdictSteerFailed records why a verdict could not be steered into
+// itemID's live work session: a durable StuckReasonVerdictUndelivered row
+// (so the failure survives past NotificationHistoryStore's 7-day/500-row
+// cap and shows up in get_backlog_stuck_report) alongside the existing
+// one-shot WARNING notification. Hardcodes BacklogStatusReview as the
+// expected status — a verdict can only be steered for an item that is, by
+// construction, currently in review (see dispatchVerdictSteer's caller,
+// BacklogChangeVerdictRecorded) — mirroring notifyIfActiveWorkSessionStale's
+// identical literal-constant precedent.
+func (s *BacklogService) notifyVerdictSteerFailed(ctx context.Context, itemID, itemTitle, sessionUUID, reason string) {
+	if s.storage != nil {
+		if _, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonVerdictUndelivered, session.BacklogStatusReview,
+			fmt.Sprintf("session %s did not receive its review verdict (%s)", sessionUUID, reason)); err != nil {
+			log.WarningLog().Printf("[VerdictSteer] MarkStuck(verdict_undelivered) item=%s: %v", itemID, err)
+		}
+	}
 	if s.eventBus == nil {
 		return
 	}
@@ -183,4 +200,17 @@ func (s *BacklogService) notifyVerdictSteerFailed(itemID, itemTitle, sessionUUID
 		fmt.Sprintf("%s — session %s did not receive its review verdict (%s). Tell it to run /backlog/status.", itemTitle, sessionUUID, reason),
 		map[string]string{"item_id": itemID},
 	))
+}
+
+// resolveVerdictUndeliveredLogged clears an open StuckReasonVerdictUndelivered
+// row for itemID once a verdict is actually steered into the work session,
+// logging (not returning) any storage error — mirrors
+// resolveSteerFailedLogged's shape for the PR-fix-steer sibling reason.
+func (s *BacklogService) resolveVerdictUndeliveredLogged(ctx context.Context, itemID string) {
+	if s.storage == nil {
+		return
+	}
+	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonVerdictUndelivered); err != nil {
+		log.WarningLog().Printf("[VerdictSteer] ResolveStuck(verdict_undelivered) item=%s: %v", itemID, err)
+	}
 }

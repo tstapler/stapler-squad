@@ -4317,6 +4317,66 @@ func TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOr
 	assert.Empty(t, open, "autonomous_stuck row must resolve once the item's status leaves in_progress/review")
 }
 
+// TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview is
+// the backstop test for StuckReasonVerdictUndelivered's single-status {review}
+// anchor: resolveVerdictUndeliveredLogged (server/services/backlog_service_verdict_steer.go)
+// is the point-of-success resolve, but any other way the item leaves review
+// (ships, is manually moved, etc.) must also clear the row via this sweep.
+func TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Verdict-undelivered item back to in_progress",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonVerdictUndelivered, BacklogStatusReview, "session never went idle")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "verdict_undelivered row must resolve once the item's status leaves review")
+}
+
+// TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInReview
+// is the negative counterpart: the row must stay open while the item is still
+// in review, even after an unrelated self-heal tick.
+func TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Verdict-undelivered item still in review",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonVerdictUndelivered, BacklogStatusReview, "session never went idle")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "verdict_undelivered row must stay open while the item is still in review")
+	assert.Equal(t, domain.StuckReasonVerdictUndelivered, open[0].Reason)
+}
+
 // TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
 // verifies rework_cap rows — the one remaining reason with no non-terminal
 // anchor at all — stay open while the item has not yet reached done/archived.
@@ -4418,6 +4478,7 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 		{"autonomous_stuck", domain.StuckReasonAutonomousStuck, BacklogStatusInProgress},
 		{"push_failed", domain.StuckReasonPushFailed, BacklogStatusReview},
 		{"rework_cap", domain.StuckReasonReworkCap, BacklogStatusInProgress},
+		{"verdict_undelivered", domain.StuckReasonVerdictUndelivered, BacklogStatusReview},
 	}
 	terminals := []BacklogStatus{BacklogStatusDone, BacklogStatusArchived}
 

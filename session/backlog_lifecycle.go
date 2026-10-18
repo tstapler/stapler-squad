@@ -2089,6 +2089,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 //	bouncing           -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
 //	autonomous_stuck   -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
 //	orphaned_triage    -> anchor {idea}                 resolve when status not in anchor
+//	verdict_undelivered -> anchor {review}              resolve when status not in anchor
 //
 // autonomous_stuck shares bouncing's two-status anchor rather than a single
 // {in_progress} one: onAutonomousDriverComplete's SessionRoleWork turn-cap-stop
@@ -2161,6 +2162,13 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		case domain.StuckReasonPRReadyUnmerged:
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		case domain.StuckReasonAbandonedReview:
+			resolve = row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonVerdictUndelivered:
+			// Point-of-success resolve is resolveVerdictUndeliveredLogged
+			// (server/services/backlog_service_verdict_steer.go); this is the
+			// backstop for every other way the item can leave review (ships,
+			// reopens for rework, is manually moved, etc.) without that call
+			// ever firing.
 			resolve = row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonStaleWork:
 			resolve = row.ItemStatus != BacklogStatusInProgress
