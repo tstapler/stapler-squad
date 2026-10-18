@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -147,6 +148,54 @@ func flagUpdate(svc *FeatureFlagService, name string, enabled bool) error {
 	return err
 }
 
+// Pre-mortem #3: the flag service and the quota RPC both read-modify-write
+// config.json; both must go through config.UpdateConfig so neither loses a write.
+func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testing.T) {
+	withIsolatedStateDir(t)
+	const flag = "browser-passthrough"
+	const iterations = 50
+	flags := NewFeatureFlagService()
+	quota := NewQuotaSettingsService()
+
+	errCh := make(chan error, 2*iterations)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= iterations; i++ {
+			errCh <- flagUpdate(flags, flag, i%2 == 0)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= iterations; i++ {
+			_, err := quota.UpdateQuotaConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{
+				Settings: &sessionv1.QuotaSettings{Enabled: proto.Bool(i%2 == 0)},
+			}))
+			errCh <- err
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	cfg := config.LoadConfig()
+	got, ok := cfg.GetFeatureFlagOverride(flag)
+	require.True(t, ok, "flag write lost")
+	require.True(t, got, "flag holds its last written value")
+	require.True(t, cfg.Quota.Enabled, "quota Enabled lost to a flag write")
+
+	resp, err := flags.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	for _, f := range resp.Msg.GetFlags() {
+		if f.GetName() == flag {
+			require.True(t, f.GetEnabled(), "the service reads back the stored value")
+		}
+	}
+}
+
 func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
 	t.Helper()
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
@@ -221,4 +270,22 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 	svc.AddStatusDetailSource("backlog", func() string { return "extra" })
 	svc.SetStatusDetailProvider("backlog", func() string { return "resumed" })
 	require.Equal(t, "resumed; extra", statusDetailOf(t, svc, "backlog"), "the setter replaces only its own slot")
+}
+
+func TestFeatureFlagStatusDetail_ReportsInertAndSource_WhenStallNudgeOnDiagnoseOff(t *testing.T) {
+	withIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+
+	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
+
+	require.NoError(t, flagUpdate(svc, config.AutonomousStallNudgeFeatureFlag, true))
+	require.Equal(t, "inactive: requires diagnose_nudge_enabled; Set explicitly: On",
+		statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+
+	require.NoError(t, flagUpdate(svc, config.DiagnoseNudgeFeatureFlag, true))
+	require.Equal(t, "Set explicitly: On", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+	require.Equal(t, "Set explicitly: On", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
+
+	require.Empty(t, statusDetailOf(t, svc, "backlog"), "other flags gain no status line")
 }

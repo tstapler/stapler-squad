@@ -10,7 +10,11 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
@@ -132,4 +136,127 @@ func EnsureBuiltInWorkflowStages(ctx context.Context, client *ent.Client) error 
 
 	log.InfoLog().Printf("[ConfiguredWorkflowEngine] seeded %d built-in stage(s) and %d transition(s)", len(stageIDs), transitionsCreated)
 	return nil
+}
+
+// stageConfigFingerprint is the canonical, order-insensitive description of a
+// stage configuration (stages, edges, liveness rows, gates). SeedFingerprint
+// hashes the built-in seed's; StageConfigFingerprint hashes a live database's.
+// An operator who adds a gate or changes a liveness value without touching an
+// edge therefore still reads as "edited" rather than "seeded".
+type stageConfigFingerprint struct {
+	Stages   []string
+	Edges    []string
+	Liveness []string
+	Gates    []string
+}
+
+func (c stageConfigFingerprint) hash() string {
+	h := sha256.New()
+	for _, section := range []struct {
+		name  string
+		lines []string
+	}{{"stages", c.Stages}, {"edges", c.Edges}, {"liveness", c.Liveness}, {"gates", c.Gates}} {
+		lines := append([]string(nil), section.lines...)
+		sort.Strings(lines)
+		_, _ = fmt.Fprintf(h, "[%s]\n", section.name)
+		for _, l := range lines {
+			_, _ = fmt.Fprintln(h, l)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+type stageRow struct {
+	Slug, Name               string
+	Entry, Terminal, Enabled bool
+}
+
+func (r stageRow) line() string {
+	return fmt.Sprintf("%s|%s|entry=%t|terminal=%t|enabled=%t", r.Slug, r.Name, r.Entry, r.Terminal, r.Enabled)
+}
+
+const nilText = "nil"
+
+func ptrText[T any](v *T) string {
+	if v == nil {
+		return nilText
+	}
+	return fmt.Sprint(*v)
+}
+
+func livenessLine(l *ent.StageLivenessDefinition) string {
+	return fmt.Sprintf("%s|mode=%s|kind=%s|expected=%s|margin=%s|noprogress=%s|threshold=%s|lookback=%s|enabled=%t",
+		l.StageSlug, ptrText(l.PipelineMode), l.Kind, ptrText(l.ExpectedDurationMs), ptrText(l.StalenessMarginMs),
+		ptrText(l.MaxNoProgressDurationMs), ptrText(l.CycleThreshold), ptrText(l.CycleLookbackMs), l.Enabled)
+}
+
+// builtInSeedFingerprintInput builds the fingerprint input from the same
+// sources EnsureBuiltInWorkflowStages writes. The built-in seed writes no
+// liveness rows and no gates, so those sections are empty.
+func builtInSeedFingerprintInput() stageConfigFingerprint {
+	var c stageConfigFingerprint
+	for _, slug := range builtInStageOrder {
+		c.Stages = append(c.Stages, stageRow{string(slug), builtInStageNames[slug], builtInEntryStages[slug], builtInTerminalStages[slug], true}.line())
+	}
+	for from, targets := range domain.ValidTransitions() {
+		for to := range targets {
+			c.Edges = append(c.Edges, fmt.Sprintf("%s->%s|enabled=true", from, to))
+		}
+	}
+	return c
+}
+
+// SeedFingerprint returns a stable hash of the built-in seed: stage set,
+// edges, liveness rows and gates. It labels `config=seeded|edited` in the
+// workflow-engine metrics.
+func SeedFingerprint() string {
+	return builtInSeedFingerprintInput().hash()
+}
+
+// StageConfigFingerprint hashes the live stage configuration in client with
+// the same canonical form as SeedFingerprint, so equality means "still seeded".
+func StageConfigFingerprint(ctx context.Context, client *ent.Client) (string, error) {
+	//nolint:entfullscan the fingerprint must cover every row of the stage configuration tables.
+	stages, err := client.BacklogStage.Query().All(ctx)
+	if err != nil {
+		return "", fmt.Errorf("StageConfigFingerprint: query stages: %w", err)
+	}
+	slugByID := make(map[uuid.UUID]string, len(stages))
+	var c stageConfigFingerprint
+	for _, s := range stages {
+		slugByID[s.ID] = s.Slug
+		c.Stages = append(c.Stages, stageRow{s.Slug, s.Name, s.IsEntry, s.IsTerminal, s.Enabled}.line())
+	}
+
+	//nolint:entfullscan the fingerprint must cover every edge.
+	transitions, err := client.StageTransition.Query().All(ctx)
+	if err != nil {
+		return "", fmt.Errorf("StageConfigFingerprint: query transitions: %w", err)
+	}
+	edgeByID := make(map[uuid.UUID]string, len(transitions))
+	for _, t := range transitions {
+		edge := fmt.Sprintf("%s->%s", slugByID[t.FromStageID], slugByID[t.ToStageID])
+		edgeByID[t.ID] = edge
+		c.Edges = append(c.Edges, fmt.Sprintf("%s|enabled=%t", edge, t.Enabled))
+	}
+
+	//nolint:entfullscan the fingerprint must cover every gate.
+	gates, err := client.TransitionGate.Query().All(ctx)
+	if err != nil {
+		return "", fmt.Errorf("StageConfigFingerprint: query gates: %w", err)
+	}
+	for _, g := range gates {
+		cfg, _ := json.Marshal(g.Config) // map keys marshal sorted: stable
+		c.Gates = append(c.Gates, fmt.Sprintf("%s|kind=%s|stateful=%t|order=%d|enabled=%t|config=%s", edgeByID[g.TransitionID], g.Kind, g.Stateful, g.OrderIndex, g.Enabled, cfg))
+	}
+
+	//nolint:entfullscan the fingerprint must cover every liveness row.
+	liveness, err := client.StageLivenessDefinition.Query().All(ctx)
+	if err != nil {
+		return "", fmt.Errorf("StageConfigFingerprint: query liveness: %w", err)
+	}
+	for _, l := range liveness {
+		c.Liveness = append(c.Liveness, livenessLine(l))
+	}
+	return c.hash(), nil
 }
