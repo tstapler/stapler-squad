@@ -246,6 +246,7 @@ var (
 	ErrACRequired                   = domain.ErrACRequired
 	ErrPlanRequired                 = domain.ErrPlanRequired
 	ErrPlanArtifactsRequired        = domain.ErrPlanArtifactsRequired
+	ErrPlanArtifactsMissing         = domain.ErrPlanArtifactsMissing
 	ErrVerdictRequired              = domain.ErrVerdictRequired
 	ErrCodeNotOnMain                = domain.ErrCodeNotOnMain
 	ErrUnresolvedBlockers           = domain.ErrUnresolvedBlockers

@@ -842,6 +842,29 @@ func transitionActorFromContext(ctx context.Context) string {
 	return session.TriggeredByUser
 }
 
+// isFailedPreconditionGuardError reports whether guardErr is one of
+// TransitionGuard's sentinel errors (session/domain/backlog.go) that
+// represent a business-rule precondition not yet met, as opposed to a
+// structurally invalid request — the distinction TransitionBacklogItemStatus
+// uses to choose CodeFailedPrecondition over CodeInvalidArgument.
+func isFailedPreconditionGuardError(guardErr error) bool {
+	for _, sentinel := range []error{
+		session.ErrACRequired,
+		session.ErrPlanRequired,
+		session.ErrPlanArtifactsRequired,
+		session.ErrPlanArtifactsMissing,
+		session.ErrVerdictRequired,
+		session.ErrCodeNotOnMain,
+		session.ErrVerdictClearRequiredForReady,
+		session.ErrUnresolvedBlockers,
+	} {
+		if errors.Is(guardErr, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
 // TransitionBacklogItemStatus moves an item through the status state machine.
 // +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
@@ -906,14 +929,9 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	guardInput.OverrideReason = req.Msg.OverrideReason
 	guardInput.HasUnshippedCode = hasUnshippedCode
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
-		if errors.Is(guardErr, session.ErrACRequired) ||
-			errors.Is(guardErr, session.ErrPlanRequired) ||
-			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
-			errors.Is(guardErr, session.ErrVerdictRequired) ||
-			errors.Is(guardErr, session.ErrCodeNotOnMain) ||
-			errors.Is(guardErr, session.ErrVerdictClearRequiredForReady) ||
-			errors.Is(guardErr, session.ErrUnresolvedBlockers) {
+		if isFailedPreconditionGuardError(guardErr) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)
@@ -999,6 +1017,26 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}), nil
 }
 
+// checkPlanArtifactsOnDisk returns an actionable, FailedPrecondition-shaped
+// error for ApprovePlan/RejectPlan when item has no usable plan artifacts,
+// or nil when it does. It distinguishes the two ways that can happen —
+// "triage never wrote plan_artifacts_path" (empty field: the item needs
+// TriggerTriage) vs. "it was written but the directory is gone now" (stale
+// field: a worktree got cleaned up after triage succeeded, or deleted
+// out-of-band; re-running triage, not retrying the same action, is the fix) —
+// rather than the single "re-run TriggerTriage" message both cases used to
+// share, which was actively misleading for the second case (see backlog item
+// 1cfae441-8953-41e6-803d-959062119d4f).
+func checkPlanArtifactsOnDisk(item *session.BacklogItemData) error {
+	if item.PlanArtifactsPath == "" {
+		return fmt.Errorf("no plan artifacts found — run TriggerTriage first")
+	}
+	if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+		return fmt.Errorf("plan artifacts path %q is recorded but no longer exists on disk (triage ran, but its worktree or output was since removed) — re-run triage to regenerate it: %w", item.PlanArtifactsPath, statErr)
+	}
+	return nil
+}
+
 // --- ApprovePlan ---
 
 // ApprovePlan marks the planning artifacts for an item as approved.
@@ -1019,13 +1057,8 @@ func (s *BacklogService) ApprovePlan(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	if item.PlanArtifactsPath == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
-	}
-	if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("plan artifacts path %q does not exist on disk — re-run TriggerTriage", item.PlanArtifactsPath))
+	if planErr := checkPlanArtifactsOnDisk(item); planErr != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, planErr)
 	}
 
 	now := time.Now()
@@ -1088,9 +1121,8 @@ func (s *BacklogService) RejectPlan(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	if item.PlanArtifactsPath == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
+	if planErr := checkPlanArtifactsOnDisk(item); planErr != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, planErr)
 	}
 
 	now := time.Now()

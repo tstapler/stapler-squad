@@ -41,3 +41,24 @@ describe("BacklogFilterBar source filter", () => {
     expect(screen.queryByLabelText("Filter by issue source")).toBeNull();
   });
 });
+
+describe("BacklogFilterBar archive done", () => {
+  it("is absent without onArchiveDone", () => {
+    renderBar();
+    expect(screen.queryByTestId("backlog-archive-done-button")).toBeNull();
+  });
+
+  it("is disabled at zero and shows the count", () => {
+    renderBar({ onArchiveDone: jest.fn(), doneCount: 0 });
+    expect(screen.getByTestId("backlog-archive-done-button")).toBeDisabled();
+    expect(screen.getByText("Archive done (0)")).toBeInTheDocument();
+  });
+
+  it("fires onArchiveDone when enabled", () => {
+    const onArchiveDone = jest.fn();
+    renderBar({ onArchiveDone, doneCount: 4 });
+    fireEvent.click(screen.getByText("Archive done (4)"));
+    expect(onArchiveDone).toHaveBeenCalledTimes(1);
+  });
+});
+

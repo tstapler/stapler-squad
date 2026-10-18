@@ -5775,6 +5775,143 @@ func TestTriggerTriage_should_NotAutoApprovePlan_When_AutoApprovePlanUnset(t *te
 	assert.Nil(t, got.PlanApprovedAt)
 }
 
+// TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementationDirMissing
+// is a regression test for the root cause behind backlog item
+// 1cfae441-8953-41e6-803d-959062119d4f: TriggerTriage used to persist
+// plan_artifacts_path unconditionally for SDD-mode items, even when the LLM
+// never created the project_plans/<name>/implementation/ directory it
+// pointed at — leaving ApprovePlan permanently failing "does not exist on
+// disk" with no recovery short of manual DB/disk surgery. Nothing in this
+// fake-pool test creates that directory (or a flat plan.md at the
+// project_plans/<name>/ root — the other real-world location), so
+// plan_artifacts_path must stay empty.
+func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementationDirMissing(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd item with no implementation dir",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     t.TempDir(),
+		PipelineMode: session.DefaultSDDPipelineModeSlug,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "item should still reach ready even though no plan artifacts were produced")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.Empty(t, got.PlanArtifactsPath, "plan_artifacts_path must stay empty rather than pointing at a directory nothing created")
+	assert.False(t, got.PlanApproved)
+}
+
+// TestTriggerTriage_should_PersistPlanArtifactsPath_When_SDDImplementationDirExists
+// is the companion happy-path test: when the implementation/ subdirectory
+// (and a plan.md inside it) genuinely exists on disk after triage, the exact
+// documented SDD location is persisted.
+func TestTriggerTriage_should_PersistPlanArtifactsPath_When_SDDImplementationDirExists(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd item with implementation dir",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repoPath,
+		PipelineMode: session.DefaultSDDPipelineModeSlug,
+	})
+	require.NoError(t, err)
+
+	// validTriageJSON() carries no Title, so sanitizeTriageTitle falls back to
+	// "item-" + the first 8 chars of the item ID — mirror that here to write
+	// the fake triage output into the exact directory TriggerTriage will look
+	// for. triageWorkDir falls back to RepoPath itself in this test (RepoPath
+	// isn't a real git repo, so isolated-worktree setup fails, logged but
+	// non-fatal — same fallback TestTriggerTriage_should_AutoApprovePlan_When_AutoApprovePlanSet
+	// already exercises).
+	sanitizedTitle := "item-" + item.ID[:8]
+	implementationDir := filepath.Join(repoPath, "project_plans", sanitizedTitle, "implementation")
+	require.NoError(t, os.MkdirAll(implementationDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(implementationDir, "plan.md"), []byte("# Plan\n"), 0o600))
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return getErr == nil && got.PlanArtifactsPath != ""
+	}, 5*time.Second, 50*time.Millisecond, "expected triage to persist plan artifacts path once implementation/ actually exists")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, implementationDir, got.PlanArtifactsPath)
+}
+
+// TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissingButPlanMdAtRoot
+// covers the second real-world drift location found in this repo's own
+// project_plans/ history (13 of 257 real plan.md files, per a 2026-10-17
+// sweep — see backlog item 1cfae441-8953-41e6-803d-959062119d4f): the LLM
+// sometimes writes plan.md directly under project_plans/<name>/ instead of
+// its implementation/ subdirectory. resolveSDDPlanArtifactsPath must fall
+// back to that location rather than leaving plan_artifacts_path empty.
+func TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissingButPlanMdAtRoot(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "sdd item with flat plan.md",
+		Status:       string(session.BacklogStatusIdea),
+		Priority:     3,
+		RepoPath:     repoPath,
+		PipelineMode: session.DefaultSDDPipelineModeSlug,
+	})
+	require.NoError(t, err)
+
+	sanitizedTitle := "item-" + item.ID[:8]
+	projectPlanRoot := filepath.Join(repoPath, "project_plans", sanitizedTitle)
+	require.NoError(t, os.MkdirAll(projectPlanRoot, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPlanRoot, "plan.md"), []byte("# Plan\n"), 0o600))
+	// No implementation/ subdirectory at all — only requirements.md-style
+	// content at the root, matching the observed real-world drift.
+	require.NoError(t, os.WriteFile(filepath.Join(projectPlanRoot, "requirements.md"), []byte("# Requirements\n"), 0o600))
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return getErr == nil && got.PlanArtifactsPath != ""
+	}, 5*time.Second, 50*time.Millisecond, "expected triage to fall back to the flat project_plans/<name>/ root")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, projectPlanRoot, got.PlanArtifactsPath, "plan_artifacts_path must point at the root, not the never-created implementation/ subdirectory")
+}
+
 // TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown
 // is a regression test for BUG-065: an item whose triage goroutine was still
 // blocked waiting for a free concurrency slot (all 8 taken) when the server's
