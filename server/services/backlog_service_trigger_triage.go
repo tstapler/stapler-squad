@@ -801,21 +801,23 @@ func (s *BacklogService) TriggerTriage(
 		// the "Retry Triage" / plan_not_approved stuck-detector paths, rather
 		// than silently marking a nonexistent plan approved.
 		if _, statErr := os.Stat(pap); statErr == nil {
+			staleSnapshot := false
 			if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
 				snapDir := filepath.Join(artifactAbsPath, sddPlanSnapshotDirName)
 				if durable, snapErr := snapshotSDDPlanOutOfWorktree(pap, snapDir); snapErr == nil {
 					pap = durable
 				} else if _, prevErr := os.Stat(snapDir); prevErr == nil {
-					// An earlier durable copy survives; don't swap its pointer for the ephemeral worktree path.
-					log.Warn("[TriggerTriage] could not refresh SDD plan snapshot; keeping the earlier one", "item", itemID, "error", snapErr)
-					pap = snapDir
+					// Keep the earlier durable pointer rather than the ephemeral worktree path, but its content
+					// predates this triage run, so it must not be auto-approved.
+					log.Warn("[TriggerTriage] could not refresh SDD plan snapshot; keeping the earlier one and skipping auto-approval", "item", itemID, "error", snapErr)
+					pap, staleSnapshot = snapDir, true
 				} else {
 					// Still exists now, so record it; it may go stale later and ApprovePlan will say so.
 					log.Warn("[TriggerTriage] could not copy SDD plan out of the worktree; recording the in-worktree path", "item", itemID, "path", pap, "error", snapErr)
 				}
 			}
 			update.PlanArtifactsPath = &pap
-			if item.AutoApprovePlan {
+			if item.AutoApprovePlan && !staleSnapshot {
 				approved := true
 				approvedAt := time.Now()
 				update.PlanApproved = &approved

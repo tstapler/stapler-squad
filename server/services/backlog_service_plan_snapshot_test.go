@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,18 +34,42 @@ func TestSnapshotSDDPlanOutOfWorktree_should_ReplaceEarlierCopyAndClearStaleTemp
 	assert.NoDirExists(t, dst+".tmp")
 }
 
-func TestSnapshotSDDPlanOutOfWorktree_should_KeepPreviousSnapshotAndLeaveNoTemp_When_CopyFails(t *testing.T) {
+func TestSnapshotSDDPlanOutOfWorktree_should_KeepPreviousSnapshotAndLeaveNoTemp_When_CopyFailsMidWalk(t *testing.T) {
 	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	for i := 0; i <= maxSDDPlanSnapshotFiles; i++ {
+		writeFile(t, filepath.Join(src, fmt.Sprintf("f%d.md", i)), "x")
+	}
 	dst := filepath.Join(root, "durable", "sdd-plan")
 	writeFile(t, filepath.Join(dst, "plan.md"), "previous good plan")
 
-	_, err := snapshotSDDPlanOutOfWorktree(filepath.Join(root, "missing-src"), dst)
+	_, err := snapshotSDDPlanOutOfWorktree(src, dst)
 
 	require.Error(t, err)
 	prev, readErr := os.ReadFile(filepath.Join(dst, "plan.md"))
 	require.NoError(t, readErr, "a failed copy must not destroy the previous good snapshot")
 	assert.Equal(t, "previous good plan", string(prev))
 	assert.NoDirExists(t, dst+".tmp")
+}
+
+func TestSnapshotSDDPlanOutOfWorktree_should_Fail_When_SourceMissing(t *testing.T) {
+	root := t.TempDir()
+
+	_, err := snapshotSDDPlanOutOfWorktree(filepath.Join(root, "missing-src"), filepath.Join(root, "durable", "sdd-plan"))
+
+	require.Error(t, err)
+}
+
+func TestSnapshotSDDPlanOutOfWorktree_should_Fail_When_OverByteCap(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	writeFile(t, filepath.Join(src, "big.md"), strings.Repeat("x", maxSDDPlanSnapshotBytes+1))
+	dst := filepath.Join(root, "durable", "sdd-plan")
+
+	_, err := snapshotSDDPlanOutOfWorktree(src, dst)
+
+	require.Error(t, err)
+	assert.NoDirExists(t, dst)
 }
 
 func TestSnapshotSDDPlanOutOfWorktree_should_SkipSymlinks(t *testing.T) {
