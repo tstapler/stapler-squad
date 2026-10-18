@@ -182,10 +182,7 @@ func (o *FileOps) readFileFacts(sessionID, relPath string) (*fileRead, error) {
 	}
 	f, openErr := rr.Root.Open(rr.Resolved)
 	if openErr != nil {
-		if os.IsNotExist(openErr) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", relPath))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open file"))
+		return nil, openReadError(openErr, relPath)
 	}
 	defer func() { _ = f.Close() }()
 	fr, err := classifyOpenFile(f, rr, relPath, info)

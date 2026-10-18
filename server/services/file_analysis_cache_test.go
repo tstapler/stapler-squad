@@ -139,11 +139,11 @@ func TestAnalysisCache_ShouldDiscardResultAndMarkStale_When_FileChangesDuringPas
 	defer ops.analysis.Close()
 
 	var once atomic.Bool
-	mem.OnRead = func(int) {
+	mem.SetOnRead(func(int) {
 		if once.CompareAndSwap(false, true) { // an agent appends mid-pass
 			mem.AddFile(dir, "log.txt", []byte(strings.Repeat("line\n", 200)), readCorpusMTime.Add(time.Second))
 		}
-	}
+	})
 	fr, err := ops.readFileFacts("test-session", "log.txt")
 	require.NoError(t, err)
 	_, err = ops.analysis.Await(context.Background(), fr.Src.Key, ops.analysisRunnerFor(fr.Src))
@@ -153,7 +153,7 @@ func TestAnalysisCache_ShouldDiscardResultAndMarkStale_When_FileChangesDuringPas
 	assert.Nil(t, a)
 
 	// The next stat sees the new validator and analyzes the new bytes.
-	mem.OnRead = nil
+	mem.SetOnRead(nil)
 	resp, err := ops.StatWith(context.Background(), &sessionv1.StatFileRequest{SessionId: "test-session", Path: "log.txt", WantAnalysis: true})
 	require.NoError(t, err)
 	assert.Equal(t, analysisStatePending, resp.Analysis)
@@ -199,11 +199,11 @@ func TestStatFile_ShouldKeepDashToken_When_AnalysisPending(t *testing.T) {
 	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, mem)
 	defer ops.analysis.Close()
 	gate := make(chan struct{})
-	mem.OnRead = func(n int) {
+	mem.SetOnRead(func(n int) {
 		if n == analyzeChunkBytes { // only the background pass, not the stat's sniff
 			<-gate
 		}
-	}
+	})
 	resp, err := ops.StatWith(context.Background(), &sessionv1.StatFileRequest{SessionId: "test-session", Path: "big.log", WantSha256: true})
 	require.NoError(t, err)
 	assert.Equal(t, analysisStatePending, resp.Analysis)

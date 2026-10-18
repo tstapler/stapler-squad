@@ -78,6 +78,46 @@ func (l *ipLimiter) Acquire(remoteAddr string) (release func(), refused SearchBu
 	}, ""
 }
 
+// Range read caps (Task 1.6.2c, ADR-036): 4 concurrent range calls per client, 8 per
+// remote IP. "Client" is the (remote host, session) pair, the finest identity the
+// unauthenticated local listener can see; the IP key is the shared remoteHost seam.
+const (
+	maxRangesPerIP = 8
+	rangeNoTotal   = 1 << 30
+)
+
+// RangeBusyReason says which cap refused a range call; it travels in RangeBusyDetail.
+type RangeBusyReason string
+
+const (
+	rangeBusyPerClient RangeBusyReason = "per_client"
+	rangeBusyPerIP     RangeBusyReason = "per_ip"
+)
+
+// rangeLimiter counts in-flight ReadFileRange calls per remote IP and per client.
+type rangeLimiter struct{ perIP, perClient *ipLimiter }
+
+func newRangeLimiter() *rangeLimiter {
+	return &rangeLimiter{
+		perIP:     newIPLimiter(ipCaps{PerHost: maxRangesPerIP, Total: rangeNoTotal}),
+		perClient: newIPLimiter(ipCaps{PerHost: maxRangesPerClient, Total: rangeNoTotal}),
+	}
+}
+
+// Acquire takes a slot on both counters or reports which one refused.
+func (l *rangeLimiter) Acquire(remoteAddr, sessionID string) (release func(), refused RangeBusyReason) {
+	releaseIP, busy := l.perIP.Acquire(remoteAddr)
+	if busy != "" {
+		return nil, rangeBusyPerIP
+	}
+	releaseClient, busy := l.perClient.Acquire(remoteHost(remoteAddr) + "|" + sessionID)
+	if busy != "" {
+		releaseIP()
+		return nil, rangeBusyPerClient
+	}
+	return func() { releaseClient(); releaseIP() }, ""
+}
+
 // walkGate bounds concurrent walks process-wide with a FIFO queue. It replaces a plain
 // semaphore because waiters must learn their position (Queued{ahead}) as it changes.
 type walkGate struct {

@@ -90,6 +90,7 @@ type FileService struct {
 	ops            *FileOps
 	writer         *FileWriter
 	search         *SearchHandler
+	ranges         *rangeLimiter
 	dirCache       *DirCache
 	gitignoreCache GitignoreCache
 }
@@ -104,6 +105,7 @@ func NewFileService(workspace WorkspaceProvider) *FileService {
 		ops:            ops,
 		writer:         NewFileWriter(ops, invalidator),
 		search:         newSearchHandler(ops),
+		ranges:         newRangeLimiter(),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),
 	}

@@ -2568,6 +2568,12 @@ message ReadFileRangeResponse {
   ReadOnlyReason read_only_reason = 24;
 }
 
+// RangeBusyDetail is the typed detail on a ResourceExhausted ReadFileRange refusal.
+message RangeBusyDetail {
+  // "per_client" or "per_ip".
+  string reason = 1;
+}
+
 message WriteFileRequest {
   string session_id = 1;
   // File path relative to the session's active directory.

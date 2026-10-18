@@ -64,6 +64,9 @@ func TestCapabilities_ShouldAdvertiseOnlyWhatListenerAndFlagsServe_And_BumpCapsE
 				caps := fetchCaps(t, c)
 
 				want := []sessionv1.FileOp{sessionv1.FileOp_FILE_OP_STAT, sessionv1.FileOp_FILE_OP_READ_ALL}
+				if flags.rangeRead {
+					want = append(want, sessionv1.FileOp_FILE_OP_READ_LINES, sessionv1.FileOp_FILE_OP_READ_BYTES)
+				}
 				if flags.editing {
 					want = append(want, sessionv1.FileOp_FILE_OP_WRITE_FULL)
 				}
@@ -71,7 +74,15 @@ func TestCapabilities_ShouldAdvertiseOnlyWhatListenerAndFlagsServe_And_BumpCapsE
 				assert.Equal(t, []sessionv1.FileWire{sessionv1.FileWire_FILE_WIRE_CONNECT_UNARY}, caps.Wires)
 				assert.NotContains(t, caps.Ops, sessionv1.FileOp_FILE_OP_PATCH, "no delta write is served yet")
 				assert.Equal(t, int64(1536*1024), caps.Limits.MaxWriteFullBytes)
-				assert.Equal(t, int64(1<<20), caps.Limits.HashCapBytes)
+				if flags.rangeRead {
+					assert.Equal(t, int64(64<<20), caps.Limits.HashCapBytes)
+					assert.Equal(t, int64(1<<20), caps.Limits.MaxRangeBytes)
+					assert.Equal(t, int32(4000), caps.Limits.MaxRangeLines)
+					assert.Equal(t, int32(4), caps.Limits.MaxConcurrentRanges)
+				} else {
+					assert.Equal(t, int64(1<<20), caps.Limits.HashCapBytes)
+					assert.Zero(t, caps.Limits.MaxRangeBytes)
+				}
 				assert.Equal(t, uint32(1), caps.ProtocolVersion)
 
 				if mask == 0 {

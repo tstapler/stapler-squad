@@ -46,9 +46,12 @@ func (o *FileOps) flagMask(ctx context.Context) uint8 {
 }
 
 // servedOps lists what this server serves right now. Range and delta ops join
-// with their handlers (Epics 1.6 and 2.1); WRITE_FULL follows files:editing.
+// with their handlers (Epic 2.1); READ_LINES and READ_BYTES follow files:range-read; WRITE_FULL follows files:editing.
 func (o *FileOps) servedOps(ctx context.Context) []sessionv1.FileOp {
 	ops := []sessionv1.FileOp{sessionv1.FileOp_FILE_OP_STAT, sessionv1.FileOp_FILE_OP_READ_ALL}
+	if o.policy.Flags.RangeRead(ctx) {
+		ops = append(ops, sessionv1.FileOp_FILE_OP_READ_LINES, sessionv1.FileOp_FILE_OP_READ_BYTES)
+	}
 	if o.policy.Flags.Editing(ctx) {
 		ops = append(ops, sessionv1.FileOp_FILE_OP_WRITE_FULL)
 	}
@@ -58,15 +61,23 @@ func (o *FileOps) servedOps(ctx context.Context) []sessionv1.FileOp {
 // Capabilities reports what a client may rely on. Both listeners serve the same
 // unary wire today; per-listener differences arrive with PATCH (Task 2.1.5).
 func (o *FileOps) Capabilities(ctx context.Context) *sessionv1.FileTransportCapabilities {
+	limits := &sessionv1.FileTransportLimits{
+		MaxWriteFullBytes: maxWriteFullBodyBytes,
+		HashCapBytes:      truncateSize,
+	}
+	if o.policy.Flags.RangeRead(ctx) {
+		limits.MaxRangeBytes = maxRangeBytes
+		limits.MaxRangeLines = maxRangeLines
+		limits.PreferredChunkBytes = defaultRangeBytes
+		limits.HashCapBytes = rangeHashCapBytes
+		limits.MaxConcurrentRanges = maxRangesPerClient
+	}
 	return &sessionv1.FileTransportCapabilities{
 		ProtocolVersion: filesProtocolVersion,
 		Ops:             o.servedOps(ctx),
 		Wires:           []sessionv1.FileWire{sessionv1.FileWire_FILE_WIRE_CONNECT_UNARY},
-		Limits: &sessionv1.FileTransportLimits{
-			MaxWriteFullBytes: maxWriteFullBodyBytes,
-			HashCapBytes:      truncateSize,
-		},
-		CapsEpoch: o.epoch.observe(o.flagMask(ctx)),
+		Limits:          limits,
+		CapsEpoch:       o.epoch.observe(o.flagMask(ctx)),
 	}
 }
 

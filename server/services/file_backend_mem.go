@@ -16,8 +16,9 @@ type memBackend struct {
 	roots map[string]*memTree
 	// ShortRead, when > 0, caps the bytes any single Read returns (ReadAt must stay whole by contract).
 	ShortRead int
-	// OnRead, when set, runs before every handle Read with the buffer length (fault injection: change the file mid-pass).
-	OnRead func(readLen int)
+	// onRead, when set, runs before every handle Read with the buffer length (fault
+	// injection: change the file mid-pass). Set it through SetOnRead; Open reads it under mu.
+	onRead func(readLen int)
 }
 
 type memNode struct {
@@ -53,6 +54,8 @@ func (t *memTree) mkParents(rel string) {
 // AddFile creates dir/rel (and its parents) with the given bytes and mtime.
 func (m *memBackend) AddFile(dir, rel string, data []byte, mtime time.Time) {
 	t := m.tree(dir)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	t.mkParents(rel)
 	t.nodes[rel] = &memNode{data: append([]byte(nil), data...), mode: 0o644, mtime: mtime}
 }
@@ -62,6 +65,19 @@ func (m *memBackend) AddSymlink(dir, rel, target string) {
 	t := m.tree(dir)
 	t.mkParents(rel)
 	t.nodes[rel] = &memNode{mode: fs.ModeSymlink | 0o777, target: target}
+}
+
+// SetOnRead installs (or, with nil, clears) the pre-Read fault-injection hook.
+func (m *memBackend) SetOnRead(fn func(readLen int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRead = fn
+}
+
+func (m *memBackend) readHook() func(int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.onRead
 }
 
 func (m *memBackend) OpenRoot(dir string) (FileRoot, error) {
@@ -120,7 +136,7 @@ func (r *memRoot) Open(p ResolvedPath) (FileHandle, error) {
 	if n.mode.IsDir() {
 		return nil, &fs.PathError{Op: "open", Path: string(p), Err: errors.New("is a directory")}
 	}
-	return &memFileHandle{name: path.Base(string(p)), n: n, r: bytes.NewReader(n.data), short: r.b.ShortRead, onRead: r.b.OnRead}, nil
+	return &memFileHandle{name: path.Base(string(p)), n: n, r: bytes.NewReader(n.data), short: r.b.ShortRead, onRead: r.b.readHook()}, nil
 }
 
 type memFileInfo struct {
