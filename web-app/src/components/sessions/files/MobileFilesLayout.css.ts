@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { style, globalStyle } from "@vanilla-extract/css";
 import { vars, zIndex } from "@/styles/theme.css";
 
 const bar = {
@@ -98,8 +98,8 @@ export const floatingStack = style({
   alignItems: "flex-end",
   gap: "8px",
   pointerEvents: "none",
-  selectors: { "& > *": { pointerEvents: "auto" } },
 });
+globalStyle(`${floatingStack} > *`, { pointerEvents: "auto" });
 export const stackHost = style({ position: "relative", flexShrink: 0, height: 0 });
 
 export const toast = style({

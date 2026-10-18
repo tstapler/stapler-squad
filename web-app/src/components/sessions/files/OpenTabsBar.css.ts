@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { style, globalStyle } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const bar = style({
@@ -37,13 +37,13 @@ export const tab = style({
       color: vars.color.textPrimary,
       boxShadow: `inset 0 -2px 0 ${vars.color.primary}`,
     },
-    "&[data-preview='true'] [data-tab-label]": { fontStyle: "italic" },
     "&:hover": { background: vars.color.hoverBackground },
   },
   ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "-2px" },
 });
 
 export const tabLabel = style({ overflow: "hidden", textOverflow: "ellipsis" });
+globalStyle(`${tab}[data-preview='true'] ${tabLabel}`, { fontStyle: "italic" });
 
 export const pinGlyph = style({ fontSize: "10px", opacity: 0.7 });
 
