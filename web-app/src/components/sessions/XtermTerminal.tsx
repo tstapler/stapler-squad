@@ -29,7 +29,7 @@ import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type Termina
 import { dimensionsEqual, isFiniteResizeDimensions, type ResizeDimensions } from "@/lib/terminal/types";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
-import { pointToCell, rafThrottlePoint, type CellGeometry } from "@/lib/terminal/touchDrag";
+import { pointToCell, rafThrottlePoint, getTerminalRowText, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import {
@@ -316,6 +316,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // Draggable selection handles for mobile — DOM-mutated at 60fps alongside the copy button
   const startHandleRef = useRef<HTMLDivElement>(null);
   const endHandleRef = useRef<HTMLDivElement>(null);
+  // Magnifier bubble shown above the finger during a handle drag (display aid only)
+  const magnifierRef = useRef<HTMLDivElement>(null);
   // Custom left-side scrollbar track and thumb
   const scrollTrackRef = useRef<HTMLDivElement>(null);
   const scrollThumbRef = useRef<HTMLDivElement>(null);
@@ -995,6 +997,38 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           let selectThrottled: ((clientX: number, clientY: number) => void) | null = null;
           let cancelSelectThrottle: (() => void) | null = null;
 
+          // Fixed size so positioning needs no layout read inside the RAF callback.
+          const MAGNIFIER_WIDTH = 200;
+          const MAGNIFIER_HEIGHT = 32;
+          const MAGNIFIER_GAP = 56; // clears the finger and fingertip occlusion
+          const MAGNIFIER_EDGE = 8;
+
+          const hideMagnifier = () => {
+            const mag = magnifierRef.current;
+            if (mag) mag.style.display = 'none';
+          };
+
+          // Display only: reads the buffer, never touches selection state.
+          const updateMagnifier = (col: number, row: number, clientX: number, clientY: number) => {
+            const mag = magnifierRef.current;
+            if (!mag) return;
+            const { text, cursorOffset } = getTerminalRowText(terminal, row, col);
+            const cursorEl = document.createElement('span');
+            cursorEl.className = styles.selectionMagnifierCursor;
+            cursorEl.textContent = text.charAt(cursorOffset);
+            mag.replaceChildren(
+              document.createTextNode(text.slice(0, cursorOffset)),
+              cursorEl,
+              document.createTextNode(text.slice(cursorOffset + 1)),
+            );
+            const maxLeft = Math.max(MAGNIFIER_EDGE, window.innerWidth - MAGNIFIER_WIDTH - MAGNIFIER_EDGE);
+            mag.style.width = `${MAGNIFIER_WIDTH}px`;
+            mag.style.height = `${MAGNIFIER_HEIGHT}px`;
+            mag.style.left = `${Math.max(MAGNIFIER_EDGE, Math.min(maxLeft, clientX - MAGNIFIER_WIDTH / 2))}px`;
+            mag.style.top = `${Math.max(MAGNIFIER_EDGE, clientY - MAGNIFIER_HEIGHT - MAGNIFIER_GAP)}px`;
+            mag.style.display = 'block';
+          };
+
           const applyHandleDrag = (clientX: number, clientY: number) => {
             if (!anchor || !geometry) return;
             const { col, row } = pointToCell(clientX, clientY, geometry);
@@ -1007,6 +1041,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
               const len = Math.max(1, (anchor.er - row) * terminal.cols + (anchor.ec - col));
               terminal.select(col, row, len);
             }
+            updateMagnifier(col, row, clientX, clientY);
           };
 
           const onTouchMove = (e: TouchEvent) => {
@@ -1021,6 +1056,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             anchor = null;
             geometry = null;
             cancelSelectThrottle?.();
+            hideMagnifier();
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             document.removeEventListener('touchcancel', onTouchEnd);
@@ -1050,6 +1086,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           handleCleanupFns.push(() => {
             el.removeEventListener('touchstart', onTouchStart);
             cancelSelectThrottle?.();
+            hideMagnifier();
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', onTouchEnd);
             document.removeEventListener('touchcancel', onTouchEnd);
@@ -1684,6 +1721,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             ref={endHandleRef}
             className={styles.selectionHandle}
             aria-hidden="true"
+            style={{ display: 'none' }}
+          />
+          <div
+            ref={magnifierRef}
+            className={styles.selectionMagnifier}
+            aria-hidden="true"
+            role="presentation"
             style={{ display: 'none' }}
           />
         </>,

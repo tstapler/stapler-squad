@@ -74,3 +74,33 @@ export function rafThrottlePoint(
 
   return [throttled, cancel, flush];
 }
+
+/** The slice of xterm's Terminal that getTerminalRowText reads; structural so tests need no real xterm. */
+export interface RowTextSource {
+  cols: number;
+  buffer: {
+    active: {
+      viewportY: number;
+      getLine(row: number): { translateToString(trim: boolean, start?: number, end?: number): string } | undefined;
+    };
+  };
+}
+
+/**
+ * Text window of `windowSize` columns around `activeCol` on a viewport row, for the
+ * selection magnifier. `cursorOffset` is the index of `activeCol` within `text`.
+ * Display only — never feeds back into selection math.
+ */
+export function getTerminalRowText(
+  terminal: RowTextSource,
+  viewportRow: number,
+  activeCol: number,
+  windowSize = 20
+): { text: string; cursorOffset: number } {
+  const buf = terminal.buffer.active;
+  const line = buf.getLine(viewportRow + buf.viewportY);
+  const startCol = Math.max(0, activeCol - Math.floor(windowSize / 2));
+  const endCol = Math.min(terminal.cols, startCol + windowSize);
+  const text = (line?.translateToString(false, startCol, endCol) ?? '').padEnd(endCol - startCol, ' ');
+  return { text, cursorOffset: activeCol - startCol };
+}
