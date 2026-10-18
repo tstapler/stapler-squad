@@ -1038,7 +1038,7 @@ FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
 FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
 FILES_VIEWER_JSCPD_MIN_HEADROOM ?= 0.02
 # Fixed list of test-name prefixes owned by the files viewer; extend as stories land.
-FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions)
+FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOpsRange)
 
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
