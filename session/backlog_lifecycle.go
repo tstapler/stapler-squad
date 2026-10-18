@@ -706,8 +706,8 @@ func (l *BacklogLifecycleListener) getSessionArchiver() SessionArchiver {
 // worktrees and archive work/review sessions when an internal transition
 // path (not the manual RPC) drives an item straight to a terminal status.
 // Optional — nil means those paths fall back to the 60s
-// reconcileTerminalItemSessions safety-net sweep, same as before this was
-// wired.
+// reconcileTerminalItemWorktrees safety-net sweep (cleanup_terminal_worktrees
+// detector in ReconcileStuck), same as before this was wired.
 func (l *BacklogLifecycleListener) SetWorktreeCleaner(c WorktreeCleaner) {
 	l.worktreeCleanerMu.Lock()
 	defer l.worktreeCleanerMu.Unlock()
@@ -1476,6 +1476,17 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// See SessionArchiver's doc comment. No-op when unwired.
 	l.runStuckDetector("archive_terminal_sessions", &okNames, &panickedNames, func() {
 		l.reconcileTerminalItemSessions(ctx)
+	})
+
+	// Safety-net sweep: re-run worktree cleanup for items already in done/archived
+	// status whose synchronous WorktreeCleaner call (transitionBouncingItemToDone, the
+	// PR-merge-detected done path, the manual archive RPC) was missed or never fired
+	// (pre-existing terminal items from before those call sites existed, or a
+	// race/crash mid-transition). Unlike archive_terminal_sessions above, worktree
+	// cleanup previously had no periodic re-scan at all. See
+	// reconcileTerminalItemWorktrees' doc comment. No-op when unwired.
+	l.runStuckDetector("cleanup_terminal_worktrees", &okNames, &panickedNames, func() {
+		l.reconcileTerminalItemWorktrees(ctx)
 	})
 
 	// Self-heal items whose real, cached PR reference (prNumber/prUrl) has

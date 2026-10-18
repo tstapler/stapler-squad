@@ -2790,6 +2790,162 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 		"the sweep itself calls ArchiveSessionByUUID once per tick per session — idempotency is the archiver's responsibility (CAS), proven separately for SessionService.ArchiveSessionByUUID")
 }
 
+// --- cleanup_terminal_worktrees: safety-net sweep for backlog item worktrees that
+// accumulate forever because WorktreeCleaner.CleanupTerminalItem was previously only
+// invoked synchronously, on specific internal transition paths — see
+// reconcileTerminalItemWorktrees' doc comment. ---
+
+// TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone proves the
+// sweep invokes the wired WorktreeCleaner for a done item, mirroring
+// TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyDone above.
+func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-done item missed by the synchronous cleanup call",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID)
+}
+
+// TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchived mirrors
+// the done case for an already-archived item.
+func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchived(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-archived item missed by the synchronous cleanup call",
+		Status: string(BacklogStatusArchived),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID)
+}
+
+// TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal guards
+// against sweeping an item that is still in flight.
+func TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "still in-flight item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Empty(t, cleaner.calls(), "an in-flight item's worktree must not be swept")
+}
+
+// TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired proves the
+// detector degrades gracefully (and skips the ListBacklogItems query entirely) when no
+// WorktreeCleaner has been wired, matching WorktreeCleaner's nil-safety contract.
+func TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with no cleaner wired",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	// SetWorktreeCleaner deliberately not called — must degrade gracefully, not panic.
+	assert.NotPanics(t, func() {
+		listener.reconcileTerminalItemWorktrees(ctx)
+	})
+}
+
+// TestReconcileTerminalItemWorktrees_should_BeIdempotent_When_RunTwice proves the sweep
+// is safe to re-run every tick: a second run over an already-cleaned item must not error
+// or panic. The real WorktreeCleaner implementation (BacklogService.CleanupTerminalItem)
+// is itself safe to re-run — its git.Cleanup() call no-ops (logs at Info, not
+// Warn/Error) when the worktree directory is already gone, verified directly against
+// session/git/native/worktree_remove.go's RemoveWorktree — so this test only proves the
+// sweep's own iteration doesn't choke on repeated runs, mirroring
+// TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice above.
+func TestReconcileTerminalItemWorktrees_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item swept twice",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Equal(t, []string{item.ID, item.ID}, cleaner.calls(),
+		"the sweep itself calls CleanupTerminalItem once per tick per item — idempotency is the cleaner's responsibility, proven separately for BacklogService.CleanupTerminalItem")
+}
+
+// TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees proves the
+// cleanup_terminal_worktrees detector is actually wired into the periodic ReconcileStuck
+// sweep (not just callable in isolation), mirroring
+// TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue's pattern for a different
+// detector.
+func TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item relying on the ReconcileStuck-level sweep",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.ReconcileStuck(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"ReconcileStuck must invoke the cleanup_terminal_worktrees detector, which must in turn call the wired WorktreeCleaner")
+}
+
 // --- Story 2.1.4: bouncing ---
 
 // TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_WithinWindow
