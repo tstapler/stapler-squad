@@ -2,10 +2,13 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import type { GutterMarkType } from "@/lib/utils/parseDiff";
+import { degradeProfile } from "@/lib/files/degradeProfile";
+import { useFontPx } from "@/lib/files/fontSize";
+import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import type {
   BufferInit, BufferState, EditorMode, EngineFeatures, EngineHandle, HitRange, ModeConfig, ScrollSnapshot,
 } from "./files/engine/EditorEngine";
-import { codeEditor } from "./CodeEditor.css";
+import { codeEditor, codeEditorRoot, degradeNotice } from "./CodeEditor.css";
 
 export type { EditorMode, BufferInit, BufferState, ScrollSnapshot };
 
@@ -36,8 +39,20 @@ export interface CodeEditorProps {
   onReady?: (handle: CodeEditorHandle) => void;
 }
 
-function modeConfig(p: Pick<CodeEditorProps, "mode" | "wrapLines" | "path">): ModeConfig {
-  return { mode: p.mode ?? "Read", wrap: p.wrapLines, ariaLabel: `File: ${p.path ?? ""}` };
+interface Device { coarse: boolean; fontPx: number }
+
+/** `doc` is the text the buffer is created from; the large-file profile is decided per buffer, not per prop. */
+function modeConfig(p: Pick<CodeEditorProps, "mode" | "wrapLines" | "path">, device: Device, doc: string): ModeConfig {
+  const mode = p.mode ?? "Read";
+  const degrade = degradeProfile({ doc, pointerCoarse: device.coarse });
+  return {
+    mode,
+    wrap: p.wrapLines && degrade.wrap,
+    ariaLabel: `File: ${p.path ?? ""}`,
+    degrade,
+    fontPx: device.fontPx,
+    noVirtualKeyboard: device.coarse && mode === "Read",
+  };
 }
 
 /** React facade over the EditorEngine port; it never touches CodeMirror directly. */
@@ -45,8 +60,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   const { content, language, path, mode = "Read", wrapLines, gutterMarks, onReady } = props;
   const hostRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<EngineHandle | null>(null);
-  const live = useRef(props);
-  live.current = props;
+  const coarse = useCoarsePointer();
+  const fontPx = useFontPx(coarse);
+  const live = useRef({ props, device: { coarse, fontPx } });
+  live.current = { props, device: { coarse, fontPx } };
+  const notice = useMemo(() => degradeProfile({ doc: content, pointerCoarse: coarse }).notice, [content, coarse]);
 
   // The engine mounts asynchronously (lazy chunk), so callers hold a stable delegate.
   const delegate = useMemo<CodeEditorHandle>(() => {
@@ -56,7 +74,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     };
     return {
       get features() { return e().features; },
-      createBufferState: (init) => e().createBuffer({ ...init, config: modeConfig(live.current) }),
+      createBufferState: (init) => e().createBuffer({ ...init, config: modeConfig(live.current.props, live.current.device, init.doc) }),
       getState: () => e().getBuffer(),
       setBufferState: (s) => e().setBuffer(s),
       getText: () => e().getText(),
@@ -79,16 +97,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       const { CmEngine } = await import("./files/engine/CmEngine");
       if (cancelled || !hostRef.current) return;
       const engine = new CmEngine();
-      const cur = live.current;
-      const config = modeConfig(cur);
+      const { props: cur, device } = live.current;
+      const config = modeConfig(cur, device, cur.content);
       const buffer = await engine.createBuffer({
         doc: cur.content, language: cur.language, gutterMarks: cur.gutterMarks, config,
       });
       if (cancelled || !hostRef.current) return;
       mounted = engine.mount(hostRef.current, { ...config, buffer });
       engineRef.current = mounted;
-      mounted.setMode(modeConfig(live.current)); // props may have moved while the chunk loaded
-      live.current.onReady?.(delegate);
+      mounted.setMode(modeConfig(live.current.props, live.current.device, live.current.props.content)); // props may have moved while the chunk loaded
+      live.current.props.onReady?.(delegate);
     })();
     return () => {
       cancelled = true;
@@ -98,8 +116,10 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   }, [delegate]);
 
   useEffect(() => {
-    engineRef.current?.setMode(modeConfig({ mode, wrapLines, path }));
-  }, [mode, wrapLines, path]);
+    engineRef.current?.setMode(modeConfig({ mode, wrapLines, path }, { coarse, fontPx }, content));
+    // The doc only decides wrapping here; a new document is handled by the buffer effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, wrapLines, path, coarse, fontPx]);
 
   // A read-only buffer follows its source; an editable one never has its doc replaced from props.
   const seeded = useRef({ content, language, gutterMarks });
@@ -110,9 +130,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     if (!engine || mode === "Edit") return;
     if (prev.content === content && prev.language === language && prev.gutterMarks === gutterMarks) return;
     void engine
-      .createBuffer({ doc: content, language, gutterMarks, config: modeConfig({ mode, wrapLines, path }) })
+      .createBuffer({ doc: content, language, gutterMarks, config: modeConfig({ mode, wrapLines, path }, { coarse, fontPx }, content) })
       .then((b) => engine.setBuffer(b));
-  }, [content, language, gutterMarks, mode, wrapLines, path]);
+  }, [content, language, gutterMarks, mode, wrapLines, path, coarse, fontPx]);
 
-  return <div ref={hostRef} className={codeEditor} />;
+  return (
+    <div className={codeEditorRoot}>
+      {notice && <div className={degradeNotice} role="note" data-testid="degrade-notice">{notice}</div>}
+      <div ref={hostRef} className={codeEditor} />
+    </div>
+  );
 });

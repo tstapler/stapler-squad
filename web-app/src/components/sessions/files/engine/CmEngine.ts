@@ -1,10 +1,9 @@
 import { EditorView, gutter, GutterMarker } from "@codemirror/view";
 import { EditorState, Compartment, type ChangeSet, type Extension, type Text } from "@codemirror/state";
-import { basicSetup } from "codemirror";
 import type { GutterMarkType } from "@/lib/utils/parseDiff";
 import { gutterMarkerAdd, gutterMarkerDelete, gutterMarkerModify } from "../../CodeEditor.css";
 import { readOnlyExtension } from "../extensions/readOnlyFacet";
-import { degradeExtension } from "../extensions/degrade";
+import { degradeExtension, setupFor } from "../extensions/degrade";
 import { searchHighlightExtension, setSearchHit } from "../extensions/searchHighlight";
 import { vimExtension } from "../extensions/vim";
 import { mergeExtension } from "../extensions/merge";
@@ -58,11 +57,12 @@ interface Compartments {
   readOnly: Compartment;
   wrap: Compartment;
   label: Compartment;
+  font: Compartment;
 }
 
 const FEATURES: EngineFeatures = { vim: false, mergeView: false, lazyDoc: false, irc: true };
 
-function modeExtensions(c: ModeConfig): { readOnly: Extension; wrap: Extension; label: Extension } {
+function modeExtensions(c: ModeConfig): { readOnly: Extension; wrap: Extension; label: Extension; font: Extension } {
   const readOnly = (c.mode ?? "Read") === "Read";
   return {
     readOnly: [readOnlyExtension(readOnly), EditorView.contentAttributes.of({ "aria-readonly": String(readOnly) })],
@@ -73,18 +73,22 @@ function modeExtensions(c: ModeConfig): { readOnly: Extension; wrap: Extension; 
       autocorrect: "off",
       autocapitalize: "off",
       spellcheck: "false",
+      // Read mode on a touch device keeps the text selectable but never raises the keyboard.
+      ...(readOnly && c.noVirtualKeyboard ? { inputmode: "none" } : {}),
     }),
+    font: c.fontPx ? EditorView.theme({ "&": { fontSize: `${c.fontPx}px` } }) : [],
   };
 }
 
 export class CmEngine implements EditorEngine {
   readonly features = FEATURES;
-  private readonly comps: Compartments = { readOnly: new Compartment(), wrap: new Compartment(), label: new Compartment() };
+  private readonly comps: Compartments = { readOnly: new Compartment(), wrap: new Compartment(), label: new Compartment(), font: new Compartment() };
 
   async createBuffer(init: BufferInit): Promise<BufferState> {
+    const degrade = init.config?.degrade;
     let lang: Extension | null = null;
     try {
-      lang = await loadCodemirrorLang(init.language ?? "text");
+      if (degrade?.syntaxHighlight !== false) lang = await loadCodemirrorLang(init.language ?? "text");
     } catch {
       // Unsupported language: plain text.
     }
@@ -100,14 +104,15 @@ export class CmEngine implements EditorEngine {
     const mode = modeExtensions(init.config ?? {});
     // view.setState drops every extension, so each buffer state carries the full set itself.
     const extensions: Extension[] = [
-      basicSetup,
+      setupFor(degrade),
       cmTheme,
       legacyVimKeymap(),
       changeGutter,
       this.comps.readOnly.of(mode.readOnly),
       this.comps.wrap.of(mode.wrap),
       this.comps.label.of(mode.label),
-      degradeExtension(),
+      this.comps.font.of(mode.font),
+      degradeExtension(degrade),
       searchHighlightExtension(),
       vimExtension(),
       mergeExtension(),
@@ -122,7 +127,10 @@ export class CmEngine implements EditorEngine {
 
   reconfigureEffects(config: ModeConfig) {
     const m = modeExtensions(config);
-    return [this.comps.readOnly.reconfigure(m.readOnly), this.comps.wrap.reconfigure(m.wrap), this.comps.label.reconfigure(m.label)];
+    return [
+      this.comps.readOnly.reconfigure(m.readOnly), this.comps.wrap.reconfigure(m.wrap),
+      this.comps.label.reconfigure(m.label), this.comps.font.reconfigure(m.font),
+    ];
   }
 }
 
@@ -137,7 +145,7 @@ class CmHandle implements EngineHandle {
 
   constructor(private engine: CmEngine, private readonly el: HTMLElement, options: EngineOptions) {
     this.buffer = options.buffer as CmBuffer;
-    this.config = { mode: options.mode, wrap: options.wrap, ariaLabel: options.ariaLabel };
+    this.config = { mode: options.mode, wrap: options.wrap, ariaLabel: options.ariaLabel, fontPx: options.fontPx, noVirtualKeyboard: options.noVirtualKeyboard };
     this.view = new EditorView({
       state: this.buffer.state,
       parent: el,

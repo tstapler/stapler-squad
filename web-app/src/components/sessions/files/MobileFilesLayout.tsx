@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { canGoBack, canGoForward, type BufferNotice } from "@/lib/files/bufferReducer";
+import { stepFontPx } from "@/lib/files/fontSize";
+import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import type { FilesV2 } from "@/lib/hooks/useFilesV2";
 import type { PaneState, PaneVia } from "@/lib/hooks/useMobilePane";
 import { useViewport } from "@/components/providers/ViewportProvider";
@@ -43,6 +45,7 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
   const { v2 } = p;
   const on = p.active && !!v2;
   const { isVirtualKeyboardOpen } = useViewport();
+  const coarse = useCoarsePointer();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [shown, setShown] = useState<BufferNotice | null>(null);
   const notice = v2?.buffers.state.notice ?? null;
@@ -66,9 +69,11 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
     return [
       { label: "Outline", run: () => v2.bridge.setOverlay("outline"), disabled: !active },
       { label: "Copy path", run: () => active && tabActions.copyPath(active.path), disabled: !active },
+      { label: "Text larger (A+)", run: () => void stepFontPx(1, coarse) },
+      { label: "Text smaller (A-)", run: () => void stepFontPx(-1, coarse) },
       ...(p.overflowItems ?? []),
     ];
-  }, [v2, p.overflowItems, tabActions]);
+  }, [v2, p.overflowItems, tabActions, coarse]);
 
   if (!on || !v2) return <>{null}{p.children}{null}</>;
 

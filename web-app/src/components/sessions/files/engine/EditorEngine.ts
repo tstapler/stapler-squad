@@ -1,6 +1,7 @@
 // Port the Files tab depends on instead of CodeMirror (ADR-036 decisions 19-20; research/transport.md 11.1).
 // This file must not import @codemirror/*, @replit/codemirror-vim or @lezer/*.
 import type { GutterMarkType } from "@/lib/utils/parseDiff";
+import type { DegradeProfile } from "@/lib/files/degradeProfile";
 
 export type EditorMode = "Read" | "Edit";
 
@@ -59,6 +60,12 @@ export interface ModeConfig {
   wrap?: boolean;
   /** Accessible name of the editing surface, e.g. "File: src/a.go". */
   ariaLabel?: string;
+  /** Features to drop for a large file on a phone; applied when a buffer is created. */
+  degrade?: DegradeProfile;
+  /** Editor font size in CSS px. */
+  fontPx?: number;
+  /** Read mode on a touch device: tapping code must not raise the soft keyboard. */
+  noVirtualKeyboard?: boolean;
 }
 
 export interface BufferInit {

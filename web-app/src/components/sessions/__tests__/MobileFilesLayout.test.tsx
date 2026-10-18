@@ -228,3 +228,22 @@ describe("MobileFilesLayout", () => {
     }
   });
 });
+
+describe("MobileFilesLayout overflow menu", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("fontStepper_should_StepFromTheOverflowMenu_And_PersistPerDevice", async () => {
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByText("tap-file"));
+    const open = () => user.click(screen.getByRole("button", { name: "More actions" }));
+    await open();
+    await user.click(screen.getByRole("menuitem", { name: "Text larger (A+)" }));
+    expect(window.localStorage.getItem("ssq.files.fontPx")).toBe("14");
+    await open();
+    await user.click(screen.getByRole("menuitem", { name: "Text smaller (A-)" }));
+    await open();
+    await user.click(screen.getByRole("menuitem", { name: "Text smaller (A-)" }));
+    expect(window.localStorage.getItem("ssq.files.fontPx")).toBe("12");
+  });
+});
