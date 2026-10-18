@@ -97,11 +97,17 @@ export function useGetFileContent(
   /** Bump to refetch the same file; pair it with `invalidateFileContent`. */
   reloadKey = 0
 ): UseGetFileContentResult {
-  const [data, setData] = useState<GetFileContentResponse | null>(null);
+  // Tagged with its source so a render for a new path never sees the previous file's content (the effect below
+  // only replaces it after that render commits).
+  const [loaded, setLoaded] = useState<{ key: string; data: GetFileContentResponse } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Track which path we're fetching to avoid stale updates.
   const requestIdRef = useRef(0);
+  const setData = useCallback(
+    (next: GetFileContentResponse | null, key = "") => setLoaded(next ? { key, data: next } : null),
+    []
+  );
 
   useEffect(() => {
     if (!sessionId || !filePath) {
@@ -115,7 +121,7 @@ export function useGetFileContent(
     const cacheKey = `${sessionId}:${filePath}`;
     const cached = fileContentCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < FILE_CONTENT_CACHE_TTL_MS) {
-      setData(cached.data);
+      setData(cached.data, cacheKey);
       setLoading(false);
       setError(null);
       return;
@@ -130,7 +136,7 @@ export function useGetFileContent(
       .then((response) => {
         if (requestId === requestIdRef.current) {
           fileContentCache.set(cacheKey, { data: response, timestamp: Date.now() });
-          setData(response);
+          setData(response, cacheKey);
         }
       })
       .catch((err) => {
@@ -144,7 +150,8 @@ export function useGetFileContent(
           setLoading(false);
         }
       });
-  }, [sessionId, filePath, baseUrl, reloadKey]);
+  }, [sessionId, filePath, baseUrl, reloadKey, setData]);
 
+  const data = loaded?.key === `${sessionId}:${filePath}` ? loaded.data : null;
   return { data, loading, error };
 }
