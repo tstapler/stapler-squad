@@ -125,7 +125,9 @@ mkdir -p "$(dirname "$WT_E")"
 make_fixture "$WT_E"
 
 STAPLER_SQUAD_SHARED_NODE_MODULES=0 "$SCRIPT" "$WT_E" > "$TMP/out-e1" 2>&1 || { cat "$TMP/out-e1"; fail "scenario 4: opt-out install failed"; }
-[ -d "$WT_E/node_modules" ] && [ ! -L "$WT_E/node_modules" ] || fail "scenario 4: STAPLER_SQUAD_SHARED_NODE_MODULES=0 did not produce a plain local directory"
+if [ ! -d "$WT_E/node_modules" ] || [ -L "$WT_E/node_modules" ]; then
+	fail "scenario 4: STAPLER_SQUAD_SHARED_NODE_MODULES=0 did not produce a plain local directory"
+fi
 echo "PASS: scenario 4 -- STAPLER_SQUAD_SHARED_NODE_MODULES=0 opts out to a plain local install"
 
 echo "All shared-node-modules.sh scenarios passed."
