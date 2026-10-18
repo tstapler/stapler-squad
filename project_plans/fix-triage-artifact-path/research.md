@@ -1,5 +1,7 @@
 # Research: fix-triage-artifact-path
 
+> Describes the code *before* #1072; the line references below are to that earlier state.
+
 ## Confirmed Root Cause
 
 **File:** `server/services/backlog_service_trigger_triage.go` lines 655–688

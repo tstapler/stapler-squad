@@ -5,6 +5,11 @@
 **Item ID:** 1cfae441-8953-41e6-803d-959062119d4f  
 **Category:** bugfix
 
+> **Status:** implemented on main by #1072 (`resolveSDDPlanArtifactsPath`, persist-only-if-exists in
+> `TriggerTriage`, `checkPlanArtifactsOnDisk`, `PlanArtifactsPathMissing` in `TransitionGuard`).
+> Root cause is inferred from code and tests; the original screenshot's error text was never
+> available, so the live error was not reproduced.
+
 ---
 
 ## Problem Statement
