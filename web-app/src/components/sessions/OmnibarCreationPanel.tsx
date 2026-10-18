@@ -904,6 +904,33 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* Parallel fan-out: same prompt across N isolated worktree sessions (new_worktree only) */}
+        {sessionType === "new_worktree" && (
+          <div className={field}>
+            <label className={labelClass} htmlFor="omnibar-fanout-count">
+              Run as variants <span style={{ fontWeight: "normal", opacity: 0.6 }}>(1 = single session, max 5)</span>
+            </label>
+            <input
+              id="omnibar-fanout-count"
+              data-testid="omnibar-fanout-count"
+              type="number"
+              min={1}
+              max={5}
+              className={fieldInput}
+              value={formState.fanoutCount}
+              onChange={(e) => {
+                const n = Math.max(1, Math.min(5, Math.floor(Number(e.target.value)) || 1));
+                setFormField("fanoutCount", n);
+              }}
+            />
+            {formState.fanoutCount >= 2 && (
+              <span className={hint} role="status" data-testid="omnibar-fanout-cost-warning">
+                {formState.fanoutCount} sessions will run simultaneously — monitor cost in Insights
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Presets — hand-edited, shareable launch shortcuts from launcher-presets.json.
             Placed above Advanced Options so it's visible without an extra click. */}
         <div className={collapsible}>

@@ -457,6 +457,13 @@ service SessionService {
   // Batch session creation (S2)
   rpc BatchCreateSessions(BatchCreateSessionsRequest) returns (BatchCreateSessionsResponse) {}
 
+  // FanOutSession creates N (2-5) sessions from one prompt, each in its own worktree,
+  // grouped by a shared fanout tag so the UI can compare them (/fanout/:groupId).
+  rpc FanOutSession(FanOutSessionRequest) returns (FanOutSessionResponse) {}
+  // PickFanoutWinner merges the chosen variant's branch into the group's base branch and
+  // archives every other session in the group.
+  rpc PickFanoutWinner(PickFanoutWinnerRequest) returns (PickFanoutWinnerResponse) {}
+
   // One-shot PR creation (S3)
   rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
 
@@ -3026,6 +3033,39 @@ message BatchCreateSessionsResponse {
   repeated BatchCreateResult results = 1;
   int32 succeeded = 2;
   int32 failed = 3;
+}
+
+// ============================================================================
+// Parallel fan-out
+// ============================================================================
+
+// FanOutSessionRequest runs one prompt across count isolated sessions. The base
+// CreateSessionRequest carries title (used as a prefix), path, program, prompt, etc.;
+// its tags are extended with the fan-out group tags.
+message FanOutSessionRequest {
+  CreateSessionRequest base = 1;
+  // Number of variants, 2-5 inclusive. Rejected server-side outside that range.
+  int32 count = 2;
+  // Optional per-variant program/model override (index i applies to variant i).
+  // Empty entries (or a shorter list) fall back to base.program.
+  repeated string program_overrides = 3;
+}
+
+message FanOutSessionResponse {
+  string group_id = 1;
+  repeated Session sessions = 2;
+}
+
+message PickFanoutWinnerRequest {
+  string group_id = 1;
+  string winner_session_id = 2;
+}
+
+message PickFanoutWinnerResponse {
+  // Branch the winner was merged into.
+  string base_branch = 1;
+  // IDs of the sessions archived as losers.
+  repeated string archived_session_ids = 2;
 }
 
 // ============================================================================
