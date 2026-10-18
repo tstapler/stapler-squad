@@ -72,6 +72,7 @@ import {
 } from "./Omnibar.css";
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
 import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
@@ -2210,6 +2211,9 @@ export function Omnibar({
           <span className={shortcut}>
             <span className={shortcutKey}>Esc</span> Close
           </span>
+          {isDiscoveryMode && isAtDropdownVisible && (
+            <OmnibarBacklogButton onClick={openBacklogCompose} className={createButton} />
+          )}
           {!isDiscoveryMode && (
             <button
               type="button"

@@ -16,8 +16,9 @@ import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
   collapsibleContent, footer, button as buttonClass, buttonSecondary, buttonPrimary,
-  error as errorClass,
+  error as errorClass, backlogButton,
 } from "./Omnibar.css";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import * as styles from "./OmnibarCreationPanel.css";
 import { FileChipList, type AttachedFile } from "./FileChipList";
 import { RadioGroup } from "@/components/ui/RadioGroup";
@@ -1022,14 +1023,11 @@ export function OmnibarCreationPanel({
       {/* Footer */}
       <div className={footer}>
         {onCreateBacklog && (
-          <button
-            type="button"
-            data-testid="omnibar-create-backlog-button"
-            className={`${buttonClass} ${buttonSecondary}`}
+          <OmnibarBacklogButton
             onClick={onCreateBacklog}
-          >
-            Create Backlog Item
-          </button>
+            disabled={isSubmitting}
+            className={`${buttonClass} ${buttonSecondary} ${backlogButton}`}
+          />
         )}
         <button type="button" className={`${buttonClass} ${buttonSecondary}`} onClick={onCancel}>
           Cancel

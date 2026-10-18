@@ -237,12 +237,16 @@ export const collapsibleContent = style({
 
 export const footer = style({
   display: "flex",
+  flexWrap: "wrap",
   justifyContent: "flex-end",
   gap: 8,
   padding: 16,
   borderTop: `1px solid ${vars.color.borderColor}`,
   background: vars.color.hoverBackground,
 });
+
+// Pushes the backlog action to the left edge of the footer row.
+export const backlogButton = style({ marginRight: "auto" });
 
 export const button = style({
   padding: "8px 16px",

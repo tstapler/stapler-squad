@@ -7,6 +7,7 @@
 
 import React from "react";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Omnibar } from "@/components/sessions/Omnibar";
 import {
   mockUsePathCompletions,
@@ -286,5 +287,69 @@ describe("Omnibar compose mode", () => {
       expect(screen.getByTestId("backlog-intent-review-parse-failed-banner")).toBeInTheDocument()
     );
     expect(screen.queryByTestId("backlog-compose-widget")).not.toBeInTheDocument();
+  });
+});
+
+describe("Omnibar footer / fallback Create Backlog Item button", () => {
+  function enterCreationMode() {
+    fireEvent.click(screen.getByRole("button", { name: /^Create$/ }));
+  }
+
+  it("footer click seeds and focuses the compose textarea", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "fix the flaky login test");
+    enterCreationMode();
+
+    fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
+
+    const textarea = screen.getByTestId("backlog-compose-textarea");
+    expect(textarea).toHaveValue("fix the flaky login test");
+    expect(textarea).toHaveFocus();
+  });
+
+  it("plain Enter on the focused footer button opens compose and does not also run the submit path", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    // "backlog: ..." makes canSubmit true, so a leaked Enter would open the intent review.
+    await typeAndDetect(input, "backlog: fix login");
+    enterCreationMode();
+    expect(screen.getByTestId("omnibar-create-session-button")).toBeEnabled();
+
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    screen.getByTestId("omnibar-create-backlog-button").focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByTestId("backlog-compose-textarea")).toBeInTheDocument();
+    expect(screen.queryByText(/Parsing your message into a backlog item/)).not.toBeInTheDocument();
+  });
+
+  it("does not stop Escape on the button, so the modal handler still sees it", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "/tmp");
+    enterCreationMode();
+    const onKeyDown = jest.fn();
+    const modal = screen.getByTestId("omnibar");
+    modal.addEventListener("keydown", onKeyDown);
+
+    fireEvent.keyDown(screen.getByTestId("omnibar-create-backlog-button"), { key: "Escape" });
+
+    expect(onKeyDown).toHaveBeenCalled();
+  });
+
+  it("shows the fallback button in discovery only while an @ command hides the list row", async () => {
+    mockBacklogService({});
+    const atMock = jest.requireMock("@/lib/hooks/useAtCommandSuggestions").useAtCommandSuggestions as jest.Mock;
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "fix login");
+    expect(screen.queryByTestId("omnibar-create-backlog-button")).not.toBeInTheDocument();
+
+    atMock.mockReturnValue({ isAtCommand: true, suggestions: [], complete: jest.fn() });
+    await typeAndDetect(input, "@deploy");
+    fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
+
+    expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("@deploy");
+    atMock.mockReturnValue({ isAtCommand: false, suggestions: [], complete: jest.fn() });
   });
 });
