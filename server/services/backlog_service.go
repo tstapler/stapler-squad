@@ -1449,6 +1449,18 @@ func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD flo
 	return totalUSD, unpricedCount
 }
 
+// effectiveBudgetThreshold resolves the soft budget for an item: its own
+// threshold wins, otherwise the live global quota.default_cost_budget_threshold_usd
+// (read per call so edits apply without restart). nil = off; 0.0 is a valid
+// threshold. Resolution lives here so session.EvaluateBudgetThreshold stays pure.
+// Crossing is log-only ([BudgetWarning]); no notification is sent.
+func effectiveBudgetThreshold(itemThresholdUSD *float64) *float64 {
+	if itemThresholdUSD != nil {
+		return itemThresholdUSD
+	}
+	return config.LoadConfig().Quota.DefaultCostBudgetThresholdUSD
+}
+
 // logBudgetWarningIfCrossed evaluates the per-item soft budget threshold
 // (ADR-003) inline at cost-recording time for a headless triage/review call:
 // priorSessions is that item's ItemSession set fetched before this call's own
@@ -1457,6 +1469,7 @@ func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD flo
 // retries, or errors the call that triggered it (see EvaluateBudgetThreshold's
 // own doc comment).
 func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []session.ItemSessionSummary, callCostUSD float64) {
+	thresholdUSD = effectiveBudgetThreshold(thresholdUSD)
 	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
 	cumulative := priorTotal + callCostUSD
 	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
@@ -1478,6 +1491,7 @@ func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, prio
 // re-log; deleting the item's entry once its cost drops back under threshold
 // lets a future re-crossing warn again. No-ops when thresholdUSD is nil.
 func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float64, totalCostUSD float64) {
+	thresholdUSD = effectiveBudgetThreshold(thresholdUSD)
 	if thresholdUSD == nil {
 		return
 	}
