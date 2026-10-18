@@ -1300,14 +1300,15 @@ describe("BacklogItemDetail — Story 3.1.4 Task 3.1.4i/3.1.4j: shared Collapsib
     // sibling sections wired into one CollapsibleGroup (Task 3.1.4i)
     // actually deliver ADR-027's cross-header keyboard-nav benefit.
     const descriptionHeader = screen.getByTestId("collapsible-header-description");
-    const planArtifactsHeader = screen.getByTestId("collapsible-header-plan-artifacts");
+    // Acceptance Criteria directly follows Description in the Reference group.
+    const nextHeader = screen.getByTestId("collapsible-header-ac-criteria");
 
     descriptionHeader.focus();
     expect(descriptionHeader).toHaveFocus();
 
     fireEvent.keyDown(descriptionHeader, { key: "ArrowDown", code: "ArrowDown" });
 
-    expect(planArtifactsHeader).toHaveFocus();
+    expect(nextHeader).toHaveFocus();
   });
 });
 
@@ -1912,5 +1913,96 @@ describe("BacklogItemDetail — Story 5.2.3: per-item cost-by-stage table", () =
 
     expect(screen.getByTestId("item-stage-cost-error")).toHaveTextContent("Couldn't load cost data.");
     expect(screen.queryByTestId("item-stage-cost-table")).not.toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemDetail — Phase 3: criteria in the accordion, group labels, Description default", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  async function renderItem(overrides: Partial<BacklogItem> = {}) {
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([]),
+      acCriteria: [
+        { index: 0, text: "First criterion", status: "done" },
+        { index: 1, text: "Second criterion", status: "pending" },
+      ],
+      ...overrides,
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  const follows = (a: HTMLElement, b: HTMLElement) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("BacklogItemDetail_should_RenderAcCriteriaSectionInsideCollapsibleGroup", async () => {
+    await renderItem({ status: "review" });
+    const header = screen.getByTestId("collapsible-header-ac-criteria");
+    expect(header).toHaveTextContent("Acceptance Criteria (1/2)");
+    expect(screen.getByTestId("ac-criteria-section")).toContainElement(screen.getByText("First criterion"));
+  });
+
+  it.each(["review", "pr_pending"] as const)(
+    "BacklogItemDetail_should_DefaultExpandAcCriteriaSection_When_StatusIs_%s",
+    async (status) => {
+      await renderItem({ status });
+      expect(screen.getByTestId("collapsible-header-ac-criteria")).toHaveAttribute("aria-expanded", "true");
+    },
+  );
+
+  it("BacklogItemDetail_should_DefaultCollapseAcCriteriaSection_When_StatusIsInProgress", async () => {
+    await renderItem({ status: "in_progress" });
+    expect(screen.getByTestId("collapsible-header-ac-criteria")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("First criterion")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RespectStoredCollapsedPreference_For_AcCriteriaSection", async () => {
+    localStorage.setItem("backlog-detail-section-item-1-ac-criteria", "false");
+    await renderItem({ status: "review" });
+    expect(screen.getByTestId("collapsible-header-ac-criteria")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_RenderAllFiveGroupLabels_AsAriaHiddenNonAccordionElements_When_StatusIsReview", async () => {
+    await renderItem({ status: "review" });
+    for (const label of ["Decision", "Reference", "Monitoring", "Audit Trail", "Admin"]) {
+      const el = screen.getByText(label);
+      expect(el).toHaveAttribute("aria-hidden", "true");
+      expect(el.closest("button")).toBeNull();
+      expect(el.closest("[data-radix-collection-item]")).toBeNull();
+    }
+  });
+
+  it("BacklogItemDetail_should_NotRenderDecisionGroupLabel_When_AllDecisionSectionsAreGatedOut", async () => {
+    await renderItem({ status: "idea", gateVerdict: undefined });
+    expect(screen.queryByText("Decision")).not.toBeInTheDocument();
+    expect(screen.getByText("Reference")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_DefaultExpandDescriptionSection_When_NoStoredPreference", async () => {
+    await renderItem({ status: "in_progress", description: "Some description" });
+    expect(screen.getByTestId("collapsible-header-description")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("backlog-description-rendered")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_PersistExplicitDescriptionCollapse_AcrossReopen", async () => {
+    await renderItem({ status: "in_progress", description: "Some description" });
+    fireEvent.click(screen.getByTestId("collapsible-header-description"));
+    expect(localStorage.getItem("backlog-detail-section-item-1-description")).toBe("false");
+  });
+
+  it("BacklogItemDetail_should_RenderDescriptionSectionBeforeAcCriteriaSection_In_Reference_Group", async () => {
+    await renderItem({ status: "review" });
+    expect(
+      follows(
+        screen.getByTestId("collapsible-header-description"),
+        screen.getByTestId("collapsible-header-ac-criteria"),
+      ),
+    ).toBe(true);
   });
 });
