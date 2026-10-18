@@ -124,4 +124,17 @@ export class FilesTabView {
   async activeLineText(): Promise<string> {
     return this.page.evaluate(() => document.querySelector(".cm-activeLine")?.textContent ?? "");
   }
+
+  // Mobile layout (nav-stack panes, top bar, bottom bar, tab sheet).
+  get layoutRoot(): Locator { return this.treePane.locator(".."); }
+  get topBar(): Locator { return this.page.getByTestId("mobile-top-bar"); }
+  get bottomBar(): Locator { return this.page.getByRole("navigation", { name: "Files actions" }); }
+  bottomBarButton(name: string): Locator { return this.bottomBar.getByRole("button", { name, exact: true }); }
+  get paneBack(): Locator { return this.topBar.getByRole("button", { name: /^Back to / }); }
+  get tabCountButton(): Locator { return this.topBar.getByRole("button", { name: /^Open files, \d+$/ }); }
+  get tabSheet(): Locator { return this.page.getByRole("dialog", { name: "Open files" }); }
+  get overflowButton(): Locator { return this.topBar.getByRole("button", { name: "More actions" }); }
+  get layout(): Promise<string | null> { return this.layoutRoot.getAttribute("data-layout"); }
+  get pane(): Promise<string | null> { return this.layoutRoot.getAttribute("data-pane"); }
+  get codeContent(): Locator { return this.page.getByRole("textbox", { name: /^File: / }); }
 }
