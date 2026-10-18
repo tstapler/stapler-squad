@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // blockedDequeueFixture seeds a queued dependent whose blocker is a not-yet-started
@@ -132,6 +133,12 @@ func TestDequeueNextQueuedItems_should_NotStartItem_When_PlanArtifactsPathDelete
 
 	assert.Equal(t, "queued", itemStatus(t, svc, itemID), "item with a now-missing plan artifacts path must not be dequeued into in_progress")
 	assert.Empty(t, creator.calls, "no work session may be spawned when the plan can no longer be read")
+
+	// Criterion 6: the stale path must also be surfaced durably (a stuck row the
+	// item detail view and Unfinished tab read), not only logged.
+	stuck, err := svc.storage.HasOpenStuckReason(ctx, itemID, domain.StuckReasonPlanNotApproved)
+	require.NoError(t, err)
+	assert.True(t, stuck, "a queued item whose plan_artifacts_path vanished must get an open plan_not_approved stuck row")
 }
 
 func TestTransitionBacklogItemStatus_should_RejectInProgress_When_BlockerUnresolved(t *testing.T) {

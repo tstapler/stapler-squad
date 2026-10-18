@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/guidancerequest"
 )
 
@@ -197,6 +198,7 @@ func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in CreateGuid
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("create guidance request: commit: %w", err)
 	}
+	r.publishGuidanceChange(ctx, row.Scope, row.ScopeKey)
 	return guidanceRequestToData(row), nil
 }
 
@@ -309,6 +311,9 @@ func (r *EntRepository) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID,
 	if err != nil {
 		return false, fmt.Errorf("answer guidance request %s: %w", id, err)
 	}
+	if n > 0 {
+		r.publishGuidanceChangeByID(ctx, id)
+	}
 	return n > 0, nil
 }
 
@@ -346,6 +351,9 @@ func (r *EntRepository) CancelGuidanceRequest(ctx context.Context, id uuid.UUID,
 		Save(ctx)
 	if err != nil {
 		return false, fmt.Errorf("cancel guidance request %s (%s): %w", id, reason, err)
+	}
+	if n > 0 {
+		r.publishGuidanceChangeByID(ctx, id)
 	}
 	return n > 0, nil
 }
@@ -478,4 +486,103 @@ func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*
 		return nil, fmt.Errorf("list all pending guidance requests: %w", err)
 	}
 	return guidanceRequestsToData(rows), nil
+}
+
+// pendingGuidanceItemIDs returns the subset of itemIDs that have at least one
+// open backlog-item-scoped GuidanceRequest, in a single query.
+func (r *EntRepository) pendingGuidanceItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+	if len(itemIDs) == 0 {
+		return map[string]bool{}, nil
+	}
+	keys, err := r.client.GuidanceRequest.Query().
+		Where(
+			guidancerequest.Scope(string(domain.RequestScopeBacklogItem)),
+			guidancerequest.ScopeKeyIn(itemIDs...),
+			guidancerequest.AnsweredAtIsNil(),
+			guidancerequest.CancelledAtIsNil(),
+		).
+		Select(guidancerequest.FieldScopeKey).
+		Strings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending guidance for items: %w", err)
+	}
+	set := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		set[k] = true
+	}
+	return set, nil
+}
+
+// attachPendingGuidance sets HasPendingGuidanceRequests on item. Best-effort:
+// a lookup failure is logged and leaves the flag false.
+func (r *EntRepository) attachPendingGuidance(ctx context.Context, item *BacklogItemData) {
+	if item == nil || item.ID == "" {
+		return
+	}
+	set, err := r.pendingGuidanceItemIDs(ctx, []string{item.ID})
+	if err != nil {
+		log.WarningLog().Printf("[EntRepository] attachPendingGuidance: item %s: %v", item.ID, err)
+		return
+	}
+	item.HasPendingGuidanceRequests = set[item.ID]
+}
+
+// publishGuidanceChange republishes the owning item so WatchBacklogItems
+// subscribers see HasPendingGuidanceRequests flip. No-op for non-item scopes.
+func (r *EntRepository) publishGuidanceChange(ctx context.Context, scope string, scopeKey string) {
+	if scope != string(domain.RequestScopeBacklogItem) || scopeKey == "" {
+		return
+	}
+	// Best-effort republish after the write committed: must survive caller cancellation.
+	ctx = context.WithoutCancel(ctx)
+	itemID, err := uuid.Parse(scopeKey)
+	if err != nil {
+		return
+	}
+	row, err := r.client.BacklogItem.Query().Where(backlogitem.ID(itemID)).WithSource().Only(ctx)
+	if err != nil {
+		if !ent.IsNotFound(err) {
+			log.WarningLog().Printf("[EntRepository] publishGuidanceChange: item %s: %v", scopeKey, err)
+		}
+		return
+	}
+	item := backlogItemToData(row)
+	r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+}
+
+func (r *EntRepository) publishGuidanceChangeByID(ctx context.Context, id uuid.UUID) {
+	row, err := r.client.GuidanceRequest.Get(ctx, id)
+	if err != nil {
+		log.WarningLog().Printf("[EntRepository] publishGuidanceChangeByID: guidance request %s: %v", id, err)
+		return
+	}
+	r.publishGuidanceChange(ctx, row.Scope, row.ScopeKey)
+}
+
+// applyPendingGuidance sets the flag for ids via set, using one batched query.
+func (r *EntRepository) applyPendingGuidance(ctx context.Context, ids []string, set func(i int, pending bool)) {
+	pending, err := r.pendingGuidanceItemIDs(ctx, ids)
+	if err != nil {
+		log.WarningLog().Printf("[EntRepository] applyPendingGuidance: %v", err)
+		return
+	}
+	for i, id := range ids {
+		set(i, pending[id])
+	}
+}
+
+func (r *EntRepository) applyPendingGuidanceToData(ctx context.Context, items []BacklogItemData) {
+	ids := make([]string, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	r.applyPendingGuidance(ctx, ids, func(i int, p bool) { items[i].HasPendingGuidanceRequests = p })
+}
+
+func (r *EntRepository) applyPendingGuidanceToSummaries(ctx context.Context, items []BacklogItemSummary) {
+	ids := make([]string, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	r.applyPendingGuidance(ctx, ids, func(i int, p bool) { items[i].HasPendingGuidanceRequests = p })
 }

@@ -869,6 +869,13 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// with no readable plan content — an operator sees this via the
 			// item's stuck-review surface and re-runs triage to refresh the path.
 			log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
+			// The log line alone is invisible to the operator; MarkStuck is idempotent across sweeps.
+			if s.storage != nil {
+				msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
+				if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
+					log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
+				}
+			}
 		default:
 			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
 		}

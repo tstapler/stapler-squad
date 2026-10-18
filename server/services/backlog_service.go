@@ -1062,6 +1062,7 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.
 		PlanRejectionReason: item.PlanRejectionReason,
 	}
 	p.PluginId = item.SourcePluginID
+	p.HasPendingGuidanceRequests = item.HasPendingGuidanceRequests
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
@@ -1151,6 +1152,7 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		PublicId:           item.PublicIDRaw,
 	}
 	p.PluginId = item.SourcePluginID
+	p.HasPendingGuidanceRequests = item.HasPendingGuidanceRequests
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}

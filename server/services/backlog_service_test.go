@@ -4324,9 +4324,21 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 
 	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	expectedPath := filepath.Join(workDir, "project_plans", slug, "implementation")
-	assert.Equal(t, expectedPath, updated.PlanArtifactsPath,
-		"PlanArtifactsPath must point at the implementation/ subdir SDD's plan.md actually lives in")
+	// The recorded path is a durable copy of implementation/, not the in-worktree
+	// directory: worktrees are removed on terminal/reopen cleanup, which left the
+	// recorded path dangling (backlog item 1cfae441-8953-41e6-803d-959062119d4f).
+	assert.True(t, strings.HasSuffix(updated.PlanArtifactsPath, filepath.Join(item.ID, sddPlanSnapshotDirName)),
+		"PlanArtifactsPath %q must be the per-item durable plan snapshot", updated.PlanArtifactsPath)
+	assert.False(t, strings.HasPrefix(updated.PlanArtifactsPath, workDir), "must not point inside the triage worktree")
+	copied, readErr := os.ReadFile(filepath.Join(updated.PlanArtifactsPath, "plan.md"))
+	require.NoError(t, readErr, "the snapshot must contain plan.md directly (work-session context reads <path>/plan.md)")
+	assert.Equal(t, "# Plan\n", string(copied))
+
+	// Survival: remove the worktree the way terminal/reopen cleanup does; the
+	// recorded path must still resolve, so ApprovePlan does not report "does not exist".
+	require.NoError(t, os.RemoveAll(workDir))
+	_, approveErr := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: item.ID}))
+	require.NoError(t, approveErr, "plan path must survive removal of the triage worktree")
 }
 
 // TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession is the

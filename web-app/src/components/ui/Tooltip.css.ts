@@ -33,3 +33,11 @@ export const tooltipContent = style({
 export const tooltipArrow = style({
   fill: vars.color.cardBackground,
 });
+
+export const tooltipLink = style({
+  display: "block",
+  marginTop: "2px",
+  color: vars.color.textSecondary,
+  textDecoration: "underline",
+  userSelect: "auto",
+});

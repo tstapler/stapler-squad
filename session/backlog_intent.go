@@ -33,7 +33,8 @@ Rules:
 3. acceptance_criteria: 2-5 concrete, testable criteria the task should satisfy. If the input is too vague to derive any, return an empty list rather than inventing generic filler.
 4. confidence: your 0.0-1.0 confidence that this structuring faithfully represents the input's intent. Use a low value when the input is ambiguous or very sparse.
 5. suggested_repo_path: if a "Known repos:" list is provided, set this to the exact path from that list that best matches the repo the task describes, or "" if none clearly matches. Never invent a path that is not in the list.
-6. Output ONLY a single JSON object, no text before or after it, matching this schema:
+6. If the input contains Markdown image references of the form ![alt](url), include every one verbatim, unchanged, in the description. Never rewrite, shorten, or omit them.
+7. Output ONLY a single JSON object, no text before or after it, matching this schema:
 {"title":"...","description":"...","acceptance_criteria":["...","..."],"confidence":0.9,"suggested_repo_path":""}`
 
 // BuildBacklogIntentSystemPrompt returns the stable system prompt for

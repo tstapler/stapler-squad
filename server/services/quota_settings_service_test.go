@@ -178,3 +178,18 @@ func TestConfigSurfaceProof_QuotaAssumedWindowTokenBudget_ChangesQuotaMode(t *te
 		})
 	}, int64(0), int64(5_000_000))
 }
+
+func TestUpdateQuotaConfig_LogsNewEffectiveValues_WhenSaved(t *testing.T) {
+	withIsolatedStateDir(t)
+	buf := captureSlog(t)
+
+	_, err := updateQuota(t, &sessionv1.QuotaSettings{
+		Enabled: proto.Bool(true), PauseBelowHeadroomPct: proto.Float64(30), AssumedWindowTokenBudget: proto.Int64(5_000_000),
+	})
+	require.NoError(t, err)
+
+	out := buf.String()
+	for _, want := range []string{"quota settings saved", "mode=proactive", "pause_below_headroom_pct=30", "assumed_window_token_budget=5000000"} {
+		assert.Contains(t, out, want)
+	}
+}
