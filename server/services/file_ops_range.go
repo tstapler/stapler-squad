@@ -202,7 +202,7 @@ func (o *FileOps) finishRange(rd *rangeRead, win rangeWindow) *sessionv1.ReadFil
 	resp.VersionToken = token.String()
 	_, body := detectBOM(win.Raw)
 	resp.ReadOnlyReason = classifyReadOnly(readFacts{
-		Truncated: !(resp.Bof && resp.Eof) || rd.info.Size() > truncateSize || resp.LongLine,
+		Truncated: !resp.Bof || !resp.Eof || rd.info.Size() > truncateSize || resp.LongLine,
 		ViaLink:   rd.rr.ViaLink,
 		Body:      body,
 	})
