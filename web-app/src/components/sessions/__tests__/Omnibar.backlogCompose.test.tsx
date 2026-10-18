@@ -356,12 +356,12 @@ describe("Omnibar footer / fallback Create Backlog Item button", () => {
     expect(onKeyDown).toHaveBeenCalled();
   });
 
-  it("shows the fallback button in discovery only while an @ command hides the list row", async () => {
+  it("shows the footer button in every discovery state, including while an @ command hides the list row", async () => {
     mockBacklogService({});
     const atMock = jest.requireMock("@/lib/hooks/useAtCommandSuggestions").useAtCommandSuggestions as jest.Mock;
     const { input } = renderOmnibar();
     await typeAndDetect(input, "fix login");
-    expect(screen.queryByTestId("omnibar-create-backlog-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("omnibar-create-backlog-button")).toBeInTheDocument();
 
     atMock.mockReturnValue({ isAtCommand: true, suggestions: [], complete: jest.fn() });
     await typeAndDetect(input, "@deploy");

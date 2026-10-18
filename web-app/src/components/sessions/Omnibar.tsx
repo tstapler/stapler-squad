@@ -2211,7 +2211,7 @@ export function Omnibar({
           <span className={shortcut}>
             <span className={shortcutKey}>Esc</span> Close
           </span>
-          {isDiscoveryMode && isAtDropdownVisible && (
+          {isDiscoveryMode && (
             <OmnibarBacklogButton onClick={openBacklogCompose} className={createButton} />
           )}
           {!isDiscoveryMode && (

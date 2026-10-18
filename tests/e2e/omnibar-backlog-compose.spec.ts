@@ -87,10 +87,10 @@ for (const profile of [V1_DESKTOP, V2_PORTRAIT]) {
       await expect(page.getByTestId('backlog-compose-submit')).toBeFocused();
     });
 
-    test('discovery shows the list row and no footer backlog button', async ({ page }) => {
+    test('discovery shows both the list row and the footer backlog button', async ({ page }) => {
       await openOmnibar(page, 'fix login');
       await expect(page.getByText('Create Backlog Item (AI)')).toBeVisible();
-      await expect(page.getByTestId('omnibar-create-backlog-button')).toHaveCount(0);
+      await expect(page.getByTestId('omnibar-create-backlog-button')).toBeVisible();
     });
 
     test('creation-mode footer button opens compose, and Enter on the focused button does too', async ({ page }) => {
