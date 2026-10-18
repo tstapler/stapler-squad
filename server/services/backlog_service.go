@@ -491,6 +491,12 @@ func (s *BacklogService) PipelineEngine() session.PipelineEngine {
 	return s.pipelineEngine
 }
 
+// WorkflowEngine returns the engine injected at construction. Exported for the
+// production-wiring test (server/dependencies_workflow_engine_test.go).
+func (s *BacklogService) WorkflowEngine() session.WorkflowEngine {
+	return s.engine
+}
+
 // ConfigMu exposes the mutex guarding cfg's backlog-concurrency fields so
 // server/dependencies.go can wire the exact same mutex into
 // DefaultsService.SetSharedBacklogConfig — see cfgMu's doc comment on the

@@ -258,6 +258,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("ClaudeSettingsWatcher started")
 	}
 
+	// Shadow ledger recorder: flushes the soak window every minute and once more
+	// when serverCtx ends; the actuator reads the same recorder.
+	if we := deps.WorkflowEngine; we != nil {
+		srv.SetWorkflowEngineSoakSource(we.Soak)
+		srv.goBackground(func() { we.Recorder.Run(serverCtx) })
+	}
+
 	// Start UnfinishedWork scanner.
 	if deps.UnfinishedScanner != nil {
 		deps.UnfinishedScanner.Start(serverCtx)
