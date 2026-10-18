@@ -99,6 +99,11 @@ help: ## Show this help message
 git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
 	@scripts/git-soak-status.sh
 
+.PHONY: verify-manual-instance
+verify-manual-instance: ## Guarded manual instance for slot N (make verify-manual-instance N=1 [CHECK=1 for a dry run that starts nothing])
+	@test -n "$(N)" || (echo "usage: make verify-manual-instance N=<1-5> [CHECK=1]" && exit 2)
+	@scripts/verify-manual-instance.sh $(if $(CHECK),--check) $(N)
+
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
 	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \

@@ -418,13 +418,39 @@ func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string) string {
-	var parts []string
+	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(); d != "" {
 			parts = append(parts, d)
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
+// On does nothing ("inactive: requires <flag>", parsed by the Features page) and
+// whether its value is the registry default or was set explicitly.
+func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
+		return nil
+	}
+	var parts []string
+	if name == config.AutonomousStallNudgeFeatureFlag &&
+		config.EffectiveAutonomousStallNudgeEnabled(cfg) && !config.EffectiveDiagnoseNudgeEnabled(cfg) {
+		parts = append(parts, "inactive: requires "+config.DiagnoseNudgeFeatureFlag)
+	}
+	onOff := func(b bool) string {
+		if b {
+			return "On"
+		}
+		return "Off"
+	}
+	if value, explicit := cfg.FeatureFlags[name]; explicit {
+		parts = append(parts, "Set explicitly: "+onOff(value))
+	} else {
+		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+	}
+	return parts
 }
 
 // SetEnableGuard installs a precondition for enabling name. It is checked only
@@ -571,20 +597,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 // flip as an explicit false.
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
-	cfg := config.LoadConfig()
-	previous, hadKey := cfg.GetFeatureFlagOverride(name)
-	if !hadKey {
-		previous = featureFlagDefault(name)
-	}
+	var previous, hadKey bool
+	err := config.UpdateConfig(func(cfg *config.Config) error {
+		previous, hadKey = cfg.GetFeatureFlagOverride(name)
+		if !hadKey {
+			previous = featureFlagDefault(name)
+		}
+		if op.isSet() {
+			return cfg.SetFeatureFlag(name, enabled)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
-	}
-	var err error
-	if op.isSet() {
-		err = cfg.SetFeatureFlag(name, enabled)
-	} else {
-		err = cfg.DeleteFeatureFlag(name)
 	}
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
@@ -609,7 +635,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	}
 	log.Error("feature controller toggle failed, rolling back persisted flag",
 		"feature", name, "enabled", enabled, "err", ctrlErr)
-	if rollbackErr := rollbackFlag(cfg, name, previous, hadKey); rollbackErr != nil {
+	if rollbackErr := rollbackFlag(name, previous, hadKey); rollbackErr != nil {
 		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
 		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed
@@ -625,11 +651,13 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
 }
 
-func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error {
-	if hadKey {
-		return cfg.SetFeatureFlag(name, previous)
-	}
-	return cfg.DeleteFeatureFlag(name)
+func rollbackFlag(name string, previous, hadKey bool) error {
+	return config.UpdateConfig(func(cfg *config.Config) error {
+		if hadKey {
+			return cfg.SetFeatureFlag(name, previous)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 }
 
 // finishApplied records the applied outcome and tells the observer which scope
