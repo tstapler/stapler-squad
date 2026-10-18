@@ -81,3 +81,16 @@ The triage worktree at `worktrees/triage-<itemID>_<suffix>/` is:
 - Cleaned up by `CleanupTerminalItem` → `cleanupItemWorktreesExcept` when a `SessionRoleWork` session is cleaned up on terminal transitions (done/archived)
 
 After cleanup, `PlanArtifactsPath` still points at the deleted directory. This is the "was written, now gone" scenario. The primary fix (Option A) does not address this; it addresses "was never written." For the deleted-after-use case, `TransitionGuard`'s disk check (AC-4) provides a safety net.
+
+## Second root cause: the saved path points inside a worktree that gets replaced
+
+The screenshot's path was inside a triage worktree
+(`.../worktrees/triage-<item-id>_<suffix>/project_plans/<name>/implementation`).
+Verified on disk for that item: that exact directory no longer exists, and a
+worktree for the same item under a *different* suffix now holds the same
+`project_plans/<name>/` (the plan survives because triage commits it to the
+branch). So persisting only-if-exists (#1072) is not enough: the path was valid
+at save time and went stale when the worktree was removed and recreated.
+`TriggerTriage` now copies the plan to `<triage-artifacts>/<item-id>/sdd-plan/`
+(the same durable base default-mode items already use) and records that copy.
+Which exact event removed that worktree was not established.

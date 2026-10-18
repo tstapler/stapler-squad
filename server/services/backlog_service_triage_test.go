@@ -5862,7 +5862,9 @@ func TestTriggerTriage_should_PersistPlanArtifactsPath_When_SDDImplementationDir
 
 	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, getErr)
-	assert.Equal(t, implementationDir, got.PlanArtifactsPath)
+	// The recorded path is the durable copy of implementation/, not the in-tree directory.
+	assert.True(t, strings.HasSuffix(got.PlanArtifactsPath, filepath.Join(item.ID, sddPlanSnapshotDirName)), "got %q", got.PlanArtifactsPath)
+	assert.FileExists(t, filepath.Join(got.PlanArtifactsPath, "plan.md"))
 }
 
 // TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissingButPlanMdAtRoot
@@ -5909,7 +5911,10 @@ func TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissin
 
 	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, getErr)
-	assert.Equal(t, projectPlanRoot, got.PlanArtifactsPath, "plan_artifacts_path must point at the root, not the never-created implementation/ subdirectory")
+	// The flat layout is copied from the project_plans/<name>/ root, not the never-created implementation/ subdirectory.
+	assert.True(t, strings.HasSuffix(got.PlanArtifactsPath, filepath.Join(item.ID, sddPlanSnapshotDirName)), "got %q", got.PlanArtifactsPath)
+	assert.FileExists(t, filepath.Join(got.PlanArtifactsPath, "plan.md"))
+	assert.FileExists(t, filepath.Join(got.PlanArtifactsPath, "requirements.md"), "the flat root's sibling docs are copied with it")
 }
 
 // TestTriggerTriage_should_PreserveEarlierPlanArtifactsPath_When_ReTriageWritesNoPlan
