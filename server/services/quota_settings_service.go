@@ -13,7 +13,6 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/log"
 )
 
 var _ sessionv1connect.QuotaServiceHandler = (*QuotaSettingsService)(nil)
@@ -63,15 +62,7 @@ func (s *QuotaSettingsService) UpdateQuotaConfig(
 	// Read back what was stored rather than echoing the request.
 	stored := config.LoadConfig()
 	v := quotaView(stored)
-	q := stored.Quota
-	log.Info("quota settings saved",
-		"enabled", q.Enabled, "mode", q.Mode(),
-		"pause_below_headroom_pct", q.PauseBelowHeadroomPct, "resume_margin_pct", q.ResumeMarginPct,
-		"assumed_window_token_budget", q.AssumedWindowTokenBudget,
-		"consecutive_ticks_to_pause", q.ConsecutiveTicksToPause, "consecutive_ticks_to_resume", q.ConsecutiveTicksToResume,
-		"rate_limit_window_minutes", q.RateLimitWindowMinutes, "manual_override_grace_minutes", q.ManualOverrideGraceMinutes,
-		"foreground_throttle_delay_seconds", q.ForegroundThrottleDelaySeconds,
-		"default_cost_budget_threshold_usd", q.DefaultCostBudgetThresholdUSD)
+	LogQuotaEffectiveConfig("quota settings saved", stored.Quota)
 	return connect.NewResponse(&sessionv1.UpdateQuotaConfigResponse{
 		Settings: v.settings, Mode: v.mode, Warnings: v.warnings, QuotaSource: v.source,
 	}), nil
