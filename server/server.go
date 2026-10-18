@@ -75,6 +75,9 @@ type Server struct {
 	selfAuthMu                 sync.RWMutex                    // guards selfAuthPaths
 	selfAuthPaths              []func(path string) bool        // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
+
+	// workflowEngineSoak is what /actuator/workflow-engine reads; set via SetWorkflowEngineSoakSource.
+	workflowEngineSoak atomic.Pointer[WorkflowEngineSoakSource]
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -784,6 +787,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
 		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
+	}
+
+	// QuotaService: live-editable quota gate settings (always registered; the gate
+	// re-reads config.json each reconcile).
+	{
+		quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(
+			services.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
+		srv.RegisterConnectHandler("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
+		log.Info("Registered QuotaService handler", "path", "/api"+quotaPath)
 	}
 
 	// Register ImportService handler (import-external-session, Phase 1).
@@ -1911,6 +1923,19 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 
 	updateFlagProcedurePath: middleware.ProfileRebinding,
 	replyProcedurePath:      middleware.ProfileRebinding,
+
+	// Config writes that change engine or gate behavior on the unauthenticated
+	// local listener (Task 2.1.1e). Reads (Get*/List*) stay unguarded.
+	"/api" + sessionv1connect.QuotaServiceUpdateQuotaConfigProcedure:       middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteTransitionGateProcedure:  middleware.ProfileRebinding,
 }
 
 // localChain is the :8543 middleware chain (inside otelhttp):

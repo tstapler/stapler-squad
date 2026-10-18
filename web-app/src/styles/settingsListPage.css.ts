@@ -43,7 +43,7 @@ export const newBtn = style({
   cursor: "pointer",
   border: `1px solid ${vars.color.primary}`,
   background: vars.color.primary,
-  color: vars.color.textInverse,
+  color: vars.color.onPrimaryFill,
   fontWeight: 500,
   ":hover": {
     background: vars.color.primaryHover,
