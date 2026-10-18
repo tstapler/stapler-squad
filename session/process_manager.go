@@ -3,11 +3,23 @@ package session
 import (
 	"context"
 	"os"
+
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // ProcessManager abstracts terminal process lifecycle and I/O.
 // Implementations: TmuxBackend (wraps TmuxProcessManager), NativeProcessManager (Phase 2).
 type ProcessManager interface {
+	// WireLaunch tells the backend what program to run, before Start or
+	// RestoreWithWorkDir. It is a required method so a new backend cannot compile
+	// without deciding how it consumes the launch command; callers never
+	// type-switch on the concrete backend to do this.
+	WireLaunch(spec LaunchSpec)
+
+	// AppendLaunchEnv adds environment (KEY=VALUE) for the program the next Start
+	// launches. A backend that cannot pass env must say so by doing nothing, explicitly.
+	AppendLaunchEnv(env ...string)
+
 	// Lifecycle
 	Start(dir string) error
 	RestoreWithWorkDir(workDir string) error
@@ -71,6 +83,15 @@ type ProcessManager interface {
 	// Exit notifications
 	SetOnExitCallback(fn func(string))
 	ResetExitOnce()
+}
+
+// LaunchSpec is everything a backend needs to launch an instance's program.
+type LaunchSpec struct {
+	// Program is the full launch command (including any --resume flag).
+	Program string
+	// NewTmuxSession builds the instance-configured tmux session (runner,
+	// prefix, socket, env) around Program; only the tmux backend calls it.
+	NewTmuxSession func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession
 }
 
 // ProcessManagerBackend identifies the backend implementation.

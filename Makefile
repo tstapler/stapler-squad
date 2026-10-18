@@ -318,15 +318,16 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
 # in go.mod together — nothing enforces this automatically; see ADR-001
 # (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
-# v1.1.0 bump (from v1.0.0): go.mod's client pin (clients/go v0.1.0) is
-# unchanged — it's the only tagged Go client version that exists, and it's
-# confirmed empirically compatible with the v1.1.0 server (full integration
-# suite, session/tymux/supervise_integration_test.go, passes against it).
-# v1.1.0 still lacks the Unix-socket control plane -- see
-# docs/bugs/open/BUG-112-*.md and tstapler/tymux#46 -- which only affects
-# DaemonConfig.SocketPath's collision protection, not the TCP-based session
-# I/O this repo's tymux backend actually depends on.
-TYMUX_VERSION ?= v1.1.0
+# v1.3.0 bump (from v1.1.0): go.mod's client pin (clients/go v0.1.0) is
+# unchanged — it's still the only tagged Go client version that exists, and
+# the full integration suite (session/tymux/supervise_integration_test.go)
+# passes against the embedded v1.3.0 server.
+# v1.3.0 fixes BUG-112 gap 1: the Unix-socket control plane
+# (TYMUXD_SOCKET_PATH/--socket-path) is now present in a tagged release —
+# confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
+# binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
+# See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
+TYMUX_VERSION ?= v1.3.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
