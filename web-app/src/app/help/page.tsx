@@ -1,7 +1,8 @@
 "use client";
 
 // analytics-exempt
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type Fuse from "fuse.js";
@@ -10,6 +11,16 @@ import type { DocEntry } from "@/lib/docs/docLoader";
 import * as styles from "./help.css";
 
 export default function HelpPage() {
+  // useSearchParams requires a Suspense boundary for static prerendering.
+  return (
+    <Suspense fallback={null}>
+      <HelpPageContent />
+    </Suspense>
+  );
+}
+
+function HelpPageContent() {
+  const docParam = useSearchParams()?.get("doc") ?? null;
   const [docs, setDocs] = useState<DocEntry[]>([]);
   const [filteredDocs, setFilteredDocs] = useState<DocEntry[]>([]);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -31,7 +42,8 @@ export default function HelpPage() {
         setFilteredDocs(entries);
         setFuseIndex(index);
         if (entries.length > 0) {
-          setSelectedSlug(entries[0].slug);
+          const deepLinked = docParam && entries.find((d) => d.slug === docParam);
+          setSelectedSlug(deepLinked ? deepLinked.slug : entries[0].slug);
         } else {
           // loadDocs() swallows per-file failures (allSettled), so "nothing loaded" is the failure signal.
           setLoadError(true);
@@ -46,7 +58,17 @@ export default function HelpPage() {
     return () => {
       cancelled = true;
     };
+    // docParam is read once per load; later changes are handled by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadTick]);
+
+  useEffect(() => {
+    if (docParam && docs.some((d) => d.slug === docParam)) {
+      setQuery("");
+      setFilteredDocs(docs);
+      setSelectedSlug(docParam);
+    }
+  }, [docParam, docs]);
 
   const handleSearch = useCallback(
     (value: string) => {
