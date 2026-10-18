@@ -9,12 +9,21 @@ import (
 // behavior, or a written exemption. Stories 2.1.1b, 1.2.4a, 1.5.3c, 1.5.8g,
 // 1.5.9c, 5.1.2 and 5.1.3 add entries and delete the matching pendingSurfaces
 // line in the same change.
-var configSurfaceProofs = map[surfaceID]proofEntry{}
+var configSurfaceProofs = map[surfaceID]proofEntry{
+	"quota.enabled": {
+		testName:   "TestConfigSurfaceProof_QuotaEnabled_ChangesQuotaMode",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.assumed_window_token_budget": {
+		testName:   "TestConfigSurfaceProof_QuotaAssumedWindowTokenBudget_ChangesQuotaMode",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+}
 
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 76
+const pendingCeiling = 74
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -30,12 +39,11 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 		}
 	}
 	add("5.1.2a", false,
-		"quota.assumed_window_token_budget", "quota.consecutive_ticks_to_pause",
-		"quota.consecutive_ticks_to_resume", "quota.enabled",
+		"quota.consecutive_ticks_to_pause", "quota.consecutive_ticks_to_resume",
 		"quota.foreground_throttle_delay_seconds", "quota.manual_override_grace_minutes",
 		"quota.pause_below_headroom_pct", "quota.rate_limit_window_minutes",
 		"quota.resume_margin_pct")
-	add("5.1.2a", true, "quota.default_cost_budget_threshold_usd") // field added by Story 2.1.1
+	add("5.1.2a", false, "quota.default_cost_budget_threshold_usd") // field added by Story 2.1.1, consumed by 2.1.3
 	add("5.1.2b", true,
 		"flag:backlog:workflow-engine-shadow", "flag:backlog:workflow-engine-enforce",
 		"flag:backlog:workflow-engine-enforce-agent", "flag:backlog:workflow-engine-enforce-system") // Stories 1.1.3, 1.5.3, 1.5.8
