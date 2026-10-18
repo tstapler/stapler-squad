@@ -16,6 +16,13 @@ export async function assertReflow(page: Page): Promise<string[]> {
     for (const node of document.querySelectorAll<HTMLElement>("button, a[href], input, [role=button]")) {
       const r = node.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
+      // A deliberately scrollable strip (e.g. the session tab list) may extend past the viewport.
+      let scroller = false;
+      for (let p = node.parentElement; p && p !== document.body; p = p.parentElement) {
+        const ox = getComputedStyle(p).overflowX;
+        if ((ox === "auto" || ox === "scroll") && p.scrollWidth > p.clientWidth) { scroller = true; break; }
+      }
+      if (scroller) continue;
       if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`${node.getAttribute("aria-label") ?? node.textContent?.trim()} leaves the viewport`);
     }
     return problems;

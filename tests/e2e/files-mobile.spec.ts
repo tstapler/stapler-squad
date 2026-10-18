@@ -63,8 +63,8 @@ test.describe("phone 390x844", () => {
 
   test("mobileNav_should_PopPaneWithoutLeavingSession_When_BrowserBack", async ({ page }) => {
     const files = await FilesTabView.create(page);
-    await files.goto();
     await stubVisualViewport(page);
+    await files.goto();
     await files.treeFile("a.txt").click();
     expect(await files.pane).toBe("editor");
     // Keyboard up then down with no popstate: the pane does not move (Android Back, ux 7.4 rule 6).
@@ -95,8 +95,8 @@ test.describe("phone 390x844", () => {
 
   test("filesMobile_should_HideBottomBarAndSizeEditor_When_VisualViewportStubbedTo500", async ({ page }) => {
     const files = await FilesTabView.create(page);
-    await files.goto();
     await stubVisualViewport(page);
+    await files.goto();
     await files.treeFile("a.txt").click();
     await expect(files.bottomBar).toBeVisible();
     await setVisualViewportHeight(page, 500);
@@ -150,8 +150,8 @@ test.describe("phone 390x844", () => {
 
   test("searchRow_should_OpenOnSingleTap_When_KeyboardOpenViewportStubbed", async ({ page }) => {
     const files = await FilesTabView.create(page, seedSearchFixture);
-    await files.goto();
     await stubVisualViewport(page);
+    await files.goto();
     await files.bottomBarButton("Search").click();
     await files.searchQuery.fill("line");
     await files.searchResults.getByRole("treeitem").nth(1).waitFor();
@@ -197,8 +197,10 @@ test.describe("narrow phone 320x568", () => {
   });
 });
 
+// The Files container sits beside app chrome (sidebar, session list), so it is ~540px narrower than the
+// viewport; tablets need a >= 1366px viewport to reach the 768px container threshold (820/1180 stay mobile).
 test.describe("layout rule", () => {
-  test("layout_should_BeMobileAt844x390Coarse_And_DesktopAt1180x820CoarseWithViewportHeight470", async ({ browser }) => {
+  test("layout_should_BeMobileAt844x390Coarse_And_DesktopAt1366x1024CoarseWithViewportHeight470", async ({ browser }) => {
     const landscape = await browser.newContext({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
     const p1 = await landscape.newPage();
     const f1 = await FilesTabView.create(p1);
@@ -206,18 +208,18 @@ test.describe("layout rule", () => {
     expect(await f1.layout).toBe("mobile");
     await landscape.close();
 
-    const tablet = await browser.newContext({ viewport: { width: 1180, height: 820 }, isMobile: true, hasTouch: true });
+    const tablet = await browser.newContext({ viewport: { width: 1366, height: 1024 }, isMobile: true, hasTouch: true });
     const p2 = await tablet.newPage();
     const f2 = await FilesTabView.create(p2);
     await f2.goto();
     expect(await f2.layout).toBe("desktop");
-    await p2.setViewportSize({ width: 1180, height: 470 });
+    await p2.setViewportSize({ width: 1366, height: 470 });
     expect(await f2.layout).toBe("desktop");
     await tablet.close();
   });
 
-  test("tablet_should_UseDesktopLayoutWithTouchSizing_When_820x1180CoarsePointer", async ({ browser }) => {
-    const ctx = await browser.newContext({ viewport: { width: 820, height: 1180 }, isMobile: true, hasTouch: true });
+  test("tablet_should_UseDesktopLayoutWithTouchSizing_When_1366x1024CoarsePointer", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1366, height: 1024 }, isMobile: true, hasTouch: true });
     const page = await ctx.newPage();
     const files = await FilesTabView.create(page);
     await files.goto();
