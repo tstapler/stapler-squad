@@ -834,6 +834,17 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// it durably (AC3) so the item detail view can render a BlockerChip
 			// instead of leaving the operator to guess why it's stalled.
 			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
+		case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
+			// Stale plan_artifacts_path (never written, or its worktree was
+			// cleaned up): surface it durably rather than leaving the item
+			// silently unclaimable. MarkStuck is idempotent across sweeps.
+			log.Warn("[DequeueNextQueuedItems] claim blocked: recorded plan artifacts directory missing — re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath)
+			if s.storage != nil {
+				msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
+				if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
+					log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
+				}
+			}
 		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 			// now that SpawnSessionFromItem's planning gate runs before the

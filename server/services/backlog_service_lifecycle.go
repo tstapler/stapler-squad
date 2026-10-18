@@ -910,6 +910,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
+			errors.Is(guardErr, session.ErrPlanArtifactsMissing) ||
 			errors.Is(guardErr, session.ErrVerdictRequired) ||
 			errors.Is(guardErr, session.ErrCodeNotOnMain) ||
 			errors.Is(guardErr, session.ErrVerdictClearRequiredForReady) ||
@@ -1024,8 +1025,12 @@ func (s *BacklogService) ApprovePlan(
 			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
 	}
 	if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("plan artifacts directory %q is recorded but does not exist on disk (triage wrote it elsewhere or its worktree was cleaned up) — re-run TriggerTriage", item.PlanArtifactsPath))
+		}
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("plan artifacts path %q does not exist on disk — re-run TriggerTriage", item.PlanArtifactsPath))
+			fmt.Errorf("cannot verify plan artifacts path %q: %w — re-run TriggerTriage", item.PlanArtifactsPath, statErr))
 	}
 
 	now := time.Now()

@@ -6581,3 +6581,44 @@ func TestEndItemSessionForCallError_should_RecordDetailOnlyForOtherBucket(t *tes
 		})
 	}
 }
+
+// TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementationDirMissing
+// is the regression for the false "plan artifacts path ... does not exist on disk"
+// error: SDD triage derives its plan path from the LLM-returned title, but the LLM
+// picks its own project_plans/<name>/ directory, so the derived path can name a
+// directory that was never written. It must not be persisted — and a re-triage that
+// writes nothing must not clobber the previous, still-valid path.
+func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementationDirMissing(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:           "sdd item whose plan dir is never written",
+		Status:          string(session.BacklogStatusIdea),
+		Priority:        3,
+		RepoPath:        t.TempDir(),
+		PipelineMode:    session.DefaultSDDPipelineModeSlug,
+		AutoApprovePlan: true,
+	})
+	require.NoError(t, err)
+
+	priorValid := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{PlanArtifactsPath: &priorValid}, nil)
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+
+	wait.RequireEventually(t, func() bool {
+		got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return getErr == nil && got.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "expected triage to finish and advance the item to ready")
+
+	got, getErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, priorValid, got.PlanArtifactsPath, "a triage run that wrote no plan dir must leave the earlier valid path untouched")
+	assert.False(t, got.PlanApproved, "auto-approve must not fire for a plan path that does not exist")
+}

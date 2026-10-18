@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -309,8 +311,14 @@ func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t 
 		t.Errorf("TransitionGuard plan_approved=true no artifacts = %v; want ErrPlanArtifactsRequired", err)
 	}
 
-	// plan_approved=true with artifacts path → nil
-	item.PlanArtifactsPath = "/some/path"
+	// plan_approved=true with a recorded path that is not on disk → ErrPlanArtifactsMissing
+	item.PlanArtifactsPath = filepath.Join(t.TempDir(), "gone", "implementation")
+	if err := TransitionGuard(item, BacklogStatusInProgress); !errors.Is(err, ErrPlanArtifactsMissing) {
+		t.Errorf("TransitionGuard plan_approved=true stale artifacts path = %v; want ErrPlanArtifactsMissing", err)
+	}
+
+	// plan_approved=true with an existing artifacts directory → nil
+	item.PlanArtifactsPath = t.TempDir()
 	if err := TransitionGuard(item, BacklogStatusInProgress); err != nil {
 		t.Errorf("TransitionGuard plan_approved=true with artifacts = %v; want nil", err)
 	}

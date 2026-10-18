@@ -5535,3 +5535,28 @@ func TestResolveHeadlessCaller_should_FallBackToClaudeWithFallbackReason_When_Pr
 	assert.Equal(t, "gemini_unavailable", fallbackReason, "distinct from the unknown-program case's unsupported_program reason")
 	assert.Contains(t, buf.String(), "headless program unavailable")
 }
+
+// ApprovePlan with a recorded path that is not on disk must say so, distinctly
+// from the empty-path case ("no plan artifacts found").
+func TestApprovePlan_StalePlanArtifactsPath_ReturnsDistinctFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:             "item with stale plan path",
+		Status:            string(session.BacklogStatusReady),
+		Priority:          3,
+		PlanArtifactsPath: filepath.Join(t.TempDir(), "gone", "implementation"),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: item.ID}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+	assert.Contains(t, connErr.Message(), "does not exist on disk")
+	assert.NotContains(t, connErr.Message(), "no plan artifacts found")
+}

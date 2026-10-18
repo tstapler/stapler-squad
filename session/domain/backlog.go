@@ -7,6 +7,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"os"
 )
 
 // BacklogStatus represents the lifecycle state of a backlog item. The type
@@ -599,6 +600,7 @@ var (
 	ErrACRequired                   = errors.New("acceptance criteria required before marking ready")
 	ErrPlanRequired                 = errors.New("plan must be approved or skip_planning must be true before spawning work session")
 	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrPlanArtifactsMissing         = errors.New("plan artifacts path is recorded but the directory does not exist on disk — re-run triage")
 	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
 	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
 	ErrUnresolvedBlockers           = errors.New("item has one or more blockers that have not reached done")
@@ -662,6 +664,13 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		}
 		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPath == "" {
 			return ErrPlanArtifactsRequired
+		}
+		// Only stat when a plan path is actually recorded: keeps this cold for items
+		// that skip planning or have no plan yet.
+		if item.PlanApproved && !item.SkipPlanning {
+			if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+				return ErrPlanArtifactsMissing
+			}
 		}
 		return nil
 
