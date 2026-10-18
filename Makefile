@@ -690,7 +690,7 @@ test-race: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
-test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
+test-integration: ensure-tools proto-gen server/web/dist $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two
