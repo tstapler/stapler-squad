@@ -60,6 +60,8 @@ func FileOpsConformance(t *testing.T, newOps func(t *testing.T, dir string) *Fil
 		assert.Equal(t, want, readCorpusDigest(t, svc))
 	})
 
+	runRangeConformance(t, ops)
+
 	t.Run("capabilities advertise the read floor", func(t *testing.T) {
 		caps := ops.Capabilities(context.Background())
 		assert.Contains(t, caps.Ops, sessionv1.FileOp_FILE_OP_STAT)
@@ -70,12 +72,20 @@ func FileOpsConformance(t *testing.T, newOps func(t *testing.T, dir string) *Fil
 func TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend(t *testing.T) {
 	t.Run("osRootBackend", func(t *testing.T) {
 		FileOpsConformance(t, func(t *testing.T, dir string) *FileOps {
-			return NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}}, strictBackend())
+			return newRangeConformanceOps(t, dir, strictBackend())
 		})
 	})
 	t.Run("memBackend", func(t *testing.T) {
 		FileOpsConformance(t, func(t *testing.T, dir string) *FileOps {
-			return NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}}, strictOver{memFromDir(t, dir)})
+			return newRangeConformanceOps(t, dir, strictOver{memFromDir(t, dir)})
 		})
 	})
+}
+
+// newRangeConformanceOps is FileOps with files:range-read on, closed with the test.
+func newRangeConformanceOps(t *testing.T, dir string, b FileBackend) *FileOps {
+	t.Helper()
+	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, b)
+	t.Cleanup(ops.analysis.Close)
+	return ops
 }
