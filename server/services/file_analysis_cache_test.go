@@ -116,7 +116,7 @@ func TestAnalysisCache_ShouldRunOnePassAtATime_And_EvictLeastRecentlyUsed(t *tes
 		n := active.Add(1)
 		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) //nolint:notimesleeptest holds the slot so overlapping runs are observable
 		active.Add(-1)
 		return &Analysis{}, nil
 	}

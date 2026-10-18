@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
@@ -404,7 +405,7 @@ func gitCheckIgnore(t *testing.T, dir string, paths []string) map[string]bool {
 		t.Skip("git not installed")
 	}
 	run := func(stdin string, args ...string) []byte {
-		cmd := exec.Command("git", append([]string{"-c", "core.excludesFile=/dev/null"}, args...)...)
+		cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-c", "core.excludesFile=/dev/null"}, args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		cmd.Stdin = strings.NewReader(stdin)

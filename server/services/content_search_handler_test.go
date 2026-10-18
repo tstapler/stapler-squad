@@ -429,7 +429,7 @@ func TestSearchContentHandler_ShouldEndQueuedStreamWithSearchBusy_When_QueueWait
 		synctest.Wait()
 		assert.Equal(t, []string{"queued"}, out.kinds())
 
-		time.Sleep(maxQueueWait)
+		time.Sleep(maxQueueWait) //nolint:notimesleeptest advances the synctest fake clock
 		synctest.Wait()
 
 		err := <-errc
