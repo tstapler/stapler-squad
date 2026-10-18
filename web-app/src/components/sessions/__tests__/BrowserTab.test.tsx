@@ -1,7 +1,7 @@
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowserTab, VNCStatus, buildWsUrl } from '../BrowserTab';
+import { BrowserTab, VNCStatus, buildWsUrl, buildInspectUrl, formatInspectContext } from '../BrowserTab';
 import type { VNCState } from '../BrowserTab';
 
 // Helper to construct minimal VNCState objects for tests without requiring
@@ -13,11 +13,21 @@ function makeVncState(partial: Partial<VNCState>): VNCState {
 // Capture the latest onDisconnected callback so tests can simulate disconnects
 let capturedOnDisconnected: (() => void) | undefined;
 let capturedOnConnected: (() => void) | undefined;
+let capturedInspectMode: boolean | undefined;
+let capturedOnInspectClick: ((x: number, y: number) => void) | undefined;
+
+const mockWriteToSession = jest.fn().mockResolvedValue({ success: true });
+jest.mock('@connectrpc/connect', () => ({
+  createClient: () => ({ writeToSession: (...a: unknown[]) => mockWriteToSession(...a) }),
+}));
+jest.mock('@/lib/api/transport', () => ({ getConnectTransport: () => ({}) }));
 
 // Mock CDPViewer — pure canvas component, no DOM APIs needed in tests
 jest.mock('../CDPViewer', () => ({
   __esModule: true,
-  default: jest.fn(({ wsUrl, onConnected, onDisconnected }: { wsUrl: string; onConnected?: () => void; onDisconnected?: () => void }) => {
+  default: jest.fn(({ wsUrl, onConnected, onDisconnected, inspectMode, onInspectClick }: { wsUrl: string; onConnected?: () => void; onDisconnected?: () => void; inspectMode?: boolean; onInspectClick?: (x: number, y: number) => void }) => {
+    capturedInspectMode = inspectMode;
+    capturedOnInspectClick = onInspectClick;
     capturedOnConnected = onConnected;
     capturedOnDisconnected = onDisconnected;
     return <canvas data-testid="cdp-viewer" data-ws-url={wsUrl} />;
@@ -215,5 +225,108 @@ describe('buildWsUrl', () => {
     const url = buildWsUrl('wss://example.com/api', SESSION_ID);
     expect(url).toMatch(/^wss:\/\//);
     expect(url).toBe(`wss://example.com/api/sessions/${SESSION_ID}/cdp-stream`);
+  });
+});
+
+describe('BrowserTab — inspect mode', () => {
+  const readyProps = {
+    sessionId: 'sess-1',
+    baseUrl: 'http://localhost:8543/api',
+    isVisible: true,
+    vncState: makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true }),
+  };
+  const okBody = {
+    html: '<button>Go</button>',
+    computedCss: [{ name: 'display', value: 'block' }, { name: 'color', value: 'red' }],
+    screenshotBase64: 'QUJD',
+  };
+
+  function mockFetch(body: unknown, ok = true, status = 200) {
+    global.fetch = jest.fn().mockResolvedValue({ ok, status, json: async () => body }) as unknown as typeof fetch;
+  }
+
+  async function clickAndOpenPanel(body: unknown = okBody) {
+    mockFetch(body);
+    render(<BrowserTab {...readyProps} />);
+    fireEvent.click(screen.getByTestId('inspect-toggle'));
+    await act(async () => { capturedOnInspectClick?.(10, 20); });
+    return screen.findByTestId('inspect-result-panel');
+  }
+
+  beforeEach(() => { mockWriteToSession.mockClear(); capturedInspectMode = undefined; });
+
+  it('disables the Inspect toggle (with tooltip) when the stream is not ready', () => {
+    render(<BrowserTab {...readyProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_STARTING })} />);
+    const btn = screen.getByTestId('inspect-toggle');
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', expect.stringMatching(/stream is live/i));
+  });
+
+  it('enables the toggle when ready and passes inspectMode to the viewer', () => {
+    render(<BrowserTab {...readyProps} />);
+    expect(screen.getByTestId('inspect-toggle')).toBeEnabled();
+    expect(capturedInspectMode).toBe(false);
+    fireEvent.click(screen.getByTestId('inspect-toggle'));
+    expect(capturedInspectMode).toBe(true);
+  });
+
+  it('POSTs scaled coordinates and shows screenshot, html and css', async () => {
+    await clickAndOpenPanel();
+    expect(global.fetch).toHaveBeenCalledWith(
+      buildInspectUrl(readyProps.baseUrl, 'sess-1'),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ x: 10, y: 20 }) }),
+    );
+    expect(screen.getByAltText('Element screenshot')).toHaveAttribute('src', 'data:image/jpeg;base64,QUJD');
+    expect(screen.getByText('<button>Go</button>')).toBeInTheDocument();
+    expect(screen.getByText('display')).toBeInTheDocument();
+  });
+
+  it('shows a placeholder when the screenshot is unavailable', async () => {
+    await clickAndOpenPanel({ ...okBody, screenshotBase64: '' });
+    expect(screen.getByText('Screenshot unavailable')).toBeInTheDocument();
+  });
+
+  it('Send to Agent writes the formatted block without pressing enter', async () => {
+    await clickAndOpenPanel();
+    fireEvent.click(screen.getByText('Send to Agent'));
+    await waitFor(() => expect(mockWriteToSession).toHaveBeenCalledTimes(1));
+    const req = mockWriteToSession.mock.calls[0][0];
+    expect(req.sessionId).toBe('sess-1');
+    expect(req.pressEnter).toBe(false);
+    expect(req.input).toBe(formatInspectContext(10, 20, okBody));
+    expect(req.input.startsWith('[Browser Inspector] Element at (10, 20):\nHTML: ')).toBe(true);
+    expect(req.input.endsWith('\n')).toBe(false);
+  });
+
+  it('strips control characters from page content before it reaches the terminal', () => {
+    const out = formatInspectContext(1, 2, { html: '<a title="x\rrm -rf\x1b[2J">', computedCss: [{ name: 'color', value: 'red\n' }] });
+    const [header, html, css] = out.split('\n');
+    expect(header).toBe('[Browser Inspector] Element at (1, 2):');
+    expect(html).toBe('HTML: <a title="x rm -rf [2J">');
+    expect(css).toBe('CSS: color: red ');
+    expect(out).not.toMatch(/[\r\x1b]/);
+  });
+
+  it('Escape closes the panel and deactivates inspect mode', async () => {
+    await clickAndOpenPanel();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('inspect-result-panel')).not.toBeInTheDocument();
+    expect(capturedInspectMode).toBe(false);
+  });
+
+  it('the Close button closes the panel and deactivates inspect mode', async () => {
+    await clickAndOpenPanel();
+    fireEvent.click(screen.getByText('✕ Close'));
+    expect(screen.queryByTestId('inspect-result-panel')).not.toBeInTheDocument();
+    expect(capturedInspectMode).toBe(false);
+  });
+
+  it('surfaces the server error message on a 503', async () => {
+    mockFetch({ error: 'CDP not connected' }, false, 503);
+    render(<BrowserTab {...readyProps} />);
+    fireEvent.click(screen.getByTestId('inspect-toggle'));
+    await act(async () => { capturedOnInspectClick?.(1, 1); });
+    expect(await screen.findByRole('alert')).toHaveTextContent('CDP not connected');
+    expect(screen.queryByTestId('inspect-result-panel')).not.toBeInTheDocument();
   });
 });

@@ -481,6 +481,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/sessions/{id}/cdp-stream", cdpStream.HandleWebSocket)
 	log.Info("Registered CDP stream WebSocket handler at /api/sessions/{id}/cdp-stream")
 
+	// Register one-shot element inspection for Browser Passthrough (CDP).
+	inspectElement := services.NewInspectElementHandler(deps.ReviewQueuePoller)
+	srv.mux.HandleFunc("POST /api/sessions/{id}/inspect-element", inspectElement.ServeHTTP)
+	log.Info("Registered element inspect handler at POST /api/sessions/{id}/inspect-element")
+
 	// Register general ConnectRPC handler (unary calls)
 	sessionOpts := append(
 		ConnectOptions(deps.ErrorRegistry),

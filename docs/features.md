@@ -16,6 +16,17 @@ Full xterm.js terminal per session with real-time output streaming. Attach and r
 
 ---
 
+## Browser Element Inspector
+
+While watching an agent's browser in the **Browser** tab, click **Inspect**, then click any element in the live view. Stapler Squad queries Chrome over CDP and shows the element's cropped screenshot, `outerHTML` (truncated to 8 KB) and key computed CSS (display, position, width, height, color, background-color, font-size, font-family, border, margin, padding). **Send to Agent** types a `[Browser Inspector] Element at (x, y): HTML: … CSS: …` block into the session's terminal input without pressing Enter, so you can add a note before submitting. The screenshot stays in the panel; only text is sent.
+
+- Requires a running Chrome/Chromium with CDP; **Inspect** is disabled until the stream is live.
+- While Inspect is on, clicks are not forwarded to Chrome; the hover box is an approximation, and the exact element box is known after the click.
+- Press `Esc` or **✕ Close** to leave Inspect mode.
+- Endpoint: `POST /api/sessions/{id}/inspect-element` with `{"x": int, "y": int}`; returns 503 when CDP is not available for the session.
+
+---
+
 ## Diff Viewer
 
 Per-session git diff with VCS context. See exactly what each agent has changed before you approve or merge.

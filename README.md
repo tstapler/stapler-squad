@@ -139,6 +139,10 @@ Browser passthrough lets agents (or you) open a real browser inside a session. T
 
 Each session with browser passthrough enabled gets its own isolated virtual display (Xvfb). The `DISPLAY` environment variable is injected automatically into the tmux session so any GUI application the agent launches appears on that display. When a Chrome or Chromium window is detected, the Browser tab becomes active and streams the live view via noVNC.
 
+#### Inspecting elements
+
+Click **Inspect** in the Browser tab toolbar (enabled once the stream is live), then click an element in the view. The result panel shows a cropped screenshot, the element's HTML (up to 8 KB) and key computed CSS. **Send to Agent** inserts a `[Browser Inspector] Element at (x, y):` text block into the session's terminal input without submitting it. Press `Esc` or **✕ Close** to leave Inspect mode. See [docs/features.md](docs/features.md#browser-element-inspector).
+
 #### Required packages
 
 | Package | Arch | Debian / Ubuntu |
