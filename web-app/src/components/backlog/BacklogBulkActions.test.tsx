@@ -125,6 +125,15 @@ describe("BacklogBulkActions", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
 
+    it("drops the dialog when the selection empties and does not resurrect it", () => {
+      const base = { totalCount: 5, onArchiveSelected: jest.fn(), onDeleteSelected: jest.fn(), onTriageSelected: jest.fn(), onAutoImplementSelected: jest.fn(), onSelectAll: jest.fn(), onClear: jest.fn() };
+      const { rerender } = render(<BacklogBulkActions {...base} selectedCount={1} autoImplementEligibleIds={["a"]} />);
+      fireEvent.click(screen.getByTestId("backlog-bulk-auto-implement-selected"));
+      rerender(<BacklogBulkActions {...base} selectedCount={0} autoImplementEligibleIds={[]} />);
+      rerender(<BacklogBulkActions {...base} selectedCount={1} autoImplementEligibleIds={["z"]} />);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
     it("disables Confirm when nothing is eligible", () => {
       renderToolbar({ selectedCount: 2, autoImplementEligibleIds: [] });
       fireEvent.click(screen.getByTestId("backlog-bulk-auto-implement-selected"));

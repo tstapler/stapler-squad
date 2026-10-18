@@ -780,14 +780,24 @@ function BacklogPageInner() {
 
   // frozenIds is the snapshot taken when the confirmation dialog opened, not the live selection.
   const handleAutoImplementSelected = useCallback(async (frozenIds: string[]) => {
-    if (frozenIds.length === 0) return;
+    // The frozen set is the maximum; drop items that stopped being eligible since the dialog opened.
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ids = frozenIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkAutoImplementEligible(it);
+    });
+    if (ids.length === 0) {
+      showBulkFeedback("Nothing eligible for auto-implement");
+      return;
+    }
     await runGuarded(busyRef, setBulkBusyIfMounted, async () => {
-      const result = await runBulkSpawnChunked(frozenIds, (id) => spawnSessionFromItem(id, { autonomous: true }));
+      const result = await runBulkSpawnChunked(ids, (id) => spawnSessionFromItem(id, { autonomous: true }));
       if (!mountedRef.current) return;
-      showBulkFeedback(formatSpawnBulkFeedback(result));
+      const dropped = frozenIds.length - ids.length;
+      showBulkFeedback(formatSpawnBulkFeedback(result) + (dropped > 0 ? `, ${dropped} no longer eligible` : ""));
       dispatch(selectionAfterBulk(result.failed));
     });
-  }, [spawnSessionFromItem, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
+  }, [items, spawnSessionFromItem, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
 
   const handleDeleteSelected = useCallback(async () => {
     const result = await runBulkAction("Deleted", visibleSelectedIds, deleteBacklogItem);

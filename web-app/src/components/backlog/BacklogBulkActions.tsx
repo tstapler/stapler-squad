@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog-bulk-actions
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useAnalytics } from "@/lib/analytics";
 import {
@@ -43,6 +43,10 @@ export function BacklogBulkActions({
   const [autoImplementSnapshot, setAutoImplementSnapshot] = useState<{ ids: string[]; ineligible: number } | null>(null);
   const autoImplementTriggerRef = useRef<HTMLButtonElement>(null);
   const autoImplementDialogRef = useRef<HTMLDivElement>(null);
+  // Selection can empty while the dialog is open (live removal, filter change); drop the stale snapshot.
+  useEffect(() => {
+    if (selectedCount === 0) setAutoImplementSnapshot(null);
+  }, [selectedCount]);
   useFocusTrap(autoImplementDialogRef, autoImplementSnapshot !== null, autoImplementTriggerRef);
 
   if (selectedCount === 0) {
@@ -170,7 +174,7 @@ export function BacklogBulkActions({
               <button
                 type="button"
                 className={actionButton}
-                disabled={autoImplementSnapshot.ids.length === 0}
+                disabled={busy || autoImplementSnapshot.ids.length === 0}
                 data-testid="backlog-bulk-auto-implement-confirm"
                 onClick={() => {
                   track({ name: "backlog_bulk_auto_implement_confirm", category: "user_action", component: "BacklogBulkActions", labels: { count: String(autoImplementSnapshot.ids.length) } });
