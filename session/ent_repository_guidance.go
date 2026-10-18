@@ -492,7 +492,7 @@ func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*
 // open backlog-item-scoped GuidanceRequest, in a single query.
 func (r *EntRepository) pendingGuidanceItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
 	if len(itemIDs) == 0 {
-		return nil, nil
+		return map[string]bool{}, nil
 	}
 	keys, err := r.client.GuidanceRequest.Query().
 		Where(
