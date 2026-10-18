@@ -19,9 +19,11 @@ test.describe("Files panel separator (U-A11Y-4)", () => {
     await expect(sep).toHaveAttribute("aria-orientation", "vertical");
     const widthOf = async () => Math.round((await files.treePane.boundingBox())!.width);
     const now = async () => Number(await sep.getAttribute("aria-valuenow"));
-    const min = Number(await sep.getAttribute("aria-valuemin"));
-    const max = Number(await sep.getAttribute("aria-valuemax"));
-    expect(max).toBeGreaterThan(min);
+    const bound = async (which: "min" | "max") => Number(await sep.getAttribute(`aria-value${which}`));
+    // The max follows the container's measured width, which lands a frame after the separator renders.
+    await expect.poll(async () => (await bound("max")) > (await bound("min"))).toBe(true);
+    const min = await bound("min");
+    const max = await bound("max");
 
     await sep.focus();
     await sep.press("Home");
