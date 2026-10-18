@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Mous
 import type { Buffer, BufferNotice } from "@/lib/files/bufferReducer";
 import { bucketTabs } from "@/lib/files/analytics/events";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
+import { accessibleName, baseName, isDirty, labelOf } from "./tabLabels";
 import {
   bar, tabList, tab as tabClass, tabLabel, pinGlyph, dirtyDot, closeButton, overflowButton, menu, menuItem,
   tabListDialog, listRow, toast, toastAction, srOnly,
@@ -27,23 +28,6 @@ export interface OpenTabsBarProps {
   onCopyPath: (path: string) => void;
   onReveal: (path: string) => void;
   onUndoEvict: () => void;
-}
-
-const isDirty = (b: Buffer) => b.status === "loaded" && b.dirty;
-const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
-
-/** Basename, with the parent directory added only when two open tabs would read the same. */
-function labelOf(path: string, all: readonly Buffer[]): string {
-  const base = baseName(path);
-  if (all.filter((b) => baseName(b.path) === base).length < 2) return base;
-  const parts = path.split("/");
-  return parts.length > 1 ? `${parts[parts.length - 2]}/${base}` : base;
-}
-
-function accessibleName(b: Buffer, all: readonly Buffer[]): string {
-  const label = labelOf(b.path, all);
-  if (isDirty(b)) return `${label}, unsaved`;
-  return `${label}, ${b.pinned ? "pinned" : "preview"}`;
 }
 
 type Via = "strip" | "keyboard";

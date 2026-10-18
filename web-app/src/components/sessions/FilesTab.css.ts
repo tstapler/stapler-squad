@@ -8,12 +8,14 @@ export const container = style({
   background: vars.color.terminalBackground,
   containerType: "inline-size",
   containerName: "filesTab",
+  selectors: { "&[data-layout='mobile']": { flexDirection: "column" } },
 });
 
-// Narrow-pane breakpoint. Uses a container query against `container` above so this
-// activates based on the session card's own width, not the browser viewport — a
-// pane can be "mobile-narrow" inside a wide desktop window.
-const NARROW = "(max-width: 767px)";
+// The mobile layout is chosen by `chooseFilesLayout` (container width OR phone-class touch device)
+// and written to the container's data attributes, not by a container query, so a landscape phone
+// 844px wide still gets it. `data-pane` says which of the three nav-stack panes is showing.
+const mobileLayout = `${container}[data-layout='mobile']`;
+const mobileLegacy = `${mobileLayout}[data-chrome='legacy']`;
 
 export const treePane = style({
   display: "flex",
@@ -21,12 +23,10 @@ export const treePane = style({
   flexShrink: 0,
   borderRight: `1px solid ${vars.color.borderColor}`,
   overflow: "hidden",
-  "@container": {
-    [`filesTab ${NARROW}`]: {
-      // Inline width (panel.width px) would leave a black gap — override to fill.
-      width: "100% !important",
-      borderRight: "none",
-    },
+  selectors: {
+    // Inline width (panel.width px) would leave a black gap — override to fill.
+    [`${mobileLayout} &`]: { width: "100% !important", borderRight: "none", flex: 1, minHeight: 0 },
+    [`${mobileLayout}[data-pane='editor'] &`]: { display: "none" },
   },
 });
 
@@ -47,32 +47,13 @@ export const expandStrip = style({
   background: vars.color.terminalBackground,
   color: vars.color.textPrimary,
   cursor: "pointer",
-  "@container": { [`filesTab ${NARROW}`]: { display: "none" } },
-});
-
-export const mobilePaneHidden = style({
-  "@container": {
-    [`filesTab ${NARROW}`]: {
-      display: "none !important",
-    },
-  },
-});
-
-export const mobilePaneVisible = style({
-  "@container": {
-    [`filesTab ${NARROW}`]: {
-      display: "flex !important",
-      flex: 1,
-      width: "100%",
-      maxWidth: "none",
-    },
-  },
+  selectors: { [`${mobileLayout} &`]: { display: "none" } },
 });
 
 export const mobileBackButton = style({
   display: "none",
-  "@container": {
-    [`filesTab ${NARROW}`]: {
+  selectors: {
+    [`${mobileLegacy} &`]: {
       display: "flex",
       alignItems: "center",
       gap: 4,
@@ -92,6 +73,10 @@ export const contentPane = style({
   overflow: "hidden",
   display: "flex",
   flexDirection: "column",
+  selectors: {
+    [`${mobileLayout}:not([data-pane='editor']) &`]: { display: "none" },
+    [`${mobileLayout} &`]: { width: "100%", minHeight: 0 },
+  },
 });
 
 export const toolbar = style({
@@ -190,18 +175,14 @@ export const treeWrapper = style({
 
 // Fix 2: hide collapse/expand panel buttons on mobile — toolbar has too many buttons
 export const toolbarButtonMobileHidden = style({
-  "@container": {
-    [`filesTab ${NARROW}`]: {
-      display: "none",
-    },
-  },
+  selectors: { [`${mobileLayout} &`]: { display: "none" } },
 });
 
 // Fix 5: search icon button shown only on mobile, in the content pane header
 export const mobileSearchButton = style({
   display: "none",
-  "@container": {
-    [`filesTab ${NARROW}`]: {
+  selectors: {
+    [`${mobileLegacy} &`]: {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",

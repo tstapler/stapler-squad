@@ -41,5 +41,5 @@ export function useSearchPane(v2: FilesV2 | undefined, { expandPanel, showTreePa
     () => new Set((buffers ?? []).flatMap((b) => (b.status === "loaded" && b.dirty ? [b.path] : []))),
     [buffers],
   );
-  return { leftPane, chooseLeftPane, focusToken, openSearch, openHit, dirtyPaths };
+  return { leftPane, showLeftPane: setLeftPane, chooseLeftPane, focusToken, openSearch, openHit, dirtyPaths };
 }

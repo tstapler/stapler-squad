@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback, useImperativeHandle, useRef, type KeyboardEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { SearchHit } from "@/lib/files/searchClient";
 import { useFirstTapActivation } from "@/lib/hooks/useFirstTapActivation";
@@ -59,6 +59,21 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
     getItemKey: (i) => p.rows[i]?.key ?? i,
   });
 
+  // A pane hidden with display:none loses its scroll offset; remember it and put it back when the list shows again.
+  const savedTop = useRef(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let hidden = false;
+    const ro = new ResizeObserver((entries) => {
+      const height = entries[entries.length - 1].contentRect.height;
+      if (height > 0 && hidden) el.scrollTop = savedTop.current;
+      hidden = height === 0;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   useImperativeHandle(ref, () => ({
     scrollToKey(key) {
       const i = p.rows.findIndex((r) => r.key === key);
@@ -90,6 +105,7 @@ export const SearchResults = forwardRef<SearchResultsHandle, SearchResultsProps>
       aria-label="Search results"
       aria-busy={p.busy}
       {...tap}
+      onScroll={(e) => { if (e.currentTarget.clientHeight > 0) savedTop.current = e.currentTarget.scrollTop; }}
       onKeyDown={onKeyDown}
       data-testid="search-results"
     >
@@ -141,9 +157,9 @@ export interface QuickfixView {
 }
 
 /** Next/previous-hit chip: a status segment on desktop, a floating 44 px control on touch (ux.md S2). */
-export function QuickfixChip({ view }: { view: QuickfixView }) {
+export function QuickfixChip({ view, stacked = false }: { view: QuickfixView; stacked?: boolean }) {
   return (
-    <div className={chip} role="group" aria-label="Search hits" data-testid="quickfix-chip">
+    <div className={chip} style={stacked ? { position: "static" } : undefined} role="group" aria-label="Search hits" data-testid="quickfix-chip">
       <span>Hit {view.position}/{view.total}</span>
       <button type="button" className={chipButton} aria-label="Previous hit" onClick={() => view.step(-1)}>↑</button>
       <button type="button" className={chipButton} aria-label="Next hit" onClick={() => view.step(1)}>↓</button>
