@@ -26,7 +26,7 @@ import { tabPanel } from "./files/FilesV2Chrome.css";
 import { FilesTreeToolbar } from "./FilesTreeToolbar";
 import {
   container, treePane, treePaneCollapsed, contentPane, treeWrapper, leftView,
-  mobilePaneHidden, mobilePaneVisible, mobileBackButton, mobileSearchButton,
+  mobilePaneHidden, mobilePaneVisible, mobileBackButton, mobileSearchButton, expandStrip,
 } from "./FilesTab.css";
 
 // ---- Props ----
@@ -267,6 +267,11 @@ function FilesTabView({
       </div>
 
       {!panel.collapsed && <TreeResizeHandle {...panel.handleProps} />}
+      {panel.collapsed && (
+        <button className={expandStrip} onClick={panel.expand} title="Expand file tree panel" aria-label="Expand file tree panel">
+          ⊞
+        </button>
+      )}
 
       {/* Right pane: file content */}
       <div className={contentPaneClasses}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useReducer } from "react";
 
 export interface ResizablePanelOptions {
   storageKey: string;
@@ -77,6 +77,9 @@ export function useResizablePanel({
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
+  // `aria-valuemax` reads the container width at render; the ref is empty on the first render, so re-render once
+  // the container is measured and whenever it resizes.
+  const [, remeasure] = useReducer((n: number) => n + 1, 0);
   const isDraggingRef = useRef(false);
   const lastWidthRef = useRef<number>(readStoredNumber(storageKey, defaultWidth, minWidth));
   const rafRef = useRef<number | null>(null);
@@ -110,6 +113,16 @@ export function useResizablePanel({
       setWidth(maxWidth);
     }
   }, [maxWidthFraction]); // intentionally omits width — runs once on mount per fraction change
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    remeasure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => remeasure());
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();

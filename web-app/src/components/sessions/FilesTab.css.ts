@@ -35,6 +35,19 @@ export const treePaneCollapsed = style({
   overflow: "hidden",
   borderRight: "none",
   minWidth: "0 !important",
+  // The toolbar's own expand button is clipped to nothing here; hide the pane so only the strip below answers to it.
+  visibility: "hidden",
+});
+
+export const expandStrip = style({
+  flexShrink: 0,
+  width: "24px",
+  border: "none",
+  borderRight: `1px solid ${vars.color.borderColor}`,
+  background: vars.color.terminalBackground,
+  color: vars.color.textPrimary,
+  cursor: "pointer",
+  "@container": { [`filesTab ${NARROW}`]: { display: "none" } },
 });
 
 export const mobilePaneHidden = style({

@@ -1,4 +1,5 @@
 "use client";
+// +feature: files-tabs
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { Buffer, BufferNotice } from "@/lib/files/bufferReducer";

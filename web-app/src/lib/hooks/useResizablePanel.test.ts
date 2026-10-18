@@ -1,5 +1,5 @@
-import type React from "react";
-import { renderHook, act } from "@testing-library/react";
+import React from "react";
+import { renderHook, render, act } from "@testing-library/react";
 import { useResizablePanel, ResizablePanelOptions } from "./useResizablePanel";
 
 // Mock localStorage
@@ -424,6 +424,24 @@ describe("useResizablePanel", () => {
       const arrow = key("ArrowRight");
       act(() => result.current.handleProps.onKeyDown(arrow));
       expect(arrow.preventDefault).toHaveBeenCalled();
+    });
+  });
+
+  describe("separator bounds before the first measurement", () => {
+    it("useResizablePanel_should_ReportMeasuredAriaValueMax_When_ContainerMountsAfterFirstRender", () => {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1000 });
+      try {
+        function Probe() {
+          const panel = useResizablePanel(defaultOptions);
+          return React.createElement("div", { ref: panel.containerRef }, React.createElement("div", { "data-testid": "sep", ...panel.handleProps }));
+        }
+        const view = render(React.createElement(Probe));
+        expect(view.getByTestId("sep").getAttribute("aria-valuemax")).toBe("500");
+      } finally {
+        if (original) Object.defineProperty(HTMLElement.prototype, "clientWidth", original);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+      }
     });
   });
 });
