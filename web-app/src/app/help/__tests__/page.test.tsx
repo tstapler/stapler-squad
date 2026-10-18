@@ -8,6 +8,11 @@ jest.mock("react-markdown", () => ({ __esModule: true, default: ({ children }: {
 jest.mock("remark-gfm", () => ({ __esModule: true, default: () => {} }));
 jest.mock("../help.css", () => new Proxy({}, { get: (_t, p) => (p === "sidebarLink" ? () => "" : typeof p === "string" ? p : "") }));
 
+let mockDocParam: string | null = null;
+jest.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(mockDocParam ? { doc: mockDocParam } : {}),
+}));
+
 const okResponse = { ok: true, status: 200, text: () => Promise.resolve("# Intro\nHello docs") };
 const notFound = { ok: false, status: 404, text: () => Promise.resolve("") };
 
@@ -26,5 +31,31 @@ describe("HelpPage load failure", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getAllByText(/Hello docs/).length).toBeGreaterThan(0));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("HelpPage ?doc= deep link", () => {
+  const realFetch = global.fetch;
+  beforeEach(() => {
+    global.fetch = jest.fn((url: string) =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(`# Title of ${url}\nbody`) })
+    ) as unknown as typeof fetch;
+  });
+  afterEach(() => { global.fetch = realFetch; mockDocParam = null; });
+
+  it("pre-selects the doc named by ?doc=", async () => {
+    mockDocParam = "omnibar";
+    render(<HelpPage />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { current: "page" })).toHaveTextContent("/docs/omnibar.md")
+    );
+  });
+
+  it("falls back to the first doc for an unknown slug", async () => {
+    mockDocParam = "nope";
+    render(<HelpPage />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { current: "page" })).toHaveTextContent("what-is-stapler-squad")
+    );
   });
 });

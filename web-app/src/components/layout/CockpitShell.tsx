@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { DrawerNav } from "./DrawerNav";
 import { BottomNav } from "./BottomNav";
 import { KeyboardShortcutOverlay } from "@/components/ui/KeyboardShortcutOverlay";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useNotificationShortcuts } from "@/lib/shortcuts/useNotificationShortcuts";
 import { CommandBar } from "@/components/command-bar/CommandBar";
@@ -83,10 +84,10 @@ export function CockpitShell({ children }: CockpitShellProps) {
       <CommandBar />
       <KeyboardShortcutOverlay isOpen={shortcutsOpen} onClose={closeShortcuts} />
       {showFloatingShortcutsButton && (
+        <Tooltip label="Keyboard shortcuts (?)" side="left" helpSlug="keyboard-shortcuts">
         <button
           onClick={openShortcuts}
           aria-label="Keyboard shortcuts (?)"
-          title="Keyboard shortcuts (?)"
           style={{
             position: "fixed",
             bottom: "1.5rem",
@@ -107,6 +108,7 @@ export function CockpitShell({ children }: CockpitShellProps) {
         >
           ?
         </button>
+        </Tooltip>
       )}
     </>
   );

@@ -5,6 +5,7 @@ import { useAppSelector } from "@/lib/store";
 import { selectConnectionState, type ConnectionState } from "@/lib/store/sessionsSlice";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { button, dots, spinner, labels, ariaLiveRegion, tooltip, tooltipReloadLink, wrapper } from "./ConnectionIndicator.css";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connected: "Live",
@@ -67,10 +68,10 @@ export function ConnectionIndicator() {
         {announcement}
       </div>
       <div className={wrapper}>
+        <Tooltip label={titleText} side="bottom" helpSlug="tmux-integration">
         <button
           className={button}
           aria-label={ariaLabel}
-          title={titleText}
           onClick={isActionable ? handleClick : undefined}
           onKeyDown={isActionable ? handleKeyDown : undefined}
           disabled={!isActionable}
@@ -87,6 +88,7 @@ export function ConnectionIndicator() {
             {STATE_LABEL[connectionState]}
           </span>
         </button>
+        </Tooltip>
         {isReconnecting && (
           <div className={tooltip}>
             <a

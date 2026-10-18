@@ -1,5 +1,6 @@
 import React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -120,10 +121,10 @@ describe("ConnectionIndicator", () => {
     expect(watchSessionsMock).not.toHaveBeenCalled();
   });
 
-  it("ConnectionIndicator_should_showAttemptCountInTooltip_When_reconnectAttemptCountIsThree", () => {
+  it("ConnectionIndicator_should_showAttemptCountInTooltip_When_reconnectAttemptCountIsThree", async () => {
     renderWithStore("stale", 3);
-    const btn = screen.getByRole("button");
-    expect(btn).toHaveAttribute("title", expect.stringContaining("attempt 3"));
+    await userEvent.hover(screen.getByRole("button"));
+    expect((await screen.findAllByText(/attempt 3/)).length).toBeGreaterThan(0);
   });
 
   it("ConnectionIndicator_should_showReconnectingLabel_When_stateIsStaleOrDisconnected", () => {
