@@ -16,8 +16,9 @@ import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
   collapsibleContent, footer, button as buttonClass, buttonSecondary, buttonPrimary,
-  error as errorClass,
+  error as errorClass, backlogButton,
 } from "./Omnibar.css";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import * as styles from "./OmnibarCreationPanel.css";
 import { FileChipList, type AttachedFile } from "./FileChipList";
 import { RadioGroup } from "@/components/ui/RadioGroup";
@@ -149,6 +150,8 @@ export interface OmnibarCreationPanelProps {
   setFormField: <K extends keyof OmnibarFormState>(key: K, value: OmnibarFormState[K]) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  /** Opens backlog-item compose mode; when set, a footer button is shown beside Cancel/Create Session. */
+  onCreateBacklog?: () => void;
   worktrees: WorktreeEntry[];
   isWorktreesLoading?: boolean;
   /** Set when the worktree list request failed or timed out — shown as a hint. */
@@ -210,6 +213,7 @@ export function OmnibarCreationPanel({
   setFormField,
   onSubmit,
   onCancel,
+  onCreateBacklog,
   worktrees,
   isWorktreesLoading = false,
   worktreesError = null,
@@ -1018,6 +1022,13 @@ export function OmnibarCreationPanel({
 
       {/* Footer */}
       <div className={footer}>
+        {onCreateBacklog && (
+          <OmnibarBacklogButton
+            onClick={onCreateBacklog}
+            disabled={isSubmitting}
+            className={`${buttonClass} ${buttonSecondary} ${backlogButton}`}
+          />
+        )}
         <button type="button" className={`${buttonClass} ${buttonSecondary}`} onClick={onCancel}>
           Cancel
         </button>

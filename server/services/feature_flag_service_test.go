@@ -222,3 +222,21 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 	svc.SetStatusDetailProvider("backlog", func() string { return "resumed" })
 	require.Equal(t, "resumed; extra", statusDetailOf(t, svc, "backlog"), "the setter replaces only its own slot")
 }
+
+func TestFeatureFlagStatusDetail_ReportsInertAndSource_WhenStallNudgeOnDiagnoseOff(t *testing.T) {
+	withIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+
+	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
+
+	require.NoError(t, flagUpdate(svc, config.AutonomousStallNudgeFeatureFlag, true))
+	require.Equal(t, "inactive: requires diagnose_nudge_enabled; Set explicitly: On",
+		statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+
+	require.NoError(t, flagUpdate(svc, config.DiagnoseNudgeFeatureFlag, true))
+	require.Equal(t, "Set explicitly: On", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+	require.Equal(t, "Set explicitly: On", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
+
+	require.Empty(t, statusDetailOf(t, svc, "backlog"), "other flags gain no status line")
+}

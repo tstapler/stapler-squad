@@ -1,4 +1,4 @@
-import reducer, { toggleSelection, selectAll, clearSelection } from "./backlogBulkSelectionSlice";
+import reducer, { toggleSelection, selectAll, clearSelection, selectionAfterBulk } from "./backlogBulkSelectionSlice";
 
 const initial = { selectedIds: [] as string[], selectMode: false };
 
@@ -23,5 +23,15 @@ describe("backlogBulkSelectionSlice", () => {
   it("clearSelection empties selection and leaves select mode", () => {
     const state = reducer(reducer(initial, selectAll(["x", "y"])), clearSelection());
     expect(state).toEqual(initial);
+  });
+
+  it("selectionAfterBulk clears on full success", () => {
+    const state = reducer(reducer(initial, selectAll(["a", "b"])), selectionAfterBulk([]));
+    expect(state).toEqual(initial);
+  });
+
+  it("selectionAfterBulk leaves only the failed ids selected on partial failure", () => {
+    const state = reducer(reducer(initial, selectAll(["a", "b", "c"])), selectionAfterBulk(["b"]));
+    expect(state.selectedIds).toEqual(["b"]);
   });
 });

@@ -46,7 +46,11 @@ export function mockThemeContextModule() {
 }
 
 export function mockConfigModule() {
-  return { getApiBaseUrl: jest.fn(() => "http://localhost:8543") };
+  return {
+    getApiBaseUrl: jest.fn(() => "http://localhost:8543"),
+    // Creation mode mounts useDestinationPathPreview, whose transport calls this.
+    createAuthInterceptor: jest.fn(() => jest.fn()),
+  };
 }
 
 export function mockUsePathCompletionsModule() {
