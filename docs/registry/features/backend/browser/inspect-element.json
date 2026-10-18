@@ -7,7 +7,14 @@
   "httpPath": "/api/sessions/{id}/inspect-element",
   "markerFound": true,
   "handlerFile": "server/services/inspect_element_handler.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestInspectElementHandler_CDPPortZero_Returns503JSON",
+    "TestInspectElementHandler_SessionNotFound_Returns404",
+    "TestInspectElementHandler_BadBody_Returns400",
+    "TestInspectElementHandler_Success",
+    "TestInspectElementHandler_NoElement_Returns200NotFound",
+    "TestInspectElementHandler_CDPError_Returns502"
+  ],
   "lastModified": "2026-10-18T00:50:58.211222803-07:00"
 }
