@@ -149,6 +149,8 @@ export interface OmnibarCreationPanelProps {
   setFormField: <K extends keyof OmnibarFormState>(key: K, value: OmnibarFormState[K]) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  /** Opens backlog-item compose mode; when set, a footer button is shown beside Cancel/Create Session. */
+  onCreateBacklog?: () => void;
   worktrees: WorktreeEntry[];
   isWorktreesLoading?: boolean;
   /** Set when the worktree list request failed or timed out — shown as a hint. */
@@ -210,6 +212,7 @@ export function OmnibarCreationPanel({
   setFormField,
   onSubmit,
   onCancel,
+  onCreateBacklog,
   worktrees,
   isWorktreesLoading = false,
   worktreesError = null,
@@ -1018,6 +1021,16 @@ export function OmnibarCreationPanel({
 
       {/* Footer */}
       <div className={footer}>
+        {onCreateBacklog && (
+          <button
+            type="button"
+            data-testid="omnibar-create-backlog-button"
+            className={`${buttonClass} ${buttonSecondary}`}
+            onClick={onCreateBacklog}
+          >
+            Create Backlog Item
+          </button>
+        )}
         <button type="button" className={`${buttonClass} ${buttonSecondary}`} onClick={onCancel}>
           Cancel
         </button>

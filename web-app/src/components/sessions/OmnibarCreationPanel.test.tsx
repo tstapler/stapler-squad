@@ -52,6 +52,22 @@ describe("omnibar-create-session-button testid", () => {
   });
 });
 
+describe("omnibar-create-backlog-button (footer action)", () => {
+  it("renders in the footer next to Create Session and fires onCreateBacklog", () => {
+    const onCreateBacklog = jest.fn();
+    render(<OmnibarCreationPanel {...buildProps({ onCreateBacklog })} />);
+    const btn = screen.getByTestId("omnibar-create-backlog-button");
+    expect(btn.parentElement).toBe(screen.getByTestId("omnibar-create-session-button").parentElement);
+    fireEvent.click(btn);
+    expect(onCreateBacklog).toHaveBeenCalledTimes(1);
+  });
+
+  it("is absent when no onCreateBacklog handler is supplied", () => {
+    render(<OmnibarCreationPanel {...buildProps()} />);
+    expect(screen.queryByTestId("omnibar-create-backlog-button")).not.toBeInTheDocument();
+  });
+});
+
 describe("remote selector (Epic 4.3 Story 4.3.2 — ADR-001: remote-as-orthogonal-flag)", () => {
   const REMOTES: RemoteOption[] = [{ name: "prod-box" }, { name: "staging-box" }];
 

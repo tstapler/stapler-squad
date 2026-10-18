@@ -2124,6 +2124,7 @@ export function Omnibar({
             setFormField={setFormField}
             onSubmit={handleSubmit}
             onCancel={onClose}
+            onCreateBacklog={openBacklogCompose}
             worktrees={worktrees}
             isWorktreesLoading={isWorktreesLoading}
             worktreesError={worktreesError}
