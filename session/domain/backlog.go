@@ -7,6 +7,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 )
 
@@ -662,8 +663,10 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		// A recorded plan path that is not on disk is rejected whether or not the
 		// plan is approved: re-triage is the actionable fix either way. Only stat
 		// when a path is recorded, keeping this cold for items with no plan yet.
+		// Only ENOENT counts as missing; other stat errors (e.g. EACCES) fail open
+		// rather than telling the operator to re-run triage.
 		if !item.SkipPlanning && item.PlanArtifactsPath != "" {
-			if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+			if _, statErr := os.Stat(item.PlanArtifactsPath); errors.Is(statErr, fs.ErrNotExist) {
 				return ErrPlanArtifactsMissing
 			}
 		}

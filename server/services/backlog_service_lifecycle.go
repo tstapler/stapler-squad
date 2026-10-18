@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -1025,7 +1026,7 @@ func (s *BacklogService) ApprovePlan(
 			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
 	}
 	if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
-		if os.IsNotExist(statErr) {
+		if errors.Is(statErr, fs.ErrNotExist) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("plan artifacts directory %q is recorded but does not exist on disk (triage wrote it elsewhere or its worktree was cleaned up) — re-run TriggerTriage", item.PlanArtifactsPath))
 		}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -6661,7 +6662,9 @@ func TestTriggerTriage_should_RecordWherePlanWasWritten_AcrossFlatLayoutRemovalA
 		require.NoError(t, approveErr)
 	}
 
-	pool.onCall = func(string) { writePlan(planBase) }
+	var planDir atomic.Value // dir the fake LLM writes plan.md into; swapped between runs
+	planDir.Store(planBase)
+	pool.onCall = func(string) { writePlan(planDir.Load().(string)) }
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 	require.NoError(t, err)
 	waitForPath(planBase)
@@ -6669,7 +6672,7 @@ func TestTriggerTriage_should_RecordWherePlanWasWritten_AcrossFlatLayoutRemovalA
 
 	require.NoError(t, os.RemoveAll(planBase))
 	implDir := filepath.Join(planBase, "implementation")
-	pool.onCall = func(string) { writePlan(implDir) }
+	planDir.Store(implDir)
 	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
 	require.NoError(t, err)
 	waitForPath(implDir)

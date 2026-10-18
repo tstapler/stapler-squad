@@ -79,11 +79,9 @@ func sanitizeTriageTitle(title, itemID string) string {
 
 // resolveSDDPlanDir returns the directory holding the plan SDD triage wrote for
 // title under workDir. The prompt asks for project_plans/<name>/implementation/,
-// but the LLM sometimes writes plan.md flat in project_plans/<name>/ (item
-// f4235050: commit 80dcd93e7), so the implementation/ path never existed and the
-// recorded path made ApprovePlan fail. Prefers implementation/, falls back to the
-// flat layout only when it holds a plan.md, and otherwise returns the canonical
-// implementation/ path so callers' existence check reports it as missing.
+// but the LLM sometimes writes plan.md flat in project_plans/<name>/. Prefers
+// implementation/, falls back to the flat layout only when it holds a plan.md,
+// and otherwise returns the canonical path so callers' existence check fails.
 func resolveSDDPlanDir(workDir, title string) string {
 	base := filepath.Join(workDir, "project_plans", title)
 	impl := filepath.Join(base, "implementation")
