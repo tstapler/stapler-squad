@@ -649,6 +649,24 @@ func (s *BacklogService) hasUnresolvedBlockers(ctx context.Context, itemID strin
 	return unresolved[itemID], nil
 }
 
+// planArtifactsPathMissing reports whether item has a recorded
+// PlanArtifactsPath that no longer exists on disk — e.g. the triage worktree
+// that produced it was reaped by CleanupTerminalItem after the item went
+// terminal and was later reopened. domain.TransitionGuard itself does no I/O
+// (session/domain is a pure package by design — see its doc comment), so
+// every guardInput-building call site performs this os.Stat and sets
+// PlanArtifactsPathMissing, mirroring the existing caller-side
+// hasUnresolvedBlockers query above. Only checked for the ->in_progress
+// guard, so this is a no-op os.Stat for every other transition and for any
+// item without a plan path at all.
+func planArtifactsPathMissing(item *session.BacklogItemData, to session.BacklogStatus) bool {
+	if to != session.BacklogStatusInProgress || item.PlanArtifactsPath == "" {
+		return false
+	}
+	_, statErr := os.Stat(item.PlanArtifactsPath)
+	return statErr != nil
+}
+
 // Returns the same errors storage.TransitionBacklogItemStatus returns
 // (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
 // domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
@@ -667,6 +685,7 @@ func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.
 	}
 	guardInput := session.NewBacklogItemTransitionInput(item, from)
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		return nil, guardErr
 	}
@@ -834,17 +853,6 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// it durably (AC3) so the item detail view can render a BlockerChip
 			// instead of leaving the operator to guess why it's stalled.
 			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-		case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
-			// Stale plan_artifacts_path (never written, or its worktree was
-			// cleaned up): surface it durably rather than leaving the item
-			// silently unclaimable. MarkStuck is idempotent across sweeps.
-			log.Warn("[DequeueNextQueuedItems] claim blocked: recorded plan artifacts directory missing — re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath)
-			if s.storage != nil {
-				msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
-				if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
-					log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
-				}
-			}
 		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 			// now that SpawnSessionFromItem's planning gate runs before the
@@ -853,6 +861,14 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 			// call site regression, or a pre-existing queued/ready row from
 			// before that ordering fix).
 			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+		case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
+			// Genuinely reachable, unlike the two cases above: a path that was
+			// valid when the plan was approved can be deleted later (triage
+			// worktree reaped by CleanupTerminalItem, then the item reopened).
+			// Leave the item queued rather than dequeuing it into a work session
+			// with no readable plan content — an operator sees this via the
+			// item's stuck-review surface and re-runs triage to refresh the path.
+			log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
 		default:
 			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
 		}

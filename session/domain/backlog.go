@@ -7,8 +7,6 @@ package domain
 import (
 	"encoding/json"
 	"errors"
-	"io/fs"
-	"os"
 )
 
 // BacklogStatus represents the lifecycle state of a backlog item. The type
@@ -601,7 +599,7 @@ var (
 	ErrACRequired                   = errors.New("acceptance criteria required before marking ready")
 	ErrPlanRequired                 = errors.New("plan must be approved or skip_planning must be true before spawning work session")
 	ErrPlanArtifactsRequired        = errors.New("plan artifacts path is required when planning is not skipped")
-	ErrPlanArtifactsMissing         = errors.New("plan artifacts path is recorded but the directory does not exist on disk — re-run triage")
+	ErrPlanArtifactsMissing         = errors.New("plan artifacts path is recorded but no longer exists on disk — re-run triage")
 	ErrVerdictRequired              = errors.New("PASS verdict or manual override required before marking done")
 	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
 	ErrUnresolvedBlockers           = errors.New("item has one or more blockers that have not reached done")
@@ -638,6 +636,13 @@ type BacklogItemTransitionInput struct {
 	// a batched query (see DequeueNextQueuedItems) rather than a per-item
 	// lookup.
 	HasUnresolvedBlockers bool
+	// PlanArtifactsPathMissing is true when PlanArtifactsPath is non-empty but
+	// the directory it names no longer exists on disk (e.g. a triage worktree
+	// was cleaned up after the item went terminal and then got reopened). This
+	// package does no I/O itself (see the package doc comment) — the caller
+	// performs the os.Stat and sets this field, the same pattern
+	// HasUnresolvedBlockers already uses for its own caller-side query.
+	PlanArtifactsPathMissing bool
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -660,21 +665,14 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		if item.HasUnresolvedBlockers {
 			return ErrUnresolvedBlockers
 		}
-		// A recorded plan path that is not on disk is rejected whether or not the
-		// plan is approved: re-triage is the actionable fix either way. Only stat
-		// when a path is recorded, keeping this cold for items with no plan yet.
-		// Only ENOENT counts as missing; other stat errors (e.g. EACCES) fail open
-		// rather than telling the operator to re-run triage.
-		if !item.SkipPlanning && item.PlanArtifactsPath != "" {
-			if _, statErr := os.Stat(item.PlanArtifactsPath); errors.Is(statErr, fs.ErrNotExist) {
-				return ErrPlanArtifactsMissing
-			}
-		}
 		if !item.PlanApproved && !item.SkipPlanning {
 			return ErrPlanRequired
 		}
 		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPath == "" {
 			return ErrPlanArtifactsRequired
+		}
+		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPathMissing {
+			return ErrPlanArtifactsMissing
 		}
 		return nil
 

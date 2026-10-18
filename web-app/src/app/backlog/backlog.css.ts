@@ -188,6 +188,36 @@ export const tableRow = style({
   },
 });
 
+export const checkboxCell = style({
+  width: 32,
+  paddingRight: 0,
+});
+
+// Hidden until the row is hovered/focused, checked, or select mode is on.
+export const rowCheckbox = style({
+  opacity: 0,
+  cursor: "pointer",
+  selectors: {
+    [`${tableRow}:hover &`]: { opacity: 1 },
+    [`${tableRow}:focus-within &`]: { opacity: 1 },
+    "&:checked": { opacity: 1 },
+  },
+  "@media": { "(hover: none)": { opacity: 1 } },
+});
+
+export const rowCheckboxVisible = style({
+  selectors: { "&&": { opacity: 1 } },
+});
+
+export const srOnly = style({
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+});
+
 export const tableRowActive = style({
   background: vars.color.accentBg,
 });

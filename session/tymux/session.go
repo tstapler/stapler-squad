@@ -624,14 +624,16 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	return CellsToSGR(snap.GetGrid())
 }
 
-// CapturePaneContentRaw returns the live screen's plain text (Cell.text
-// only, no ANSI) — Task 2.2.2a.
+// CapturePaneContentRaw returns the live screen with SGR preserved, as the
+// ProcessManager contract (and the tmux backend) promises: the web terminal
+// paints its first frame from this, so plain text left panes uncolored until
+// live output arrived.
 func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
 		return "", err
 	}
-	return rowsToPlainText(snap.GetGrid()), nil
+	return CellsToSGR(snap.GetGrid())
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument
