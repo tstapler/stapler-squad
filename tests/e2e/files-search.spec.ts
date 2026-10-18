@@ -3,6 +3,9 @@
 import { test, expect } from "@playwright/test";
 import { FilesTabView, seedSearchFixture } from "./pages/files-tab.page";
 
+// Wide enough that the container reaches the desktop layout; a narrow one shows the mobile nav-stack.
+test.use({ viewport: { width: 1900, height: 1000 } });
+
 test.describe("content search", () => {
   test("search_should_LandOnHitLine_In3Interactions_When_QueryTypedAndEnterPressed", async ({ page }) => {
     const files = await FilesTabView.create(page, seedSearchFixture);
@@ -14,7 +17,7 @@ test.describe("content search", () => {
 
     await expect(files.editorTab("a.go")).toHaveAttribute("aria-selected", "true");
     await expect.poll(() => files.activeLineText()).toContain("needle_fn");
-    await expect(page.getByText("func needle_fn() {}", { exact: true })).toBeInViewport();
+    await expect(files.codeContent.getByText("func needle_fn() {}", { exact: true })).toBeInViewport();
   });
 
   test("search_should_OfferHitStepping_When_HitOpened", async ({ page }) => {

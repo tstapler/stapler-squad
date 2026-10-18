@@ -33,7 +33,7 @@ test.describe("tab strip", () => {
   });
 
   test.describe("touch sizing", () => {
-    test.use({ hasTouch: true, isMobile: true, viewport: { width: 820, height: 1180 } });
+    test.use({ hasTouch: true, isMobile: true, viewport: { width: 1366, height: 1024 } });
     test("tabs_should_GiveCloseButtonA44pxHitArea_When_PointerCoarse", async ({ page }) => {
       const files = await FilesTabView.create(page);
       await files.goto();
@@ -50,6 +50,7 @@ test.describe("jumplist, go to line and deep links", () => {
     const files = await FilesTabView.create(page);
     await files.goto();
     await files.treeFile("long.txt").click();
+    await expect(files.codeContent).toContainText("line 1"); // Ctrl+G before the file lands is dropped
     await page.keyboard.press("Control+g");
     await page.getByRole("textbox", { name: "Go to line" }).fill("250");
     await page.keyboard.press("Enter");
