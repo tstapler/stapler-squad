@@ -7,7 +7,7 @@
 import React from "react";
 import fs from "fs";
 import path from "path";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import FeaturesPage from "./page";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import type { FeatureFlagMeta } from "@/lib/contexts/FeatureFlagsContext";
@@ -58,6 +58,8 @@ function mockFlags(flagList: FeatureFlagMeta[]) {
     flagList,
     isLoading: false,
     error: null,
+    loadError: null,
+    reload: jest.fn(),
     setFlag: jest.fn(),
   });
 }
@@ -107,7 +109,9 @@ describe("FeaturesPage", () => {
     const descriptionLine = screen.getByText(
       "Backlog management with external sync sources and AI-driven triage"
     );
-    expect(descriptionLine.parentElement?.children.length).toBe(2); // flagName + description only
+    // flagName + description + the (empty) row status region; no extra detail line
+    expect(descriptionLine.parentElement?.children.length).toBe(3);
+    expect(screen.getByTestId("feature-flag-row-status")).toBeEmptyDOMElement();
     expect(container.querySelectorAll("div").length).toBeGreaterThan(0);
   });
 });
@@ -134,12 +138,14 @@ describe("FeaturesPage — pi-support disable warning", () => {
       flagList: [makeFlag({ name: "pi-support", enabled: true, description: "pi coding agent support" })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
 
     render(<FeaturesPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /disable pi coding agent/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /pi coding agent/i }));
 
     // Persistence must not happen until the user explicitly acknowledges.
     await waitFor(() => expect(screen.getByTestId("pi-disable-warning-overlay")).toBeInTheDocument());
@@ -170,12 +176,14 @@ describe("FeaturesPage — pi-support disable warning", () => {
       flagList: [makeFlag({ name: "pi-support", enabled: true, description: "pi coding agent support" })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
 
     render(<FeaturesPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /disable pi coding agent/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /pi coding agent/i }));
 
     await waitFor(() => expect(screen.getByTestId("pi-disable-warning-overlay")).toBeInTheDocument());
     expect(setFlag).not.toHaveBeenCalled();
@@ -193,12 +201,14 @@ describe("FeaturesPage — pi-support disable warning", () => {
       flagList: [makeFlag({ name: "pi-support", enabled: true, description: "pi coding agent support" })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
 
     render(<FeaturesPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /disable pi coding agent/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /pi coding agent/i }));
     await waitFor(() => expect(screen.getByTestId("pi-disable-warning-overlay")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("pi-disable-warning-cancel"));
@@ -219,12 +229,14 @@ describe("FeaturesPage — pi-support disable warning", () => {
       flagList: [makeFlag({ name: "pi-support", enabled: true, description: "pi coding agent support" })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
 
     render(<FeaturesPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /disable pi coding agent/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /pi coding agent/i }));
 
     await waitFor(() => expect(setFlag).toHaveBeenCalledWith("pi-support", false));
     expect(screen.queryByTestId("pi-disable-warning-overlay")).not.toBeInTheDocument();
@@ -239,12 +251,14 @@ describe("FeaturesPage — pi-support disable warning", () => {
       flagList: [makeFlag({ name: "backlog", enabled: false, description: "Backlog management" })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
 
     render(<FeaturesPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /enable backlog/i }));
+    fireEvent.click(screen.getByRole("switch", { name: "Backlog" }));
 
     expect(setFlag).toHaveBeenCalledWith("backlog", true);
     expect(global.fetch).not.toHaveBeenCalled();
@@ -259,12 +273,14 @@ describe("FeaturesPage — pi-support disable warning", () => {
       flagList: [makeFlag({ name: "pi-support", enabled: false, description: "pi coding agent support" })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
 
     render(<FeaturesPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /enable pi coding agent/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /pi coding agent/i }));
 
     expect(setFlag).toHaveBeenCalledWith("pi-support", true);
     expect(global.fetch).not.toHaveBeenCalled();
@@ -294,6 +310,8 @@ describe("FeaturesPage - hidden_session_gate overrides", () => {
       flagList: [makeFlag({ name: "hidden_session_gate", enabled, description: "gate", scopes })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
     render(<FeaturesPage />);
@@ -302,7 +320,7 @@ describe("FeaturesPage - hidden_session_gate overrides", () => {
 
   it("features_page_should_send_the_global_literal_scope_when_the_gate_toggle_is_used", () => {
     const setFlag = setup();
-    fireEvent.click(screen.getByRole("button", { name: /enable notifications: hidden-session delivery gate/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /hidden-session delivery gate/i }));
     expect(setFlag).toHaveBeenCalledWith("hidden_session_gate", { mutation: "set", scope: "global", enabled: true });
   });
 
@@ -377,7 +395,7 @@ describe("FeaturesPage - notification flag rows (FG-1, FG-5, FG-6)", () => {
     ]);
     render(<FeaturesPage />);
 
-    expect(screen.getByRole("button", { name: /enable notifications: hidden-session delivery gate/i })).toHaveAttribute("aria-pressed");
+    expect(screen.getByRole("switch", { name: /hidden-session delivery gate/i })).toHaveAttribute("aria-checked");
     const rows = screen.getAllByTestId("feature-flag-row");
     const noteCount = rows.filter((row) => row.querySelector('[data-testid="flag-live-note"]')).length;
     expect(noteCount).toBe(1);
@@ -412,6 +430,8 @@ describe("FeaturesPage - notification flag rows (FG-1, FG-5, FG-6)", () => {
       flagList: [makeFlag({ name: "hidden_session_gate", enabled: true, scopes: { "kind:review": false } })],
       isLoading: false,
       error: null,
+      loadError: null,
+      reload: jest.fn(),
       setFlag,
     });
     render(<FeaturesPage />);
@@ -421,5 +441,177 @@ describe("FeaturesPage - notification flag rows (FG-1, FG-5, FG-6)", () => {
 
     fireEvent.click(within(screen.getByTestId("gate-override-review")).getByRole("radio", { name: "Inherit" }));
     expect(setFlag).toHaveBeenLastCalledWith("hidden_session_gate", { mutation: "clear", scope: "kind:review" });
+  });
+});
+
+// Story 4.1.4: legibility (UX-11, UX-12), switch semantics (UX-09, UX-10), states (UX-13, UX-14, UX-17, UX-48).
+describe("FeaturesPage - Story 4.1.4", () => {
+  const STALL = "autonomous_stall_nudge_enabled";
+  const DIAGNOSE = "diagnose_nudge_enabled";
+
+  function mockState(overrides: Partial<ReturnType<typeof useFeatureFlags>>) {
+    mockUseFeatureFlags.mockReturnValue({
+      flags: {},
+      flagList: [],
+      isLoading: false,
+      error: null,
+      loadError: null,
+      reload: jest.fn(),
+      setFlag: jest.fn(),
+      ...overrides,
+    });
+  }
+
+  it("groups autonomous flags and shows On (inactive), default source and human labels", () => {
+    mockFlags([
+      makeFlag({ name: "backlog" }),
+      makeFlag({
+        name: DIAGNOSE,
+        enabled: false,
+        statusDetail: "Default: Off (not set explicitly)",
+      }),
+      makeFlag({
+        name: STALL,
+        enabled: true,
+        statusDetail: `inactive: requires ${DIAGNOSE}; Set explicitly: On`,
+      }),
+    ]);
+    render(<FeaturesPage />);
+
+    const group = screen.getByRole("region", { name: "Autonomous backlog" });
+    expect(within(group).getByRole("heading", { name: "Autonomous backlog" })).toBeInTheDocument();
+    // human labels, not raw keys; the stall row is nested right after the diagnose row
+    const rows = within(group).getAllByTestId("feature-flag-row");
+    expect(rows[0]).toHaveTextContent("Diagnose & Nudge");
+    expect(rows[1]).toHaveTextContent("Autonomous stall nudge");
+    expect(rows[1].className).toMatch(/nestedRow/);
+    expect(screen.queryByText(DIAGNOSE)).not.toBeInTheDocument();
+
+    expect(within(rows[1]).getByTestId("feature-flag-status")).toHaveTextContent("On (inactive)");
+    expect(within(rows[1]).getByText("Has no effect until Diagnose & Nudge is On.")).toBeInTheDocument();
+    expect(within(rows[1]).getByTestId("feature-flag-source")).toHaveTextContent("Set explicitly: On");
+    expect(within(rows[0]).getByTestId("feature-flag-source")).toHaveTextContent("Default: Off (not set explicitly)");
+    // inactive is not rendered as a free-text status line
+    expect(within(rows[1]).queryByText(/requires diagnose_nudge_enabled/)).not.toBeInTheDocument();
+    // an inert row's switch stays operable
+    expect(within(rows[1]).getByRole("switch")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("rows should show default or explicit source rollback line and live note When rendered", () => {
+    mockFlags([
+      makeFlag({ name: "hidden_session_gate", enabled: false, statusDetail: "Default: Off (not set explicitly)" }),
+      makeFlag({ name: "backlog", statusDetail: "Set explicitly: On" }),
+    ]);
+    render(<FeaturesPage />);
+    const [gate, backlog] = screen.getAllByTestId("feature-flag-row");
+    expect(within(gate).getByTestId("feature-flag-source")).toHaveTextContent("Default: Off (not set explicitly)");
+    expect(within(gate).getByTestId("flag-live-note")).toHaveTextContent("Takes effect without reload");
+    expect(within(backlog).getByTestId("feature-flag-source")).toHaveTextContent("Set explicitly: On");
+  });
+
+  it("flagExtras registry renders per-flag extras without name-branching", () => {
+    mockFlags([makeFlag({ name: "hidden_session_gate" }), makeFlag({ name: "backlog" })]);
+    render(<FeaturesPage />);
+    const [gate, backlog] = screen.getAllByTestId("feature-flag-row");
+    expect(within(gate).getByTestId("gate-status-line")).toBeInTheDocument();
+    expect(within(gate).getByTestId("gate-kind-overrides")).toBeInTheDocument();
+    expect(within(backlog).queryByTestId("gate-status-line")).not.toBeInTheDocument();
+    expect(fs.readFileSync(path.join(__dirname, "page.tsx"), "utf8")).not.toMatch(/name === ["'A-Z_]/);
+  });
+
+  it("every flag control exposes switch semantics with a stable label, a valid description id and no aria-pressed", () => {
+    const setFlag = jest.fn().mockResolvedValue({ ok: true });
+    mockState({
+      flagList: [makeFlag({ name: "backlog", enabled: false, description: "Backlog management" })],
+      setFlag,
+    });
+    const { rerender } = render(<FeaturesPage />);
+    const off = screen.getByRole("switch", { name: "Backlog" });
+    expect(off).toHaveAttribute("aria-checked", "false");
+    const describedBy = off.getAttribute("aria-describedby") ?? "";
+    expect(describedBy).not.toBe("");
+    expect(document.getElementById(describedBy)).toHaveTextContent("Backlog management");
+
+    mockState({ flagList: [makeFlag({ name: "backlog", enabled: true, description: "Backlog management" })], setFlag });
+    rerender(<FeaturesPage />);
+    const on = screen.getByRole("switch", { name: "Backlog" });
+    expect(on).toHaveAttribute("aria-checked", "true");
+    expect(document.querySelector("[aria-pressed]")).toBeNull();
+
+    const css = fs.readFileSync(path.join(__dirname, "page.css.ts"), "utf8");
+    const block = css.slice(css.indexOf("export const toggle = style("));
+    const toggleCss = block.slice(0, block.indexOf("export const toggleTrack"));
+    expect(toggleCss).toMatch(/width: "44px"/);
+    expect(toggleCss).toMatch(/height: "44px"/);
+    expect(toggleCss).toMatch(/":focus-visible"/);
+  });
+
+  it("should render aria-busy skeleton and no switches When flags loading", () => {
+    mockState({ isLoading: true });
+    render(<FeaturesPage />);
+    expect(screen.getByTestId("feature-flags-loading")).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+  });
+
+  it("shows a load-failed alert with Retry and renders no switch When the list request fails", () => {
+    const reload = jest.fn();
+    mockState({
+      loadError: "unavailable",
+      reload,
+      flagList: [makeFlag({ name: "backlog", enabled: false })],
+    });
+    render(<FeaturesPage />);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't load feature flags: unavailable");
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces the result in the row status, keeps focus on the switch, and on failure shows an alert with Retry", async () => {
+    const setFlag = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: "boom" })
+      .mockResolvedValueOnce({ ok: true });
+    mockState({ flagList: [makeFlag({ name: "backlog", enabled: false })], setFlag });
+    render(<FeaturesPage />);
+    const sw = screen.getByRole("switch", { name: "Backlog" });
+    sw.focus();
+    fireEvent.click(sw);
+
+    const row = screen.getAllByTestId("feature-flag-row")[0];
+    const alert = await within(row).findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't change Backlog: boom");
+    expect(sw).toHaveFocus();
+    expect(sw).toHaveAttribute("aria-checked", "false"); // reverts to the server value
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(within(row).getByRole("status")).toHaveTextContent("Backlog is now On."));
+    expect(within(row).queryByRole("alert")).not.toBeInTheDocument();
+    expect(setFlag).toHaveBeenCalledTimes(2);
+    expect(sw).toHaveFocus();
+  });
+
+  it("ignores a second activation while a toggle is pending, keeps focus, and announces Saving once", async () => {
+    let finish: (v: { ok: true }) => void = () => {};
+    const setFlag = jest.fn().mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    mockState({ flagList: [makeFlag({ name: "backlog", enabled: false })], setFlag });
+    render(<FeaturesPage />);
+    const sw = screen.getByRole("switch", { name: "Backlog" });
+    sw.focus();
+    fireEvent.click(sw);
+    fireEvent.click(sw);
+
+    await waitFor(() => expect(sw).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(sw);
+    expect(setFlag).toHaveBeenCalledTimes(1);
+    expect(sw).toHaveFocus();
+    const status = screen.getByTestId("feature-flag-row-status");
+    expect(status).toHaveTextContent("Saving Backlog...");
+
+    await act(async () => finish({ ok: true }));
+    expect(status).toHaveTextContent("Backlog is now On.");
+    expect(sw).not.toHaveAttribute("aria-disabled");
+    expect(sw).toHaveFocus();
   });
 });

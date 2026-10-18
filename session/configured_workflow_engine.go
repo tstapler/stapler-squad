@@ -3,8 +3,11 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
@@ -45,7 +48,22 @@ type ConfiguredWorkflowEngine struct {
 	// degrades to treating any non-empty pipeline_mode as unresolvable rather
 	// than panicking.
 	pipelineModeRepo PipelineModeRepository
+
+	// loadErr is the outcome of the most recent cache load/invalidate; the
+	// selector reads it to tell a failed load from a legitimately empty config.
+	loadErr atomic.Pointer[error]
+
+	// gateLookupTimeout bounds each stateful-gate DB read; zero means
+	// defaultGateLookupTimeout. A test seam, never set in production.
+	gateLookupTimeout time.Duration
+	// gateLookupTimeouts counts stateful-gate reads cut off by the deadline.
+	gateLookupTimeouts atomic.Int64
 }
+
+// defaultGateLookupTimeout bounds the GateSatisfactionRepository reads made
+// while evaluating stateful gates. WorkflowEngine carries no context, so the
+// deadline lives here; a timeout leaves the gate unsatisfied (fail closed).
+const defaultGateLookupTimeout = 2 * time.Second
 
 var _ WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
 
@@ -77,7 +95,9 @@ type StageConfigSnapshot struct {
 // be nil (e.g. in tests that don't exercise those paths).
 func NewConfiguredWorkflowEngine(repo StageConfigRepository, gateSatisfactionRepo GateSatisfactionRepository, pipelineModeRepo PipelineModeRepository) (*ConfiguredWorkflowEngine, error) {
 	e := &ConfiguredWorkflowEngine{repo: repo, cache: &stageConfigCache{}, gateSatisfactionRepo: gateSatisfactionRepo, pipelineModeRepo: pipelineModeRepo}
-	if err := e.cache.Load(context.Background(), repo); err != nil {
+	err := e.cache.Load(context.Background(), repo)
+	e.recordLoadResult(err)
+	if err != nil {
 		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache.Load failed at startup, continuing with an empty cache: %v", err)
 	}
 	return e, nil
@@ -88,7 +108,56 @@ func NewConfiguredWorkflowEngine(repo StageConfigRepository, gateSatisfactionRep
 // that must invalidate the cache after every Create/Update/Delete of a
 // stage, transition, or gate.
 func (e *ConfiguredWorkflowEngine) InvalidateCache(ctx context.Context) error {
-	return e.cache.Invalidate(ctx, e.repo)
+	err := e.cache.Invalidate(ctx, e.repo)
+	e.recordLoadResult(err)
+	return err
+}
+
+func (e *ConfiguredWorkflowEngine) recordLoadResult(err error) {
+	if err == nil {
+		e.loadErr.Store(nil)
+		return
+	}
+	e.loadErr.Store(&err)
+}
+
+// LoadError returns the error from the most recent cache load or invalidate,
+// or nil when it succeeded.
+func (e *ConfiguredWorkflowEngine) LoadError() error {
+	if p := e.loadErr.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// HasAnyStage reports whether the live cache holds at least one enabled stage.
+// False means the graph is unloaded or empty, so callers should not trust it
+// to answer CanTransition (an empty graph denies everything).
+func (e *ConfiguredWorkflowEngine) HasAnyStage() bool {
+	snap := e.cache.ptr.Load()
+	return snap != nil && len(snap.edges) > 0
+}
+
+// GateLookupTimeouts returns how many stateful-gate reads hit the deadline.
+func (e *ConfiguredWorkflowEngine) GateLookupTimeouts() int64 {
+	return e.gateLookupTimeouts.Load()
+}
+
+// lookupGateRecord reads a persisted gate satisfaction under a bounded
+// deadline and counts deadline/cancel failures. Any error, including a
+// timeout, is returned so the caller leaves the gate unsatisfied.
+func (e *ConfiguredWorkflowEngine) lookupGateRecord(itemID, gateID uuid.UUID) (*GateSatisfactionData, error) {
+	timeout := e.gateLookupTimeout
+	if timeout <= 0 {
+		timeout = defaultGateLookupTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	record, err := e.gateSatisfactionRepo.GetByItemAndGate(ctx, itemID, gateID)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		e.gateLookupTimeouts.Add(1)
+	}
+	return record, err
 }
 
 // CanTransition implements WorkflowEngine. When from is not present at all in
@@ -163,21 +232,42 @@ const stageConfigUnresolvableGateID = "stage-config-unresolvable"
 // contain to either (never a legal edge), today's nil, nil is preserved —
 // CanTransition already governs legality separately.
 func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) ([]GateStatus, error) {
+	statuses, _ := e.collectGates(item, to, fallback, true)
+	return statuses, nil
+}
+
+// PendingGatesStructuralOnly is PendingGates without any I/O: stateful gate
+// kinds (human_approval, automated_review, custom) are skipped rather than
+// evaluated, and skippedStateful reports that at least one was. Shadow
+// evaluation uses it so comparing engines never reads the database.
+func (e *ConfiguredWorkflowEngine) PendingGatesStructuralOnly(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) (statuses []GateStatus, skippedStateful bool) {
+	return e.collectGates(item, to, fallback, false)
+}
+
+func isStatefulGateKind(k GateKind) bool {
+	return k == GateKindHumanApproval || k == GateKindAutomatedReview || k == GateKindCustom
+}
+
+func (e *ConfiguredWorkflowEngine) collectGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot, evalStateful bool) (statuses []GateStatus, skippedStateful bool) {
 	edge, ok := e.cache.Get(item.Status, to)
 	if !ok {
 		if status, blocked := stageConfigUnresolvableGateStatus(to, fallback); blocked {
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); blocking %s->%s pending manual override (edge once existed per item's captured StageConfigSnapshot)", item.Status, item.Status, to)
-			return []GateStatus{status}, nil
+			return []GateStatus{status}, false
 		}
-		return nil, nil
+		return nil, false
 	}
 	if len(edge.Gates) == 0 {
-		return nil, nil
+		return nil, false
 	}
 
-	statuses := make([]GateStatus, 0, len(edge.Gates))
+	statuses = make([]GateStatus, 0, len(edge.Gates))
 	unsatisfied := 0
 	for _, g := range edge.Gates {
+		if !evalStateful && isStatefulGateKind(g.Kind) {
+			skippedStateful = true
+			continue
+		}
 		status := e.evaluateGate(g, item)
 		if !status.Satisfied {
 			unsatisfied++
@@ -185,8 +275,8 @@ func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput,
 		statuses = append(statuses, status)
 	}
 
-	log.InfoLog().Printf("[ConfiguredWorkflowEngine] resolved transition %s->%s, %d gate(s) pending", item.Status, to, unsatisfied)
-	return statuses, nil
+	log.DebugLog().Printf("[ConfiguredWorkflowEngine] resolved transition %s->%s, %d gate(s) pending", item.Status, to, unsatisfied)
+	return statuses, skippedStateful
 }
 
 // stageConfigUnresolvableGateStatus returns ADR-004's synthetic blocking
@@ -221,6 +311,12 @@ func (e *ConfiguredWorkflowEngine) ValidateGates(item BacklogItemTransitionInput
 	if err != nil {
 		return err
 	}
+	return firstUnsatisfiedGateError(statuses)
+}
+
+// firstUnsatisfiedGateError wraps ErrGateNotSatisfied around the first
+// unsatisfied status, or returns nil when all are satisfied.
+func firstUnsatisfiedGateError(statuses []GateStatus) error {
 	for _, s := range statuses {
 		if !s.Satisfied {
 			return fmt.Errorf("%w: %s gate %q: %s", ErrGateNotSatisfied, s.Kind, s.GateID, s.Description)
@@ -273,15 +369,13 @@ func (e *ConfiguredWorkflowEngine) evaluateGate(g resolvedGate, item BacklogItem
 // item.ItemID doesn't parse as a UUID, or no record exists yet — the last of
 // these is the normal "not yet approved" case, not an error.
 //
-// Uses context.Background() rather than a caller-supplied context:
-// WorkflowEngine.PendingGates' signature (shared with DefaultWorkflowEngine,
-// session/workflow_engine.go) carries no context parameter, mirroring
-// NewConfiguredWorkflowEngine's identical constructor-time cache.Load call
-// just above.
+// The read runs under lookupGateRecord's bounded context rather than a
+// caller-supplied one: WorkflowEngine.PendingGates' signature (shared with
+// DefaultWorkflowEngine, session/workflow_engine.go) carries no context.
 func (e *ConfiguredWorkflowEngine) evaluateHumanApprovalGate(g resolvedGate, item BacklogItemTransitionInput) GateStatus {
 	if e.gateSatisfactionRepo != nil && item.ItemID != "" {
 		if itemUUID, parseErr := uuid.Parse(item.ItemID); parseErr == nil {
-			if record, lookupErr := e.gateSatisfactionRepo.GetByItemAndGate(context.Background(), itemUUID, g.ID); lookupErr == nil && record.Satisfied {
+			if record, lookupErr := e.lookupGateRecord(itemUUID, g.ID); lookupErr == nil && record.Satisfied {
 				return GateStatus{
 					GateID:      g.ID.String(),
 					Kind:        GateKindHumanApproval,
@@ -371,7 +465,7 @@ func (e *ConfiguredWorkflowEngine) checkAutomatedReviewGateConfig(g resolvedGate
 func (e *ConfiguredWorkflowEngine) evaluateRecordedGate(g resolvedGate, item BacklogItemTransitionInput, kindLabel string) GateStatus {
 	if e.gateSatisfactionRepo != nil && item.ItemID != "" {
 		if itemUUID, parseErr := uuid.Parse(item.ItemID); parseErr == nil {
-			if record, lookupErr := e.gateSatisfactionRepo.GetByItemAndGate(context.Background(), itemUUID, g.ID); lookupErr == nil {
+			if record, lookupErr := e.lookupGateRecord(itemUUID, g.ID); lookupErr == nil {
 				actionHint := ""
 				if !record.Satisfied {
 					actionHint = fmt.Sprintf("re-run the %s check for this item", kindLabel)

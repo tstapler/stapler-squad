@@ -3,19 +3,30 @@ package services
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // TestFeatureFlagService_should_ToggleForwardingBehaviorForNextRequestOnly_When_UpdateFeatureFlagCalledMidSession
@@ -147,6 +158,54 @@ func flagUpdate(svc *FeatureFlagService, name string, enabled bool) error {
 	return err
 }
 
+// Pre-mortem #3: the flag service and the quota RPC both read-modify-write
+// config.json; both must go through config.UpdateConfig so neither loses a write.
+func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testing.T) {
+	withIsolatedStateDir(t)
+	const flag = "browser-passthrough"
+	const iterations = 50
+	flags := NewFeatureFlagService()
+	quota := NewQuotaSettingsService()
+
+	errCh := make(chan error, 2*iterations)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= iterations; i++ {
+			errCh <- flagUpdate(flags, flag, i%2 == 0)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= iterations; i++ {
+			_, err := quota.UpdateQuotaConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{
+				Settings: &sessionv1.QuotaSettings{Enabled: proto.Bool(i%2 == 0)},
+			}))
+			errCh <- err
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	cfg := config.LoadConfig()
+	got, ok := cfg.GetFeatureFlagOverride(flag)
+	require.True(t, ok, "flag write lost")
+	require.True(t, got, "flag holds its last written value")
+	require.True(t, cfg.Quota.Enabled, "quota Enabled lost to a flag write")
+
+	resp, err := flags.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	for _, f := range resp.Msg.GetFlags() {
+		if f.GetName() == flag {
+			require.True(t, f.GetEnabled(), "the service reads back the stored value")
+		}
+	}
+}
+
 func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
 	t.Helper()
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
@@ -221,4 +280,228 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 	svc.AddStatusDetailSource("backlog", func() string { return "extra" })
 	svc.SetStatusDetailProvider("backlog", func() string { return "resumed" })
 	require.Equal(t, "resumed; extra", statusDetailOf(t, svc, "backlog"), "the setter replaces only its own slot")
+}
+
+func TestFeatureFlagStatusDetail_ReportsInertAndSource_WhenStallNudgeOnDiagnoseOff(t *testing.T) {
+	withIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+
+	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
+
+	require.NoError(t, flagUpdate(svc, config.AutonomousStallNudgeFeatureFlag, true))
+	require.Equal(t, "inactive: requires diagnose_nudge_enabled; Set explicitly: On",
+		statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+
+	require.NoError(t, flagUpdate(svc, config.DiagnoseNudgeFeatureFlag, true))
+	require.Equal(t, "Set explicitly: On", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
+	require.Equal(t, "Set explicitly: On", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
+
+	require.Empty(t, statusDetailOf(t, svc, "backlog"), "other flags gain no status line")
+}
+
+// --- workflow engine mode flags (Story 1.1.3) --------------------------------
+
+type modeTestClock struct{ now time.Time }
+
+func (c *modeTestClock) Now() time.Time          { return c.now }
+func (c *modeTestClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func TestModeResolver_ReturnsShadow_WhenNoFlagSetAndReaderIsProductionReader(t *testing.T) {
+	withIsolatedStateDir(t)
+	cfg := config.LoadConfig()
+	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineShadowFeatureFlag, "fixture: nothing is set")
+	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineEnforceFeatureFlag, "fixture: nothing is set")
+
+	src := NewWorkflowEngineModeSource(config.LoadConfig, nil)
+
+	require.Equal(t, session.ModeShadow, src.Mode(), "an unset shadow flag resolves to its registered default (on), not Off")
+}
+
+func TestModeFlags_DefaultShadowOnEnforceOff_AndComposeToThreeLegalModes(t *testing.T) {
+	t.Parallel()
+	require.True(t, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag))
+	require.False(t, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag))
+	require.Equal(t, config.WorkflowEngineShadowDefault, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag), "declared once in config")
+	require.Equal(t, config.WorkflowEngineEnforceDefault, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag), "declared once in config")
+
+	set := func(flags map[string]bool) *config.Config { return &config.Config{FeatureFlags: flags} }
+	shadow, enforce := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag
+	cases := []struct {
+		name string
+		cfg  *config.Config
+		want session.EngineMode
+	}{
+		{"nil config", nil, session.ModeShadow},
+		{"nothing set", set(nil), session.ModeShadow},
+		{"shadow off", set(map[string]bool{shadow: false}), session.ModeOff},
+		{"enforce on", set(map[string]bool{enforce: true}), session.ModeEnforce},
+		{"enforce on, shadow off", set(map[string]bool{shadow: false, enforce: true}), session.ModeEnforce},
+		{"both explicit on", set(map[string]bool{shadow: true, enforce: true}), session.ModeEnforce},
+		{"both explicit off", set(map[string]bool{shadow: false, enforce: false}), session.ModeOff},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, WorkflowEngineModeFromConfig(tc.cfg), tc.name)
+	}
+}
+
+func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *testing.T) {
+	withIsolatedStateDir(t)
+	clock := &modeTestClock{now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)}
+	src := NewWorkflowEngineModeSource(config.LoadConfig, clock)
+	svc := NewFeatureFlagService()
+	require.Equal(t, session.ModeShadow, src.Mode())
+
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
+	require.Equal(t, session.ModeShadow, src.Mode(), "the cached mode is reused inside the TTL")
+	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	require.Equal(t, session.ModeEnforce, src.Mode(), "enforce applies after at most the TTL, no restart")
+
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
+	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	require.Equal(t, session.ModeShadow, src.Mode())
+}
+
+func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(t *testing.T) {
+	withIsolatedStateDir(t)
+	got := map[string]bool{}
+	for _, kf := range knownFeatureFlags {
+		got[kf.name] = kf.defaultValue
+	}
+	require.Equal(t, config.WorkflowEngineShadowDefault, got[config.WorkflowEngineShadowFeatureFlag])
+	require.Equal(t, config.WorkflowEngineEnforceDefault, got[config.WorkflowEngineEnforceFeatureFlag])
+
+	// GetFeatureFlags reports the same defaults the production reader resolves.
+	resp, err := NewFeatureFlagService().GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	reported := map[string]bool{}
+	for _, f := range resp.Msg.Flags {
+		reported[f.Name] = f.Enabled
+	}
+	require.True(t, reported[config.WorkflowEngineShadowFeatureFlag])
+	require.False(t, reported[config.WorkflowEngineEnforceFeatureFlag])
+	require.Equal(t, session.ModeShadow, NewWorkflowEngineModeSource(config.LoadConfig, nil).Mode())
+}
+
+// plainFlagReads returns "file:line" for each plain GetFeatureFlag call (which
+// returns false for an unset flag) whose argument names one of the mode flags.
+func plainFlagReads(t *testing.T, filename, src string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filename, src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	names := map[string]bool{
+		config.WorkflowEngineShadowFeatureFlag: true, config.WorkflowEngineEnforceFeatureFlag: true,
+		"WorkflowEngineShadowFeatureFlag": true, "WorkflowEngineEnforceFeatureFlag": true,
+	}
+	var hits []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "GetFeatureFlag" {
+			return true
+		}
+		for _, arg := range call.Args {
+			ast.Inspect(arg, func(a ast.Node) bool {
+				switch v := a.(type) {
+				case *ast.BasicLit:
+					if s, err := strconv.Unquote(v.Value); err == nil && names[s] {
+						hits = append(hits, fset.Position(v.Pos()).String())
+					}
+				case *ast.Ident:
+					if names[v.Name] {
+						hits = append(hits, fset.Position(v.Pos()).String())
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return hits
+}
+
+func TestWorkflowEngineModeFlags_NoNonTestCodeReadsThemWithPlainGetFeatureFlag(t *testing.T) {
+	t.Parallel()
+	bad := `package x
+func f(c *C) bool { return c.GetFeatureFlag("backlog:workflow-engine-enforce") || c.GetFeatureFlag(config.WorkflowEngineShadowFeatureFlag) }`
+	require.Len(t, plainFlagReads(t, "bad.go", bad), 2, "the scanner must catch both literal and constant reads")
+	good := `package x
+func f(c *C) bool { return c.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, true) }`
+	require.Empty(t, plainFlagReads(t, "good.go", good))
+
+	root := filepath.Join("..", "..")
+	skip := map[string]bool{"node_modules": true, "web-app": true, "gen": true, ".git": true, "ent": true, "tests": true, "docs": true, "project_plans": true, ".claude": true}
+	var hits []string
+	require.NoError(t, filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skip[d.Name()] && path != root {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path) // #nosec G304 -- walking this repo's own source
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(src), "GetFeatureFlag(") {
+			return nil
+		}
+		hits = append(hits, plainFlagReads(t, path, string(src))...)
+		return nil
+	}))
+	require.Empty(t, hits, "read the mode flags with GetFeatureFlagWithDefault and the registered default")
+}
+
+// modeFlagObservable runs one CanTransition through a selector driven by the
+// production mode reader and returns what a caller can observe.
+func modeFlagObservable(t *testing.T, flag string, enabled bool, observe func(*session.SwitchableWorkflowEngine, *countingShadow) any) any {
+	t.Helper()
+	clock := &modeTestClock{now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)}
+	svc := NewFeatureFlagService()
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
+	require.NoError(t, flagUpdate(svc, flag, enabled))
+	rec := &countingShadow{}
+	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil,
+		NewWorkflowEngineModeSource(config.LoadConfig, clock), session.WithShadowRecorder(rec))
+	return observe(sel, rec)
+}
+
+type countingShadow struct{ calls atomic.Int64 }
+
+func (c *countingShadow) RecordShadowCall(session.EngineMethod, session.CallPath) { c.calls.Add(1) }
+func (c *countingShadow) RecordDivergence(session.EngineMethod, session.DivergenceClass, string, session.CallPath) {
+}
+func (c *countingShadow) RecordNotCompared(session.NotComparedReason) {}
+
+func TestConfigSurfaceProof_WorkflowEngineShadow_ChangesShadowCallsRecorded(t *testing.T) {
+	withIsolatedStateDir(t)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		return modeFlagObservable(t, config.WorkflowEngineShadowFeatureFlag, setting.(bool),
+			func(sel *session.SwitchableWorkflowEngine, rec *countingShadow) any {
+				sel.CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil)
+				return rec.calls.Load()
+			})
+	}, false, true)
+}
+
+func TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer(t *testing.T) {
+	withIsolatedStateDir(t)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		return modeFlagObservable(t, config.WorkflowEngineEnforceFeatureFlag, setting.(bool),
+			func(sel *session.SwitchableWorkflowEngine, _ *countingShadow) any {
+				// archived->archived is system-required: only the enforce composition allows it.
+				return sel.CanTransition(session.BacklogStatusArchived, session.BacklogStatusArchived, nil)
+			})
+	}, false, true)
 }

@@ -152,20 +152,22 @@ func flagScopeReadback(cfg *config.Config, name string, scopes []string) []*sess
 // previous effective value (the inherited global when the key was absent) goes
 // to the audit line; a failed controller apply restores or deletes the key.
 func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit *flagAudit) error {
-	cfg := config.LoadConfig()
-	previous, hadKey := cfg.GetFeatureFlagScopedOverride(op.name, op.scope)
-	if !hadKey {
-		previous = cfg.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
-	}
+	var previous, hadKey bool
+	var cfg *config.Config
+	err := config.UpdateConfig(func(c *config.Config) error {
+		cfg = c
+		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
+		if !hadKey {
+			previous = c.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
+		}
+		if op.isSet() {
+			return c.SetFeatureFlagScope(op.name, op.scope, op.enabled)
+		}
+		return c.DeleteFeatureFlagScope(op.name, op.scope)
+	})
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
-	}
-	var err error
-	if op.isSet() {
-		err = cfg.SetFeatureFlagScope(op.name, op.scope, op.enabled)
-	} else {
-		err = cfg.DeleteFeatureFlagScope(op.name, op.scope)
 	}
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag scope: %w", err))
@@ -189,12 +191,12 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	}
 	log.Error("feature controller scope apply failed, rolling back persisted scope",
 		"feature", op.name, "scope", op.scope, "err", ctrlErr)
-	var rollbackErr error
-	if hadKey {
-		rollbackErr = cfg.SetFeatureFlagScope(op.name, op.scope, previous)
-	} else {
-		rollbackErr = cfg.DeleteFeatureFlagScope(op.name, op.scope)
-	}
+	rollbackErr := config.UpdateConfig(func(c *config.Config) error {
+		if hadKey {
+			return c.SetFeatureFlagScope(op.name, op.scope, previous)
+		}
+		return c.DeleteFeatureFlagScope(op.name, op.scope)
+	})
 	if rollbackErr != nil {
 		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed

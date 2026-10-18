@@ -2,11 +2,17 @@ package services
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	quotalog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -708,5 +714,114 @@ func TestReconcile_should_DetectManualOverrideOnlyOnce_When_ExternalStateStaysCh
 	qg.mu.Unlock()
 	if !secondOverrideAt.Equal(firstOverrideAt) {
 		t.Errorf("manualOverrideAt changed on a second tick with no new external change (%v -> %v) — provenance must only fire once per external change, not every tick", firstOverrideAt, secondOverrideAt)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Story 2.1.2 — resume on disable, legible status text, effective-config log.
+// ---------------------------------------------------------------------------
+
+// captureSlog swaps the package slog default for a buffer; callers must not
+// be t.Parallel (the seam is process-global).
+func captureSlog(t *testing.T) *quotalog.SyncBuffer {
+	t.Helper()
+	buf := &quotalog.SyncBuffer{}
+	prev := quotalog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { quotalog.SetSlogDefaultForTest(prev) })
+	return buf
+}
+
+func TestQuotaGateReconcile_ResumesBacklogOnce_WhenGateDisabledWhilePaused(t *testing.T) {
+	buf := captureSlog(t)
+	cfg := config.QuotaConfig{}.QuotaConfigOrDefault() // Enabled=false: the operator just switched the gate off
+	ctrl := &countingFeatureController{enabled: false}
+	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, ctrl, events.NewEventBus(1))
+	qg.state.pausedByQuota = true
+	v := false
+	qg.state.lastSetEnabled = &v
+
+	qg.Reconcile(context.Background())
+	qg.Reconcile(context.Background()) // second tick must not re-enable
+
+	if ctrl.enableCalls != 1 {
+		t.Errorf("enableCalls = %d, want 1", ctrl.enableCalls)
+	}
+	if qg.IsPausedByQuota() {
+		t.Error("pausedByQuota = true after resume, want false")
+	}
+	if !strings.Contains(buf.String(), "quota gate disabled while paused; resuming backlog") {
+		t.Errorf("log missing resume line, got: %s", buf.String())
+	}
+}
+
+func TestQuotaGateReconcile_LeavesBacklogAlone_WhenGateDisabledAndNotPausedByQuota(t *testing.T) {
+	ctrl := &countingFeatureController{enabled: false} // a human turned it off
+	qg := newTestQuotaGate(config.QuotaConfig{}.QuotaConfigOrDefault(), &fakeTokenStore{}, &mockInstancePoller{}, ctrl, events.NewEventBus(1))
+
+	qg.Reconcile(context.Background())
+
+	if ctrl.enableCalls != 0 {
+		t.Errorf("enableCalls = %d, want 0 (manual disable must stay disabled)", ctrl.enableCalls)
+	}
+}
+
+func TestQuotaGateReconcile_UsesNewBudgetWithoutRestart_WhenConfigUpdatedViaRpc(t *testing.T) {
+	withIsolatedStateDir(t)
+	ctrl := &countingFeatureController{enabled: true}
+	store := &fakeTokenStore{results: fakeResultsWithUsage(4_500_000)} // 10% of a 5M budget remains
+	qg := NewQuotaGate(func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
+		store, &mockInstancePoller{}, ctrl, events.NewEventBus(10))
+	v := true
+	qg.state.lastSetEnabled = &v
+
+	_, err := updateQuota(t, &sessionv1.QuotaSettings{Enabled: proto.Bool(true)})
+	require.NoError(t, err)
+	qg.Reconcile(context.Background())
+	qg.Reconcile(context.Background())
+	if ctrl.disableCalls != 0 {
+		t.Fatalf("disableCalls = %d with no budget set, want 0 (reactive-only)", ctrl.disableCalls)
+	}
+
+	_, err = updateQuota(t, &sessionv1.QuotaSettings{AssumedWindowTokenBudget: proto.Int64(5_000_000)})
+	require.NoError(t, err)
+	qg.Reconcile(context.Background())
+	qg.Reconcile(context.Background()) // default ConsecutiveTicksToPause = 2
+
+	if ctrl.disableCalls != 1 {
+		t.Errorf("disableCalls = %d after RPC set 5M budget, want 1 (new budget applied without restart)", ctrl.disableCalls)
+	}
+}
+
+func TestStatusDetail_should_PointToSettingsPage_When_EnabledWithZeroBudget(t *testing.T) {
+	t.Parallel()
+	cfg := config.QuotaConfig{}.QuotaConfigOrDefault()
+	cfg.Enabled = true
+	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, &countingFeatureController{}, events.NewEventBus(1))
+
+	got := qg.StatusDetail()
+	if strings.Contains(got, "config.json") || !strings.Contains(got, "Settings > Backlog quota") {
+		t.Errorf("StatusDetail() = %q, want it to point at Settings > Backlog quota, not config.json", got)
+	}
+}
+
+func TestLogQuotaEffectiveConfig_IncludesEveryValueAndMode_WhenProactive(t *testing.T) {
+	buf := captureSlog(t)
+
+	LogQuotaEffectiveConfig("Using quota gate config", config.QuotaConfig{
+		Enabled: true, PauseBelowHeadroomPct: 30, AssumedWindowTokenBudget: 5_000_000,
+	})
+
+	out := buf.String()
+	for _, want := range []string{
+		"mode=proactive", "enabled=true",
+		"pause_below_headroom_pct=30", `resume_margin_pct="15 (default)"`,
+		"assumed_window_token_budget=5000000",
+		`consecutive_ticks_to_pause="2 (default)"`, `consecutive_ticks_to_resume="3 (default)"`,
+		`rate_limit_window_minutes="30 (default)"`, `manual_override_grace_minutes="10 (default)"`,
+		`foreground_throttle_delay_seconds="300 (default)"`, `default_cost_budget_threshold_usd="off (default)"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log line missing %s; got: %s", want, out)
+		}
 	}
 }
