@@ -1,0 +1,12 @@
+{
+  "id": "UpdateQuotaConfig",
+  "type": "backend",
+  "service": "QuotaService",
+  "method": "UpdateQuotaConfig",
+  "protoFile": "proto/session/v1/quota.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/quota_settings_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-18T01:09:52.736043562-07:00"
+}

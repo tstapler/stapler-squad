@@ -597,20 +597,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 // flip as an explicit false.
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
-	cfg := config.LoadConfig()
-	previous, hadKey := cfg.GetFeatureFlagOverride(name)
-	if !hadKey {
-		previous = featureFlagDefault(name)
-	}
+	var previous, hadKey bool
+	err := config.UpdateConfig(func(cfg *config.Config) error {
+		previous, hadKey = cfg.GetFeatureFlagOverride(name)
+		if !hadKey {
+			previous = featureFlagDefault(name)
+		}
+		if op.isSet() {
+			return cfg.SetFeatureFlag(name, enabled)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
-	}
-	var err error
-	if op.isSet() {
-		err = cfg.SetFeatureFlag(name, enabled)
-	} else {
-		err = cfg.DeleteFeatureFlag(name)
 	}
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
@@ -635,7 +635,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	}
 	log.Error("feature controller toggle failed, rolling back persisted flag",
 		"feature", name, "enabled", enabled, "err", ctrlErr)
-	if rollbackErr := rollbackFlag(cfg, name, previous, hadKey); rollbackErr != nil {
+	if rollbackErr := rollbackFlag(name, previous, hadKey); rollbackErr != nil {
 		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
 		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed
@@ -651,11 +651,13 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
 }
 
-func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error {
-	if hadKey {
-		return cfg.SetFeatureFlag(name, previous)
-	}
-	return cfg.DeleteFeatureFlag(name)
+func rollbackFlag(name string, previous, hadKey bool) error {
+	return config.UpdateConfig(func(cfg *config.Config) error {
+		if hadKey {
+			return cfg.SetFeatureFlag(name, previous)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 }
 
 // finishApplied records the applied outcome and tells the observer which scope
