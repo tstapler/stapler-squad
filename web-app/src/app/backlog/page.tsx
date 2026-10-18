@@ -30,7 +30,7 @@ import {
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
-import { toggleSelection, selectAll, clearSelection } from "@/lib/store/backlogBulkSelectionSlice";
+import { toggleSelection, selectAll, clearSelection, selectionAfterBulk } from "@/lib/store/backlogBulkSelectionSlice";
 import { BacklogBulkActions } from "@/components/backlog/BacklogBulkActions";
 import {
   runBulk, formatBulkFeedback, runBulkChunked, runBulkSpawnChunked, formatSpawnBulkFeedback, formatTriageFeedback,
@@ -766,8 +766,7 @@ function BacklogPageInner() {
       const result = await runBulkChunked(eligible, (id) => triggerTriage(id));
       if (!mountedRef.current) return;
       showBulkFeedback(formatTriageFeedback(result, skipped));
-      if (result.failed.length === 0) dispatch(clearSelection());
-      else dispatch(selectAll(result.failed));
+      dispatch(selectionAfterBulk(result.failed));
     });
   }, [items, visibleSelectedIds, triggerTriage, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
 
@@ -786,8 +785,7 @@ function BacklogPageInner() {
       const result = await runBulkSpawnChunked(frozenIds, (id) => spawnSessionFromItem(id, { autonomous: true }));
       if (!mountedRef.current) return;
       showBulkFeedback(formatSpawnBulkFeedback(result));
-      if (result.failed.length === 0) dispatch(clearSelection());
-      else dispatch(selectAll(result.failed));
+      dispatch(selectionAfterBulk(result.failed));
     });
   }, [spawnSessionFromItem, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
 
