@@ -16,7 +16,7 @@ const MOBILE_WIDTH = 768;
 const PERSIST_DEBOUNCE_MS = 300;
 const STORAGE_VERSION = 1;
 
-function classify(err: unknown): FailureKind {
+export function classifyFailure(err: unknown): FailureKind {
   if (!(err instanceof Rejected)) return "rpc_error";
   return err.reason === "not_found" || err.reason === "too_large" || err.reason === "binary" ? err.reason : "rpc_error";
 }
@@ -125,7 +125,7 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
           sources.current.delete(b.path);
           if (origin) analytics.emit("files.tab.open", { kind: origin.pinned ? "pinned" : "preview", source: origin.source, ext_class: extClass(b.path), size: bucketBytes(r.size) });
         },
-        (err) => { if (!ctl.signal.aborted) dispatchRaw({ type: "markFailed", path: b.path, reason: classify(err) }); },
+        (err) => { if (!ctl.signal.aborted) dispatchRaw({ type: "markFailed", path: b.path, reason: classifyFailure(err) }); },
       ).finally(() => inflight.current.delete(key));
     }
   }, [state.buffers, transport, analytics]);

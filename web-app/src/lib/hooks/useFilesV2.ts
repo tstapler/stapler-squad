@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { PaletteCommand } from "@/components/sessions/QuickOpenPalette";
 import { useAccessibleView } from "./useAccessibleView";
 import { useBufferFreshness, type StaleAction } from "./useBufferFreshness";
 import { useEditorBridge } from "./useEditorBridge";
 import { useFileTransport } from "./useFileTransport";
 import { useFilesFeedback } from "./useFilesFeedback";
-import { useOpenBuffers, type UseOpenBuffersOptions } from "./useOpenBuffers";
+import { failureClass } from "@/components/sessions/files/PendingState";
+import { classifyFailure, useOpenBuffers, type UseOpenBuffersOptions } from "./useOpenBuffers";
 import { useStatusModel } from "./useStatusModel";
 
 const RECENT_LIMIT = 8;
@@ -26,6 +27,8 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   const transport = useFileTransport();
   const status = useStatusModel(bridge);
   const { announceSuccess, announceProgress, announceError } = feedback;
+  const activePathRef = useRef<string | undefined>(undefined);
+  activePathRef.current = active?.path;
 
   const shortcuts = useMemo(() => ({
     onBack: () => back("keyboard"),
@@ -50,9 +53,15 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
     const { sessionId, path } = active;
     announceProgress("Checking the file on disk...");
     setReloadFailed(null);
+    // The user may switch or close the tab while stat is in flight; a late result must not touch another tab.
+    const stillActive = () => activePathRef.current === path;
     transport.stat({ sessionId, path }).then(
-      (r) => { reload(r.token); announceSuccess("reloaded", baseName(path)); },
-      () => { announceError("Could not check the file: network error"); setReloadFailed({ path, seq: Date.now() }); },
+      (r) => { if (stillActive()) { reload(r.token); announceSuccess("reloaded", baseName(path)); } },
+      (err) => {
+        if (!stillActive()) return;
+        announceError(`Could not check the file: ${failureClass(classifyFailure(err))}`);
+        setReloadFailed({ path, seq: Date.now() });
+      },
     );
   }, [active, transport, reload, announceSuccess, announceProgress, announceError]);
   const dirty = active?.status === "loaded" && active.dirty;
