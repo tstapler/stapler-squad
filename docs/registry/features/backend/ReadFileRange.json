@@ -6,7 +6,12 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/files_delegates.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestReadFileRange_ShouldRefuseGzipInflatedPastTheReadRequestCap",
+    "TestReadFileRange_ShouldStayOutOfGuardedProcedures",
+    "TestReadRange_ShouldReturnLineAlignedLfWindowWithRawOffsets_When_CrlfBomFile",
+    "TestReadRange_ShouldSnapByteAnchorToRuneStart_And_SetEofOnLastWindow"
+  ],
   "lastModified": "2026-10-17T22:43:12.179147179-07:00"
 }

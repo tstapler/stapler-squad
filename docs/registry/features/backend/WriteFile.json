@@ -6,7 +6,11 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/files_delegates.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestWriteFile_ShouldReturnConflictFullText_When_AgentRewroteFile",
+    "TestWriteFile_ShouldReturnFailedPreconditionFlagOffAndWriteNothing_When_FlagOff",
+    "TestWriteFile_ShouldRejectAndLeaveTargetUnchanged_When_SymlinkEscapeMatrix"
+  ],
   "lastModified": "2026-10-17T13:04:25.266085823-07:00"
 }
