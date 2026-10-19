@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,83 @@ func resolveSDDPlanArtifactsPath(triageWorkDir, sanitizedTitle string) string {
 		}
 	}
 	return filepath.Join(base, "implementation")
+}
+
+// sddPlanSnapshotDirName holds the copied SDD plan inside an item's durable triage dir.
+const sddPlanSnapshotDirName = "sdd-plan"
+
+const (
+	maxSDDPlanSnapshotFiles = 500
+	maxSDDPlanSnapshotBytes = 20 << 20
+)
+
+// snapshotSDDPlanOutOfWorktree copies the SDD plan from its triage worktree (removed on
+// cleanup) into dst and returns dst. Only regular files are copied: the plan is written by
+// an agent, so symlinks are skipped rather than followed out of the tree. A failed copy
+// leaves any previous dst intact.
+func snapshotSDDPlanOutOfWorktree(src, dst string) (string, error) {
+	if fi, err := os.Lstat(src); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("plan source %q is not a real directory (err: %v)", src, err)
+	}
+	tmp, old := dst+".tmp", dst+".old"
+	if err := os.RemoveAll(tmp); err != nil {
+		return "", fmt.Errorf("clear temp plan snapshot: %w", err)
+	}
+	if err := copyRegularFiles(src, tmp); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", fmt.Errorf("copy plan out of worktree: %w", err)
+	}
+	// Swap via .old so dst is missing only between two renames, and is restored if the second fails.
+	_ = os.RemoveAll(old)
+	if err := os.Rename(dst, old); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.RemoveAll(tmp)
+		return "", fmt.Errorf("move previous plan snapshot aside: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Rename(old, dst)
+		_ = os.RemoveAll(tmp)
+		return "", fmt.Errorf("install plan snapshot: %w", err)
+	}
+	_ = os.RemoveAll(old)
+	return dst, nil
+}
+
+// copyRegularFiles copies directories and regular files from src to dst, skipping symlinks
+// and anything else, and fails past the file-count or byte caps.
+func copyRegularFiles(src, dst string) error {
+	var files int
+	var total int64
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, 0o755)
+		case !d.Type().IsRegular():
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if files++; files > maxSDDPlanSnapshotFiles {
+			return fmt.Errorf("more than %d files", maxSDDPlanSnapshotFiles)
+		}
+		if total += info.Size(); total > maxSDDPlanSnapshotBytes {
+			return fmt.Errorf("more than %d bytes", maxSDDPlanSnapshotBytes)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 // retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
@@ -723,8 +801,23 @@ func (s *BacklogService) TriggerTriage(
 		// the "Retry Triage" / plan_not_approved stuck-detector paths, rather
 		// than silently marking a nonexistent plan approved.
 		if _, statErr := os.Stat(pap); statErr == nil {
+			staleSnapshot := false
+			if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+				snapDir := filepath.Join(artifactAbsPath, sddPlanSnapshotDirName)
+				if durable, snapErr := snapshotSDDPlanOutOfWorktree(pap, snapDir); snapErr == nil {
+					pap = durable
+				} else if _, prevErr := os.Stat(snapDir); prevErr == nil {
+					// Keep the earlier durable pointer rather than the ephemeral worktree path, but its content
+					// predates this triage run, so it must not be auto-approved.
+					log.Warn("[TriggerTriage] could not refresh SDD plan snapshot; keeping the earlier one and skipping auto-approval", "item", itemID, "error", snapErr)
+					pap, staleSnapshot = snapDir, true
+				} else {
+					// Still exists now, so record it; it may go stale later and ApprovePlan will say so.
+					log.Warn("[TriggerTriage] could not copy SDD plan out of the worktree; recording the in-worktree path", "item", itemID, "path", pap, "error", snapErr)
+				}
+			}
 			update.PlanArtifactsPath = &pap
-			if item.AutoApprovePlan {
+			if item.AutoApprovePlan && !staleSnapshot {
 				approved := true
 				approvedAt := time.Now()
 				update.PlanApproved = &approved

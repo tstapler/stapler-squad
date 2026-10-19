@@ -85,6 +85,21 @@ func (s *stubStore) ListInstanceData() ([]session.InstanceData, error) {
 	return data, nil
 }
 
+// FindInstanceDataByID mirrors Storage.FindInstanceDataByID's stable-ID-or-title
+// matching, scanning s.instances in place of an indexed query.
+func (s *stubStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
+	for _, inst := range s.instances {
+		data := inst.ToInstanceData()
+		if data.MatchesID(id) {
+			return &data, nil
+		}
+	}
+	return nil, session.ErrInstanceDataNotFound
+}
+
 // makeScrollbackMgr creates a scrollback manager backed by a temp directory.
 func makeScrollbackMgr(t *testing.T) *scrollback.ScrollbackManager {
 	t.Helper()

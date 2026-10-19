@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, act } from '@testing-library/react';
+import { render, act, fireEvent } from '@testing-library/react';
 import CDPViewer from '../CDPViewer';
 
 // ---------------------------------------------------------------------------
@@ -336,5 +336,63 @@ describe('CDPViewer — wsUrl prop passthrough', () => {
     const { url } = latestSocket();
     const path = url.replace(/^wss?:\/\/[^/]+/, '');
     expect(path).not.toContain('//');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inspect mode
+// ---------------------------------------------------------------------------
+
+describe('CDPViewer — inspect mode', () => {
+  const URL = 'ws://localhost:8543/api/sessions/abc/cdp-stream';
+
+  beforeEach(() => {
+    HTMLCanvasElement.prototype.getContext = jest.fn(() => ({
+      drawImage: jest.fn(), clearRect: jest.fn(), fillRect: jest.fn(), strokeRect: jest.fn(),
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+  });
+
+  function openViewer(props: Partial<React.ComponentProps<typeof CDPViewer>> = {}) {
+    const utils = render(<CDPViewer wsUrl={URL} isVisible={true} {...props} />);
+    const ws = latestSocket();
+    ws.simulateOpen();
+    return { ...utils, ws, canvas: utils.getByRole('img') as HTMLCanvasElement };
+  }
+
+  it('sends mouse input to Chrome and no inspect callback when inspectMode is absent', () => {
+    const onInspectClick = jest.fn();
+    const { ws, canvas } = openViewer({ onInspectClick });
+    fireEvent.mouseDown(canvas, { clientX: 3, clientY: 4, button: 0 });
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(ws.send.mock.calls[0][0]).params.type).toBe('mousePressed');
+    expect(onInspectClick).not.toHaveBeenCalled();
+  });
+
+  it('reports click coordinates and suppresses CDP dispatch in inspect mode', () => {
+    const onInspectClick = jest.fn();
+    const { ws, canvas } = openViewer({ inspectMode: true, onInspectClick });
+    fireEvent.mouseDown(canvas, { clientX: 0, clientY: 0, button: 0 });
+    fireEvent.mouseUp(canvas, { clientX: 0, clientY: 0, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 0, clientY: 0 });
+    expect(onInspectClick).toHaveBeenCalledTimes(1);
+    expect(onInspectClick).toHaveBeenCalledWith(expect.any(Number), expect.any(Number));
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('draws a hover rectangle on the overlay canvas in inspect mode', () => {
+    const fillRect = jest.fn();
+    HTMLCanvasElement.prototype.getContext = jest.fn(() => ({
+      drawImage: jest.fn(), clearRect: jest.fn(), fillRect, strokeRect: jest.fn(),
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    const { canvas } = openViewer({ inspectMode: true });
+    fireEvent.mouseMove(canvas, { clientX: 5, clientY: 5 });
+    expect(fillRect).toHaveBeenCalled();
+  });
+
+  it('keeps the overlay hidden and non-interactive outside inspect mode', () => {
+    const { getByTestId } = openViewer();
+    const overlay = getByTestId('cdp-inspect-overlay');
+    expect(overlay.style.display).toBe('none');
+    expect(overlay.style.pointerEvents).toBe('none');
   });
 });

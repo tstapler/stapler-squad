@@ -37,6 +37,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.WORKTREE_INCONSISTENT]: "Worktree state inconsistent",
   [StuckReason.REPEATED_NOOP_DISPATCH]: "Repeated no-op sessions",
   [StuckReason.MERGED_PR_UNVERIFIED]: "Merged PR not tied to item",
+  [StuckReason.VERDICT_UNDELIVERED]: "Review verdict not delivered to session",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -65,6 +66,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.WORKTREE_INCONSISTENT]: "⛔",
   [StuckReason.REPEATED_NOOP_DISPATCH]: "🔁",
   [StuckReason.MERGED_PR_UNVERIFIED]: "⛔",
+  [StuckReason.VERDICT_UNDELIVERED]: "🟡",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -93,6 +95,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.WORKTREE_INCONSISTENT]: styles.chipWorktreeInconsistent,
   [StuckReason.REPEATED_NOOP_DISPATCH]: styles.chipWorktreeInconsistent,
   [StuckReason.MERGED_PR_UNVERIFIED]: styles.chipPrPendingNoPR,
+  [StuckReason.VERDICT_UNDELIVERED]: styles.chipAbandonedReview,
 };
 
 /**
@@ -134,6 +137,10 @@ export const STUCK_REASON_PRIORITY: Record<StuckReason, number> = {
   [StuckReason.MERGED_PR_UNVERIFIED]: 6.5,
   [StuckReason.REWORK_BLOCKED_STALE]: 7,
   [StuckReason.PR_NEEDS_FIX]: 8,
+  // The work session still has the verdict via its own polling fallback, so
+  // this is strictly less urgent than PR_NEEDS_FIX (nothing auto-retries
+  // that one) but still worth surfacing before ABANDONED_REVIEW.
+  [StuckReason.VERDICT_UNDELIVERED]: 8.5,
   [StuckReason.ABANDONED_REVIEW]: 9,
   [StuckReason.REWORK_CAP]: 10,
   [StuckReason.RESPAWN_BLOCKED_ACTIVE]: 11,

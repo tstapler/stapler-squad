@@ -30,9 +30,12 @@ import {
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
-import { toggleSelection, selectAll, clearSelection } from "@/lib/store/backlogBulkSelectionSlice";
+import { toggleSelection, selectAll, clearSelection, selectionAfterBulk } from "@/lib/store/backlogBulkSelectionSlice";
 import { BacklogBulkActions } from "@/components/backlog/BacklogBulkActions";
-import { runBulk, formatBulkFeedback } from "@/lib/backlog/bulkActions";
+import {
+  runBulk, formatBulkFeedback, runBulkChunked, runBulkSpawnChunked, formatSpawnBulkFeedback, formatTriageFeedback,
+  isBulkTriageEligible, isBulkAutoImplementEligible, runGuarded,
+} from "@/lib/backlog/bulkActions";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
@@ -249,7 +252,7 @@ function BacklogTableRow({
 function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
-  const { createBacklogItem, importGitHubIssue, triggerTriage, archiveBacklogItem, deleteBacklogItem } = useBacklogService();
+  const { createBacklogItem, importGitHubIssue, triggerTriage, spawnSessionFromItem, archiveBacklogItem, deleteBacklogItem } = useBacklogService();
   const { openOmnibar } = useOmnibar();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -743,6 +746,59 @@ function BacklogPageInner() {
     else dispatch(selectAll(result.failed));
   }, [items, visibleSelectedIds, runBulkAction, showBulkFeedback, archiveBacklogItem, dispatch]);
 
+  const setBulkBusyIfMounted = useCallback((busy: boolean) => {
+    if (busy || mountedRef.current) setBulkBusy(busy);
+  }, []);
+
+  const handleTriageSelected = useCallback(async () => {
+    if (busyRef.current) return;
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const eligible = visibleSelectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkTriageEligible(it);
+    });
+    const skipped = visibleSelectedIds.length - eligible.length;
+    if (eligible.length === 0) {
+      showBulkFeedback(formatTriageFeedback({ succeeded: [], failed: [] }, skipped));
+      return;
+    }
+    await runGuarded(busyRef, setBulkBusyIfMounted, async () => {
+      const result = await runBulkChunked(eligible, (id) => triggerTriage(id));
+      if (!mountedRef.current) return;
+      showBulkFeedback(formatTriageFeedback(result, skipped));
+      dispatch(selectionAfterBulk(result.failed));
+    });
+  }, [items, visibleSelectedIds, triggerTriage, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
+
+  const autoImplementEligibleIds = useMemo(() => {
+    const byId = new Map(items.map((i) => [i.id, i]));
+    return visibleSelectedIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkAutoImplementEligible(it);
+    });
+  }, [items, visibleSelectedIds]);
+
+  // frozenIds is the snapshot taken when the confirmation dialog opened, not the live selection.
+  const handleAutoImplementSelected = useCallback(async (frozenIds: string[]) => {
+    // The frozen set is the maximum; drop items that stopped being eligible since the dialog opened.
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ids = frozenIds.filter((id) => {
+      const it = byId.get(id);
+      return it !== undefined && isBulkAutoImplementEligible(it);
+    });
+    if (ids.length === 0) {
+      showBulkFeedback("Nothing eligible for auto-implement");
+      return;
+    }
+    await runGuarded(busyRef, setBulkBusyIfMounted, async () => {
+      const result = await runBulkSpawnChunked(ids, (id) => spawnSessionFromItem(id, { autonomous: true }));
+      if (!mountedRef.current) return;
+      const dropped = frozenIds.length - ids.length;
+      showBulkFeedback(formatSpawnBulkFeedback(result) + (dropped > 0 ? `, ${dropped} no longer eligible` : ""));
+      dispatch(selectionAfterBulk(result.failed));
+    });
+  }, [items, spawnSessionFromItem, setBulkBusyIfMounted, showBulkFeedback, dispatch]);
+
   const handleDeleteSelected = useCallback(async () => {
     const result = await runBulkAction("Deleted", visibleSelectedIds, deleteBacklogItem);
     if (!result || !mountedRef.current) return;
@@ -851,6 +907,9 @@ function BacklogPageInner() {
         feedback={bulkFeedback}
         onArchiveSelected={handleArchiveSelected}
         onDeleteSelected={handleDeleteSelected}
+        onTriageSelected={handleTriageSelected}
+        onAutoImplementSelected={handleAutoImplementSelected}
+        autoImplementEligibleIds={autoImplementEligibleIds}
         onSelectAll={() => dispatch(selectAll(sortedItems.map((i) => i.id)))}
         onClear={() => dispatch(clearSelection())}
       />

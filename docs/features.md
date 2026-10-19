@@ -12,6 +12,19 @@ See all your AI agents at a glance. Status badges, diff stats, tags, and categor
 
 Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.
 
+**Drag-and-drop file upload** — drag one or more files (images, logs, configs, anything) from your OS file manager onto the terminal of a live session. A "Drop to attach" overlay appears while you hover; on release each file is uploaded sequentially through `POST /api/v1/upload-image` (the same path as the toolbar file picker) and its absolute path is inserted into the terminal input. Desktop only: it is disabled on touch-only devices and for read-only sessions, and pane-reorder drags are ignored.
+
+---
+
+## Browser Element Inspector
+
+While watching an agent's browser in the **Browser** tab, click **Inspect**, then click any element in the live view. Stapler Squad queries Chrome over CDP and shows the element's cropped screenshot, `outerHTML` (truncated to 8 KB) and key computed CSS (display, position, width, height, color, background-color, font-size, font-family, border, margin, padding). **Send to Agent** types a `[Browser Inspector] Element at (x, y): HTML: … CSS: …` block into the session's terminal input without pressing Enter, so you can add a note before submitting. The screenshot stays in the panel; only text is sent.
+
+- Requires a running Chrome/Chromium with CDP; **Inspect** is disabled until the stream is live.
+- While Inspect is on, clicks are not forwarded to Chrome; the hover box is an approximation, and the exact element box is known after the click.
+- Press `Esc` or **✕ Close** to leave Inspect mode.
+- Endpoint: `POST /api/sessions/{id}/inspect-element` with `{"x": int, "y": int}`; returns 503 when CDP is not available for the session.
+
 ---
 
 ## Diff Viewer

@@ -2048,19 +2048,18 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	)), nil
 }
 
-// findSessionTitleByUUID returns the session Title for the given UUID using ListInstanceData.
-// Returns "" and an error if not found.
+// findSessionTitleByUUID returns the session Title for the given UUID, via an
+// indexed lookup (FindInstanceDataByID) rather than loading and linear-scanning
+// every session row. Returns "" and an error if not found.
 func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, error) {
-	instances, err := store.ListInstanceData()
+	data, err := store.FindInstanceDataByID(uuid)
 	if err != nil {
+		if errors.Is(err, session.ErrInstanceDataNotFound) {
+			return "", fmt.Errorf("no session found with UUID %s", uuid)
+		}
 		return "", err
 	}
-	for _, d := range instances {
-		if d.UUID == uuid {
-			return d.Title, nil
-		}
-	}
-	return "", fmt.Errorf("no session found with UUID %s", uuid)
+	return data.Title, nil
 }
 
 // --- post_backlog_update ---

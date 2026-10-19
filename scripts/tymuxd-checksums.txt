@@ -20,3 +20,14 @@ v1.1.0 aarch64-apple-darwin b5c29e9d91641db8276842c815eb49420ec2a7033709cef0febc
 v1.1.0 x86_64-apple-darwin ea2b49779203d5dde74f39325525ac9e87a2357b94b4257e11c17c1232b49e28
 v1.1.0 x86_64-unknown-linux-musl fa5cf55ccddada1bad09eada0b3444bfa98a70753ca938d5a2a98de97dccf52c
 v1.1.0 aarch64-unknown-linux-musl 5fbbf9b3f35dcca20f3e03d3df2d9b58bf348e0c1b9b682a085c1e45ed672a02
+# v1.3.0: first tagged release with the Unix-socket control plane
+# (TYMUXD_SOCKET_PATH/--socket-path), landed upstream in tstapler/tymux#44
+# and first tagged in v1.2.0 -- confirmed via `strings tymuxd | grep
+# TYMUXD_SOCKET_PATH` returning real matches (the flag help text and the
+# bind-collision error message) on all four v1.3.0 binaries below, and via
+# `tymuxd --version` reporting `tymuxd 1.3.0`. Closes BUG-112 gap 1 -- see
+# docs/bugs/open/BUG-112-*.md.
+v1.3.0 aarch64-apple-darwin c1a16bd03dac717c37756893be4a8368255e7c6c1675e2f8c80417b778438d3b
+v1.3.0 x86_64-apple-darwin 1c85256761f22f35594ae8d92a285aeb9007ca7b96ed56e7866de76c08ebc519
+v1.3.0 x86_64-unknown-linux-musl 0c2155f3d7f76bc7e2f028fa07211288c5d165fc2fd979a0f6ef6a9ed158a466
+v1.3.0 aarch64-unknown-linux-musl e23ad7b79a32ed6ec73004c620673dbb03f9f19f8d0fd32a4867fb30d2de1a0a

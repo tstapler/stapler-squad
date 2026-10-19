@@ -359,6 +359,29 @@ export const terminal = style({
   },
 });
 
+export const dropZoneOverlay = style({
+  position: "absolute",
+  inset: 0,
+  zIndex: 20,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  backgroundColor: "rgba(0, 0, 0, 0.45)",
+  // Must not intercept drag events, or enter/leave on the overlay would unbalance the counter.
+  pointerEvents: "none",
+});
+
+export const dropZoneLabel = style({
+  color: "#fff",
+  fontSize: "1rem",
+  fontWeight: 600,
+  padding: "8px 16px",
+  borderRadius: 6,
+  border: "2px dashed rgba(255, 255, 255, 0.7)",
+  background: "rgba(0, 0, 0, 0.3)",
+  userSelect: "none",
+});
+
 export const loadingOverlay = style({
   position: "absolute",
   top: 0,

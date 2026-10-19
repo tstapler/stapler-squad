@@ -1,5 +1,9 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createClient } from '@connectrpc/connect';
+import { create } from '@bufbuild/protobuf';
+import { SessionService, WriteToSessionRequestSchema } from '@/gen/session/v1/session_pb';
+import { getConnectTransport } from '@/lib/api/transport';
 import * as styles from './BrowserTab.css';
 import CDPViewer from './CDPViewer';
 import { VNCState, VNCStatus } from '@/gen/session/v1/types_pb';
@@ -13,6 +17,32 @@ interface BrowserTabProps {
   baseUrl: string;
   isVisible: boolean;
   vncState: VNCState | undefined;
+}
+
+export interface InspectResult {
+  html: string;
+  notFound?: boolean;
+  computedCss?: { name: string; value: string }[];
+  screenshotBase64?: string;
+}
+
+/** REST URL for the inspect endpoint; baseUrl ends in /api (see BrowserTab props). */
+export function buildInspectUrl(baseUrl: string, sessionId: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/sessions/${sessionId}/inspect-element`;
+}
+
+// Page content is untrusted: a CR would submit the line and ESC could inject
+// terminal escape sequences, so control characters never reach the PTY.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]+/g;
+function stripControlChars(s: string): string {
+  return s.replace(CONTROL_CHARS, ' ');
+}
+
+/** Text injected into the terminal by "Send to Agent" (no trailing newline: the user confirms). */
+export function formatInspectContext(x: number, y: number, r: InspectResult): string {
+  const css = (r.computedCss ?? []).map((p) => `${p.name}: ${p.value}`).join('; ');
+  return `[Browser Inspector] Element at (${x}, ${y}):\nHTML: ${stripControlChars(r.html)}\nCSS: ${stripControlChars(css)}`;
 }
 
 export function buildWsUrl(baseUrl: string, sessionId: string): string {
@@ -66,6 +96,75 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
   // Incrementing key forces CDPViewer to re-mount on manual reconnect
   const [viewerKey, setViewerKey] = useState(0);
 
+  // Inspect mode state. The toggle is only usable while the stream is live (isReady).
+  const [inspectMode, setInspectMode] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+  const [inspectResult, setInspectResult] = useState<{ x: number; y: number; data: InspectResult } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const closeInspector = useCallback(() => {
+    abortRef.current?.abort();
+    setInspectMode(false);
+    setInspecting(false);
+    setInspectError(null);
+    setInspectResult(null);
+  }, []);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Stream dropped while inspecting: leave inspect mode.
+  useEffect(() => {
+    if (!isReady) closeInspector();
+  }, [isReady, closeInspector]);
+
+  useEffect(() => {
+    if (!inspectMode && !inspectResult) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeInspector();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [inspectMode, inspectResult, closeInspector]);
+
+  async function handleInspectClick(x: number, y: number) {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setInspecting(true);
+    setInspectError(null);
+    try {
+      const res = await fetch(buildInspectUrl(baseUrl, sessionId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x, y }),
+        signal: controller.signal,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error ?? `Inspection failed (${res.status})`);
+      setInspectResult({ x, y, data: body as InspectResult });
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setInspectError(err instanceof Error ? err.message : 'Inspection failed');
+    } finally {
+      if (abortRef.current === controller) setInspecting(false);
+    }
+  }
+
+  async function handleSendToAgent() {
+    if (!inspectResult) return;
+    try {
+      const client = createClient(SessionService, getConnectTransport());
+      await client.writeToSession(create(WriteToSessionRequestSchema, {
+        sessionId,
+        input: formatInspectContext(inspectResult.x, inspectResult.y, inspectResult.data),
+        pressEnter: false,
+      }));
+    } catch (err) {
+      setInspectError(err instanceof Error ? err.message : 'Failed to send to agent');
+    }
+  }
+
   function handleReconnect() {
     setConnectionState('disconnected');
     setViewerKey((k) => k + 1);
@@ -73,6 +172,22 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
 
   return (
     <div className={styles.browserTabContainer}>
+      <div className={styles.toolbar}>
+        <button
+          type="button"
+          className={styles.inspectButton}
+          data-testid="inspect-toggle"
+          aria-pressed={inspectMode}
+          disabled={!isReady}
+          title={isReady ? 'Pick an element to send to the agent (Esc to exit)' : 'Inspect is available once the browser stream is live'}
+          onClick={() => (inspectMode ? closeInspector() : setInspectMode(true))}
+        >
+          Inspect
+        </button>
+        {inspecting && <span role="status">Inspecting…</span>}
+        {inspectError && <span role="alert">{inspectError}</span>}
+      </div>
+
       {/* Viewer area */}
       <div className={styles.viewerArea}>
         {isUnavailable && (
@@ -125,7 +240,39 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
               isVisible={isVisible && isReady}
               onConnected={() => setConnectionState('connected')}
               onDisconnected={() => setConnectionState('reconnecting')}
+              inspectMode={inspectMode}
+              onInspectClick={handleInspectClick}
             />
+          </div>
+        )}
+
+        {inspectResult && (
+          <div className={styles.resultPanel} data-testid="inspect-result-panel" role="dialog" aria-label="Inspected element">
+            <div className={styles.resultHeader}>
+              <strong>Element at ({inspectResult.x}, {inspectResult.y})</strong>
+              <button type="button" className={styles.inspectButton} onClick={closeInspector}>✕ Close</button>
+            </div>
+            {inspectResult.data.notFound ? (
+              <span>No element found at this position.</span>
+            ) : (
+              <>
+                {inspectResult.data.screenshotBase64 ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className={styles.resultScreenshot} alt="Element screenshot" src={`data:image/jpeg;base64,${inspectResult.data.screenshotBase64}`} />
+                ) : (
+                  <span>Screenshot unavailable</span>
+                )}
+                <pre className={styles.resultCode}><code>{inspectResult.data.html}</code></pre>
+                <table className={styles.cssTable}>
+                  <tbody>
+                    {(inspectResult.data.computedCss ?? []).map((p) => (
+                      <tr key={p.name}><td>{p.name}</td><td>{p.value}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button type="button" className={styles.inspectButton} onClick={handleSendToAgent}>Send to Agent</button>
+              </>
+            )}
           </div>
         )}
       </div>
