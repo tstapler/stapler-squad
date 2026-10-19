@@ -146,3 +146,20 @@ func TestDirtyGenPolicy_CompleteIndexWalk_ShouldClearAgeButKeepEventReasons(t *t
 	d.CompleteIndexWalk(dec)
 	assert.Equal(t, ReasonDirEvent, d.Decide().Reason, "a directory event stays pending until the untracked set was walked")
 }
+
+func TestDirtyGen_ArmMidWalk_DiscardsPreArmWalkCompletion(t *testing.T) {
+	for name, complete := range map[string]func(*DirtyGen, DirtyDecision){
+		"full_walk":  (*DirtyGen).CompleteFullWalk,
+		"index_walk": (*DirtyGen).CompleteIndexWalk,
+	} {
+		t.Run(name, func(t *testing.T) {
+			clk := &fakeClock{t: time.Unix(1_700_000_000, 0)}
+			d := NewDirtyGen(clk.Now)
+			dec := d.Decide() // walk starts unarmed; changes made now are never seen
+			d.Arm()           // lands mid-walk, zeroing lastFullWalk
+			complete(d, dec)
+			assert.Equal(t, ReasonUnarmed, d.Peek().Reason,
+				"a walk that began before Arm must not make a clean verdict trustworthy")
+		})
+	}
+}

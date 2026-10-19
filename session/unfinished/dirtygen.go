@@ -105,6 +105,7 @@ type DirtyDecision struct {
 
 	pending uint32
 	at      time.Time
+	epoch   uint64 // arm epoch at Peek; a Complete* from an older epoch must not store
 }
 
 // DirtyGen is the per-worktree dirty-tracking state: a generation counter
@@ -114,6 +115,7 @@ type DirtyDecision struct {
 type DirtyGen struct {
 	gen          atomic.Uint64
 	armed        atomic.Bool
+	epoch        atomic.Uint64 // bumped on every arm/disarm transition
 	pending      atomic.Uint32
 	lastFullWalk atomic.Int64 // unix nanos; 0 = no full walk since arming
 	now          func() time.Time
@@ -139,13 +141,15 @@ func (d *DirtyGen) Arm() {
 	if d.armed.Load() {
 		return
 	}
-	d.lastFullWalk.Store(0) // before armed flips, so no scan trusts a pre-disarm walk
+	d.epoch.Add(1) // first: a walk decided before this point can no longer store its timestamp
+	d.lastFullWalk.Store(0)
 	d.armed.Store(true)
 	d.gen.Add(1)
 }
 
 // Disarm marks the watcher not live; every scan is a full walk until re-armed.
 func (d *DirtyGen) Disarm() {
+	d.epoch.Add(1)
 	d.armed.Store(false)
 	d.gen.Add(1)
 }
@@ -173,8 +177,8 @@ func (d *DirtyGen) Note(kind EventKind) {
 }
 
 // ShouldRunStatPass reports whether the tracked-file stat pass must run.
-// Always true: Tier A is blind to in-place edits, and Tier B is not built, so
-// no DirtyGen state can license skipping it (ADR-006 hard rule).
+// Always true: the directory watch is blind to in-place edits, so no DirtyGen
+// state can license skipping it (ADR-006 hard rule).
 func (d *DirtyGen) ShouldRunStatPass() bool { return true }
 
 // Decide evaluates the fallback rule and, when it forces a full walk,
@@ -191,6 +195,7 @@ func (d *DirtyGen) Decide() DirtyDecision {
 // diff walk) asks whether a full walk is pending without double-counting it.
 func (d *DirtyGen) Peek() DirtyDecision {
 	now := d.now()
+	epoch := d.epoch.Load() // before armed/lastFullWalk so a concurrent Arm is detected on Complete
 	pending := d.pending.Load()
 	last := time.Time{}
 	if n := d.lastFullWalk.Load(); n != 0 {
@@ -199,6 +204,7 @@ func (d *DirtyGen) Peek() DirtyDecision {
 	reason := d.rule.Evaluate(d.armed.Load(), last, now, pending)
 	dec := DirtyDecision{
 		Gen:       d.gen.Load(),
+		epoch:     epoch,
 		FullWalk:  reason != ReasonNone,
 		Reason:    reason,
 		DirtyHint: pending&pendDirtyHint != 0,
@@ -225,14 +231,34 @@ func (d *DirtyGen) AckHint(dec DirtyDecision) {
 // CompleteFullWalk records a finished full walk that began at decision dec.
 // Only the pending bits dec observed are cleared, so an event arriving during
 // the walk still forces the next one.
+//
+// A walk that straddled an Arm/Disarm is discarded: it never saw the changes
+// made before the arm, so trusting its clean verdict would be unproven.
 func (d *DirtyGen) CompleteFullWalk(dec DirtyDecision) {
+	if !d.stillCurrent(dec) {
+		return
+	}
 	for {
 		old := d.pending.Load()
 		if d.pending.CompareAndSwap(old, old&^dec.pending) {
 			break
 		}
 	}
+	d.storeLastFullWalk(dec)
+}
+
+// stillCurrent reports whether dec was taken in the current arm epoch.
+func (d *DirtyGen) stillCurrent(dec DirtyDecision) bool {
+	return d.epoch.Load() == dec.epoch && d.armed.Load()
+}
+
+// storeLastFullWalk publishes dec's timestamp, then undoes it if an Arm/Disarm
+// raced in between the check and the store.
+func (d *DirtyGen) storeLastFullWalk(dec DirtyDecision) {
 	d.lastFullWalk.Store(dec.at.UnixNano())
+	if d.epoch.Load() != dec.epoch {
+		d.lastFullWalk.Store(0)
+	}
 }
 
 // CompleteIndexWalk records a forced scan that re-validated the parsed index
@@ -247,5 +273,8 @@ func (d *DirtyGen) CompleteIndexWalk(dec DirtyDecision) {
 	if dec.pending&(pendOverflow|pendError|pendDirEvent) != 0 {
 		return
 	}
-	d.lastFullWalk.Store(dec.at.UnixNano())
+	if !d.stillCurrent(dec) {
+		return
+	}
+	d.storeLastFullWalk(dec)
 }
