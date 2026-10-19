@@ -216,7 +216,9 @@ if "$SCRIPT" "$WT_I" > "$TMP/out-i1" 2>&1; then
 fi
 COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
 [ "$COUNT_AFTER" -eq "$COUNT_BEFORE" ] || fail "scenario 7: a pnpm install was recorded despite the verify step failing"
-[ -d "$WT_I/node_modules" ] && [ ! -L "$WT_I/node_modules" ] || fail "scenario 7: node_modules is no longer the original real directory after an aborted verify"
+if [ ! -d "$WT_I/node_modules" ] || [ -L "$WT_I/node_modules" ]; then
+	fail "scenario 7: node_modules is no longer the original real directory after an aborted verify"
+fi
 [ -f "$WT_I/node_modules/SURVIVOR_MARKER" ] || fail "scenario 7: original node_modules content was lost despite the script aborting"
 echo "PASS: scenario 7 -- a failing frozen-lockfile verify step aborts the script and leaves the existing node_modules untouched"
 
