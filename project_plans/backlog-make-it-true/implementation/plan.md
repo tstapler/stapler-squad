@@ -1727,3 +1727,10 @@ W0 implementation found these plan errors; each was checked against code before 
 - The operator `override_reason` graph bypass is still unimplemented; AC4's "only exit" message depends on it (Story 1.2.4 or later, with ADR-001/ADR-007 wording update).
 - Story 2.2.1: an extra test file was edited, a `backlog` flag was added, the link is unconditional, and the "Backlog resumed" text is a heuristic.
 - Task 1.1.3e (per-from-stage scope) deliberately skipped; the flag stays global-only.
+
+## Errata from W6 (2026-10-18)
+
+- Story 1.2.2: the web-app stuck maps (`stuckReason.ts`, `StuckItemsSection.tsx` `GROUP_ORDER`) needed a `TRANSITION_DENIED` entry for `tsc` and the section's guard test; the dispatcher added them (outside the story's `Files:` line). The UI does not yet show `denied_caller/from/to/reason` (proto fields 17-20); Story 1.5.8 should surface them.
+- Story 1.2.2: structured denial fields live in the stuck row's `context` string (parsed into proto fields 17-20), not new ent columns; `ErrTransitionNotAllowed` is re-exported from `session/storage_backlog.go`.
+- Story 1.2.2: a snoozed `transition_denied` row is invisible to the dedupe check (`FindOpenStuckStates` excludes snoozed), so a snoozed row gets a fresh comment and notification on the next sweep. Unaddressed.
+- Story 3.1.1: `RepoSettings` returns `Status=OK` with `Stale=true` when a refresh fails but an earlier OK value is retained (for Story 3.1.3).
