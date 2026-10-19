@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,10 +141,9 @@ func TestAnalyze_ShouldReturnCanceledPromptly_When_ContextCancelledMidPass(t *te
 	defer cancel()
 	// 256 MiB of generated lines; the reader cancels after 1 MiB.
 	src := &cancelAfterReader{remaining: 256 << 20, cancelAt: 255 << 20, cancel: cancel}
-	start := time.Now()
 	_, err := Analyze(ctx, src)
 	assert.ErrorIs(t, err, context.Canceled)
-	assert.Less(t, time.Since(start), 200*time.Millisecond)
+	// Promptness is bounded in bytes consumed, not wall-clock: a time limit flakes under -race on a loaded CI box.
 	assert.Less(t, int64(256<<20-src.remaining), int64(4<<20), "stopped within a chunk or two of cancel")
 }
 

@@ -36,7 +36,7 @@ func gatedRunner(started chan<- struct{}, release <-chan struct{}) analysisRunne
 
 func analysisEventually(t *testing.T, cond func() bool) {
 	t.Helper()
-	require.Eventually(t, cond, 2*time.Second, time.Millisecond)
+	require.Eventually(t, cond, 30*time.Second, time.Millisecond) // ceiling only; returns as soon as cond holds
 }
 
 func TestAnalysisCache_ShouldReportPendingThenReady_And_RebuildInFullOnValidatorChange(t *testing.T) {

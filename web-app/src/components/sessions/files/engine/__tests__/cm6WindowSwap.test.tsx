@@ -73,5 +73,5 @@ describe("cm6LazyDoc window-swap fallback (Task 1.6.4d)", () => {
     textbox.dispatchEvent(new Event("compositionend", { bubbles: true }));
     await new Promise((r) => setTimeout(r, 5));
     expect(o.handle.getText().startsWith("L1 ")).toBe(true);
-  });
+  }, 60_000); // ~1.8s idle but 1000 CM6 dispatches over 20k lines took 6.4s on a loaded CI worker; this is a work bound, not a perf assertion
 });

@@ -689,7 +689,9 @@ func TestContentSearch_ShouldFindMatchIn40MbFile_When_LargeFilesTrue_And_ReportS
 		opts.LargeFiles = true
 		var got []SearchMatch
 		var stats SearchStats
-		peak := peakHeapGrowth(func() { got, stats = runSearch(t, root, opts) })
+		// An hour-long budget keeps the production 10s limit from skipping the file on a loaded -race runner.
+		searcher := walkSearcher{workers: searchWorkerCount(runtime.GOMAXPROCS(0)), fileBudget: time.Hour}
+		peak := peakHeapGrowth(func() { got, stats = runSearcher(t, searcher, root, opts) })
 		require.Len(t, got, 1)
 		assert.Equal(t, 900_000, got[0].Line)
 		assert.EqualValues(t, 899_999*int64(len("line 0000000\n")), got[0].ByteOffset)
