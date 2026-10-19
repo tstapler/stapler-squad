@@ -36,6 +36,11 @@ type timerStore interface {
 // dispatcher (Story 4.3) delivers it and later confirms with MarkWakeDelivered.
 type ClaimedFunc func(ctx context.Context, claimed *session.WakeTriggerData)
 
+// AdmitFunc decides, just before a due row would be claimed, whether the claim
+// may proceed. It returns false when it already dealt with the row (deferred it
+// for a rate limit, skipped it); the timer then leaves the row alone.
+type AdmitFunc func(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool
+
 // MissedFunc is told about a row that expired before the timer could claim it.
 type MissedFunc func(ctx context.Context, missed *session.WakeTriggerData)
 
@@ -48,6 +53,7 @@ type Timekeeper struct {
 	clock   Clock
 	claimed ClaimedFunc
 	missed  MissedFunc
+	admit   AdmitFunc
 	leader  LeaderGuard
 	rearm   chan struct{}
 
@@ -66,6 +72,9 @@ func WithLeaderGuard(g LeaderGuard) TimekeeperOption { return func(t *Timekeeper
 
 // WithMissedFunc registers a callback for rows that expired unclaimed.
 func WithMissedFunc(fn MissedFunc) TimekeeperOption { return func(t *Timekeeper) { t.missed = fn } }
+
+// WithAdmitFunc registers the claim-time gate (the Wake limits table).
+func WithAdmitFunc(fn AdmitFunc) TimekeeperOption { return func(t *Timekeeper) { t.admit = fn } }
 
 // NewTimekeeper builds a Timekeeper; claimed is called for every row it claims.
 func NewTimekeeper(store timerStore, clock Clock, claimed ClaimedFunc, opts ...TimekeeperOption) *Timekeeper {
@@ -186,6 +195,11 @@ func (t *Timekeeper) nextWait(ctx context.Context) (wait time.Duration, armed bo
 	return max(next.Sub(t.clock.Now()), 0), true
 }
 
+// FireDue claims every row due now once, as the loop does when the timer
+// fires. Startup reconcile calls it before the loop starts so overdue rows are
+// handled under the readiness barrier. It reports false after a store error.
+func (t *Timekeeper) FireDue(ctx context.Context) bool { return t.fireDue(ctx) }
+
 // fireDue claims every due row once. An expired row becomes missed instead:
 // claiming it would fire a stale wake, and leaving it pending would make the
 // loop re-select it forever.
@@ -218,6 +232,9 @@ func (t *Timekeeper) handleDue(ctx context.Context, row *session.WakeTriggerData
 	}
 	if row.ExpiresAt != nil && !row.ExpiresAt.After(now) {
 		return t.markMissed(ctx, id, row, now)
+	}
+	if t.admit != nil && !t.admit(ctx, row, now) {
+		return true
 	}
 	applied, err := t.store.ClaimWakeTrigger(ctx, id, now)
 	if err != nil {

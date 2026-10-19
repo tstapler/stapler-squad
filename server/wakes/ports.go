@@ -31,6 +31,7 @@ type Store interface {
 	ListPendingWakeTriggers(ctx context.Context) ([]*session.WakeTriggerData, error)
 	ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*session.WakeTriggerData, error)
 	ListNeedsReviveWakeTriggers(ctx context.Context) ([]*session.WakeTriggerData, error)
+	SweepTerminalWakeTriggers(ctx context.Context, now time.Time, retention time.Duration) (int, error)
 }
 
 // WriteOutcome is what a Steerer.WriteWake attempt did to the pane.
