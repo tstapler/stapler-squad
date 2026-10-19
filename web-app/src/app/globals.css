@@ -281,13 +281,14 @@ a {
   background-color: var(--primary-active);
 }
 
+/* --text-muted is #7d8ea8: white on it is 3.32:1 (fails WCAG AA); mixed toward black it is ~6:1 */
 .btn-secondary {
-  background-color: var(--text-muted);
+  background-color: color-mix(in srgb, var(--text-muted) 70%, black);
   color: var(--primary-text);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background-color: var(--text-secondary);
+  background-color: color-mix(in srgb, var(--text-muted) 55%, black);
 }
 
 .btn:disabled {

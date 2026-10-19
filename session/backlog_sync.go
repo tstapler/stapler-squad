@@ -46,6 +46,18 @@ type SyncLoop struct {
 	workflowEngine WorkflowEngine
 }
 
+// SetWorkflowEngine replaces the engine that guards backward-sync transitions
+// (server/dependencies.go injects the shared SwitchableWorkflowEngine). nil is
+// ignored so a loop never ends up with no engine. Call before Start.
+func (sl *SyncLoop) SetWorkflowEngine(engine WorkflowEngine) {
+	if engine != nil {
+		sl.workflowEngine = engine
+	}
+}
+
+// WorkflowEngine returns the engine guarding backward-sync transitions.
+func (sl *SyncLoop) WorkflowEngine() WorkflowEngine { return sl.workflowEngine }
+
 // NewSyncLoop creates a SyncLoop with the default interval and no key provider.
 func NewSyncLoop(storage *Storage, registry *PluginRegistry) *SyncLoop {
 	return &SyncLoop{
