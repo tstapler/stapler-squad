@@ -18,6 +18,8 @@ const (
 	MetricLimitHit        = "wake_limit_hit_total"          // limit,phase
 	MetricDuplicate       = "wake_duplicate_delivery_total" // (none)
 	MetricReconcileDigest = "wake_reconcile_digest_total"   // (none)
+
+	GaugeNeedsReviveAge = "wake_needs_revive_age_seconds" // oldest needs_revive row
 )
 
 // Reconcile result label values.
@@ -43,11 +45,13 @@ type Metrics struct {
 	mu     sync.Mutex
 	counts map[string]int64
 	otel   map[string]metric.Int64Counter
+	gauges map[string]float64
+	gauge  map[string]metric.Float64Gauge
 }
 
 // NewMetrics returns an empty mirror.
 func NewMetrics() *Metrics {
-	return &Metrics{counts: map[string]int64{}, otel: map[string]metric.Int64Counter{}}
+	return &Metrics{counts: map[string]int64{}, otel: map[string]metric.Int64Counter{}, gauges: map[string]float64{}, gauge: map[string]metric.Float64Gauge{}}
 }
 
 func seriesKey(name string, labels []string) string {
@@ -95,4 +99,35 @@ func (m *Metrics) Value(name string, labels ...string) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.counts[seriesKey(name, labels)]
+}
+
+// SetGauge records the current value of a gauge.
+func (m *Metrics) SetGauge(name string, v float64) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.gauges[name] = v
+	inst, ok := m.gauge[name]
+	if !ok {
+		g, err := telemetry.GetMeter().Float64Gauge(name)
+		if err == nil {
+			inst = g
+		}
+		m.gauge[name] = inst
+	}
+	m.mu.Unlock()
+	if inst != nil {
+		inst.Record(context.Background(), v)
+	}
+}
+
+// Gauge returns the last value set for name.
+func (m *Metrics) Gauge(name string) float64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gauges[name]
 }

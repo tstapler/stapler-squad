@@ -2,9 +2,11 @@ package wakes
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // terminalRetention is how long ended rows stay for the Scheduled prompts list
@@ -81,9 +83,54 @@ func (d *Dispatcher) reviveWaiting(ctx context.Context) {
 		log.Warn("wake reconcile: list needs_revive failed", errKey, err)
 		return
 	}
+	d.observeNeedsReviveAge(rows)
 	for _, row := range rows {
 		d.spawn(func() { d.processNeedsRevive(ctx, row) })
 	}
+}
+
+// needsReviveAlertAge is how long a row may wait in needs_revive before the
+// operator is told (pre-mortem #14).
+const needsReviveAlertAge = time.Hour
+
+// observeNeedsReviveAge sets the oldest-row gauge and raises one failure-class
+// notification per row that has waited past the alert age. The age counts from
+// the claim, the last timestamp a needs_revive row carries.
+func (d *Dispatcher) observeNeedsReviveAge(rows []*session.WakeTriggerData) {
+	now := d.cfg.Clock.Now()
+	var oldest time.Duration
+	for _, row := range rows {
+		since := row.CreatedAt
+		if row.ClaimedAt != nil {
+			since = *row.ClaimedAt
+		}
+		age := now.Sub(since)
+		oldest = max(oldest, age)
+		if age <= needsReviveAlertAge || !d.markRevivalAlerted(row.ID) || d.cfg.Notifier == nil {
+			continue
+		}
+		d.cfg.Notifier.Notify(Notification{
+			Kind:             NotifyFailure,
+			OwnerSessionUUID: row.OwnerSessionUUID,
+			Title:            "Scheduled prompt waiting to revive a session",
+			Message:          fmt.Sprintf("A scheduled prompt has waited %s for its stopped session to be admitted; %q", age.Round(time.Minute), snippet(row.Action.Payload)),
+		})
+	}
+	d.cfg.Metrics.SetGauge(GaugeNeedsReviveAge, oldest.Seconds())
+}
+
+// markRevivalAlerted reports true the first time it sees id.
+func (d *Dispatcher) markRevivalAlerted(id string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.reviveAlerted == nil {
+		d.reviveAlerted = map[string]struct{}{}
+	}
+	if _, done := d.reviveAlerted[id]; done {
+		return false
+	}
+	d.reviveAlerted[id] = struct{}{}
+	return true
 }
 
 // fireHeldConditions claims every pending event-type row whose persisted-state

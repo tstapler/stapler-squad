@@ -147,7 +147,7 @@ func TestSteerDelivery_should_WriteNothing_When_CaptureIsNotPositivelyIdle(t *te
 	}
 }
 
-func TestSteerDelivery_should_StayClaimedAndCountAttempt_When_SubmitFails(t *testing.T) {
+func TestSteerDelivery_should_StayClaimed_When_SubmitFails(t *testing.T) {
 	t.Parallel()
 	r := newDeliveryRig(t)
 	r.steerer.setReady("owner-1", true)
@@ -159,7 +159,7 @@ func TestSteerDelivery_should_StayClaimedAndCountAttempt_When_SubmitFails(t *tes
 	got, err := r.repo.GetWakeTrigger(context.Background(), uuid.MustParse(row.ID))
 	require.NoError(t, err)
 	assert.Equal(t, domain.WakeStatusClaimed, got.Status)
-	assert.Equal(t, 1, got.DeliveryAttempts)
+	assert.Equal(t, 0, got.DeliveryAttempts, "attempts count completed writes only")
 	assert.True(t, r.d.Holds(row.ID))
 }
 

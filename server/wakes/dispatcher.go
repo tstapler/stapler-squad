@@ -64,15 +64,16 @@ type Dispatcher struct {
 	changed   chan struct{}
 	startedAt time.Time
 
-	mu         sync.Mutex
-	running    bool
-	cancel     context.CancelFunc
-	release    func()
-	lastFired  map[string]time.Time
-	digest     *digest
-	lastDigest map[string]time.Time
-	matchers   []EventMatcher
-	predicates map[domain.WakeTriggerType]Predicate
+	mu            sync.Mutex
+	running       bool
+	cancel        context.CancelFunc
+	release       func()
+	lastFired     map[string]time.Time
+	digest        *digest
+	lastDigest    map[string]time.Time
+	reviveAlerted map[string]struct{}
+	matchers      []EventMatcher
+	predicates    map[domain.WakeTriggerType]Predicate
 
 	wg sync.WaitGroup // long-running loops
 	bg sync.WaitGroup // spawned one-shot work (revives)
@@ -112,6 +113,7 @@ func NewDispatcher(cfg Config) *Dispatcher {
 	d.delivery = NewSteerDelivery(SteerDeliveryConfig{
 		Store: cfg.Store, Steerer: cfg.Steerer, Owners: cfg.Owners, Clock: cfg.Clock, Metrics: cfg.Metrics,
 		RetryInterval: cfg.RetryInterval,
+		BusyHold:      limits.BusyHold,
 		OnEnded:       d.ended,
 		OnNeedsRevive: func(ctx context.Context, row *session.WakeTriggerData) {
 			d.spawn(func() { d.processNeedsRevive(ctx, row) })

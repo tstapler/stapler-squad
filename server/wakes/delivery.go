@@ -45,6 +45,9 @@ type SteerDeliveryConfig struct {
 	OnEnded       EndedFunc
 	OnNeedsRevive ReviveFunc
 	RetryInterval time.Duration
+	// BusyHold is how long a claimed row waits for an owner that never becomes
+	// ready before it becomes missed(owner_busy_timeout); zero disables it.
+	BusyHold time.Duration
 }
 
 // SteerDelivery is a cache of claimed steer_text rows plus the retry wrapper
@@ -182,23 +185,42 @@ func (d *SteerDelivery) attempt(ctx context.Context, row *session.WakeTriggerDat
 		return
 	}
 	if !d.cfg.Steerer.IsReadyForSteer(row.OwnerSessionUUID) {
+		d.endIfBusyTooLong(ctx, row, id, now)
 		return
 	}
 	d.write(ctx, row, id, now)
 }
 
-func (d *SteerDelivery) write(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
-	if err := d.cfg.Store.RecordWakeDeliveryAttempt(ctx, id); err != nil {
-		log.Warn("wake delivery: record attempt failed", "trigger_id", row.ID, errKey, err)
+// endIfBusyTooLong turns a claim that has waited out the busy-owner hold into
+// missed(owner_busy_timeout); it is never silently dropped (pre-mortem #9).
+func (d *SteerDelivery) endIfBusyTooLong(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
+	if d.cfg.BusyHold <= 0 || row.ClaimedAt == nil || now.Sub(*row.ClaimedAt) < d.cfg.BusyHold {
+		return
 	}
+	d.end(ctx, row, id, domain.WakeStatusMissed, domain.WakeReasonOwnerBusyTimeout, now)
+}
+
+func (d *SteerDelivery) write(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
 	outcome, err := d.cfg.Steerer.WriteWake(ctx, row.OwnerSessionUUID, RenderWake(row))
 	if err != nil {
 		log.Warn("wake delivery: write failed; will retry", "trigger_id", row.ID, errKey, err)
+		d.endIfBusyTooLong(ctx, row, id, now)
 		return
 	}
 	if outcome != WriteDelivered {
+		d.endIfBusyTooLong(ctx, row, id, now)
 		return
 	}
+	// delivery_attempts counts completed pane writes, so a row that already has
+	// one when it is written again is a re-send: the crash window between the
+	// write and MarkWakeDelivered (ADR-006 rule 10).
+	if row.DeliveryAttempts > 0 {
+		d.cfg.Metrics.Inc(MetricDuplicate)
+	}
+	if err := d.cfg.Store.RecordWakeDeliveryAttempt(ctx, id); err != nil {
+		log.Warn("wake delivery: record attempt failed", "trigger_id", row.ID, errKey, err)
+	}
+	row.DeliveryAttempts++
 	applied, err := d.cfg.Store.MarkWakeDelivered(ctx, id, now, nextFireAfter(row, now))
 	if err != nil {
 		log.Error("wake delivery: written but MarkWakeDelivered failed", "trigger_id", row.ID, errKey, err)
