@@ -63,6 +63,47 @@ service GitHubUserService {
   // delivers it through the per-session guard. Outcomes are typed in
   // NudgeOutcome; unsupported programs return FailedPrecondition.
   rpc NudgeSessionForPR(NudgeSessionForPRRequest) returns (NudgeSessionForPRResponse) {}
+
+  // MergePRDirect merges a PR identified by (owner, repo, number, host), with
+  // no session required. Refreshes the PR cache on success.
+  rpc MergePRDirect(MergePRDirectRequest) returns (PRActionResponse) {}
+
+  // ClosePRDirect closes a PR without merging, with no session required.
+  rpc ClosePRDirect(ClosePRDirectRequest) returns (PRActionResponse) {}
+
+  // ConvertPRToDraft marks an open PR as draft. FailedPrecondition when node_id is empty.
+  rpc ConvertPRToDraft(PRDraftToggleRequest) returns (PRActionResponse) {}
+
+  // MarkPRReady marks a draft PR as ready for review. FailedPrecondition when node_id is empty.
+  rpc MarkPRReady(PRDraftToggleRequest) returns (PRActionResponse) {}
+}
+
+message MergePRDirectRequest {
+  string owner  = 1;
+  string repo   = 2;
+  int32  number = 3;
+  string host   = 4;           // empty means github.com
+  optional string method = 5;  // "merge" | "squash" | "rebase"; default "merge"
+}
+
+message ClosePRDirectRequest {
+  string owner  = 1;
+  string repo   = 2;
+  int32  number = 3;
+  string host   = 4;
+}
+
+message PRDraftToggleRequest {
+  string owner   = 1;
+  string repo    = 2;
+  int32  number  = 3;
+  string host    = 4;
+  string node_id = 5;  // UserPR.node_id
+}
+
+message PRActionResponse {
+  bool   success = 1;
+  string message = 2;
 }
 
 // GitHubAccount is a single connected GitHub account.

@@ -1,0 +1,11 @@
+{
+  "id": "ClosePRDirect",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "ClosePRDirect",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-19T02:29:23.89580217-07:00"
+}

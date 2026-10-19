@@ -54,6 +54,14 @@ type UserPR struct {
 	UnresolvedThreadsTruncated bool  // count was capped at maxReviewThreads
 	HasMergeConflict           *bool // nil = GitHub mergeable UNKNOWN (computed lazily)
 	DetailsLoaded              bool  // true only when reviewThreads came back
+
+	NodeID                  string // GraphQL global ID; required by the draft-toggle mutations
+	Body                    string
+	Labels                  []string
+	Additions               int
+	Deletions               int
+	ChangedFiles            int
+	RequestedReviewerLogins []string
 }
 
 // FailingCheck is one failing CheckRun or StatusContext on a PR's head commit.
@@ -854,6 +862,15 @@ query UserPRs {
   viewer {
     pullRequests(first: 100, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
+        id
+        body
+        additions
+        deletions
+        changedFiles
+        labels(first: 20) { nodes { name } }
+        reviewRequests(first: 10) {
+          nodes { requestedReviewer { ... on User { login } } }
+        }
         number
         title
         url
@@ -962,6 +979,23 @@ type graphQLContext struct {
 }
 
 type graphQLPRNode struct {
+	ID           string `json:"id"`
+	Body         string `json:"body"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	Labels       struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
+	ReviewRequests struct {
+		Nodes []struct {
+			RequestedReviewer struct {
+				Login string `json:"login"`
+			} `json:"requestedReviewer"`
+		} `json:"nodes"`
+	} `json:"reviewRequests"`
 	Number      int    `json:"number"`
 	Title       string `json:"title"`
 	URL         string `json:"url"`
@@ -1209,6 +1243,14 @@ func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR,
 			AccountLogin:     login,
 			FailingChecks:    mapFailingChecks(contexts),
 			HasMergeConflict: mergeConflict(n.Mergeable),
+
+			NodeID:                  n.ID,
+			Body:                    n.Body,
+			Additions:               n.Additions,
+			Deletions:               n.Deletions,
+			ChangedFiles:            n.ChangedFiles,
+			Labels:                  labelNames(n),
+			RequestedReviewerLogins: requestedReviewerLogins(n),
 		}
 		if n.ReviewThreads != nil {
 			count, truncated := countUnresolved(n.ReviewThreads)
@@ -1219,6 +1261,25 @@ func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR,
 		prs = append(prs, pr)
 	}
 	return prs, nil
+}
+
+func labelNames(n graphQLPRNode) []string {
+	out := make([]string, 0, len(n.Labels.Nodes))
+	for _, l := range n.Labels.Nodes {
+		out = append(out, l.Name)
+	}
+	return out
+}
+
+// requestedReviewerLogins skips non-User reviewers (teams), which decode to an empty login.
+func requestedReviewerLogins(n graphQLPRNode) []string {
+	var out []string
+	for _, r := range n.ReviewRequests.Nodes {
+		if r.RequestedReviewer.Login != "" {
+			out = append(out, r.RequestedReviewer.Login)
+		}
+	}
+	return out
 }
 
 func parseGitHubTime(s string) time.Time {
