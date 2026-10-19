@@ -44,6 +44,7 @@ func (s *SessionService) wireDialogCanary() *DialogMatchCanary {
 func (s *SessionService) SetGuidanceMirror(m *GuidanceHookMirror) {
 	if m != nil {
 		m.SetPaneCapture(s.PaneCapture)
+		m.SetCardRetirer(historyItemResolver{store: s.GetNotificationStore()}.ResolveGuidanceNotifications)
 	}
 	s.guidanceMirror.Store(m)
 }

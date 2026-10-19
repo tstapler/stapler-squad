@@ -236,3 +236,13 @@ func (r historyItemResolver) ReopenQuestionNotifications(questionID string) {
 		log.Warn("[NotificationAction] could not reopen question notifications", "question", questionID, "err", err)
 	}
 }
+
+// ResolveGuidanceNotifications retires the cards of a mirrored question whose dialog was resolved elsewhere.
+func (r historyItemResolver) ResolveGuidanceNotifications(guidanceID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ResolveGuidance(guidanceID); err != nil {
+		log.Warn("[NotificationAction] could not retire guidance notifications", "guidance", guidanceID, "err", err)
+	}
+}

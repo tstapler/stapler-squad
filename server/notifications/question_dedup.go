@@ -6,6 +6,7 @@ const (
 	metaQuestionOptions = "question_options"
 	metaQuestionID      = "question_id"
 	metaApprovalID      = "approval_id"
+	metaGuidanceID      = "guidance_request_id"
 )
 
 // questionKey is what tells two question notifications of one session apart: the
@@ -23,6 +24,12 @@ func questionKey(r *NotificationRecord) string {
 // returns how many it retired.
 func (s *NotificationHistoryStore) ResolveQuestion(questionID string) (int, error) {
 	return s.resolveByMetadata(metaQuestionID, questionID)
+}
+
+// ResolveGuidance retires the unread records of one mirrored question, whether or not
+// it was replyable (an unreplyable card carries only the guidance request id).
+func (s *NotificationHistoryStore) ResolveGuidance(guidanceID string) (int, error) {
+	return s.resolveByMetadata(metaGuidanceID, guidanceID)
 }
 
 // ResolveApproval retires the unread records of one decided approval.

@@ -128,3 +128,19 @@ func TestReopenQuestion_should_MarkOnlyThatQuestionsReadRecordsUnread(t *testing
 	require.NoError(t, err)
 	assert.Zero(t, again, "an unread record is left alone")
 }
+
+func TestResolveGuidance_should_RetireAnUnreplyableCardThatHasNoQuestionID(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	rec := questionRecord("n1", "s1", "Which regions?", "", "")
+	delete(rec.Metadata, metaQuestionID)
+	rec.Metadata[metaGuidanceID] = "g1"
+	require.NoError(t, store.Append(rec))
+
+	n, err := store.ResolveGuidance("g1")
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	got, _ := store.GetByID("n1")
+	assert.True(t, got.IsRead)
+}

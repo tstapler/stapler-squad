@@ -48,7 +48,13 @@ type GuidanceHookMirror struct {
 	cleared func(reason string)
 	// capture takes one fresh pane capture; nil disables on-demand re-verification.
 	capture func(ctx context.Context, sessionUUID string) (string, error)
+	// retireCard moves a cleared question's card out of Needs you; nil leaves it.
+	retireCard func(rowID string)
 }
+
+// SetCardRetirer installs what moves the card of a question cleared by a terminal
+// answer or a vanished dialog out of Needs you (UX-AC26: it flips, then settles).
+func (m *GuidanceHookMirror) SetCardRetirer(fn func(rowID string)) { m.retireCard = fn }
 
 // SetPaneCapture installs the capture used to re-verify open rows at the cap.
 func (m *GuidanceHookMirror) SetPaneCapture(fn func(ctx context.Context, sessionUUID string) (string, error)) {
@@ -247,6 +253,9 @@ func (m *GuidanceHookMirror) Clear(ctx context.Context, rowID string, reason dom
 	m.pending.Forget(QuestionKey{SessionUUID: row.AskerSessionUUID, QuestionID: rowID})
 	if applied && m.cleared != nil {
 		m.cleared(reason.String())
+	}
+	if applied && m.retireCard != nil && reason != domain.CancelReasonSessionEnded {
+		m.retireCard(rowID)
 	}
 	return nil
 }

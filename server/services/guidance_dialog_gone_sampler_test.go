@@ -328,3 +328,17 @@ func TestAnswerRouter_should_ReturnStaleWithZeroWrites_When_TheDialogWasAnswered
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, res.Outcome)
 	assert.Empty(t, pm.writes())
 }
+
+func TestClear_should_RetireTheCardOfATerminalAnswer_ButNotOfAnEndedSession(t *testing.T) {
+	t.Parallel()
+	e := newSamplerEnv(t, ownFrame(t))
+	var retired []string
+	e.mirror.SetCardRetirer(func(id string) { retired = append(retired, id) })
+	gone := e.colorRow("toolu_gone")
+	ended := e.colorRow("toolu_ended")
+
+	require.NoError(t, e.mirror.Clear(context.Background(), gone, domain.CancelReasonDialogGone))
+	require.NoError(t, e.mirror.Clear(context.Background(), ended, domain.CancelReasonSessionEnded))
+
+	assert.Equal(t, []string{gone}, retired, "the session-ended card stays so the operator can Dismiss it")
+}
