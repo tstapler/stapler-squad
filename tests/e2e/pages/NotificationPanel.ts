@@ -218,6 +218,81 @@ export async function openNotificationTray(page: Page, baseUrl: string): Promise
   return tray;
 }
 
+export const INLINE_ACTIONS_FLAG = 'notification_inline_actions';
+
+/** Resolves once the element's box has not moved or resized for `quietMs` (the row's settled-layout window is 300 ms). */
+async function waitForStableBox(control: Locator, quietMs = 400): Promise<void> {
+  await control.evaluate(
+    (el, quiet) =>
+      new Promise<void>((resolve) => {
+        let key = '';
+        let since = performance.now();
+        const tick = () => {
+          const r = el.getBoundingClientRect();
+          const now = `${r.x},${r.y},${r.width},${r.height}`;
+          if (now !== key) {
+            key = now;
+            since = performance.now();
+          }
+          if (performance.now() - since >= quiet) resolve();
+          else requestAnimationFrame(tick);
+        };
+        tick();
+      }),
+    quietMs,
+  );
+}
+
+/**
+ * One tray row's inline actions (ActionRow). A control that just rendered or moved ignores a press for
+ * 300 ms and the tray drops a press right after a scroll, so `press` scrolls, then waits for both before it clicks.
+ */
+export class InlineActionRow {
+  readonly row: Locator;
+  readonly actions: Locator;
+  readonly status: Locator;
+  readonly approve: Locator;
+  readonly deny: Locator;
+  readonly sendDenial: Locator;
+  readonly undo: Locator;
+  readonly unavailableReason: Locator;
+
+  constructor(
+    private readonly page: Page,
+    private readonly text: string,
+  ) {
+    this.row = page.getByTestId('notification-tray').getByTestId('tray-row').filter({ hasText: text });
+    this.actions = this.row.getByTestId('action-row');
+    this.status = this.row.getByTestId('action-status');
+    this.approve = this.row.getByTestId('action-approve');
+    this.deny = this.row.getByTestId('action-deny');
+    this.sendDenial = this.row.getByTestId('action-send-denial');
+    this.undo = this.row.getByTestId('action-undo');
+    this.unavailableReason = this.row.getByTestId('action-unavailable-reason');
+  }
+
+  /** The list is virtualized and ranks by urgency, so search for the row's text to bring it into the DOM. */
+  async reveal(): Promise<void> {
+    await this.page.getByTestId('notification-tray').getByRole('searchbox', { name: 'Search notifications' }).fill(this.text);
+    await expect(this.row).toHaveCount(1);
+  }
+
+  /** An answer or decision option button, by its label. */
+  option(label: string | RegExp): Locator {
+    return this.row.locator('[data-action-option]').filter({ hasText: label });
+  }
+
+  async press(control: Locator, { tap = false }: { tap?: boolean } = {}): Promise<void> {
+    await expect(control).toBeVisible();
+    // Scroll first: the click's own scroll-into-view would fire a scroll event right before the press.
+    await control.scrollIntoViewIfNeeded();
+    await waitForStableBox(control);
+    await waitForTrayScrollIdle(this.page);
+    if (tap) await control.tap();
+    else await control.click();
+  }
+}
+
 /** The tray's Background segment (Story 5.4). */
 export class BackgroundSegment {
   readonly tab: Locator;
