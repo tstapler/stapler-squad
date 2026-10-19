@@ -123,6 +123,16 @@ Inspect your current Stapler Squad configuration directly from the UI — no hun
 
 ---
 
+## Parallel Fan-Out
+
+Run one prompt across 2–5 isolated worktree sessions, compare their diffs side by side, and merge the best one.
+
+**Launch.** In the omnibar's creation form (New branch mode), set **Run as variants** to 2–5, fill in the first prompt, and create. A warning ("N sessions will run simultaneously — monitor cost in Insights") appears as soon as N ≥ 2. You can also type `fanout 3: <prompt>` into the omnibar to prefill the count and prompt, then choose the repo. The server rejects counts outside 2–5. Each variant gets its own worktree and branch (`<branch>-vN` when a branch is given), and fan-out sessions are ordinary sessions, so the capacity monitor and quota gate see them like any other.
+
+**Compare.** Launching opens `/fanout?groupId=<id>` (a query param rather than `/fanout/<id>`, because the web app is a static export). Each variant is a column with its status badge and the standard diff viewer.
+
+**Pick the winner.** Click **Pick as winner** on a column and confirm. The winner must be stopped, paused, hibernated, or idle at its prompt; a still-working session is rejected. Its changes are committed and its branch merged into the base branch the group was launched from (that branch must be checked out in the repo), then every other variant is archived. If the merge conflicts, you get an error naming the files and nothing is changed.
+
 ## Isolated Git Workspaces
 
 Every agent gets its own git worktree. No branch conflicts, no dirty state bleed between sessions. Merge when you're ready.
