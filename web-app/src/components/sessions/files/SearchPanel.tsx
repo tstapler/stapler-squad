@@ -227,6 +227,7 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   const st = search.status;
   const hasResults = search.hits.length > 0;
   const worktreeGone = st === "worktree_unavailable";
+  const disabled = st === "disabled";
   const busyStream = st === "searching" || st === "queued";
 
   let line: string | null = null;
@@ -235,7 +236,7 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   else if (st === "cancelled") line = `Search cancelled - ${search.hits.length} results so far`;
   else if (st === "done" && hasResults) line = resultsText(search.hits.length, files);
 
-  const idleCopy = typed < 2 && !busyStream && !worktreeGone;
+  const idleCopy = typed < 2 && !busyStream && !worktreeGone && !disabled;
   const retained = st === "idle" && hasResults;
   const zero = st === "done" && !hasResults;
 
@@ -301,6 +302,7 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
           <button type="button" className={textButton} onClick={search.retry}>Retry</button>
         </div>
       )}
+      {disabled && <div className={emptyMessage}><span>Search is disabled</span></div>}
       {worktreeGone && (
         <div className={emptyMessage}>
           <span>Session paused; worktree unavailable</span>

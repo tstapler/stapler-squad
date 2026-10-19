@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { Code, ConnectError } from "@connectrpc/connect";
+import { ReadOnlyReason, ReadOnlyReasonDetailSchema } from "@/gen/session/v1/session_pb";
 import { createFilesTestHarness } from "./fixtures";
 import { controllableSearchStream, searchHit, searchQuery, searchStats } from "./fixtures/controllableSearchStream";
 import { useContentSearch } from "@/lib/hooks/useContentSearch";
@@ -222,6 +223,8 @@ describe("classifySearchError", () => {
     expect(classifySearchError(new ConnectError("x", Code.ResourceExhausted)).kind).toBe("busy");
     expect(classifySearchError(new ConnectError("bad regexp", Code.InvalidArgument))).toEqual({ kind: "invalid", message: "bad regexp" });
     expect(classifySearchError(new ConnectError("WorktreeMissing: session worktree is not on disk", Code.FailedPrecondition)).kind).toBe("worktree");
+    const flagOff = new ConnectError("viewer v2 disabled", Code.FailedPrecondition, undefined, [{ desc: ReadOnlyReasonDetailSchema, value: { reason: ReadOnlyReason.FLAG_OFF } }]);
+    expect(classifySearchError(flagOff).kind).toBe("flag_off");
     expect(classifySearchError(new ConnectError("x", Code.Canceled)).kind).toBe("cancelled");
     expect(classifySearchError(new ConnectError("x", Code.Unavailable)).kind).toBe("error");
     expect(classifySearchError(new Error("boom")).kind).toBe("error");

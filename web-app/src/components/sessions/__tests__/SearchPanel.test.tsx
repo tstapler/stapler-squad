@@ -1,6 +1,7 @@
 import React from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { Code, ConnectError } from "@connectrpc/connect";
+import { ReadOnlyReason, ReadOnlyReasonDetailSchema } from "@/gen/session/v1/session_pb";
 import type { SearchHit } from "@/lib/files/searchClient";
 import { createFilesTestHarness, installVirtualViewport as installViewport } from "@/lib/files/__tests__/fixtures";
 import { controllableSearchStream, searchHit, searchStats } from "@/lib/files/__tests__/fixtures/controllableSearchStream";
@@ -259,6 +260,26 @@ describe("SearchPanel", () => {
     expect(screen.getByText("Showing first 1000 - refine your query")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add filters" }));
     expect(screen.getByLabelText("Files to include")).toHaveFocus();
+  });
+
+  it("searchPanel_should_ShowSearchDisabledAndRefreshFlags_When_SearchContentRefusesWithFlagOff", async () => {
+    const { h, c, fire } = mount();
+    await flush();
+    const flagReads = () => h.calls.filter((name) => name === "getFeatureFlags").length;
+    const before = flagReads();
+    await fire("foo");
+    const refusal = new ConnectError("viewer v2 disabled", Code.FailedPrecondition, undefined, [
+      { desc: ReadOnlyReasonDetailSchema, value: { reason: ReadOnlyReason.FLAG_OFF } },
+    ]);
+
+    act(() => c.requests[0].fail(refusal));
+    await flush();
+
+    expect(screen.getByText("Search is disabled")).toBeInTheDocument();
+    expect(screen.queryByText("Search failed - check your connection")).toBeNull();
+    expect(flagReads()).toBe(before + 1);
+    const results = h.analytics.events.filter((e) => e.name === "files.search.results");
+    expect(results.at(-1)?.labels).toMatchObject({ outcome: "flag_off" });
   });
 
   it("searchPanel_should_ShowPausedStateWithResume_When_WorktreeUnavailable", async () => {

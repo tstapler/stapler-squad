@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bucketFiles, bucketQueryLen, bucketResults, bucketScale, searchOpts, type LabelsOf,
 } from "@/lib/files/analytics/events";
+import { useFilesFlags } from "@/lib/hooks/useFilesFlags";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import {
   MIN_QUERY_LENGTH, classifySearchError, connectSearchStream, newClientId,
@@ -13,7 +14,7 @@ import {
 export const SEARCH_DEBOUNCE_MS = 300;
 export const HIDDEN_ABORT_MS = 30_000;
 
-export type SearchStatus = "idle" | "queued" | "searching" | "done" | "cancelled" | "busy" | "invalid" | "error" | "worktree_unavailable";
+export type SearchStatus = "idle" | "queued" | "searching" | "done" | "cancelled" | "busy" | "invalid" | "error" | "worktree_unavailable" | "disabled";
 type Stats = Extract<SearchEvent, { type: "stats" }>;
 type Outcome = LabelsOf<"files.search.results">["outcome"];
 
@@ -46,6 +47,7 @@ interface Options {
 /** Debounced, abortable content search: one live stream, request-id guarded, never auto-retried. */
 export function useContentSearch({ sessionId, enabled = true, stream }: Options) {
   const analytics = useFilesAnalytics({ component: "SearchPanel", sessionId });
+  const { onFlagOff } = useFilesFlags();
   const clientId = useRef<string>("");
   if (!clientId.current) clientId.current = newClientId();
   const run = useMemo<SearchStream>(() => stream ?? connectSearchStream(sessionId, clientId.current), [stream, sessionId]);
@@ -120,9 +122,10 @@ export function useContentSearch({ sessionId, enabled = true, stream }: Options)
         if (!isLive()) return;
         const { kind, message } = classifySearchError(err);
         if (kind === "cancelled") return;
-        const status: SearchStatus = kind === "worktree" ? "worktree_unavailable" : kind;
+        if (kind === "flag_off") void onFlagOff();
+        const status: SearchStatus = kind === "worktree" ? "worktree_unavailable" : kind === "flag_off" ? "disabled" : kind;
         setState((s) => ({ ...s, status, ahead: 0, message: message ?? null }));
-        finish(kind === "invalid" ? "invalid_regex" : kind === "worktree" ? "worktree_unavailable" : kind === "busy" ? "busy" : "error", null);
+        finish(kind === "invalid" ? "invalid_regex" : kind === "worktree" ? "worktree_unavailable" : kind === "busy" ? "busy" : kind === "flag_off" ? "flag_off" : "error", null);
       }
     })();
   }, [abort]);

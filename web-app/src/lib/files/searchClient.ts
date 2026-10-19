@@ -2,7 +2,7 @@
 // Hooks depend on the SearchStream port so tests drive a hand-written stream.
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import {
-  SearchCaseMode, SearchMatchMode, SearchWordMode, SessionService,
+  ReadOnlyReason, ReadOnlyReasonDetailSchema, SearchCaseMode, SearchMatchMode, SearchWordMode, SessionService,
 } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 
@@ -84,7 +84,7 @@ export function connectSearchStream(sessionId: string, clientId: string): Search
   };
 }
 
-export type SearchErrorKind = "busy" | "invalid" | "worktree" | "cancelled" | "error";
+export type SearchErrorKind = "busy" | "invalid" | "worktree" | "flag_off" | "cancelled" | "error";
 
 /** Maps a stream failure to a UI state; `message` is only set where the server text is meant for the user. */
 export function classifySearchError(err: unknown): { kind: SearchErrorKind; message?: string } {
@@ -92,7 +92,10 @@ export function classifySearchError(err: unknown): { kind: SearchErrorKind; mess
   switch (err.code) {
     case Code.ResourceExhausted: return { kind: "busy" };
     case Code.InvalidArgument: return { kind: "invalid", message: err.rawMessage };
-    case Code.FailedPrecondition: return err.rawMessage.includes("WorktreeMissing") ? { kind: "worktree" } : { kind: "error" };
+    case Code.FailedPrecondition: {
+      if (err.findDetails(ReadOnlyReasonDetailSchema).some((d) => d.reason === ReadOnlyReason.FLAG_OFF)) return { kind: "flag_off" };
+      return err.rawMessage.includes("WorktreeMissing") ? { kind: "worktree" } : { kind: "error" };
+    }
     case Code.Canceled: return { kind: "cancelled" };
     default: return { kind: "error" };
   }
