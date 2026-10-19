@@ -25,6 +25,7 @@ export interface CodeEditorHandle {
   gotoLine(line: number): void;
   /** Marks a search hit until the cursor moves; null clears it. */
   highlightRange(range: HitRange | null): void;
+  getViewport(): LineRange;
   scrollSnapshot(): ScrollSnapshot;
   restoreScroll(snapshot: ScrollSnapshot): void;
   focus(): void;
@@ -89,6 +90,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       insertText: (t) => e().insertText(t),
       gotoLine: (n) => e().reveal(n),
       highlightRange: (r) => e().highlight(r),
+      getViewport: () => e().getViewport(),
       scrollSnapshot: () => e().scrollSnapshot(),
       restoreScroll: (s) => e().restoreScroll(s),
       focus: () => e().focus(),

@@ -12,6 +12,11 @@ export interface ViewState { line: number; col: number; scrollTop: number }
 export interface NavEntry { path: string; line: number; col: number }
 export interface ClosedTab { path: string; viewState: ViewState }
 
+/** Where a loaded buffer's text comes from: all of it, or windows read on demand (ADR-036; text never lives here). */
+export type BufferSource =
+  | { kind: "full" }
+  | { kind: "windowed"; tier: "t1" | "t2"; size: number; windowStartLine: number; lineCount?: number; analysis: "unspecified" | "pending" | "ready" | "failed" };
+
 interface BufferBase {
   path: string;
   /** Captured at open and never updated: the live session prop may change underneath a reused tab. */
@@ -27,7 +32,7 @@ interface LoadedCommon extends BufferBase {
   token: string;
   dirty: boolean;
   saving: boolean;
-  source: { kind: "full" };
+  source: BufferSource;
 }
 /** Edit is representable only when the file is editable (read-only reason None). */
 export type LoadedBuffer =
@@ -77,7 +82,8 @@ export type BufferAction =
   | { type: "navBack" }
   | { type: "navForward" }
   | { type: "recordViewState"; path: string; viewState: ViewState }
-  | { type: "markLoaded"; path: string; token: string; readOnly: ReadOnlyKind }
+  /** A windowed `source` opens at the buffer's recorded line. */
+  | { type: "markLoaded"; path: string; token: string; readOnly: ReadOnlyKind; source?: BufferSource }
   | { type: "markFailed"; path: string; reason: FailureKind }
   | { type: "markDirty"; path: string; dirty: boolean }
   | { type: "markSaving"; path: string; saving: boolean }
@@ -104,6 +110,9 @@ const isEvictable = (b: Buffer) => isReplaceablePreview(b) && b.status !== "load
 const indexOf = (s: BufferState, path: string) => s.buffers.findIndex((b) => b.path === path);
 
 // ---- helpers ----
+
+const windowedAt = (source: BufferSource | undefined, line: number): BufferSource =>
+  source?.kind === "windowed" ? { ...source, windowStartLine: line } : { kind: "full" };
 
 function touched(s: BufferState, index: number): BufferState {
   const tick = s.tick + 1;
@@ -321,7 +330,7 @@ function apply(s: BufferState, a: BufferAction): BufferState {
       return mapBuffer(s, a.path, (b): Buffer => {
         if (b.status === "failed") return b;
         const common = { path: b.path, sessionId: b.sessionId, pinned: b.pinned, viewState: b.viewState, usedAt: b.usedAt };
-        const loaded = { ...common, status: "loaded" as const, token: a.token, dirty: false, saving: false, source: { kind: "full" as const } };
+        const loaded = { ...common, status: "loaded" as const, token: a.token, dirty: false, saving: false, source: windowedAt(a.source, b.viewState.line) };
         return { ...loaded, mode: "read", readOnly: a.readOnly };
       });
     case "markFailed":

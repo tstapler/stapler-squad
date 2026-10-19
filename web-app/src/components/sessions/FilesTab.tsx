@@ -229,6 +229,7 @@ function FilesTabView({
                 onEditorReady={v2?.bridge.onEditorReady}
                 accessible={v2?.accessible.on}
                 dirty={v2?.buffers.active?.status === "loaded" && v2.buffers.active.dirty}
+                source={v2?.viewerSource}
               />
             </div>
           </div>

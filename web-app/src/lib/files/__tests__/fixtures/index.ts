@@ -10,3 +10,5 @@ export { CANARIES, LABEL_VALUE_SHAPE, MAX_LABELS, canaryLeaks, labelProblems, fi
 export { fakeClock } from "./fakeClock";
 export { createFakeTransport, fakeCapabilities, DEFAULT_OPS } from "./fakeTransport";
 export type { FakeTransport, FakeTransportOptions } from "./fakeTransport";
+export { createVirtualRangeTransport, lineText } from "./virtualRangeTransport";
+export type { VirtualRangeTransport } from "./virtualRangeTransport";

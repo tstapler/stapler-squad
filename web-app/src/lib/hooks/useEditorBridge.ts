@@ -44,12 +44,14 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
     if (!pendingReveal || !editor || editor.path !== pendingReveal.path) return;
     try {
       // The engine clamps; a hit past the loaded text (truncated read) says so instead of landing silently.
-      const all = editor.handle.getText().split("\n");
-      setBeyond(pendingReveal.line > all.length ? { path: pendingReveal.path, line: pendingReveal.line } : null);
+      // A windowed file loads on demand: its jump clamps itself, and the loaded text is not the whole file.
+      const windowed = editor.handle.windowed !== undefined;
+      const all = windowed ? [] : editor.handle.getText().split("\n");
+      setBeyond(!windowed && pendingReveal.line > all.length ? { path: pendingReveal.path, line: pendingReveal.line } : null);
       editor.handle.gotoLine(pendingReveal.line);
       const hit = pendingHit.current?.path === pendingReveal.path ? pendingHit.current : null;
       pendingHit.current = null;
-      if (hit && hit.line <= all.length) {
+      if (hit && (windowed || hit.line <= all.length)) {
         const matched = hit.text.slice(hit.start, hit.end);
         let at = { line: hit.line, from: hit.start };
         const here = all[hit.line - 1] ?? "";
@@ -114,7 +116,8 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
 
   const goToLine = useCallback((requested: number, via: "palette" | "status_bar" | "vim") => {
     if (!editor || !active || editor.path !== active.path || !Number.isFinite(requested)) return;
-    const { line, clamped } = clampLine(requested, editor.handle.getText().split("\n").length);
+    const windowed = editor.handle.windowed;
+    const { line, clamped } = windowed ? { line: Math.max(1, Math.trunc(requested)), clamped: false } : clampLine(requested, editor.handle.getText().split("\n").length);
     analytics.emit("files.nav.jump_line", { via, clamped: String(clamped) as "true" | "false" });
     jumpTo(active.path, line);
   }, [editor, active, analytics, jumpTo]);
@@ -150,6 +153,7 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
 
   const outline = useCallback((): OutlineResult => {
     if (!editor || !active || editor.path !== active.path) return { kind: "unavailable", reason: "error" };
+    if (editor.handle.windowed) return { kind: "unavailable", reason: "large" };
     try {
       const text = editor.handle.getText();
       return buildOutline(text, detectLanguage(active.path), { size: text.length });
@@ -169,7 +173,7 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
     }
   }, [editor, active]);
   const eol = useCallback((): "LF" | "CRLF" | "mixed" | null => {
-    if (!editor || !active || editor.path !== active.path) return null;
+    if (!editor || !active || editor.path !== active.path || editor.handle.windowed) return null;
     try {
       const text = editor.handle.getText();
       const crlf = (text.match(/\r\n/g) ?? []).length;

@@ -8,6 +8,8 @@ import {
 import { bucketBytes, bucketTabs, extClass, type LabelsOf } from "@/lib/files/analytics/events";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { Rejected } from "@/lib/files/transport/fileTransport";
+import { decideOpen } from "@/lib/files/windowedSource";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useFileTransport } from "./useFileTransport";
 
 const MOBILE_WIDTH = 768;
@@ -46,7 +48,7 @@ function readPersisted(sessionId: string): Restored {
   }
 }
 
-function writePersisted(sessionId: string, state: BufferState): boolean {
+export function writePersisted(sessionId: string, state: BufferState): boolean {
   try {
     const payload: Persisted = {
       v: STORAGE_VERSION,
@@ -78,6 +80,8 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
   const [storageFailed, setStorageFailed] = useState(restoredRef.current?.outcome === "storage_unavailable");
   const analytics = useFilesAnalytics({ component: "FilesTab", sessionId });
   const transport = useFileTransport();
+  const rangeRead = useRef(false);
+  rangeRead.current = useFeatureFlag("files:range-read");
   const dispatch = useCallback((a: BufferAction) => dispatchRaw(a), []);
 
   // One restore event per mount, after the buffers exist.
@@ -114,7 +118,9 @@ export function useOpenBuffers(sessionId: string, { initialSelectedPath, onSelec
       transport.stat({ sessionId: b.sessionId, path: b.path }, undefined, ctl.signal).then(
         (r) => {
           if (ctl.signal.aborted) return;
-          dispatchRaw({ type: "markLoaded", path: b.path, token: r.token, readOnly: r.readOnly });
+          const { limits, ops } = transport.capabilities();
+          const open = decideOpen({ size: r.size, readOnly: r.readOnly, analysis: r.analysis, ops, hashCapBytes: limits.hashCapBytes, rangeRead: rangeRead.current });
+          dispatchRaw({ type: "markLoaded", path: b.path, token: r.token, readOnly: open.readOnly, source: open.source });
           const origin = sources.current.get(b.path);
           sources.current.delete(b.path);
           if (origin) analytics.emit("files.tab.open", { kind: origin.pinned ? "pinned" : "preview", source: origin.source, ext_class: extClass(b.path), size: bucketBytes(r.size) });

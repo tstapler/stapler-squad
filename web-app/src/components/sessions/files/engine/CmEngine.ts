@@ -17,6 +17,7 @@ import { cmTheme } from "./cmTheme";
 import { changesToEdits } from "./pendingEdits";
 import type { LazyBufferInfo, LazyController, LazyMode } from "./cm6LazyDoc/controller";
 import { GapLineController } from "./cm6LazyDoc/gapLineController";
+import { gapTableOf, segAtFileLine } from "./cm6LazyDoc/gapTable";
 import { lazyBufferParts } from "./cm6LazyDoc/lazyBuffer";
 import { WindowSwapController } from "./cm6LazyDoc/windowSwap";
 
@@ -305,7 +306,17 @@ class CmHandle implements EngineHandle {
   }
 
   highlight(range: HitRange | null) {
-    this.view.dispatch({ effects: setSearchHit.of(range) });
+    this.view.dispatch({ effects: setSearchHit.of(range && this.docLineOf(range)) });
+  }
+
+  /** A gap-line document holds only loaded lines, so a hit's file line is mapped to its document line (null while unloaded). */
+  private docLineOf(range: HitRange): HitRange | null {
+    if (this.lazy?.mode !== "gap-line" || !this.buffer.lazy) return range;
+    const table = gapTableOf(this.view.state);
+    const at = segAtFileLine(table, range.line - 1);
+    const seg = at && table.segs[at.index];
+    if (!at || seg?.kind !== "loaded") return null;
+    return { ...range, line: this.view.state.doc.lineAt(seg.from).number + at.offset };
   }
 
   getViewport(): LineRange {

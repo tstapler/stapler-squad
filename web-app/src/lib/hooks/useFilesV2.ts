@@ -63,8 +63,9 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
     { id: "save", label: "Save", shortcut: "Ctrl+S", disabledReason: dirty ? "saving is not available yet" : "no changes", run: () => undefined },
   ], [active, dirty, setOverlay, reloadFromDisk, accessible]);
 
+  const viewerSource = active?.status === "loaded" ? active.source : undefined;
   const recentPaths = useMemo(() => buffers.mru.slice(0, RECENT_LIMIT), [buffers.mru]);
-  return { buffers, bridge, accessible, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands, reloadFailed, reloadFromDisk, clearReloadFailed: () => setReloadFailed(null) };
+  return { buffers, bridge, viewerSource, accessible, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands, reloadFailed, reloadFromDisk, clearReloadFailed: () => setReloadFailed(null) };
 }
 
 export type FilesV2 = ReturnType<typeof useFilesV2>;

@@ -3,6 +3,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { useGetFileContent } from "@/lib/hooks/useFileService";
 import type { ReadViewHandle } from "./files/readViewHandle";
+import type { BufferSource } from "@/lib/files/bufferReducer";
+import { FALLBACK_CHIP_TEXT } from "@/lib/files/transport/router";
+import { WindowedFileView } from "./files/WindowedFileView";
 import { ReadSurface } from "./files/ReadSurface";
 import { buildGutterMarks, type GutterMarkType } from "@/lib/utils/parseDiff";
 import {
@@ -206,11 +209,15 @@ interface FileContentViewerProps {
   accessible?: boolean;
   /** The buffer has unsaved edits (the Accessible view labels them). */
   dirty?: boolean;
+  /** How the loaded buffer's text is read; absent until the open stat lands (the whole-file fetch starts meanwhile) and outside the buffered tab. */
+  source?: BufferSource;
 }
 
 // +feature: file-content-viewer
-export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, reloadKey, onEditorReady, accessible = false, dirty = false }: FileContentViewerProps) {
-  const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl, reloadKey);
+export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, reloadKey, onEditorReady, accessible = false, dirty = false, source }: FileContentViewerProps) {
+  const [demoted, setDemoted] = useState(false);
+  const windowed = source?.kind === "windowed" && !demoted ? source : null;
+  const { data, loading, error } = useGetFileContent(sessionId, windowed ? null : filePath, baseUrl, reloadKey);
   const [wrapLines, setWrapLines] = useState(false);
   const gutterMarks = useMemo(
     () => (diffContent && filePath ? buildGutterMarks(diffContent, filePath) : new Map<number, GutterMarkType>()),
@@ -219,6 +226,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
 
   useEffect(() => {
     setWrapLines(false);
+    setDemoted(false);
   }, [filePath]);
 
   if (!filePath) {
@@ -234,6 +242,25 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
   const rawUrl = `/api/files/raw?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`;
   const downloadUrl = `${rawUrl}&download=true`;
   const openUrl = rawUrl;
+
+  if (windowed) {
+    return (
+      <div className={container}>
+        <Breadcrumb path={filePath} openUrl={openUrl} downloadUrl={downloadUrl} />
+        <div className={viewer}>
+          <WindowedFileView
+            sessionId={sessionId}
+            path={filePath}
+            source={windowed}
+            language={detectLanguage(filePath)}
+            reloadKey={reloadKey}
+            onReady={onEditorReady && ((handle) => onEditorReady(handle, filePath))}
+            onDemoted={() => setDemoted(true)}
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -354,6 +381,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
         wrapLines={wrapLines}
         onToggleWrap={() => setWrapLines((w) => !w)}
       />
+      {demoted && <div className={truncationWarning} role="status" data-testid="fallback-chip">{FALLBACK_CHIP_TEXT}</div>}
       {data.isTruncated && (
         <div className={truncationWarning}>
           ⚠ File truncated to 1 MB — only the first portion is shown
