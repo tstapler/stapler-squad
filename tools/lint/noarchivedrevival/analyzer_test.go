@@ -9,5 +9,5 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), noarchivedrevival.Analyzer, "session", "other")
+	analysistest.Run(t, analysistest.TestData(), noarchivedrevival.Analyzer, "session", "other", "server/wakes", "server/services")
 }
