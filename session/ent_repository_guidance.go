@@ -70,6 +70,7 @@ type GuidanceRequestData struct {
 	DeliveryAttempts    int
 	HookCallID          domain.HookCallID
 	ExpiresAt           *time.Time
+	CancelReason        domain.CancelReason
 }
 
 // Status derives the row's lifecycle state from its timestamps. Cancelled is
@@ -159,6 +160,7 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 		DeliveryAttempts:    row.DeliveryAttempts,
 		HookCallID:          domain.HookCallID(row.HookCallID),
 		ExpiresAt:           row.ExpiresAt,
+		CancelReason:        domain.CancelReason(row.CancelReason),
 	}
 }
 
@@ -393,9 +395,8 @@ func (r *EntRepository) MarkGuidanceRequestNotified(ctx context.Context, id uuid
 
 // CancelGuidanceRequest atomically, idempotently sets cancelled_at via a
 // single conditional UPDATE ... WHERE answered_at IS NULL AND cancelled_at IS
-// NULL, mirroring AnswerGuidanceRequest's shape. reason is accepted for
-// call-site documentation/logging purposes; it is not persisted (no reason
-// column on this schema).
+// NULL, mirroring AnswerGuidanceRequest's shape. reason is stored in
+// cancel_reason so a card can say why the question went away.
 func (r *EntRepository) CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reason string) (applied bool, err error) {
 	n, err := r.client.GuidanceRequest.Update().
 		Where(
@@ -404,6 +405,7 @@ func (r *EntRepository) CancelGuidanceRequest(ctx context.Context, id uuid.UUID,
 			guidancerequest.CancelledAtIsNil(),
 		).
 		SetCancelledAt(time.Now()).
+		SetCancelReason(reason).
 		Save(ctx)
 	if err != nil {
 		return false, fmt.Errorf("cancel guidance request %s (%s): %w", id, reason, err)

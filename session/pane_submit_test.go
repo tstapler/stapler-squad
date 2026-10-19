@@ -84,7 +84,9 @@ func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) 
 	inst.updates = []bool{false, false, true} // settle immediately, then confirm the submit
 
 	const content = "some long driver-generated prompt text"
-	if err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), content, time.Millisecond, 20*time.Millisecond); err != nil {
+	// A wide maxWait: the fake answers at once, and a tight window made the confirm
+	// poll time out under load, which triggers the Enter retry and a third write.
+	if err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), content, time.Millisecond, 5*time.Second); err != nil {
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
 

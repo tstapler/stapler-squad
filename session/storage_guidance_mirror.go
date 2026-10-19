@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,4 +22,9 @@ func (s *Storage) SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route d
 // ListOpenGuidanceRequestsByAsker forwards to EntRepository.ListOpenGuidanceRequestsByAsker.
 func (s *Storage) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*GuidanceRequestData, error) {
 	return s.repo.ListOpenGuidanceRequestsByAsker(ctx, askerSessionUUID, sources...)
+}
+
+// PurgeTerminalGuidanceQuestions forwards to EntRepository.PurgeTerminalGuidanceQuestions.
+func (s *Storage) PurgeTerminalGuidanceQuestions(ctx context.Context, cutoff time.Time) (int, error) {
+	return s.repo.PurgeTerminalGuidanceQuestions(ctx, cutoff)
 }

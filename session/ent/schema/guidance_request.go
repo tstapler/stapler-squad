@@ -102,6 +102,9 @@ func (GuidanceRequest) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("When an open peer-help row lapses (created_at + domain.PeerHelpTTL); NULL for rows that do not expire."),
+		field.String("cancel_reason").
+			Optional().
+			Comment("domain.CancelReason of a cancelled row; empty for rows cancelled before the column existed."),
 		field.String("hook_call_id").
 			Optional().
 			Comment("The Claude tool_use_id of the hook invocation; with asker_session_uuid it is the coalescing key for hook rows."),
