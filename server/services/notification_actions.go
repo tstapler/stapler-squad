@@ -141,7 +141,7 @@ type BacklogDecisionLookup interface {
 type OpenGuidance struct {
 	Options []string
 	// Source is who raised it. A hook-mirrored question is answered by ANSWER_QUESTION (the pane
-	// route) and a peer request by the peer session, so only agent-created rows get ANSWER_GUIDANCE.
+	// route) and a peer request may also be answered by the operator on the peer's behalf, so only hook rows are excluded from ANSWER_GUIDANCE.
 	Source domain.QuestionSource
 	// PeerHelp marks an agent-to-agent request: the operator may also withdraw it.
 	PeerHelp bool
@@ -348,7 +348,7 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
 	id := r.GetMetadata()[metaGuidanceRequestID]
 	g, open := st.guidance[id]
-	if id == "" || !open || g.Source == domain.QuestionSourceHook || g.Source == domain.QuestionSourcePeer {
+	if id == "" || !open || g.Source == domain.QuestionSourceHook {
 		return nil
 	}
 	d := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_ANSWER_GUIDANCE, "Answer",

@@ -210,11 +210,11 @@ func TestBuildDescriptors_ShouldOfferAnswerGuidance_WhenGuidanceOpen(t *testing.
 	assert.Equal(t, []string{"OPEN"}, kinds(closed))
 }
 
-func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookOrPeerSourced(t *testing.T) {
+func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookSourced(t *testing.T) {
 	t.Parallel()
 	f := newDescriptorFixture()
 	f.guidance.open["hook"] = OpenGuidance{Source: domain.QuestionSourceHook}
-	f.guidance.open["peer"] = OpenGuidance{Source: domain.QuestionSourcePeer}
+	f.guidance.open["peer"] = OpenGuidance{Source: domain.QuestionSourcePeer, PeerHelp: true}
 	f.guidance.open["agent"] = OpenGuidance{Source: domain.QuestionSourceAgentMCP}
 	rec := func(id string) *sessionv1.NotificationHistoryRecord {
 		return &sessionv1.NotificationHistoryRecord{Id: "n-" + id, Metadata: map[string]string{metaGuidanceRequestID: id}}
@@ -223,7 +223,7 @@ func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookOrPee
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{hook, peer, agent}, ListenerClassLocal)
 
 	assert.Equal(t, []string{"OPEN"}, kinds(hook), "a hook question is answered through its pane route, never as a stored answer")
-	assert.Equal(t, []string{"OPEN"}, kinds(peer))
+	assert.Equal(t, []string{"ANSWER_GUIDANCE", "CANCEL_PEER_HELP", "OPEN"}, kinds(peer), "the operator may answer for the peer or withdraw the request")
 	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(agent))
 }
 
