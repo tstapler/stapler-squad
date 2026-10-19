@@ -90,8 +90,8 @@ func updateSessionFields() []string {
 // T-RO-17
 func TestUIRpcSurface_ShouldClassifyEveryRPCAsWriteOrNot_WhenReflectingSessionServiceDescriptors(t *testing.T) {
 	desc := sessionV1Descriptors()
-	if len(desc) != 15 {
-		t.Fatalf("expected 15 services in session.v1, found %d; a new service must be classified", len(desc))
+	if len(desc) != 16 {
+		t.Fatalf("expected 16 services in session.v1, found %d; a new service must be classified", len(desc))
 	}
 	for _, f := range rpcClassificationFindings(desc, terminalWriteRPCs, notTerminalWriteRPCs) {
 		t.Error(f)

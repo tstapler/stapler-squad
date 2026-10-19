@@ -176,7 +176,10 @@ export class TestServer {
     // Playwright (see 2026-09-04 insights-cost-intelligence e2e debugging).
     console.log('Ensuring Go binary is up to date (make stapler-squad)...');
     const projectRoot = path.join(__dirname, '../../..');
-    await execPromise('make stapler-squad', { cwd: projectRoot });
+    // `npx playwright` leaves npm_config_user_agent=npm/..., which web-app's bun-only
+    // preinstall guard rejects when make triggers `bun install`.
+    const { npm_config_user_agent: _npmUserAgent, ...makeEnv } = process.env;
+    await execPromise('make stapler-squad', { cwd: projectRoot, env: makeEnv });
     console.log('✅ Binary up to date');
 
     // The Makefile target always writes to the single repo-root path, which

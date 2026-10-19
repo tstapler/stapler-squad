@@ -5,7 +5,9 @@
   "method": "ListSavedGuidanceAnswers",
   "protoFile": "proto/session/v1/guidance_request.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestListSavedGuidanceAnswers_should_ReturnOnlyAgentCreatedSavedRows"
+  ],
   "lastModified": "2026-10-19T04:24:54.976200826-07:00"
 }

@@ -21,9 +21,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 func main() {
@@ -66,7 +67,7 @@ func optionsFromEnv(webAppDir string) (Options, error) {
 func bunInstall(webAppDir, target string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile", "--cwd", target)
+	cmd := safeexec.CommandContext(ctx, "bun", "install", "--frozen-lockfile", "--cwd", target)
 	cmd.Dir = webAppDir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
