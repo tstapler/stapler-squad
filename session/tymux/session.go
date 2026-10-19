@@ -313,15 +313,31 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	s.mu.RLock()
 	command := s.command
 	s.mu.RUnlock()
+	program, args := splitLaunchCommand(command)
 	resp, err := s.transport.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{
 		Name:    dir,
-		Command: command,
+		Command: program,
+		Args:    args,
 		Cwd:     dir,
 	}))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
 	return s.cacheFromSession(resp.Msg)
+}
+
+// shellMetachars are the characters that make a launch command more than a
+// bare program name; tymuxd execs Command as a single program, so these need a shell.
+const shellMetachars = " \t\n'\"\\$&|;<>()*?[]{}~`#!"
+
+// splitLaunchCommand maps a shell-style launch command onto CreateSessionRequest's
+// Command/Args. A bare program name passes through; anything with arguments or
+// shell syntax runs as `/bin/sh -c <command>`.
+func splitLaunchCommand(command string) (program string, args []string) {
+	if !strings.ContainsAny(command, shellMetachars) {
+		return command, nil
+	}
+	return "/bin/sh", []string{"-c", command}
 }
 
 // SetCommand records the program Start() will ask tymuxd to spawn. Call

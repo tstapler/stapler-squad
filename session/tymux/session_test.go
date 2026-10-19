@@ -134,23 +134,38 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 }
 
 func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
-	dir := t.TempDir()
-	var gotReq *v1.CreateSessionRequest
-	transport := &fakeTransport{
-		createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-			gotReq = req.Msg
-			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
-		},
+	tests := []struct {
+		name        string
+		command     string
+		wantCommand string
+		wantArgs    []string
+	}{
+		{"bare program", "claude", "claude", nil},
+		{"absolute path", "/home/u/.local/bin/claude", "/home/u/.local/bin/claude", nil},
+		{"program with args", "claude --resume abc", "/bin/sh", []string{"-c", "claude --resume abc"}},
+		{"quoted path arg", "claude --mcp-config '/tmp/a b.json'", "/bin/sh", []string{"-c", "claude --mcp-config '/tmp/a b.json'"}},
+		{"env prefix and chaining", "FOO=1 claude && true", "/bin/sh", []string{"-c", "FOO=1 claude && true"}},
+		{"unset", "", "", nil},
 	}
-	sess := NewTymuxGRPCSession(transport)
-	sess.SetCommand("claude --resume abc")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var gotReq *v1.CreateSessionRequest
+			transport := &fakeTransport{
+				createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+					gotReq = req.Msg
+					return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+				},
+			}
+			sess := NewTymuxGRPCSession(transport)
+			sess.SetCommand(tc.command)
 
-	err := sess.Start(dir)
-
-	require.NoError(t, err)
-	require.NotNil(t, gotReq)
-	assert.Equal(t, "claude --resume abc", gotReq.GetCommand(),
-		"Start must forward SetCommand's value as CreateSessionRequest.Command, not default to tymuxd's bare $SHELL")
+			require.NoError(t, sess.Start(dir))
+			require.NotNil(t, gotReq)
+			assert.Equal(t, tc.wantCommand, gotReq.GetCommand())
+			assert.Equal(t, tc.wantArgs, gotReq.GetArgs())
+		})
+	}
 }
 
 func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
