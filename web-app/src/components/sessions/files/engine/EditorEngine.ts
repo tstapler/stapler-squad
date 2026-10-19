@@ -73,6 +73,8 @@ export interface BufferInit {
   language?: string;
   gutterMarks?: Map<number, GutterMarkType>;
   config?: ModeConfig;
+  /** A document of this many lines that is loaded on demand; `doc` is ignored. */
+  lazy?: { lineCount: number };
 }
 
 export interface EngineFeatures {

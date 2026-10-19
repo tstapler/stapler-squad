@@ -1,12 +1,12 @@
 import { installJsdomLayoutShims } from "@/lib/files/__tests__/fixtures/jsdomLayout";
-import type { EditorEngine, EngineHandle } from "../EditorEngine";
+import type { EditorEngine, EngineHandle, LineRange } from "../EditorEngine";
 
 const LABEL = "File: conformance.txt";
 const SAMPLE = "alpha\nbeta\ngamma";
 
 /**
- * Gate every EditorEngine must pass (ADR-036). Lazy-document cases are reported as skipped with the
- * reason while `features.lazyDoc` is false, and fail loudly if an engine claims lazyDoc before they exist.
+ * Gate every EditorEngine must pass (ADR-036). Lazy-document cases run when `features.lazyDoc` is true and
+ * are reported as skipped with the reason while it is false.
  */
 export function runEngineConformance(name: string, makeEngine: () => EditorEngine): void {
   describe(`runEngineConformance(${name})`, () => {
@@ -135,14 +135,58 @@ export function runEngineConformance(name: string, makeEngine: () => EditorEngin
       "provideRange_and_evictRange_should_KeepTheScrollAnchor",
       "edits_should_MapToAbsolutePositionsAcrossAGap",
     ];
-    for (const caseName of LAZY_CASES) {
-      if (lazy) {
-        it(caseName, () => {
-          throw new Error("lazy conformance cases land with Story 1.6.4; the engine must not claim lazyDoc before then");
+
+    async function openLazy(lineCount: number) {
+      const engine = makeEngine();
+      const config = { mode: "Edit" as const, ariaLabel: LABEL };
+      const buffer = await engine.createBuffer({ doc: "", lazy: { lineCount }, config });
+      handle = engine.mount(host, { buffer, ...config });
+      return handle;
+    }
+    const put = (startLine: number, ...lines: string[]) =>
+      handle.provideRange({ startLine, endLine: startLine + lines.length - 1 }, lines.join("\n"));
+
+    if (lazy) {
+      it(LAZY_CASES[0], async () => {
+        await openLazy(3000);
+        const needs: LineRange[] = [];
+        handle.onNeedRange((r) => needs.push(r));
+        put(1, "a", "b", "c");
+        handle.reveal(2, 1);
+        const viewport = handle.getViewport();
+        put(2001, "x", "y", "z");
+        expect(handle.getCursor()).toEqual({ line: 2, col: 1 });
+        expect(handle.getViewport().startLine).toBe(viewport.startLine);
+        handle.evictRange({ startLine: 2001, endLine: 2003 });
+        expect(handle.getCursor()).toEqual({ line: 2, col: 1 });
+        expect(handle.getText()).not.toContain("x");
+        handle.reveal(2002);
+        const ask = needs.find((r) => r.startLine <= 2002 && r.endLine >= 2002)!;
+        expect(ask).toBeDefined();
+        put(ask.startLine, ...Array.from({ length: ask.endLine - ask.startLine + 1 }, (_, i) => `line ${ask.startLine + i}`));
+        expect(handle.getCursor()).toEqual({ line: 2002, col: 0 });
+      });
+
+      it(LAZY_CASES[1], async () => {
+        await openLazy(1000);
+        put(1, "a", "b", "c");
+        put(901, "p", "q", "r");
+        handle.reveal(1, 1);
+        handle.insertText("X");
+        put(501, "m", "n", "o"); // a load between two edits must not move them
+        handle.reveal(902, 0);
+        handle.insertText("Y");
+        handle.reveal(502, 1);
+        handle.insertText("Z");
+        const edit = (line: number, colUtf16: number, insert: string) => ({
+          start: { line, colUtf16 }, end: { line, colUtf16 }, insert,
         });
-      } else {
-        it.skip(`${caseName} (skipped: features.lazyDoc=false)`, () => undefined);
-      }
+        expect(handle.takePending().edits).toEqual([edit(0, 1, "X"), edit(501, 1, "Z"), edit(901, 0, "Y")]);
+        handle.ack("t1");
+        expect(handle.takePending().edits).toEqual([]);
+      });
+    } else {
+      for (const caseName of LAZY_CASES) it.skip(`${caseName} (skipped: features.lazyDoc=false)`, () => undefined);
     }
   });
 }

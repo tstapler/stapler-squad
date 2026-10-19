@@ -6,7 +6,8 @@ import { degradeProfile } from "@/lib/files/degradeProfile";
 import { useFontPx } from "@/lib/files/fontSize";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import type {
-  BufferInit, BufferState, EditorMode, EngineFeatures, EngineHandle, HitRange, ModeConfig, ScrollSnapshot,
+  BufferInit, BufferState, EditorMode, EngineFeatures, EngineHandle, HitRange, LineRange, ModeConfig, PendingEdits, ScrollSnapshot,
+  VirtualDoc,
 } from "./files/engine/EditorEngine";
 import { codeEditor, codeEditorRoot, degradeNotice } from "./CodeEditor.css";
 
@@ -27,6 +28,12 @@ export interface CodeEditorHandle {
   scrollSnapshot(): ScrollSnapshot;
   restoreScroll(snapshot: ScrollSnapshot): void;
   focus(): void;
+  /** Lazy document (features.lazyDoc): host-driven loading of a partly loaded file, edits in absolute coordinates. */
+  setSource(src: VirtualDoc): void;
+  onNeedRange(cb: (range: LineRange) => void): void;
+  provideRange(range: LineRange, text: string): void;
+  evictRange(range: LineRange): void;
+  takePending(): PendingEdits;
 }
 
 export interface CodeEditorProps {
@@ -85,6 +92,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       scrollSnapshot: () => e().scrollSnapshot(),
       restoreScroll: (s) => e().restoreScroll(s),
       focus: () => e().focus(),
+      setSource: (src) => e().setSource(src),
+      onNeedRange: (cb) => e().onNeedRange(cb),
+      provideRange: (r, t) => e().provideRange(r, t),
+      evictRange: (r) => e().evictRange(r),
+      takePending: () => e().takePending(),
     };
   }, []);
   useImperativeHandle(ref, () => delegate, [delegate]);

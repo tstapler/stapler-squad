@@ -1,5 +1,5 @@
 // @feature files:tabs
-// Task 0.1.4c (ADR-036 S-T3): measures the two lazy-document models on the 1,000,000-line virtual file served by
+// Task 0.1.4c (ADR-036 S-T3) and Task 1.6.4c: measures the two lazy-document models plus the production engine ("engine") on the 1,000,000-line virtual file served by
 // web-app/src/app/spike-lazydoc (throwaway page). Pass/fail per criterion is printed as "SPIKE 0.1.4c ..." lines.
 import { test, expect, type Page } from "@playwright/test";
 import { suppressOnboarding } from "./pages/files-tab.page";
@@ -33,7 +33,7 @@ async function call<T>(page: Page, fn: keyof Api, ...args: unknown[]): Promise<T
   ) as Promise<T>;
 }
 
-for (const model of ["a2", "a1"] as const) {
+for (const model of ["a2", "a1", "engine"] as const) {
   test.describe(`lazy document model ${model}`, () => {
     test.beforeEach(async ({ page }) => {
       await suppressOnboarding(page);

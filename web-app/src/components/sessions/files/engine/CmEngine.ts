@@ -15,6 +15,10 @@ import { loadCodemirrorLang } from "./languages";
 import { legacyVimKeymap } from "./legacyKeymap";
 import { cmTheme } from "./cmTheme";
 import { changesToEdits } from "./pendingEdits";
+import type { LazyBufferInfo, LazyController, LazyMode } from "./cm6LazyDoc/controller";
+import { GapLineController } from "./cm6LazyDoc/gapLineController";
+import { lazyBufferParts } from "./cm6LazyDoc/lazyBuffer";
+import { WindowSwapController } from "./cm6LazyDoc/windowSwap";
 
 const GUTTER_MARKER_CLASS: Record<GutterMarkType, string> = {
   add: gutterMarkerAdd,
@@ -48,6 +52,8 @@ class CmBuffer implements BufferState {
   base: Text;
   pending: ChangeSet | null = null;
   inflight: ChangeSet | null = null;
+  /** Set for a buffer whose document is only partly loaded (cm6LazyDoc). */
+  lazy: LazyBufferInfo | null = null;
   constructor(public state: EditorState) {
     this.base = state.doc;
   }
@@ -60,7 +66,7 @@ interface Compartments {
   font: Compartment;
 }
 
-const FEATURES: EngineFeatures = { vim: false, mergeView: false, lazyDoc: false, irc: true };
+const FEATURES: EngineFeatures = { vim: false, mergeView: false, lazyDoc: true, irc: true };
 
 function modeExtensions(c: ModeConfig): { readOnly: Extension; wrap: Extension; label: Extension; font: Extension } {
   const readOnly = (c.mode ?? "Read") === "Read";
@@ -84,6 +90,13 @@ export class CmEngine implements EditorEngine {
   readonly features = FEATURES;
   private readonly comps: Compartments = { readOnly: new Compartment(), wrap: new Compartment(), label: new Compartment(), font: new Compartment() };
 
+  /** `lazyMode` picks the lazy-document model; gap-line (a2) is the default, window-swap (a1) the unselected fallback. */
+  constructor(readonly lazyMode: LazyMode = "gap-line") {}
+
+  makeController(view: EditorView): LazyController {
+    return this.lazyMode === "window-swap" ? new WindowSwapController(view) : new GapLineController(view);
+  }
+
   async createBuffer(init: BufferInit): Promise<BufferState> {
     const degrade = init.config?.degrade;
     let lang: Extension | null = null;
@@ -101,7 +114,8 @@ export class CmEngine implements EditorEngine {
         return markType ? new ChangeGutterMarker(markType) : null;
       },
     });
-    const mode = modeExtensions(init.config ?? {});
+    // Wrapped lines break the fixed line height a lazy document's placeholders are sized with.
+    const mode = modeExtensions(init.lazy ? { ...init.config, wrap: false } : (init.config ?? {}));
     // view.setState drops every extension, so each buffer state carries the full set itself.
     const extensions: Extension[] = [
       setupFor(degrade),
@@ -118,7 +132,11 @@ export class CmEngine implements EditorEngine {
       mergeExtension(),
     ];
     if (lang) extensions.push(lang);
-    return new CmBuffer(EditorState.create({ doc: init.doc, extensions }));
+    if (!init.lazy) return new CmBuffer(EditorState.create({ doc: init.doc, extensions }));
+    const parts = lazyBufferParts(this.lazyMode, init.lazy.lineCount, extensions);
+    const buffer = new CmBuffer(EditorState.create({ doc: parts.doc, extensions: parts.extensions }));
+    buffer.lazy = parts.info;
+    return buffer;
   }
 
   mount(el: HTMLElement, options: EngineOptions): EngineHandle {
@@ -141,6 +159,8 @@ class CmHandle implements EngineHandle {
   private config: ModeConfig;
   private editsCb: ((batch: EditBatch) => void) | null = null;
   private queued: Array<() => void> = [];
+  private lazy: LazyController | null = null;
+  private needCb: ((range: LineRange) => void) | null = null;
   private readonly onCompositionEnd = () => setTimeout(() => this.flushQueued(), 0);
 
   constructor(private engine: CmEngine, private readonly el: HTMLElement, options: EngineOptions) {
@@ -151,11 +171,27 @@ class CmHandle implements EngineHandle {
       parent: el,
       dispatchTransactions: (trs, view) => {
         view.update(trs);
-        for (const tr of trs) if (tr.docChanged) this.recordChange(tr.changes);
+        for (const tr of trs) if (tr.docChanged && !this.lazy?.absorb(tr)) this.recordChange(tr.changes);
       },
     });
+    this.bindLazy();
     // compositionend bubbles from contentDOM; listening on the host runs after CM has cleared its own state.
     el.addEventListener("compositionend", this.onCompositionEnd);
+  }
+
+  /** Points the lazy controller (created on first use) at the current buffer, or at nothing for a fully loaded one. */
+  private bindLazy() {
+    const info = this.buffer.lazy;
+    if (info && !this.lazy) {
+      this.lazy = this.engine.makeController(this.view);
+      if (this.needCb) this.lazy.onNeedRange(this.needCb);
+    }
+    this.lazy?.attach(info ? this.buffer : null, info);
+  }
+
+  private lazyOrThrow(): LazyController {
+    if (!this.buffer.lazy || !this.lazy) throw new Error("CmEngine: lazyDoc source required (setSource with a lineCount)");
+    return this.lazy;
   }
 
   private recordChange(changes: ChangeSet) {
@@ -167,7 +203,8 @@ class CmHandle implements EngineHandle {
   private pendingEdits(): PendingEdits["edits"] {
     const b = this.buffer;
     const all = b.inflight && b.pending ? b.inflight.compose(b.pending) : (b.inflight ?? b.pending);
-    return all ? changesToEdits(all, b.base) : [];
+    if (!all) return [];
+    return this.buffer.lazy && this.lazy ? this.lazy.edits() : changesToEdits(all, b.base);
   }
 
   /** CM6 state must not change under an active IME composition (ADR-032): defer until it ends. */
@@ -195,25 +232,33 @@ class CmHandle implements EngineHandle {
       this.buffer.state = this.view.state;
       this.buffer = next as CmBuffer;
       this.view.setState(this.buffer.state);
-      this.view.dispatch({ effects: this.engine.reconfigureEffects(this.config) });
+      this.bindLazy();
+      this.view.dispatch({ effects: this.engine.reconfigureEffects(this.effectiveConfig()) });
     });
   }
 
   setSource(src: VirtualDoc) {
-    if (src.text === undefined) throw new Error("CmEngine: lazyDoc is not supported; setSource needs the full text");
-    void this.createBuffer({ doc: src.text }).then((b) => this.setBuffer(b));
+    if (src.text === undefined && src.lineCount === undefined) throw new Error("CmEngine: setSource needs the full text or a lineCount");
+    const lazy = src.text === undefined ? { lineCount: src.lineCount ?? 0 } : undefined;
+    void this.createBuffer({ doc: src.text ?? "", lazy }).then((b) => {
+      this.setBuffer(b);
+      this.whenIdle(() => this.lazy?.setFetcher(src.fetch ? (r) => src.fetch!(r) : null));
+    });
   }
 
-  onNeedRange(_cb: (range: LineRange) => void) {
-    // Never fires while lazyDoc=false: the whole file is always loaded.
+  onNeedRange(cb: (range: LineRange) => void) {
+    this.needCb = cb;
+    this.lazy?.onNeedRange(cb);
   }
 
-  provideRange(): void {
-    throw new Error("CmEngine: lazyDoc is not supported");
+  provideRange(range: LineRange, text: string): void {
+    const lazy = this.lazyOrThrow();
+    this.whenIdle(() => lazy.provideRange(range, text));
   }
 
-  evictRange(): void {
-    throw new Error("CmEngine: lazyDoc is not supported");
+  evictRange(range: LineRange): void {
+    const lazy = this.lazyOrThrow();
+    this.whenIdle(() => lazy.evictRange(range));
   }
 
   onEdits(cb: (batch: EditBatch) => void) {
@@ -226,7 +271,7 @@ class CmHandle implements EngineHandle {
       b.inflight = b.inflight ? b.inflight.compose(b.pending) : b.pending;
       b.pending = null;
     }
-    return { edits: b.inflight ? changesToEdits(b.inflight, b.base) : [] };
+    return { edits: this.pendingEdits() };
   }
 
   ack(_newToken: string) {
@@ -242,7 +287,7 @@ class CmHandle implements EngineHandle {
   getCursor() {
     const head = this.view.state.selection.main.head;
     const line = this.view.state.doc.lineAt(head);
-    return { line: line.number, col: head - line.from };
+    return { line: this.buffer.lazy && this.lazy ? this.lazy.cursorLine() : line.number, col: head - line.from };
   }
 
   insertText(text: string) {
@@ -252,6 +297,7 @@ class CmHandle implements EngineHandle {
   }
 
   reveal(line: number, col = 0) {
+    if (this.buffer.lazy && this.lazy) return this.lazy.reveal(line, col);
     const doc = this.view.state.doc;
     const target = doc.line(Math.min(Math.max(1, Math.floor(line)), doc.lines));
     const pos = Math.min(target.from + Math.max(0, col), target.to);
@@ -263,6 +309,7 @@ class CmHandle implements EngineHandle {
   }
 
   getViewport(): LineRange {
+    if (this.buffer.lazy && this.lazy) return this.lazy.viewport();
     const { from, to } = this.view.viewport;
     const doc = this.view.state.doc;
     return { startLine: doc.lineAt(from).number, endLine: doc.lineAt(to).number };
@@ -282,7 +329,11 @@ class CmHandle implements EngineHandle {
 
   setMode(config: ModeConfig) {
     this.config = { ...this.config, ...config };
-    this.whenIdle(() => this.view.dispatch({ effects: this.engine.reconfigureEffects(this.config) }));
+    this.whenIdle(() => this.view.dispatch({ effects: this.engine.reconfigureEffects(this.effectiveConfig()) }));
+  }
+
+  private effectiveConfig(): ModeConfig {
+    return this.buffer.lazy ? { ...this.config, wrap: false } : this.config;
   }
 
   focus() {
@@ -291,6 +342,7 @@ class CmHandle implements EngineHandle {
 
   destroy() {
     this.el.removeEventListener("compositionend", this.onCompositionEnd);
+    this.lazy?.destroy();
     this.view.destroy();
   }
 }
