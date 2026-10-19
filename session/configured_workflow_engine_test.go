@@ -1113,3 +1113,57 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 		assert.Empty(t, statuses[0].ConfigError)
 	})
 }
+
+// deadlineGateRepo returns context.DeadlineExceeded the way a database read
+// that outlived its deadline would, and records the deadline it was given.
+type deadlineGateRepo struct {
+	GateSatisfactionRepository
+	sawDeadline time.Duration
+}
+
+func (r *deadlineGateRepo) GetByItemAndGate(ctx context.Context, _, _ uuid.UUID) (*GateSatisfactionData, error) {
+	if d, ok := ctx.Deadline(); ok {
+		r.sawDeadline = time.Until(d)
+	}
+	return nil, context.DeadlineExceeded
+}
+
+func TestConfiguredWorkflowEngine_StatefulGateFailsClosed_WhenRepoTimesOut(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
+	gateRepo := &deadlineGateRepo{}
+	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+	require.NoError(t, err)
+	from, to := newCustomTransitionWithGates(t, repo.client, engine, []GateKind{GateKindHumanApproval}, []bool{true})
+	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
+
+	statuses, err := engine.PendingGates(item, to, nil)
+
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	require.False(t, statuses[0].Satisfied, "a timed-out read leaves the gate unsatisfied")
+	require.EqualValues(t, 1, engine.GateLookupTimeouts())
+	require.Positive(t, gateRepo.sawDeadline, "read ran under a deadline")
+	require.LessOrEqual(t, gateRepo.sawDeadline, defaultGateLookupTimeout)
+}
+
+func TestConfiguredWorkflowEngine_PendingGatesStructuralOnly_SkipsStatefulKindsWithoutIo(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
+	gateRepo := &deadlineGateRepo{}
+	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+	require.NoError(t, err)
+	from, to := newCustomTransitionWithGates(t, repo.client, engine,
+		[]GateKind{GateKindStructural, GateKindHumanApproval}, []bool{false, true})
+	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: oneAcCriterion()}
+
+	statuses, skipped := engine.PendingGatesStructuralOnly(item, to, nil)
+
+	require.True(t, skipped)
+	require.Len(t, statuses, 1)
+	require.Equal(t, GateKindStructural, statuses[0].Kind)
+	require.Zero(t, gateRepo.sawDeadline, "repository never touched")
+	require.Zero(t, engine.GateLookupTimeouts())
+}
