@@ -236,12 +236,17 @@ function TabMenu({ path, x, buffers, onDismiss, actions }: TabMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const buffer = buffers.find((b) => b.path === path);
   const index = buffers.findIndex((b) => b.path === path);
+  // onDismiss is an inline closure; reading it through a ref keeps the effects from re-running (and re-focusing) per render.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-    const onDown = (e: globalThis.MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onDismiss(); };
+  }, [path]);
+  useEffect(() => {
+    const onDown = (e: globalThis.MouseEvent) => { if (!ref.current?.contains(e.target as Node)) dismissRef.current(); };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
-  }, [onDismiss]);
+  }, []);
   if (!buffer) return null;
   const items: [string, () => void, boolean?][] = [
     ["Close", actions.close],
