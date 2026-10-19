@@ -17,10 +17,12 @@ import (
 
 // Notification metadata keys of a question notification.
 const (
-	metaQuestionID       = "question_id"
-	metaQuestionShape    = "question_shape"
-	metaQuestionOptions  = "question_options"
-	metaReplyUnavailable = "reply_unavailable"
+	metaQuestionID = "question_id"
+	// metaGuidanceRequestID is the durable GuidanceRequest row mirrored for the question.
+	metaGuidanceRequestID = "guidance_request_id"
+	metaQuestionShape     = "question_shape"
+	metaQuestionOptions   = "question_options"
+	metaReplyUnavailable  = "reply_unavailable"
 	// metaQuestionPending is how many questions of the session were asked together
 	// with this one (PendingQuestionStore.PendingCount): above 1 the card cannot
 	// know which one is on screen. Unlike the notification's occurrence count it
@@ -36,6 +38,8 @@ type questionWiring struct {
 	proofs *HookProofs
 	// unreplyable counts a question registered not replyable, by cause.
 	unreplyable func(cause string)
+	// mirror writes the durable GuidanceRequest row; nil disables mirroring.
+	mirror *GuidanceHookMirror
 	// sessionLive reports whether uuid is a known session; nil consults storage.
 	sessionLive func(uuid string) bool
 }
@@ -45,6 +49,9 @@ type questionWiring struct {
 func (h *ApprovalHandler) SetQuestionRegistry(store *PendingQuestionStore, unreplyable func(cause string)) {
 	h.questions.store, h.questions.unreplyable = store, unreplyable
 }
+
+// SetGuidanceMirror wires the durable hook-question mirror.
+func (h *ApprovalHandler) SetGuidanceMirror(m *GuidanceHookMirror) { h.questions.mirror = m }
 
 // SetHookProofs overrides the proofs used to verify the sender header.
 func (h *ApprovalHandler) SetHookProofs(p *HookProofs) { h.questions.proofs = p }
@@ -103,7 +110,7 @@ func (h *ApprovalHandler) attributeQuestion(r *http.Request, headerResolvedID st
 
 // registerQuestion parses the payload, registers a replyable entry when the
 // proof verified and the shape is single, and returns the notification metadata.
-func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribution, asked AskedQuestion) map[string]string {
+func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribution, asked AskedQuestion, hookCallID string) map[string]string {
 	meta := map[string]string{metaQuestionShape: string(asked.Shape)}
 	cause := qa.cause
 	if asked.Shape != QuestionShapeSingle {
@@ -111,6 +118,10 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 	}
 	if cause == "" && h.questions.store == nil {
 		cause = replyCauseNoProof
+	}
+	mirrorID := h.mirrorQuestion(sessionID, hookCallID, asked, cause == "")
+	if mirrorID != "" {
+		meta[metaGuidanceRequestID] = mirrorID
 	}
 	if cause != "" {
 		meta[metaReplyUnavailable] = cause
@@ -129,6 +140,9 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 		return meta
 	}
 	id := NewQuestionID()
+	if mirrorID != "" {
+		id = mirrorID // the durable row id survives a restart, so a rendered card keeps addressing it
+	}
 	pending := h.questions.store.Register(PendingQuestion{
 		QuestionID:  id,
 		SessionUUID: sessionID,
@@ -139,6 +153,46 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 	meta[metaQuestionPending] = strconv.Itoa(pending)
 	meta[metaQuestionOptions] = string(labels)
 	return meta
+}
+
+// mirrorQuestion writes the durable row and returns its id, or "" when mirroring
+// is off, the session has no UUID or the write failed (fail open).
+func (h *ApprovalHandler) mirrorQuestion(sessionID, hookCallID string, asked AskedQuestion, replyable bool) string {
+	if h.questions.mirror == nil {
+		return ""
+	}
+	sessionUUID := h.sessionUUIDFor(sessionID)
+	if sessionUUID == "" {
+		return ""
+	}
+	id, _ := h.questions.mirror.Mirror(HookMirrorRequest{
+		SessionUUID: sessionUUID, HookCallID: hookCallID, Asked: asked, Replyable: replyable,
+	})
+	return id
+}
+
+// sessionUUIDFor resolves a hook's session identifier (a UUID or, for an
+// unverified sender, a title) to the instance UUID; rows are keyed by UUID only.
+func (h *ApprovalHandler) sessionUUIDFor(id string) string {
+	if id == "" || id == "unknown" {
+		return ""
+	}
+	if h.knownSession(id) {
+		return id
+	}
+	if h.storage == nil {
+		return ""
+	}
+	instances, err := h.storage.ListInstanceData()
+	if err != nil {
+		return ""
+	}
+	for _, d := range instances {
+		if d.UUID != "" && d.Title == id {
+			return d.UUID
+		}
+	}
+	return ""
 }
 
 // newQuestionNotificationID is the notification id of a question toast.

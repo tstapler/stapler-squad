@@ -245,6 +245,15 @@ func (s *PendingQuestionStore) PeekQuestions(keys []QuestionKey) map[QuestionKey
 	return out
 }
 
+// Forget drops a registered (not claimed) entry whose durable row was cleared.
+func (s *PendingQuestionStore) Forget(k QuestionKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e := s.entries[k.QuestionID]; e != nil && e.q.SessionUUID == k.SessionUUID && e.state == pendingRegistered {
+		s.removeLocked(k.QuestionID)
+	}
+}
+
 // PendingCount is how many AskUserQuestion dialogs the session may be waiting on
 // at once: its registered, unclaimed questions plus unregistered ones, counted
 // only inside pendingParallelWindow. Parallel questions arrive together; an older

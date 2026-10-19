@@ -873,7 +873,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetAutoApprovedGate(gate)
 	}
 	// Reply: hook sender proofs (best-effort provenance) and the pending-question registry.
-	wireHookProofsAndQuestions(approvalHandler, deps, srv.goBackground)
+	wireHookProofsAndQuestions(approvalHandler, deps, srv.goBackground, serverCtx)
 	wireMCPProofs(serverCtx, deps, srv.goBackground) // per-session MCP credential (ADR-007 rule 0)
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/

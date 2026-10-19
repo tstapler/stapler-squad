@@ -443,8 +443,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		if qa.uuid != "" {
 			sessionID = qa.uuid // a verified proof's UUID is the attribution; the title header is ignored
 		}
-		h.broadcastQuestionNotification(sessionID, payload, qa)
+		// The defer reply goes out before the mirror write so a slow repository
+		// can never hold the native dialog back (pre-mortem #7).
 		h.writeDeferDecision(w)
+		_ = http.NewResponseController(w).Flush()
+		h.broadcastQuestionNotification(sessionID, payload, qa)
 		return
 	}
 
@@ -796,7 +799,8 @@ func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payloa
 			message = truncateString(prompt, maxNotificationMessageLen)
 		}
 	}
-	meta := h.registerQuestion(sessionID, qa, asked)
+	message, _ = RedactSecrets(message)
+	meta := h.registerQuestion(sessionID, qa, asked, payload.ToolUseID)
 	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
 
 	event := events.NewNotificationEvent(

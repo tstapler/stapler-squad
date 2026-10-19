@@ -66,6 +66,10 @@ func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, t
 // time: NotificationHistoryStore.List/GetByID reads the persisted record back
 // later regardless of whether anything was listening when it was published.
 func (s *GuidanceRequestService) notifyAnswered(data *session.GuidanceRequestData) {
+	// The operator already acted on the pane card; a second toast would duplicate it (ADR-003 rule 3a).
+	if data.Source == domain.QuestionSourceHook {
+		return
+	}
 	title := "Your guidance request was answered"
 	message := truncateForNotification(data.QuestionText) + " → " + truncateForNotification(data.Answer)
 	const notifyTypeInputRequired = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED)
