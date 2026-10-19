@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef } from "react";
+import { useBackgroundTelemetry } from "@/lib/hooks/useBackgroundTelemetry";
 import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
 import { useBackgroundSessions, type BackgroundSessionsState } from "@/lib/hooks/useBackgroundSessions";
 import {
@@ -35,6 +36,7 @@ export interface BackgroundActivityState {
 export function useBackgroundActivity(
   enabled: boolean,
   history: readonly NotificationHistoryItem[],
+  onEvidenceAlert?: () => void,
 ): BackgroundActivityState {
   const feedEnabled = useFeatureFlagValue(BACKGROUND_FEED_FLAG, undefined, true);
   const poll = useBackgroundSessions(enabled);
@@ -62,6 +64,7 @@ export function useBackgroundActivity(
   }, [history, sessions, departed, lastUpdatedAt, feedEnabled]);
 
   const rollup = useMemo(() => buildRollup(rows), [rows]);
+  useBackgroundTelemetry(rows, lastUpdatedAt, enabled && feedEnabled, onEvidenceAlert);
 
   return {
     rows,

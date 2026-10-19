@@ -14,6 +14,7 @@ import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnecti
 import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useBackgroundActivity } from "@/lib/hooks/useBackgroundActivity";
+import { usePaneOpenTiming } from "@/lib/hooks/usePaneOpenTiming";
 import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
 import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
@@ -112,6 +113,7 @@ export function NotificationPanel() {
     refreshHistory,
     clearHistoryByIds,
     showActionToast,
+    addNotification,
     quietMode,
     setQuietMode,
   } = useNotifications();
@@ -305,7 +307,16 @@ export function NotificationPanel() {
   // Background activity (Story 5.4): polled only while its segment is showing; the segment
   // badge is the same join over history, so it adds nothing to the bell count.
   const backgroundVisible = isPanelOpen && traySegment === "background";
-  const background = useBackgroundActivity(backgroundVisible && !isOffline, notificationHistory);
+  const background = useBackgroundActivity(backgroundVisible && !isOffline, notificationHistory, () =>
+    addNotification({
+      sessionId: "",
+      sessionName: "",
+      title: "Background outcome evidence is empty",
+      message: "No background session has reported a finished outcome in 24 hours. Stopped sessions are shown as outcome unknown.",
+      notificationType: "warning",
+    }),
+  );
+  usePaneOpenTiming(isPanelOpen, notificationHistory.length > 0);
   const announcedBackgroundLoad = useRef(false);
   useEffect(() => {
     if (backgroundVisible && background.poll.loading && !announcedBackgroundLoad.current) {
