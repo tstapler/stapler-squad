@@ -8,6 +8,7 @@ import {
   type NotificationActionDescriptor,
 } from "@/gen/session/v1/notification_action_pb";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useCardEngagement, useEngagement } from "@/lib/hooks/useEngagedCard";
 import { useInvokeNotificationAction, type ActionSpec } from "@/lib/hooks/useInvokeNotificationAction";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { clearDraft, readDraft, writeDraft } from "@/lib/utils/sessionDrafts";
@@ -113,6 +114,10 @@ export function ActionRow(props: ActionRowProps) {
   const offlineReason = props.disabledReason ?? contextReason;
   const { state, invoke, retry, reset } = useInvokeNotificationAction();
   const uid = useId();
+  const engagement = useCardEngagement();
+  const tracker = useEngagement();
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const focusWasInside = useRef(false);
 
   const [step, setStep] = useState<Step>("row");
   const [pick, setPick] = useState<Pick | null>(null);
@@ -137,11 +142,31 @@ export function ActionRow(props: ActionRowProps) {
   const dispatch = useCallback(
     (spec: ActionSpec, ctx: OutcomeContext) => {
       lastCtx.current = ctx;
+      focusWasInside.current = !!rootRef.current?.contains(document.activeElement);
       setStep("row");
       return invoke(spec);
     },
     [invoke],
   );
+
+  // Sub-steps and drafts keep the card engaged; a final state releases it (design/ux.md 7.1).
+  const draftOpen = reason.trim() !== "";
+  useEffect(() => {
+    engagement.setSubStep(step !== "row" || draftOpen);
+    return () => engagement.setSubStep(false);
+  }, [engagement, step, draftOpen]);
+  const finalState = !!view?.settled;
+  useEffect(() => {
+    engagement.setResolved(finalState);
+    return () => engagement.setResolved(false);
+  }, [engagement, finalState]);
+  // The pressed button leaves with the row's controls; keep focus in the card on the result line.
+  useEffect(() => {
+    if (finalState && focusWasInside.current) {
+      focusWasInside.current = false;
+      tracker?.focusProgrammatically(statusRef.current);
+    }
+  }, [finalState, tracker]);
 
   // One short result per settled outcome, through the panel's single polite region.
   useEffect(() => {
@@ -225,7 +250,7 @@ export function ActionRow(props: ActionRowProps) {
     <ActionButton id="open" label={COPY.openSession} variant={secondaryVariant} minHeight={minHeight} onClick={() => onOpen?.()} />
   );
   const statusLine = (text: string) => (
-    <p className={status} data-testid="action-status">
+    <p ref={statusRef} tabIndex={-1} className={status} data-testid="action-status">
       {text}
     </p>
   );

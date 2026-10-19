@@ -12,6 +12,8 @@ import { useApprovalResolution } from "@/lib/hooks/useApprovalResolution";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
 import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
+import { EngagementContext, useEngagementTracker } from "@/lib/hooks/useEngagedCard";
+import { useFrozenList } from "@/lib/hooks/useFrozenList";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useBackgroundActivity } from "@/lib/hooks/useBackgroundActivity";
 import { usePaneOpenTiming } from "@/lib/hooks/usePaneOpenTiming";
@@ -26,6 +28,7 @@ import {
 } from "@/lib/utils/notificationMapping";
 import type { ActivityRow } from "@/lib/utils/backgroundActivity";
 import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
+import type { NotificationHistoryItem } from "@/lib/types/notification";
 import { AutoHandledSection } from "./NotificationItem";
 import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";
 import { rulePrefillFor } from "./notification-actions/inlineActions";
@@ -138,6 +141,7 @@ export function NotificationPanel() {
   const isSheet = isBottomSheet;
   const isSideOverlay = variant === "side-overlay";
 
+  const operatorResolved = useRef<Set<string>>(new Set());
   const trayRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -275,7 +279,39 @@ export function NotificationPanel() {
     [notificationHistory, bulk.hiddenIds],
   );
 
-  const stable = useStableRowOrder(visibleHistory, isPanelOpen, scrolled);
+  // A card the operator is working on holds the Needs-you tier still (design/ux.md 7.1).
+  const { tracker, frozen } = useEngagementTracker();
+  const frozenList = useFrozenList(visibleHistory, frozen, {
+    isHeld: isNeedsYou,
+    onMerge: (n) => announce(n === 1 ? "1 new item" : `${n} new items`, "polite", "tray-new-items"),
+  });
+  useEffect(() => {
+    if (!isPanelOpen) tracker.reset();
+  }, [isPanelOpen, tracker]);
+  // A held row whose live record is no longer pending was resolved elsewhere: it stops being
+  // engaged by focus or a draft, and stays in place until the list unfreezes.
+  useEffect(() => {
+    const live = new Map(visibleHistory.map((n) => [n.id, n]));
+    for (const n of frozenList.items) if (isNeedsYou(n) && !isNeedsYou(live.get(n.id))) tracker.setResolved(n.id, true);
+  }, [visibleHistory, frozenList.items, tracker]);
+
+  const stable = useStableRowOrder(frozenList.items, isPanelOpen, scrolled);
+  const newCount = frozenList.queued + stable.heldCount;
+  const mergeNew = () => {
+    mergeFocusId.current = frozenList.queuedIds[0] ?? null;
+    frozenList.merge();
+    stable.release();
+  };
+  // "N new" moves focus to the first merged row's header: the operator's own action.
+  const mergeFocusId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = mergeFocusId.current;
+    if (!id) return;
+    const el = trayRef.current?.querySelector<HTMLElement>(`[data-tray-row="${CSS.escape(id)}"]`);
+    if (!el) return;
+    mergeFocusId.current = null;
+    el.focus({ preventScroll: true });
+  });
 
   const filteredNotifications = useMemo(() => {
     let rows = stable.items.filter((n) => n.notificationType !== "auto_approved");
@@ -506,9 +542,9 @@ export function NotificationPanel() {
     }
     return (
       <>
-        {stable.heldCount > 0 && (
-          <button type="button" className={newPill} data-testid="tray-new-pill" onClick={stable.release}>
-            {stable.heldCount} new
+        {newCount > 0 && (
+          <button type="button" className={newPill} data-testid="tray-new-pill" onClick={mergeNew}>
+            {newCount} new
           </button>
         )}
         <TrayList
@@ -524,7 +560,10 @@ export function NotificationPanel() {
             onNavigate: closeForNavigation,
             lookupHidden: isPanelOpen,
             onRefreshActions: () => void refreshHistory(),
-            onActionApplied: acknowledgeNotification,
+            onActionApplied: (ids) => {
+              ids.forEach((id) => operatorResolved.current.add(id));
+              acknowledgeNotification(ids);
+            },
             onCreateRule: (n) => {
               closeForNavigation();
               window.location.assign(buildPrefillHref(rulePrefillFor(n)));
@@ -540,6 +579,10 @@ export function NotificationPanel() {
           onDismissGroup={dismissGroup}
           onDismissSession={dismissSession}
           groupForId={(id) => groupsById.get(id)}
+          onFocusAdvanced={(key) => {
+            // A late acknowledgement is silent unless focus was inside the leaving row (D6).
+            if (!operatorResolved.current.has(key)) announce("Answer confirmed, moved to Recent activity", "polite", "tray-row-left");
+          }}
         />
       </>
     );
@@ -594,6 +637,7 @@ export function NotificationPanel() {
   }[variant];
 
   return (
+    <EngagementContext.Provider value={tracker}>
     <ActionsDisabledReasonContext.Provider value={actionsReason}>
       {modalSheet && <div className={sheetScrim} data-testid="tray-scrim" onClick={close} aria-hidden="true" />}
       <TrayHandle />
@@ -879,5 +923,8 @@ export function NotificationPanel() {
         </div>
       </div>
     </ActionsDisabledReasonContext.Provider>
+    </EngagementContext.Provider>
   );
 }
+
+const isNeedsYou = (n: NotificationHistoryItem | undefined) => n?.isPendingDecision === true;
