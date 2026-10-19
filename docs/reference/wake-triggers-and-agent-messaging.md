@@ -110,3 +110,55 @@ the event bus (Spike S4). They cover open PRs of the connected accounts; any
 other PR is `unavailable`. Supported `(type, kind)` pairs are the table in
 `server/wakes/kinds.go`; a kind without a persisted-state predicate is
 `no_reconcile_predicate`.
+
+## Operator surface
+
+`WakeTriggerService` (`proto/session/v1/wake_trigger.proto`,
+`server/services/wake_trigger_service.go`) is what the Background tab's
+"Scheduled prompts" section and peer-help rows read and write. Agents never
+call it.
+
+| RPC | Does |
+|---|---|
+| `ListWakeTriggers` | Pending, claimed, `needs_revive` and (for 7 days) `missed` triggers of every owner, plus `enabled`, the kill-switch state. Reads storage, so it works while the flag is off. |
+| `CancelWakeTrigger` | Cancels any owner's trigger. Outcome `ALREADY_FIRED` carries `delivered_at` when the trigger fired first. Goes through the dispatcher when it runs, straight to storage when it does not (Cancel works while paused). |
+| `CreateOperatorReminder` | Schedules a `notify_operator` trigger about a session ("Remind me"). Outcomes: `CREATED`, `DUPLICATE` (same session and time), `PAST_TIME`, `CAP_EXCEEDED`, `UNAVAILABLE` (no dispatcher). |
+| `ListPeerHelpRequests` | Open and 24-hour-old peer requests with a derived state: `waiting`, `answered`, `not_sent` (the answerer is deleted, archived or in another repository) or `cancelled`. |
+
+`CANCEL_WAKE` and `CANCEL_PEER_HELP` (`InvokeNotificationAction`) share the
+same code. Cancelling a peer request sets the row `cancelled` and fires the
+asker's `guidance_answered` wake, whose text says the request was cancelled.
+
+### Peer-help escalation
+
+`wakes.Escalator` (`server/wakes/escalator.go`) holds one deadline per open
+peer request at `created_at + 10 min` on the dispatcher's `Clock`, and escalates
+at once when the answerer is stopped, archived, deleted or in another
+repository. Escalation raises one `INPUT_REQUIRED` notification bound to the
+asker, id `peer-help-stalled:<request id>`, with metadata `guidance_request_id`
+and `peer_title`. The guidance row's `notified_at` is the durable marker, so a
+restart or a second pass never raises a second one. The descriptor builder adds
+`CANCEL_PEER_HELP` (with confirm) beside `ANSWER_GUIDANCE`, labelled
+"Answer for {peer}".
+
+An operator answer to a peer request flips the row's `answerer_kind` to `human`
+(`answerer_session_uuid` keeps naming the peer); the asker's wake then reads
+"answered by the operator on behalf of session X (from=operator on-behalf-of=X)".
+
+### Prompts
+
+With the `schedule_wake` tool row on (`tool:schedule_wake` and a running
+dispatcher), the task protocol, the default review command and custom pipeline
+mode review and initial prompts add one paragraph pointing at `schedule_wake`.
+The existing ban on the client-side wake tool and `/loop` stays in the text.
+With the row off the prompts are byte-identical to before
+(`session/testdata/wake_prompt/`). `TestPollingToolReferencesInGo_*`
+(`session/wake_polling_guard_test.go`) pins the lines per Go file that mention
+the banned tool.
+
+### Known limit
+
+The dispatcher is built at server start from the flag value then
+(`startWakes`); a runtime flip does not start or stop it. `ListWakeTriggers`
+reports the flag, so the section can show "paused" or "resumed" before the
+dispatcher agrees; reminders answer `UNAVAILABLE` until the next restart.
