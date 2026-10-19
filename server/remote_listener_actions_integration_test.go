@@ -118,7 +118,7 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 
 	f := &actionFakes{}
 	svc.SetNotificationActionDispatcher(services.NewNotificationActionDispatcher(services.ActionDelegates{
-		Approvals: f, Questions: svc.WireHiddenReplyAdapter(), Guidance: f, Backlog: f, Cancels: f,
+		Approvals: f, Questions: svc.WireAnswerRouter(services.AnswerRouterDeps{}), Guidance: f, Backlog: f, Cancels: f,
 	}, nil))
 
 	srv, _ := newChainTestServer(t, "localhost:8543")

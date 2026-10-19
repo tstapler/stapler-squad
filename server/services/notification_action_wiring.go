@@ -10,6 +10,8 @@ type NotificationActionWiring struct {
 	Storage  *session.Storage
 	Guidance *GuidanceRequestService
 	Backlog  *BacklogService
+	// Mirror re-registers an expired hook question from its durable row (optional).
+	Mirror *GuidanceHookMirror
 }
 
 // WireNotificationActions installs the descriptor builder on notification
@@ -20,9 +22,10 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 		Approvals: NewApprovalLookup(s.approvalStore),
 		Questions: s.replyState().store,
 	}
+	acks := s.wireGuidanceAcks(w.Storage)
 	delegates := ActionDelegates{
 		Approvals: NewApprovalResolver(s.approvalSvc, s.approvalStore),
-		Questions: s.WireHiddenReplyAdapter(),
+		Questions: s.WireAnswerRouter(answerRouterDeps(w, acks)),
 		Resolver:  NewNotificationResolver(s.GetNotificationStore()),
 	}
 	if w.Storage != nil {

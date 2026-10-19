@@ -28,3 +28,8 @@ func (s *Storage) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSess
 func (s *Storage) PurgeTerminalGuidanceQuestions(ctx context.Context, cutoff time.Time) (int, error) {
 	return s.repo.PurgeTerminalGuidanceQuestions(ctx, cutoff)
 }
+
+// ListGuidanceByDelivery forwards to EntRepository.ListGuidanceByDelivery.
+func (s *Storage) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*GuidanceRequestData, error) {
+	return s.repo.ListGuidanceByDelivery(ctx, route, state)
+}

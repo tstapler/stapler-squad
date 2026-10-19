@@ -116,6 +116,10 @@ type SessionService struct {
 
 	// actionDispatcher serves InvokeNotificationAction; nil reports FLAG_OFF.
 	actionDispatcher *NotificationActionDispatcher
+	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
+	guidanceAcks *GuidanceAckDetector
+	ackCancel    context.CancelFunc
+	ackDone      chan struct{}
 
 	// deliveryGate is the hidden-session delivery gate installed as the event bus
 	// publish filter at construction (nil when built through NewSessionService).

@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // notification_action_adapters.go binds the dispatcher's consumer-side
@@ -75,71 +76,13 @@ func (a guidanceServiceAdapter) AnswerGuidance(ctx context.Context, requestID, a
 	return applied(), nil
 }
 
-// replyFunc is the existing hidden-session reply handler.
-type replyFunc func(context.Context, *connect.Request[sessionv1.ReplyToPendingQuestionRequest]) (*connect.Response[sessionv1.ReplyToPendingQuestionResponse], error)
-
 // pendingQuestionPeeker reads one registered question.
 type pendingQuestionPeeker interface {
 	Peek(QuestionKey) (PendingQuestion, bool)
 }
 
-// sessionRouteFinder says whether a session is hidden, visible or unknown.
-type sessionRouteFinder func(sessionID string) (hidden, known bool)
-
-// hiddenReplyAdapter is the interim QuestionReplier. It serves hidden sessions
-// through the existing reply handler and reports FLAG_OFF for visible ones.
-//
-// SEAM: when PaneReplyCore (Story 2.4) and the AnswerRouter (Task 3.4a) land,
-// replace this type behind QuestionReplier; the dispatcher and UI do not change.
-type hiddenReplyAdapter struct {
-	find      sessionRouteFinder
-	questions pendingQuestionPeeker
-	reply     replyFunc
-}
-
-// NewHiddenReplyAdapter builds the interim QuestionReplier.
-func NewHiddenReplyAdapter(find sessionRouteFinder, questions pendingQuestionPeeker, reply replyFunc) QuestionReplier {
-	return hiddenReplyAdapter{find: find, questions: questions, reply: reply}
-}
-
-func (a hiddenReplyAdapter) RouteFor(sessionID string) (answerRoute, bool) {
-	hidden, known := a.find(sessionID)
-	if !known {
-		return 0, false
-	}
-	if hidden {
-		return routeLiveKeystrokeHidden, true
-	}
-	return routeLiveKeystrokeVisible, true
-}
-
-func (a hiddenReplyAdapter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (ActionResult, error) {
-	hidden, known := a.find(in.SessionID)
-	if !known {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
-	}
-	if !hidden {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage), nil
-	}
-	q, ok := a.questions.Peek(QuestionKey{SessionUUID: in.SessionID, QuestionID: in.QuestionID})
-	if !ok {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, nil
-	}
-	digit := optionDigit(q.Dialog.Labels, in.OptionLabel)
-	if digit == "" {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
-	}
-	resp, err := a.reply(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
-		SessionId: in.SessionID, QuestionId: in.QuestionID, ReplyText: digit, ReplyId: in.ReplyID,
-	}))
-	if err != nil {
-		if connect.CodeOf(err) == connect.CodeInvalidArgument || connect.CodeOf(err) == connect.CodePermissionDenied {
-			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
-		}
-		return ActionResult{}, err
-	}
-	return mapReplyOutcome(resp.Msg), nil
-}
+// replyFunc is the existing hidden-session reply handler.
+type replyFunc func(context.Context, *connect.Request[sessionv1.ReplyToPendingQuestionRequest]) (*connect.Response[sessionv1.ReplyToPendingQuestionResponse], error)
 
 // optionDigit is the 1-based option number of label as one ASCII digit.
 func optionDigit(labels []string, label string) string {
@@ -152,7 +95,11 @@ func optionDigit(labels []string, label string) string {
 }
 
 func mapReplyOutcome(r *sessionv1.ReplyToPendingQuestionResponse) ActionResult {
-	switch r.GetOutcome() {
+	return mapReplyOutcomeValue(r.GetOutcome(), r.GetRetryAfterSeconds())
+}
+
+func mapReplyOutcomeValue(o sessionv1.ReplyOutcome, retryAfter int32) ActionResult {
+	switch o {
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT:
 		return applied()
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE:
@@ -162,7 +109,7 @@ func mapReplyOutcome(r *sessionv1.ReplyToPendingQuestionResponse) ActionResult {
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT:
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_replaced"}
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, RetryAfter: r.GetRetryAfterSeconds()}
+		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, RetryAfter: retryAfter}
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED:
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage)
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT,
@@ -185,23 +132,35 @@ func inProcessPeer(req connect.AnyRequest) string {
 	return "127.0.0.1:0"
 }
 
-// NewSessionRouteFinder reports hidden/visible/unknown for a session id using
-// the service's instance lookup.
-func (s *SessionService) NewSessionRouteFinder() sessionRouteFinder {
-	return func(sessionID string) (hidden, known bool) {
+// answerSessions classifies a session for the router from the live poller.
+func (s *SessionService) answerSessions() answerSessionFinder {
+	return func(sessionID string) routedSession {
 		inst := s.findInstance(sessionID)
-		if inst == nil {
-			return false, false
+		switch {
+		case inst == nil:
+			return routedSession{}
+		case inst.IsArchived():
+			return routedSession{inst: inst, phase: phaseArchived}
+		case inst.Snapshot().Status.IsSuspended():
+			return routedSession{inst: inst, phase: phaseStopped}
 		}
-		return AccessFor(inst) == TerminalReadOnly, true
+		return routedSession{inst: inst, phase: phaseLive}
 	}
 }
 
-// WireHiddenReplyAdapter installs the interim in-process peer and returns the
-// QuestionReplier over this service's reply machinery.
-func (s *SessionService) WireHiddenReplyAdapter() QuestionReplier {
+// WireAnswerRouter installs the in-process peer the router needs to call the
+// hidden reply handler and returns the QuestionReplier over this service.
+func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 	if s.replyPeerAddr == nil {
 		s.replyPeerAddr = inProcessPeer
 	}
-	return NewHiddenReplyAdapter(s.NewSessionRouteFinder(), s.replyState().store, s.ReplyToPendingQuestion)
+	r := &AnswerRouter{
+		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
+		visible: s.paneReplyCore, guard: NewHumanActiveGuard(defaultHumanActivity, tmux.ListClientActivity),
+		flags: configActionFlags{ev: compiledFlagEvidence}, rows: d.Rows, acks: d.Acks,
+	}
+	if d.Mirror != nil {
+		r.ensure = d.Mirror.EnsureRegistered
+	}
+	return r
 }

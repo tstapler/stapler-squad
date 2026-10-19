@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -34,6 +35,10 @@ type GuidanceRequestResult struct {
 	Questions []domain.Question `json:"questions,omitempty"`
 	Answer    string            `json:"answer,omitempty"`
 	Status    string            `json:"status"`
+	// AnsweredAt (RFC 3339) and DeliveryState let a respawned agent see that a stored
+	// answer is waiting even though nothing was pushed to its pane.
+	AnsweredAt    string `json:"answered_at,omitempty"`
+	DeliveryState string `json:"delivery_state,omitempty"`
 }
 
 // guidanceRequestToResult converts the repository's plain data view into the
@@ -48,6 +53,11 @@ func guidanceRequestToResult(d *session.GuidanceRequestData) GuidanceRequestResu
 		QuestionType: string(d.QuestionType),
 		Answer:       d.Answer,
 		Status:       string(d.Status()),
+
+		DeliveryState: string(d.DeliveryState),
+	}
+	if d.AnsweredAt != nil {
+		res.AnsweredAt = d.AnsweredAt.UTC().Format(time.RFC3339)
 	}
 	if d.ItemID != nil {
 		res.ItemID = d.ItemID.String()

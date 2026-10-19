@@ -135,3 +135,18 @@ func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, ask
 	}
 	return guidanceRequestsToData(rows), nil
 }
+
+// ListGuidanceByDelivery returns the rows in delivery state, newest first,
+// limited to route when route is set. Used to resume acknowledgement tracking
+// after a restart and to find pre-answered rows for a hook.
+func (r *EntRepository) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*GuidanceRequestData, error) {
+	q := r.client.GuidanceRequest.Query().Where(guidancerequest.DeliveryState(string(state)))
+	if route != "" {
+		q = q.Where(guidancerequest.DeliveryRoute(string(route)))
+	}
+	rows, err := q.Order(guidancerequest.ByCreatedAt(sql.OrderDesc())).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list guidance requests in delivery state %s: %w", state, err)
+	}
+	return guidanceRequestsToData(rows), nil
+}

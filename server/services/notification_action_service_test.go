@@ -436,54 +436,6 @@ func TestGuidanceAnswerer_ShouldReportAlreadyResolved_WhenAnswerNotApplied(t *te
 	assert.Equal(t, outResolved, second.Outcome, "applied=false maps to ALREADY_RESOLVED")
 }
 
-// The interim adapter: visible -> FLAG_OFF with zero writes; hidden -> the reply handler.
-type replySpy struct {
-	calls atomic.Int32
-	last  *sessionv1.ReplyToPendingQuestionRequest
-	resp  sessionv1.ReplyOutcome
-}
-
-func (r *replySpy) reply(_ context.Context, req *connect.Request[sessionv1.ReplyToPendingQuestionRequest]) (*connect.Response[sessionv1.ReplyToPendingQuestionResponse], error) {
-	r.calls.Add(1)
-	r.last = req.Msg
-	return connect.NewResponse(&sessionv1.ReplyToPendingQuestionResponse{Outcome: r.resp}), nil
-}
-
-type fixedQuestions map[QuestionKey]PendingQuestion
-
-func (f fixedQuestions) Peek(k QuestionKey) (PendingQuestion, bool) { q, ok := f[k]; return q, ok }
-
-func TestHiddenReplyAdapter_ShouldReturnFlagOffForVisibleAndDelegateForHidden_WhenQuestionAnswered(t *testing.T) {
-	t.Parallel()
-	q := PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
-	q.Dialog.Labels = []string{"Redis", "Memcached"}
-	questions := fixedQuestions{{SessionUUID: "s1", QuestionID: "q1"}: q}
-	in := QuestionAnswer{SessionID: "s1", QuestionID: "q1", OptionLabel: "Memcached", ReplyID: "r1"}
-
-	visible := &replySpy{}
-	res, err := NewHiddenReplyAdapter(func(string) (bool, bool) { return false, true }, questions, visible.reply).ReplyToQuestion(context.Background(), in)
-	require.NoError(t, err)
-	assert.Equal(t, outFlagOff, res.Outcome)
-	assert.Zero(t, visible.calls.Load(), "no write for a visible session")
-
-	hidden := &replySpy{resp: sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT}
-	adapter := NewHiddenReplyAdapter(func(string) (bool, bool) { return true, true }, questions, hidden.reply)
-	res, err = adapter.ReplyToQuestion(context.Background(), in)
-	require.NoError(t, err)
-	assert.Equal(t, outApplied, res.Outcome)
-	assert.Equal(t, "2", hidden.last.ReplyText, "the label maps to its 1-based digit")
-	assert.Equal(t, "r1", hidden.last.ReplyId)
-
-	in.OptionLabel = "Nope"
-	res, err = adapter.ReplyToQuestion(context.Background(), in)
-	require.NoError(t, err)
-	assert.Equal(t, outInvalid, res.Outcome)
-
-	route, known := adapter.RouteFor("s1")
-	assert.True(t, known)
-	assert.Equal(t, routeLiveKeystrokeHidden, route)
-}
-
 func TestMapReplyOutcome_ShouldCoverEveryReplyOutcome(t *testing.T) {
 	t.Parallel()
 	want := map[sessionv1.ReplyOutcome]sessionv1.ActionOutcome{
