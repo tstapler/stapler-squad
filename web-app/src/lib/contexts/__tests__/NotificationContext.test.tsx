@@ -1108,7 +1108,7 @@ describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
   afterEach(() => {
     mockServerUnread = 0;
     window.localStorage.clear();
-    resetReviewedMarksForTests();
+    act(() => resetReviewedMarksForTests());
   });
 
   it("marked_handled_should_leave_this_browsers_badge_and_Needs_you_without_a_server_write", () => {

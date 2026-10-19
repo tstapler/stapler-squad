@@ -427,7 +427,7 @@ describe("tray", () => {
       expect(screen.queryByTestId("tray-undo-bar")).toBeNull();
 
       const row = screen.getAllByTestId("tray-row")[0];
-      row.focus();
+      act(() => row.focus());
       fireEvent.keyDown(row, { key: "x" });
       expect(screen.getByTestId("tray-undo-bar")).toHaveTextContent("Dismissed 1 notification");
     });
@@ -1170,7 +1170,7 @@ describe("tray spec gaps (Phase 5)", () => {
     mockClearByIds.mockResolvedValue({ deleted: 1, kept: [] });
     render(tree());
     const headerRow = document.querySelector('[data-tray-row="s1"]') as HTMLElement;
-    headerRow.focus();
+    act(() => headerRow.focus());
 
     fireEvent.keyDown(headerRow, { key: "Enter" });
     expect(screen.getByRole("button", { name: /alpha \(1\)/ })).toHaveAttribute("aria-expanded", "false");
@@ -1178,7 +1178,7 @@ describe("tray spec gaps (Phase 5)", () => {
     expect(screen.getByRole("button", { name: /alpha \(1\)/ })).toHaveAttribute("aria-expanded", "true");
 
     const groupRow = screen.getAllByTestId("tray-row")[0];
-    groupRow.focus();
+    act(() => groupRow.focus());
     fireEvent.keyDown(groupRow, { key: "Enter" });
     expect(mockMarkAsRead).toHaveBeenCalledWith(["a"]);
 
@@ -1205,7 +1205,7 @@ describe("tray spec gaps (Phase 5)", () => {
     const keyOf = () => (document.activeElement as HTMLElement).getAttribute("data-tray-row");
 
     const first = document.querySelector('[data-tray-row="s1"]') as HTMLElement;
-    first.focus();
+    act(() => first.focus());
     fireEvent.keyDown(first, { key: "j" });
     expect(keyOf()).not.toBe("s1");
     const moved = keyOf();

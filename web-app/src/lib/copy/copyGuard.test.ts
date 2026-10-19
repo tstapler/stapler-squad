@@ -119,8 +119,9 @@ describe("rendered action row states", () => {
     jest.useFakeTimers();
     respondWith(ActionOutcome.RATE_LIMITED, { retryAfterSeconds: 2 });
     renderRow({ descriptors: makeApprovalDescriptors() });
-    screen.getByTestId("action-approve").click();
-    await act(async () => {});
+    await act(async () => {
+      screen.getByTestId("action-approve").click();
+    });
     expectClean(bodyText());
     jest.useRealTimers();
   });
