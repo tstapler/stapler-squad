@@ -130,9 +130,23 @@ func rangeOutcome(resp *sessionv1.ReadFileRangeResponse, err error) string {
 	case connect.CodeInvalidArgument, connect.CodeNotFound:
 		return "invalid"
 	case connect.CodeFailedPrecondition:
-		return "disabled"
+		return failedPreconditionOutcome(err)
 	default:
 		return "error"
+	}
+}
+
+func failedPreconditionOutcome(err error) string {
+	var notServed errOpNotServed
+	switch {
+	case errors.As(err, &notServed):
+		return "disabled"
+	case errors.Is(err, errRangeIndexPending):
+		return "index_pending"
+	case errors.Is(err, errRangeTooLarge):
+		return "too_large"
+	default:
+		return "refused"
 	}
 }
 

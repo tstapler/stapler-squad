@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -40,6 +41,12 @@ func rangeOp(req *sessionv1.ReadFileRangeRequest) sessionv1.FileOp {
 	return sessionv1.FileOp_FILE_OP_READ_LINES
 }
 
+// Causes of a range FailedPrecondition, kept as sentinels so metrics can tell them apart.
+var (
+	errRangeTooLarge     = errors.New("file too large for range reads")
+	errRangeIndexPending = errors.New("line index is still being built; retry or read from line 1")
+)
+
 // ReadRange serves one window of a file without reading the rest (ADR-036).
 func (o *FileOps) ReadRange(ctx context.Context, req *sessionv1.ReadFileRangeRequest) (*sessionv1.ReadFileRangeResponse, error) {
 	if req.GetLines() == nil && req.GetBytes() == nil {
@@ -62,7 +69,7 @@ func (o *FileOps) ReadRange(ctx context.Context, req *sessionv1.ReadFileRangeReq
 	}
 	if info.Size() > rangeReadCeilingBytes {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("file too large for range reads (%d bytes)", info.Size()))
+			fmt.Errorf("%w (%d bytes)", errRangeTooLarge, info.Size()))
 	}
 	f, err := rr.Root.Open(rr.Resolved)
 	if err != nil {
@@ -130,8 +137,7 @@ func (o *FileOps) lineRangeWindow(ctx context.Context, rd *rangeRead, a *session
 		}
 	}
 	if first > 1 && rd.analysis == nil {
-		return rangeWindow{}, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("line index is still being built; retry or read from line 1"))
+		return rangeWindow{}, connect.NewError(connect.CodeFailedPrecondition, errRangeIndexPending)
 	}
 	if rd.analysis != nil {
 		first = min(first, max(rd.analysis.LineCount-int64(lim.Lines)+1, 1))

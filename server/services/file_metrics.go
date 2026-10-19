@@ -51,7 +51,7 @@ func recordSearchMetrics(ctx context.Context, outcome SearchOutcome, total time.
 
 var (
 	filesRangeTotal = mustInt64Counter(telemetry.GetMeter(), "files.range.total",
-		metric.WithDescription("ReadFileRange calls by outcome (ok, torn, busy, denied, invalid, disabled, error)"))
+		metric.WithDescription("ReadFileRange calls by outcome (ok, torn, busy, denied, invalid, disabled, index_pending, too_large, refused, error)"))
 
 	filesRangeDurationMS = mustFloat64Histogram(telemetry.GetMeter(), "files.range.duration_ms",
 		metric.WithDescription("Wall-clock duration of a ReadFileRange call, in milliseconds"),
