@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import { AnnouncerContext } from "@/lib/hooks/useAnnounce";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import { NotificationPanel } from "../NotificationPanel";
-import { makeApprovalDescriptors, makeNotification } from "./notificationFixtures";
+import { makeApprovalDescriptors, makeNotification, makeQuestionDescriptors } from "./notificationFixtures";
 
 export { panelState, notificationsModule, virtualizerModule } from "./panelMocks";
 
@@ -22,6 +22,20 @@ export function pendingApprovals(count: number, startAt = 0): NotificationHistor
       actions: makeApprovalDescriptors(`a${i}`),
     });
   });
+}
+
+/** Pending questions with three options each; ids `q<i>`, newer than every approval. */
+export function pendingQuestions(count: number, startAt = 0): NotificationHistoryItem[] {
+  return Array.from({ length: count }, (_, k) =>
+    makeNotification({
+      id: `q${startAt + k}`,
+      sessionId: `sq${startAt + k}`,
+      timestamp: 200_000 - (startAt + k),
+      notificationType: "question",
+      isPendingDecision: true,
+      actions: makeQuestionDescriptors({ targetKey: `q${startAt + k}`, options: [{ label: "Redis" }, { label: "Memcached" }, { label: "None" }] }),
+    }),
+  );
 }
 
 /** The poll result for an approval another client resolved: no longer pending, decision stamped. */

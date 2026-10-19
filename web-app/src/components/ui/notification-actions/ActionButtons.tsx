@@ -57,6 +57,7 @@ export function OptionGroup({ d, ui }: { d: NotificationActionDescriptor; ui: Bu
           disabled={ui.blocked || !d.available}
           reasonId={ui.reasonFor(d)}
           minHeight={ui.minHeight}
+          option
           onClick={() => ui.onPress({ descriptor: d, option: o })}
         />
       ))}

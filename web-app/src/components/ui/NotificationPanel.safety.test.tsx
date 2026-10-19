@@ -2,7 +2,7 @@ import { act, fireEvent, screen, within } from "@testing-library/react";
 import { ActionOutcome } from "@/gen/session/v1/notification_action_pb";
 import { invokeMock, respondWith } from "./__fixtures__/actionRowHarness";
 import { setTimingForTests } from "@/lib/hooks/interactionTiming";
-import { pendingApprovals, renderPanel, resolvedElsewhere, rowKeys } from "./__fixtures__/panelHarness";
+import { pendingApprovals, pendingQuestions, renderPanel, resolvedElsewhere, rowKeys } from "./__fixtures__/panelHarness";
 import { panelState } from "./__fixtures__/panelMocks";
 
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({ useFeatureFlag: () => false }));
@@ -137,5 +137,125 @@ describe("Story 2.6a and 2.10: resolved-row lifecycle and focus advance", () => 
     refreshPanel();
     advance(GRACE * 2);
     expect(announce.mock.calls.filter(([t]) => String(t).startsWith("Answer confirmed"))).toHaveLength(0);
+  });
+});
+
+describe("Story 2.10b: digit and focus guards", () => {
+  const rowOf = (container: HTMLElement, key: string) => container.querySelector(`[data-tray-row="${key}"]`) as HTMLElement;
+  const press = (key: string, init: KeyboardEventInit = {}, target: Element | null = document.activeElement) =>
+    act(() => void fireEvent.keyDown(target as Element, { key, ...init }));
+  const optionButtons = (container: HTMLElement, key: string) => Array.from(rowOf(container, key).querySelectorAll<HTMLElement>("[data-action-option]"));
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    respondWith(ActionOutcome.APPLIED);
+    panelState.history = [...pendingQuestions(2), ...pendingApprovals(1)];
+  });
+
+  it("ignores a digit 100 ms after focus advanced to the next card and sends nothing", async () => {
+    respondWith(ActionOutcome.APPLIED);
+    panelState.history = [...pendingApprovals(1), ...pendingQuestions(1).map((q) => ({ ...q, timestamp: 5_000 }))];
+    const { container, refreshPanel } = renderPanel();
+    expect(rowKeys(container).filter((k) => k !== null && /^[nq]\d/.test(k))).toEqual(["n0", "q0"]);
+    operatorFocus(approveOf(0));
+    await act(async () => approveOf(0).click());
+    panelState.history = [resolvedElsewhere(panelState.history.find((n) => n.id === "n0")!), ...panelState.history.filter((n) => n.id !== "n0")];
+    refreshPanel();
+    advance(GRACE);
+    const q0 = rowOf(container, "q0");
+    expect(document.activeElement).toBe(q0);
+    invokeMock.mockClear();
+    advance(100);
+    press("1");
+    expect(document.activeElement).toBe(q0);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("lets 1, 2, 3 pressed 50 ms apart visit options in order on an opened card, keeps it engaged and sends nothing until Enter on an option", async () => {
+    const { container, refreshPanel } = renderPanel();
+    const q1 = rowOf(container, "q1");
+    operatorFocus(q1);
+    press("Enter");
+    advance(GRACE);
+    const options = optionButtons(container, "q1");
+    expect(options).toHaveLength(3);
+    for (const [i, key] of ["1", "2", "3"].entries()) {
+      press(key);
+      expect(document.activeElement).toBe(options[i]);
+      advance(50);
+    }
+    panelState.history = [...pendingQuestions(1, 9), ...panelState.history];
+    refreshPanel();
+    expect(screen.getByTestId("tray-new-pill")).toHaveTextContent("1 new");
+    expect(invokeMock).not.toHaveBeenCalled();
+    press("2");
+    await act(async () => options[1].click());
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not arm the pre-expanded first item until the operator tabs onto it", () => {
+    const { container } = renderPanel();
+    const first = rowOf(container, "q0");
+    expect(first).toHaveAttribute("data-expanded", "pre");
+    advance(GRACE);
+    press("1", {}, first);
+    expect(document.activeElement).not.toBe(optionButtons(container, "q0")[0]);
+    operatorFocus(first);
+    advance(GRACE);
+    press("1");
+    expect(document.activeElement).toBe(optionButtons(container, "q0")[0]);
+  });
+
+  it("collapses the pre-expanded item on Enter and arms it on the next Enter", () => {
+    const { container } = renderPanel();
+    const first = rowOf(container, "q0");
+    operatorFocus(first);
+    press("Enter");
+    expect(first).not.toHaveAttribute("data-expanded");
+    press("Enter");
+    expect(first).toHaveAttribute("data-expanded", "operator");
+  });
+
+  it("holds an operator-expanded card engaged on touch, 10 s after the tap, until it is collapsed", () => {
+    const { container, refreshPanel } = renderPanel();
+    const q1 = rowOf(container, "q1");
+    fireEvent.touchStart(q1);
+    act(() => void fireEvent.click(within(q1).getByText("Something happened")));
+    expect(q1).toHaveAttribute("data-expanded", "operator");
+    advance(10_000);
+    panelState.history = [...pendingQuestions(1, 9), ...panelState.history];
+    refreshPanel();
+    expect(screen.getByTestId("tray-new-pill")).toHaveTextContent("1 new");
+    expect(rowKeys(container).filter((k) => k?.startsWith("q"))).toEqual(["q0", "q1"]);
+    press("Escape", {}, q1);
+    expect(q1).not.toHaveAttribute("data-expanded");
+    advance(GRACE);
+    expect(rowKeys(container).filter((k) => k?.startsWith("q"))).toEqual(["q9", "q0", "q1"].sort());
+  });
+
+  it.each([
+    ["with Ctrl held", { ctrlKey: true }],
+    ["during IME composition", { isComposing: true }],
+  ])("ignores digits %s", (_name, init) => {
+    const { container } = renderPanel();
+    const q1 = rowOf(container, "q1");
+    operatorFocus(q1);
+    press("Enter");
+    advance(GRACE);
+    press("1", init);
+    expect(document.activeElement).toBe(q1);
+  });
+
+  it("ignores digits typed in a field inside the card", () => {
+    const { container } = renderPanel();
+    const q1 = rowOf(container, "q1");
+    operatorFocus(q1);
+    press("Enter");
+    advance(GRACE);
+    const field = document.createElement("textarea");
+    q1.appendChild(field);
+    operatorFocus(field);
+    press("1", {}, field);
+    expect(document.activeElement).toBe(field);
   });
 });
