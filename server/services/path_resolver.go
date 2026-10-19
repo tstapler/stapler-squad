@@ -14,6 +14,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -40,14 +41,15 @@ const (
 type ResolvedPath string
 
 // SymlinkDeniedError reports a symlink whose target leaves the worktree or
-// points into .git. Target is the link's raw Readlink string (metadata only).
+// points into .git. Target is the link's raw Readlink string, kept for server-side
+// logs and tests only: it never reaches the wire message or the detail.
 type SymlinkDeniedError struct {
 	Link   string
 	Target string
 }
 
 func (e *SymlinkDeniedError) Error() string {
-	return fmt.Sprintf("symlink %q points outside the worktree or into .git (target %q)", e.Link, e.Target)
+	return fmt.Sprintf("symlink %q points outside the worktree or into .git", e.Link)
 }
 
 // linkProber is the part of a root the resolver needs to expand symlinks. It sees
@@ -58,12 +60,15 @@ type linkProber interface {
 }
 
 // symlinkDenied builds the PermissionDenied error for a refused link, carrying
-// the typed ReadOnlyReasonDetail (SYMLINK plus the raw target string).
+// the typed ReadOnlyReasonDetail (SYMLINK). The raw target is logged, not returned,
+// since it can be an absolute host path.
 func symlinkDenied(link, target string) *connect.Error {
+	if target != "" {
+		log.Debug("symlink read refused", "link", link, "target", target)
+	}
 	ce := connect.NewError(connect.CodePermissionDenied, &SymlinkDeniedError{Link: link, Target: target})
 	if d, err := connect.NewErrorDetail(&sessionv1.ReadOnlyReasonDetail{
-		Reason:     sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK,
-		LinkTarget: target,
+		Reason: sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK,
 	}); err == nil {
 		ce.AddDetail(d)
 	}
@@ -183,13 +188,12 @@ func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool
 		if err != nil {
 			return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read symlink"))
 		}
-		denied := symlinkDenied(nextPath, target)
 		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
-			return "", false, denied
+			return "", false, symlinkDenied(nextPath, target)
 		}
 		joined := path.Clean(path.Join(strings.Join(cur, "/"), filepath.ToSlash(target)))
 		if joined == ".." || strings.HasPrefix(joined, "../") || hasGitComponent(joined) {
-			return "", false, denied
+			return "", false, symlinkDenied(nextPath, target)
 		}
 		cur = nil
 		pending = append(splitComponents(joined), pending...)

@@ -1114,8 +1114,8 @@ func TestGetFileContent_ShouldReturnPermissionDenied_When_LeafIsSymlinkEscape(t 
 }
 
 // In-tree link reads carry ReadOnlyReason=Symlink; escaping links are denied with a typed
-// ReadOnlyReasonDetail that carries the link target.
-func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithTargetDetail_When_LinkClasses(t *testing.T) {
+// ReadOnlyReasonDetail that does not echo the link target.
+func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithoutEchoingTarget_When_LinkClasses(t *testing.T) {
 	dir, outside := newResolverFixture(t)
 	for rel, want := range map[string]string{"AGENTS.md": "claude\n", "docs/alias.md": "readme\n", "chain1": "claude\n", "shared/x.txt": "shared\n"} {
 		got, err := realGetFileContent(t, dir, rel)
@@ -1142,8 +1142,11 @@ func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithTarg
 			continue
 		}
 		detail := readOnlyDetail(t, err)
-		if detail == nil || detail.Reason != sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK || detail.LinkTarget != target {
-			t.Errorf("%s: detail %+v, want SYMLINK with target %q", rel, detail, target)
+		if detail == nil || detail.Reason != sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK || detail.LinkTarget != "" {
+			t.Errorf("%s: detail %+v, want SYMLINK without the link target", rel, detail)
+		}
+		if strings.Contains(err.Error(), "target") || (!strings.HasPrefix(target, ".git") && strings.Contains(err.Error(), target)) {
+			t.Errorf("%s: wire message %q echoes the link target %q", rel, err.Error(), target)
 		}
 	}
 	if _, err := realGetFileContent(t, dir, "dangling_inside"); connect.CodeOf(err) != connect.CodeNotFound {

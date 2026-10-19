@@ -120,7 +120,7 @@ func TestGetFileContent_ShouldBeByteIdenticalThroughFileOps_And_EmitSlogAndTelem
 	for _, k := range keys {
 		assert.Equal(t, want[k], got[k], k)
 	}
-	assert.Empty(t, logs.String(), "reads emitted no slog lines before the refactor, so FileOps must emit none either")
+	assert.Empty(t, withoutRefusalDebugLines(logs.String()), "reads emitted no slog lines before the refactor, so FileOps must emit none either")
 }
 
 // strictOver wraps a backend and panics on any Open/Lstat path the resolver
@@ -170,4 +170,15 @@ func TestFileOps_ShouldNeverReachBackendWithUnresolvedPath_When_ConfinementCorpu
 			_, _ = ops.Stat(context.Background(), "test-session", rel)
 		}, rel)
 	}
+}
+
+// withoutRefusalDebugLines drops the one deliberate server-side line for a refused symlink (the target stays off the wire).
+func withoutRefusalDebugLines(logs string) string {
+	var kept []string
+	for _, line := range strings.Split(logs, "\n") {
+		if line != "" && !strings.Contains(line, "symlink read refused") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
