@@ -380,6 +380,12 @@ message Session {
   // Human-readable explanation for context_health. Empty when context_health
   // is UNSPECIFIED or GREEN.
   string context_health_reason = 98;
+
+  // Server-computed outcome of a stopped background session: "completed",
+  // "failed" or "unknown". Populated only for ListSessions{hidden_only};
+  // empty otherwise. A string (not an enum) so a new value never breaks
+  // older clients, which treat anything unrecognized as unknown.
+  string background_outcome = 99;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
