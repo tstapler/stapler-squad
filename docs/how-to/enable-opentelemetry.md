@@ -101,7 +101,7 @@ Disabled by default, gated the same way as the server:
 ```bash
 # Enable browser tracing. NEXT_PUBLIC_* vars are baked in at `next build`
 # time (static export, no server-side env reads), so this must be set before
-# `make web-build` / `pnpm run build`, not at runtime like the server's vars.
+# `make web-build` / `bun run build`, not at runtime like the server's vars.
 NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 
 # Override the export endpoint (default: same-origin "/api/otel/v1/traces",

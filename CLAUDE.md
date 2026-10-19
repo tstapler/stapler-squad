@@ -22,7 +22,7 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 ./stapler-squad --tmux-keep-server                     # Keep tmux server alive after sessions close
 ```
 
-**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `docs/explanation/tmux-keep-server-on-restart.md`.
+**Note:** `make install-service` restarts the running service, but this does not kill live tmux sessions — `scripts/install-service.sh` has deployed the unit with `--tmux-keep-server` on both platforms since #180, so the tmux server and every session (including the one you're working in) survive the restart. See `docs/explanation/tmux-keep-server-on-restart.md` for the historical bug this fixed and how to re-verify the deployed unit if you ever suspect regression.
 
 ### Profiling
 
@@ -55,8 +55,8 @@ go test ./ui -run TestFoo   # Specific test
 make test-coverage
 
 # Frontend tests (not part of make ci)
-cd web-app && npx jest --no-coverage
-cd web-app && npx jest --testPathPatterns="<pattern>" --no-coverage
+cd web-app && bunx jest --no-coverage
+cd web-app && bunx jest --testPathPatterns="<pattern>" --no-coverage
 ```
 
 Benchmark reference (all benchmarks MUST be run with `&`): `docs/reference/benchmarks.md`
@@ -90,7 +90,7 @@ both fail the build, not just report:
   usually an Extract/Move Function refactor (see `quality:reflect-and-fix`'s
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
-  or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
+  or `bun run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
   like `--new-from-rev`, so this gates on an absolute `threshold` (0.14%,
   raised from 0.1% to 0.12% on 2026-09-12 after PR #785's new Omnibar test
   file added one more irreducible `jest.mock(...)` block and tripped the old
@@ -244,7 +244,7 @@ Tests in `tests/e2e/` use Playwright + Allure. **Do not manually start a server 
 - Global teardown (`global-teardown.ts`) kills that isolated server and cleans up its temp dir when the run ends.
 
 ```bash
-cd tests/e2e && npm test                                 # runs the full suite (isolated instance auto-managed)
+cd tests/e2e && bun run test                                # runs the full suite (isolated instance auto-managed)
 cd tests/e2e && npx playwright test session-lifecycle.spec.ts
 make e2e-report
 make e2e-lighthouse
@@ -260,7 +260,7 @@ make e2e-lighthouse
 
 ### Manual/interactive testing without touching the live deployed instance
 
-Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `docs/explanation/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
+Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it briefly takes the live server down during the restart and ships your in-progress build to every session/backlog item in flight; tmux sessions themselves survive the restart — see the Note above — but the binary swap and restart-window downtime are still real). To click around a change by hand instead, run a second, fully separate instance:
 
 ```bash
 mkdir -p ~/.stapler-squad/manual-builds/manual-1
@@ -349,8 +349,8 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
-| Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
-| Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
+| Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
+| Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
 | Why autonomous-mode sessions stop early: every driver exit path, cited, with verdicts | `docs/explanation/autonomous-stall-causes.md` |

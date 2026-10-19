@@ -111,6 +111,25 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return resp, err
 }
 
+// IsTransientRequestError reports whether err is this package's own
+// pre-emptive rejection — IsLimited()'s rate-limit fail-fast or AdmitOrigin's
+// priority admission-control rejection, both raised above before the request
+// was ever dispatched — as opposed to a definitive response from the GitHub
+// API (a real 404, a genuine field mismatch, etc.). Matches by substring
+// against the exact literals this file generates, mirroring the equivalent
+// check already in session/pr_status_poller.go's handleFetchError. A caller
+// gating an irreversible decision on a GitHub lookup (e.g. backlog's
+// merged-PR ownership re-verification, session/backlog_lifecycle_pr.go) must
+// treat this as "retry later," never as a negative verdict — the request was
+// never sent, so it answers nothing about the thing being checked.
+func IsTransientRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "rate limited until") || strings.Contains(msg, "admission control rejected")
+}
+
 // ghPriorityAdmissionFlagCacheVal/ghPriorityAdmissionFlagCacheAt cache
 // config.LoadConfig().GetFeatureFlagWithDefault's result for
 // githubPriorityAdmissionFlagName, so RoundTrip's disk read + JSON unmarshal

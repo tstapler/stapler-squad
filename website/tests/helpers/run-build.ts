@@ -1,4 +1,4 @@
-// Shared by every integration-style test that spawns a real `pnpm run build`.
+// Shared by every integration-style test that spawns a real `bun run build`.
 //
 // Astro's `getViteConfig` (used by vitest.config.ts so component tests can
 // render .astro files) sets process.env.BASE_URL="/" and SITE globally for
@@ -12,10 +12,10 @@
 // while Astro.site-derived canonical URLs (set directly from astro.config.mjs's
 // `site`, not inherited env) stayed correct. Stripping these two vars before
 // spawning lets the child process compute its own values from
-// astro.config.mjs, matching a real `pnpm run build` run from a shell.
+// astro.config.mjs, matching a real `bun run build` run from a shell.
 import { execFileSync } from 'node:child_process';
 
 export function runRealBuild(cwd: string): void {
 	const { BASE_URL, SITE, ...cleanEnv } = process.env;
-	execFileSync('pnpm', ['run', 'build'], { cwd, stdio: 'inherit', env: cleanEnv });
+	execFileSync('bun', ['run', 'build'], { cwd, stdio: 'inherit', env: cleanEnv });
 }
