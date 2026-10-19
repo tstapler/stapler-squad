@@ -43,7 +43,7 @@ export function readOnlyOf(reason: ReadOnlyReason, isBinary: boolean, truncated:
 const INDEX_PENDING = /line index/i;
 
 // fetch() rejects with a TypeError worded per browser (Chrome, Firefox, Safari); other TypeErrors are bugs.
-const FETCH_FAILURE = /failed to fetch|networkerror|load failed|network request failed/i;
+const FETCH_FAILURE = /failed to fetch|networkerror|load failed|network request failed|^network error$|^fetch failed$/i;
 const isFetchFailure = (e: unknown): boolean => e instanceof TypeError && FETCH_FAILURE.test(e.message);
 
 /** Typed refusals become `Rejected`; wire-level failures become `TransportFailure`; the rest pass through. */
