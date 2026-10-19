@@ -154,7 +154,7 @@ for (const key of ['V1', 'V2'] as const) {
       // app may rewrite the URL to its own window id afterwards, so the banner is the proof.
       const view = row.getByTestId('notification-view-output');
       await expect(view).toHaveAttribute('href', /tab=terminal&notification=/);
-      await view.click();
+      await clickWhenScrollIdle(page, view);
       await expect(page.getByTestId('readonly-banner')).toBeVisible();
 
       // BA-9: the record is read, so the row is gone and the badge dropped.
