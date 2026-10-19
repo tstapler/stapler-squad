@@ -11,9 +11,18 @@
 # STAPLER_SQUAD_SHARED_NODE_MODULES=0 escape hatch must fall back to a plain
 # local install (a real directory, not a symlink).
 #
+# Also covers the backfill-migration path: an existing real (non-symlink)
+# node_modules -- the state of every worktree that installed before this
+# mechanism shipped -- must be migrated (moved) into the shared store rather
+# than reinstalled from scratch, discarded if another worktree already
+# seeded that hash, and left completely untouched if the frozen-lockfile
+# verify step fails.
+#
 # `pnpm` is stubbed so this test is fast/deterministic/offline (per the
 # deterministic-fast-tests skill) -- it exercises the script's own hashing,
-# locking and symlinking logic, not pnpm's real install behavior.
+# locking and symlinking logic, not pnpm's real install behavior. The real
+# frozen-lockfile divergence/success semantics this relies on were verified
+# separately against actual pnpm (see the PR description), not just assumed.
 #
 # Usage: sh scripts/shared-node-modules.test.sh
 set -eu
@@ -37,6 +46,14 @@ export INSTALL_COUNTER
 cat > "$STUB_BIN/pnpm" <<'EOF'
 #!/bin/sh
 set -eu
+# Backfill-verify failure simulation: a FAIL_INSTALL marker in cwd stands in
+# for a genuine package.json/pnpm-lock.yaml divergence (real pnpm's
+# `--frozen-lockfile` failure mode, verified separately against actual
+# pnpm). Exits before touching anything, same as the real failure.
+if [ -f FAIL_INSTALL ]; then
+	echo "stub pnpm: FAIL_INSTALL marker present, simulating a frozen-lockfile divergence" >&2
+	exit 1
+fi
 echo "install" >> "$INSTALL_COUNTER"
 mkdir -p node_modules
 : > node_modules/.modules.yaml
@@ -129,5 +146,78 @@ if [ ! -d "$WT_E/node_modules" ] || [ -L "$WT_E/node_modules" ]; then
 	fail "scenario 4: STAPLER_SQUAD_SHARED_NODE_MODULES=0 did not produce a plain local directory"
 fi
 echo "PASS: scenario 4 -- STAPLER_SQUAD_SHARED_NODE_MODULES=0 opts out to a plain local install"
+
+# --- Scenarios 5-7 use before/after deltas on INSTALL_COUNTER rather than
+# absolute totals (unlike 1-4 above), so they stay correct regardless of
+# what runs before them. ---
+
+# --- Scenario 5: backfill migration -- existing real node_modules, no
+# shared install yet for this hash -> migrate (mv) the already-verified
+# local tree into the shared store instead of reinstalling from scratch. ---
+WT_F="$TMP/wt-f/web-app"
+mkdir -p "$WT_F"
+make_fixture "$WT_F"
+echo "pnpm-lock-content-scenario5" > "$WT_F/pnpm-lock.yaml" # unique hash -- must not collide with scenarios 1-4's shared install
+mkdir -p "$WT_F/node_modules"
+echo "original-local-install-marker" > "$WT_F/node_modules/ORIGINAL_MARKER"
+
+COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
+"$SCRIPT" "$WT_F" > "$TMP/out-f1" 2>&1 || { cat "$TMP/out-f1"; fail "scenario 5: backfill migration failed"; }
+COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
+[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 5: expected exactly 1 pnpm invocation (the verify step only, no reinstall-into-shared), got $((COUNT_AFTER - COUNT_BEFORE))"
+[ -L "$WT_F/node_modules" ] || fail "scenario 5: node_modules is not a symlink after migration"
+[ -f "$WT_F/node_modules/ORIGINAL_MARKER" ] || fail "scenario 5: migrated tree lost the original local content -- looks like a reinstall happened instead of a move"
+grep -q "original-local-install-marker" "$WT_F/node_modules/ORIGINAL_MARKER" || fail "scenario 5: ORIGINAL_MARKER content mismatch"
+echo "PASS: scenario 5 -- existing real node_modules with no prior shared install for its hash is migrated (moved) into the shared store, not reinstalled"
+
+# --- Scenario 6: backfill migration -- existing real node_modules, but a
+# shared install ALREADY exists for this hash -> discard the local tree,
+# symlink to the pre-existing shared content unchanged. ---
+WT_G="$TMP/wt-g/web-app"
+WT_H="$TMP/wt-h/web-app"
+mkdir -p "$WT_G" "$WT_H"
+make_fixture "$WT_G"
+make_fixture "$WT_H"
+echo "pnpm-lock-content-scenario6" > "$WT_G/pnpm-lock.yaml" # unique hash, shared between WT_G and WT_H only
+echo "pnpm-lock-content-scenario6" > "$WT_H/pnpm-lock.yaml"
+
+# WT_G installs normally first (no pre-existing node_modules), establishing
+# the shared install for this fixture's hash.
+"$SCRIPT" "$WT_G" > "$TMP/out-g1" 2>&1 || { cat "$TMP/out-g1"; fail "scenario 6: seeding shared install via WT_G failed"; }
+SHARED_TARGET="$(readlink "$WT_G/node_modules")"
+
+# WT_H already has a real, stale-looking local node_modules before the
+# script runs on it.
+mkdir -p "$WT_H/node_modules"
+echo "stale-local-content-must-be-discarded" > "$WT_H/node_modules/LOCAL_MARKER"
+
+COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
+"$SCRIPT" "$WT_H" > "$TMP/out-h1" 2>&1 || { cat "$TMP/out-h1"; fail "scenario 6: migration onto an existing shared install failed"; }
+COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
+[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 6: expected exactly 1 pnpm invocation (the verify step only, no reinstall), got $((COUNT_AFTER - COUNT_BEFORE))"
+[ -L "$WT_H/node_modules" ] || fail "scenario 6: node_modules is not a symlink"
+[ "$(readlink "$WT_H/node_modules")" = "$SHARED_TARGET" ] || fail "scenario 6: did not link to the pre-existing shared install ($SHARED_TARGET)"
+[ ! -e "$WT_H/node_modules/LOCAL_MARKER" ] || fail "scenario 6: stale local content leaked into the shared tree instead of being discarded"
+echo "PASS: scenario 6 -- existing real node_modules is discarded when a shared install for its hash already exists, symlinked to the pre-existing shared content unchanged"
+
+# --- Scenario 7: backfill verify step fails -> script aborts, the existing
+# node_modules is left completely untouched (not partially moved/deleted). ---
+WT_I="$TMP/wt-i/web-app"
+mkdir -p "$WT_I"
+make_fixture "$WT_I"
+echo "pnpm-lock-content-scenario7" > "$WT_I/pnpm-lock.yaml" # unique hash -- irrelevant here since it never gets computed, but keeps intent clear
+mkdir -p "$WT_I/node_modules"
+echo "must-survive-a-failed-verify" > "$WT_I/node_modules/SURVIVOR_MARKER"
+: > "$WT_I/FAIL_INSTALL" # tells the stub pnpm to simulate a frozen-lockfile divergence
+
+COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
+if "$SCRIPT" "$WT_I" > "$TMP/out-i1" 2>&1; then
+	fail "scenario 7: script succeeded despite a failing frozen-lockfile verify step"
+fi
+COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
+[ "$COUNT_AFTER" -eq "$COUNT_BEFORE" ] || fail "scenario 7: a pnpm install was recorded despite the verify step failing"
+[ -d "$WT_I/node_modules" ] && [ ! -L "$WT_I/node_modules" ] || fail "scenario 7: node_modules is no longer the original real directory after an aborted verify"
+[ -f "$WT_I/node_modules/SURVIVOR_MARKER" ] || fail "scenario 7: original node_modules content was lost despite the script aborting"
+echo "PASS: scenario 7 -- a failing frozen-lockfile verify step aborts the script and leaves the existing node_modules untouched"
 
 echo "All shared-node-modules.sh scenarios passed."

@@ -28,6 +28,15 @@
 # Every other worktree with the same hash just symlinks node_modules at it,
 # skipping the install entirely.
 #
+# Backfill: a worktree whose node_modules predates this mechanism (a real
+# directory, not a symlink -- true of every worktree that installed before
+# this script existed, main checkout included) gets migrated automatically:
+# `pnpm install --frozen-lockfile` verifies/repairs it against the current
+# lockfile first (aborts with node_modules untouched if package.json and the
+# lockfile have genuinely diverged), then the now-trusted tree either seeds
+# the shared store (a `mv`, not a reinstall) or is discarded if another
+# worktree already seeded that hash first.
+#
 # Usage: scripts/shared-node-modules.sh <web-app-dir>
 # Opt out (always do a plain local install, e.g. to debug a suspected
 # shared-tree issue) with:
@@ -71,6 +80,19 @@ compute_hash() {
 	done
 }
 
+# Backfill migration: a real (non-symlink) node_modules here predates this
+# mechanism. Verify/repair it against the current lockfile before trusting
+# it as a migration source -- see header comment. `set -euo pipefail` means
+# a genuine package.json/lockfile divergence aborts the whole script right
+# here, with node_modules exactly as it was (verified empirically: pnpm
+# fails this check before mutating anything).
+MIGRATING_EXISTING=0
+if [ -e node_modules ] && [ ! -L node_modules ]; then
+	echo "shared-node-modules: node_modules exists as a real directory (pre-dates shared-node-modules); verifying it against pnpm-lock.yaml before migrating it into the shared store"
+	pnpm install --frozen-lockfile
+	MIGRATING_EXISTING=1
+fi
+
 HASH="$(compute_hash | sha256sum | cut -d' ' -f1)"
 SHARED="$SHARED_ROOT/$HASH"
 
@@ -79,12 +101,10 @@ if [ -L node_modules ] && [ "$(readlink node_modules)" = "$SHARED/node_modules" 
 	exit 0
 fi
 
-mkdir -p "$SHARED_ROOT"
-exec 200>"$SHARED_ROOT/$HASH.lock"
-flock 200
-
-if [ ! -f "$SHARED/.install-complete" ]; then
-	echo "shared-node-modules: no shared install for $HASH yet, installing into $SHARED"
+# Copies the manifest + local file:-dependency content (but not
+# node_modules itself) into a freshly-cleared $SHARED, for either the
+# fresh-install path or the migration path to build on.
+seed_shared_manifest() {
 	rm -rf "$SHARED"
 	mkdir -p "$SHARED"
 	cp package.json pnpm-lock.yaml "$SHARED/"
@@ -93,10 +113,30 @@ if [ ! -f "$SHARED/.install-complete" ]; then
 		rm -rf "${SHARED:?}/${d:?}"
 		cp -r "$d" "$SHARED/$d"
 	done
-	( cd "$SHARED" && pnpm install --frozen-lockfile )
+}
+
+mkdir -p "$SHARED_ROOT"
+exec 200>"$SHARED_ROOT/$HASH.lock"
+flock 200
+
+if [ ! -f "$SHARED/.install-complete" ]; then
+	if [ "$MIGRATING_EXISTING" = "1" ]; then
+		echo "shared-node-modules: seeding shared install for $HASH from this worktree's already-verified node_modules (move, not reinstall)"
+		seed_shared_manifest
+		mv node_modules "$SHARED/node_modules"
+	else
+		echo "shared-node-modules: no shared install for $HASH yet, installing into $SHARED"
+		seed_shared_manifest
+		( cd "$SHARED" && pnpm install --frozen-lockfile )
+	fi
 	touch "$SHARED/.install-complete"
 else
 	echo "shared-node-modules: reusing existing shared install at $SHARED"
+	if [ "$MIGRATING_EXISTING" = "1" ]; then
+		# Another worktree already seeded this hash first; this tree is now
+		# redundant -- discard it rather than keeping two copies on disk.
+		rm -rf node_modules
+	fi
 fi
 flock -u 200
 
