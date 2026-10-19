@@ -22,7 +22,7 @@ func TestParseClientActivity_ShouldSplitModeActivityAndSession_WhenOutputIsWellF
 
 func TestClientActivityIsOurs_ShouldBeTrueOnlyForAChildOfThisProcess(t *testing.T) {
 	t.Parallel()
-	child := exec.Command("sleep", "30")
+	child := exec.Command("sleep", "30") //nolint:norawexec the test needs a real child process of this binary
 	require.NoError(t, child.Start())
 	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
 
