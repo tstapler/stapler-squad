@@ -450,3 +450,37 @@ func TestSetDelivery_should_LetExactlyOneWriterWin_When_EightGoroutinesRaceTheSa
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.DeliveryAttempts, "only the winner's attempt was counted")
 }
+
+func TestListGuidanceByDelivery_should_FilterByStateAndOptionalRoute(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	move := func(callID string, route domain.DeliveryRoute, to ...domain.DeliveryState) string {
+		row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, callID, "Which cache? "+callID), 0)
+		require.NoError(t, err)
+		for _, s := range to {
+			ok, err := repo.SetDelivery(ctx, uuid.MustParse(row.ID), route, s, 0)
+			require.NoError(t, err)
+			require.True(t, ok)
+		}
+		return row.ID
+	}
+	liveSent := move("toolu_a", domain.DeliveryRouteLiveKeystroke, domain.DeliveryStatePending, domain.DeliveryStateSent)
+	hookSent := move("toolu_b", domain.DeliveryRouteHookReply, domain.DeliveryStatePending, domain.DeliveryStateSent)
+	move("toolu_c", domain.DeliveryRouteLiveKeystroke, domain.DeliveryStatePending)
+
+	ids := func(rows []*GuidanceRequestData) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+	anyRoute, err := repo.ListGuidanceByDelivery(ctx, "", domain.DeliveryStateSent)
+	require.NoError(t, err)
+	hookOnly, err := repo.ListGuidanceByDelivery(ctx, domain.DeliveryRouteHookReply, domain.DeliveryStateSent)
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{liveSent, hookSent}, ids(anyRoute))
+	assert.Equal(t, []string{hookSent}, ids(hookOnly))
+}
