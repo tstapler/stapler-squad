@@ -17,6 +17,9 @@ type BacklogController struct {
 	registry *PluginRegistry
 	keyFunc  func() ([]byte, error)
 
+	// workflowEngine, when set, is handed to every SyncLoop Enable creates.
+	workflowEngine WorkflowEngine
+
 	// syncLoop is the currently running sync loop; nil when disabled.
 	syncLoop   *SyncLoop
 	syncCancel context.CancelFunc
@@ -36,6 +39,25 @@ func NewBacklogController(
 		registry: registry,
 		keyFunc:  keyFunc,
 	}
+}
+
+// SetWorkflowEngine sets the engine given to SyncLoops created by later Enable
+// calls; call it before Enable. nil keeps the SyncLoop default.
+func (c *BacklogController) SetWorkflowEngine(engine WorkflowEngine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workflowEngine = engine
+}
+
+// SyncLoopWorkflowEngine returns the engine of the running SyncLoop (nil when
+// the feature is disabled). Exposed for the production-wiring test.
+func (c *BacklogController) SyncLoopWorkflowEngine() WorkflowEngine {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.syncLoop == nil {
+		return nil
+	}
+	return c.syncLoop.WorkflowEngine()
 }
 
 // Enable activates the backlog feature: sets listener enabled and starts the sync loop.
@@ -59,6 +81,7 @@ func (c *BacklogController) Enable(_ context.Context) error {
 	} else {
 		sl = NewSyncLoop(c.storage, c.registry)
 	}
+	sl.SetWorkflowEngine(c.workflowEngine)
 	c.syncLoop = sl
 	go sl.Start(ctx)
 	return nil
