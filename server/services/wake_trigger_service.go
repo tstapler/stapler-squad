@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -64,7 +65,10 @@ type WakeTriggerDeps struct {
 	Titles func(sessionUUID string) string
 	// Enabled reports whether agent_wake_triggers lets the dispatcher run.
 	Enabled func() bool
-	Now     func() time.Time
+	// ExpireOverdue ends rows past expires_at as missed; it runs before a list so a
+	// stopped dispatcher does not leave expired rows pending. nil skips it.
+	ExpireOverdue func(ctx context.Context) error
+	Now           func() time.Time
 }
 
 // WakeTriggerService backs the WakeTriggerService RPCs and the CANCEL_WAKE /
@@ -116,6 +120,11 @@ func (s *WakeTriggerService) title(sessionUUID string) string {
 func (s *WakeTriggerService) ListWakeTriggers(
 	ctx context.Context, _ *connect.Request[sessionv1.ListWakeTriggersRequest],
 ) (*connect.Response[sessionv1.ListWakeTriggersResponse], error) {
+	if s.deps.ExpireOverdue != nil {
+		if err := s.deps.ExpireOverdue(ctx); err != nil {
+			log.Warn("wake trigger list: expiry sweep failed", "err", err)
+		}
+	}
 	rows, err := s.deps.Store.ListWakeTriggersByStatus(ctx,
 		domain.WakeStatusPending, domain.WakeStatusClaimed, domain.WakeStatusNeedsRevive, domain.WakeStatusMissed)
 	if err != nil {

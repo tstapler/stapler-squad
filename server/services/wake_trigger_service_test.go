@@ -369,3 +369,18 @@ func TestWakeTriggerService_ListPeerHelpRequests_should_ShowNotSentPlainReason_A
 	assert.Equal(t, "waiting", byID[stopped.ID].State, "a stopped peer is stalled, not undeliverable")
 	assert.Equal(t, "Peer is stopped. Not delivered unless resumed.", byID[stopped.ID].StateReason)
 }
+
+func TestWakeTriggerService_ListWakeTriggers_should_ListExpiredRowAsMissed_When_ExpirySweepRunsBeforeTheList(t *testing.T) {
+	r := newWakeRig(t, false, wakes.LimitSettings{})
+	row := r.atWake(t, "owner-a", wakeNow.Add(-3*time.Hour), domain.WakeActionSteerText) // expired an hour ago
+	r.svc.deps.ExpireOverdue = func(ctx context.Context) error {
+		_, err := wakes.ExpireOverdue(ctx, r.storage, nil, wakeNow)
+		return err
+	}
+
+	got := r.list(t)
+
+	require.Len(t, got.Triggers, 1)
+	assert.Equal(t, row.ID, got.Triggers[0].Id)
+	assert.Equal(t, string(domain.WakeStatusMissed), got.Triggers[0].Status)
+}
