@@ -87,6 +87,9 @@ var notTerminalWriteRPCs = map[string][]string{
 	"LLMBackendService": {
 		"GetLLMBackendSettings", "UpdateLLMBackendSettings",
 	},
+	"WakeTriggerService": {
+		"CancelWakeTrigger", "CreateOperatorReminder", "ListPeerHelpRequests", "ListWakeTriggers",
+	},
 	"RemoteService": {
 		"CreateRemote", "DeleteRemote", "GenerateRemoteIdentity", "ListRemotes", "TestRemoteConnection",
 		"TrustRemoteHostKey",

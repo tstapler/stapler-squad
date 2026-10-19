@@ -24,7 +24,7 @@ func (d *Dispatcher) registerGuidanceSource() {
 		if err != nil {
 			return false, fmt.Errorf("guidance predicate %s: %w", s.GuidanceRequestID, err)
 		}
-		return f.Exists && f.Answered, nil
+		return f.Exists && (f.Answered || f.Cancelled), nil
 	})
 }
 
@@ -47,15 +47,22 @@ func (d *Dispatcher) guidanceDetail(ctx context.Context, id string) string {
 		return ""
 	}
 	f, err := d.cfg.Guidance.Guidance(ctx, id)
-	if err != nil || !f.Exists || !f.Answered {
+	if err != nil || !f.Exists || (!f.Answered && !f.Cancelled) {
 		if err != nil {
 			log.Warn("wake dispatcher: guidance detail unavailable", "guidance_request_id", id, errKey, err)
 		}
 		return ""
 	}
+	if f.Cancelled && !f.Answered {
+		return fmt.Sprintf("help request %s was cancelled (%s); no answer will come", id, cancelReasonText(f.CancelReason))
+	}
 	answer := truncateRunes(f.Answer, maxAnswerDetailRunes)
 	if f.AnswererKind == string(domain.AnswererKindSession) {
 		return fmt.Sprintf("help request %s answered by session %s: %s", id, f.AnswererSessionUUID, answer)
+	}
+	if f.AnswererSessionUUID != "" {
+		return fmt.Sprintf("help request %s answered by the operator on behalf of session %s (from=operator on-behalf-of=%s): %s",
+			id, f.AnswererSessionUUID, f.AnswererSessionUUID, answer)
 	}
 	return fmt.Sprintf("guidance request %s answered by the operator: %s", id, answer)
 }
@@ -82,4 +89,11 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "..."
+}
+
+func cancelReasonText(reason string) string {
+	if reason == "" || reason == OperatorCancelReason {
+		return "by the operator"
+	}
+	return reason
 }

@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Errors the owner-facing API returns; the MCP tools map them to typed results.
@@ -54,33 +51,12 @@ func (d *Dispatcher) ListByOwner(ctx context.Context, owner string) ([]*session.
 // ErrWakeNotOwner and is left untouched; one already ended reports
 // cancelled=false with its row.
 func (d *Dispatcher) Cancel(ctx context.Context, owner, id string) (row *session.WakeTriggerData, cancelled bool, err error) {
-	parsed, err := uuid.Parse(id)
+	row, err = d.loadWake(ctx, id)
 	if err != nil {
-		return nil, false, ErrWakeNotFound
-	}
-	row, err = d.cfg.Store.GetWakeTrigger(ctx, parsed)
-	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
-			return nil, false, ErrWakeNotFound
-		}
-		return nil, false, fmt.Errorf("cancel wake: %w", err)
+		return nil, false, err
 	}
 	if row.OwnerSessionUUID != owner {
 		return nil, false, ErrWakeNotOwner
 	}
-	applied, err := d.cfg.Store.CancelWakeTrigger(ctx, parsed, d.cfg.Clock.Now())
-	if err != nil {
-		return nil, false, fmt.Errorf("cancel wake: %w", err)
-	}
-	if applied {
-		d.index.remove(row)
-		d.delivery.drop(row.ID)
-		d.limiter.release(row.ID)
-		d.cfg.Metrics.Inc(MetricTrigger, string(row.Type), string(domain.WakeStatusCancelled))
-	}
-	row, err = d.cfg.Store.GetWakeTrigger(ctx, parsed)
-	if err != nil {
-		return nil, applied, fmt.Errorf("cancel wake: reread: %w", err)
-	}
-	return row, applied, nil
+	return d.cancelRow(ctx, row)
 }

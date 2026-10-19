@@ -61,3 +61,25 @@ func TestNextGeneration_should_ChainOnlyFromAWakeDeliveredWithinTheWindow(t *tes
 	require.NoError(t, err)
 	assert.Zero(t, gen, "outside the window it is a fresh chain")
 }
+
+func TestCancelAny_should_CancelAnyOwnersWake_And_ReportAnEndedOne(t *testing.T) {
+	t.Parallel()
+	r := newDispatcherRig(t)
+	ctx := context.Background()
+	at := t0.Add(time.Hour)
+	row := newRow(t, r.repo, rowOpts{owner: "owner-1", spec: domain.AtSpec{At: at}, nextFire: &at})
+
+	_, _, err := r.d.CancelAny(ctx, "not-a-uuid")
+	require.ErrorIs(t, err, ErrWakeNotFound)
+	_, _, err = r.d.CancelAny(ctx, uuid.NewString())
+	require.ErrorIs(t, err, ErrWakeNotFound)
+
+	got, cancelled, err := r.d.CancelAny(ctx, row.ID)
+	require.NoError(t, err)
+	assert.True(t, cancelled, "the operator needs no ownership")
+	assert.Equal(t, domain.WakeStatusCancelled, got.Status)
+
+	_, again, err := r.d.CancelAny(ctx, row.ID)
+	require.NoError(t, err)
+	assert.False(t, again)
+}

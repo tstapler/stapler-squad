@@ -70,6 +70,8 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 	return wakes.GuidanceFacts{
 		Exists:              true,
 		Answered:            data.Status() == session.GuidanceRequestStatusAnswered,
+		Cancelled:           data.Status() == session.GuidanceRequestStatusCancelled,
+		CancelReason:        string(data.CancelReason),
 		Answer:              data.Answer,
 		AnswererKind:        string(data.AnswererKind),
 		AnswererSessionUUID: data.AnswererSessionUUID,

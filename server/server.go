@@ -594,6 +594,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// through deps.Storage rather than constructed with zero args like the
 	// config-only rollout services above.
 	var guidanceRequestSvc *services.GuidanceRequestService
+	var wakeTriggerSvc *services.WakeTriggerService
 	if deps.Storage != nil {
 		// deps.BacklogService is passed only when non-nil: a nil *BacklogService
 		// boxed into the TriageRespawner interface would be a non-nil interface
@@ -604,9 +605,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			triageRespawner = deps.BacklogService
 		}
 		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
 			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
-				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService,
+				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService, Cancels: wakeTriggerSvc,
 			})
 		}
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -758,7 +760,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.shutdownHooks = append(srv.shutdownHooks, deps.WorkflowScheduler.Stop)
 		log.Info("WorkflowScheduler started")
 	}
-	startWakes(serverCtx, srv, deps, guidanceRequestSvc) // ADR-006 wake timer; server/wakes_module.go
+	startWakes(serverCtx, srv, deps, guidanceRequestSvc, wakeTriggerSvc) // ADR-006 wake timer; server/wakes_module.go
 
 	// Register BacklogService shutdown so in-flight triage goroutines are signalled
 	// to stop acquiring new semaphore slots and existing calls can complete cleanly.

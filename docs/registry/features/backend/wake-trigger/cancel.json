@@ -1,0 +1,12 @@
+{
+  "id": "wake-trigger:cancel",
+  "type": "backend",
+  "service": "WakeTriggerService",
+  "method": "CancelWakeTrigger",
+  "protoFile": "proto/session/v1/wake_trigger.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/wake_trigger_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-19T04:10:44.741910841-07:00"
+}

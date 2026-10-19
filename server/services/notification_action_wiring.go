@@ -10,6 +10,8 @@ type NotificationActionWiring struct {
 	Storage  *session.Storage
 	Guidance *GuidanceRequestService
 	Backlog  *BacklogService
+	// Cancels backs CANCEL_WAKE and CANCEL_PEER_HELP (optional).
+	Cancels CancelDelegate
 	// Mirror re-registers an expired hook question from its durable row (optional).
 	Mirror *GuidanceHookMirror
 }
@@ -29,6 +31,7 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 		Approvals: NewApprovalResolver(s.approvalSvc, s.approvalStore),
 		Questions: s.WireAnswerRouter(answerRouterDeps(w, acks)),
 		Resolver:  NewNotificationResolver(s.GetNotificationStore()),
+		Cancels:   w.Cancels,
 	}
 	if w.Storage != nil {
 		src.Backlog = NewBacklogDecisionLookup(w.Storage)

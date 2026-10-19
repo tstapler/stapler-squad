@@ -143,6 +143,8 @@ type OpenGuidance struct {
 	// Source is who raised it. A hook-mirrored question is answered by ANSWER_QUESTION (the pane
 	// route) and a peer request by the peer session, so only agent-created rows get ANSWER_GUIDANCE.
 	Source domain.QuestionSource
+	// PeerHelp marks an agent-to-agent request: the operator may also withdraw it.
+	PeerHelp bool
 }
 
 // GuidanceLookup returns the open guidance requests among ids.
@@ -354,7 +356,16 @@ func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistory
 	for _, o := range g.Options {
 		d.Options = append(d.Options, &sessionv1.ActionOption{Label: o})
 	}
-	return []*sessionv1.NotificationActionDescriptor{d}
+	if !g.PeerHelp {
+		return []*sessionv1.NotificationActionDescriptor{d}
+	}
+	if peer := r.GetMetadata()[MetaPeerTitle]; peer != "" {
+		d.Label = "Answer for " + peer
+	}
+	cancel := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_CANCEL_PEER_HELP, "Cancel request",
+		sessionv1.ActionTargetKey_ACTION_TARGET_KEY_GUIDANCE_REQUEST_ID, id)
+	cancel.RequiresConfirm = true
+	return []*sessionv1.NotificationActionDescriptor{d, cancel}
 }
 
 // DecisionSchema is the stable shape of the decision_schema metadata.

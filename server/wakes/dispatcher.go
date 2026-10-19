@@ -39,8 +39,10 @@ type Config struct {
 	Sessions SessionStates
 	Guidance GuidanceState
 	PRs      PRSource
-	Leader   LeaderGuard
-	Metrics  *Metrics
+	// Peers enables the PeerHelpEscalator over the open peer-help requests.
+	Peers   PeerRequests
+	Leader  LeaderGuard
+	Metrics *Metrics
 
 	// Limits are the operator-set values of the Wake limits table; zero values
 	// keep the defaults and everything is clamped to the compiled ceilings.
@@ -61,6 +63,10 @@ type Dispatcher struct {
 	reviver  *Reviver
 	timer    *Timekeeper
 	index    *triggerIndex
+
+	// escalator pulls the operator into stalled peer-help requests; nil when
+	// Config.Peers is unset.
+	escalator *Escalator
 
 	limits  Limits
 	limiter *limiter
@@ -131,6 +137,12 @@ func NewDispatcher(cfg Config) *Dispatcher {
 			return d.allowClaim(ctx, row, now)
 		}),
 	)
+	if cfg.Peers != nil {
+		d.escalator = NewEscalator(EscalatorConfig{
+			Requests: cfg.Peers, Owners: cfg.Owners, Notifier: cfg.Notifier,
+			Events: cfg.Events, Clock: cfg.Clock, Metrics: cfg.Metrics,
+		})
+	}
 	d.registerBacklogSource()
 	d.registerSessionSource()
 	d.registerGuidanceSource()
@@ -143,6 +155,9 @@ func NewDispatcher(cfg Config) *Dispatcher {
 func (d *Dispatcher) ChangeHook() func() {
 	return func() {
 		d.timer.Rearm()
+		if d.escalator != nil {
+			d.escalator.Rearm()
+		}
 		select {
 		case d.changed <- struct{}{}:
 		default:
@@ -220,6 +235,11 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		d.shutdown()
 		return fmt.Errorf("wakes: start timer: %w", err)
 	}
+	if d.escalator != nil {
+		if err := d.escalator.Start(loopCtx); err != nil {
+			log.Warn("wake dispatcher: peer help escalator not started", errKey, err)
+		}
+	}
 	return nil
 }
 
@@ -235,6 +255,11 @@ func (d *Dispatcher) Stop(ctx context.Context) error {
 		log.Warn("wake dispatcher: timer stop", errKey, err)
 	}
 	d.shutdown()
+	if d.escalator != nil {
+		if err := d.escalator.Stop(ctx); err != nil {
+			log.Warn("wake dispatcher: escalator stop", errKey, err)
+		}
+	}
 	done := make(chan struct{})
 	go func() { d.wg.Wait(); d.bg.Wait(); close(done) }()
 	select {

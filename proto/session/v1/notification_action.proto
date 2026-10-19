@@ -56,6 +56,7 @@ enum ActionTargetKey {
   ACTION_TARGET_KEY_QUESTION_ID = 2;
   ACTION_TARGET_KEY_GUIDANCE_REQUEST_ID = 3;
   ACTION_TARGET_KEY_ITEM_ID = 4;
+  ACTION_TARGET_KEY_WAKE_TRIGGER_ID = 5;
 }
 
 // ActionOption is one selectable answer or decision choice.

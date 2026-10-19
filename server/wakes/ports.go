@@ -100,6 +100,9 @@ const (
 	// NotifyFailure: a wake ended missed, skipped or failed (failure class so a
 	// hidden-session owner still reaches the operator).
 	NotifyFailure
+	// NotifyPeerStalled: an open peer-help request nobody answered or whose
+	// answerer ended (INPUT_REQUIRED, bound to the asker).
+	NotifyPeerStalled
 )
 
 // Notification is a request to tell the operator something.
@@ -110,6 +113,11 @@ type Notification struct {
 	OwnerSessionUUID string
 	Title            string
 	Message          string
+	// GuidanceRequestID is the stalled request of a NotifyPeerStalled; it keys
+	// the notification's actions.
+	GuidanceRequestID string
+	// PeerTitle names the unresponsive answerer, for the "Answer for {peer}" label.
+	PeerTitle string
 }
 
 // Notifier raises operator notifications.
@@ -152,8 +160,12 @@ type SessionStates interface {
 
 // GuidanceFacts is the persisted state of a guidance request.
 type GuidanceFacts struct {
-	Exists              bool
-	Answered            bool
+	Exists   bool
+	Answered bool
+	// Cancelled is a request withdrawn before an answer; the asker is woken
+	// with "cancelled" so it stops waiting.
+	Cancelled           bool
+	CancelReason        string
 	Answer              string
 	AnswererKind        string
 	AnswererSessionUUID string

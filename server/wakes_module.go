@@ -33,8 +33,11 @@ type wakeWiring struct {
 	Sessions  wakes.SessionStates
 	Guidance  wakes.GuidanceState
 	PRs       wakes.PRSource
-	Leader    wakes.LeaderGuard
-	Limits    wakes.LimitSettings
+	Peers     wakes.PeerRequests
+	// Clock is nil in production (the real clock); tests inject a fake.
+	Clock  wakes.Clock
+	Leader wakes.LeaderGuard
+	Limits wakes.LimitSettings
 }
 
 // newWakeDispatcher builds the dispatcher and registers its change hook so a
@@ -42,7 +45,7 @@ type wakeWiring struct {
 func newWakeDispatcher(w wakeWiring, hook func(func())) *wakes.Dispatcher {
 	d := wakes.NewDispatcher(wakes.Config{
 		Store: w.Store, Steerer: w.Steerer, Owners: w.Owners, Admission: w.Admission,
-		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Sessions: w.Sessions, Guidance: w.Guidance, PRs: w.PRs,
+		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Sessions: w.Sessions, Guidance: w.Guidance, PRs: w.PRs, Peers: w.Peers, Clock: w.Clock,
 		Leader: w.Leader, Limits: w.Limits,
 	})
 	hook(d.ChangeHook())
@@ -82,7 +85,7 @@ func wakeTriggerTypeNames() []string {
 // startWakes starts the wake dispatcher when the flag matrix allows it and
 // registers its shutdown join. A non-leader process, or a disabled flag,
 // leaves it stopped.
-func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidance *services.GuidanceRequestService) {
+func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidance *services.GuidanceRequestService, triggers *services.WakeTriggerService) {
 	cfg := config.LoadConfig()
 	if deps.Storage == nil || deps.SessionService == nil || !wakeDispatcherEnabled(cfg) {
 		return
@@ -110,6 +113,7 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 		Sessions:  wakeSessionStates{svc: deps.SessionService, storage: deps.Storage},
 		Guidance:  wakeGuidance{storage: deps.Storage},
 		PRs:       prs,
+		Peers:     wakePeerRequests{storage: deps.Storage, titles: sessionTitles{svc: deps.SessionService, storage: deps.Storage}.Title},
 		Leader:    leader,
 		Limits:    wakeLimitSettings(cfg.WakeLimits),
 	}, deps.Storage.SetWakeChangeHook)
@@ -123,7 +127,13 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 	reconcile := d.Reconcile
 	wakeReconcileFn.Store(&reconcile)
 	installWakeTools(d, deps, guidance)
+	if triggers != nil {
+		triggers.SetBackend(d)
+	}
 	srv.shutdownHooks = append(srv.shutdownHooks, func() {
+		if triggers != nil {
+			triggers.SetBackend(nil)
+		}
 		wakeReconcileFn.Store(nil)
 		servermcp.SetWakeToolDeps(func() *servermcp.WakeToolDeps { return nil })
 		stopCtx, cancel := context.WithTimeout(context.Background(), wakeShutdownTimeout)

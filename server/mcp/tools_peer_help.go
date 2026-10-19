@@ -115,6 +115,7 @@ func (h *peerHelpHandlers) requestHelp(ctx context.Context, caller string, req m
 		h.abort(ctx, row.ID)
 		return scheduleErrorResult(err), nil
 	}
+	h.gate.metrics.Inc(wakes.MetricPeerHelp, peerStateWaiting)
 	out := RequestHelpResult{MCPResult: MCPResult{Success: true}, RequestID: row.ID, Peer: peer, State: peerStateWaiting}
 	if peer != peerHuman {
 		out.Delivery, out.DeliveryReason = h.promptPeer(ctx, deps, caller, peer, row.ID, question)

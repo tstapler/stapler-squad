@@ -64,7 +64,7 @@ func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string
 	if err := who.authorize(data); err != nil {
 		return data, false, err
 	}
-	applied, err = s.storage.AnswerGuidanceRequest(ctx, parsed, answer)
+	applied, err = s.recordAnswer(ctx, parsed, answer, who, data)
 	if err != nil {
 		return nil, false, err
 	}
@@ -106,4 +106,13 @@ func (s *GuidanceRequestService) saveForLaterIfSessionEnded(ctx context.Context,
 	if _, err := s.storage.SetGuidanceDelivery(ctx, id, route, domain.DeliveryStateSavedForLater, 0); err != nil {
 		log.Warn("[GuidanceRequest] answer stored but not marked saved for later", "id", data.ID, "err", err)
 	}
+}
+
+// recordAnswer persists the answer. The operator answering a peer request
+// stands in for the peer, and the row records that so the asker is told.
+func (s *GuidanceRequestService) recordAnswer(ctx context.Context, id uuid.UUID, answer string, who Answerer, data *session.GuidanceRequestData) (bool, error) {
+	if who.kind == domain.AnswererKindHuman && data.Source == domain.QuestionSourcePeer && data.AnswererSessionUUID != "" {
+		return s.storage.AnswerGuidanceRequestOnBehalf(ctx, id, answer)
+	}
+	return s.storage.AnswerGuidanceRequest(ctx, id, answer)
 }

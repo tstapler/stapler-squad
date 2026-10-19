@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // notification_action_lookups.go holds the production adapters behind the
@@ -48,7 +49,7 @@ func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (
 	out := map[string]OpenGuidance{}
 	for _, r := range rows {
 		if want[r.ID] {
-			out[r.ID] = OpenGuidance{Options: decodeGuidanceOptions(r.Options), Source: r.Source}
+			out[r.ID] = OpenGuidance{Options: decodeGuidanceOptions(r.Options), Source: r.Source, PeerHelp: r.Source == domain.QuestionSourcePeer}
 		}
 	}
 	return out, nil

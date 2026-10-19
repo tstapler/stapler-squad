@@ -172,13 +172,23 @@ func (n wakeNotifier) Notify(note wakes.Notification) {
 	meta := map[string]string{"target_session_uuid": note.OwnerSessionUUID}
 	sessionID, ntype := "", sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
 	priority := sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
-	if note.Kind == wakes.NotifyFailure {
+	notificationID := uuid.New().String()
+	switch note.Kind {
+	case wakes.NotifyFailure:
 		sessionID, ntype = note.OwnerSessionUUID, sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
 		priority = sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
 		meta[events.MetadataKeyDeliveryClass] = events.DeliveryClassFailure
+	case wakes.NotifyPeerStalled:
+		// Needs-human class, bound to the asker, keyed on the request so it is
+		// one row per request however often it is raised.
+		sessionID, ntype = note.OwnerSessionUUID, sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED
+		priority = sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		meta[services.MetaGuidanceRequestID] = note.GuidanceRequestID
+		meta[services.MetaPeerTitle] = note.PeerTitle
+		notificationID = "peer-help-stalled:" + note.GuidanceRequestID
 	}
 	n.bus.Publish(events.NewNotificationEvent(
-		sessionID, "", uuid.New().String(), int32(ntype), int32(priority), note.Title, note.Message, meta,
+		sessionID, "", notificationID, int32(ntype), int32(priority), note.Title, note.Message, meta,
 	))
 	log.Info("wake notification", "kind", note.Kind, "title", note.Title)
 }

@@ -40,6 +40,7 @@ func TestRequestHelp_should_CreatePeerRow_ArmAskerWake_And_PromptThePeer(t *test
 	assert.Equal(t, "B", row.AnswererSessionUUID)
 	assert.Equal(t, row.ID, m["request_id"])
 	assert.Equal(t, "sent", m["delivery"])
+	assert.EqualValues(t, 1, r.metrics.Value(wakes.MetricPeerHelp, "waiting"))
 
 	calls := r.backend.scheduleCalls()
 	require.Len(t, calls, 2)
@@ -50,7 +51,7 @@ func TestRequestHelp_should_CreatePeerRow_ArmAskerWake_And_PromptThePeer(t *test
 	assert.Contains(t, calls[1].Action.Payload, row.ID)
 }
 
-func TestRequestHelp_should_Reject_And_CreateNoRow_When_PeerCannotBeAsked(t *testing.T) {
+func TestRequestHelp_should_returnTypedRejectedAndCreateNoRow_When_selfTargetArchivedOneShotOrCrossWorkspace(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
