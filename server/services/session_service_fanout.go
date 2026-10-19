@@ -184,16 +184,17 @@ func (s *SessionService) PickFanoutWinner(
 				wt.GetBranchName(), strings.Join(result.ConflictedFiles, ", ")))
 	}
 
-	var archived []string
+	var archived, archiveFailed []string
 	for _, m := range members {
 		if m == winner || m.IsArchived() {
 			continue
 		}
 		if _, err := s.ArchiveSession(ctx, connect.NewRequest(&sessionv1.ArchiveSessionRequest{SessionId: m.UUID})); err != nil {
 			log.Warn("failed to archive fan-out loser", "group_id", req.Msg.GroupId, "session", m.UUID, "err", err)
+			archiveFailed = append(archiveFailed, m.UUID)
 			continue
 		}
 		archived = append(archived, m.UUID)
 	}
-	return connect.NewResponse(&sessionv1.PickFanoutWinnerResponse{BaseBranch: baseBranch, ArchivedSessionIds: archived}), nil
+	return connect.NewResponse(&sessionv1.PickFanoutWinnerResponse{BaseBranch: baseBranch, ArchivedSessionIds: archived, FailedArchiveSessionIds: archiveFailed}), nil
 }

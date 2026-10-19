@@ -52,8 +52,11 @@ function FanoutComparison({ groupId }: { groupId: string }) {
   const pick = async (sessionId: string) => {
     setError(null);
     try {
-      await pickFanoutWinner(groupId, sessionId);
+      const res = await pickFanoutWinner(groupId, sessionId);
       setPicked(sessionId);
+      if (res.failedArchiveSessionIds.length > 0) {
+        setError(`Winner merged, but ${res.failedArchiveSessionIds.length} other variant(s) could not be archived; archive them manually.`);
+      }
       setConfirming(null);
       await refresh();
     } catch (err) {

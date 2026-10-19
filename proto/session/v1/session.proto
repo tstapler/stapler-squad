@@ -3066,6 +3066,8 @@ message PickFanoutWinnerResponse {
   string base_branch = 1;
   // IDs of the sessions archived as losers.
   repeated string archived_session_ids = 2;
+  // IDs of losers whose archival failed; the merge already landed, so retry via ArchiveSession.
+  repeated string failed_archive_session_ids = 3;
 }
 
 // ============================================================================
