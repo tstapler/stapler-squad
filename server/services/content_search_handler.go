@@ -145,7 +145,7 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 	key := SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()}
 	host := remoteHost(remoteAddr)
 	// Slot first, then registration; release runs before end so a superseder that waits on end finds the slot free.
-	var release, end func() = func() {}, func() {}
+	release, end := func() {}, func() {}
 	defer func() { release(); end() }()
 	var sctx context.Context
 	var refused SearchBusyReason
