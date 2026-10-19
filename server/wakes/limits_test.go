@@ -343,3 +343,45 @@ func TestRateGate_should_ReleaseSlot_When_ClaimEndsSkipped(t *testing.T) {
 	require.Equal(t, domain.WakeStatusSkipped, r.status(skipped.ID))
 	assert.Zero(t, r.d.DeliveredPerOwnerHour("owner-1"), "a skipped claim gives its slot back")
 }
+
+func TestMetrics_should_ObserveFireLag_When_ATimeTriggerIsClaimedLate(t *testing.T) {
+	t.Parallel()
+	r := newDispatcherRig(t)
+	due := t0.Add(-90 * time.Second)
+	row := newRow(t, r.repo, rowOpts{owner: "owner-1", payload: "late", spec: domain.AtSpec{At: due}, nextFire: &due})
+
+	r.d.timerClaim(context.Background(), row)
+
+	assert.Equal(t, []float64{90}, r.d.Metrics().FireLags("at"), "wake_fire_lag_seconds{type=at}")
+}
+
+// A flag that was off while rows came due re-enables through the same rate gate
+// as any other fire (plan 4.3, pre-mortem #6): no bypass, one digest.
+func TestReconcile_should_DeliverAtMostTheOwnerLimitAndDigestTheRest_When_ThirtyOverdueRowsAreReEnabled(t *testing.T) {
+	t.Parallel()
+	r := newDispatcherRig(t)
+	rows := make([]*session.WakeTriggerData, 30)
+	for i := range rows {
+		due := t0.Add(-time.Duration(60-i) * time.Minute)
+		rows[i] = newRow(t, r.repo, rowOpts{owner: "owner-1", payload: fmt.Sprintf("overdue %d", i), spec: domain.AtSpec{At: due}, nextFire: &due})
+	}
+
+	r.d.reconcileStartup(context.Background())
+
+	delivered, pending := 0, 0
+	for _, row := range rows {
+		switch r.status(row.ID) {
+		case domain.WakeStatusDelivered:
+			delivered++
+		case domain.WakeStatusPending:
+			pending++
+		}
+	}
+	assert.Equal(t, 6, delivered, "the per-owner hourly limit")
+	assert.Equal(t, 24, pending, "the rest are deferred, not lost and not fired")
+	assert.Equal(t, 6, r.d.DeliveredPerOwnerHour("owner-1"))
+	assert.Len(t, r.steerer.pane.written(), 6)
+	notes := r.notifier.all()
+	require.Len(t, notes, 1, "exactly one failure-class digest for the owner")
+	assert.Equal(t, NotifyFailure, notes[0].Kind)
+}

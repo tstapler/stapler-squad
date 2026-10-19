@@ -566,5 +566,8 @@ func (d *Dispatcher) timerClaim(ctx context.Context, row *session.WakeTriggerDat
 		return
 	}
 	row.Status, row.ClaimedAt = domain.WakeStatusClaimed, &now
+	if row.NextFireAt != nil {
+		d.cfg.Metrics.ObserveFireLag(string(row.Type), now.Sub(*row.NextFireAt))
+	}
 	d.onClaimed(ctx, row)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -24,6 +25,8 @@ const (
 	MetricPeerHelp           = "peer_help_total"               // state
 
 	GaugeNeedsReviveAge = "wake_needs_revive_age_seconds" // oldest needs_revive row
+
+	HistogramFireLag = "wake_fire_lag_seconds" // type: claim time minus next_fire_at
 )
 
 // Reconcile result label values.
@@ -55,11 +58,13 @@ type Metrics struct {
 	otel   map[string]metric.Int64Counter
 	gauges map[string]float64
 	gauge  map[string]metric.Float64Gauge
+	lag    metric.Float64Histogram
+	lags   map[string][]float64 // trigger type -> observed lags in seconds
 }
 
 // NewMetrics returns an empty mirror.
 func NewMetrics() *Metrics {
-	return &Metrics{counts: map[string]int64{}, otel: map[string]metric.Int64Counter{}, gauges: map[string]float64{}, gauge: map[string]metric.Float64Gauge{}}
+	return &Metrics{counts: map[string]int64{}, otel: map[string]metric.Int64Counter{}, gauges: map[string]float64{}, gauge: map[string]metric.Float64Gauge{}, lags: map[string][]float64{}}
 }
 
 func seriesKey(name string, labels []string) string {
@@ -138,4 +143,34 @@ func (m *Metrics) Gauge(name string) float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.gauges[name]
+}
+
+// ObserveFireLag records how late a due trigger of triggerType was claimed.
+func (m *Metrics) ObserveFireLag(triggerType string, lag time.Duration) {
+	if m == nil {
+		return
+	}
+	seconds := max(lag, 0).Seconds()
+	m.mu.Lock()
+	m.lags[triggerType] = append(m.lags[triggerType], seconds)
+	if m.lag == nil {
+		if h, err := telemetry.GetMeter().Float64Histogram(HistogramFireLag, metric.WithUnit("s")); err == nil {
+			m.lag = h
+		}
+	}
+	h := m.lag
+	m.mu.Unlock()
+	if h != nil {
+		h.Record(context.Background(), seconds, metric.WithAttributes(attribute.String("type", triggerType)))
+	}
+}
+
+// FireLags returns the lags (seconds) observed for triggerType, oldest first.
+func (m *Metrics) FireLags(triggerType string) []float64 {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]float64(nil), m.lags[triggerType]...)
 }
