@@ -54,7 +54,9 @@ export function WindowedFileView({ sessionId, path, source, language, accessible
   }, [transport, sessionId, path, source.size, reloadKey]);
   const file = current?.file ?? null;
   const state = useWindowedState(file);
-  useEffect(() => { if (state.demoted) onDemoted?.(); }, [state.demoted, onDemoted]);
+  // An open that fails has no window to show; the full read is the always-working floor, so fall back like a demotion.
+  const fallBack = state.demoted || state.openFailed;
+  useEffect(() => { if (fallBack) onDemoted?.(); }, [fallBack, onDemoted]);
 
   if (!file) return null;
   if (accessible) {
