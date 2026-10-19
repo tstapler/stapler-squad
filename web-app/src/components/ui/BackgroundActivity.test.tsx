@@ -362,7 +362,7 @@ describe("BackgroundActivity", () => {
     expect(screen.getByTestId("background-rollup")).toHaveTextContent("(11 reviewed)");
   });
 
-  it("ux_ac70_should_showFirstRunNoteOnceAndKeepFailuresInReviewedGroup", () => {
+  it("ux_ac70_should_showFirstRunNoteUntilGotItIsPressed", () => {
     setup(eleven("unknown"));
     expect(screen.getByTestId("background-first-run")).toHaveTextContent("not that everything succeeded");
     fireEvent.click(screen.getByRole("button", { name: "Got it" }));
@@ -399,6 +399,14 @@ describe("BackgroundActivity", () => {
     expect(screen.getByText("Reviewed failures (1)")).toBeInTheDocument();
     expect(toggleOf(screen.getByTestId("background-row"))).toHaveAttribute("aria-expanded", "false");
     expect(props.onOpenRow).not.toHaveBeenCalled();
+  });
+
+  it("BackgroundActivity_should_notAdvertiseExpandableDetails_When_rowHasNoMessage", () => {
+    setup(eleven());
+    for (const row of screen.getAllByTestId("background-row")) {
+      expect(toggleOf(row)).not.toHaveAttribute("aria-expanded");
+      expect(toggleOf(row)).not.toHaveAttribute("aria-controls");
+    }
   });
 
   it("BackgroundActivity_should_notRenderControlsForSessionWithPendingQuestion_And_ShowLinkChip", () => {

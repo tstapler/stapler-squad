@@ -120,6 +120,7 @@ function RowView({
   const ex = row.exception;
   const needsHuman = row.state === "exception_needs_human";
   const departed = row.state === "departed";
+  const hasDetails = Boolean(ex?.message);
   // Row text toggles the details; a control inside the row never does (UX-AC71).
   const toggleFromText = (e: React.MouseEvent) => {
     const control = (e.target as HTMLElement).closest("a,button");
@@ -140,8 +141,8 @@ function RowView({
         <button
           type="button"
           className={`${rowTitle} ${rowTitleButton}`}
-          aria-expanded={expanded}
-          aria-controls={`${row.key}-details`}
+          aria-expanded={hasDetails ? expanded : undefined}
+          aria-controls={hasDetails ? `${row.key}-details` : undefined}
           data-row-toggle=""
           data-focus-id={focusId}
         >
