@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { usePublishDeckTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import type { PaneState } from "@/lib/hooks/useMobilePane";
 import {
   topBar, bottomBar, barButton, bottomItem, split, barLabel, title, fileName, dirtyDot, popover, popoverItem, srOnly,
@@ -62,8 +63,11 @@ export interface TopBarProps {
 export function MobileTopBar({ pane, origin, path, dirty, tabCount, overflow, onBack, onTabs }: TopBarProps) {
   const heading = pane === "files" ? "Files" : pane === "search" ? "Search" : path ?? "No file open";
   const backLabel = pane === "search" ? "Back to Files" : origin === "search" ? "Back to results" : "Back to Files";
+  // The phone toast deck docks under the session tab row by default, which is where this bar sits; dock it below the bar instead.
+  const barRef = useRef<HTMLDivElement>(null);
+  usePublishDeckTopOffset(barRef);
   return (
-    <div className={topBar} data-testid="mobile-top-bar">
+    <div ref={barRef} className={topBar} data-testid="mobile-top-bar">
       {pane !== "files" && <button type="button" className={barButton} aria-label={backLabel} onClick={() => onBack()}>←</button>}
       <div className={title} style={pane === "files" ? { paddingLeft: 12 } : undefined}>
         {pane === "editor" && dirty && <span className={dirtyDot} aria-hidden="true" />}
