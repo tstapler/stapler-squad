@@ -281,7 +281,11 @@ func nextFireAfter(row *session.WakeTriggerData, now time.Time) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	return sched.NextAfterFire(*row.NextFireAt, now)
+	next := sched.NextAfterFire(*row.NextFireAt, now)
+	if gap, skipped := sched.SkippedGap(*row.NextFireAt, next); skipped {
+		log.Info("wake cron: nonexistent local time skipped", "trigger_id", row.ID, "reason", "dst_gap", "wall_clock", gap.Format("2006-01-02 15:04"), "zone", sched.Zone())
+	}
+	return next
 }
 
 // RenderWake builds the text written into the owner's pane: a provenance

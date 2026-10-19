@@ -96,3 +96,23 @@ func TestCronSchedule_NextAfterFire_should_SkipMissedOccurrences_When_ClockJumps
 	scheduled := utc(2026, 10, 18, 10, 5)
 	assert.Equal(t, utc(2026, 10, 18, 12, 35), c.NextAfterFire(scheduled, utc(2026, 10, 18, 12, 31)))
 }
+
+func TestCronSchedule_SkippedGap_should_NameTheNonexistentLocalTime_OnlyWhenOneWasSkipped(t *testing.T) {
+	t.Parallel()
+	c := mustParseCron(t, "CRON_TZ=America/Chicago 30 2 * * *")
+	chicago, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+
+	fired := time.Date(2026, 3, 7, 2, 30, 0, 0, chicago).UTC()
+	gap, skipped := c.SkippedGap(fired, c.NextAfterFire(fired, fired))
+	require.True(t, skipped, "02:30 on 2026-03-08 does not exist in America/Chicago")
+	assert.Equal(t, "2026-03-08 02:30", gap.Format("2006-01-02 15:04"))
+
+	ordinary := time.Date(2026, 3, 9, 2, 30, 0, 0, chicago).UTC()
+	_, skipped = c.SkippedGap(ordinary, c.NextAfterFire(ordinary, ordinary))
+	assert.False(t, skipped, "an ordinary day skips nothing")
+
+	utc := mustParseCron(t, "30 2 * * *")
+	_, skipped = utc.SkippedGap(fired, utc.NextAfterFire(fired, fired))
+	assert.False(t, skipped, "UTC has no gaps")
+}

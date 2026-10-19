@@ -21,6 +21,7 @@ var ErrInvalidCron = errors.New("invalid cron spec")
 // owns the timer (ADR-006 rule 3).
 type CronSchedule struct {
 	sched cron.Schedule
+	wall  cron.Schedule // the same expression read as UTC wall-clock, to find skipped local times
 	zone  *time.Location
 }
 
@@ -50,7 +51,11 @@ func ParseCron(expr string) (CronSchedule, error) {
 	if err != nil {
 		return CronSchedule{}, fmt.Errorf("%w: %v", ErrInvalidCron, err)
 	}
-	return CronSchedule{sched: sched, zone: zone}, nil
+	wall, err := cron.ParseStandard("CRON_TZ=UTC " + strings.Join(rest, " "))
+	if err != nil {
+		return CronSchedule{}, fmt.Errorf("%w: %v", ErrInvalidCron, err)
+	}
+	return CronSchedule{sched: sched, wall: wall, zone: zone}, nil
 }
 
 func cronZonePrefix(field string) (string, bool) {
@@ -91,4 +96,31 @@ func (c CronSchedule) NextAfterFire(scheduled, now time.Time) time.Time {
 func (c CronSchedule) sameWallClockMinute(a, b time.Time) bool {
 	const layout = "2006-01-02 15:04"
 	return a.In(c.zone).Format(layout) == b.In(c.zone).Format(layout)
+}
+
+// maxGapScan bounds SkippedGap's walk; a gap is at most one hour wide.
+const maxGapScan = 10_000
+
+// SkippedGap reports the first wall-clock occurrence strictly between after and
+// next that does not exist in the zone (a spring-forward gap), which Next
+// silently skipped. The dispatcher logs it as reason=dst_gap.
+func (c CronSchedule) SkippedGap(after, next time.Time) (time.Time, bool) {
+	limit := wallClockUTC(next.In(c.zone))
+	t := c.wall.Next(wallClockUTC(after.In(c.zone)))
+	for range maxGapScan {
+		if !t.Before(limit) {
+			return time.Time{}, false
+		}
+		local := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, c.zone)
+		if local.Hour() != t.Hour() || local.Minute() != t.Minute() {
+			return t, true
+		}
+		t = c.wall.Next(t)
+	}
+	return time.Time{}, false
+}
+
+// wallClockUTC re-labels t's local wall-clock fields as UTC.
+func wallClockUTC(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC)
 }
