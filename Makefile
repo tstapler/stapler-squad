@@ -197,9 +197,22 @@ endif
 # local file:-dependency content) instead of a full per-worktree install --
 # see that script's header and docs/explanation/package-management-evaluation.md.
 # Opt out with STAPLER_SQUAD_SHARED_NODE_MODULES=0.
-web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml
+#
+# A worktree whose node_modules predates this mechanism is a real directory
+# with its own already-fresh .modules.yaml -- mtime-only prerequisites below
+# would call that "up to date" and never invoke the script, leaving its
+# backfill-migration logic dead. Force a re-run whenever node_modules exists
+# but isn't a symlink into the shared store; the script's own fast path
+# settles back into normal mtime caching once it is (verified via `make -n`
+# against both states).
+NEEDS_NODE_MODULES_MIGRATION := $(shell [ -e web-app/node_modules ] && [ ! -L web-app/node_modules ] && echo force)
+
+web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
 	@echo "Installing web-app pnpm dependencies..."
 	@./scripts/shared-node-modules.sh web-app
+
+.PHONY: FORCE-node-modules-migration
+FORCE-node-modules-migration: ;
 
 # Build Next.js app to web-app/out
 web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
