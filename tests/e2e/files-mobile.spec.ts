@@ -127,8 +127,7 @@ test.describe("phone 390x844", () => {
     await stubVisualViewport(page);
     await files.goto();
     await files.treeFile("a.txt").click();
-    await files.overflowButton.click();
-    await page.getByRole("menuitem", { name: "Go to line" }).click();
+    await files.bottomBarButton("Go to line").click();
     const dialog = page.getByRole("dialog", { name: "Go to line" });
     await expect(dialog).toBeVisible();
     await setVisualViewportHeight(page, 500);
