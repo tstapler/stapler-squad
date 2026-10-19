@@ -11,6 +11,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -108,15 +109,78 @@ func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *st
 	// trade-off for skipping a redundant .gitignore walk every 30s poll.
 	untrackedMatcher := g.getOrBuildUntrackedMatcher(entry, worktreePath)
 
-	// Classify index entries: staged-changed (index hash ≠ HEAD hash) vs stable.
-	type indexMeta struct {
-		name       string
-		indexHash  plumbing.Hash
-		headHash   plumbing.Hash // zero if not in HEAD
-		size       uint32
-		modifiedAt time.Time
-		staged     bool
+	metas, indexedNames, stagedDels := classifyIndex(idx, headHashes)
+
+	entry.mu.Unlock() // release before OS operations
+
+	// indexMtime anchors the racy-git window check below: a file is only
+	// "racy" (stat can't prove it's unchanged) if its own mtime is not clearly
+	// before the index was last written — the same test git itself uses,
+	// rather than re-hashing every stat-clean file on every single poll.
+	var indexMtime time.Time
+	if fi, statErr := os.Stat(filepath.Join(worktreeGitDir(worktreePath), "index")); statErr == nil {
+		indexMtime = fi.ModTime()
 	}
+
+	// ── Phase 2: build change target list (no lock, no blob reads) ───────────
+	stagedTargets := stagedTargetList(metas, stagedDels)
+	unstagedTargets := g.unstagedTargetList(worktreePath, metas, indexMtime, pass)
+
+	// ── Phase 3: memo lookup, then batch-read the needed blobs ───────────────
+	// With diff_counter on, files whose stat identity and HEAD blob are
+	// unchanged since a prior diff are answered from the memo and cost neither
+	// a blob read nor a file read.
+	var d DiffStat
+	var memo *fileDiffMemo
+	if g.effectiveFlags().DiffCounter {
+		memo = diffMemoInstance()
+	}
+	pending := make([]pendingTarget, 0, len(stagedTargets)+len(unstagedTargets))
+	for _, ts := range [][]changeTarget{stagedTargets, unstagedTargets} {
+		pending = g.resolveMemoHits(memo, worktreePath, ts, pending, &d)
+	}
+	blobMap := g.loadHeadBlobs(entry, pending)
+
+	for _, p := range pending {
+		g.applyDiff(&d, p, blobMap, memo, worktreePath)
+	}
+
+	// Untracked files: count lines as pure insertions (no HEAD version).
+	// Limited to maxUntrackedFiles to avoid OOM on repos with large build-artifact trees.
+	// Files over maxUntrackedFileSize are counted but not read for line counting.
+	// gitignore-matched paths (node_modules/, build output, etc.) are skipped
+	// entirely rather than walked and read — this was previously the single
+	// largest allocator in the app (~163GB cum in one profiling session),
+	// since ignored build trees were read just like any other untracked file.
+	// untrackedMatcher was resolved in Phase 1 above (cached on entry, F6).
+	_ = g.walkUntrackedSkip(worktreePath, indexedNames, untrackedMatcher, tg, func(absPath string) {
+		d.Files++
+		if n, ok := countFileLines(absPath); ok {
+			d.Insertions += n
+		}
+	})
+
+	return d, nil
+}
+
+// indexMeta is one stage-0 index entry classified against HEAD.
+type indexMeta struct {
+	name       string
+	indexHash  plumbing.Hash
+	headHash   plumbing.Hash // zero if not in HEAD
+	size       uint32
+	modifiedAt time.Time
+	staged     bool // index hash differs from HEAD
+}
+
+// stagedDel is a file in HEAD but absent from the index.
+type stagedDel struct {
+	name     string
+	headHash plumbing.Hash
+}
+
+// classifyIndex compares index entries with HEAD tree hashes (no blob reads).
+func classifyIndex(idx *index.Index, headHashes map[string]plumbing.Hash) ([]indexMeta, map[string]struct{}, []stagedDel) {
 	metas := make([]indexMeta, 0, len(idx.Entries))
 	indexedNames := make(map[string]struct{}, len(idx.Entries))
 	for _, e := range idx.Entries {
@@ -134,41 +198,32 @@ func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *st
 			staged:     e.Hash != headHash,
 		})
 	}
-
-	// Staged deletions: files in HEAD but absent from index.
-	type stagedDel struct {
-		name     string
-		headHash plumbing.Hash
-	}
 	var stagedDels []stagedDel
 	for name, headHash := range headHashes {
 		if _, inIdx := indexedNames[name]; !inIdx {
 			stagedDels = append(stagedDels, stagedDel{name, headHash})
 		}
 	}
+	return metas, indexedNames, stagedDels
+}
 
-	entry.mu.Unlock() // release before OS operations
-
-	// indexMtime anchors the racy-git window check below: a file is only
-	// "racy" (stat can't prove it's unchanged) if its own mtime is not clearly
-	// before the index was last written — the same test git itself uses,
-	// rather than re-hashing every stat-clean file on every single poll.
-	var indexMtime time.Time
-	if fi, statErr := os.Stat(filepath.Join(worktreeGitDir(worktreePath), "index")); statErr == nil {
-		indexMtime = fi.ModTime()
-	}
-
-	// ── Phase 2: build change target list (no lock, no blob reads) ───────────
-	stagedTargets := make([]changeTarget, 0, len(stagedDels))
+// stagedTargetList lists staged modifications and staged deletions.
+func stagedTargetList(metas []indexMeta, stagedDels []stagedDel) []changeTarget {
+	targets := make([]changeTarget, 0, len(stagedDels))
 	for _, m := range metas {
 		if m.staged {
-			stagedTargets = append(stagedTargets, changeTarget{m.name, m.headHash, false})
+			targets = append(targets, changeTarget{m.name, m.headHash, false})
 		}
 	}
 	for _, sd := range stagedDels {
-		stagedTargets = append(stagedTargets, changeTarget{sd.name, sd.headHash, true})
+		targets = append(targets, changeTarget{sd.name, sd.headHash, true})
 	}
+	return targets
+}
 
+// unstagedTargetList stats every non-staged entry and lists those that differ
+// from the index (or may, inside the racy-git window).
+func (g *GoGitVCSReader) unstagedTargetList(worktreePath string, metas []indexMeta, indexMtime time.Time, pass *statPass) []changeTarget {
 	unstagedTargets := make([]changeTarget, 0)
 	passCursor := pass.cursor()
 	for _, m := range metas {
@@ -215,42 +270,7 @@ func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *st
 			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
 		}
 	}
-
-	// ── Phase 3: memo lookup, then batch-read the needed blobs ───────────────
-	// With diff_counter on, files whose stat identity and HEAD blob are
-	// unchanged since a prior diff are answered from the memo and cost neither
-	// a blob read nor a file read.
-	var d DiffStat
-	var memo *fileDiffMemo
-	if g.effectiveFlags().DiffCounter {
-		memo = diffMemoInstance()
-	}
-	pending := make([]pendingTarget, 0, len(stagedTargets)+len(unstagedTargets))
-	for _, ts := range [][]changeTarget{stagedTargets, unstagedTargets} {
-		pending = g.resolveMemoHits(memo, worktreePath, ts, pending, &d)
-	}
-	blobMap := g.loadHeadBlobs(entry, pending)
-
-	for _, p := range pending {
-		g.applyDiff(&d, p, blobMap, memo, worktreePath)
-	}
-
-	// Untracked files: count lines as pure insertions (no HEAD version).
-	// Limited to maxUntrackedFiles to avoid OOM on repos with large build-artifact trees.
-	// Files over maxUntrackedFileSize are counted but not read for line counting.
-	// gitignore-matched paths (node_modules/, build output, etc.) are skipped
-	// entirely rather than walked and read — this was previously the single
-	// largest allocator in the app (~163GB cum in one profiling session),
-	// since ignored build trees were read just like any other untracked file.
-	// untrackedMatcher was resolved in Phase 1 above (cached on entry, F6).
-	_ = g.walkUntrackedSkip(worktreePath, indexedNames, untrackedMatcher, tg, func(absPath string) {
-		d.Files++
-		if n, ok := countFileLines(absPath); ok {
-			d.Insertions += n
-		}
-	})
-
-	return d, nil
+	return unstagedTargets
 }
 
 // changeTarget is one file whose diff against HEAD must be counted.
