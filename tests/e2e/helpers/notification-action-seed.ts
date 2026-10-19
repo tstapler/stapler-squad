@@ -27,6 +27,16 @@ async function history(request: APIRequestContext, baseUrl: string): Promise<His
   return body.notifications ?? [];
 }
 
+/** The history subscriber coalesces before persisting, so a row sent just now is not yet listed. */
+async function untilPersisted(request: APIRequestContext, baseUrl: string, key: string, value: string): Promise<void> {
+  await expect
+    .poll(async () => (await history(request, baseUrl)).some((n) => n.metadata?.[key] === value), {
+      message: `history row with ${key}=${value}`,
+      timeout: 15_000,
+    })
+    .toBe(true);
+}
+
 export interface SeededApproval {
   approvalId: string;
   command: string;
@@ -101,6 +111,7 @@ export async function seedGuidance(
     title: question,
     metadata: { guidance_request_id: row.id },
   });
+  await untilPersisted(request, baseUrl, 'guidance_request_id', row.id);
   return { id: row.id, question };
 }
 
@@ -131,6 +142,7 @@ export async function seedBacklogDecision(request: APIRequestContext, baseUrl: s
     title,
     metadata: { item_id: itemId, decision_schema: DECISION_SCHEMA },
   });
+  await untilPersisted(request, baseUrl, 'item_id', itemId);
   return { itemId, title };
 }
 
