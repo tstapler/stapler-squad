@@ -67,6 +67,10 @@ Sessions poll with the client-side `ScheduleWakeup`/`/loop` (ssq#428). The serve
 - Adds one table and one consumer; no new infrastructure, no new dependency (cron parsing already in robfig).
 - Correctness is ours: clock jumps, double-fire and missed-fire are covered by explicit tests (Epic 4 story 4.8).
 
+## Transport note (Spike S3, 2026-10-18; awaits owner review, default proceeds)
+
+Claude Code Channels can push a user turn into a live TUI (measured on 2.1.303), but a custom channel needs `--dangerously-load-development-channels`, which prompts for confirmation on every launch, and `--channels` is allowlist-only during the research preview (`research/spike-S3.md`). Spike S3 therefore FAILS the no-interactive-opt-in criterion: `SteerDelivery` with `SubmitContentWithEnter` stays the only wake transport and Channels is a future optimization (`Delivery_should_useChannelWhenSpikePassed` stays skipped).
+
 ## Alternatives rejected
 
 - **River/asynq job queue**: adds Postgres/Redis to a single-binary SQLite deployment.
