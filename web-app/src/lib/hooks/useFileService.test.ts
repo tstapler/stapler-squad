@@ -26,4 +26,20 @@ describe("useGetFileContent", () => {
     expect(seen).not.toContain("content of a.txt");
     expect(probe.result.current.data?.content).toBe("content of b.txt");
   });
+
+  it("useGetFileContent_should_KeepCachedFileData_When_ALateResponseForThePreviousFileArrives", async () => {
+    let resolveA: (v: unknown) => void = () => {};
+    getFileContent.mockImplementation((req: { path: string }) =>
+      req.path === "slow-a.txt" ? new Promise((r) => { resolveA = r; }) : Promise.resolve(reply(`content of ${req.path}`)));
+    // Warm the module cache for cached-b.txt.
+    const warm = renderHook(() => useGetFileContent("s-race", "cached-b.txt", ""));
+    await waitFor(() => expect(warm.result.current.data?.content).toBe("content of cached-b.txt"));
+
+    const { result, rerender } = renderHook(({ path }) => useGetFileContent("s-race", path, ""), { initialProps: { path: "slow-a.txt" } });
+    rerender({ path: "cached-b.txt" });
+    await waitFor(() => expect(result.current.data?.content).toBe("content of cached-b.txt"));
+    await act(async () => resolveA(reply("content of slow-a.txt")));
+    expect(result.current.data?.content).toBe("content of cached-b.txt");
+    expect(result.current.loading).toBe(false);
+  });
 });

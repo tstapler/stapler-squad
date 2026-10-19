@@ -110,6 +110,8 @@ export function useGetFileContent(
   );
 
   useEffect(() => {
+    // Bump on every run, including the early returns, so an in-flight fetch for the previous file goes stale.
+    const requestId = ++requestIdRef.current;
     if (!sessionId || !filePath) {
       setData(null);
       setLoading(false);
@@ -127,7 +129,6 @@ export function useGetFileContent(
       return;
     }
 
-    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     setData(null);
