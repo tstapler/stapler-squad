@@ -1718,3 +1718,12 @@ W0 implementation found these plan errors; each was checked against code before 
 
 ### Owner decision: Metric 1 carve-out confirmed (2026-10-18)
 - Owner replied "yes, confirm the carve-out and dispatch 1.2.1". The editor rejects disabling any edge an `agent` tool or `system` caller can request (ADR-007 Decision 4), including every `*->archived` edge; those edges stay gate-editable. Alternatives A and B for this item are dropped. Story 1.2.1 is cleared for dispatch.
+
+## Errata from W5 (2026-10-18)
+
+- Story 1.2.1 `Files:` extended to include `server/services/backlog_service_stages.go` and its test file (stage RPC guards, AC3/AC4).
+- The seeded graph has no `review->archived` edge; built-in stages cannot be stranded by an edge edit; the single-edge stranded check is mostly redundant with `ValidateDisableTransition`.
+- Stage disable/delete stranding check and the write are separate steps (small race window). Disabling a built-in stage that still has system-required outgoing edges is not blocked, since it is not stranded under the AC4 definition.
+- The operator `override_reason` graph bypass is still unimplemented; AC4's "only exit" message depends on it (Story 1.2.4 or later, with ADR-001/ADR-007 wording update).
+- Story 2.2.1: an extra test file was edited, a `backlog` flag was added, the link is unconditional, and the "Backlog resumed" text is a heuristic.
+- Task 1.1.3e (per-from-stage scope) deliberately skipped; the flag stays global-only.
