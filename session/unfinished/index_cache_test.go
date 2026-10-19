@@ -207,3 +207,19 @@ func TestHasUncommitted_ScanSkipShouldMatchLegacy_WhenWorktreeMutated(t *testing
 func writeFile(dir, name, content string) error {
 	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
 }
+
+func TestDiffShortstat_ShouldAgreeWithHasUncommitted_WhenSkipWorktreeEntryAbsent(t *testing.T) {
+	t.Parallel()
+	repo, dir := trackedRepo(t, map[string]string{"keep.txt": "k\n", "sparse.txt": "s\n"})
+	testrepo.SkipWorktree(t, repo, "sparse.txt")
+	require.NoError(t, os.Remove(filepath.Join(dir, "sparse.txt")))
+	ageIndex(t, dir)
+
+	legacy, err := newLegacyReader().DiffShortstat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 1, legacy.Files, "flag off: absent sparse entry counted deleted, as HasUncommitted does")
+
+	skip, err := newSkipReader().DiffShortstat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, skip.Files, "scan_skip: absent sparse entry is not a deletion, matching HasUncommitted")
+}

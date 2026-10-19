@@ -186,6 +186,9 @@ type indexMeta struct {
 	size       uint32
 	modifiedAt time.Time
 	staged     bool // index hash differs from HEAD
+	// skipWorktree marks a sparse-checkout entry; under scan_skip an absent one is
+	// not a deletion, matching hasUncommittedSkip.
+	skipWorktree bool
 }
 
 // stagedDel is a file in HEAD but absent from the index.
@@ -211,6 +214,8 @@ func classifyIndex(idx *index.Index, headHashes map[string]plumbing.Hash) ([]ind
 			size:       e.Size,
 			modifiedAt: e.ModifiedAt,
 			staged:     e.Hash != headHash,
+
+			skipWorktree: e.SkipWorktree,
 		})
 	}
 	var stagedDels []stagedDel
@@ -241,6 +246,7 @@ func stagedTargetList(metas []indexMeta, stagedDels []stagedDel) []changeTarget 
 func (g *GoGitVCSReader) unstagedTargetList(worktreePath string, metas []indexMeta, indexMtime time.Time, pass *statPass) []changeTarget {
 	unstagedTargets := make([]changeTarget, 0)
 	passCursor := pass.cursor()
+	skipSparse := g.effectiveFlags().ScanSkip
 	for _, m := range metas {
 		if m.staged {
 			continue
@@ -248,7 +254,7 @@ func (g *GoGitVCSReader) unstagedTargetList(worktreePath string, metas []indexMe
 		wtPath := filepath.Join(worktreePath, m.name)
 		info, serr := g.lstatTracked(&passCursor, m.name, wtPath)
 		if serr != nil {
-			if os.IsNotExist(serr) {
+			if os.IsNotExist(serr) && !(skipSparse && m.skipWorktree) {
 				unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, true})
 			}
 			continue
