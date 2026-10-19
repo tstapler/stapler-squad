@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,4 +97,84 @@ func TestWakeLimitSettings_should_MapEveryConfigField(t *testing.T) {
 	got := wakeLimitSettings(config.WakeLimitsConfig{PendingPerOwner: 7, ReviveLockSeconds: 9})
 	assert.Equal(t, 7, got.PendingPerOwner)
 	assert.Equal(t, 9, got.ReviveLockSeconds)
+}
+
+type lifecycleProbe struct {
+	on        atomic.Bool
+	starts    atomic.Int32
+	stops     atomic.Int32
+	reconcile atomic.Int32
+	startErr  error
+}
+
+func (p *lifecycleProbe) lifecycle() *wakeLifecycle {
+	return &wakeLifecycle{
+		enabled: p.on.Load,
+		start: func(context.Context) (func(), func(context.Context), error) {
+			if p.startErr != nil {
+				return nil, nil, p.startErr
+			}
+			p.starts.Add(1)
+			return func() { p.stops.Add(1) }, func(context.Context) { p.reconcile.Add(1) }, nil
+		},
+	}
+}
+
+func TestWakeLifecycle_should_StartAndStopDispatcher_When_FlagFlipsAtRuntime(t *testing.T) {
+	t.Parallel()
+	p := &lifecycleProbe{}
+	lc := p.lifecycle()
+	ctx := context.Background()
+
+	lc.sync(ctx)
+	assert.EqualValues(t, 0, p.starts.Load(), "flag off at boot: nothing runs")
+
+	p.on.Store(true)
+	lc.sync(ctx)
+	lc.sync(ctx)
+	assert.EqualValues(t, 1, p.starts.Load(), "a flip on starts it once")
+
+	p.on.Store(false)
+	lc.sync(ctx)
+	lc.sync(ctx)
+	assert.EqualValues(t, 1, p.stops.Load(), "a flip off stops it once")
+
+	p.on.Store(true)
+	lc.sync(ctx)
+	assert.EqualValues(t, 2, p.starts.Load(), "and it can start again")
+}
+
+func TestWakeLifecycle_should_ReconcileOnlyWhileRunning_And_PickUpFlagOnTick(t *testing.T) {
+	t.Parallel()
+	p := &lifecycleProbe{}
+	lc := p.lifecycle()
+	ctx := context.Background()
+
+	lc.Reconcile(ctx)
+	assert.EqualValues(t, 0, p.reconcile.Load())
+
+	p.on.Store(true)
+	lc.Reconcile(ctx)
+	assert.EqualValues(t, 1, p.starts.Load(), "the periodic tick applies a flip the listener missed")
+	assert.EqualValues(t, 1, p.reconcile.Load())
+
+	lc.shutdown()
+	assert.EqualValues(t, 1, p.stops.Load())
+	lc.shutdown()
+	assert.EqualValues(t, 1, p.stops.Load(), "shutdown is idempotent")
+}
+
+func TestWakeLifecycle_should_RetryStart_When_NotLeaderThenBecomesLeader(t *testing.T) {
+	t.Parallel()
+	p := &lifecycleProbe{startErr: wakes.ErrNotLeader}
+	p.on.Store(true)
+	lc := p.lifecycle()
+	ctx := context.Background()
+
+	lc.sync(ctx)
+	assert.EqualValues(t, 0, p.starts.Load())
+
+	p.startErr = nil
+	lc.sync(ctx)
+	assert.EqualValues(t, 1, p.starts.Load())
 }

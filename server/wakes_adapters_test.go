@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/wakes"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func notifyOnce(t *testing.T, n wakes.Notification) *events.Event {
@@ -55,4 +56,14 @@ func TestWakeNotifier_should_ReachOperator_When_OwnerSessionIsHidden(t *testing.
 	assert.Equal(t, deliverygate.OutcomeDeliver, deliverygate.ShouldDeliver(deliverygate.VisibilityNotASession, facts).Outcome)
 	assert.Equal(t, deliverygate.OutcomeSuppress, deliverygate.ShouldDeliver(deliverygate.VisibilityHidden, facts).Outcome,
 		"the same INFO bound to a hidden session would be suppressed, which is why a reminder is unbound")
+}
+
+func TestIsStartingStatus_should_OnlyBeTrueForCreatingAndRestoring(t *testing.T) {
+	t.Parallel()
+	for _, s := range []session.Status{session.Creating, session.Restoring} {
+		assert.True(t, isStartingStatus(s), s.String())
+	}
+	for _, s := range []session.Status{session.Active, session.Paused, session.Stopped, session.Hibernated, session.Crashed, session.PermanentlyFailed, session.Failed} {
+		assert.False(t, isStartingStatus(s), s.String())
+	}
 }

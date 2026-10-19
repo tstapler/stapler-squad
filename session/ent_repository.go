@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"encoding/json"
@@ -60,8 +61,8 @@ type EntRepository struct {
 	seedURI string
 
 	// wakeChanged is called after any WakeTrigger row change so the wake timer
-	// can re-arm (set once at wiring via SetWakeChangeHook, before use).
-	wakeChanged func()
+	// can re-arm (SetWakeChangeHook).
+	wakeChanged atomic.Pointer[func()]
 
 	// itemChangePublisher is nil-safe — every hooked backlog mutation method
 	// nil-checks before calling it (publish is best-effort and never blocks

@@ -156,9 +156,13 @@ With the row off the prompts are byte-identical to before
 (`session/wake_polling_guard_test.go`) pins the lines per Go file that mention
 the banned tool.
 
-### Known limit
+### Flag flips apply at runtime
 
-The dispatcher is built at server start from the flag value then
-(`startWakes`); a runtime flip does not start or stop it. `ListWakeTriggers`
-reports the flag, so the section can show "paused" or "resumed" before the
-dispatcher agrees; reminders answer `UNAVAILABLE` until the next restart.
+A global or `trigger:<type>` flip of `agent_wake_triggers` starts or stops the
+dispatcher at once (`wakeLifecycle` in `server/wakes_module.go`); the 60 s
+reconcile tick also applies a change the flip missed and retries a start that
+lost the leader guard. Stopping keeps every row. Starting runs the startup
+reconcile, so claims stay fire-once. Each `trigger:<type>` scope is read at fire
+time: a pending row of an off type is neither fired nor marked `missed`, except
+that `expires_at` always wins (ADR-008). While the dispatcher is stopped nothing
+marks rows `missed`; expired rows end at the next start.

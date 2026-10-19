@@ -133,3 +133,24 @@ func TestEffectiveAnswerQuestion_ShouldBeClosed_WhenNothingConfigured(t *testing
 		assert.False(t, effectiveAnswerQuestion(r), "route %d", r)
 	}
 }
+
+func TestUpdateFeatureFlag_ShouldNotifyWakeListener_WhenAgentWakeTriggersFlippedGloballyOrByScope(t *testing.T) {
+	e := newNotificationFlagEnv(t)
+	var calls int
+	var sawOn []bool
+	SetWakeFlagListener(func() {
+		calls++
+		sawOn = append(sawOn, effectiveFlag(agentWakeTriggersFlagName, "dispatcher"))
+	})
+	t.Cleanup(func() { SetWakeFlagListener(nil) })
+
+	require.NoError(t, e.flip(agentWakeTriggersFlagName, true))
+	require.NoError(t, e.flip(agentWakeTriggersFlagName, false))
+	_, err := e.svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+		Name: agentWakeTriggersFlagName, Scope: scopePrefixTrigger + "at", Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED,
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, calls)
+	assert.Equal(t, []bool{true, false, true}, sawOn, "the listener sees the already-persisted value")
+}

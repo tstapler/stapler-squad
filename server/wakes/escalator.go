@@ -55,7 +55,7 @@ func PeerFaultOf(answerer, asker OwnerFacts) (reason string, notSent, ok bool) {
 		return "peer is archived", true, true
 	case answerer.WorkspaceKey != "" && asker.WorkspaceKey != "" && answerer.WorkspaceKey != asker.WorkspaceKey:
 		return "peer works in a different repository", true, true
-	case !answerer.Live:
+	case !answerer.Live && !answerer.Starting:
 		return "Peer is stopped. Not delivered unless resumed.", false, true
 	}
 	return "", false, false

@@ -79,6 +79,9 @@ type OwnerFacts struct {
 	// Live: tracked and running, so a pane write is possible. Exists && !Live
 	// is a stopped owner.
 	Live bool
+	// Starting is a session still being created or restored: not live yet, but
+	// not stopped either, so a peer request to it is neither stalled nor undeliverable.
+	Starting bool
 	// Revive is set for a stopped owner whose instance can be restarted.
 	Revive ReviveTarget
 	// WorkspaceKey names the repository the session works in (Instance.WorkspaceKey),

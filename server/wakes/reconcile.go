@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -135,7 +137,8 @@ func (d *Dispatcher) markRevivalAlerted(id string) bool {
 
 // fireHeldConditions claims every pending event-type row whose persisted-state
 // predicate already holds (the condition became true while events were not
-// being observed).
+// being observed), and ends event-type rows past expires_at: no timer watches
+// those.
 func (d *Dispatcher) fireHeldConditions(ctx context.Context) {
 	rows, err := d.cfg.Store.ListPendingWakeTriggers(ctx)
 	if err != nil {
@@ -144,6 +147,12 @@ func (d *Dispatcher) fireHeldConditions(ctx context.Context) {
 	}
 	for _, row := range rows {
 		if row.Type.IsTimeBased() {
+			continue
+		}
+		if now := d.cfg.Clock.Now(); row.ExpiresAt != nil && !row.ExpiresAt.After(now) {
+			if id, err := uuid.Parse(row.ID); err == nil {
+				d.expire(ctx, id, row, now) // expires_at wins even for an off scope (ADR-008)
+			}
 			continue
 		}
 		holds, err := d.conditionHolds(ctx, row)

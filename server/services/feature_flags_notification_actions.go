@@ -264,3 +264,41 @@ func resolveAnswerQuestion(cfg *config.Config, ev flagEvidence, route answerRout
 	}
 	return false
 }
+
+// wakeFlagListener is told after every agent_wake_triggers flip (global or
+// scoped) so the wake dispatcher starts, stops or re-checks held rows at once
+// instead of at the next restart. The server sets it while it runs.
+var wakeFlagListener atomic.Pointer[func()]
+
+// SetWakeFlagListener registers fn; nil clears it.
+func SetWakeFlagListener(fn func()) {
+	if fn == nil {
+		wakeFlagListener.Store(nil)
+		return
+	}
+	wakeFlagListener.Store(&fn)
+}
+
+func notifyWakeFlagChanged() {
+	if fn := wakeFlagListener.Load(); fn != nil {
+		(*fn)()
+	}
+}
+
+func (c agentWakeTriggersFlagController) Enable(ctx context.Context) error {
+	err := c.liveFlagController.Enable(ctx)
+	notifyWakeFlagChanged()
+	return err
+}
+
+func (c agentWakeTriggersFlagController) Disable() error {
+	err := c.liveFlagController.Disable()
+	notifyWakeFlagChanged()
+	return err
+}
+
+// ApplyScope makes a trigger:<type> flip live; the flag is already persisted.
+func (c agentWakeTriggersFlagController) ApplyScope(string, bool) error {
+	notifyWakeFlagChanged()
+	return nil
+}

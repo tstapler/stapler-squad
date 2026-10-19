@@ -48,6 +48,11 @@ type Config struct {
 	// keep the defaults and everything is clamped to the compiled ceilings.
 	Limits LimitSettings
 
+	// TypeEnabled reports whether a trigger type's flag scope is on, read at
+	// fire time (ADR-008). Nil means every type is on. A pending row of an off
+	// type is neither fired nor marked missed, except by expires_at.
+	TypeEnabled func(domain.WakeTriggerType) bool
+
 	ClaimLease    time.Duration
 	RetryInterval time.Duration
 }
@@ -133,6 +138,7 @@ func NewDispatcher(cfg Config) *Dispatcher {
 	})
 	d.timer = NewTimekeeper(cfg.Store, cfg.Clock, d.onClaimed,
 		WithMissedFunc(d.timerMissed),
+		WithHoldFunc(func(row *session.WakeTriggerData) bool { return d.typeOff(row.Type) }),
 		WithAdmitFunc(func(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool {
 			return d.allowClaim(ctx, row, now)
 		}),
@@ -174,6 +180,10 @@ func (d *Dispatcher) Delivery() *SteerDelivery { return d.delivery }
 
 // Metrics returns the dispatcher's counters.
 func (d *Dispatcher) Metrics() *Metrics { return d.cfg.Metrics }
+
+func (d *Dispatcher) typeOff(t domain.WakeTriggerType) bool {
+	return d.cfg.TypeEnabled != nil && !d.cfg.TypeEnabled(t)
+}
 
 func (d *Dispatcher) allowClaim(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool {
 	return d.admit == nil || d.admit(ctx, row, now)
@@ -360,11 +370,11 @@ func (d *Dispatcher) fire(ctx context.Context, row *session.WakeTriggerData) {
 		return
 	}
 	now := d.cfg.Clock.Now()
-	if d.debounced(row.ID, now) {
-		return
-	}
 	if row.ExpiresAt != nil && !row.ExpiresAt.After(now) {
 		d.expire(ctx, id, row, now)
+		return
+	}
+	if d.typeOff(row.Type) || d.debounced(row.ID, now) {
 		return
 	}
 	if !d.allowClaim(ctx, row, now) {

@@ -92,7 +92,8 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 			Exists:   true,
 			Archived: snap.ArchivedAt != nil,
 			OneShot:  session.IsOneShot(inst),
-			Live:     inst.IsActive(),
+			Live:     snap.Status == session.Active,
+			Starting: isStartingStatus(snap.Status),
 
 			WorkspaceKey: inst.WorkspaceKey(),
 		}
@@ -117,6 +118,11 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 	}
 	f.ItemTerminal = o.itemTerminal(ctx, sessionUUID)
 	return f, nil
+}
+
+// isStartingStatus: a session that is still coming up is neither live nor stopped.
+func isStartingStatus(s session.Status) bool {
+	return s == session.Creating || s == session.Restoring
 }
 
 // itemTerminal reports whether the backlog item this session works is done or

@@ -236,3 +236,11 @@ func TestGuidanceSource_should_WakeTheAskerWithCancelled_When_OperatorCancelsThe
 	r.eventually(r.delivered(row.ID))
 	assert.Contains(t, r.steerer.pane.written()[0], "help request g3 was cancelled (by the operator)")
 }
+
+func TestPeerFaultOf_should_NotFault_When_PeerIsStillStarting(t *testing.T) {
+	asker := OwnerFacts{Exists: true, Live: true, WorkspaceKey: "repo"}
+	_, _, faulted := PeerFaultOf(OwnerFacts{Exists: true, Starting: true, WorkspaceKey: "repo"}, asker)
+	assert.False(t, faulted, "a just-spawned peer is not stopped")
+	_, _, faulted = PeerFaultOf(OwnerFacts{Exists: true, Starting: true, Archived: true}, asker)
+	assert.True(t, faulted, "archived still wins")
+}

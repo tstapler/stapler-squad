@@ -74,12 +74,19 @@ type CreateWakeTriggerInput struct {
 }
 
 // SetWakeChangeHook registers fn to run after every WakeTrigger row change.
-// Call once at wiring, before the repository is shared.
-func (r *EntRepository) SetWakeChangeHook(fn func()) { r.wakeChanged = fn }
+// Safe to call while the repository is in use: the wake dispatcher swaps it as
+// agent_wake_triggers flips. A nil fn clears it.
+func (r *EntRepository) SetWakeChangeHook(fn func()) {
+	if fn == nil {
+		r.wakeChanged.Store(nil)
+		return
+	}
+	r.wakeChanged.Store(&fn)
+}
 
 func (r *EntRepository) notifyWakeChanged() {
-	if r.wakeChanged != nil {
-		r.wakeChanged()
+	if fn := r.wakeChanged.Load(); fn != nil {
+		(*fn)()
 	}
 }
 

@@ -41,6 +41,11 @@ type ClaimedFunc func(ctx context.Context, claimed *session.WakeTriggerData)
 // for a rate limit, skipped it); the timer then leaves the row alone.
 type AdmitFunc func(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool
 
+// HoldFunc reports a due row that must stay pending untouched (its trigger
+// type is switched off). The loop re-checks it every storeRetryDelay instead of
+// spinning on a row that is due but not claimable.
+type HoldFunc func(row *session.WakeTriggerData) bool
+
 // MissedFunc is told about a row that expired before the timer could claim it.
 type MissedFunc func(ctx context.Context, missed *session.WakeTriggerData)
 
@@ -54,6 +59,7 @@ type Timekeeper struct {
 	claimed ClaimedFunc
 	missed  MissedFunc
 	admit   AdmitFunc
+	hold    HoldFunc
 	leader  LeaderGuard
 	rearm   chan struct{}
 
@@ -75,6 +81,9 @@ func WithMissedFunc(fn MissedFunc) TimekeeperOption { return func(t *Timekeeper)
 
 // WithAdmitFunc registers the claim-time gate (the Wake limits table).
 func WithAdmitFunc(fn AdmitFunc) TimekeeperOption { return func(t *Timekeeper) { t.admit = fn } }
+
+// WithHoldFunc registers the scope hold; expires_at is checked before it.
+func WithHoldFunc(fn HoldFunc) TimekeeperOption { return func(t *Timekeeper) { t.hold = fn } }
 
 // NewTimekeeper builds a Timekeeper; claimed is called for every row it claims.
 func NewTimekeeper(store timerStore, clock Clock, claimed ClaimedFunc, opts ...TimekeeperOption) *Timekeeper {
@@ -232,6 +241,9 @@ func (t *Timekeeper) handleDue(ctx context.Context, row *session.WakeTriggerData
 	}
 	if row.ExpiresAt != nil && !row.ExpiresAt.After(now) {
 		return t.markMissed(ctx, id, row, now)
+	}
+	if t.hold != nil && t.hold(row) {
+		return false
 	}
 	if t.admit != nil && !t.admit(ctx, row, now) {
 		return true
