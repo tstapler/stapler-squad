@@ -79,6 +79,23 @@ describe("Detector", () => {
     });
   });
 
+  describe("FanOutDetector", () => {
+    it("FanOutDetector_should_detectCountAndPrompt_When_inputIsFanoutNColonPrompt", () => {
+      const result = registry.detect("fanout 3: add dark mode");
+      expect(result.type).toBe(InputType.FanOut);
+      expect(result.parsedValue).toBe("add dark mode");
+      expect(result.metadata?.fanoutCount).toBe(3);
+    });
+
+    it("FanOutDetector_should_notMatch_When_countIsAboveCap", () => {
+      expect(registry.detect("fanout 9: add dark mode").type).not.toBe(InputType.FanOut);
+    });
+
+    it("FanOutDetector_should_notMatch_When_promptIsEmpty", () => {
+      expect(registry.detect("fanout 2:").type).not.toBe(InputType.FanOut);
+    });
+  });
+
   describe("ChatBacklogItemDetector", () => {
     it("ChatBacklogItemDetector_should_detectBacklogPrefix_When_inputStartsWithBacklogColon", () => {
       const result = registry.detect("backlog: add dark mode support");

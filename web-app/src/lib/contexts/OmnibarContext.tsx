@@ -20,6 +20,7 @@ import { PresetDetector } from "@/lib/omnibar/detectors/PresetDetector";
 import { useGitHubEnterpriseHosts } from "@/lib/hooks/useGitHubEnterpriseHosts";
 import { GitHubEnterpriseURLDetector } from "@/lib/omnibar/detectors/GitHubEnterpriseURLDetector";
 import { useConfiguredRemotes } from "@/lib/hooks/useConfiguredRemotes";
+import { fanOutSession, fanoutComparisonPath } from "@/lib/hooks/useFanoutService";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -262,6 +263,28 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         : data.sessionType
         ? sessionTypeMap[data.sessionType]
         : undefined;
+
+      if (data.fanoutCount && data.fanoutCount >= 2) {
+        // Server validates 2-5 and rejects anything else with InvalidArgument.
+        const { groupId } = await fanOutSession(
+          {
+            title: data.title,
+            path: data.path,
+            branch: data.branch,
+            program: data.program,
+            category: data.category,
+            autoYes: data.autoYes,
+            autoApprove: data.autoApprove ?? false,
+            sessionType: effectiveSessionType,
+            initialPrompt: data.initialPrompt,
+            permissionMode: data.permissionMode ?? "",
+            extraArgs: data.extraArgs ?? [],
+          },
+          data.fanoutCount,
+        );
+        router.push(fanoutComparisonPath(groupId));
+        return;
+      }
 
       // createSession throws on error, so no null check needed
       const session = await createSession({
