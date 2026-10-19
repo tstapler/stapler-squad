@@ -169,7 +169,10 @@ type BacklogService struct {
 	// (server/dependencies.go, Task 2.4.4a).
 	julesDispatcher JulesDispatcher
 	cfg             *config.Config
-	engine          session.WorkflowEngine
+	// repoSettings looks up a repo's merge settings for the stuck report; nil
+	// (the default) skips the lookup so every item reports UNSPECIFIED.
+	repoSettings RepoSettingsLookup
+	engine       session.WorkflowEngine
 	// reviewGuard is the listener's process-wide review-spawn reservation, so
 	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
 	reviewGuard *session.ReviewSpawnGuard
@@ -468,6 +471,12 @@ func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id stri
 // CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
 func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
 	s.gateSatisfactionRepo = repo
+}
+
+// SetRepoSettingsLookup wires the repo-settings lookup used to populate the
+// auto-merge fields of the stuck report. nil disables the lookup.
+func (s *BacklogService) SetRepoSettingsLookup(l RepoSettingsLookup) {
+	s.repoSettings = l
 }
 
 // SetLivenessRepository wires the repository backing the LivenessDefinition
