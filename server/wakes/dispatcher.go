@@ -484,7 +484,7 @@ func (d *Dispatcher) ended(_ context.Context, row *session.WakeTriggerData, stat
 	dg := d.digest
 	d.mu.Unlock()
 	if dg != nil {
-		dg.add(row.OwnerSessionUUID)
+		dg.add(row.OwnerSessionUUID, row.ID)
 		return
 	}
 	if d.cfg.Notifier != nil {

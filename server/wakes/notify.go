@@ -35,7 +35,7 @@ func failureNotification(row *session.WakeTriggerData, state domain.WakeStatus, 
 		Kind:             NotifyFailure,
 		OwnerSessionUUID: row.OwnerSessionUUID,
 		Title:            fmt.Sprintf("Scheduled prompt %s", state),
-		Message:          fmt.Sprintf("%s (%s): %q", state, reason, snippet(row.Action.Payload)),
+		Message:          fmt.Sprintf("%s (%s) trigger %s: %q", state, reason, row.ID, snippet(row.Action.Payload)),
 	}
 }
 
@@ -54,17 +54,19 @@ func reminderNotification(row *session.WakeTriggerData, ownerExists bool) Notifi
 // digest folds the missed and skipped rows of one reconcile run into a single
 // failure-class notification, however many rows ended (pre-mortem #6).
 type digest struct {
-	mu      sync.Mutex
-	byOwner map[string]int
-	total   int
+	mu       sync.Mutex
+	byOwner  map[string]int
+	triggers map[string][]string
+	total    int
 }
 
-func newDigest() *digest { return &digest{byOwner: map[string]int{}} }
+func newDigest() *digest { return &digest{byOwner: map[string]int{}, triggers: map[string][]string{}} }
 
-func (dg *digest) add(owner string) {
+func (dg *digest) add(owner, triggerID string) {
 	dg.mu.Lock()
 	defer dg.mu.Unlock()
 	dg.byOwner[owner]++
+	dg.triggers[owner] = append(dg.triggers[owner], triggerID)
 	dg.total++
 }
 
@@ -87,8 +89,10 @@ func (dg *digest) build(now time.Time, recent map[string]time.Time) (Notificatio
 		return Notification{}, false
 	}
 	sort.Strings(owners)
+	var ids []string
 	for _, o := range owners {
 		recent[o] = now
+		ids = append(ids, dg.triggers[o]...)
 	}
 	listed := owners
 	if len(listed) > digestOwnersListed {
@@ -97,6 +101,11 @@ func (dg *digest) build(now time.Time, recent map[string]time.Time) (Notificatio
 	msg := fmt.Sprintf("%d scheduled prompts were missed or skipped during the restart. Sessions: %s", total, strings.Join(listed, ", "))
 	if rest := len(owners) - len(listed); rest > 0 {
 		msg += fmt.Sprintf(" and %d more", rest)
+	}
+	if len(ids) > digestOwnersListed {
+		msg += fmt.Sprintf(". Triggers: %s and %d more", strings.Join(ids[:digestOwnersListed], ", "), len(ids)-digestOwnersListed)
+	} else {
+		msg += ". Triggers: " + strings.Join(ids, ", ")
 	}
 	return Notification{Kind: NotifyFailure, Title: "Scheduled prompts missed", Message: msg}, true
 }
