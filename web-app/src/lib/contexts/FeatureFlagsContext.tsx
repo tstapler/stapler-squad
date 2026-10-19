@@ -53,12 +53,20 @@ export function readbackMismatch(change: FlagChange, flag: FeatureFlag): string 
   return entry?.enabled === change.enabled ? null : change.scope;
 }
 
+/** Outcome of a setFlag call; a failure carries the reason shown in the flag's row. */
+export type SetFlagResult = { ok: true } | { ok: false; error: string };
+
 interface FeatureFlagsContextValue {
   flags: Record<string, boolean>;
   flagList: FeatureFlagMeta[];
   isLoading: boolean;
+  /** Last failure of any kind (load or update); consumers that need to tell them apart use loadError. */
   error: string | null;
-  setFlag: (name: string, change: boolean | FlagChange) => Promise<void>;
+  /** Reason the flag list could not be loaded, or null. Cleared by reload(). */
+  loadError: string | null;
+  /** Re-fetches the flag list, showing the loading state. */
+  reload: () => Promise<void>;
+  setFlag: (name: string, change: boolean | FlagChange) => Promise<SetFlagResult>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
@@ -66,7 +74,9 @@ const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
   flagList: [],
   isLoading: true,
   error: null,
-  setFlag: async () => {},
+  loadError: null,
+  reload: async () => {},
+  setFlag: async () => ({ ok: true }),
 });
 
 export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
@@ -74,13 +84,15 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const [flagList, setFlagList] = useState<FeatureFlagMeta[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const client = useMemo(
     () => createClient(SessionService, getConnectTransport()),
     []
   );
 
-  const fetchFlags = useCallback(async () => {
+  // quiet: a background re-read after a failed write must not turn a loaded list into a load failure.
+  const fetchFlags = useCallback(async (opts?: { quiet?: boolean }) => {
     try {
       const res = await client.getFeatureFlags({});
       const map: Record<string, boolean> = {};
@@ -91,8 +103,10 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       }
       setFlags(map);
       setFlagList(list);
-    } catch {
+      setLoadError(null);
+    } catch (err) {
       setError("Failed to load feature flags");
+      if (!opts?.quiet) setLoadError(err instanceof Error ? err.message : "request failed");
     } finally {
       setIsLoading(false);
     }
@@ -100,9 +114,15 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { fetchFlags(); }, [fetchFlags]);
 
+  const reload = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    await fetchFlags();
+  }, [fetchFlags]);
+
   // The displayed state is always the server's read-back, never an optimistic
   // value: a failed or ignored change leaves the previous state and re-reads it.
-  const setFlag = useCallback(async (name: string, change: boolean | FlagChange) => {
+  const setFlag = useCallback(async (name: string, change: boolean | FlagChange): Promise<SetFlagResult> => {
     const req =
       typeof change === "boolean"
         ? { name, enabled: change }
@@ -128,16 +148,18 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       }
       setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
       setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
+      return { ok: true };
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
       setError("Failed to update feature flag");
-      void fetchFlags();
+      void fetchFlags({ quiet: true });
+      return { ok: false, error: err instanceof Error ? err.message : "request failed" };
     }
   }, [client, fetchFlags]);
 
   const value = useMemo(
-    () => ({ flags, flagList, isLoading, error, setFlag }),
-    [flags, flagList, isLoading, error, setFlag]
+    () => ({ flags, flagList, isLoading, error, loadError, reload, setFlag }),
+    [flags, flagList, isLoading, error, loadError, reload, setFlag]
   );
 
   return (

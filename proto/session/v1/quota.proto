@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package session.v1;
+
+// QuotaService reads and edits the account-wide session-quota gate settings.
+// Changes apply live: the gate re-reads config.json on every reconcile tick.
+service QuotaService {
+  // GetQuotaConfig returns the effective settings (defaults applied), the derived
+  // mode, warnings, and whether the operator ever saved quota settings.
+  rpc GetQuotaConfig(GetQuotaConfigRequest) returns (GetQuotaConfigResponse) {}
+
+  // UpdateQuotaConfig merges the supplied fields into the stored settings after
+  // validation, persists them, and returns the stored (read-back) state.
+  rpc UpdateQuotaConfig(UpdateQuotaConfigRequest) returns (UpdateQuotaConfigResponse) {}
+}
+
+// QuotaMode is derived from enabled and assumed_window_token_budget; never stored.
+enum QuotaMode {
+  QUOTA_MODE_UNSPECIFIED = 0;
+  QUOTA_MODE_DISABLED = 1;
+  // Gate on, budget 0: only the hard rate-limit override is active.
+  QUOTA_MODE_REACTIVE_ONLY = 2;
+  QUOTA_MODE_PROACTIVE = 3;
+}
+
+// QuotaSource tells "never configured" apart from "configured with the defaults".
+enum QuotaSource {
+  QUOTA_SOURCE_UNSPECIFIED = 0;
+  QUOTA_SOURCE_NOT_CONFIGURED = 1;
+  QUOTA_SOURCE_CONFIGURED = 2;
+}
+
+// QuotaSettings carries every editable quota field. In an update, an absent
+// optional field keeps the stored value; a present zero is rejected where zero
+// would be silently replaced by a default. default_cost_budget_threshold_usd is
+// the exception: the request is authoritative, so absent stores nil (off).
+message QuotaSettings {
+  optional bool enabled = 1;
+  optional double pause_below_headroom_pct = 2;
+  optional double resume_margin_pct = 3;
+  optional int32 consecutive_ticks_to_pause = 4;
+  optional int32 consecutive_ticks_to_resume = 5;
+  // 0 is valid and means reactive-only (no proactive signal).
+  optional int64 assumed_window_token_budget = 6;
+  optional int32 rate_limit_window_minutes = 7;
+  optional int32 manual_override_grace_minutes = 8;
+  optional int32 foreground_throttle_delay_seconds = 9;
+  // Global soft-budget default in USD; absent = off, 0.0 is a valid threshold.
+  optional double default_cost_budget_threshold_usd = 10;
+}
+
+message GetQuotaConfigRequest {}
+message GetQuotaConfigResponse {
+  // Effective values (defaults applied); every field is populated except an off
+  // default_cost_budget_threshold_usd.
+  QuotaSettings settings = 1;
+  QuotaMode mode = 2;
+  repeated string warnings = 3;
+  QuotaSource quota_source = 4;
+}
+
+message UpdateQuotaConfigRequest {
+  QuotaSettings settings = 1;
+}
+message UpdateQuotaConfigResponse {
+  QuotaSettings settings = 1;
+  QuotaMode mode = 2;
+  repeated string warnings = 3;
+  QuotaSource quota_source = 4;
+}

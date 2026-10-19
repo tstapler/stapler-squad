@@ -56,25 +56,120 @@ export const flagDescription = style({
   lineHeight: 1.4,
 });
 
+// The button is the 44x44 hit area; the visible track inside it stays 44x24.
 export const toggle = style({
   flexShrink: 0,
-  width: "2.75rem",
-  height: "1.5rem",
-  borderRadius: "9999px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "44px",
+  height: "44px",
+  padding: 0,
   border: "none",
+  background: "transparent",
+  borderRadius: vars.radii.md,
   cursor: "pointer",
-  transition: "background 0.15s ease",
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.primary}`,
+    outlineOffset: "2px",
+  },
+  selectors: {
+    '&[aria-disabled="true"]': { cursor: "progress", opacity: 0.6 },
+  },
+});
+
+export const toggleTrack = style({
   position: "relative",
+  display: "block",
+  width: "44px",
+  height: "24px",
+  borderRadius: "9999px",
+  background: vars.color.borderColor,
+  transition: "background 0.15s ease",
+  selectors: {
+    '[aria-checked="true"] > &': { background: vars.color.primary },
+  },
 });
 
 export const toggleThumb = style({
   position: "absolute",
-  top: "0.1875rem",
-  width: "1.125rem",
-  height: "1.125rem",
+  top: "3px",
+  left: "3px",
+  width: "18px",
+  height: "18px",
   borderRadius: "50%",
   background: "white",
   transition: "left 0.15s ease",
+  selectors: {
+    '[aria-checked="true"] > * > &': { left: "23px" },
+  },
+});
+
+export const rowStatus = style({
+  color: vars.color.textSecondary,
+  fontSize: "0.8125rem",
+  minHeight: "1.2em",
+});
+
+export const rowError = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "0.5rem",
+  marginTop: "0.5rem",
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: vars.radii.md,
+  padding: "0.5rem 0.75rem",
+  fontSize: "0.8125rem",
+});
+
+export const retryButton = style({
+  minHeight: "44px",
+  padding: "0 0.75rem",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: "transparent",
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  cursor: "pointer",
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.primary}`,
+    outlineOffset: "2px",
+  },
+});
+
+export const group = style({
+  marginTop: "1.5rem",
+});
+
+export const groupHeading = style({
+  color: vars.color.textPrimary,
+  fontSize: "1.0625rem",
+  fontWeight: 700,
+  margin: 0,
+  paddingBottom: "0.25rem",
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const nestedRow = style({
+  marginLeft: "1.5rem",
+  paddingLeft: "1rem",
+  borderLeft: `2px solid ${vars.color.borderColor}`,
+});
+
+export const skeletonRow = style({
+  height: "4.5rem",
+  margin: "0.75rem 0",
+  borderRadius: vars.radii.md,
+  background: vars.color.surfaceSubtle,
+});
+
+export const badgeInert = style({
+  background: "transparent",
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
 });
 
 export const badge = style({
@@ -88,8 +183,8 @@ export const badge = style({
 });
 
 export const badgeEnabled = style({
-  background: vars.color.success,
-  color: "white",
+  background: vars.color.successBg,
+  color: vars.color.successText,
 });
 
 export const badgeDisabled = style({
