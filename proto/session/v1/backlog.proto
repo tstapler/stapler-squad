@@ -2146,13 +2146,9 @@ message StuckBacklogItem {
   // become un-snoozed at query time (ListStuckBacklogItems only ever returns
   // rows that are currently un-snoozed, so this is normally unset).
   google.protobuf.Timestamp snoozed_until = 10;
-  // allow_auto_merge surfaces the repo's GitHub auto-merge setting, read-only
-  // and best-effort (see plan.md Story 4.1.4 / ADR discussion). This field is
-  // declared here so the Phase 4 frontend work doesn't require a second
-  // proto-gen round-trip, but it is intentionally left unset (not populated)
-  // by the ListStuckBacklogItems handler added in this change — Phase 4 owns
-  // fetching and populating it. Unset means "not fetched / unknown", not
-  // "auto-merge disabled".
+  // allow_auto_merge is the repo's GitHub auto-merge setting. It is meaningful
+  // only when auto_merge_lookup_status is OK; for every other status it is
+  // unset, so "false" never accompanies a failed or skipped lookup.
   optional bool allow_auto_merge = 11;
   // remediation_attempts is how many automated (or operator-triggered via
   // TriggerRemediationNow) remediation attempts have been made for this open
@@ -2180,6 +2176,22 @@ message StuckBacklogItem {
   string denied_from = 18;
   string denied_to = 19;
   string denied_reason = 20;
+  // auto_merge_lookup_status says whether allow_auto_merge can be trusted.
+  // UNSPECIFIED means no lookup was made (e.g. no GitHub repo for the item).
+  AutoMergeLookupStatus auto_merge_lookup_status = 21;
+  // auto_merge_checked_at is the time of the lookup attempt, set for every
+  // status except UNSPECIFIED (including failed lookups, shown as "Last tried").
+  google.protobuf.Timestamp auto_merge_checked_at = 22;
+}
+
+// AutoMergeLookupStatus is the outcome of the per-repo auto-merge setting lookup.
+enum AutoMergeLookupStatus {
+  AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED = 0;
+  AUTO_MERGE_LOOKUP_STATUS_OK = 1;
+  AUTO_MERGE_LOOKUP_STATUS_RATE_LIMITED = 2;
+  AUTO_MERGE_LOOKUP_STATUS_NO_PERMISSION = 3;
+  AUTO_MERGE_LOOKUP_STATUS_NOT_FOUND = 4;
+  AUTO_MERGE_LOOKUP_STATUS_ERROR = 5;
 }
 
 message ListStuckBacklogItemsRequest {}

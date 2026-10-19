@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -145,10 +146,74 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 	}
 }
 
+// RepoSettingsLookup fetches a repo's merge settings; github.RepoSettings
+// satisfies it.
+type RepoSettingsLookup func(ctx context.Context, ref githubpkg.RepoRef) githubpkg.RepoSettingsResult
+
+func toProtoAutoMergeStatus(s githubpkg.RepoSettingsStatus) sessionv1.AutoMergeLookupStatus {
+	switch s {
+	case githubpkg.RepoSettingsOK:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK
+	case githubpkg.RepoSettingsRateLimited:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_RATE_LIMITED
+	case githubpkg.RepoSettingsNoPermission:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_NO_PERMISSION
+	case githubpkg.RepoSettingsNotFound:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_NOT_FOUND
+	case githubpkg.RepoSettingsError:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_ERROR
+	default:
+		return sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED
+	}
+}
+
+// populateAutoMerge fills the auto-merge fields on items from the repo each
+// item's PR URL names, fetching settings once per repo. Items with no
+// parseable GitHub PR URL stay UNSPECIFIED and trigger no lookup.
+func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*sessionv1.StuckBacklogItem) {
+	if s.repoSettings == nil {
+		return
+	}
+	hosts := s.EnterpriseHosts()
+	byRepo := make(map[githubpkg.RepoRef]githubpkg.RepoSettingsResult)
+	for _, item := range items {
+		if item.PrUrl == "" {
+			continue
+		}
+		parsed, err := githubpkg.ParseGitHubRefWithHosts(item.PrUrl, hosts)
+		if err != nil {
+			continue
+		}
+		ref, err := githubpkg.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
+		if err != nil {
+			continue
+		}
+		res, ok := byRepo[ref]
+		if !ok {
+			res = s.repoSettings(ctx, ref)
+			byRepo[ref] = res
+		}
+		applyAutoMerge(item, res)
+	}
+}
+
+func applyAutoMerge(item *sessionv1.StuckBacklogItem, res githubpkg.RepoSettingsResult) {
+	item.AutoMergeLookupStatus = toProtoAutoMergeStatus(res.Status)
+	if res.Status == githubpkg.RepoSettingsUnspecified {
+		return
+	}
+	if !res.CheckedAt.IsZero() {
+		item.AutoMergeCheckedAt = timestamppb.New(res.CheckedAt)
+	}
+	if allowed, ok := res.AutoMerge(); ok {
+		item.AllowAutoMerge = &allowed
+	}
+}
+
 // stuckBacklogItemToProto maps an OpenStuckStateData projection (already
 // filtered to open + un-snoozed by FindOpenStuckStates) to its proto
-// representation. allow_auto_merge is intentionally left unset here — Phase 4
-// (Story 4.1.4) owns fetching and populating the per-repo, TTL-cached value.
+// representation. allow_auto_merge is left unset here; ListStuckBacklogItems populates it via
+// populateAutoMerge so one lookup serves every item of a repo.
 func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBacklogItem {
 	item := &sessionv1.StuckBacklogItem{
 		ItemId:          row.ItemID,
@@ -208,6 +273,8 @@ func (s *BacklogService) ListStuckBacklogItems(
 			}
 		}
 	}
+
+	s.populateAutoMerge(ctx, items)
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil
 }
