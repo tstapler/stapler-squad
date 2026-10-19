@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -434,6 +436,7 @@ func TestGuidanceAnswerer_ShouldReportAlreadyResolved_WhenAnswerNotApplied(t *te
 	require.NoError(t, err)
 	assert.Equal(t, outApplied, first.Outcome)
 	assert.Equal(t, outResolved, second.Outcome, "applied=false maps to ALREADY_RESOLVED")
+	assert.Equal(t, "prod", second.Detail, "the value that won")
 }
 
 func TestMapReplyOutcome_ShouldCoverEveryReplyOutcome(t *testing.T) {
@@ -474,4 +477,28 @@ func TestInvokeNotificationAction_ShouldKeepTheCard_WhenAnswerWasNotApplied(t *t
 	f.invoke(t, localCtx(t), answerReq("k-q"), nil)
 
 	assert.Empty(t, f.resolver.questions)
+}
+
+func TestApprovalResolver_ShouldCarryTheStampedDecision_WhenAlreadyResolved(t *testing.T) {
+	withIsolatedStateDir(t)
+	history, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
+	require.NoError(t, err)
+	require.NoError(t, history.Append(&notifications.NotificationRecord{
+		ID: "appr-1", SessionID: "session-X", NotificationType: 1, CreatedAt: time.Now(),
+		Metadata: map[string]string{"approval_id": "appr-1"},
+	}))
+	store := NewApprovalStore("")
+	svc := NewApprovalService(store)
+	svc.SetNotificationStore(history)
+	require.NoError(t, store.Create(newTestPendingApproval("appr-1", "session-X", "Bash")))
+	resolver := NewApprovalResolver(svc, store)
+
+	first, err := resolver.ResolveApproval(context.Background(), ApprovalChoice{ApprovalID: "appr-1", Allow: false})
+	require.NoError(t, err)
+	again, err := resolver.ResolveApproval(context.Background(), ApprovalChoice{ApprovalID: "appr-1", Allow: true})
+	require.NoError(t, err)
+
+	assert.Equal(t, outApplied, first.Outcome)
+	assert.Equal(t, outResolved, again.Outcome)
+	assert.Equal(t, "deny", again.Detail, "the card can say what the other tab decided")
 }

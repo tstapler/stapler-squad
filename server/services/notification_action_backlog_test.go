@@ -67,7 +67,9 @@ func TestBacklogDecider_ShouldMarkDone_WhenAcceptedFromReview(t *testing.T) {
 	assert.Equal(t, outApplied, decide(t, w.decider(), choiceAccept, false).Outcome)
 	assert.Equal(t, backlogStatusDone, w.lastTarget)
 	assert.Equal(t, backlogStatusReview, w.lastExpect, "the transition is guarded by the status the operator saw")
-	assert.Equal(t, outResolved, decide(t, w.decider(), choiceAccept, false).Outcome, "a retry sees done")
+	retry := decide(t, w.decider(), choiceAccept, false)
+	assert.Equal(t, outResolved, retry.Outcome, "a retry sees done")
+	assert.Equal(t, backlogStatusDone, retry.Detail, "the value that resolved it")
 	assert.EqualValues(t, 1, w.transitions.Load())
 }
 

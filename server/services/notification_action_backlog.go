@@ -84,7 +84,7 @@ func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (ActionRe
 // already at target was decided by an earlier call.
 func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, current, target string, from ...string) (ActionResult, error) {
 	if current == target {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, current), nil
 	}
 	if !stringIn(from, current) {
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
@@ -113,7 +113,7 @@ func mapTransitionError(err error) (ActionResult, error) {
 func (b backlogDecider) merge(ctx context.Context, d BacklogDecision, status string) (ActionResult, error) {
 	switch status {
 	case backlogStatusDone, backlogStatusArchived:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, status), nil
 	case backlogStatusReview, backlogStatusPRPending:
 	default:
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil

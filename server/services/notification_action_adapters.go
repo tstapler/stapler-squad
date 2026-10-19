@@ -37,18 +37,30 @@ func (a approvalServiceAdapter) ResolveApproval(ctx context.Context, c ApprovalC
 	}
 	switch connect.CodeOf(err) {
 	case connect.CodeNotFound:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.decision(c.ApprovalID)), nil
 	case connect.CodeFailedPrecondition:
 		// Still pending: the CI-red guard blocked it ("Approve anyway" needs confirm).
 		// Gone: a rule auto-resolved it while the operator looked.
 		if _, pending := a.store.Get(c.ApprovalID); pending {
 			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 		}
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.decision(c.ApprovalID)), nil
 	case connect.CodeInvalidArgument, connect.CodeAborted:
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}
 	return ActionResult{}, err
+}
+
+// decision is the stamped outcome of an already-resolved approval ("allow",
+// "deny", ...), the value an "Answered elsewhere" card shows; "" when unknown.
+func (a approvalServiceAdapter) decision(approvalID string) string {
+	if a.svc == nil || a.svc.notificationStore == nil {
+		return ""
+	}
+	if rec, ok := a.svc.notificationStore.GetByID(approvalID); ok {
+		return rec.Metadata["approval_decision"]
+	}
+	return ""
 }
 
 // guidanceServiceAdapter answers through GuidanceRequestService.
@@ -71,7 +83,7 @@ func (a guidanceServiceAdapter) AnswerGuidance(ctx context.Context, requestID, a
 		return ActionResult{}, err
 	}
 	if !resp.Msg.GetApplied() {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, resp.Msg.GetRequest().GetAnswer()), nil
 	}
 	return applied(), nil
 }
