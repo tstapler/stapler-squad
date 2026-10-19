@@ -39,15 +39,37 @@ func TestWakeDispatcherEnabled_should_FollowFlagMatrix_When_GlobalAndScopesPermu
 	}
 }
 
-// With no workflow repo or scheduler constructed anywhere, a due trigger is still claimed.
-func TestWakesModule_should_ClaimDueTrigger_When_NoWorkflowSchedulerExists(t *testing.T) {
+type wakeTestSteerer struct{ wrote chan string }
+
+func (wakeTestSteerer) IsReadyForSteer(string) bool { return true }
+func (s wakeTestSteerer) WriteWake(_ context.Context, _ string, text string) (wakes.WriteOutcome, error) {
+	s.wrote <- text
+	return wakes.WriteDelivered, nil
+}
+
+type wakeTestOwners struct{}
+
+func (wakeTestOwners) Owner(context.Context, string) (wakes.OwnerFacts, error) {
+	return wakes.OwnerFacts{Exists: true, Live: true}, nil
+}
+
+type wakeTestAdmission struct{}
+
+func (wakeTestAdmission) Admit(context.Context) (bool, error) { return false, nil }
+
+// With no workflow repo or scheduler constructed anywhere, a due trigger is
+// still claimed and delivered through the dispatcher.
+func TestWakeDispatcher_should_DeliverDueTrigger_When_NoWorkflowSchedulerExists(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	claimed := make(chan string, 1)
-	mod := newWakesModule(storage, wakes.NoLeader{}, func(_ context.Context, row *session.WakeTriggerData) { claimed <- row.ID })
+	wrote := make(chan string, 1)
+	d := newWakeDispatcher(wakeWiring{
+		Store: storage, Steerer: wakeTestSteerer{wrote: wrote}, Owners: wakeTestOwners{},
+		Admission: wakeTestAdmission{}, Leader: wakes.NoLeader{},
+	}, storage.SetWakeChangeHook)
 
 	due := time.Now().Add(-time.Minute)
 	action, err := domain.NewWakeAction(domain.WakeActionSteerText, "due")
@@ -57,13 +79,21 @@ func TestWakesModule_should_ClaimDueTrigger_When_NoWorkflowSchedulerExists(t *te
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, mod.timer.Start(context.Background()))
-	t.Cleanup(func() { _ = mod.timer.Stop(context.Background()) })
+	require.NoError(t, d.Start(context.Background()))
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
 
 	select {
-	case id := <-claimed:
-		assert.Equal(t, created.ID, id)
+	case text := <-wrote:
+		assert.Contains(t, text, created.ID)
+		assert.Contains(t, text, "<wake")
 	case <-time.After(10 * time.Second):
-		t.Fatal("due trigger was not claimed")
+		t.Fatal("due trigger was not delivered")
 	}
+}
+
+func TestWakeLimitSettings_should_MapEveryConfigField(t *testing.T) {
+	t.Parallel()
+	got := wakeLimitSettings(config.WakeLimitsConfig{PendingPerOwner: 7, ReviveLockSeconds: 9})
+	assert.Equal(t, 7, got.PendingPerOwner)
+	assert.Equal(t, 9, got.ReviveLockSeconds)
 }

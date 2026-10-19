@@ -3,12 +3,12 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -19,20 +19,44 @@ const (
 	wakeTriggerScopeBase = "trigger:"
 )
 
-// wakesModule wires the wake-trigger timer into the server lifecycle
-// (ADR-006). Story 4.3 supplies the real claimed-row delivery; until then
-// claimed rows are only logged, which is inert because no code creates a
-// trigger before Story 4.5 and the flag defaults off.
-type wakesModule struct {
-	timer *wakes.Timekeeper
+// wakeWiring carries the ports a Dispatcher needs; startWakes builds them from
+// the server dependencies and tests pass fakes.
+type wakeWiring struct {
+	Store     wakes.Store
+	Steerer   wakes.Steerer
+	Owners    wakes.OwnerLookup
+	Admission wakes.Admission
+	Notifier  wakes.Notifier
+	Events    wakes.EventSource
+	Backlog   wakes.BacklogState
+	Leader    wakes.LeaderGuard
+	Limits    wakes.LimitSettings
 }
 
-// newWakesModule builds the timer over storage and registers its re-arm on
-// every wake-row change.
-func newWakesModule(storage *session.Storage, leader wakes.LeaderGuard, claimed wakes.ClaimedFunc) *wakesModule {
-	tk := wakes.NewTimekeeper(storage, wakes.RealClock{}, claimed, wakes.WithLeaderGuard(leader))
-	storage.SetWakeChangeHook(tk.Rearm)
-	return &wakesModule{timer: tk}
+// newWakeDispatcher builds the dispatcher and registers its change hook so a
+// created, cancelled or changed row re-arms the timer and refreshes the index.
+func newWakeDispatcher(w wakeWiring, hook func(func())) *wakes.Dispatcher {
+	d := wakes.NewDispatcher(wakes.Config{
+		Store: w.Store, Steerer: w.Steerer, Owners: w.Owners, Admission: w.Admission,
+		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Leader: w.Leader, Limits: w.Limits,
+	})
+	hook(d.ChangeHook())
+	return d
+}
+
+// wakeLimitSettings maps the config section onto the dispatcher's settings.
+func wakeLimitSettings(c config.WakeLimitsConfig) wakes.LimitSettings {
+	return wakes.LimitSettings(c)
+}
+
+// wakeReconcileFn is the dispatcher's periodic pass, called from the existing
+// 60 s ReconcileStuck ticker in BuildRuntimeDeps (ADR-006 rule 6: no new ticker).
+var wakeReconcileFn atomic.Pointer[func(context.Context)]
+
+func runWakeReconcile(ctx context.Context) {
+	if fn := wakeReconcileFn.Load(); fn != nil {
+		(*fn)(ctx)
+	}
 }
 
 // wakeDispatcherEnabled applies the flag matrix row "dispatcher running":
@@ -49,30 +73,46 @@ func wakeDispatcherEnabled(cfg *config.Config) bool {
 	return false
 }
 
-// startWakes starts the wake timer when the flag matrix allows it and
+// startWakes starts the wake dispatcher when the flag matrix allows it and
 // registers its shutdown join. A non-leader process, or a disabled flag,
 // leaves it stopped.
 func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies) {
-	if deps.Storage == nil || !wakeDispatcherEnabled(config.LoadConfig()) {
+	cfg := config.LoadConfig()
+	if deps.Storage == nil || deps.SessionService == nil || !wakeDispatcherEnabled(cfg) {
 		return
 	}
 	var leader wakes.LeaderGuard = wakes.NoLeader{}
 	if dir, err := config.GetConfigDir(); err == nil {
 		leader = wakes.FileLeader{Path: filepath.Join(dir, wakeLeaderLockName)}
 	}
-	mod := newWakesModule(deps.Storage, leader, func(_ context.Context, row *session.WakeTriggerData) {
-		log.Info("wake claimed; delivery is wired in Story 4.3", "trigger_id", row.ID)
-	})
-	if err := mod.timer.Start(ctx); err != nil {
-		log.Warn("wake timer not started", "error", err)
+	var bus wakes.EventSource
+	if deps.EventBus != nil {
+		bus = deps.EventBus
+	}
+	d := newWakeDispatcher(wakeWiring{
+		Store:     deps.Storage,
+		Steerer:   wakeSteerer{svc: deps.SessionService},
+		Owners:    wakeOwners{svc: deps.SessionService, storage: deps.Storage},
+		Admission: wakeAdmission{backlog: deps.BacklogService},
+		Notifier:  wakeNotifier{bus: deps.EventBus},
+		Events:    bus,
+		Backlog:   wakeBacklogState{storage: deps.Storage},
+		Leader:    leader,
+		Limits:    wakeLimitSettings(cfg.WakeLimits),
+	}, deps.Storage.SetWakeChangeHook)
+	if err := d.Start(ctx); err != nil {
+		log.Warn("wake dispatcher not started", "error", err)
 		return
 	}
+	reconcile := d.Reconcile
+	wakeReconcileFn.Store(&reconcile)
 	srv.shutdownHooks = append(srv.shutdownHooks, func() {
+		wakeReconcileFn.Store(nil)
 		stopCtx, cancel := context.WithTimeout(context.Background(), wakeShutdownTimeout)
 		defer cancel()
-		if err := mod.timer.Stop(stopCtx); err != nil {
-			log.Warn("wake timer shutdown", "error", err)
+		if err := d.Stop(stopCtx); err != nil {
+			log.Warn("wake dispatcher shutdown", "error", err)
 		}
 	})
-	log.Info("wake timer started")
+	log.Info("wake dispatcher started")
 }
