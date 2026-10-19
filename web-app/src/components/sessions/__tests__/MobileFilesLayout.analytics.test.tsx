@@ -62,16 +62,13 @@ describe("MobileFilesLayout tab analytics", () => {
     ]);
   });
 
-  it("tabSheet_should_EmitOneCloseOthersEventPerClosedTab_When_CloseOthersChosen", async () => {
+  it("tabSheet_should_EmitSingleCloseOthersEvent_When_CloseOthersChosen", async () => {
     const m = mount();
     const sheet = await openSheet(m);
 
     fireEvent.click(within(sheet).getByRole("button", { name: "Actions for a.go" }));
     fireEvent.click(within(sheet).getByRole("menuitem", { name: "Close others" }));
 
-    expect(m.events("files.tab.close")).toEqual([
-      expect.objectContaining({ method: "close_others" }),
-      expect.objectContaining({ method: "close_others" }),
-    ]);
+    expect(m.events("files.tab.close")).toEqual([expect.objectContaining({ method: "close_others", dirty: "false", open_tabs: "2-3" })]);
   });
 });

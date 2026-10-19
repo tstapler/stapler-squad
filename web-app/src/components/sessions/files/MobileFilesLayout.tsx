@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { canGoBack, canGoForward, type BufferNotice } from "@/lib/files/bufferReducer";
+import { canGoBack, canGoForward, type Buffer, type BufferNotice } from "@/lib/files/bufferReducer";
 import { bucketTabs } from "@/lib/files/analytics/events";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { stepFontPx } from "@/lib/files/fontSize";
@@ -84,16 +84,17 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
   const { buffers, bridge } = v2;
   const { state } = buffers;
   const active = buffers.active;
-  const emitClose = (path: string, method: "button" | "context_menu" | "close_others") => {
-    const b = state.buffers.find((x) => x.path === path);
-    analytics.emit("files.tab.close", { dirty: b && isDirty(b) ? "true" : "false", method, open_tabs: bucketTabs(state.buffers.length) });
+  const emitClose = (closing: readonly Buffer[], method: "button" | "context_menu" | "close_others") => {
+    const dirty = closing.some(isDirty);
+    analytics.emit("files.tab.close", { dirty: dirty ? "true" : "false", method, open_tabs: bucketTabs(state.buffers.length) });
   };
   const closeFromSheet = (path: string, method: "button" | "context_menu") => {
-    emitClose(path, method);
+    emitClose(state.buffers.filter((x) => x.path === path), method);
     buffers.close(path);
   };
+  // One event per gesture, not per closed tab.
   const closeOthersFromSheet = (keep: string) => {
-    for (const b of state.buffers) if (b.path !== keep) emitClose(b.path, "close_others");
+    emitClose(state.buffers.filter((x) => x.path !== keep), "close_others");
     tabActions.closeOthers(keep);
   };
   const selectFromSheet = (path: string) => {
