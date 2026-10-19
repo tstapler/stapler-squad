@@ -26,6 +26,17 @@ describe("cm6LazyDoc gap-line model (Story 1.6.4)", () => {
   const segs = () => gapTableOf(o.view.state).segs;
   const firstLoaded = () => segs().findIndex((s) => s.kind === "loaded");
 
+  it("lazyDoc_should_KeepLineCountEqualToTheGapTable_When_AWindowHoldsALoneCR", async () => {
+    o = await openLazy(host, 50);
+    o.handle.provideRange({ startLine: 1, endLine: 5 }, ["one", "two\rthree", "four", "five", "six"].join("\n"));
+
+    const table = gapTableOf(o.view.state);
+    const loaded = table.segs.findIndex((s) => s.kind === "loaded");
+    const loadedDocLines = o.view.state.doc.lineAt(table.segs[loaded].to).number - o.view.state.doc.lineAt(table.segs[loaded].from).number + 1;
+    expect(loadedDocLines).toBe(5);
+    expect(o.view.state.doc.lines).toBe(5 + table.segs.filter((seg) => seg.kind === "gap").length); // one row per gap
+  });
+
   it("lazyDoc_should_ShowAbsoluteLineNumbersAndRefuseEditsIntoPlaceholders_And_KeepUndoDepthAcross100LoadEvictCycles", async () => {
     o = await openLazy(host, 1_000_000);
     provide(o, 1, 400);

@@ -133,6 +133,8 @@ export class CmEngine implements EditorEngine {
       mergeExtension(),
     ];
     if (lang) extensions.push(lang);
+    // The server counts lines by "\n" only; CodeMirror would also split a lone CR and drift from the gap table.
+    if (init.lazy) extensions.push(EditorState.lineSeparator.of("\n"));
     if (!init.lazy) return new CmBuffer(EditorState.create({ doc: init.doc, extensions }));
     const parts = lazyBufferParts(this.lazyMode, init.lazy.lineCount, extensions);
     const buffer = new CmBuffer(EditorState.create({ doc: parts.doc, extensions: parts.extensions }));
