@@ -6,7 +6,7 @@ The Astro + Starlight marketing site and curated help docs for
 by `.github/workflows/deploy-website.yml` on every push to `main` that
 touches `website/**`, `docs/how-to/**`, or `docs/features.md`.
 
-This is a standalone pnpm package, independent of `web-app/`'s Next.js
+This is a standalone Bun package, independent of `web-app/`'s Next.js
 toolchain — see `project_plans/stapler-squad-website/decisions/ADR-001-ssg-choice-astro-starlight.md`
 for why.
 
@@ -35,7 +35,7 @@ Help docs are not a live mirror of `docs/`. `scripts/content-manifest.json`
 (the `ContentManifest`, see ADR-003) lists every candidate `docs/how-to/*.md`
 source and whether it's included; `scripts/sync-content.mjs` copies and
 transforms each included source into a committed `CuratedDoc` under
-`src/content/docs/help/`. Run `pnpm run sync-content` after editing a source
+`src/content/docs/help/`. Run `bun run sync-content` after editing a source
 doc that's in the manifest, and commit the regenerated output — the deploy
 workflow's `sync-content -- --check` step fails the build on drift.
 
@@ -45,16 +45,16 @@ All commands are run from `website/`:
 
 | Command | Action |
 | :--- | :--- |
-| `pnpm install` | Install dependencies |
-| `pnpm run dev` | Start local dev server at `localhost:4321` |
-| `pnpm run build` | Build the production site to `./dist/` |
-| `pnpm run preview` | Preview the build locally before deploying |
-| `pnpm run sync-content` | Regenerate `CuratedDoc`s from `content-manifest.json` |
-| `pnpm run sync-content -- --check` | Verify-only: fail if regenerating would produce a diff |
-| `pnpm test` / `pnpm run test:unit` / `pnpm run test:integration` | Vitest suites |
-| `pnpm run test:e2e` | Playwright UX-acceptance suite (builds + previews first) |
-| `pnpm run test:a11y` | axe-core accessibility scan (builds + previews first) |
-| `pnpm run lhci:desktop` / `pnpm run lhci:mobile` | Lighthouse CI against the built site |
+| `bun install` | Install dependencies |
+| `bun run dev` | Start local dev server at `localhost:4321` |
+| `bun run build` | Build the production site to `./dist/` |
+| `bun run preview` | Preview the build locally before deploying |
+| `bun run sync-content` | Regenerate `CuratedDoc`s from `content-manifest.json` |
+| `bun run sync-content -- --check` | Verify-only: fail if regenerating would produce a diff |
+| `bun run test` / `bun run test:unit` / `bun run test:integration` | Vitest suites |
+| `bun run test:e2e` | Playwright UX-acceptance suite (builds + previews first) |
+| `bun run test:a11y` | axe-core accessibility scan (builds + previews first) |
+| `bun run lhci:desktop` / `bun run lhci:mobile` | Lighthouse CI against the built site |
 | `node scripts/check-internal-links.mjs` | Fail if any internal link 404s in `dist/` |
 | `node scripts/check-asset-health.mjs` | Fail if a referenced `ReleaseAssetRef` 404s or its content hash doesn't match `scripts/asset-health-manifest.json` |
 
