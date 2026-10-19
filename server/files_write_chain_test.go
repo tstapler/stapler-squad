@@ -126,3 +126,53 @@ func TestWriteFile_ShouldMatchRecordedTierOutcome_When_RemoteAccessCallerPerTier
 		assert.EqualValues(t, 1, stub.writeCalls.Load())
 	})
 }
+
+// A gzip request body inflates after BodyLimit has counted it, so a few KB on the wire could
+// become hundreds of MB in the handler. Both chains must refuse it before the RPC runs.
+func TestWriteFile_ShouldRefuseGzipBomb_On_LocalAndRemoteChains(t *testing.T) {
+	srv, stub := newWriteFileChainServer(t)
+	admit := func(next http.Handler) http.Handler { return next }
+	for name, chain := range map[string]http.Handler{"local": srv.localChain(), "remote": srv.remoteChain(admit, false)} {
+		t.Run(name, func(t *testing.T) {
+			ts := httptest.NewServer(chain)
+			defer ts.Close()
+			c := sessionv1connect.NewSessionServiceClient(http.DefaultClient, ts.URL+"/api", connect.WithSendGzip())
+			stub.writeCalls.Store(0)
+
+			_, err := c.WriteFile(context.Background(), connect.NewRequest(&sessionv1.WriteFileRequest{
+				SessionId: "s", Path: "a.go", Content: make([]byte, 64<<20), ExpectedToken: "t", // 64 MiB of zeros gzips to ~64 KB
+			}))
+
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+			assert.Zero(t, stub.writeCalls.Load(), "handler never ran")
+		})
+	}
+}
+
+func TestWriteFile_ShouldAcceptCompressedBodyWithinTheCap(t *testing.T) {
+	srv, stub := newWriteFileChainServer(t)
+	ts := httptest.NewServer(srv.localChain())
+	defer ts.Close()
+	c := sessionv1connect.NewSessionServiceClient(http.DefaultClient, ts.URL+"/api", connect.WithSendGzip())
+
+	_, err := c.WriteFile(context.Background(), connect.NewRequest(&sessionv1.WriteFileRequest{
+		SessionId: "s", Path: "a.go", Content: []byte(strings.Repeat("a", 1<<20)), ExpectedToken: "t",
+	}))
+
+	require.NoError(t, err)
+	assert.EqualValues(t, 1<<20, stub.writeBytes.Load())
+}
+
+func TestReadFileRange_ShouldRefuseGzipInflatedPastTheReadRequestCap(t *testing.T) {
+	srv, _ := newWriteFileChainServer(t)
+	ts := httptest.NewServer(srv.localChain())
+	defer ts.Close()
+	c := sessionv1connect.NewSessionServiceClient(http.DefaultClient, ts.URL+"/api", connect.WithSendGzip())
+
+	_, err := c.ReadFileRange(context.Background(), connect.NewRequest(&sessionv1.ReadFileRangeRequest{
+		SessionId: "s", Path: strings.Repeat("a", 8<<20),
+	}))
+
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+}

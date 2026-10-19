@@ -51,12 +51,23 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 // base64 JSON, plus the path, token and framing (ADR-031 "Request-size cap").
 const writeFileBodyLimit = 1536 * 1024
 
+// fileReadRequestBodyLimit caps the small request messages of the read-side file RPCs, inflated size included.
+const fileReadRequestBodyLimit = 256 * 1024
+
 // withFileBodyLimits wraps the session Connect handler so both listeners share the
 // WriteFile body cap. It sits around the handler, not beside guardedProcedures: that map
 // feeds only localChainWith, so a limit registered there would leave :8444 unbounded.
 // The path is the one the handler sees (the mux has already stripped "/api").
 func withFileBodyLimits(h http.Handler) http.Handler {
-	return middleware.BodyLimit(sessionv1connect.SessionServiceWriteFileProcedure, writeFileBodyLimit)(h)
+	h = middleware.BodyLimit(sessionv1connect.SessionServiceWriteFileProcedure, writeFileBodyLimit)(h)
+	for _, procedure := range []string{
+		sessionv1connect.SessionServiceReadFileRangeProcedure,
+		sessionv1connect.SessionServiceStatFileProcedure,
+		sessionv1connect.SessionServiceGetFileTransportCapabilitiesProcedure,
+	} {
+		h = middleware.BodyLimit(procedure, fileReadRequestBodyLimit)(h)
+	}
+	return h
 }
 
 // localChain is the :8543 middleware chain (inside otelhttp):
