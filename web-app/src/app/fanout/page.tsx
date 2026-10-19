@@ -44,6 +44,7 @@ function FanoutComparison({ groupId }: { groupId: string }) {
   }, [groupId]);
 
   useEffect(() => {
+    if (!groupId) return;
     void refresh();
     const t = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(t);
@@ -53,9 +54,11 @@ function FanoutComparison({ groupId }: { groupId: string }) {
     setError(null);
     try {
       const res = await pickFanoutWinner(groupId, sessionId);
-      setPicked(sessionId);
       if (res.failedArchiveSessionIds.length > 0) {
-        setError(`Winner merged, but ${res.failedArchiveSessionIds.length} other variant(s) could not be archived; archive them manually.`);
+        // Leave picking enabled: repeating the same pick is idempotent and retries the archive.
+        setError(`Winner merged, but ${res.failedArchiveSessionIds.length} other variant(s) could not be archived. Pick the same winner again to retry.`);
+      } else {
+        setPicked(sessionId);
       }
       setConfirming(null);
       await refresh();

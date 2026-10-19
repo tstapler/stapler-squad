@@ -1,12 +1,12 @@
 package git
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
 // BranchMergeResult describes MergeBranchIntoCheckedOut's outcome.
@@ -20,38 +20,55 @@ type BranchMergeResult struct {
 	ConflictedFiles []string
 }
 
-const branchMergeTimeout = 60 * time.Second
-
 // MergeBranchIntoCheckedOut merges the local branch into whatever branch is currently
-// checked out at repoPath (no fetch, no remote involved — unlike MergeMainIntoWorktree,
-// which merges origin/<main>). It shells out because go-git cannot perform a three-way
-// merge; on conflict it aborts so callers never see a half-merged tree.
+// checked out at repoPath (no fetch, no remote involved). It reuses the native merge
+// pipeline MergeMainIntoWorktree runs, which only knows how to merge a remote-tracking
+// ref: the branch tip is exposed as a temporary refs/remotes/origin/<branch> (restoring any
+// real one afterwards) and the fetch step is skipped. On conflict the merge is aborted, so
+// callers never see a half-merged tree.
 // kibitzer:ignore primitive-obsession -- mirrors MergeMainIntoWorktree(worktreePath, mainBranch)
 func MergeBranchIntoCheckedOut(repoPath, branch string) (*BranchMergeResult, error) {
 	if branch == "" || strings.HasPrefix(branch, "-") {
 		return nil, fmt.Errorf("invalid branch name %q", branch)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), branchMergeTimeout)
-	defer cancel()
-
-	out, mergeErr := runGitIn(ctx, repoPath, "merge", "--no-ff", "--no-edit", branch)
-	if mergeErr == nil {
-		return &BranchMergeResult{UpToDate: strings.Contains(out, "Already up to date")}, nil
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", repoPath, err)
+	}
+	tip, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		return nil, fmt.Errorf("resolve branch %q in %s: %w", branch, repoPath, err)
 	}
 
-	conflicts, diffErr := runGitIn(ctx, repoPath, "diff", "--name-only", "--diff-filter=U")
-	files := strings.Fields(conflicts)
-	if diffErr != nil || len(files) == 0 {
-		return nil, fmt.Errorf("git merge %s failed: %w: %s", branch, mergeErr, strings.TrimSpace(out))
+	trackingName := plumbing.NewRemoteReferenceName("origin", branch)
+	prior, priorErr := repo.Storer.Reference(trackingName)
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(trackingName, tip.Hash())); err != nil {
+		return nil, fmt.Errorf("expose %q for merge: %w", branch, err)
 	}
-	if _, abortErr := runGitIn(ctx, repoPath, "merge", "--abort"); abortErr != nil {
-		return nil, fmt.Errorf("git merge %s conflicted and abort failed: %w", branch, abortErr)
+	defer func() {
+		if priorErr == nil {
+			_ = repo.Storer.SetReference(prior)
+		} else {
+			_ = repo.Storer.RemoveReference(trackingName)
+		}
+	}()
+
+	deps := nativeMergeDeps
+	deps.Fetch = func(string, string) error { return nil }
+	res, err := native.MergeMainIntoWorktree(deps, repoPath, branch)
+	if err != nil {
+		return nil, fmt.Errorf("merge %q into %s: %w", branch, repoPath, err)
 	}
-	return &BranchMergeResult{Conflicted: true, ConflictedFiles: files}, nil
+	if res == nil {
+		return nil, errors.New("merge returned no result")
+	}
+	return &BranchMergeResult{UpToDate: res.UpToDate, Conflicted: res.Conflicted, ConflictedFiles: res.ConflictedFiles}, nil
 }
 
-func runGitIn(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := safeexec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+// RepoHasUncommittedChanges reports whether repoPath's working tree has uncommitted
+// changes, which a merge there would mix in or trip over.
+func RepoHasUncommittedChanges(repoPath string) (bool, error) {
+	var ignoreCache gitignoreFSCache
+	var headCache headTreeHashCache
+	return worktreeIsDirtyFast(repoPath, &ignoreCache, &headCache)
 }

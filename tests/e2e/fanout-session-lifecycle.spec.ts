@@ -5,7 +5,8 @@
  *
  * The shared test-mode instance has no agent/git fixture to run two real variants, so the group's
  * members, diffs and the pick are fulfilled by route stubs (same approach as background-activity.spec.ts).
- * The cap is exercised against the real server.
+ * The real merge + loser-archive path is covered by Go tests against real git worktrees
+ * (server/services/session_service_fanout_test.go); the cap and unknown-group errors hit the real server here.
  */
 import { test, expect, type Page } from '@playwright/test';
 
@@ -76,5 +77,13 @@ test.describe('Parallel fan-out lifecycle', () => {
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('invalid_argument');
+  });
+
+  test('server returns a structured not_found for an unknown fan-out group', async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/session.v1.SessionService/PickFanoutWinner`, {
+      data: { groupId: 'no-such-group', winnerSessionId: 'x' },
+    });
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe('not_found');
   });
 });

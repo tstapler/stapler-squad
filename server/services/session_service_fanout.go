@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -28,6 +30,10 @@ const (
 	fanoutVariantTagPrefix = "fanout-variant:"
 	fanoutBaseTagPrefix    = "fanout-base:"
 )
+
+// fanoutPickLocks serializes PickFanoutWinner per group: two picks would otherwise run
+// concurrent merges in the same repo and each archive the other's winner.
+var fanoutPickLocks sync.Map // groupID -> *sync.Mutex
 
 // +api: session:fanout
 // FanOutSession creates count sessions from one prompt. CreateSession returns once the
@@ -131,6 +137,10 @@ func (s *SessionService) PickFanoutWinner(
 	if req.Msg.GroupId == "" || req.Msg.WinnerSessionId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("group_id and winner_session_id are required"))
 	}
+	mu, _ := fanoutPickLocks.LoadOrStore(req.Msg.GroupId, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+
 	members := s.fanoutGroupMembers(req.Msg.GroupId)
 	if len(members) == 0 {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fan-out group not found: %s", req.Msg.GroupId))
@@ -158,21 +168,38 @@ func (s *SessionService) PickFanoutWinner(
 	}
 
 	wt, err := winner.GetGitWorktree()
-	if err != nil || wt == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("winner has no git worktree: %v", err))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("winner %s has no git worktree: %w", winner.UUID, err))
+	}
+	if wt == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("winner %s has no git worktree", winner.UUID))
 	}
 	baseBranch := fanoutBaseBranch(winner)
 	if baseBranch == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("fan-out group has no recorded base branch"))
 	}
 	current, err := git.GetCurrentBranchName(wt.GetRepoPath())
-	if err != nil || current != baseBranch {
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("cannot read the checked-out branch of %s: %w", wt.GetRepoPath(), err))
+	}
+	if current != baseBranch {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("repository must have base branch %q checked out to merge (found %q)", baseBranch, current))
 	}
+	if dirty, err := git.RepoHasUncommittedChanges(wt.GetRepoPath()); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check %s for uncommitted changes: %w", wt.GetRepoPath(), err))
+	} else if dirty {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repository %s has uncommitted changes; commit or stash them before picking a winner", wt.GetRepoPath()))
+	}
 
-	if err := wt.CommitChanges("fan-out: variant " + winner.Title); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to commit winner changes: %w", err))
+	// A paused session's worktree is deleted but its branch keeps the committed work, so
+	// there is nothing to commit; merge the branch as is.
+	if _, statErr := os.Stat(wt.GetWorktreePath()); statErr == nil {
+		if err := wt.CommitChanges("fan-out: variant " + winner.Title); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to commit changes of winner %s: %w", winner.UUID, err))
+		}
 	}
 	result, err := git.MergeBranchIntoCheckedOut(wt.GetRepoPath(), wt.GetBranchName())
 	if err != nil {
@@ -180,7 +207,7 @@ func (s *SessionService) PickFanoutWinner(
 	}
 	if result.Conflicted {
 		return nil, connect.NewError(connect.CodeAborted,
-			fmt.Errorf("merge conflicts in %s; resolve manually (nothing was changed): %s",
+			fmt.Errorf("merge conflicts in %s; resolve manually (base branch unchanged): %s",
 				wt.GetBranchName(), strings.Join(result.ConflictedFiles, ", ")))
 	}
 
