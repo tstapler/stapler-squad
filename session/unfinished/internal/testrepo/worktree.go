@@ -58,6 +58,25 @@ func NewLinkedWorktree(t testing.TB, mainRepoDir, name, branch string) string {
 	return linked
 }
 
+// UseRelativePaths rewrites the pointer files of the linked worktree created by
+// NewLinkedWorktree to the relative form git >= 2.48 writes with
+// worktree.useRelativePaths: the .git file relative to the worktree directory,
+// <admin>/gitdir relative to the admin directory.
+func UseRelativePaths(t testing.TB, mainRepoDir, name, linked string) {
+	t.Helper()
+	adminDir := filepath.Join(mainRepoDir, ".git", "worktrees", name)
+	toAdmin, err := filepath.Rel(linked, adminDir)
+	if err != nil {
+		t.Fatalf("testrepo: rel to admin: %v", err)
+	}
+	toLinked, err := filepath.Rel(adminDir, filepath.Join(linked, ".git"))
+	if err != nil {
+		t.Fatalf("testrepo: rel to linked: %v", err)
+	}
+	mustWrite(t, filepath.Join(linked, ".git"), "gitdir: "+toAdmin+"\n")
+	mustWrite(t, filepath.Join(adminDir, "gitdir"), toLinked+"\n")
+}
+
 // OpenLinked opens a linked worktree directory with commondir support.
 func OpenLinked(t testing.TB, linkedDir string) *git.Repository {
 	t.Helper()

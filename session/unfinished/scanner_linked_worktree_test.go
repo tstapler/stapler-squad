@@ -139,3 +139,20 @@ func TestListWorktrees_FromMainPath_ShouldListMainThenLinked(t *testing.T) {
 	assert.Equal(t, f.mainDir, paths[0])
 	assert.ElementsMatch(t, []string{f.mainDir, f.linked1, f.linked2}, paths)
 }
+
+// git >= 2.48 (worktree.useRelativePaths) writes relative pointer files; the
+// resolvers must anchor them to the file's directory, not the process cwd.
+func TestLinkedWorktree_RelativePointerFiles_ShouldResolveGitdirCommondirAndWorktree(t *testing.T) {
+	t.Parallel()
+	f := newLinkedFixture(t)
+	testrepo.UseRelativePaths(t, f.mainDir, "wt1", f.linked1)
+	raw, err := os.ReadFile(filepath.Join(f.linked1, ".git"))
+	require.NoError(t, err)
+	require.False(t, filepath.IsAbs(string(raw[len("gitdir: "):len(raw)-1])), "precondition: relative pointer")
+
+	assert.Equal(t, f.adminDir1, worktreeGitDir(f.linked1))
+	assert.Equal(t, filepath.Join(f.mainDir, ".git"), gitCommonDir(f.linked1))
+	wt, ok := linkedWorktreePath(f.adminDir1)
+	require.True(t, ok)
+	assert.Equal(t, f.linked1, wt)
+}

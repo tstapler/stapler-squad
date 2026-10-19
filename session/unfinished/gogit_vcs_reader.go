@@ -1164,14 +1164,17 @@ func worktreeGitDir(repoPath string) string {
 	if !strings.HasPrefix(line, prefix) {
 		return gitPath
 	}
-	wtGitDir := strings.TrimPrefix(line, prefix)
-	if !filepath.IsAbs(wtGitDir) {
-		// Defensive: git worktree add always writes an absolute path in
-		// practice, but resolve relative to repoPath if it ever isn't,
-		// matching how the commondir line below already handles this.
-		wtGitDir = filepath.Join(repoPath, wtGitDir)
+	return resolveGitPath(repoPath, strings.TrimPrefix(line, prefix))
+}
+
+// resolveGitPath resolves a path read from a git pointer file against base (the
+// directory holding that file). git >= 2.48 with worktree.useRelativePaths
+// writes relative `gitdir:` lines; older git always wrote absolute ones.
+func resolveGitPath(base, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
 	}
-	return filepath.Clean(wtGitDir)
+	return filepath.Clean(p)
 }
 
 // gitCommonDir returns the path to the common git directory (the main .git dir),
@@ -1190,15 +1193,11 @@ func gitCommonDir(repoPath string) string {
 	if !strings.HasPrefix(line, prefix) {
 		return gitPath
 	}
-	wtGitDir := strings.TrimPrefix(line, prefix)
+	wtGitDir := resolveGitPath(repoPath, strings.TrimPrefix(line, prefix))
 	// wtGitDir is parsed from gitPath above, which is itself rooted at the
 	// trusted repoPath -- not user input.
 	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil { // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
-		commondir := strings.TrimSpace(string(cdData))
-		if !filepath.IsAbs(commondir) {
-			commondir = filepath.Join(wtGitDir, commondir)
-		}
-		return commondir
+		return resolveGitPath(wtGitDir, strings.TrimSpace(string(cdData)))
 	}
 	return filepath.Dir(wtGitDir)
 }

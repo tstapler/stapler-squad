@@ -186,7 +186,8 @@ func (s *Scanner) addWorktreeGitdir(w gitWatcher, admin string, t worktreeTarget
 	s.armDirty(t.worktree)
 }
 
-// linkedWorktreePath reads <admin>/gitdir, which holds "<worktree>/.git".
+// linkedWorktreePath reads <admin>/gitdir, which holds "<worktree>/.git"
+// (relative to admin when git wrote it with worktree.useRelativePaths).
 func linkedWorktreePath(admin string) (string, bool) {
 	data, err := os.ReadFile(filepath.Join(admin, "gitdir")) // #nosec G304 -- admin is a subdirectory of a tracked repo's .git/worktrees
 	if err != nil {
@@ -196,7 +197,7 @@ func linkedWorktreePath(admin string) (string, bool) {
 	if line == "" {
 		return "", false
 	}
-	return filepath.Dir(line), true
+	return filepath.Dir(resolveGitPath(admin, line)), true
 }
 
 func (s *Scanner) worktreeTargetFor(admin string) (worktreeTarget, bool) {
