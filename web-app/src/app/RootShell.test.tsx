@@ -39,8 +39,7 @@ describe("RootShell", () => {
     expect(skip).toHaveAttribute("href", "#main-content");
 
     const main = document.getElementById("main-content");
-    expect(main).not.toBeNull();
-    expect(main!.tagName).toBe("MAIN");
+    expect(main?.tagName).toBe("MAIN");
     expect(main).toHaveTextContent("child");
     expect(main).toContainElement(screen.getByTestId("tmux-banner"));
     expect(main).toContainElement(screen.getByTestId("fork-banner"));
