@@ -159,7 +159,8 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 // MUST be called with entry.mu already held (mirrors the caching contract of
 // entry.headTreeCache above — both are entry-scoped fields protected by entry.mu).
 func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreePath string) gitignore.Matcher {
-	if entry.untrackedMatcherBuilt {
+	sig := rootGitignoreSig(worktreePath)
+	if entry.untrackedMatcherBuilt && entry.untrackedMatcherSig == sig {
 		return entry.untrackedMatcher
 	}
 
@@ -168,9 +169,10 @@ func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreeP
 	// repoCache purely for memory pressure, with HEAD never having moved.
 	if cached, ok := g.matcherCache.Load(worktreePath); ok {
 		mc, _ := cached.(*matcherCacheEntry)
-		if mc != nil && mc.headTreeHash == entry.headTreeHash {
+		if mc != nil && mc.headTreeHash == entry.headTreeHash && mc.ignoreSig == sig {
 			atomic.StoreInt64(&mc.accessedAtNs, time.Now().UnixNano())
 			entry.untrackedMatcher = mc.matcher
+			entry.untrackedMatcherSig = sig
 			entry.untrackedMatcherBuilt = true
 			return entry.untrackedMatcher
 		}
@@ -182,10 +184,12 @@ func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreeP
 		m = gitignore.NewMatcher(patterns)
 	}
 	entry.untrackedMatcher = m
+	entry.untrackedMatcherSig = sig
 	entry.untrackedMatcherBuilt = true
 	g.matcherCache.Store(worktreePath, &matcherCacheEntry{
 		matcher:      m,
 		headTreeHash: entry.headTreeHash,
+		ignoreSig:    sig,
 		accessedAtNs: time.Now().UnixNano(),
 	})
 	return m

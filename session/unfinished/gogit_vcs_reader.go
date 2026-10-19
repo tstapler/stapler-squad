@@ -344,16 +344,16 @@ type cachedRepo struct {
 
 	// untrackedMatcherBuilt/untrackedMatcher cache the compiled gitignore
 	// matcher used by the untracked-file walk in diffShortstatUncached.
-	// Rebuilt only when HEAD moves AND a .gitignore file actually changed
+	// Rebuilt when HEAD moves AND a .gitignore file actually changed
 	// (resolveHeadTreeHashes clears untrackedMatcherBuilt in that case,
-	// checked via gitignoreEntriesChanged) — most commits don't touch
-	// .gitignore, so this avoids paying gitignore.ReadPatterns' recursive
-	// filesystem walk on every commit. A .gitignore edit made between HEAD
-	// moves can still be stale for up to one poll cycle, an acceptable
-	// trade-off matching this file's other TTL-based staleness tolerances
-	// (e.g. diffStatCacheTTL). Guarded by mu, same as the fields above.
+	// checked via gitignoreEntriesChanged), or when the root .gitignore's stat
+	// signature differs (an uncommitted edit). Nested .gitignore edits between
+	// HEAD moves stay stale. Guarded by mu, same as the fields above.
 	untrackedMatcherBuilt bool
 	untrackedMatcher      gitignore.Matcher
+	// untrackedMatcherSig is the root .gitignore signature untrackedMatcher was
+	// built from, so an uncommitted edit also forces a rebuild.
+	untrackedMatcherSig ignoreSig
 }
 
 // gogitstoreCloser is implemented by storage.Storer values that hold a
@@ -629,7 +629,20 @@ type GoGitVCSReader struct {
 type matcherCacheEntry struct {
 	matcher      gitignore.Matcher
 	headTreeHash plumbing.Hash
+	ignoreSig    ignoreSig
 	accessedAtNs int64
+}
+
+// ignoreSig is the stat signature of the worktree's root .gitignore; present is
+// false when the file is absent.
+type ignoreSig struct {
+	sig     statSig
+	present bool
+}
+
+func rootGitignoreSig(worktreePath string) ignoreSig {
+	sig, ok := statPathSig(filepath.Join(worktreePath, ".gitignore"))
+	return ignoreSig{sig: sig, present: ok}
 }
 
 // matcherCacheTTL controls how long an unused matcherCache entry survives.
