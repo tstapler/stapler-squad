@@ -12,7 +12,7 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/bun.lock'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -77,7 +77,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/pnpm-lock\.yaml$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -113,7 +113,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # web-build-smoke: proves `make web-build` succeeds standalone on a bare
-  # checkout, with none of the manual buf/pnpm pre-steps that `prepare` (above)
+  # checkout, with none of the manual buf/bun pre-steps that `prepare` (above)
   # runs by hand. `prepare` bypasses the Makefile's own dependency graph, so it
   # cannot catch a missing prerequisite there (e.g. `web-app/out` not depending
   # on `proto-gen` — see #144). This job exercises the exact entry point
@@ -146,17 +146,13 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
 
       # See .github/actions/prepare/action.yml's "Cache buf binary" step for
       # why this caches the whole tool-cache "buf" dir rather than a specific
@@ -178,9 +174,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
-          key: nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+          key: nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
           restore-keys: |
-            nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+            nextjs-smoke-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
             nextjs-smoke-${{ runner.os }}-
 
       - name: make web-build (no manual pre-steps)
@@ -350,20 +346,16 @@ jobs:
             echo "_Advisory only -- not a merge gate. The full-repo coverage gate (global-threshold: 60) runs on merges to main._"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js (for coverage report)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
 
       - name: Run CI comment-gate unit tests
-        run: cd tools/ci-gates && pnpm install --silent && pnpm test
+        run: cd tools/ci-gates && bun install --silent && bun run test
 
       # Subsumes registry-validation.yml's divergence check (removed): that
       # workflow tolerated up to 2% ID-count drift before failing, but
@@ -391,7 +383,7 @@ jobs:
             fi
           done
           # Also validate the typed catalog
-          cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
+          cd web-app && bun install --frozen-lockfile --silent && bun run validate-catalog
 
       # registry-validation.yml's other unique signal (advisory, not blocking):
       # what fraction of registered features declare testIds at all. Ported
@@ -413,7 +405,7 @@ jobs:
       - name: Generate feature E2E coverage report
         id: coverage
         run: |
-          cd tools/coverage && pnpm install --silent
+          cd tools/coverage && bun install --silent
           OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")

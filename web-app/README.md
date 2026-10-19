@@ -13,13 +13,13 @@ This is the web-based session management interface for Stapler Squad. It's a sep
 
 ```bash
 # Install dependencies
-npm install
+bun install
 
 # Run development server (port 3001)
-npm run dev
+bun run dev
 
 # Build for production
-npm run build
+bun run build
 ```
 
 ## Generated Code
@@ -36,7 +36,7 @@ buf generate
 
 The built application is automatically embedded into the Go server:
 
-1. Build: `npm run build` (creates `out/` directory)
+1. Build: `bun run build` (creates `out/` directory)
 2. Copy to Go server: `cp -r out/ ../server/web/dist/`
 3. Go embeds `server/web/dist/` at build time
 4. Served at `http://localhost:8543/` when server runs

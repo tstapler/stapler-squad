@@ -2,10 +2,10 @@
 # shellcheck shell=sh
 #
 # shared-node-modules.test.sh -- regression test for shared-node-modules.sh's
-# core properties: two "worktrees" with an identical pnpm-lock.yaml + local
+# core properties: two "worktrees" with an identical bun.lock + local
 # file:-dependency content must end up symlinked to the SAME shared install
 # (and only install once); a worktree whose local file: dependency content
-# differs -- even with pnpm-lock.yaml byte-identical -- must get a DIFFERENT
+# differs -- even with bun.lock byte-identical -- must get a DIFFERENT
 # shared install, never the stale one; a missing local file: dependency
 # directory must fail loudly instead of installing something wrong; and the
 # STAPLER_SQUAD_SHARED_NODE_MODULES=0 escape hatch must fall back to a plain
@@ -18,11 +18,11 @@
 # seeded that hash, and left completely untouched if the frozen-lockfile
 # verify step fails.
 #
-# `pnpm` is stubbed so this test is fast/deterministic/offline (per the
+# `bun` is stubbed so this test is fast/deterministic/offline (per the
 # deterministic-fast-tests skill) -- it exercises the script's own hashing,
-# locking and symlinking logic, not pnpm's real install behavior. The real
+# locking and symlinking logic, not bun's real install behavior. The real
 # frozen-lockfile divergence/success semantics this relies on were verified
-# separately against actual pnpm (see the PR description), not just assumed.
+# separately against actual bun (see the PR description), not just assumed.
 #
 # Usage: sh scripts/shared-node-modules.test.sh
 set -eu
@@ -39,27 +39,27 @@ INSTALL_COUNTER="$TMP/install-count"
 export INSTALL_COUNTER
 : > "$INSTALL_COUNTER"
 
-# Stub pnpm: records one line per `install --frozen-lockfile` invocation and
+# Stub bun: records one line per `install --frozen-lockfile` invocation and
 # fabricates a minimal node_modules so the script's own bookkeeping
-# (.install-complete, node_modules/.modules.yaml) has something to find.
-# Real pnpm behavior is out of scope for this test.
-cat > "$STUB_BIN/pnpm" <<'EOF'
+# (.install-complete, node_modules/.bun) has something to find.
+# Real bun behavior is out of scope for this test.
+cat > "$STUB_BIN/bun" <<'EOF'
 #!/bin/sh
 set -eu
 # Backfill-verify failure simulation: a FAIL_INSTALL marker in cwd stands in
-# for a genuine package.json/pnpm-lock.yaml divergence (real pnpm's
+# for a genuine package.json/bun.lock divergence (real bun's
 # `--frozen-lockfile` failure mode, verified separately against actual
-# pnpm). Exits before touching anything, same as the real failure.
+# bun). Exits before touching anything, same as the real failure.
 if [ -f FAIL_INSTALL ]; then
-	echo "stub pnpm: FAIL_INSTALL marker present, simulating a frozen-lockfile divergence" >&2
+	echo "stub bun: FAIL_INSTALL marker present, simulating a frozen-lockfile divergence" >&2
 	exit 1
 fi
 echo "install" >> "$INSTALL_COUNTER"
 mkdir -p node_modules
-: > node_modules/.modules.yaml
+mkdir -p node_modules/.bun
 exit 0
 EOF
-chmod +x "$STUB_BIN/pnpm"
+chmod +x "$STUB_BIN/bun"
 
 export PATH="$STUB_BIN:$PATH"
 SHARED_ROOT="$TMP/shared-node-modules"
@@ -81,7 +81,7 @@ make_fixture() {
   }
 }
 EOF
-	echo "pnpm-lock-content-v1" > "$dir/pnpm-lock.yaml"
+	echo "bun-lock-content-v1" > "$dir/bun.lock"
 	echo "module.exports = { rule: 1 };" > "$dir/my-plugin/index.js"
 }
 
@@ -101,7 +101,7 @@ make_fixture "$WT_B"
 TARGET_A="$(readlink "$WT_A/node_modules")"
 TARGET_B="$(readlink "$WT_B/node_modules")"
 [ "$TARGET_A" = "$TARGET_B" ] || fail "scenario 1: two worktrees with identical lockfile+plugin content linked to different shared installs ($TARGET_A vs $TARGET_B)"
-[ "$(wc -l < "$INSTALL_COUNTER")" -eq 1 ] || fail "scenario 1: expected exactly 1 pnpm install, got $(wc -l < "$INSTALL_COUNTER")"
+[ "$(wc -l < "$INSTALL_COUNTER")" -eq 1 ] || fail "scenario 1: expected exactly 1 bun install, got $(wc -l < "$INSTALL_COUNTER")"
 echo "PASS: scenario 1 -- identical worktrees share one install"
 
 # Re-running on an already-linked worktree must be a no-op (fast path).
@@ -109,7 +109,7 @@ echo "PASS: scenario 1 -- identical worktrees share one install"
 [ "$(wc -l < "$INSTALL_COUNTER")" -eq 1 ] || fail "scenario 1b: re-running on an already-linked worktree triggered a reinstall"
 echo "PASS: scenario 1b -- already-linked worktree is a no-op"
 
-# --- Scenario 2: same pnpm-lock.yaml, but local file: dependency content
+# --- Scenario 2: same bun.lock, but local file: dependency content
 # differs -- must NOT share WT_A's install. ---
 WT_C="$TMP/wt-c/web-app"
 mkdir -p "$(dirname "$WT_C")"
@@ -157,14 +157,14 @@ echo "PASS: scenario 4 -- STAPLER_SQUAD_SHARED_NODE_MODULES=0 opts out to a plai
 WT_F="$TMP/wt-f/web-app"
 mkdir -p "$WT_F"
 make_fixture "$WT_F"
-echo "pnpm-lock-content-scenario5" > "$WT_F/pnpm-lock.yaml" # unique hash -- must not collide with scenarios 1-4's shared install
+echo "bun-lock-content-scenario5" > "$WT_F/bun.lock" # unique hash -- must not collide with scenarios 1-4's shared install
 mkdir -p "$WT_F/node_modules"
 echo "original-local-install-marker" > "$WT_F/node_modules/ORIGINAL_MARKER"
 
 COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
 "$SCRIPT" "$WT_F" > "$TMP/out-f1" 2>&1 || { cat "$TMP/out-f1"; fail "scenario 5: backfill migration failed"; }
 COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
-[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 5: expected exactly 1 pnpm invocation (the verify step only, no reinstall-into-shared), got $((COUNT_AFTER - COUNT_BEFORE))"
+[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 5: expected exactly 1 bun invocation (the verify step only, no reinstall-into-shared), got $((COUNT_AFTER - COUNT_BEFORE))"
 [ -L "$WT_F/node_modules" ] || fail "scenario 5: node_modules is not a symlink after migration"
 [ -f "$WT_F/node_modules/ORIGINAL_MARKER" ] || fail "scenario 5: migrated tree lost the original local content -- looks like a reinstall happened instead of a move"
 grep -q "original-local-install-marker" "$WT_F/node_modules/ORIGINAL_MARKER" || fail "scenario 5: ORIGINAL_MARKER content mismatch"
@@ -178,8 +178,8 @@ WT_H="$TMP/wt-h/web-app"
 mkdir -p "$WT_G" "$WT_H"
 make_fixture "$WT_G"
 make_fixture "$WT_H"
-echo "pnpm-lock-content-scenario6" > "$WT_G/pnpm-lock.yaml" # unique hash, shared between WT_G and WT_H only
-echo "pnpm-lock-content-scenario6" > "$WT_H/pnpm-lock.yaml"
+echo "bun-lock-content-scenario6" > "$WT_G/bun.lock" # unique hash, shared between WT_G and WT_H only
+echo "bun-lock-content-scenario6" > "$WT_H/bun.lock"
 
 # WT_G installs normally first (no pre-existing node_modules), establishing
 # the shared install for this fixture's hash.
@@ -194,7 +194,7 @@ echo "stale-local-content-must-be-discarded" > "$WT_H/node_modules/LOCAL_MARKER"
 COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
 "$SCRIPT" "$WT_H" > "$TMP/out-h1" 2>&1 || { cat "$TMP/out-h1"; fail "scenario 6: migration onto an existing shared install failed"; }
 COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
-[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 6: expected exactly 1 pnpm invocation (the verify step only, no reinstall), got $((COUNT_AFTER - COUNT_BEFORE))"
+[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 6: expected exactly 1 bun invocation (the verify step only, no reinstall), got $((COUNT_AFTER - COUNT_BEFORE))"
 [ -L "$WT_H/node_modules" ] || fail "scenario 6: node_modules is not a symlink"
 [ "$(readlink "$WT_H/node_modules")" = "$SHARED_TARGET" ] || fail "scenario 6: did not link to the pre-existing shared install ($SHARED_TARGET)"
 [ ! -e "$WT_H/node_modules/LOCAL_MARKER" ] || fail "scenario 6: stale local content leaked into the shared tree instead of being discarded"
@@ -205,21 +205,51 @@ echo "PASS: scenario 6 -- existing real node_modules is discarded when a shared 
 WT_I="$TMP/wt-i/web-app"
 mkdir -p "$WT_I"
 make_fixture "$WT_I"
-echo "pnpm-lock-content-scenario7" > "$WT_I/pnpm-lock.yaml" # unique hash -- irrelevant here since it never gets computed, but keeps intent clear
+echo "bun-lock-content-scenario7" > "$WT_I/bun.lock" # unique hash -- irrelevant here since it never gets computed, but keeps intent clear
 mkdir -p "$WT_I/node_modules"
 echo "must-survive-a-failed-verify" > "$WT_I/node_modules/SURVIVOR_MARKER"
-: > "$WT_I/FAIL_INSTALL" # tells the stub pnpm to simulate a frozen-lockfile divergence
+: > "$WT_I/FAIL_INSTALL" # tells the stub bun to simulate a frozen-lockfile divergence
 
 COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
 if "$SCRIPT" "$WT_I" > "$TMP/out-i1" 2>&1; then
 	fail "scenario 7: script succeeded despite a failing frozen-lockfile verify step"
 fi
 COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
-[ "$COUNT_AFTER" -eq "$COUNT_BEFORE" ] || fail "scenario 7: a pnpm install was recorded despite the verify step failing"
+[ "$COUNT_AFTER" -eq "$COUNT_BEFORE" ] || fail "scenario 7: a bun install was recorded despite the verify step failing"
 if [ ! -d "$WT_I/node_modules" ] || [ -L "$WT_I/node_modules" ]; then
 	fail "scenario 7: node_modules is no longer the original real directory after an aborted verify"
 fi
 [ -f "$WT_I/node_modules/SURVIVOR_MARKER" ] || fail "scenario 7: original node_modules content was lost despite the script aborting"
 echo "PASS: scenario 7 -- a failing frozen-lockfile verify step aborts the script and leaves the existing node_modules untouched"
+
+# --- Scenario 8: a legacy pnpm-built node_modules (has .modules.yaml) is
+# discarded and replaced by a fresh install -- never migrated into the shared
+# store, and no separate verify step runs. ---
+WT_J="$TMP/wt-j/web-app"
+mkdir -p "$WT_J"
+make_fixture "$WT_J"
+echo "bun-lock-content-scenario8" > "$WT_J/bun.lock"
+mkdir -p "$WT_J/node_modules/.pnpm"
+: > "$WT_J/node_modules/.modules.yaml"
+echo "pnpm-era" > "$WT_J/node_modules/PNPM_MARKER"
+
+COUNT_BEFORE="$(wc -l < "$INSTALL_COUNTER")"
+"$SCRIPT" "$WT_J" > "$TMP/out-j1" 2>&1 || { cat "$TMP/out-j1"; fail "scenario 8: legacy pnpm tree handling failed"; }
+COUNT_AFTER="$(wc -l < "$INSTALL_COUNTER")"
+[ "$((COUNT_AFTER - COUNT_BEFORE))" -eq 1 ] || fail "scenario 8: expected exactly 1 fresh bun install, got $((COUNT_AFTER - COUNT_BEFORE))"
+[ -L "$WT_J/node_modules" ] || fail "scenario 8: node_modules is not a symlink"
+[ ! -e "$WT_J/node_modules/PNPM_MARKER" ] || fail "scenario 8: the pnpm-era tree was migrated instead of discarded"
+[ -d "$WT_J/node_modules/.bun" ] || fail "scenario 8: fresh install content missing"
+echo "PASS: scenario 8 -- a legacy pnpm-built node_modules is discarded and reinstalled with bun"
+
+# --- Scenario 9: every successful run (fresh, fast path, opt-out) leaves the
+# freshness stamp the Makefile target depends on. ---
+for wt in "$WT_A" "$WT_E" "$WT_J"; do
+	[ -f "$wt/node_modules/.ssq-install-stamp" ] || fail "scenario 9: $wt has no node_modules/.ssq-install-stamp"
+done
+rm -f "$WT_A/node_modules/.ssq-install-stamp"
+"$SCRIPT" "$WT_A" > "$TMP/out-a3" 2>&1 || fail "scenario 9: fast-path re-run failed"
+[ -f "$WT_A/node_modules/.ssq-install-stamp" ] || fail "scenario 9: fast path did not refresh the stamp"
+echo "PASS: scenario 9 -- successful runs leave node_modules/.ssq-install-stamp"
 
 echo "All shared-node-modules.sh scenarios passed."
