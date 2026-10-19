@@ -38,9 +38,13 @@ export const answerField = style({
   background: vars.color.cardBackground,
   color: vars.color.textPrimary,
   font: "inherit",
+  fontSize: "16px", // UX-AC44: below 16px iOS Safari zooms the page on focus
   boxSizing: "border-box",
   selectors: { "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" } },
 });
+
+/** The Remind me time picker: a single-line field, still a 44px target (UX-AC42). */
+export const pickField = style([answerField, { minHeight: "44px" }]);
 
 export const fieldLabel = style({ fontSize: "0.8125rem", color: vars.color.textSecondary });
 

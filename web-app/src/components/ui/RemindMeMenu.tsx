@@ -9,7 +9,7 @@ import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { action, rowActions } from "./BackgroundActivity.css";
 import { InlineError } from "./InlineConfirm";
 import { formatClockTime } from "./OfflineBanner";
-import { answerField, fieldLabel, inlineMessage, menuItem, menuList } from "./ScheduledPrompts.css";
+import { fieldLabel, inlineMessage, menuItem, menuList, pickField } from "./ScheduledPrompts.css";
 
 /** How long the confirmation offers Undo (UX-AC40). */
 export const REMINDER_UNDO_MS = 10_000;
@@ -205,8 +205,7 @@ export function RemindMeMenu({ sessionUuid, label, presets = DEFAULT_PRESETS, sc
           <input
             id={pickId}
             type="datetime-local"
-            className={answerField}
-            style={{ minHeight: 0 }}
+            className={pickField}
             value={pickValue}
             min={toLocalInput(now())}
             onChange={(e) => setPickValue(e.target.value)}
