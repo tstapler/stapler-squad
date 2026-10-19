@@ -7,7 +7,7 @@
 # exit codes (e.g. curl's 6=couldn't resolve host, 7=couldn't connect,
 # 28=timeout) and fail fast on everything else -- useful for tools whose
 # exit code actually distinguishes "transient" from "this will never work",
-# unlike e.g. `pnpm run build`, which exits 1 for both a flaky font fetch
+# unlike e.g. `bun run build`, which exits 1 for both a flaky font fetch
 # and a real compile error.
 #
 # Usage:

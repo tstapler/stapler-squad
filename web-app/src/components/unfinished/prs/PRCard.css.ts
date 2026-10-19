@@ -201,6 +201,96 @@ export const prActions = style({
   "@media": { [NARROW]: { flexDirection: "column", alignItems: "stretch" } },
 });
 
+export const expandedInfo = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+});
+
+export const expandToggle = style({
+  alignSelf: "flex-start",
+  minHeight: INTERACTIVE_MIN,
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  border: "none",
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  cursor: "pointer",
+  ":hover": { color: vars.color.primary },
+});
+
+export const bodyPreview = style({
+  margin: 0,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+});
+
+export const labelList = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space["1"],
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+});
+
+export const statLine = style({
+  margin: 0,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+});
+
+export const actionRow = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space["2"],
+});
+
+const actionButtonBase = style({
+  minHeight: INTERACTIVE_MIN,
+  padding: `${vars.space["1"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  cursor: "pointer",
+  selectors: { "&:disabled": { opacity: 0.5, cursor: "not-allowed" } },
+});
+
+export const actionButton = style([
+  actionButtonBase,
+  { background: "transparent", color: vars.color.textSecondary, border: `1px solid ${vars.color.borderColor}` },
+]);
+
+export const dangerActionButton = style([
+  actionButtonBase,
+  { background: "transparent", color: vars.color.error, border: `1px solid ${vars.color.error}` },
+]);
+
+export const methodSelect = style([
+  actionButtonBase,
+  { background: vars.color.cardBackground, color: vars.color.textPrimary, border: `1px solid ${vars.color.borderColor}` },
+]);
+
+export const actionError = style({
+  margin: 0,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.error,
+});
+
+export const confirmDialog = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  padding: vars.space["3"],
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.sm,
+});
+
 export const openSessionButton = style({
   minHeight: INTERACTIVE_MIN,
   padding: `${vars.space["1"]} ${vars.space["3"]}`,

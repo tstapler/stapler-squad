@@ -629,6 +629,64 @@ func TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeV
 	assert.Len(t, notifier.calls, 1, "the operator must be notified exactly once across ticks")
 }
 
+// TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerificationTransientlyRejected
+// is the regression proof for the bug where a GitHub rate-limit/admission-control
+// rejection on the ownership re-verification call (verifyPRBelongsToItem) was
+// treated identically to a genuine branch mismatch: it called
+// markMergedPRUnverified, which — per that function's own doc comment — "never
+// auto-resolves" without a manual operator fix, permanently stranding an
+// already-merged, genuinely-owned PR's item at pr_pending. The fix must retry
+// on the next tick instead, exactly like the IsPRMerged check two lines above
+// already does for its own errors.
+func TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerificationTransientlyRejected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 1101)
+	newUntrackedWorkSessionWithBranchName(t, storage, item.ID, "backlog/mine")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	calls := 0
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("PR request failed: %w", errors.New("github: admission control rejected request: background headroom reserved for resource core"))
+		}
+		return &github.PRInfo{HeadRef: "backlog/mine"}, nil
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	// Tick 1: the ownership check is transiently rejected.
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assertNotStuckAsMergedPRUnverified(t, storage, item.ID, notifier)
+
+	// Tick 2: the retry succeeds, so the item completes normally.
+	listener.ReconcilePRPending(ctx, storage.repo)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "once the transient rejection clears, the merge must still be detected and auto-completed")
+}
+
+// assertNotStuckAsMergedPRUnverified asserts itemID is still pr_pending with
+// no open merged_pr_unverified stuck row and no operator notification fired —
+// the expected shape immediately after a retryable (not definitive) ownership
+// re-verification failure.
+func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *Storage, itemID string, notifier *fakeNotifier) {
+	t.Helper()
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "a transient rejection must not block the item from later completing")
+	rows, err := storage.repo.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	_, found := findOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
+	assert.False(t, found, "a transient admission-control rejection must never be recorded as a merged_pr_unverified stuck row")
+	assert.Empty(t, notifier.calls, "a retryable error must not trigger the never-auto-resolving operator notification")
+}
+
 func TestPROwnershipFor(t *testing.T) {
 	t.Parallel()
 	const tip, base = "tip111", "base222"

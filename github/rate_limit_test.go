@@ -305,6 +305,32 @@ func TestAdmitOrigin_should_RejectInInterleavedOrdering_WithoutCrossResourceLeak
 	})
 }
 
+// TestAdmitOrigin_should_AdmitBackgroundOrigin_When_ExhaustedReadingHasExpired
+// is the regression proof for the self-perpetuating-stall bug: a background
+// origin is rejected pre-dispatch, so a rejected call can never be the one
+// that refreshes the stale reading rejecting it. Once that reading's own
+// ResetAt has passed, GitHub has already replenished the bucket server-side
+// — AdmitOrigin must treat it as unobserved (admit), not keep enforcing an
+// expired snapshot forever while waiting for an OriginInteractive call for
+// the same resource that may never come.
+func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_ExhaustedReadingHasExpired(t *testing.T) {
+	r := &RateLimiter{}
+	r.Update(fakeRateLimitResponse(http.StatusOK, map[string]string{
+		"X-RateLimit-Resource":  "core",
+		"X-RateLimit-Remaining": "90", // 1.8% of 5000, well below the 10% headroom
+		"X-RateLimit-Limit":     "5000",
+		"X-RateLimit-Reset":     strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10), // already past
+	}))
+
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	if !admitted {
+		t.Fatalf("AdmitOrigin(OriginPRStatusPoller, \"core\") admitted = false (reason %q), want true — the reading's reset window has already passed", reason)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty for an admitted call", reason)
+	}
+}
+
 // TestResourceForRequest covers the request-to-resource classifier (Task
 // 3.2.1a): search/* paths classify as "search", a graphql-suffixed path
 // classifies as "graphql", and everything else classifies as "core".

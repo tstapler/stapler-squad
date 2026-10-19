@@ -77,16 +77,18 @@ any production code:
   local plugins, gets a different key automatically — no cross-branch
   contamination, no stale-plugin bug.
 
-**Implementation**: [`scripts/shared-node-modules.sh`](../../scripts/shared-node-modules.sh),
+**Implementation**: [`tools/shared-node-modules`](../../tools/shared-node-modules/) (Go; replaces an earlier bash script that needed the Linux-only `flock` and `sha256sum` binaries),
 wired into the Makefile's `web-app/node_modules/.modules.yaml` target (the
 existing `pnpm install --frozen-lockfile` call site) and its re-install
 guard in the `web-app/out` target. Escape hatch:
 `STAPLER_SQUAD_SHARED_NODE_MODULES=0` forces a plain local install, e.g. to
 rule the shared mechanism in/out while debugging something unrelated.
-Regression tests: [`scripts/shared-node-modules.test.sh`](../../scripts/shared-node-modules.test.sh)
-(stubs `pnpm` so the suite is fast/offline/deterministic per the
-`deterministic-fast-tests` skill — it's testing this script's own
-hashing/locking/symlinking logic, not pnpm's install behavior).
+Regression tests: [`tools/shared-node-modules/run_test.go`](../../tools/shared-node-modules/run_test.go)
+(injects a fake installer instead of `pnpm` so the suite is fast/offline/deterministic per the
+`deterministic-fast-tests` skill — it's testing this tool's own
+hashing/locking/symlinking logic, not pnpm's install behavior) and
+[`scripts/shared-node-modules-makefile.test.sh`](../../scripts/shared-node-modules-makefile.test.sh)
+for the Makefile staleness rule.
 
 **What was actually tested, not just read about** (three scratch git
 worktrees via `git worktree add --detach`, plus one plain directory copy
@@ -104,7 +106,7 @@ discarded after):
 | `next lint` (ESLint, including the two local `file:` plugins loading through the symlinked tree) | PASS — zero errors (pre-existing warnings only) |
 | `stylelint` + `check-css-vars.mjs` | PASS |
 | Playwright (`npx playwright --version` resolves; browser binaries live in `~/.cache/ms-playwright`, independent of `node_modules` either way) | PASS |
-| `make build`, `make test` (Go suite), `make lint`, `make web-build`, `make test-shell` (new `shared-node-modules.test.sh`), `make lint-shell` — all run against this change's actual implementation, not just the prototype | PASS (all) |
+| `make build`, `make test` (Go suite), `make lint`, `make web-build`, `make test-shell` (`tools/shared-node-modules` Go tests), `make lint-shell` — all run against this change's actual implementation, not just the prototype | PASS (all) |
 
 **Known limitation, flagged rather than silently accepted**: once linked,
 `web-app/node_modules` for a given hash is the *same physical directory* for

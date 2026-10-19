@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const badge = style({
@@ -22,6 +22,11 @@ export const inline = style({
   verticalAlign: "middle",
 });
 
+const stuckBadgePulse = keyframes({
+  "0%, 100%": { opacity: 0.4 },
+  "50%": { opacity: 0.9 },
+});
+
 // Neutral pulse/skeleton placeholder shown before the first successful fetch
 // resolves — never a bare "0" (design/ux.md Surface 1 / AC 24).
 export const skeleton = style({
@@ -30,12 +35,6 @@ export const skeleton = style({
   height: "1.25rem",
   borderRadius: vars.radii.full,
   background: vars.color.surfaceMuted,
-  animation: "stuckBadgePulse 1.4s ease-in-out infinite",
+  animation: `${stuckBadgePulse} 1.4s ease-in-out infinite`,
   verticalAlign: "middle",
-  "@keyframes": {
-    stuckBadgePulse: {
-      "0%, 100%": { opacity: 0.4 },
-      "50%": { opacity: 0.9 },
-    },
-  },
-} as Parameters<typeof import("@vanilla-extract/css").style>[0]);
+});
