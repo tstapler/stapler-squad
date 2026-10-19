@@ -15,16 +15,15 @@ import (
 )
 
 type deliveryRig struct {
-	repo     *session.EntRepository
-	clock    *FakeClock
-	steerer  *fakeSteerer
-	owners   *fakeOwners
-	metrics  *Metrics
-	d        *SteerDelivery
-	ended    []domain.WakeStatus
-	revived  []string
-	reasons  []domain.WakeReason
-	lastNote *Notification
+	repo    *session.EntRepository
+	clock   *FakeClock
+	steerer *fakeSteerer
+	owners  *fakeOwners
+	metrics *Metrics
+	d       *SteerDelivery
+	ended   []domain.WakeStatus
+	revived []string
+	reasons []domain.WakeReason
 }
 
 func newDeliveryRig(t *testing.T) *deliveryRig {

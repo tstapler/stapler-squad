@@ -375,15 +375,19 @@ func (d *Dispatcher) buildCreateInput(req ScheduleRequest, now time.Time) (sessi
 	if !typ.IsTimeBased() && d.cfg.Events == nil {
 		return session.CreateWakeTriggerInput{}, ErrEventStreamUnavailable
 	}
-	next, err := d.firstFire(req.Spec, now)
+	next, timed, err := d.firstFire(req.Spec, now)
 	if err != nil {
 		return session.CreateWakeTriggerInput{}, err
+	}
+	var nextFire *time.Time
+	if timed {
+		nextFire = &next
 	}
 	maxFires, err := d.resolveMaxFires(typ, req.MaxFires)
 	if err != nil {
 		return session.CreateWakeTriggerInput{}, err
 	}
-	expires, err := d.resolveExpiry(req.ExpiresAt, next, now)
+	expires, err := d.resolveExpiry(req.ExpiresAt, nextFire, now)
 	if err != nil {
 		return session.CreateWakeTriggerInput{}, err
 	}
@@ -391,31 +395,29 @@ func (d *Dispatcher) buildCreateInput(req ScheduleRequest, now time.Time) (sessi
 		return session.CreateWakeTriggerInput{}, d.refuse(LimitGeneration, fmt.Sprintf("chain generation %d exceeds %d", req.Generation, lim.Generation))
 	}
 	return session.CreateWakeTriggerInput{
-		OwnerSessionUUID: req.Owner, Spec: req.Spec, Action: req.Action, NextFireAt: next,
+		OwnerSessionUUID: req.Owner, Spec: req.Spec, Action: req.Action, NextFireAt: nextFire,
 		MaxFires: maxFires, Generation: req.Generation, AllowRevive: req.AllowRevive,
 		ExpiresAt: &expires, PendingCap: lim.PendingPerOwner,
 	}, nil
 }
 
-// firstFire is next_fire_at for a time-based spec (nil for event types), and
-// enforces the minimum cron interval.
-func (d *Dispatcher) firstFire(spec domain.WakeSpec, now time.Time) (*time.Time, error) {
+// firstFire is next_fire_at for a time-based spec (timed=false for event
+// types), and enforces the minimum cron interval.
+func (d *Dispatcher) firstFire(spec domain.WakeSpec, now time.Time) (at time.Time, timed bool, err error) {
 	switch s := spec.(type) {
 	case domain.AtSpec:
-		at := s.At.UTC()
-		return &at, nil
+		return s.At.UTC(), true, nil
 	case domain.CronSpec:
 		sched, err := ParseCron(s.Expr)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+			return time.Time{}, false, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		if gap := minCronGap(sched, now); gap < d.limits.MinCronInterval {
-			return nil, d.refuse(LimitMinInterval, fmt.Sprintf("cron fires every %s, the minimum is %s", gap, d.limits.MinCronInterval))
+			return time.Time{}, false, d.refuse(LimitMinInterval, fmt.Sprintf("cron fires every %s, the minimum is %s", gap, d.limits.MinCronInterval))
 		}
-		first := sched.Next(now)
-		return &first, nil
+		return sched.Next(now), true, nil
 	}
-	return nil, nil
+	return time.Time{}, false, nil
 }
 
 // minCronGap is the shortest gap among the next cronGapProbe occurrences.

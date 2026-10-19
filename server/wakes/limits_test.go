@@ -266,7 +266,7 @@ func TestRateGate_should_DeferSeventhWake_When_OwnerLimitIsSix(t *testing.T) {
 func TestRateGate_should_DeferAcrossOwners_When_GlobalLimitReached(t *testing.T) {
 	t.Parallel()
 	r := newDispatcherRig(t, func(c *Config) { c.Limits = LimitSettings{FiresGlobalHour: 3} })
-	var rows []*session.WakeTriggerData
+	rows := make([]*session.WakeTriggerData, 0, 4)
 	for i := range 4 {
 		owner := fmt.Sprintf("owner-g%d", i)
 		r.steerer.setReady(owner, true)
