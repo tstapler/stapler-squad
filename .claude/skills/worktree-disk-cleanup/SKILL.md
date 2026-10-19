@@ -185,10 +185,21 @@ for d in ~/.stapler-squad/shared-node-modules/*/; do
     age_secs=$(( $(date +%s) - $(stat -c %Y "$d" 2>/dev/null || stat -f %m "$d") ))
     [ "$age_secs" -lt 3600 ] && continue
     echo "orphaned, no referencing worktree, older than 1h: $d"
-    # rm -rf "$d" "$d".lock  -- uncomment once you've eyeballed the list
+    # rm -rf "$d" "${d%/}.lock"  -- uncomment once you've eyeballed the list.
+    # Note the ${d%/} strip: $d carries the trailing slash from the `*/`
+    # glob, and the per-hash lock file is a SIBLING of the hash dir
+    # ("<hash>.lock", created by `exec 200>"$SHARED_ROOT/$HASH.lock"` in
+    # shared-node-modules.sh), not a child of it -- "$d".lock would silently
+    # target a nonexistent "<hash>/.lock" and never remove the real file.
   fi
 done
 ```
+
+The `.lock` files are tiny (0 bytes, one per hash ever seen) and harmless on
+their own, but they'd otherwise accumulate forever with nothing to prune
+them — folding their removal into this same step, keyed off the same
+orphan/age check as the directory it guards, avoids a second GC mechanism
+for a one-line cost.
 
 Same confirmation rule as Step 4: list candidates, get the scope confirmed,
 then delete. This is the one GC mechanism for this directory — nothing in
