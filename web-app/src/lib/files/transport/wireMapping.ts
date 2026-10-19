@@ -44,7 +44,10 @@ const INDEX_PENDING = /line index/i;
 
 /** Typed refusals become `Rejected`; wire-level failures become `TransportFailure`; the rest pass through. */
 export function mapError(err: unknown): unknown {
+  // fetch() rejects with a TypeError when the network is down; connect may wrap it as Code.Unknown.
+  if (err instanceof TypeError) return new TransportFailure("network", err);
   if (!(err instanceof ConnectError)) return err;
+  if (err.code === Code.Unknown && err.cause instanceof TypeError) return new TransportFailure("network", err);
   switch (err.code) {
     case Code.NotFound:
       return new Rejected("not_found");

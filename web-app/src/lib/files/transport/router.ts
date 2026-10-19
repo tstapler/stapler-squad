@@ -32,6 +32,8 @@ export class FileTransportRouter {
   private caps: FileCapabilities | null = null;
   private capsPromise: Promise<void> | null = null;
   private pin: SelectReason | null = null;
+  /** Why the last capabilities fetch failed (not Unimplemented); cleared on success. */
+  private capsFailure: unknown = null;
   private readonly byId = new Map<TransportId, FileTransport>();
   private readonly ceiling = new Map<FileOpName, number>();
   private readonly streak = new Map<FileOpName, { id: TransportId; failures: number }>();
@@ -68,6 +70,7 @@ export class FileTransportRouter {
 
   private async run<T extends { capsEpoch?: number }>(ref: FileRef, op: FileOpName, need: AdvertisedOp, call: (t: FileTransport) => Promise<T>): Promise<T> {
     await this.ensureCaps(ref.sessionId);
+    this.requireCapsOrFloor(need);
     const transport = this.resolve(op, need);
     this.announce();
     try {
@@ -92,10 +95,18 @@ export class FileTransportRouter {
       const caps = await this.opts.fetchCapabilities(sessionId);
       if (caps.protocolVersion > SUPPORTED_PROTOCOL_MAJOR) this.pin = "version";
       else this.caps = caps;
+      this.capsFailure = null;
     } catch (err) {
       // Older server: today's behaviour. Any other failure retries on the next call.
       if (err instanceof ConnectError && err.code === Code.Unimplemented) this.pin = "capabilities";
+      else this.capsFailure = err;
     }
+  }
+
+  /** Unknown capabilities after a failed fetch is transient, so an op only a higher rung serves must not look unsupported. */
+  private requireCapsOrFloor(need: AdvertisedOp): void {
+    if (this.caps || this.pin || !this.capsFailure) return;
+    if (!this.opts.full.capabilities().ops.includes(need)) throw new TransportFailure("unavailable", this.capsFailure);
   }
 
   private async checkEpoch(sessionId: string, epoch: number | undefined): Promise<void> {

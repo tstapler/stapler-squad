@@ -113,4 +113,15 @@ describe("FileTransportRouter", () => {
     expect(t.router.transportFor("read")).toBe("connect_unary");
     expect(t.onFallback).not.toHaveBeenCalled();
   });
+  it("router_should_ThrowTransportFailureNotUnsupported_When_CapabilitiesFetchFailsTransiently", async () => {
+    const { router, fetchCapabilities } = setup(new TypeError("Failed to fetch"));
+    const lines = { kind: "lines", anchorLine: 1, dir: "fwd", wantLines: 10, maxBytes: 100 } as const;
+
+    const err = await router.read(REF, lines).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(TransportFailure);
+    expect(err).not.toBeInstanceOf(Rejected);
+    await router.read(REF, lines).catch(() => undefined);
+    expect(fetchCapabilities).toHaveBeenCalledTimes(2); // the failure is retried, not remembered
+  });
 });
