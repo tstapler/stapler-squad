@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -82,4 +83,30 @@ func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, tool
 	if inst := s.findInstance(sessionID); inst != nil {
 		s.guidanceAcks.Receipt(ctx, inst.GetStableID(), toolName)
 	}
+}
+
+// wireHookReply installs the pre-answered-question resolver. It stays inert
+// while stage:hook_reply is closed (spikeS1HookReplyPassed).
+func (s *SessionService) wireHookReply(storage *session.Storage, acks *GuidanceAckDetector) {
+	if storage == nil {
+		return
+	}
+	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: compiledFlagEvidence}}
+	if acks != nil {
+		r.acks = acks
+	}
+	s.hookReply.Store(r)
+}
+
+// HookReplier is the AskUserQuestion hook answerer for the hook IPC server. It
+// reads the resolver at call time, so it may be installed before actions are wired.
+func (s *SessionService) HookReplier() HookReplier { return lazyHookReplier{s} }
+
+type lazyHookReplier struct{ s *SessionService }
+
+func (l lazyHookReplier) Reply(ctx context.Context, sessionUUID string, toolInput map[string]interface{}) *hookipc.HookOutput {
+	if r := l.s.hookReply.Load(); r != nil {
+		return r.Reply(ctx, sessionUUID, toolInput)
+	}
+	return nil
 }

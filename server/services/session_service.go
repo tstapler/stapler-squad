@@ -118,6 +118,7 @@ type SessionService struct {
 	actionDispatcher *NotificationActionDispatcher
 	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
 	guidanceAcks *GuidanceAckDetector
+	hookReply    atomic.Pointer[hookReplyResolver]
 	ackCancel    context.CancelFunc
 	ackDone      chan struct{}
 
