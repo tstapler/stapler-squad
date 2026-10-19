@@ -5,16 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// DefaultDebounce is the per-trigger event coalescing window (Wake limits row
-// "debounce").
-const DefaultDebounce = 5 * time.Second
 
 // EventMatch names the triggers an event can fire: the (type, key) index cell
 // and, for kinds, the spec's kind string.

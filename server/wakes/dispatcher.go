@@ -36,11 +36,12 @@ type Config struct {
 	Leader  LeaderGuard
 	Metrics *Metrics
 
+	// Limits are the operator-set values of the Wake limits table; zero values
+	// keep the defaults and everything is clamped to the compiled ceilings.
+	Limits LimitSettings
+
 	ClaimLease    time.Duration
 	RetryInterval time.Duration
-	ReviveHold    time.Duration
-	// Debounce coalesces repeat events for one multi-fire trigger.
-	Debounce time.Duration
 }
 
 // Dispatcher is the single admission path for wakes (ADR-006 rule 3): one bus
@@ -55,7 +56,9 @@ type Dispatcher struct {
 	timer    *Timekeeper
 	index    *triggerIndex
 
-	admit AdmitFunc // claim-time gate; nil admits everything
+	limits  Limits
+	limiter *limiter
+	admit   AdmitFunc // claim-time gate; nil admits everything
 
 	ready     chan struct{}
 	changed   chan struct{}
@@ -92,11 +95,11 @@ func NewDispatcher(cfg Config) *Dispatcher {
 	if cfg.ClaimLease <= 0 {
 		cfg.ClaimLease = DefaultClaimLease
 	}
-	if cfg.Debounce <= 0 {
-		cfg.Debounce = DefaultDebounce
-	}
+	limits := ResolveLimits(cfg.Limits)
 	d := &Dispatcher{
 		cfg:        cfg,
+		limits:     limits,
+		limiter:    newLimiter(),
 		index:      newTriggerIndex(),
 		ready:      make(chan struct{}),
 		changed:    make(chan struct{}, 1),
@@ -104,7 +107,8 @@ func NewDispatcher(cfg Config) *Dispatcher {
 		lastDigest: map[string]time.Time{},
 		predicates: map[domain.WakeTriggerType]Predicate{},
 	}
-	d.reviver = NewReviver(cfg.Admission, cfg.Owners, cfg.Clock, cfg.ReviveHold)
+	d.reviver = NewReviver(cfg.Admission, cfg.Owners, cfg.Clock, limits.ReviveLockHold)
+	d.admit = d.rateGate
 	d.delivery = NewSteerDelivery(SteerDeliveryConfig{
 		Store: cfg.Store, Steerer: cfg.Steerer, Owners: cfg.Owners, Clock: cfg.Clock, Metrics: cfg.Metrics,
 		RetryInterval: cfg.RetryInterval,
@@ -316,13 +320,13 @@ func (d *Dispatcher) fire(ctx context.Context, row *session.WakeTriggerData) {
 func (d *Dispatcher) debounced(id string, now time.Time) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if last, ok := d.lastFired[id]; ok && now.Sub(last) < d.cfg.Debounce {
+	if last, ok := d.lastFired[id]; ok && now.Sub(last) < d.limits.Debounce {
 		return true
 	}
 	d.lastFired[id] = now
 	if len(d.lastFired) > lastFiredPruneAt {
 		for k, t := range d.lastFired {
-			if now.Sub(t) >= d.cfg.Debounce {
+			if now.Sub(t) >= d.limits.Debounce {
 				delete(d.lastFired, k)
 			}
 		}
@@ -396,6 +400,9 @@ func (d *Dispatcher) deliverReminder(ctx context.Context, row *session.WakeTrigg
 // ended is the one place a missed or skipped row reaches the operator: a
 // failure-class notification, or a digest entry while a reconcile run is open.
 func (d *Dispatcher) ended(_ context.Context, row *session.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason) {
+	if row.Status == domain.WakeStatusClaimed {
+		d.limiter.release(row.ID) // a claim that never delivered gives its hourly slot back
+	}
 	d.mu.Lock()
 	dg := d.digest
 	d.mu.Unlock()
