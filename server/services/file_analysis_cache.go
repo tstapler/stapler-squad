@@ -122,7 +122,7 @@ func (c *analysisCache) Await(ctx context.Context, key analysisKey, run analysis
 	c.mu.Lock()
 	e.waiters--
 	if e.waiters == 0 && !e.detached && e.state == analysisStatePending {
-		e.cancel()
+		c.dropLocked(e) // also cancels; keeps a new joiner from receiving this doomed entry
 	}
 	c.mu.Unlock()
 	if waitErr != nil {
@@ -181,10 +181,9 @@ func (c *analysisCache) runEntry(ctx context.Context, e *analysisEntry, run anal
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
-	case errors.Is(err, context.Canceled), errors.Is(err, errAnalysisStale):
-		c.dropLocked(e) // never cache; the next request starts fresh
-		e.state, e.err = analysisStateFailed, err
 	case err != nil:
+		// Cancel, stale and I/O errors alike are never cached: waiters holding e still read e.err, the next request starts fresh.
+		c.dropLocked(e)
 		e.state, e.err = analysisStateFailed, err
 	default:
 		e.state, e.result = analysisStateReady, res

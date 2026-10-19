@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -85,6 +86,56 @@ func TestAnalysisCache_ShouldCancelPass_When_LastWaiterLeavesAndNotCacheOwned(t 
 	cancel2()
 	require.ErrorIs(t, <-errs, context.Canceled)
 	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateUnspecified })
+}
+
+func TestAnalysisCache_ShouldDetachEntryImmediately_When_LastWaiterCancelsAPassThatIsSlowToStop(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	c := newAnalysisCache(analysisCacheEntries, 1)
+	defer c.Close()
+	started, proceed := make(chan struct{}, 1), make(chan struct{})
+	k := keyOf("/w/slow-stop.log", 10)
+	slowStop := func(ctx context.Context) (*Analysis, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-proceed // the pass takes a while to notice the cancel
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := c.Await(ctx, k, slowStop); done <- err }()
+	<-started
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	c.mu.Lock()
+	_, stillCached := c.entries[k]
+	c.mu.Unlock()
+	assert.False(t, stillCached, "a joiner must not be handed the doomed entry")
+	close(proceed)
+}
+
+func TestAnalysisCache_ShouldNotCacheFailure_When_PassFailsWithTransientError(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	c := newAnalysisCache(analysisCacheEntries, 1)
+	defer c.Close()
+	k := keyOf("/w/eio.log", 10)
+	var runs atomic.Int32
+	run := func(context.Context) (*Analysis, error) {
+		if runs.Add(1) == 1 {
+			return nil, errors.New("input/output error")
+		}
+		return &Analysis{LineCount: 7}, nil
+	}
+
+	_, err := c.Await(context.Background(), k, run)
+	require.ErrorContains(t, err, "input/output error")
+	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateUnspecified })
+
+	got, err := c.Await(context.Background(), k, run)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), got.LineCount)
+	assert.Equal(t, int32(2), runs.Load())
 }
 
 func TestAnalysisCache_ShouldKeepPassRunning_When_StartedCacheOwnedAndWaiterLeaves(t *testing.T) {
