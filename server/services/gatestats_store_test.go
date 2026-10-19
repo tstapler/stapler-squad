@@ -169,7 +169,7 @@ func TestStatsFile_ShouldRoundTripAndLoadStatus_WhenValidFileExists(t *testing.T
 func TestStatsStore_ShouldNeverBlockPanicOrFailStartupAndWarnOncePer10Minutes_WhenDirUnwritableOrDiskFull(t *testing.T) {
 	t.Parallel()
 	mfs, clk := newMemFS(), newGateTestClock()
-	mfs.failWrite = errDiskFull
+	mfs.setFailWrite(errDiskFull)
 	store, warns := newTestStore(t, mfs, clk, 1)
 	mfs.put(testStatsDir+"/"+statsFileName+".5.tmp", []byte("stale"))
 

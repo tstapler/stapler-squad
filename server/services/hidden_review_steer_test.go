@@ -204,7 +204,7 @@ func TestBacklogSteer_ShouldRecordOnlyThe80CharacterPreview_WhenTheMessageIsLong
 func TestBacklogSteer_ShouldReturnInternalWithZeroWritesAndAuditFailedMetric_WhenPreWriteAuditAppendFails(t *testing.T) {
 	e := newSteerEnv(t)
 	review := e.addSession("review-audit", true, session.SessionRoleReview)
-	e.mfs.failWrite = errors.New("disk full")
+	e.mfs.setFailWrite(errors.New("disk full"))
 
 	err := e.steer(e.localCtx(), review.inst.Title, "go")
 	require.Error(t, err)
