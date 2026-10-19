@@ -1245,7 +1245,7 @@ func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR,
 			HasMergeConflict: mergeConflict(n.Mergeable),
 
 			NodeID:                  n.ID,
-			Body:                    n.Body,
+			Body:                    truncateBody(n.Body),
 			Additions:               n.Additions,
 			Deletions:               n.Deletions,
 			ChangedFiles:            n.ChangedFiles,
@@ -1261,6 +1261,16 @@ func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR,
 		prs = append(prs, pr)
 	}
 	return prs, nil
+}
+
+// maxBodyChars bounds the PR description carried in every poll snapshot; the UI shows a 300-char preview.
+const maxBodyChars = 1000
+
+func truncateBody(s string) string {
+	if r := []rune(s); len(r) > maxBodyChars {
+		return string(r[:maxBodyChars])
+	}
+	return s
 }
 
 func labelNames(n graphQLPRNode) []string {

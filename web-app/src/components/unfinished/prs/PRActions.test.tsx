@@ -68,6 +68,18 @@ describe("PRCard actions", () => {
     expect(onNothingToFix).toHaveBeenCalled();
   });
 
+  it("prCard_should_KeepDialogAndReturnFocusToClose_When_CloseFails", async () => {
+    const client = fakeClient({ closePRDirect: jest.fn(() => Promise.reject(new Error("denied"))) });
+    render(<PRCard pr={makePR()} actionClient={client} />);
+    fireEvent.click(screen.getByTestId("pr-close-button"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pr-close-confirm"));
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("denied");
+    expect(screen.getByTestId("pr-close-button")).toHaveFocus();
+  });
+
   it("prCard_should_DisableButtonsWhileMergeInFlight", async () => {
     let resolve!: () => void;
     const client = fakeClient({
@@ -116,13 +128,13 @@ describe("PRCard actions", () => {
     expect(screen.queryByTestId("github-pr-card")).toBeNull();
   });
 
-  it("prCard_should_CallDraftRPCsWithNodeId_When_Toggled", async () => {
+  it("prCard_should_CallDraftRPCs_When_Toggled", async () => {
     const toDraft = fakeClient();
     const { unmount } = render(<PRCard pr={makePR({ nodeId: "PR_1" })} actionClient={toDraft} />);
     await act(async () => {
       fireEvent.click(screen.getByTestId("pr-draft-toggle-button"));
     });
-    expect(toDraft.convertPRToDraft).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "PR_1" }));
+    expect(toDraft.convertPRToDraft).toHaveBeenCalledWith(expect.objectContaining({ owner: "acme", number: 42 }));
     unmount();
 
     const toReady = fakeClient();
@@ -130,7 +142,7 @@ describe("PRCard actions", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("pr-draft-toggle-button"));
     });
-    expect(toReady.markPRReady).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "PR_1" }));
+    expect(toReady.markPRReady).toHaveBeenCalledWith(expect.objectContaining({ owner: "acme", number: 42 }));
   });
 
   it("prCard_should_DisableDraftToggle_When_NodeIdMissing", () => {

@@ -61,8 +61,10 @@ export function PRActionBar({ pr, client, onGone, onChanged }: PRActionBarProps)
   };
 
   const close = async () => {
+    // Stay mounted until the RPC settles so focus returns to a re-enabled trigger on failure.
+    const ok = await run("close", pr);
     setConfirmingClose(false);
-    if (await run("close", pr)) {
+    if (ok) {
       toast(`PR #${pr.number} closed`);
       onGone();
     }
@@ -102,7 +104,7 @@ export function PRActionBar({ pr, client, onGone, onChanged }: PRActionBarProps)
               onClick={merge}
               data-testid="pr-merge-button"
             >
-              {inflight === "merge" ? "Merging…" : "Merge"}
+              {inflight === "merge" ? "Merging…" : `Merge (${method})`}
             </button>
           </>
         )}
@@ -142,12 +144,19 @@ export function PRActionBar({ pr, client, onGone, onChanged }: PRActionBarProps)
             Close PR #{pr.number} without merging?
           </p>
           <div className={styles.actionRow}>
-            <button type="button" autoFocus className={styles.actionButton} onClick={() => setConfirmingClose(false)}>
+            <button
+              type="button"
+              autoFocus
+              className={styles.actionButton}
+              disabled={busy}
+              onClick={() => setConfirmingClose(false)}
+            >
               Cancel
             </button>
             <button
               type="button"
               className={styles.dangerActionButton}
+              disabled={busy}
               onClick={close}
               data-testid="pr-close-confirm"
             >

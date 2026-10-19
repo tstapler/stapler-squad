@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // prActionDeps are the GitHub calls behind the session-less PR action RPCs.
@@ -18,6 +19,7 @@ type prActionDeps struct {
 	setDraft  func(ctx context.Context, host, nodeID, token string, draft bool) error
 	refresh   func(ctx context.Context) error
 	tokenFrom PRTokenResolver
+	snapshot  PRSnapshotSource
 }
 
 func (s *GitHubUserService) actionDeps() prActionDeps {
@@ -42,28 +44,43 @@ func (s *GitHubUserService) actionDeps() prActionDeps {
 	if d.tokenFrom == nil {
 		d.tokenFrom = s.cache
 	}
+	if d.snapshot == nil {
+		d.snapshot = s.cache
+	}
 	return d
 }
 
-// directPRTarget validates (owner, repo, number, host) shared by every direct action.
-func directPRTarget(owner, repo string, number int32, host string) (githubpkg.RepoRef, error) {
+// prActionTarget validates (owner, repo, number, host) and requires the PR to
+// belong to a connected account (the same gate the nudge path uses), so these
+// RPCs only act on PRs the panel itself lists.
+func (d prActionDeps) prActionTarget(owner, repo string, number int32, host string) (githubpkg.PRKey, githubpkg.RepoRef, string, error) {
 	if number <= 0 {
-		return githubpkg.RepoRef{}, connect.NewError(connect.CodeInvalidArgument, errors.New("number must be positive"))
+		return githubpkg.PRKey{}, githubpkg.RepoRef{}, "", connect.NewError(connect.CodeInvalidArgument, errors.New("number must be positive"))
+	}
+	key, err := githubpkg.NewPRKey(host, owner, repo, int(number))
+	if err != nil {
+		return githubpkg.PRKey{}, githubpkg.RepoRef{}, "", connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	ref, err := githubpkg.NewRepoRefWithHost(owner, repo, host)
 	if err != nil {
-		return githubpkg.RepoRef{}, connect.NewError(connect.CodeInvalidArgument, err)
+		return githubpkg.PRKey{}, githubpkg.RepoRef{}, "", connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	return ref, nil
+	token, _, ok := d.tokenFrom.TokenForPR(key)
+	if !ok {
+		return githubpkg.PRKey{}, githubpkg.RepoRef{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("PR is not tracked or its GitHub account is no longer connected"))
+	}
+	return key, ref, token, nil
 }
 
 // finishPRAction refreshes the cache after a successful action so
 // WatchUserPRs subscribers see the new state, and builds the response.
-func (s *GitHubUserService) finishPRAction(ctx context.Context, d prActionDeps, err error, failure, success string) (*connect.Response[sessionv1.PRActionResponse], error) {
+func finishPRAction(ctx context.Context, d prActionDeps, err error, failure, success string) (*connect.Response[sessionv1.PRActionResponse], error) {
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("%s: %w", failure, err)))
 	}
-	_ = d.refresh(ctx)
+	if rerr := d.refresh(ctx); rerr != nil {
+		log.Warn("PR cache refresh after action failed", "error", rerr)
+	}
 	return connect.NewResponse(&sessionv1.PRActionResponse{Success: true, Message: success}), nil
 }
 
@@ -74,16 +91,21 @@ func (s *GitHubUserService) MergePRDirect(
 ) (*connect.Response[sessionv1.PRActionResponse], error) {
 	ctx = githubpkg.WithGitHubCallOrigin(ctx, githubpkg.OriginInteractive)
 	m := req.Msg
-	ref, err := directPRTarget(m.Owner, m.Repo, m.Number, m.Host)
-	if err != nil {
-		return nil, err
-	}
 	method := "merge"
 	if m.Method != nil && *m.Method != "" {
 		method = *m.Method
 	}
+	switch method {
+	case "merge", "squash", "rebase":
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown merge method %q", method))
+	}
 	d := s.actionDeps()
-	return s.finishPRAction(ctx, d, d.merge(ctx, ref, int(m.Number), method),
+	_, ref, _, err := d.prActionTarget(m.Owner, m.Repo, m.Number, m.Host)
+	if err != nil {
+		return nil, err
+	}
+	return finishPRAction(ctx, d, d.merge(ctx, ref, int(m.Number), method),
 		"failed to merge PR", fmt.Sprintf("PR #%d merged using method '%s'", m.Number, method))
 }
 
@@ -94,12 +116,12 @@ func (s *GitHubUserService) ClosePRDirect(
 ) (*connect.Response[sessionv1.PRActionResponse], error) {
 	ctx = githubpkg.WithGitHubCallOrigin(ctx, githubpkg.OriginInteractive)
 	m := req.Msg
-	ref, err := directPRTarget(m.Owner, m.Repo, m.Number, m.Host)
+	d := s.actionDeps()
+	_, ref, _, err := d.prActionTarget(m.Owner, m.Repo, m.Number, m.Host)
 	if err != nil {
 		return nil, err
 	}
-	d := s.actionDeps()
-	return s.finishPRAction(ctx, d, d.close(ctx, ref, int(m.Number)),
+	return finishPRAction(ctx, d, d.close(ctx, ref, int(m.Number)),
 		"failed to close PR", fmt.Sprintf("PR #%d closed", m.Number))
 }
 
@@ -121,20 +143,14 @@ func (s *GitHubUserService) MarkPRReady(
 
 func (s *GitHubUserService) toggleDraft(ctx context.Context, m *sessionv1.PRDraftToggleRequest, draft bool) (*connect.Response[sessionv1.PRActionResponse], error) {
 	ctx = githubpkg.WithGitHubCallOrigin(ctx, githubpkg.OriginInteractive)
-	if _, err := directPRTarget(m.Owner, m.Repo, m.Number, m.Host); err != nil {
+	d := s.actionDeps()
+	key, _, token, err := d.prActionTarget(m.Owner, m.Repo, m.Number, m.Host)
+	if err != nil {
 		return nil, err
 	}
-	if m.NodeId == "" {
+	nodeID := cachedNodeID(d.snapshot.GetAll(), key)
+	if nodeID == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("PR node_id is not known yet; wait for the next refresh"))
-	}
-	key, err := githubpkg.NewPRKey(m.Host, m.Owner, m.Repo, int(m.Number))
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
-	}
-	d := s.actionDeps()
-	token, _, ok := d.tokenFrom.TokenForPR(key)
-	if !ok {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("the GitHub account for this PR is no longer connected"))
 	}
 	msg := fmt.Sprintf("PR #%d marked ready for review", m.Number)
 	failure := "failed to mark PR ready"
@@ -142,5 +158,17 @@ func (s *GitHubUserService) toggleDraft(ctx context.Context, m *sessionv1.PRDraf
 		msg = fmt.Sprintf("PR #%d converted to draft", m.Number)
 		failure = "failed to convert PR to draft"
 	}
-	return s.finishPRAction(ctx, d, d.setDraft(ctx, defaultHostIfEmpty(m.Host), m.NodeId, token, draft), failure, msg)
+	return finishPRAction(ctx, d, d.setDraft(ctx, key.Host(), nodeID, token, draft), failure, msg)
+}
+
+// cachedNodeID returns the polled node ID for key, so the mutation can never
+// target a different PR than the one the account was authorized for.
+func cachedNodeID(prs []githubpkg.UserPR, key githubpkg.PRKey) string {
+	for _, pr := range prs {
+		if pr.Number == key.Number() && githubpkg.NormalizeHost(pr.Host) == key.Host() &&
+			pr.Owner == key.Owner() && pr.Repo == key.RepoName() {
+			return pr.NodeID
+		}
+	}
+	return ""
 }

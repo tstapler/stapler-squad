@@ -57,10 +57,10 @@ export function usePRActions(client?: PRActionClient) {
             await c.closePRDirect(create(ClosePRDirectRequestSchema, target(pr)));
             break;
           case "toDraft":
-            await c.convertPRToDraft(create(PRDraftToggleRequestSchema, { ...target(pr), nodeId: pr.nodeId }));
+            await c.convertPRToDraft(create(PRDraftToggleRequestSchema, target(pr)));
             break;
           case "toReady":
-            await c.markPRReady(create(PRDraftToggleRequestSchema, { ...target(pr), nodeId: pr.nodeId }));
+            await c.markPRReady(create(PRDraftToggleRequestSchema, target(pr)));
             break;
         }
         return true;

@@ -71,10 +71,10 @@ service GitHubUserService {
   // ClosePRDirect closes a PR without merging, with no session required.
   rpc ClosePRDirect(ClosePRDirectRequest) returns (PRActionResponse) {}
 
-  // ConvertPRToDraft marks an open PR as draft. FailedPrecondition when node_id is empty.
+  // ConvertPRToDraft marks an open PR as draft. FailedPrecondition when the cached PR has no node_id.
   rpc ConvertPRToDraft(PRDraftToggleRequest) returns (PRActionResponse) {}
 
-  // MarkPRReady marks a draft PR as ready for review. FailedPrecondition when node_id is empty.
+  // MarkPRReady marks a draft PR as ready for review. FailedPrecondition when the cached PR has no node_id.
   rpc MarkPRReady(PRDraftToggleRequest) returns (PRActionResponse) {}
 }
 
@@ -93,12 +93,12 @@ message ClosePRDirectRequest {
   string host   = 4;
 }
 
+// The node ID is looked up server-side from the cached PR, never client-supplied.
 message PRDraftToggleRequest {
   string owner   = 1;
   string repo    = 2;
   int32  number  = 3;
   string host    = 4;
-  string node_id = 5;  // UserPR.node_id
 }
 
 message PRActionResponse {

@@ -23,6 +23,12 @@ type fixedTokens struct{ ok bool }
 
 func (f fixedTokens) TokenForPR(gh.PRKey) (string, string, bool) { return "tok", "alice", f.ok }
 
+type fixedSnapshot []gh.UserPR
+
+func (f fixedSnapshot) GetAll() []gh.UserPR { return f }
+
+var cachedPR = fixedSnapshot{{Owner: "o", Repo: "r", Number: 7, Host: "github.com", NodeID: "PR_1"}}
+
 func newActionService(r *actionRecorder, tokens bool) *GitHubUserService {
 	return &GitHubUserService{actions: prActionDeps{
 		merge: func(_ context.Context, _ gh.RepoRef, _ int, method string) error {
@@ -37,6 +43,7 @@ func newActionService(r *actionRecorder, tokens bool) *GitHubUserService {
 		},
 		refresh:   func(context.Context) error { r.refreshed++; return nil },
 		tokenFrom: fixedTokens{ok: tokens},
+		snapshot:  cachedPR,
 	}}
 }
 
@@ -77,7 +84,7 @@ func TestClosePRDirect_should_DelegateAndRefresh_When_Succeeds(t *testing.T) {
 }
 
 func TestDraftToggle_should_CallMutationAndRefresh_When_NodeIDPresent(t *testing.T) {
-	req := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 7, NodeId: "PR_1"}
+	req := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 7}
 
 	r := &actionRecorder{}
 	_, err := newActionService(r, true).ConvertPRToDraft(context.Background(), connect.NewRequest(req))
@@ -97,13 +104,13 @@ func TestDraftToggle_should_CallMutationAndRefresh_When_NodeIDPresent(t *testing
 func TestDraftToggle_should_ReturnFailedPrecondition_When_NodeIDEmptyOrNoAccount(t *testing.T) {
 	r := &actionRecorder{}
 	svc := newActionService(r, true)
-	noNode := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 7}
+	noNode := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 8}
 	_, err := svc.ConvertPRToDraft(context.Background(), connect.NewRequest(noNode))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	_, err = svc.MarkPRReady(context.Background(), connect.NewRequest(noNode))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 
-	noAcct := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 7, NodeId: "PR_1"}
+	noAcct := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 7}
 	_, err = newActionService(r, false).MarkPRReady(context.Background(), connect.NewRequest(noAcct))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Nil(t, r.draft)
@@ -120,4 +127,24 @@ func TestUserPRsToProto_should_MapExtendedFields(t *testing.T) {
 	assert.EqualValues(t, 2, out.Deletions)
 	assert.EqualValues(t, 3, out.ChangedFiles)
 	assert.Equal(t, []string{"bob"}, out.RequestedReviewerLogins)
+}
+
+func TestPRActions_should_ReturnFailedPrecondition_When_AccountNotConnected(t *testing.T) {
+	r := &actionRecorder{}
+	svc := newActionService(r, false)
+	ctx := context.Background()
+	_, mergeErr := svc.MergePRDirect(ctx, connect.NewRequest(&sessionv1.MergePRDirectRequest{Owner: "o", Repo: "r", Number: 7}))
+	_, closeErr := svc.ClosePRDirect(ctx, connect.NewRequest(&sessionv1.ClosePRDirectRequest{Owner: "o", Repo: "r", Number: 7}))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(mergeErr))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(closeErr))
+	assert.Zero(t, r.merged+r.closed+r.refreshed)
+}
+
+func TestMergePRDirect_should_RejectUnknownMethod(t *testing.T) {
+	r := &actionRecorder{}
+	bad := "sqush"
+	_, err := newActionService(r, true).MergePRDirect(context.Background(), connect.NewRequest(
+		&sessionv1.MergePRDirectRequest{Owner: "o", Repo: "r", Number: 7, Method: &bad}))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Zero(t, r.merged)
 }

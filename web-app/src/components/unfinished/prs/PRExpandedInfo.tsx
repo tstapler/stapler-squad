@@ -10,7 +10,8 @@ const BODY_PREVIEW_CHARS = 300;
 export function PRExpandedInfo({ pr }: { pr: UserPR }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const body = pr.body.length > BODY_PREVIEW_CHARS ? `${pr.body.slice(0, BODY_PREVIEW_CHARS)}…` : pr.body;
+  const chars = Array.from(pr.body);
+  const body = chars.length > BODY_PREVIEW_CHARS ? `${chars.slice(0, BODY_PREVIEW_CHARS).join("")}…` : pr.body;
   return (
     <div className={styles.expandedInfo}>
       <button
