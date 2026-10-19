@@ -54,6 +54,18 @@ func TestStaticFileServer_should_NotCacheAssetOutsideNextPrefix(t *testing.T) {
 	assert.NotContains(t, w.Header().Get("Cache-Control"), "immutable")
 }
 
+func TestStaticFileServer_should_Return404_When_AssetMissingUnderNextPrefix(t *testing.T) {
+	w := getStatic(t, "/_next/static/chunks/old-9.js")
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.NotContains(t, w.Body.String(), "<root>", "a stale chunk must not be answered with HTML")
+}
+
+func TestStaticFileServer_should_KeepSPAFallback_When_NonAssetPathMissing(t *testing.T) {
+	w := getStatic(t, "/backlog/board")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "<root>", w.Body.String())
+}
+
 func TestStaticFileServer_should_NotCacheIndexHTMLFile(t *testing.T) {
 	// A direct hit on a non-root html file takes the file branch and must carry no-cache.
 	fsys := newStaticTestFS()
