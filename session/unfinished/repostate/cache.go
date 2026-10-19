@@ -162,6 +162,12 @@ func (c *RepoCache[K, V]) GetOrCompute(key K, fn func() (V, error)) (V, error) {
 // computeMiss is GetOrCompute for a caller that already saw a miss from Get
 // (so the miss is not counted twice and the hit path stays closure-free).
 func (c *RepoCache[K, V]) computeMiss(key K, fn func() (V, error)) (V, error) {
+	return c.computeMissKeep(key, fn, nil)
+}
+
+// computeMissKeep is computeMiss that skips the Put when keep (if non-nil)
+// reports false after fn ran, e.g. the value is pinned to a dropped generation.
+func (c *RepoCache[K, V]) computeMissKeep(key K, fn func() (V, error), keep func() bool) (V, error) {
 	var led bool // written by the flight goroutine, read after <-ch
 	ch := c.sf.DoChan(fmt.Sprint(key), func() (out any, doErr error) {
 		defer func() {
@@ -174,7 +180,9 @@ func (c *RepoCache[K, V]) computeMiss(key K, fn func() (V, error)) (V, error) {
 		if fnErr != nil {
 			return nil, fnErr
 		}
-		c.Put(key, v)
+		if keep == nil || keep() {
+			c.Put(key, v)
+		}
 		return v, nil
 	})
 	// DoChan has registered this caller in the flight by now.

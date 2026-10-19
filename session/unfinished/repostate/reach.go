@@ -170,10 +170,13 @@ func (s *RepoState) reachMiss(ctx context.Context, rc *ReachCache, src ParentsSo
 			return b, nil
 		}
 	}
-	return rc.cache.computeMiss(key, func() (*ReachBitset, error) { return rc.build(&w, key) })
+	// A set built on a generation Drop already replaced pins that whole arena
+	// and can never be hit again (its key carries the old epoch): don't store it.
+	current := func() bool { return s.Graph().Load() == w.gen }
+	return rc.cache.computeMissKeep(key, func() (*ReachBitset, error) { return rc.build(&w, key, current) }, current)
 }
 
-func (c *ReachCache) build(w *Walk, key ReachKey) (*ReachBitset, error) {
+func (c *ReachCache) build(w *Walk, key ReachKey, current func() bool) (*ReachBitset, error) {
 	baseID, err := w.intern(key.Base)
 	if err != nil {
 		return nil, err
@@ -185,7 +188,7 @@ func (c *ReachCache) build(w *Walk, key ReachKey) (*ReachBitset, error) {
 		}
 		if ok {
 			c.incremental.Add(1)
-			c.publish(b)
+			c.publish(b, current)
 			return b, nil
 		}
 	}
@@ -194,12 +197,12 @@ func (c *ReachCache) build(w *Walk, key ReachKey) (*ReachBitset, error) {
 		return nil, err
 	}
 	c.scratch.Add(1)
-	c.publish(b)
+	c.publish(b, current)
 	return b, nil
 }
 
-func (c *ReachCache) publish(b *ReachBitset) {
-	if !b.truncated {
+func (c *ReachCache) publish(b *ReachBitset, current func() bool) {
+	if !b.truncated && current() {
 		c.latest.Store(b)
 	}
 }

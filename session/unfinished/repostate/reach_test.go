@@ -441,3 +441,34 @@ func BenchmarkReachScratch50000(b *testing.B) {
 		}
 	}
 }
+
+func TestReach_ShouldNotStoreOrSeed_WhenGraphDroppedDuringBuild(t *testing.T) {
+	d, _, base := chain(60, 50, 2)
+	rs := NewRepoState(Options{}, 1<<20)
+	var once sync.Once
+	src := &mapSource{d: d, onParents: func(context.Context, plumbing.Hash) error {
+		once.Do(rs.Graph().Drop) // the walk keeps reading the now-stale generation
+		return nil
+	}}
+	if _, err := rs.Reach(context.Background(), src, 0, reachKey(base, 50_000)); err != nil {
+		t.Fatal(err)
+	}
+	if n := rs.ReachCache().Stats().Entries; n != 0 {
+		t.Errorf("stale-generation set was cached: Entries=%d", n)
+	}
+	if rs.ReachCache().latest.Load() != nil {
+		t.Error("stale-generation set seeded the incremental builder")
+	}
+}
+
+func TestWalkClose_ShouldResetMarks_WhenWalkAbandonedMidPaint(t *testing.T) {
+	rs := NewRepoState(Options{}, 1<<20)
+	w := rs.NewWalk(context.Background(), &mapSource{d: &dag{}}, 0, 100)
+	w.s.flags.or(3, paintFromHead)
+	w.s.seen.or(4, 1)
+	s := w.s
+	w.Close()
+	if s.flags.get(3) != 0 || s.seen.get(4) != 0 || s.flags.count() != 0 || s.seen.count() != 0 {
+		t.Error("pooled scratch kept stale marks")
+	}
+}

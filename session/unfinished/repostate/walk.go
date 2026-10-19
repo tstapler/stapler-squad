@@ -190,6 +190,10 @@ func (w *Walk) Close() {
 	if w.misses != 0 {
 		w.graph.stats.rowMisses.V.Add(w.misses)
 	}
+	// A recovered panic mid-walk skips the walk's own resets; stale marks would
+	// corrupt the next borrower. O(touched), so free after a clean walk.
+	w.s.flags.reset()
+	w.s.seen.reset()
 	w.pool.put(w.s)
 	w.s = nil
 }
