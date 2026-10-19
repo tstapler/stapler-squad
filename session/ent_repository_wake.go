@@ -235,6 +235,9 @@ func validateCreateWakeTriggerInput(in CreateWakeTriggerInput) (key domain.WakeD
 // GetWakeTrigger reads one row; ent.IsNotFound reports a missing id.
 func (r *EntRepository) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*WakeTriggerData, error) {
 	row, err := r.client.WakeTrigger.Get(ctx, id)
+	if ent.IsNotFound(err) {
+		return nil, fmt.Errorf("get wake trigger %s: %w", id, ErrNotFound)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get wake trigger %s: %w", id, err)
 	}

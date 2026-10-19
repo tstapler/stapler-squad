@@ -101,3 +101,13 @@ func (s *Storage) ListNeedsReviveWakeTriggers(ctx context.Context) ([]*WakeTrigg
 func (s *Storage) SweepTerminalWakeTriggers(ctx context.Context, now time.Time, retention time.Duration) (int, error) {
 	return s.repo.SweepTerminalWakeTriggers(ctx, now, retention)
 }
+
+// CancelWakeTrigger forwards to the repository.
+func (s *Storage) CancelWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error) {
+	return s.repo.CancelWakeTrigger(ctx, id, now)
+}
+
+// ListWakeTriggersByOwner forwards to the repository.
+func (s *Storage) ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*WakeTriggerData, error) {
+	return s.repo.ListWakeTriggersByOwner(ctx, owner, statuses...)
+}

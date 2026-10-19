@@ -72,7 +72,8 @@ func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, t
 // later regardless of whether anything was listening when it was published.
 func (s *GuidanceRequestService) notifyAnswered(data *session.GuidanceRequestData) {
 	// The operator already acted on the pane card; a second toast would duplicate it (ADR-003 rule 3a).
-	if data.Source == domain.QuestionSourceHook {
+	// A peer answer reaches the asker through its guidance_answered wake instead.
+	if data.Source == domain.QuestionSourceHook || data.Source == domain.QuestionSourcePeer {
 		return
 	}
 	title := "Your guidance request was answered"
@@ -340,22 +341,12 @@ func (s *GuidanceRequestService) AnswerGuidanceRequest(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid id: %w", err))
 	}
 
-	applied, err := s.storage.AnswerGuidanceRequest(ctx, id, req.Msg.GetAnswer())
+	data, applied, err := s.AnswerAs(ctx, id.String(), req.Msg.GetAnswer(), HumanAnswerer())
+	if errors.Is(err, session.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	data, err := s.storage.GetGuidanceRequest(ctx, id)
-	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
-			return nil, connect.NewError(connect.CodeNotFound, err)
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	if applied {
-		s.notifyAnswered(data)
-		s.resumeTriageIfHalted(data)
-		s.notifyAnswerListener(ctx, data.ID)
 	}
 
 	return connect.NewResponse(&sessionv1.AnswerGuidanceRequestResponse{

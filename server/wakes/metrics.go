@@ -19,6 +19,10 @@ const (
 	MetricDuplicate       = "wake_duplicate_delivery_total" // (none)
 	MetricReconcileDigest = "wake_reconcile_digest_total"   // (none)
 
+	MetricIdentityUnverified = "mcp_identity_unverified_total" // tool
+	MetricCallerGateDenied   = "mcp_caller_gate_denied_total"  // tool,role
+	MetricPeerHelp           = "peer_help_total"               // state
+
 	GaugeNeedsReviveAge = "wake_needs_revive_age_seconds" // oldest needs_revive row
 )
 
@@ -36,6 +40,10 @@ var metricLabelKeys = map[string][]string{
 	MetricLimitHit:        {"limit", "phase"},
 	MetricDuplicate:       nil,
 	MetricReconcileDigest: nil,
+
+	MetricIdentityUnverified: {"tool"},
+	MetricCallerGateDenied:   {"tool", "role"},
+	MetricPeerHelp:           {"state"},
 }
 
 // Metrics is an in-process counter mirror that also feeds OTel (a no-op when

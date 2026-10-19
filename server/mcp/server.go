@@ -105,6 +105,9 @@ func NewCore(
 		// reason write_to_session does.
 		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder, eventBus: eventBus})
 	}
+	if storage != nil {
+		registerIdentityGatedTools(s, storage)
+	}
 	if prCache != nil {
 		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
 	}

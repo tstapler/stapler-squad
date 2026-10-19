@@ -8,16 +8,16 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
-	wakeTriggersFlag     = "agent_wake_triggers"
-	wakeLeaderLockName   = "wakes.leader.lock"
-	wakeShutdownTimeout  = 5 * time.Second
-	wakeTriggerScopeBase = "trigger:"
+	wakeTriggersFlag    = config.WakeTriggersFlag
+	wakeLeaderLockName  = "wakes.leader.lock"
+	wakeShutdownTimeout = 5 * time.Second
 )
 
 // wakeWiring carries the ports a Dispatcher needs; startWakes builds them from
@@ -67,15 +67,16 @@ func runWakeReconcile(ctx context.Context) {
 // wakeDispatcherEnabled applies the flag matrix row "dispatcher running":
 // the global flag, or an explicit scoped true for any trigger type.
 func wakeDispatcherEnabled(cfg *config.Config) bool {
-	if cfg.GetFeatureFlag(wakeTriggersFlag) {
-		return true
+	return cfg.WakeDispatcherRunning(wakeTriggerTypeNames())
+}
+
+func wakeTriggerTypeNames() []string {
+	types := domain.AllWakeTriggerTypes()
+	names := make([]string, len(types))
+	for i, t := range types {
+		names[i] = string(t)
 	}
-	for _, t := range domain.AllWakeTriggerTypes() {
-		if v, ok := cfg.GetFeatureFlagScopedOverride(wakeTriggersFlag, wakeTriggerScopeBase+string(t)); ok && v {
-			return true
-		}
-	}
-	return false
+	return names
 }
 
 // startWakes starts the wake dispatcher when the flag matrix allows it and
@@ -121,8 +122,10 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 	}
 	reconcile := d.Reconcile
 	wakeReconcileFn.Store(&reconcile)
+	installWakeTools(d, deps, guidance)
 	srv.shutdownHooks = append(srv.shutdownHooks, func() {
 		wakeReconcileFn.Store(nil)
+		servermcp.SetWakeToolDeps(func() *servermcp.WakeToolDeps { return nil })
 		stopCtx, cancel := context.WithTimeout(context.Background(), wakeShutdownTimeout)
 		defer cancel()
 		if err := d.Stop(stopCtx); err != nil {
@@ -130,4 +133,18 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 		}
 	})
 	log.Info("wake dispatcher started")
+}
+
+// installWakeTools lets the MCP wake and peer-help tools reach the running
+// dispatcher; until this runs (or in a process that is not the leader) they
+// answer `unavailable`.
+func installWakeTools(d *wakes.Dispatcher, deps *ServerDependencies, guidance *services.GuidanceRequestService) {
+	tools := &servermcp.WakeToolDeps{
+		Backend: d,
+		Owners:  wakeOwners{svc: deps.SessionService, storage: deps.Storage},
+	}
+	if guidance != nil {
+		tools.Answerer = guidance
+	}
+	servermcp.SetWakeToolDeps(func() *servermcp.WakeToolDeps { return tools })
 }

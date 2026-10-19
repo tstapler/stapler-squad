@@ -32,6 +32,8 @@ type Store interface {
 	ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*session.WakeTriggerData, error)
 	ListNeedsReviveWakeTriggers(ctx context.Context) ([]*session.WakeTriggerData, error)
 	SweepTerminalWakeTriggers(ctx context.Context, now time.Time, retention time.Duration) (int, error)
+	CancelWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
+	ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*session.WakeTriggerData, error)
 }
 
 // WriteOutcome is what a Steerer.WriteWake attempt did to the pane.
@@ -79,6 +81,9 @@ type OwnerFacts struct {
 	Live bool
 	// Revive is set for a stopped owner whose instance can be restarted.
 	Revive ReviveTarget
+	// WorkspaceKey names the repository the session works in (Instance.WorkspaceKey),
+	// "" when unknown; peer help is limited to one workspace.
+	WorkspaceKey string
 }
 
 // OwnerLookup resolves an owner session by UUID.

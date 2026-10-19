@@ -93,6 +93,8 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 			Archived: snap.ArchivedAt != nil,
 			OneShot:  session.IsOneShot(inst),
 			Live:     inst.IsActive(),
+
+			WorkspaceKey: inst.WorkspaceKey(),
 		}
 		if inst.IsHotRestoreRecoverable() {
 			f.Revive = inst
@@ -109,6 +111,8 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 			Exists:   true,
 			Archived: data.ArchivedAt != nil,
 			OneShot:  slices.Contains(data.Tags, "backlog:triage") || slices.Contains(data.Tags, "backlog:review"),
+
+			WorkspaceKey: data.WorkspaceKey(),
 		}
 	}
 	f.ItemTerminal = o.itemTerminal(ctx, sessionUUID)

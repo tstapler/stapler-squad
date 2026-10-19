@@ -81,3 +81,32 @@ proof values with `[redacted-proof]`. Scrollback on disk, Claude transcripts
 (`search_claude_history`), `get_session` previews, notification snippets and
 `get_session_diff` are not redacted. The `:8543` listener remains
 unauthenticated.
+
+## The five tools
+
+`schedule_wake`, `list_wakes`, `cancel_wake`, `request_help` and `answer_help`
+are registered through `withCallerIdentityGate`
+(`server/mcp/caller_identity_gate.go`). The caller is always the verified
+session; a `session_id` argument is ignored. A request without a verified
+credential gets `identity_unverified` and nothing is written.
+
+| Tool | Roles allowed |
+|---|---|
+| `schedule_wake`, `cancel_wake`, `answer_help` | work sessions |
+| `list_wakes`, `request_help` | work, triage, review, diagnose |
+
+Typed failures an agent can switch on: `identity_unverified`, `flag_off`
+(`error.reason` is the flag scope), `cap_exceeded` (`error.limit`),
+`unavailable`, `no_reconcile_predicate`, `rejected` (`error.reason`:
+`self_target`, `peer_not_found`, `peer_archived`, `peer_one_shot`,
+`peer_item_terminal`, `cross_workspace`) and `FORBIDDEN`.
+
+Flags (`agent_wake_triggers`): a tool needs `tool:<name>` and a running
+dispatcher; `schedule_wake` also needs `trigger:<type>`; `request_help` also
+needs `trigger:guidance_answered`, because the asker is woken by it.
+
+`pr_event` and `ci_event` come from the PR poller (`github.UserPRCache`), not
+the event bus (Spike S4). They cover open PRs of the connected accounts; any
+other PR is `unavailable`. Supported `(type, kind)` pairs are the table in
+`server/wakes/kinds.go`; a kind without a persisted-state predicate is
+`no_reconcile_predicate`.
