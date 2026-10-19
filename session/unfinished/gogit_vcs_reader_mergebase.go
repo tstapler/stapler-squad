@@ -214,8 +214,14 @@ func findMergeBase(pm parentSource, h1, h2 plumbing.Hash) (plumbing.Hash, error)
 	// Re-check staleness: a candidate painted stale by a later candidate is redundant.
 	best := candidates[:0:0]
 	for _, c := range candidates {
-		if flags[c]&paintStale != 0 && isAncestorOfOther(pm, c, candidates) {
-			continue
+		if flags[c]&paintStale != 0 {
+			redundant, err := isAncestorOfOther(pm, c, candidates)
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
+			if redundant {
+				continue
+			}
 		}
 		best = append(best, c)
 	}
@@ -237,9 +243,14 @@ func anyFresh(q paintQueue, flags map[plumbing.Hash]uint8) bool {
 
 // isAncestorOfOther reports whether c is a strict ancestor of any other candidate.
 // Only runs when several common ancestors were found (criss-cross merges).
-func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.Hash) bool {
+// object.Commit.MergeBase, the oracle, answers this exactly and propagates read
+// errors; this walk is bounded, so when the bound is hit before c is found it
+// returns an error instead of guessing "not redundant" (which could surface a
+// redundant base). Commits missing from a shallow clone or pack are skipped, as
+// in findMergeBase.
+func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.Hash) (bool, error) {
 	if len(candidates) < 2 {
-		return false
+		return false, nil
 	}
 	for _, o := range candidates {
 		if o == c {
@@ -247,7 +258,10 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 		}
 		seen := map[plumbing.Hash]struct{}{}
 		stack := []plumbing.Hash{o}
-		for len(stack) > 0 && len(seen) < mergeBaseBFSLimit {
+		for len(stack) > 0 {
+			if len(seen) >= mergeBaseBFSLimit {
+				return false, fmt.Errorf("cannot rule out that merge base %s is redundant within %d commits", c, mergeBaseBFSLimit)
+			}
 			h := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			if _, dup := seen[h]; dup {
@@ -256,17 +270,20 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 			seen[h] = struct{}{}
 			ps, err := pm.get(h)
 			if err != nil {
-				continue
+				if errors.Is(err, plumbing.ErrObjectNotFound) {
+					continue
+				}
+				return false, fmt.Errorf("commit object %s: %w", h, err)
 			}
 			for _, p := range ps {
 				if p == c {
-					return true
+					return true, nil
 				}
 				stack = append(stack, p)
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // countCommitsTo counts commits reachable from start that are not reachable from

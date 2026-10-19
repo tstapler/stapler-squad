@@ -1,5 +1,5 @@
-# merge base vs object.Commit.MergeBase best set; 514 lines where a walk is not in the best set
-# legacy best=699 legacy common=101 legacy none=39 legacy oracle-err:common=179 legacy oracle-err:none=195 lockstep best=824 lockstep none=15 lockstep oracle-err:common=154 lockstep oracle-err:none=220
+# merge base vs object.Commit.MergeBase best set; 515 lines where a walk is not in the best set
+# legacy best=699 legacy common=101 legacy none=39 legacy oracle-err:common=179 legacy oracle-err:none=195 lockstep best=821 lockstep err=3 lockstep none=15 lockstep oracle-err:common=153 lockstep oracle-err:err=1 lockstep oracle-err:none=220
 cap-linear-limit2 head=15 base=11 best={8} | legacy=none(none) | lockstep=none(none)
 cap-linear-limit3 head=15 base=11 best={8} | legacy=none(none) | lockstep=none(none)
 cap-linear-limit4 head=15 base=11 best={8} | legacy=none(none) | lockstep=8(best)
@@ -45,7 +45,7 @@ general-seed9058-limit4 head=4 base=7 best={4} | legacy=1(common) | lockstep=4(b
 general-seed9061-limit4 head=4 base=26 best={4} | legacy=none(none) | lockstep=none(none)
 general-seed9063-limit4 head=6 base=4 best={4} | legacy=2(common) | lockstep=4(best)
 general-seed9065-limit4 head=8 base=1 best={1} | legacy=0(common) | lockstep=1(best)
-general-seed9068-limit4 head=17 base=21 best={11,9} | legacy=none(none) | lockstep=11(best)
+general-seed9068-limit4 head=17 base=21 best={11,9} | legacy=none(none) | lockstep=err(err)
 general-seed9069-limit2000 head=2 base=5 best={2} | legacy=0(common) | lockstep=2(best)
 general-seed9069-limit4 head=2 base=5 best={2} | legacy=0(common) | lockstep=2(best)
 general-seed9070-limit4 head=6 base=2 best={2} | legacy=1(common) | lockstep=2(best)
@@ -60,6 +60,7 @@ general-seed9078-limit4 head=4 base=9 best={2} | legacy=0(common) | lockstep=2(b
 general-seed9082-limit4 head=0 base=6 best={0} | legacy=none(none) | lockstep=0(best)
 general-seed9083-limit4 head=1 base=16 best={1} | legacy=none(none) | lockstep=none(none)
 general-seed9084-limit4 head=1 base=16 best={1} | legacy=none(none) | lockstep=1(best)
+general-seed9085-limit4 head=17 base=12 best={3,7} | legacy=7(best) | lockstep=err(err)
 general-seed9086-limit4 head=17 base=5 best={3} | legacy=none(none) | lockstep=3(best)
 general-seed9089-limit4 head=12 base=1 best={1} | legacy=0(common) | lockstep=1(best)
 general-seed9090-limit2000 head=16 base=13 best={5} | legacy=1(common) | lockstep=5(best)
@@ -95,7 +96,7 @@ general-seed9141-limit2000 head=5 base=6 best={5} | legacy=0(common) | lockstep=
 general-seed9144-limit2000 head=9 base=12 best={9} | legacy=3(common) | lockstep=9(best)
 general-seed9149-limit4 head=15 base=10 best={3} | legacy=0(common) | lockstep=3(best)
 general-seed9151-limit2000 head=17 base=18 best={11,9} | legacy=3(common) | lockstep=11(best)
-general-seed9151-limit4 head=17 base=18 best={11,9} | legacy=none(none) | lockstep=11(best)
+general-seed9151-limit4 head=17 base=18 best={11,9} | legacy=none(none) | lockstep=err(err)
 general-seed9152-limit2000 head=2 base=17 best={2} | legacy=1(common) | lockstep=2(best)
 general-seed9152-limit4 head=2 base=17 best={2} | legacy=1(common) | lockstep=none(none)
 general-seed9153-limit2000 head=2 base=7 best={2} | legacy=0(common) | lockstep=2(best)
@@ -413,7 +414,7 @@ shallow-general-seed9149-limit4 head=15 base=10 best={} | legacy=none(oracle-err
 shallow-general-seed9150-limit2000 head=1 base=1 best={} | legacy=1(oracle-err:common) | lockstep=1(oracle-err:common)
 shallow-general-seed9150-limit4 head=1 base=1 best={} | legacy=1(oracle-err:common) | lockstep=1(oracle-err:common)
 shallow-general-seed9151-limit2000 head=17 base=18 best={} | legacy=3(oracle-err:common) | lockstep=11(oracle-err:common)
-shallow-general-seed9151-limit4 head=17 base=18 best={} | legacy=none(oracle-err:none) | lockstep=11(oracle-err:common)
+shallow-general-seed9151-limit4 head=17 base=18 best={} | legacy=none(oracle-err:none) | lockstep=err(oracle-err:err)
 shallow-general-seed9152-limit2000 head=2 base=17 best={} | legacy=none(oracle-err:none) | lockstep=none(oracle-err:none)
 shallow-general-seed9152-limit4 head=2 base=17 best={} | legacy=none(oracle-err:none) | lockstep=none(oracle-err:none)
 shallow-general-seed9153-limit2000 head=2 base=7 best={} | legacy=2(oracle-err:common) | lockstep=2(oracle-err:common)
