@@ -261,7 +261,7 @@ func (r *EntRepository) RecordWakeDeliveryAttempt(ctx context.Context, id uuid.U
 }
 
 func (r *EntRepository) listWakeTriggers(ctx context.Context, q *ent.WakeTriggerQuery) ([]*WakeTriggerData, error) {
-	rows, err := q.All(ctx)
+	rows, err := q.All(ctx) //nolint:entfullscan every caller passes a query filtered by status or owner
 	if err != nil {
 		return nil, fmt.Errorf("list wake triggers: %w", err)
 	}
