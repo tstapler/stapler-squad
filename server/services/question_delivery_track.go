@@ -45,7 +45,7 @@ func (r *AnswerRouter) beginDelivery(ctx context.Context, questionID string) del
 		return t
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
-	if err != nil || row.Status() != session.GuidanceRequestStatusPending {
+	if err != nil || !trackable(row) {
 		return t
 	}
 	t.id, t.on = id, true
@@ -96,4 +96,17 @@ func (t deliveryTrack) finish(ctx context.Context, res ActionResult, err error, 
 		sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF:
 		t.move(ctx, domain.DeliveryStateFailed, 0)
 	}
+}
+
+// trackable is a still-open row, or an answered one whose delivery failed and
+// is being retried (the confirmed "Retry anyway" of ux.md row 16).
+func trackable(row *session.GuidanceRequestData) bool {
+	switch row.Status() {
+	case session.GuidanceRequestStatusPending:
+		return true
+	case session.GuidanceRequestStatusAnswered:
+		return row.DeliveryState == domain.DeliveryStateFailed && row.DeliveryRoute == domain.DeliveryRouteLiveKeystroke
+	case session.GuidanceRequestStatusCancelled:
+	}
+	return false
 }

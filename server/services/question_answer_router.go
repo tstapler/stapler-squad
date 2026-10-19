@@ -66,6 +66,7 @@ type AnswerRouterDeps struct {
 type AnswerRouter struct {
 	sessions  answerSessionFinder
 	questions pendingQuestionPeeker
+	reopen    func(PendingQuestion)
 	ensure    func(ctx context.Context, key QuestionKey) bool
 	hidden    replyFunc
 	visible   func() *PaneReplyCore
@@ -135,6 +136,11 @@ func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in Qu
 		return r.liveSequence(ctx, s, in, qs)
 	}
 	key := QuestionKey{SessionUUID: in.SessionID, QuestionID: in.QuestionID}
+	if in.Confirm {
+		if res, stop := r.reopenForRetry(ctx, key); stop {
+			return res, nil
+		}
+	}
 	q, ok := r.questions.Peek(key)
 	if !ok && r.ensure != nil && r.ensure(ctx, key) {
 		q, ok = r.questions.Peek(key)

@@ -172,5 +172,10 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 		flags: configActionFlags{ev: compiledFlagEvidence}, rows: d.Rows, acks: d.Acks,
 	}
 	r.ensure = s.ensureRegistered(d.Mirror)
+	store := s.replyState().store
+	r.reopen = func(q PendingQuestion) {
+		store.Forget(QuestionKey{SessionUUID: q.SessionUUID, QuestionID: q.QuestionID})
+		store.Register(q)
+	}
 	return r
 }

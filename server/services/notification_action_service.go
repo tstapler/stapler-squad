@@ -85,6 +85,9 @@ type QuestionAnswer struct {
 	OptionLabel string
 	// ReplyID is the caller's idempotency key.
 	ReplyID string
+	// Confirm is the operator's "Retry anyway": re-verify the dialog and write
+	// again although an earlier digit may already have landed.
+	Confirm bool
 }
 
 // GuidanceAnswerer answers a durable guidance request.
@@ -406,7 +409,7 @@ func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv
 		return res, err
 	case sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION:
 		res, err := d.questions.ReplyToQuestion(ctx, QuestionAnswer{
-			SessionID: m.GetSessionId(), QuestionID: m.GetTargetKey(), OptionLabel: p.GetAnswer(), ReplyID: m.GetIdempotencyKey(),
+			SessionID: m.GetSessionId(), QuestionID: m.GetTargetKey(), OptionLabel: p.GetAnswer(), ReplyID: m.GetIdempotencyKey(), Confirm: p.GetConfirm(),
 		})
 		if err == nil && res.Outcome == sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED && d.resolver != nil {
 			d.resolver.ResolveQuestionNotifications(m.GetTargetKey())

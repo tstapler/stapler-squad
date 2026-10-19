@@ -50,11 +50,13 @@ type fakeQuestionReplier struct {
 	known  bool
 	writes atomic.Int32
 	result ActionResult
+	last   atomic.Pointer[QuestionAnswer]
 }
 
 func (f *fakeQuestionReplier) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
-func (f *fakeQuestionReplier) ReplyToQuestion(context.Context, QuestionAnswer) (ActionResult, error) {
+func (f *fakeQuestionReplier) ReplyToQuestion(_ context.Context, in QuestionAnswer) (ActionResult, error) {
 	f.writes.Add(1)
+	f.last.Store(&in)
 	if f.result.Outcome == 0 {
 		return applied(), nil
 	}
@@ -501,4 +503,14 @@ func TestApprovalResolver_ShouldCarryTheStampedDecision_WhenAlreadyResolved(t *t
 	assert.Equal(t, outApplied, first.Outcome)
 	assert.Equal(t, outResolved, again.Outcome)
 	assert.Equal(t, "deny", again.Detail, "the card can say what the other tab decided")
+}
+
+func TestInvokeNotificationAction_ShouldPassConfirmToTheAnswerRouter_WhenRetryAnywayIsConfirmed(t *testing.T) {
+	t.Parallel()
+	f := newDispatchFixture()
+	m := answerReq("k1")
+	m.Params.Confirm = true
+	f.invoke(t, localCtx(t), m, nil)
+	require.NotNil(t, f.questions.last.Load())
+	assert.True(t, f.questions.last.Load().Confirm)
 }
