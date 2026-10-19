@@ -55,8 +55,8 @@ go test ./ui -run TestFoo   # Specific test
 make test-coverage
 
 # Frontend tests (not part of make ci)
-cd web-app && npx jest --no-coverage
-cd web-app && npx jest --testPathPatterns="<pattern>" --no-coverage
+cd web-app && bunx jest --no-coverage
+cd web-app && bunx jest --testPathPatterns="<pattern>" --no-coverage
 ```
 
 Benchmark reference (all benchmarks MUST be run with `&`): `docs/reference/benchmarks.md`
@@ -90,7 +90,7 @@ both fail the build, not just report:
   usually an Extract/Move Function refactor (see `quality:reflect-and-fix`'s
   Level 0 consolidation gate), not a suppression.
 - **web-app — `jscpd`** (`web-app/.jscpd.json`; `make ready-duplication-gate-web`
-  or `pnpm run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
+  or `bun run lint:duplicates` in `web-app/`): jscpd has no git-diff scoping
   like `--new-from-rev`, so this gates on an absolute `threshold` (0.14%,
   raised from 0.1% to 0.12% on 2026-09-12 after PR #785's new Omnibar test
   file added one more irreducible `jest.mock(...)` block and tripped the old
@@ -246,7 +246,7 @@ Tests in `tests/e2e/` use Playwright + Allure. **Do not manually start a server 
 - Global teardown (`global-teardown.ts`) kills that isolated server and cleans up its temp dir when the run ends.
 
 ```bash
-cd tests/e2e && npm test                                 # runs the full suite (isolated instance auto-managed)
+cd tests/e2e && bun run test                                # runs the full suite (isolated instance auto-managed)
 cd tests/e2e && npx playwright test session-lifecycle.spec.ts
 make e2e-report
 make e2e-lighthouse
@@ -352,7 +352,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
 | Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
-| Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
+| Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
 | Why autonomous-mode sessions stop early: every driver exit path, cited, with verdicts | `docs/explanation/autonomous-stall-causes.md` |

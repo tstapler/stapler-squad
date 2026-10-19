@@ -12,8 +12,8 @@
 // status line, rather than blocking in the foreground) -- Playwright reads
 // that immediate, successful exit as "Process from config.webServer exited
 // early" and refuses to start, regardless of the real server being up.
-// `pnpm run test:a11y` (website/package.json) instead starts the server
-// explicitly with `pnpm run preview`, which blocks until ready and returns,
+// `bun run test:a11y` (website/package.json) instead starts the server
+// explicitly with `bun run preview`, which blocks until ready and returns,
 // then runs this config, then stops it with `astro preview stop` --
 // the same explicit start/test/stop sequence deploy-website.yml's a11y step
 // uses.
