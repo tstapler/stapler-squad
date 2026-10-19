@@ -1,6 +1,6 @@
 import { createVirtualRangeTransport } from "./fixtures/virtualRangeTransport";
 import { WindowedFile, type WindowedEngine } from "../windowedFile";
-import type { LineRange } from "../windowedSource";
+import type { LineRange } from "@/components/sessions/files/engine/EditorEngine";
 
 const REF = { sessionId: "s1", path: "big.log" };
 

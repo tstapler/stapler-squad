@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { canGoBack, canGoForward, type BufferNotice } from "@/lib/files/bufferReducer";
+import { bucketTabs } from "@/lib/files/analytics/events";
+import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { stepFontPx } from "@/lib/files/fontSize";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import type { FilesV2 } from "@/lib/hooks/useFilesV2";
@@ -46,6 +48,7 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
   const on = p.active && !!v2;
   const { isVirtualKeyboardOpen } = useViewport();
   const coarse = useCoarsePointer();
+  const analytics = useFilesAnalytics({ component: "MobileFilesLayout" });
   const [sheetOpen, setSheetOpen] = useState(false);
   const [shown, setShown] = useState<BufferNotice | null>(null);
   const notice = v2?.buffers.state.notice ?? null;
@@ -81,7 +84,20 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
   const { buffers, bridge } = v2;
   const { state } = buffers;
   const active = buffers.active;
+  const emitClose = (path: string, method: "button" | "context_menu" | "close_others") => {
+    const b = state.buffers.find((x) => x.path === path);
+    analytics.emit("files.tab.close", { dirty: b && isDirty(b) ? "true" : "false", method, open_tabs: bucketTabs(state.buffers.length) });
+  };
+  const closeFromSheet = (path: string, method: "button" | "context_menu") => {
+    emitClose(path, method);
+    buffers.close(path);
+  };
+  const closeOthersFromSheet = (keep: string) => {
+    for (const b of state.buffers) if (b.path !== keep) emitClose(b.path, "close_others");
+    tabActions.closeOthers(keep);
+  };
   const selectFromSheet = (path: string) => {
+    analytics.emit("files.tab.switch", { via: "sheet" });
     bridge.activate(path);
     setSheetOpen(false);
     // The sheet's own history entry pops first (async); only then may the editor pane push its entry.
@@ -138,10 +154,10 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
           activeIndex={state.activeIndex}
           refusal={shown?.kind === "refused" ? message : null}
           onSelect={selectFromSheet}
-          onClose={(path) => buffers.close(path)}
+          onClose={closeFromSheet}
           onPin={buffers.pin}
           onUnpin={buffers.unpin}
-          onCloseOthers={tabActions.closeOthers}
+          onCloseOthers={closeOthersFromSheet}
           onCopyPath={tabActions.copyPath}
           onDismiss={() => setSheetOpen(false)}
           onGoToFiles={() => { setSheetOpen(false); p.onPane("files", "bottom_bar"); }}

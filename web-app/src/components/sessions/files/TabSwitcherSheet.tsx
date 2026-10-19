@@ -19,7 +19,8 @@ export interface TabSwitcherSheetProps {
   /** Set when the tab cap refused an open: pinned to the top, with the closable rows' Close highlighted (U-TAB-10). */
   refusal: string | null;
   onSelect: (path: string) => void;
-  onClose: (path: string) => void;
+  /** `button` is the row's ×; `context_menu` is the row menu's Close. */
+  onClose: (path: string, method: "button" | "context_menu") => void;
   onPin: (path: string) => void;
   onUnpin: (path: string) => void;
   onCloseOthers: (path: string) => void;
@@ -102,14 +103,14 @@ export function TabSwitcherSheet(p: TabSwitcherSheetProps) {
                     style={{ minHeight: TARGET_PX }}
                     data-highlight={p.refusal && closable ? "true" : undefined}
                     aria-label={p.refusal && closable ? `Close ${label}, frees a slot` : `Close ${label}`}
-                    onClick={() => p.onClose(b.path)}
+                    onClick={() => p.onClose(b.path, "button")}
                   >×</button>
                   {menuFor === b.path && (
                     <RowMenu
                       buffer={b}
                       count={p.buffers.length}
                       onDone={() => setMenuFor(null)}
-                      actions={{ pin: p.onPin, unpin: p.onUnpin, close: p.onClose, closeOthers: p.onCloseOthers, copy: p.onCopyPath }}
+                      actions={{ pin: p.onPin, unpin: p.onUnpin, close: (path) => p.onClose(path, "context_menu"), closeOthers: p.onCloseOthers, copy: p.onCopyPath }}
                       label={baseName(b.path)}
                     />
                   )}
