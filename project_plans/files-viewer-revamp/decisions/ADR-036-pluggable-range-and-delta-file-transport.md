@@ -102,6 +102,33 @@ The 1 MB rows are dominated by the temp-file `fsync` (about 12 ms on this btrfs 
 - Scan: **replace the whole-file read with streaming for any file above the old per-file cap.** Reading a 64 MiB file whole costs 64 MiB of heap per worker (67 MB/op; 24 parallel workers could pin 1.6 GB), against 1 MB/op streaming, and streaming is also 2.5x faster here. Proposed scan constants for the Story 1.1 implementation: stream files up to 64 MiB (about 20-45 ms each warm); skip larger files with a counted "too large" outcome unless `IncludeIgnored`-style opt-in is added. UNVERIFIED on a cold cache.
 - **PENDING-OWNER: the phone/LAN leg of S-T1** (on-the-wire range response from the phone over `:62872` or Tailscale) remains unmeasured; S-T2 is host-only by nature and does not need the phone.
 
+### Phase B benchmarks (Task 1.6.7b; 2026-10-19; recorded, never gated)
+Host: AMD Ryzen 9 7900X, Linux 6.6, Go 1.26.6, files on NVMe btrfs, page cache warm, 3 iterations (`-benchtime 3x`), so the 1 MB rows are noise-dominated. Real production code paths, not prototypes: `FileOps` over `osRootBackend` with `files:range-read` on. Command (run in the background): `TMPDIR=$HOME/.cache/ssq-bench-tmp go test ./server/services -run '^$' -bench 'BenchmarkRangeRead|BenchmarkAnalyze|BenchmarkLargeFileSearch' -benchtime 3x -benchmem &`; source `server/services/file_ops_range_bench_test.go`.
+
+**MEASURED, Go `Analyze` (the cache-owned background pass: sparse index plus sha256, cold cache per iteration, LF lines of 60 bytes):**
+| size | time | MB/s | B/op |
+|---|---|---|---|
+| 1 MB | 5.2 ms | 200 | 1.32 MB |
+| 16 MB | 38.4 ms | 437 | 0.27 MB |
+| 64 MB | 161.9 ms | 415 | 0.28 MB |
+| 256 MB | 766.4 ms | 350 | 0.29 MB |
+This is about a third of the S-T2 prototype's single-pass rate (1.25-1.4 GB/s) because the production pass goes through the analysis cache and `FileBackend`; memory stays flat in file size, as predicted. A 1 GiB file extrapolates to about 3 s (INFERRED from the linear 64-256 MB rows, not measured).
+
+**MEASURED, `ReadRange` at 128 KiB windows, 400 wanted lines, analyzed file, pseudo-random anchor lines:** 16 MB 224 us, 64 MB 166 us, 256 MB 143 us per call, 224 KB allocated per call: latency does not grow with file size, as the sparse index promises.
+
+**MEASURED, large-file search, one 63 MiB file (`large_files` on, `searchBenchQuery` matching about 1 in 5,000 lines):** 32.0 ms, 2,065 MB/s, 85 KB/op. No file was skipped.
+
+**MEASURED (jest on the dev host, not the phone), TS side, `web-app/src/lib/files/__tests__/windowBench.test.ts`:** walking 400 windows of 128 KiB (a 50 MB file) through the 8 MiB coarse-pointer `ChunkCache` costs 1.5 ms in total (3.6 us per `put`), a cached window `get` 0.12 ms, and a CRC32C verify of one 128 KiB window 0.37 ms; the cache holds exactly 8,388,608 bytes (byte accounting, the evicting budget holds). Payload comparison: one 400-line window is 130,800 bytes against 52,428,800 for a whole-file read of the same file (0.25 percent).
+**Real browser (Playwright, `files-large.spec.ts`, 50 MB file, open, jump to 800,000, PageDown, search hit):** 3 `ReadFileRange` calls, largest decoded response 28,980 bytes, `usedJSHeapSize` 60.3 MB on desktop Chromium and 44.7 MB on mobile-chromium (an emulated phone, Chrome coarsens this counter); the spec asserts under 1 MiB per response and under 256 MiB heap (the 256 MiB figure is this task's choice; the plan gave no number).
+
+**NOT MEASURED (named, not fabricated):**
+- TS window-swap time inside CodeMirror (gap-line `cm6LazyDoc` load/evict cost on a real document): the jest bench has no editor; the Task 0.1.4c emulated sweep is the only figure.
+- S-T5 re-measured with the real `SearchContent` and range load against the Epic 2.6 decision rule (p95 of the save-shaped unary call over 2 s under the planned caps): not run here. The Gate G-D default for the stream adapters therefore still rests on the S-T5 spike numbers, not the real endpoints.
+- Anything on the owner's phone or over `:62872`/Tailscale (response size and latency on the wire, real scroll jank). Task 1.6.7c is the sitting; no jank threshold exists in the plan, so none is asserted.
+- A cold page cache (`SSQ_BENCH_COLD` needs root).
+
+**Constants after this task:** `hash_cap_bytes` 64 MiB, the 1 GiB read ceiling, the 4,096-line checkpoints, the 400-line / 128 KiB default window and the 8 / 64 MiB cache budgets are **unchanged**: nothing measured here argues for a different value (Analyze of 64 MB is 0.16 s; a window read is well under a millisecond; a 63 MiB scan is 32 ms). No constant was adjusted.
+
 ### Engine verdict summary (Task 0.1.4d; EMULATED, PROVISIONAL, not an owner phone verdict)
 Emulated Pixel 7 Chromium with real touch flings, 6x CPU throttle and 250 ms latency; not real iOS Safari or Android Chrome, not the owner's fingers.
 - **a2 gap-line: PASS.** 0 blank bands in 150 samples; typing and scrolling OK; a far jump lands within a few thousand lines of the target, as the model predicts.

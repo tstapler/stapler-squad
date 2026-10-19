@@ -184,7 +184,7 @@ PROVISIONAL notes above) do not close any of these. Plan line numbers refer to `
 | Real-path streaming check on the phone | Task 0.1.1b (plan 311) | Unverified |
 | Gate G1 phone smoke of the read-only flows (open, search, jump, rotate) with the Accessible view and a VoiceOver/TalkBack quick check of R1/R2 against the built component | Task 1.5.3c (plan 1272); Story 1.5.4 | Not due yet; blocks Epic 2.2/2.3/2.4 |
 | Informational: scroll and jump in a 50 MB file when `files:range-read` is on in the isolated instance | Task 1.5.3c (plan 1273) | Not due yet |
-| Windowed large-file reading on the phone (fast scroll, far jump, search hit, Accessible view, background/foreground the PWA); gates the live `files:range-read` flip | Task 1.6.7c (plan 1502); Story 1.6.5 on-device large file | Not due yet |
+| Windowed large-file reading on the phone (fast scroll, far jump, search hit, Accessible view, background/foreground the PWA); gates the live `files:range-read` flip | Task 1.6.7c (plan 1502); Story 1.6.5 on-device large file | UNVERIFIED on a phone. CI side done (Tasks 1.6.7a/b: emulated mobile-chromium e2e and host benchmarks, ADR-036 "Phase B benchmarks"); real fast-scroll feel, far jump, search hit, Accessible view and PWA background/foreground, plus phone-side wire size and latency, remain for Task 1.6.7c |
 | Phone dogfood script and sign-off (incl. `files:merge-phone` decision); gates the global `files:editing` flip | Task 2.5.4a (plan 2154) | Not due yet |
 | VoiceOver / TalkBack script for CodeMirror on touch (R1-R4 re-run) | Task 2.5.4b (plan 2158) | Not due yet |
 | Per-browser chord table (Chrome, Firefox, Safari), non-US layout AltGr+8, Edit-layout at three phone viewports | Story 2.5.2 (plan 2108) | Not due yet |
