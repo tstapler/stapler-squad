@@ -142,6 +142,11 @@ jobs:
       - name: Guard against stray "generated-files" literal
         run: tools/ci/check-generated-files-literal.sh
 
+      # Fails when go.mod's tymux client pin and the Makefile's TYMUX_VERSION
+      # point at different tymux commits.
+      - name: Check tymux client/daemon pin agreement
+        run: tools/ci/check-tymux-pin.sh
+
   go-lint:
     name: Go lint
     runs-on: ubuntu-latest
