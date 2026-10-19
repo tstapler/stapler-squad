@@ -301,3 +301,30 @@ func TestProducts_ShouldDropWithProductTier_WhenPrunedNonSevereOverBudget(t *tes
 		t.Error("product tier survived a non-severe prune over budget")
 	}
 }
+
+// An observer that already sees the new shallow stamp as current must also see
+// the bumped ordinal, even while the bumping observer is paused mid-bump.
+func TestObserveShallow_ShouldNeverReturnPreBumpOrdinal_WhenObserverRacesTheBump(t *testing.T) {
+	rs := NewRepoState(Options{}, 1<<20)
+	var inBump bool
+	var racerOrd StampOrd
+	cur := ShallowStamp{Exists: true, Size: 2, MtimeNs: 2}
+	rs.graph.Store(newGraph(Options{}, graphHooks{Yield: func() {
+		if inBump {
+			return
+		}
+		inBump = true
+		racerOrd = rs.ObserveShallow(cur) // observer B runs while A is inside BumpStamp
+	}}))
+	rs.ObserveShallow(ShallowStamp{Exists: true, Size: 1, MtimeNs: 1})
+	pre := rs.Graph().Load().StampOrd()
+
+	rs.ObserveShallow(cur)
+
+	if racerOrd == pre {
+		t.Fatalf("racing observer returned pre-bump ordinal %d; stale Truncated rows would still match", racerOrd)
+	}
+	if got := rs.Graph().Load().StampOrd(); got == pre {
+		t.Fatalf("ordinal not bumped: %d", got)
+	}
+}

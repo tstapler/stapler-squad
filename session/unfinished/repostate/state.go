@@ -78,21 +78,31 @@ func (s *RepoState) ShallowStamp() ShallowStamp {
 }
 
 // ObserveShallow records the current shallow stamp and returns the stamp
-// ordinal to walk under. A change bumps the graph's ordinal once (stale
-// Truncated rows then re-probe lazily); a racing observer may return the
-// pre-bump ordinal, which only costs it an extra re-probe.
+// ordinal to walk under. A change bumps the graph's ordinal exactly once
+// (stale Truncated rows then re-probe lazily). The bump happens before the new
+// stamp is published, so any observer that sees the new stamp as current also
+// sees the bumped ordinal; a lost CAS costs one extra bump, which only forces
+// extra re-probes.
 func (s *RepoState) ObserveShallow(cur ShallowStamp) StampOrd {
 	g := s.Graph()
 	for {
 		old := s.shallow.Load()
+		gen := g.Load()
 		if old != nil && *old == cur {
-			return g.Load().StampOrd()
+			return gen.StampOrd()
+		}
+		if old == nil { // first observation: nothing recorded under another stamp
+			if s.shallow.CompareAndSwap(old, &cur) {
+				return gen.StampOrd()
+			}
+			continue
+		}
+		ord := gen.BumpStamp()
+		for next := g.Load(); next != gen; next = g.Load() { // Drop swapped generations mid-bump
+			gen, ord = next, next.BumpStamp()
 		}
 		if s.shallow.CompareAndSwap(old, &cur) {
-			if old == nil {
-				return g.Load().StampOrd() // first observation: nothing recorded under another stamp
-			}
-			return g.Load().BumpStamp()
+			return ord
 		}
 	}
 }

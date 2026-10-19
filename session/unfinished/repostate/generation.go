@@ -367,7 +367,11 @@ func (g *Graph) Bytes() int64 { return g.Load().Bytes() }
 func (g *Graph) Drop() {
 	for {
 		old := g.gen.Load()
-		if g.gen.CompareAndSwap(old, newGeneration(old.epoch+1, g.maxRows, g.hooks, g.stats)) {
+		next := newGeneration(old.epoch+1, g.maxRows, g.hooks, g.stats)
+		// Ordinals stay monotonic across generations so a Truncated row written
+		// under a stale ordinal can never match a later one.
+		next.stampOrd.V.Store(old.stampOrd.V.Load())
+		if g.gen.CompareAndSwap(old, next) {
 			return
 		}
 	}
