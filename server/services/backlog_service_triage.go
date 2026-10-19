@@ -842,43 +842,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 		session.TriggeredBySystem,
 		hasUnresolvedBlockers)
 	if claimErr != nil {
-		switch {
-		case errors.Is(claimErr, session.ErrPreconditionFailed):
-			// Expected under concurrent claims (another process's dequeue
-			// sweep, or a manual un-queue) — not worth logging.
-		case errors.Is(claimErr, session.ErrUnresolvedBlockers):
-			// Expected steady state: item is legitimately blocked and will be
-			// retried on a later sweep once its blocker reaches done — not a
-			// bug, so not worth a warning-level log every sweep. Still surface
-			// it durably (AC3) so the item detail view can render a BlockerChip
-			// instead of leaving the operator to guess why it's stalled.
-			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
-			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
-			// now that SpawnSessionFromItem's planning gate runs before the
-			// WIP-cap queue gate, but refuse the claim rather than silently
-			// spawning an unapproved item if this is ever hit (e.g. a future
-			// call site regression, or a pre-existing queued/ready row from
-			// before that ordering fix).
-			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
-		case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
-			// Genuinely reachable, unlike the two cases above: a path that was
-			// valid when the plan was approved can be deleted later (triage
-			// worktree reaped by CleanupTerminalItem, then the item reopened).
-			// Leave the item queued rather than dequeuing it into a work session
-			// with no readable plan content — an operator sees this via the
-			// item's stuck-review surface and re-runs triage to refresh the path.
-			log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
-			// The log line alone is invisible to the operator; MarkStuck is idempotent across sweeps.
-			if s.storage != nil {
-				msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
-				if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
-					log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
-				}
-			}
-		default:
-			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
-		}
+		s.handleClaimError(ctx, item, fromStatus, claimErr)
 		return false
 	}
 
@@ -900,6 +864,48 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 	}
 	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	return true
+}
+
+// handleClaimError classifies why transitionWithGuard refused a dequeue claim
+// and surfaces it durably or quietly as appropriate. Callers hold dequeueMu.
+func (s *BacklogService) handleClaimError(ctx context.Context, item session.BacklogItemData, fromStatus session.BacklogStatus, claimErr error) {
+	switch {
+	case errors.Is(claimErr, session.ErrPreconditionFailed):
+		// Expected under concurrent claims (another process's dequeue
+		// sweep, or a manual un-queue) — not worth logging.
+	case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+		// Expected steady state: item is legitimately blocked and will be
+		// retried on a later sweep once its blocker reaches done — not a
+		// bug, so not worth a warning-level log every sweep. Still surface
+		// it durably (AC3) so the item detail view can render a BlockerChip
+		// instead of leaving the operator to guess why it's stalled.
+		s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
+	case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+		// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+		// now that SpawnSessionFromItem's planning gate runs before the
+		// WIP-cap queue gate, but refuse the claim rather than silently
+		// spawning an unapproved item if this is ever hit (e.g. a future
+		// call site regression, or a pre-existing queued/ready row from
+		// before that ordering fix).
+		log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+	case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
+		// Genuinely reachable, unlike the two cases above: a path that was
+		// valid when the plan was approved can be deleted later (triage
+		// worktree reaped by CleanupTerminalItem, then the item reopened).
+		// Leave the item queued rather than dequeuing it into a work session
+		// with no readable plan content — an operator sees this via the
+		// item's stuck-review surface and re-runs triage to refresh the path.
+		log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
+		// The log line alone is invisible to the operator; MarkStuck is idempotent across sweeps.
+		if s.storage != nil {
+			msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
+			if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
+				log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
+			}
+		}
+	default:
+		log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
+	}
 }
 
 // effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort
