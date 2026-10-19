@@ -18,7 +18,7 @@ cd web-app && bunx jest path/to/file.test.tsx
 
 ## Why
 
-`npm install` runs without complaint even when the project is pinned to another package manager. It creates a full, non-deduplicated `node_modules` copy *and* a `package-lock.json` next to the real lockfile, defeating the shared package cache and the shared `node_modules` store (`scripts/shared-node-modules.sh`).
+`npm install` runs without complaint even when the project is pinned to another package manager. It creates a full, non-deduplicated `node_modules` copy *and* a `package-lock.json` next to the real lockfile, defeating the shared package cache and the shared `node_modules` store (`tools/shared-node-modules`).
 
 This happened across dozens of stapler-squad's own agent-spawned worktrees (2026-08-10 incident): 45 of 68 worktrees had both lockfiles, and the file-count explosion (3M+ files in duplicated `node_modules` trees) drove the host machine's Btrfs metadata chunk to 97%+ full, causing write failures unrelated to actual disk space.
 
@@ -26,7 +26,7 @@ This happened across dozens of stapler-squad's own agent-spawned worktrees (2026
 
 ## Layout: isolated linker
 
-`web-app/bunfig.toml` pins `linker = "isolated"`. Packages live in `node_modules/.bun/` and top-level entries are relative symlinks into it, the same strictness pnpm had (undeclared dependencies do not resolve) and a tree that survives being moved, which `scripts/shared-node-modules.sh` relies on. The hoisted linker also works but hides phantom dependencies.
+`web-app/bunfig.toml` pins `linker = "isolated"`. Packages live in `node_modules/.bun/` and top-level entries are relative symlinks into it, the same strictness pnpm had (undeclared dependencies do not resolve) and a tree that survives being moved, which `tools/shared-node-modules` relies on. The hoisted linker also works but hides phantom dependencies.
 
 ## Supply chain: lifecycle scripts
 

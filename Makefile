@@ -193,10 +193,10 @@ endif
 	@echo "✅ stapler-squad built successfully"
 
 # Install web-app Bun dependencies when bun.lock changes. Delegates to
-# shared-node-modules.sh, which symlinks node_modules into a dir shared
+# tools/shared-node-modules, which symlinks node_modules into a dir shared
 # across every git worktree with the same lockfile (keyed by lockfile +
 # local file:-dependency content) instead of a full per-worktree install --
-# see that script's header and docs/explanation/package-management-evaluation.md.
+# see that tool's doc comment and docs/explanation/package-management-evaluation.md.
 # Opt out with STAPLER_SQUAD_SHARED_NODE_MODULES=0.
 #
 # A worktree whose node_modules predates this mechanism is a real directory
@@ -210,7 +210,7 @@ NEEDS_NODE_MODULES_MIGRATION := $(shell [ -e web-app/node_modules ] && [ ! -L we
 
 web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
 	@echo "Installing web-app Bun dependencies..."
-	@./scripts/shared-node-modules.sh web-app
+	@go run ./tools/shared-node-modules web-app
 
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
@@ -220,7 +220,7 @@ web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WE
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/next || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
-		./scripts/shared-node-modules.sh web-app; \
+		go run ./tools/shared-node-modules web-app; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
