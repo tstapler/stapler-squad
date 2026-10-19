@@ -380,12 +380,17 @@ func (w *Walk) isAncestorOfOther(c uint32) (bool, error) {
 }
 
 // reaches reports whether c is a strict ancestor of from, walking at most
-// limit distinct commits depth-first like the plain walk.
+// limit distinct commits depth-first like the plain walk. Hitting the limit
+// before c is found is an error: answering "not an ancestor" could surface a
+// redundant merge base.
 func (w *Walk) reaches(from, c uint32) (bool, error) {
 	s := w.s
 	defer s.seen.reset()
 	s.stack = append(s.stack[:0], from)
-	for len(s.stack) > 0 && s.seen.count() < w.limit {
+	for len(s.stack) > 0 {
+		if s.seen.count() >= w.limit {
+			return false, fmt.Errorf("cannot rule out that merge base is redundant within %d commits", w.limit)
+		}
 		h := s.stack[len(s.stack)-1]
 		s.stack = s.stack[:len(s.stack)-1]
 		if s.seen.get(h) != 0 {

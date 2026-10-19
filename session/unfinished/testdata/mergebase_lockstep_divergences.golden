@@ -39,7 +39,7 @@ general-seed9058-limit4 head=4 base=7 | legacy: mb=1 ahead=3 behind=4 | lockstep
 general-seed9063-limit4 head=6 base=4 | legacy: mb=2 ahead=4 behind=3 | lockstep: mb=4 ahead=4 behind=0
 general-seed9065-limit4 head=8 base=1 | legacy: mb=0 ahead=4 behind=1 | lockstep: mb=1 ahead=4 behind=0
 general-seed9068-limit2000 head=17 base=21 | legacy: mb=9 ahead=12 behind=9 | lockstep: mb=11 ahead=11 behind=7
-general-seed9068-limit4 head=17 base=21 | legacy: mb=none ahead=- behind=- | lockstep: mb=err ahead=- behind=-
+general-seed9068-limit4 head=17 base=21 | legacy: mb=none ahead=- behind=- | lockstep: mb=11 ahead=4 behind=4
 general-seed9069-limit2000 head=2 base=5 | legacy: mb=0 ahead=2 behind=4 | lockstep: mb=2 ahead=0 behind=4
 general-seed9069-limit4 head=2 base=5 | legacy: mb=0 ahead=2 behind=4 | lockstep: mb=2 ahead=0 behind=4
 general-seed9070-limit4 head=6 base=2 | legacy: mb=1 ahead=4 behind=2 | lockstep: mb=2 ahead=4 behind=0
@@ -186,7 +186,7 @@ shallow-general-seed9147-limit2000 head=6 base=2 | legacy: mb=1 ahead=2 behind=1
 shallow-general-seed9147-limit4 head=6 base=2 | legacy: mb=1 ahead=2 behind=1 | lockstep: mb=none ahead=- behind=-
 shallow-general-seed9149-limit2000 head=15 base=10 | legacy: mb=3 ahead=err behind=2 | lockstep: mb=none ahead=- behind=-
 shallow-general-seed9151-limit2000 head=17 base=18 | legacy: mb=3 ahead=err behind=err | lockstep: mb=11 ahead=err behind=err
-shallow-general-seed9151-limit4 head=17 base=18 | legacy: mb=none ahead=- behind=- | lockstep: mb=err ahead=- behind=-
+shallow-general-seed9151-limit4 head=17 base=18 | legacy: mb=none ahead=- behind=- | lockstep: mb=11 ahead=err behind=err
 shallow-general-seed9154-limit2000 head=8 base=9 | legacy: mb=4 ahead=1 behind=err | lockstep: mb=none ahead=- behind=-
 shallow-general-seed9154-limit4 head=8 base=9 | legacy: mb=4 ahead=1 behind=err | lockstep: mb=none ahead=- behind=-
 shallow-general-seed9156-limit4 head=6 base=0 | legacy: mb=none ahead=- behind=- | lockstep: mb=0 ahead=err behind=0

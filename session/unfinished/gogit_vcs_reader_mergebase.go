@@ -211,8 +211,9 @@ func findMergeBase(pm parentSource, h1, h2 plumbing.Hash) (plumbing.Hash, error)
 			q.push(paintItem{hash: p, when: pci.when})
 		}
 	}
-	// Re-check staleness: a candidate painted stale by a later candidate is redundant.
-	best := candidates[:0:0]
+	// Re-check staleness: a candidate painted stale by a later candidate is
+	// redundant. The first survivor wins, so later candidates are never checked
+	// (and cannot raise a bound error), matching repostate.Walk.bestCandidate.
 	for _, c := range candidates {
 		if flags[c]&paintStale != 0 {
 			redundant, err := isAncestorOfOther(pm, c, candidates)
@@ -223,12 +224,9 @@ func findMergeBase(pm parentSource, h1, h2 plumbing.Hash) (plumbing.Hash, error)
 				continue
 			}
 		}
-		best = append(best, c)
+		return c, nil
 	}
-	if len(best) == 0 {
-		return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
-	}
-	return best[0], nil
+	return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
 }
 
 // anyFresh reports whether q holds a commit not yet marked stale.
