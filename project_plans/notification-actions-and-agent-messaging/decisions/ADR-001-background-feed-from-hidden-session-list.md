@@ -1,6 +1,6 @@
 # ADR-001: Background activity feed is derived from the hidden-session list; the delivery gate is unchanged
 
-**Status**: Proposed (2026-10-17); amended in the Phase 4 repair (roll-up copy, session role vs state, server-computed outcome as the evidence for `finished`); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
+**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); prior status: Proposed (2026-10-17); amended in the Phase 4 repair (roll-up copy, session role vs state, server-computed outcome as the evidence for `finished`); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
 **Project**: notification-actions-and-agent-messaging
 **Flag**: `background_activity_feed`
 

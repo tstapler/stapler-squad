@@ -1,6 +1,6 @@
 # ADR-005: AskUserQuestion answer routing is a ladder; the keystroke path is the default and the hook-mediated answer is conditional on spikes S1 and S2
 
-**Status**: Proposed (2026-10-17); amends ADR-010 of `notification-tray-and-hidden-session-gate` (Reply no longer hidden-only when `askuserquestion_structured` is on); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
+**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); prior status: Proposed (2026-10-17); amends ADR-010 of `notification-tray-and-hidden-session-gate` (Reply no longer hidden-only when `askuserquestion_structured` is on); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
 **Project**: notification-actions-and-agent-messaging
 **Flag**: `askuserquestion_structured` (scopes `stage:render`, `stage:answer`, `stage:hook_reply`)
 

@@ -1,6 +1,6 @@
 # ADR-004: Inline actions are risk-tiered; keystroke-writing actions stay localhost-only until the remote chain is reviewed
 
-**Status**: Proposed (2026-10-17) - requires owner confirmation (see plan Unresolved Questions); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
+**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); prior status: Proposed (2026-10-17) - requires owner confirmation (see plan Unresolved Questions); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
 **Project**: notification-actions-and-agent-messaging
 **Flag**: `notification_inline_actions` (per-scope `channel:remote`)
 

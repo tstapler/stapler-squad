@@ -1,6 +1,6 @@
 # ADR-003: Extend `GuidanceRequest` additively as the single store for live questions and peer help
 
-**Status**: Proposed (2026-10-17); amended 2026-10-17 after review (real coalescing/cap constraints, scope keys, mirror clearing, constructor); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
+**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); prior status: Proposed (2026-10-17); amended 2026-10-17 after review (real coalescing/cap constraints, scope keys, mirror clearing, constructor); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
 **Project**: notification-actions-and-agent-messaging
 **Flags**: `askuserquestion_structured`, `agent_wake_triggers`
 

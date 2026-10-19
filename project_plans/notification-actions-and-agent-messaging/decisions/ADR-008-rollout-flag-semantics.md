@@ -1,6 +1,6 @@
 # ADR-008: Four live-settable rollout flags with explicit global + per-scope precedence
 
-**Status**: Proposed (2026-10-17); amended 2026-10-17 (reuse existing scope resolver; no new `ResolveScopedFlag`); triad round 1 (2026-10-18): the "off" column now means "the decision point resolves false", and a dependency matrix replaces the contradiction between "explicit scoped value wins" and "off disables new writes"; triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
+**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); prior status: Proposed (2026-10-17); amended 2026-10-17 (reuse existing scope resolver; no new `ResolveScopedFlag`); triad round 1 (2026-10-18): the "off" column now means "the decision point resolves false", and a dependency matrix replaces the contradiction between "explicit scoped value wins" and "off disables new writes"; triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
 **Project**: notification-actions-and-agent-messaging
 
 ## Context
