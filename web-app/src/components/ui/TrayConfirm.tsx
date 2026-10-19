@@ -47,7 +47,7 @@ export function TrayConfirm({ text, confirmLabel, error, busy, onConfirm, onCanc
       <span>{text}</span>
       <div className={trayConfirmActions}>
         <button ref={cancelRef} type="button" className={trayButton} onClick={onCancel} data-testid="tray-confirm-cancel">
-          Cancel
+          Keep
         </button>
         <button type="button" className={trayButton} onClick={onConfirm} aria-disabled={busy || undefined} data-testid="tray-confirm-ok">
           {error ? "Could not clear - Retry" : confirmLabel}
