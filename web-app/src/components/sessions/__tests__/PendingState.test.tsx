@@ -42,7 +42,7 @@ describe("WaitState", () => {
       const exits = w.exits.map((label) => ({ label, onClick: () => onAction(label) }));
       const pending = render(<WaitState kind={w.kind} name="b.go" count={3} />);
       const region = screen.getByRole("status");
-      expect(region).toHaveAttribute("aria-busy", "true");
+      expect(region).not.toHaveAttribute("aria-busy"); // busy on a live region can hold its announcement
       expect(region).toHaveTextContent(w.pending);
       pending.unmount();
 

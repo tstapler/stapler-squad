@@ -81,7 +81,7 @@ export function WaitState({ kind, name, count, failure }: WaitStateProps) {
     );
   }
   return (
-    <div className={wait} role="status" aria-busy="true" aria-live="polite" data-testid={`files-pending-${kind}`}>
+    <div className={wait} role="status" aria-live="polite" data-testid={`files-pending-${kind}`}>
       <span className={spinner} aria-hidden="true" />
       <span>{PENDING_COPY[kind](ctx)}</span>
     </div>
