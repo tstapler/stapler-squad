@@ -60,6 +60,7 @@ type Metrics struct {
 	gauge  map[string]metric.Float64Gauge
 	lag    metric.Float64Histogram
 	lags   map[string][]float64 // trigger type -> observed lags in seconds
+	fires  sessionFires
 }
 
 // NewMetrics returns an empty mirror.

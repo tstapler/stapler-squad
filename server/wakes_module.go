@@ -51,6 +51,7 @@ func newWakeDispatcher(w wakeWiring, hook func(func())) *wakes.Dispatcher {
 		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Sessions: w.Sessions, Guidance: w.Guidance, PRs: w.PRs, Peers: w.Peers, Clock: w.Clock,
 		Leader: w.Leader, Limits: w.Limits, TypeEnabled: w.TypeEnabled,
 	})
+	d.RegisterMatcher(d.Metrics().SessionEndObserver())
 	hook(d.ChangeHook())
 	return d
 }

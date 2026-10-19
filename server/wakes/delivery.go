@@ -228,6 +228,7 @@ func (d *SteerDelivery) write(ctx context.Context, row *session.WakeTriggerData,
 	}
 	if applied {
 		d.cfg.Metrics.Inc(MetricTrigger, string(row.Type), string(domain.WakeStatusDelivered))
+		d.cfg.Metrics.WakeDelivered(row.OwnerSessionUUID)
 	}
 	d.drop(row.ID)
 }
