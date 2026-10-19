@@ -232,6 +232,20 @@ func (s *PendingQuestionStore) Peek(k QuestionKey) (PendingQuestion, bool) {
 	return e.q, true
 }
 
+// PeekQuestions is Peek for many keys under one lock, for a history page.
+func (s *PendingQuestionStore) PeekQuestions(keys []QuestionKey) map[QuestionKey]PendingQuestion {
+	out := make(map[QuestionKey]PendingQuestion, len(keys))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expireLocked(s.now())
+	for _, k := range keys {
+		if e := s.entries[k.QuestionID]; e != nil && e.q.SessionUUID == k.SessionUUID && e.state == pendingRegistered {
+			out[k] = e.q
+		}
+	}
+	return out
+}
+
 // PendingCount is how many AskUserQuestion dialogs the session may be waiting on
 // at once: its registered, unclaimed questions plus unregistered ones, counted
 // only inside pendingParallelWindow. Parallel questions arrive together; an older

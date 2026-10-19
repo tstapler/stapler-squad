@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 )
 
@@ -93,5 +95,31 @@ func TestEventBusNotifier_NotifyAutoRemediating_should_StampAutoRemediatingAndKe
 		assert.Equal(t, "item-1", ev.NotificationMetadata["item_id"])
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected a notification event after NotifyAutoRemediating")
+	}
+}
+
+// A decision notification carries the stable decision_schema and the needs-human type.
+func TestEventBusNotifier_NotifyDecision_should_StampDecisionSchemaWithChoices_When_ItemAwaitsDecision(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+
+	(&EventBusNotifier{Bus: bus}).NotifyDecision("b608ab1e", "Review passed", "accept, rework or merge", DefaultDecisionSchema())
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "b608ab1e", ev.NotificationMetadata["item_id"])
+		var schema DecisionSchema
+		require.NoError(t, json.Unmarshal([]byte(ev.NotificationMetadata["decision_schema"]), &schema))
+		var values []string
+		for _, c := range schema.Choices {
+			values = append(values, c.Value)
+		}
+		assert.Equal(t, []string{"accept", "rework", "merge"}, values)
+		assert.Equal(t, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED), ev.NotificationType)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification event after NotifyDecision")
 	}
 }

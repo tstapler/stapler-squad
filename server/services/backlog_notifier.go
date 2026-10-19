@@ -2,6 +2,7 @@ package services
 
 import (
 	"github.com/google/uuid"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 )
@@ -50,6 +51,22 @@ func (n *EventBusNotifier) NotifySession(sessionID, title, message string, notif
 		notificationType, derivePriority(urgent, important),
 		title, message,
 		map[string]string{},
+	))
+}
+
+// NotifyDecision is Notify for an item awaiting an operator decision: it uses the
+// needs-human CONFIRMATION_NEEDED type (ADR-002 decision 6, so the delivery gate
+// keeps it for hidden sessions) and stamps decision_schema so the history page
+// can offer the choices inline (Story 2.2).
+func (n *EventBusNotifier) NotifyDecision(itemID, title, message string, schema DecisionSchema) {
+	if n == nil || n.Bus == nil {
+		return
+	}
+	n.Bus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED), derivePriority(true, true),
+		title, message,
+		map[string]string{metaItemID: itemID, metaDecisionSchema: EncodeDecisionSchema(schema)},
 	))
 }
 
