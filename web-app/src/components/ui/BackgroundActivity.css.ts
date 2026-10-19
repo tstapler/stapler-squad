@@ -44,6 +44,10 @@ export const rowNeedsHuman = style({
   borderLeftColor: vars.color.warning,
 });
 
+export const rowInfo = style({
+  borderLeftColor: vars.color.borderColor,
+});
+
 export const rowHead = style({
   display: "flex",
   alignItems: "center",
@@ -117,14 +121,35 @@ export const action = style({
   },
 });
 
-export const summary = style({
-  display: "flex",
-  flexDirection: "column",
-  gap: "4px",
-  paddingTop: vars.space[2],
-  borderTop: `1px solid ${vars.color.borderColor}`,
-  fontSize: "0.875rem",
+export const rollupLine = style({
+  margin: 0,
+  fontSize: "0.9375rem",
   color: vars.color.textPrimary,
+});
+
+export const stateChip = style({
+  fontSize: "0.75rem",
+  fontWeight: 600,
+  padding: "2px 8px",
+  borderRadius: "999px",
+  border: `1px solid ${vars.color.borderColor}`,
+  color: vars.color.textPrimary,
+  whiteSpace: "nowrap",
+});
+
+// Dashed border: "unknown" reads differently from "Finished" without relying on colour.
+export const stateChipUnknown = style({
+  borderStyle: "dashed",
+  color: vars.color.textSecondary,
+});
+
+export const roleTag = style({
+  fontSize: "0.75rem",
+  color: vars.color.textSecondary,
+});
+
+export const newPill = style({
+  alignSelf: "flex-start",
 });
 
 export const footer = style({
@@ -159,8 +184,6 @@ export const skeleton = style({
   animation: `${pulse} 1.4s ease-in-out infinite`,
   "@media": { "(prefers-reduced-motion: reduce)": { animation: "none" } },
 });
-
-export const successIcon = style({ color: vars.color.successText, fontSize: "1.5rem" });
 
 export const segments = style({
   display: "flex",

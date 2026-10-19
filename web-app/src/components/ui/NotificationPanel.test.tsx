@@ -16,6 +16,7 @@ import { TrayErrorBoundary } from "./TrayErrorBoundary";
 import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { writeQuietMode } from "@/lib/utils/deckSettings";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
+import { makeHiddenState, makeNotification } from "./__fixtures__/notificationFixtures";
 
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlag: () => false,
@@ -70,19 +71,6 @@ jest.mock("@/lib/hooks/useAuditLog", () => ({
     logNotificationPanelClosed: jest.fn(),
   }),
 }));
-
-function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
-  return {
-    id: overrides.id ?? "notif-1",
-    sessionId: "sess-1",
-    sessionName: "my-session",
-    message: "Something happened",
-    timestamp: Date.now(),
-    isRead: false,
-    notificationType: "info",
-    ...overrides,
-  };
-}
 
 let mockHistory: NotificationHistoryItem[] = [];
 let mockIsPanelOpen = true;
@@ -808,15 +796,7 @@ describe("tray", () => {
 
 describe("tray Background segment (Story 5.4)", () => {
   const refresh = jest.fn();
-  const hiddenState = (over: Record<string, unknown> = {}) => ({
-    sessions: [{ id: "review:h1", title: "review:h1", state: "running", updatedAtMs: Date.now() }],
-    departed: [],
-    loading: false,
-    failed: false,
-    lastUpdatedAt: Date.now(),
-    refresh,
-    ...over,
-  });
+  const hiddenState = (over: Record<string, unknown> = {}) => makeHiddenState({ refresh, ...over });
 
   beforeEach(() => {
       mockIsPanelOpen = true;
@@ -863,6 +843,30 @@ describe("tray Background segment (Story 5.4)", () => {
     fireEvent.click(screen.getByTestId("tray-tab-background"));
     expect(screen.getAllByTestId("background-row")).toHaveLength(1);
     expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
+  });
+
+  it("tablist_should_move_focus_with_arrows_and_name_the_background_tab_by_exception_count_only", () => {
+    const sessions = Array.from({ length: 11 }, (_, i) => ({ id: `review:s${i}`, title: `review:s${i}`, state: "stopped", updatedAtMs: Date.now() - i * 1000 }));
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions }));
+    mockHistory = [makeNotification({ id: "f1", sessionId: "review:s0", sessionName: "review:s0", notificationType: "error" })];
+    renderTray();
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    const notificationsTab = screen.getByRole("tab", { name: "Notifications" });
+    expect(notificationsTab).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("tray-tab-background")).toHaveAttribute("tabindex", "-1");
+    notificationsTab.focus();
+    fireEvent.keyDown(notificationsTab, { key: "ArrowRight" });
+    const bg = screen.getByRole("tab", { name: "Background, 1 needs attention" });
+    expect(bg).toHaveAttribute("aria-selected", "true");
+    expect(bg).toHaveFocus();
+
+    // acknowledged failure and a 12th session: the name stays plain "Background"
+    mockHistory = [makeNotification({ id: "f1", sessionId: "review:s0", sessionName: "review:s0", notificationType: "error", isRead: true })];
+    mockUseBackgroundSessions.mockReturnValue(
+      hiddenState({ sessions: [...sessions, { id: "review:s11", title: "review:s11", state: "stopped", updatedAtMs: Date.now() }] }),
+    );
+    fireEvent.click(screen.getByTestId("tray-tab-notifications"));
+    expect(screen.getByTestId("tray-tab-background")).toHaveAccessibleName("Background");
   });
 
   it("opening_a_row_should_mark_its_records_read_and_close_the_tray", () => {
@@ -1313,14 +1317,7 @@ describe("tray spec gaps (Phase 5)", () => {
   });
 
   it("xa15_tray_and_background_segment_should_own_no_live_region_of_their_own", () => {
-    mockUseBackgroundSessions.mockReturnValue({
-      sessions: [{ id: "review:h1", title: "review:h1", state: "running", updatedAtMs: Date.now() }],
-      departed: [],
-      loading: false,
-      failed: false,
-      lastUpdatedAt: Date.now(),
-      refresh: jest.fn(),
-    });
+    mockUseBackgroundSessions.mockReturnValue(makeHiddenState({ refresh: jest.fn() }));
     mockHistory = [
       pending("p1"),
       makeNotification({ id: "f1", sessionId: "review:h1", sessionName: "review:h1", notificationType: "error" }),

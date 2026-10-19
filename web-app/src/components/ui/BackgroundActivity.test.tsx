@@ -1,7 +1,8 @@
 import React from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { BackgroundActivity, type BackgroundActivityProps } from "./BackgroundActivity";
-import type { BackgroundRow } from "@/lib/utils/backgroundActivity";
+import { buildActivityRows, buildRollup, type ActivityRow } from "@/lib/utils/backgroundActivity";
+import { makeBackgroundRow, makeElevenStopped, makeHiddenSession } from "./__fixtures__/notificationFixtures";
 
 jest.mock("next/link", () => ({
   __esModule: true,
@@ -12,26 +13,23 @@ jest.mock("next/link", () => ({
   ),
 }));
 
-const row = (over: Partial<BackgroundRow> = {}): BackgroundRow => ({
-  key: "bg:review:h1",
-  sessionId: "review:h1",
-  sessionTitle: "review:h1",
-  kind: "failure",
-  statusLabel: "FAILED",
-  title: "Review failed",
-  message: "3 tests failing",
-  timestampMs: Date.now() - 4 * 60_000,
-  recordIds: ["n1"],
-  primaryRecordId: "n1",
-  sessionAvailable: true,
-  pendingQuestion: false,
-  ...over,
-});
+const exceptionRow = (over: Parameters<typeof makeBackgroundRow>[0] = {}): ActivityRow => {
+  const ex = makeBackgroundRow(over);
+  return {
+    key: ex.key,
+    sessionId: ex.sessionId,
+    sessionTitle: ex.sessionTitle,
+    role: "review",
+    state: ex.kind === "failure" ? "exception_failure" : "exception_needs_human",
+    timestampMs: ex.timestampMs,
+    exception: ex,
+  };
+};
 
-function setup(over: Partial<BackgroundActivityProps> = {}) {
-  const props: BackgroundActivityProps = {
-    view: { rows: [], completedOkToday: 0, running: 0 },
-    hasHiddenSessions: true,
+function propsFor(rows: ActivityRow[], over: Partial<BackgroundActivityProps> = {}): BackgroundActivityProps {
+  return {
+    rows,
+    rollup: buildRollup(rows),
     loading: false,
     failed: false,
     offline: false,
@@ -40,88 +38,111 @@ function setup(over: Partial<BackgroundActivityProps> = {}) {
     onOpenRow: jest.fn(),
     ...over,
   };
-  render(<BackgroundActivity {...props} />);
-  return props;
 }
 
+function setup(rows: ActivityRow[], over: Partial<BackgroundActivityProps> = {}) {
+  const props = propsFor(rows, over);
+  const view = render(<BackgroundActivity {...props} />);
+  const update = (nextRows: ActivityRow[], more: Partial<BackgroundActivityProps> = {}) =>
+    view.rerender(<BackgroundActivity {...propsFor(nextRows, { ...over, ...more })} />);
+  return { props, update, ...view };
+}
+
+const eleven = (outcome: "completed" | "unknown" = "completed") => buildActivityRows([], makeElevenStopped(outcome));
+
 describe("BackgroundActivity", () => {
-  it("background_section_should_render_loading_empty_healthy_empty_none_error_stale_offline_states", () => {
-    const loading = render(<BackgroundActivity {...({ view: { rows: [], completedOkToday: 0, running: 0 }, hasHiddenSessions: false, loading: true, failed: false, offline: false, lastUpdatedAt: null, onRefresh: jest.fn(), onOpenRow: jest.fn() } as BackgroundActivityProps)} />);
+  it("background_section_should_render_loading_none_error_offline_states_without_a_spinner_on_empty", () => {
+    const loading = setup([], { loading: true, lastUpdatedAt: null });
     expect(screen.getByTestId("background-loading")).toHaveAttribute("aria-busy", "true");
     loading.unmount();
 
-    // empty, healthy
-    const healthy = render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 12, running: 0 }}
-        hasHiddenSessions
-        loading={false}
-        failed={false}
-        offline={false}
-        lastUpdatedAt={Date.now()}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
+    const none = setup([]);
+    expect(screen.getByTestId("background-empty-none")).toHaveTextContent(
+      "No background work. Review and diagnose sessions will appear here while they run.",
     );
-    expect(screen.getByTestId("background-empty-healthy")).toHaveTextContent(
-      "Nothing needs attention in the background. 12 completed OK today.",
-    );
-    healthy.unmount();
-
-    // no background sessions
-    const none = render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 0, running: 0 }}
-        hasHiddenSessions={false}
-        loading={false}
-        failed={false}
-        offline={false}
-        lastUpdatedAt={Date.now()}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
-    expect(screen.getByText("No background sessions have run recently.")).toBeInTheDocument();
+    expect(screen.queryByTestId("background-loading")).toBeNull();
     none.unmount();
 
-    // first-load error, no data
-    const err = render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 0, running: 0 }}
-        hasHiddenSessions={false}
-        loading={false}
-        failed
-        offline={false}
-        lastUpdatedAt={null}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
+    const err = setup([], { failed: true, lastUpdatedAt: null });
     expect(screen.getByText("Could not load background activity.")).toBeInTheDocument();
     err.unmount();
 
-    // offline with no data
-    render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 0, running: 0 }}
-        hasHiddenSessions={false}
-        loading={false}
-        failed={false}
-        offline
-        lastUpdatedAt={null}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
+    setup([], { offline: true, lastUpdatedAt: null });
     expect(screen.getByTestId("background-offline")).toBeInTheDocument();
   });
 
+  it("BackgroundActivity_should_renderRollupTestIdWithNoFailuresCopy_When_11StoppedSessions", () => {
+    setup(eleven("unknown"));
+    expect(screen.getAllByTestId("background-row")).toHaveLength(11);
+    const rollup = screen.getByTestId("background-rollup");
+    expect(rollup).toHaveTextContent("11 background sessions, no failures reported");
+    expect(rollup.textContent?.toLowerCase()).not.toContain("healthy");
+    expect(screen.getByTestId("background-empty-healthy")).toContainElement(rollup);
+    expect(screen.getByText("No failures reported (11)")).toBeInTheDocument();
+  });
+
+  it("BackgroundActivity_should_renderDistinctStoppedUnknownChip_When_noRecordedOutcome", () => {
+    setup(eleven("completed"));
+    const chips = screen.getAllByTestId("background-state-chip").map((c) => c.textContent);
+    expect(chips.filter((t) => t === "Finished")).toHaveLength(10);
+    expect(chips.filter((t) => t === "Stopped, outcome unknown")).toHaveLength(1);
+  });
+
+  it("BackgroundActivity_should_showNNewButtonAndKeepRowPositions_When_pollAddsSession", () => {
+    const sessions = makeElevenStopped("completed");
+    const onMergeNew = jest.fn();
+    const { update } = setup(buildActivityRows([], sessions), { onMergeNew });
+    const before = screen.getAllByTestId("background-row").map((r) => r.getAttribute("data-session-id"));
+
+    const added = makeHiddenSession({ id: "review:new", updatedAtMs: Date.now() });
+    update(buildActivityRows([], [...sessions, added]));
+    expect(screen.getAllByTestId("background-row").map((r) => r.getAttribute("data-session-id"))).toEqual(before);
+    const pill = screen.getByRole("button", { name: "1 new" });
+
+    fireEvent.click(pill);
+    expect(onMergeNew).toHaveBeenCalledWith(1);
+    expect(screen.queryByTestId("background-new-pill")).toBeNull();
+    expect(screen.getAllByTestId("background-row")).toHaveLength(12);
+  });
+
+  it("BackgroundActivity_should_showNewExceptionImmediately_When_pollAddsFailure", () => {
+    const sessions = makeElevenStopped("completed");
+    const { update } = setup(buildActivityRows([], sessions));
+    update(buildActivityRows([], [...sessions, makeHiddenSession({ id: "review:bad", backgroundOutcome: "failed" })]));
+    expect(screen.queryByTestId("background-new-pill")).toBeNull();
+    expect(screen.getAllByTestId("background-row")[0]).toHaveAttribute("data-session-id", "review:bad");
+  });
+
+  it("BackgroundActivity_should_capAt100RowsWithShowAll_When_150Sessions", () => {
+    const sessions = Array.from({ length: 150 }, (_, i) => makeHiddenSession({ id: `review:s${i}`, updatedAtMs: 1000 + i }));
+    setup(buildActivityRows([], sessions));
+    expect(screen.getAllByTestId("background-row")).toHaveLength(100);
+    fireEvent.click(screen.getByRole("button", { name: "Show all (150)" }));
+    expect(screen.getAllByTestId("background-row")).toHaveLength(150);
+    expect(screen.queryByTestId("background-show-all")).toBeNull();
+  });
+
+  it("BackgroundActivity_should_renderRowsOnFirstCommit_When_cachedPollStateProvided", () => {
+    const props = propsFor(eleven("unknown"));
+    const seen: number[] = [];
+    const Probe = () => {
+      React.useLayoutEffect(() => {
+        seen.push(document.querySelectorAll("[data-testid='background-row']").length);
+      }, []);
+      return null;
+    };
+    render(
+      <>
+        <BackgroundActivity {...props} />
+        <Probe />
+      </>,
+    );
+    expect(seen).toEqual([11]);
+    expect(screen.queryByTestId("background-loading")).toBeNull();
+  });
+
   it("ba5_should_show_error_retry_and_stale_age", () => {
-    const props = setup({
-      failed: true,
-      view: { rows: [row()], completedOkToday: 0, running: 0 },
-      lastUpdatedAt: Date.now() - 2 * 60_000,
-    });
+    const { props } = setup([exceptionRow()], { failed: true, lastUpdatedAt: Date.now() - 2 * 60_000 });
     expect(screen.getByText("Could not load background activity.")).toBeInTheDocument();
     expect(screen.getByTestId("background-stale")).toHaveTextContent("Showing data from 2m ago");
     expect(screen.getByTestId("background-row")).toBeInTheDocument(); // last good data stays
@@ -129,64 +150,22 @@ describe("BackgroundActivity", () => {
     expect(props.onRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("ba6_should_gate_success_state", () => {
-    // failed fetch: never the healthy success state
-    const a = render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 3, running: 0 }}
-        hasHiddenSessions
-        loading={false}
-        failed
-        offline={false}
-        lastUpdatedAt={Date.now() - 60_000}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
+  it("ba6_should_gate_the_no_failures_wrapper_on_a_settled_poll", () => {
+    const rows = eleven("unknown");
+    const failed = setup(rows, { failed: true });
     expect(screen.queryByTestId("background-empty-healthy")).toBeNull();
-    a.unmount();
-    // offline: same
-    const b = render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 3, running: 0 }}
-        hasHiddenSessions
-        loading={false}
-        failed={false}
-        offline
-        lastUpdatedAt={Date.now() - 60_000}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
+    expect(screen.getByTestId("background-rollup")).toBeInTheDocument();
+    failed.unmount();
+    const offline = setup(rows, { offline: true, lastUpdatedAt: Date.now() - 60_000 });
     expect(screen.queryByTestId("background-empty-healthy")).toBeNull();
     expect(screen.getByTestId("background-stale")).toHaveTextContent("Offline - showing data from 1m ago");
-    b.unmount();
-    // loading with no data: skeleton, not success
-    render(
-      <BackgroundActivity
-        view={{ rows: [], completedOkToday: 3, running: 0 }}
-        hasHiddenSessions
-        loading
-        failed={false}
-        offline={false}
-        lastUpdatedAt={null}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
+    offline.unmount();
+    setup(rows, { loading: true, lastUpdatedAt: null });
     expect(screen.queryByTestId("background-empty-healthy")).toBeNull();
-  });
-
-  it("ba3_should_render_routine_as_summary_line", () => {
-    setup({ view: { rows: [row()], completedOkToday: 12, running: 3 } });
-    expect(screen.getAllByTestId("background-row")).toHaveLength(1);
-    const summary = screen.getByTestId("background-summary");
-    expect(summary).toHaveTextContent("12 completed OK today");
-    expect(summary).toHaveTextContent("3 running");
   });
 
   it("rows carry the Background chip, a status text, and View output to the read-only link", () => {
-    const props = setup({ view: { rows: [row()], completedOkToday: 0, running: 0 } });
+    const { props } = setup([exceptionRow()]);
     const r = screen.getByTestId("background-row");
     expect(within(r).getByTestId("notification-background-chip")).toHaveTextContent("Background");
     expect(within(r).getByText("FAILED")).toBeInTheDocument();
@@ -197,46 +176,33 @@ describe("BackgroundActivity", () => {
   });
 
   it("a row whose session is gone says so and keeps the captured message", () => {
-    setup({ view: { rows: [row({ sessionAvailable: false })], completedOkToday: 0, running: 0 } });
+    setup([exceptionRow({ sessionAvailable: false })]);
     const r = screen.getByTestId("background-row");
     expect(r).toHaveTextContent("Session no longer available");
     expect(r).toHaveTextContent("3 tests failing");
     expect(within(r).getByTestId("notification-view-output")).toBeInTheDocument();
   });
 
-  it("ba10_should_show_reply_only_for_pending_question", () => {
-    const question = row({ key: "q", sessionId: "q1", sessionTitle: "q1", kind: "needs_human", statusLabel: "NEEDS INPUT", pendingQuestion: true, primaryRecordId: "n-q" });
-    const failure = row();
-    const approval = row({ key: "a", sessionId: "a1", kind: "needs_human", statusLabel: "NEEDS APPROVAL", pendingQuestion: false });
-    const { unmount } = render(
-      <BackgroundActivity
-        view={{ rows: [failure, question, approval], completedOkToday: 0, running: 0 }}
-        hasHiddenSessions
-        loading={false}
-        failed={false}
-        offline={false}
-        lastUpdatedAt={Date.now()}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-      />,
-    );
-    // before Story 5.6 ships: no Reply anywhere
-    expect(screen.queryByTestId("notification-reply")).toBeNull();
-    unmount();
+  it("a departed informational row has no link and says the session no longer exists", () => {
+    const sessions = [makeHiddenSession({ id: "review:old" }), makeHiddenSession({ id: "review:keep" })];
+    const first = buildActivityRows([], sessions);
+    const rows = buildActivityRows([], sessions.slice(1), { previous: first });
+    setup(rows);
+    const departed = screen.getAllByTestId("background-row").find((r) => r.getAttribute("data-state") === "departed");
+    expect(departed).toHaveTextContent("Session no longer exists");
+    expect(within(departed as HTMLElement).queryByTestId("notification-view-output")).toBeNull();
+  });
 
-    render(
-      <BackgroundActivity
-        view={{ rows: [failure, question, approval], completedOkToday: 0, running: 0 }}
-        hasHiddenSessions
-        loading={false}
-        failed={false}
-        offline={false}
-        lastUpdatedAt={Date.now()}
-        onRefresh={jest.fn()}
-        onOpenRow={jest.fn()}
-        replyEnabled
-      />,
-    );
+  it("ba10_should_show_reply_only_for_pending_question", () => {
+    const question = exceptionRow({ key: "q", sessionId: "q1", sessionTitle: "q1", kind: "needs_human", statusLabel: "NEEDS INPUT", pendingQuestion: true, primaryRecordId: "n-q" });
+    const failure = exceptionRow();
+    const approval = exceptionRow({ key: "a", sessionId: "a1", kind: "needs_human", statusLabel: "NEEDS APPROVAL" });
+    const rows = [failure, question, approval];
+    const first = setup(rows);
+    expect(screen.queryByTestId("notification-reply")).toBeNull();
+    first.unmount();
+
+    setup(rows, { replyEnabled: true });
     const replies = screen.getAllByTestId("notification-reply");
     expect(replies).toHaveLength(1);
     expect(replies[0]).toHaveAttribute("href", expect.stringContaining("reply=1"));
@@ -244,8 +210,9 @@ describe("BackgroundActivity", () => {
   });
 
   it("refresh is inert while offline", () => {
-    const props = setup({ offline: true });
+    const { props } = setup(eleven("unknown"), { offline: true });
     fireEvent.click(screen.getByTestId("background-refresh"));
     expect(props.onRefresh).not.toHaveBeenCalled();
+    act(() => {});
   });
 });

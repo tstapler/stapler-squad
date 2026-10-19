@@ -13,7 +13,7 @@ import { useAnnounce } from "@/lib/hooks/useAnnounce";
 import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnectivity";
 import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
-import { useBackgroundSessions } from "@/lib/hooks/useBackgroundSessions";
+import { useBackgroundActivity } from "@/lib/hooks/useBackgroundActivity";
 import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
 import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
@@ -23,8 +23,7 @@ import {
   notificationTypeFilter,
   computeScopedMarkReadIds,
 } from "@/lib/utils/notificationMapping";
-import { selectBackgroundRows, type BackgroundRow } from "@/lib/utils/backgroundActivity";
-import { knownHiddenSessions } from "@/lib/utils/hiddenSessionRegistry";
+import type { ActivityRow } from "@/lib/utils/backgroundActivity";
 import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { AutoHandledSection } from "./NotificationItem";
 import { BackgroundActivity } from "./BackgroundActivity";
@@ -292,24 +291,15 @@ export function NotificationPanel() {
   // Background activity (Story 5.4): polled only while its segment is showing; the segment
   // badge is the same join over history, so it adds nothing to the bell count.
   const backgroundVisible = isPanelOpen && traySegment === "background";
-  const background = useBackgroundSessions(backgroundVisible && !isOffline);
-  const backgroundView = useMemo(
-    () =>
-      selectBackgroundRows(
-        notificationHistory,
-        background.sessions,
-        background.lastUpdatedAt === null ? knownHiddenSessions() : background.departed,
-      ),
-    [notificationHistory, background.sessions, background.departed, background.lastUpdatedAt],
-  );
+  const background = useBackgroundActivity(backgroundVisible && !isOffline, notificationHistory);
   const announcedBackgroundLoad = useRef(false);
   useEffect(() => {
-    if (backgroundVisible && background.loading && !announcedBackgroundLoad.current) {
+    if (backgroundVisible && background.poll.loading && !announcedBackgroundLoad.current) {
       announcedBackgroundLoad.current = true;
       announce("Loading background activity", "polite", "background-loading");
     }
-    if (!background.loading) announcedBackgroundLoad.current = false;
-  }, [backgroundVisible, background.loading, announce]);
+    if (!background.poll.loading) announcedBackgroundLoad.current = false;
+  }, [backgroundVisible, background.poll.loading, announce]);
 
   const { rows: flatRows, needsAttention, setSize } = useMemo(
     () => flattenGroups(filteredNotifications, collapsed),
@@ -355,9 +345,11 @@ export function NotificationPanel() {
     }
   };
 
-  const openBackgroundRow = (row: BackgroundRow) => {
-    markAsRead(row.recordIds);
-    auditLog.logNotificationSessionViewed(row.primaryRecordId, row.sessionId);
+  const openBackgroundRow = (row: ActivityRow) => {
+    if (row.exception) {
+      markAsRead(row.exception.recordIds);
+      auditLog.logNotificationSessionViewed(row.exception.primaryRecordId, row.sessionId);
+    }
     closeForNavigation();
   };
 
@@ -759,7 +751,7 @@ export function NotificationPanel() {
         <div className={segments} role="tablist" aria-label="Tray sections" data-testid="tray-segments">
           {(["notifications", "background"] as const).map((id) => {
             const selected = traySegment === id;
-            const count = id === "background" ? backgroundView.rows.length : 0;
+            const count = id === "background" ? background.exceptionCount : 0;
             return (
               // analytics-exempt
               <button
@@ -768,6 +760,7 @@ export function NotificationPanel() {
                 role="tab"
                 id={`tray-tab-${id}`}
                 aria-selected={selected}
+                aria-label={count > 0 ? `Background, ${count} needs attention` : undefined}
                 aria-controls="tray-segment-panel"
                 tabIndex={selected ? 0 : -1}
                 className={segment}
@@ -804,14 +797,15 @@ export function NotificationPanel() {
           </div>
           {traySegment === "background" ? (
             <BackgroundActivity
-              view={backgroundView}
-              hasHiddenSessions={background.sessions.length > 0 || background.departed.length > 0}
-              loading={background.loading}
-              failed={background.failed}
+              rows={background.rows}
+              rollup={background.rollup}
+              loading={background.poll.loading}
+              failed={background.poll.failed}
               offline={isOffline}
-              lastUpdatedAt={background.lastUpdatedAt}
-              onRefresh={background.refresh}
+              lastUpdatedAt={background.poll.lastUpdatedAt}
+              onRefresh={background.poll.refresh}
               onOpenRow={openBackgroundRow}
+              onMergeNew={(n) => announce(`${n} new background ${n === 1 ? "session" : "sessions"}`, "polite", "background-new")}
               replyEnabled={replyEnabled}
             />
           ) : (
