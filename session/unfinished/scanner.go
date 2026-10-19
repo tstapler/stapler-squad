@@ -202,6 +202,11 @@ type Scanner struct {
 	// case, degrading to relying solely on the (still-present) ticker.
 	fsWatcher *fsnotify.Watcher
 
+	// treeWatch reports working-tree changes (darwin FSEvents); nil when
+	// unavailable, in which case the backstop tick keeps its normal period.
+	// Guarded by mu; set once in Start before the coordinator launches.
+	treeWatch treeWatcher
+
 	// severePressureWarned rate-limits the "skipping scan under memory
 	// pressure" log line to once per pressure episode rather than once per
 	// skipped repo, so the warning itself can't contribute to log-driven
@@ -283,6 +288,7 @@ func (s *Scanner) ScanDone() <-chan time.Time {
 // than purely tick-driven. All goroutines exit cleanly when ctx is cancelled.
 func (s *Scanner) Start(ctx context.Context) {
 	s.hydrateCacheFromDisk()
+	s.startTreeWatch(ctx)
 
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
@@ -459,9 +465,7 @@ func (s *Scanner) persistCacheToDisk() {
 
 // coordinator goroutine: ticks every 30s and handles trigger signals.
 func (s *Scanner) coordinator(ctx context.Context) {
-	s.mu.RLock()
-	tick := time.NewTicker(s.tickInterval)
-	s.mu.RUnlock()
+	tick := time.NewTicker(s.backstopInterval())
 	defer tick.Stop()
 
 	for {
@@ -494,8 +498,13 @@ func (s *Scanner) TriggerScan() {
 // not a fault.
 func (s *Scanner) watchRepo(repoPath string) {
 	s.mu.RLock()
-	w := s.fsWatcher
+	w, tw := s.fsWatcher, s.treeWatch
 	s.mu.RUnlock()
+	if tw != nil {
+		if err := tw.Add(repoPath); err != nil {
+			log.Debug("could not watch working tree", "repo", repoPath, "err", err)
+		}
+	}
 	if w == nil {
 		return
 	}
@@ -510,8 +519,11 @@ func (s *Scanner) watchRepo(repoPath string) {
 // No-op if fsnotify is unavailable.
 func (s *Scanner) unwatchRepo(repoPath string) {
 	s.mu.RLock()
-	w := s.fsWatcher
+	w, tw := s.fsWatcher, s.treeWatch
 	s.mu.RUnlock()
+	if tw != nil {
+		tw.Remove(repoPath)
+	}
 	if w == nil {
 		return
 	}

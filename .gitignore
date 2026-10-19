@@ -45,6 +45,7 @@ session/ent/*/
 !session/ent/schema/
 .ent-gen.stamp
 /web-app/.next
+/web-app/node_modules
 /web-app/node_modules/
 /web-app/out/
 /web-app/storybook-static/

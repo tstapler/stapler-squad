@@ -13,6 +13,7 @@ import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
 import { StuckNavBadge } from "@/components/backlog-stuck/StuckNavBadge";
 import { NotificationsNavBadge } from "@/components/ui/NotificationsNavBadge";
+import { Tooltip } from "@/components/ui/Tooltip";
 import {
   drawer,
   navList,
@@ -62,11 +63,11 @@ export function DrawerNav() {
               const Icon = page.icon;
               return (
                 <li key={page.href}>
+                  <NavTooltip label={page.label} enabled={!isDrawerOpen}>
                   <Link
                     href={page.href}
                     className={navItem({ active: isActive })}
                     aria-current={isActive ? "page" : undefined}
-                    title={!isDrawerOpen ? page.label : undefined}
                   >
                     <span className={navIcon} aria-hidden="true">
                       <Icon size={18} />
@@ -91,6 +92,7 @@ export function DrawerNav() {
                       </span>
                     )}
                   </Link>
+                  </NavTooltip>
                 </li>
               );
             })}
@@ -112,5 +114,16 @@ export function DrawerNav() {
         </span>
       </button>
     </nav>
+  );
+}
+
+// Tooltip only while the drawer is collapsed; expanded items already show their label.
+function NavTooltip({ label, enabled, children }: { label: string; enabled: boolean; children: React.ReactElement }) {
+  return enabled ? (
+    <Tooltip label={label} side="right">
+      {children}
+    </Tooltip>
+  ) : (
+    children
   );
 }

@@ -258,6 +258,10 @@ type InstanceStore interface {
 	// objects or spawning PTY processes. Use this for read-only existence/title checks
 	// where calling LoadInstances() would create unnecessary side effects.
 	ListInstanceData() ([]InstanceData, error)
+	// FindInstanceDataByID finds the single InstanceData whose stable ID or title
+	// matches id via an indexed WHERE clause, rather than ListInstanceData() plus a
+	// linear scan. Returns ErrInstanceDataNotFound when no match exists.
+	FindInstanceDataByID(id string) (*InstanceData, error)
 	SaveInstances([]*Instance) error
 	AddInstance(*Instance) error
 	DeleteInstance(title string) error

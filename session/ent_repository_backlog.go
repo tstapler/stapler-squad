@@ -518,6 +518,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 	result := backlogItemToData(item)
+	r.attachPendingGuidance(ctx, &result)
 	return &result, nil
 }
 
@@ -1012,6 +1013,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 	if len(parsedUUIDs) == 0 {
 		return result, nil
 	}
+	r.applyPendingGuidanceToData(ctx, result)
 
 	// Eager-load item sessions via a single batched query, matching
 	// ListBacklogItemSummaries's pattern, so WatchBacklogItems' fresh-connection
@@ -1119,6 +1121,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	if len(parsedUUIDs) == 0 {
 		return summaries, nil
 	}
+	r.applyPendingGuidanceToSummaries(ctx, summaries)
 
 	// Phase 2+3: load item sessions with review verdicts via edge loading.
 	sessions, err := r.client.ItemSession.Query().
@@ -2045,6 +2048,7 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogItemData, change BacklogItemChange) {
 	r.attachItemSessionsForPublish(ctx, item)
 	r.attachStatusEventsForPublish(ctx, item)
+	r.attachPendingGuidance(ctx, item)
 	r.publishItemChangedSnapshot(item, change)
 }
 

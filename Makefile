@@ -191,17 +191,35 @@ else
 endif
 	@echo "✅ stapler-squad built successfully"
 
-# Install web-app pnpm dependencies when pnpm-lock.yaml changes
-web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml
+# Install web-app pnpm dependencies when pnpm-lock.yaml changes. Delegates to
+# shared-node-modules.sh, which symlinks node_modules into a dir shared
+# across every git worktree with the same lockfile (keyed by lockfile +
+# local file:-dependency content) instead of a full per-worktree install --
+# see that script's header and docs/explanation/package-management-evaluation.md.
+# Opt out with STAPLER_SQUAD_SHARED_NODE_MODULES=0.
+#
+# A worktree whose node_modules predates this mechanism is a real directory
+# with its own already-fresh .modules.yaml -- mtime-only prerequisites below
+# would call that "up to date" and never invoke the script, leaving its
+# backfill-migration logic dead. Force a re-run whenever node_modules exists
+# but isn't a symlink into the shared store; the script's own fast path
+# settles back into normal mtime caching once it is (verified via `make -n`
+# against both states).
+NEEDS_NODE_MODULES_MIGRATION := $(shell [ -e web-app/node_modules ] && [ ! -L web-app/node_modules ] && echo force)
+
+web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
 	@echo "Installing web-app pnpm dependencies..."
-	@cd web-app && pnpm install --frozen-lockfile
+	@./scripts/shared-node-modules.sh web-app
+
+.PHONY: FORCE-node-modules-migration
+FORCE-node-modules-migration: ;
 
 # Build Next.js app to web-app/out
 web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
 	@# Guard: re-install if node_modules was wiped by external tools without touching pnpm-lock.yaml
 	@test -d web-app/node_modules/next || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
-		cd web-app && pnpm install --frozen-lockfile; \
+		./scripts/shared-node-modules.sh web-app; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
@@ -318,15 +336,16 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
 # in go.mod together — nothing enforces this automatically; see ADR-001
 # (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
-# v1.1.0 bump (from v1.0.0): go.mod's client pin (clients/go v0.1.0) is
-# unchanged — it's the only tagged Go client version that exists, and it's
-# confirmed empirically compatible with the v1.1.0 server (full integration
-# suite, session/tymux/supervise_integration_test.go, passes against it).
-# v1.1.0 still lacks the Unix-socket control plane -- see
-# docs/bugs/open/BUG-112-*.md and tstapler/tymux#46 -- which only affects
-# DaemonConfig.SocketPath's collision protection, not the TCP-based session
-# I/O this repo's tymux backend actually depends on.
-TYMUX_VERSION ?= v1.1.0
+# v1.3.0 bump (from v1.1.0): go.mod's client pin (clients/go v0.1.0) is
+# unchanged — it's still the only tagged Go client version that exists, and
+# the full integration suite (session/tymux/supervise_integration_test.go)
+# passes against the embedded v1.3.0 server.
+# v1.3.0 fixes BUG-112 gap 1: the Unix-socket control plane
+# (TYMUXD_SOCKET_PATH/--socket-path) is now present in a tagged release —
+# confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
+# binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
+# See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
+TYMUX_VERSION ?= v1.3.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -689,7 +708,7 @@ test-race: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m -p 1 ./session ./session/mux ./session/tmux ./testutil
 	STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS=30 TMUX_BIN=$(CURDIR)/$(BIN_TMUX) $(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -short -timeout=20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux|testutil)$$')
 
-test-integration: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
+test-integration: ensure-tools proto-gen server/web/dist $(GOTESTSUM_BIN) ## Run integration tests (requires real tmux)
 	# ./session and ./session/tmux are the only integration-tagged packages that
 	# fork real tmux servers (server/mcp and session/headless don't touch tmux).
 	# Running the full suite's default per-package parallelism let those two

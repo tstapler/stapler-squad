@@ -8,6 +8,7 @@ import { CTRL_KEY_MAP, ALT_KEY_MAP, SHIFT_KEY_MAP } from "@/lib/terminal/modifie
 
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useFileDrop } from "@/lib/hooks/useFileDrop";
 import { usePublishDeckTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
@@ -1657,17 +1658,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   };
 
   // Upload a batch of files sequentially, inserting each path into the terminal.
-  const handleFilesUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-
-    // Extract File objects before resetting the input — iOS Safari invalidates FileList
-    // items after e.target.value = "" because it uses lazy references.
-    const fileArray = Array.from(fileList);
-
-    // Reset input so the same file(s) can trigger onChange again.
-    e.target.value = "";
-
+  // Shared by the file-picker inputs and drag-and-drop.
+  const uploadFileList = useCallback(async (fileArray: File[]) => {
     const total = fileArray.length;
     setUploadingCount(total);
     setUploadError(null);
@@ -1729,6 +1721,24 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       uploadSuccessTimerRef.current = setTimeout(() => setUploadSuccess(null), 4000);
     }
   }, [sessionId, baseUrl, handleTerminalData, isConnected]);
+
+  const handleFilesUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    // Extract File objects before resetting the input — iOS Safari invalidates FileList
+    // items after e.target.value = "" because it uses lazy references.
+    const fileArray = Array.from(fileList);
+
+    // Reset input so the same file(s) can trigger onChange again.
+    e.target.value = "";
+
+    void uploadFileList(fileArray);
+  }, [uploadFileList]);
+
+  // Drag-and-drop of OS files onto the terminal. Desktop-only and not for read-only sessions.
+  const canAcceptDrop = !readOnly && hasFinePointer;
+  const { isDragOver, dropHandlers } = useFileDrop(canAcceptDrop, uploadFileList);
 
   // Synchronous click handlers — MUST NOT have await before .click() (iOS Safari requirement).
   const handleCameraButtonClick = useCallback(() => {
@@ -2243,7 +2253,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           maxHeight={panelMaxHeight}
         />
       )}
-      <div className={styles.terminal} ref={terminalContainerRef}>
+      <div
+        className={styles.terminal}
+        ref={terminalContainerRef}
+        {...dropHandlers}
+        data-testid="terminal-drop-zone"
+      >
+        {isDragOver && (
+          <div className={styles.dropZoneOverlay} aria-hidden="true" data-testid="drop-zone-overlay">
+            <span className={styles.dropZoneLabel}>Drop to attach</span>
+          </div>
+        )}
         {filterOpen && <TerminalOutputFilter getLines={getFilterLines} onClose={() => setFilterOpen(false)} />}
         {showReconnectBanner && !isHardFailed && (
           <div

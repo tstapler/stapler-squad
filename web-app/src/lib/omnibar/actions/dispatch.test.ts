@@ -286,4 +286,15 @@ describe("dispatchOmnibarAction", () => {
       expect(deps.close).toHaveBeenCalled();
     });
   });
+
+  describe("fan_out", () => {
+    it("dispatchOmnibarAction_should_createFanoutSession_When_fanOutAction", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction({ type: "fan_out", path: "/repo", count: 3, prompt: "add tests" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/repo", fanoutCount: 3, initialPrompt: "add tests", sessionType: "new_worktree" })
+      );
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
 });

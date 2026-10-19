@@ -6,13 +6,23 @@ export interface CDPViewerProps {
   isVisible: boolean;
   onConnected?: () => void;
   onDisconnected?: () => void;
+  /** When true, clicks are reported via onInspectClick instead of being sent to Chrome. */
+  inspectMode?: boolean;
+  /** Called with Chrome-pixel coordinates when the canvas is clicked in inspect mode. */
+  onInspectClick?: (x: number, y: number) => void;
 }
+
+// Approximate hover box (Chrome pixels). The exact element box is only known
+// after a click, so this is a cursor cue, not a selector.
+const HOVER_BOX_W = 120;
+const HOVER_BOX_H = 60;
 
 // CDPViewer connects to a WebSocket that streams JPEG frames (binary messages)
 // and renders them to a canvas. Mouse and keyboard events are forwarded back
 // to the server as CDP Input.dispatch* JSON messages.
-export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnected }: CDPViewerProps) {
+export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnected, inspectMode = false, onInspectClick }: CDPViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
@@ -25,6 +35,13 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   useEffect(() => { onConnectedRef.current = onConnected; }, [onConnected]);
   useEffect(() => { onDisconnectedRef.current = onDisconnected; }, [onDisconnected]);
   useEffect(() => { isVisibleRef.current = isVisible; }, [isVisible]);
+
+  // Leaving inspect mode clears any hover rectangle left on the overlay.
+  const wasInspectingRef = useRef(false);
+  useEffect(() => {
+    if (wasInspectingRef.current && !inspectMode) clearOverlay();
+    wasInspectingRef.current = inspectMode;
+  }, [inspectMode]);
 
   // ------------------------------------------------------------------
   // WebSocket lifecycle
@@ -166,9 +183,33 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   // Mouse handlers
   // ------------------------------------------------------------------
 
+  function clearOverlay() {
+    const overlay = overlayRef.current;
+    overlay?.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
+  }
+
+  function drawHoverBox(x: number, y: number) {
+    const canvas = canvasRef.current;
+    const overlay = overlayRef.current;
+    const ctx = overlay?.getContext('2d');
+    if (!canvas || !overlay || !ctx) return;
+    if (overlay.width !== canvas.width) overlay.width = canvas.width;
+    if (overlay.height !== canvas.height) overlay.height = canvas.height;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    ctx.fillStyle = 'rgba(66, 133, 244, 0.2)';
+    ctx.strokeStyle = 'rgba(66, 133, 244, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.fillRect(x - HOVER_BOX_W / 2, y - HOVER_BOX_H / 2, HOVER_BOX_W, HOVER_BOX_H);
+    ctx.strokeRect(x - HOVER_BOX_W / 2, y - HOVER_BOX_H / 2, HOVER_BOX_W, HOVER_BOX_H);
+  }
+
   function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!isVisibleRef.current) return;
     const { x, y } = getCanvasCoords(e);
+    if (inspectMode) {
+      if (e.button === 0) onInspectClick?.(x, y);
+      return;
+    }
     sendJson({
       method: 'Input.dispatchMouseEvent',
       params: {
@@ -183,7 +224,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   }
 
   function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (!isVisibleRef.current) return;
+    if (!isVisibleRef.current || inspectMode) return;
     const { x, y } = getCanvasCoords(e);
     sendJson({
       method: 'Input.dispatchMouseEvent',
@@ -201,6 +242,10 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!isVisibleRef.current) return;
     const { x, y } = getCanvasCoords(e);
+    if (inspectMode) {
+      drawHoverBox(x, y);
+      return;
+    }
     sendJson({
       method: 'Input.dispatchMouseEvent',
       params: {
@@ -277,7 +322,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   // ------------------------------------------------------------------
 
   function handleTouchStart(e: React.TouchEvent<HTMLCanvasElement>) {
-    if (!isVisibleRef.current) return;
+    if (!isVisibleRef.current || inspectMode) return;
     e.preventDefault();
     const touch = e.touches[0];
     if (!touch) return;
@@ -295,7 +340,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   }
 
   function handleTouchMove(e: React.TouchEvent<HTMLCanvasElement>) {
-    if (!isVisibleRef.current) return;
+    if (!isVisibleRef.current || inspectMode) return;
     e.preventDefault();
     const touch = e.touches[0];
     if (!touch) return;
@@ -313,7 +358,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   }
 
   function handleTouchEnd(e: React.TouchEvent<HTMLCanvasElement>) {
-    if (!isVisibleRef.current) return;
+    if (!isVisibleRef.current || inspectMode) return;
     e.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -338,7 +383,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
         role="img"
         aria-label="Remote browser display"
         tabIndex={0}
-        style={{ width: '100%', height: '100%', display: 'block' }}
+        style={{ width: '100%', height: '100%', display: 'block', cursor: inspectMode ? 'crosshair' : undefined }}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onMouseMove={handleMouseMove}
@@ -348,6 +393,16 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        onMouseLeave={inspectMode ? clearOverlay : undefined}
+      />
+      <canvas
+        ref={overlayRef}
+        data-testid="cdp-inspect-overlay"
+        aria-hidden="true"
+        style={{
+          position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
+          pointerEvents: 'none', display: inspectMode ? 'block' : 'none',
+        }}
       />
       <div
         role="status"

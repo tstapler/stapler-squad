@@ -39,12 +39,13 @@ type SessionArchiver interface {
 // cleanupItemWorktrees/archiveItemWorkSessions — session/ cannot perform
 // those git-worktree operations directly or import server/services/, per
 // this codebase's package-cycle constraint); wired via SetWorktreeCleaner
-// from server/dependencies.go. Used by internal transition paths
-// (transitionBouncingItemToDone, the PR-merge-detected done path) that call
-// the storage layer's TransitionBacklogItemStatus directly and would
-// otherwise rely solely on the 60s reconcileTerminalItemSessions sweep to
-// eventually notice and clean up — this makes cleanup synchronous with the
-// transition itself, matching the manual RPC path's existing behavior.
+// from server/dependencies.go. Used synchronously by internal transition
+// paths (transitionBouncingItemToDone, the PR-merge-detected done path) right
+// after a terminal transition, and periodically by the
+// cleanup_terminal_worktrees detector (reconcileTerminalItemWorktrees) in
+// ReconcileStuck as a safety net for items that reached done/archived
+// without that synchronous call firing (pre-existing terminal items, a
+// race/crash mid-transition).
 type WorktreeCleaner interface {
 	// CleanupTerminalItem is best-effort: internal failures are logged, never
 	// returned, matching the RPC call site's existing contract.
@@ -142,5 +143,47 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 	}
 	if processed > 0 {
 		log.InfoLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work/review session(s) across %d terminal item(s)", processed, len(items))
+	}
+}
+
+// reconcileTerminalItemWorktrees is the cleanup_terminal_worktrees safety-net detector:
+// it finds every backlog item already in done/archived status and re-runs
+// cleanupTerminalItemSync for it. This exists because, unlike session archival (see
+// reconcileTerminalItemSessions above), worktree cleanup previously had no periodic
+// re-scan at all — WorktreeCleaner.CleanupTerminalItem was only ever invoked
+// synchronously, on specific internal transition paths (transitionBouncingItemToDone,
+// the PR-merge-detected done path, the manual archive RPC). An item that reached
+// done/archived through any other path — a pre-existing terminal item from before
+// those call sites existed, or a race/crash between the transition committing and the
+// synchronous cleanup call running — would otherwise keep its worktree on disk forever.
+//
+// Deliberately a second, independent query over the same done/archived item set
+// reconcileTerminalItemSessions already queries, rather than merging the two into one
+// detector: keeps this change additive (no risk of altering reconcileTerminalItemSessions's
+// existing behavior) at the cost of one extra ListBacklogItems call per tick, which is
+// cheap relative to the git/filesystem work CleanupTerminalItem itself does.
+//
+// Idempotent and cheap to re-run every tick, by the same reasoning as
+// reconcileTerminalItemSessions: cleanupTerminalItemSync no-ops when no WorktreeCleaner is
+// wired, and CleanupTerminalItem's own git.Cleanup() call is itself a no-op (logged at
+// Info, not Warn/Error — verified in session/git/native/worktree_remove.go's
+// RemoveWorktree) when the worktree directory is already gone from disk, so repeat runs
+// over an already-cleaned item do not escalate to warning-level log spam.
+func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Context) {
+	if l.getWorktreeCleaner() == nil {
+		return
+	}
+	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
+		Statuses: []string{string(BacklogStatusDone), string(BacklogStatusArchived)},
+	})
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees ListBacklogItems error: %v", err)
+		return
+	}
+	for _, item := range items {
+		l.cleanupTerminalItemSync(ctx, item.ID)
+	}
+	if len(items) > 0 {
+		log.InfoLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees: re-swept worktree cleanup for %d terminal item(s)", len(items))
 	}
 }

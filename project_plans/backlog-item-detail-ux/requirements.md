@@ -165,3 +165,87 @@ All existing constraints in requirements.md apply. Additional:
   for anything beyond the single primary action.
 - The PR badge must use `GitHubBadge` (already used in PullRequestSection) or equivalent,
   not invent a new PR chip visual language.
+
+---
+
+## Phase 3 Follow-up: Exploratory UX Audit Post Phase 1 + Phase 2 (2026-10-17)
+
+**Source**: Post-implementation exploratory testing request. Phase 1 (progressive disclosure,
+LifecycleSummary) and Phase 2 (ActionsSection reorder, PR badge in header, VCS auto-expand)
+are fully implemented. A fresh exploratory audit is requested to find remaining confusion
+points and produce tested alternative presentations.
+
+### New Problem Statement
+
+After Phase 1 + Phase 2 implementation, `BacklogItemDetail.tsx` has improved progressive
+disclosure and action reachability. However, structural issues remain:
+
+1. **AcCriteriaList is always-expanded and outside the CollapsibleGroup** — For items
+   with 5+ acceptance criteria, this inserts a long always-visible list between PlanningSection
+   and the CollapsibleGroup headers. Users must scroll through all criteria to reach section
+   headers like Sessions or Description.
+
+2. **Fifteen sections in the CollapsibleGroup** — Even collapsed, displaying 15 section
+   accordions in a vertical list requires users to visually scan a long header stack.
+   No grouping cues distinguish "decision-making" sections (Reviewing, PullRequest) from
+   "reference" sections (Description, PlanArtifacts) from "audit trail" sections (Sessions,
+   WorkflowHistory, ProgressHistory, ActivityLog).
+
+3. **Four overlapping history sections** — Sessions, WorkflowHistory, ProgressHistory, and
+   ActivityLog each present historical/audit data in different formats. Users don't have a
+   clear mental model for which answers "what happened last time?" or "why did this fail?"
+
+4. **DescriptionSection defaults collapsed** — Item description is the most fundamental
+   content for understanding an unfamiliar item, yet it defaults to collapsed.
+
+5. **LifecycleSummary badge accumulation** — For a non-default item (category + custom
+   pipeline + skip-planning + rework-cap-override + prUrl set), the header shows 6+ badges.
+
+### New Success Metrics
+
+- A user opening an unfamiliar item's detail panel can identify its lifecycle state AND
+  understand what the item is about without expanding more than 1 section.
+- The CollapsibleGroup's section list is navigable: users can locate any section in under
+  3 seconds of scanning (< 8 visible section headers, or grouped/labeled navigation).
+- "What happened last time?" is answerable from a single section or a clearly-labeled
+  group without knowing which of Sessions/WorkflowHistory/ProgressHistory/ActivityLog
+  to open.
+- AcCriteriaList scroll length does not prevent reaching CollapsibleGroup section headers
+  without scrolling (criteria list is either collapsible or moved into the group).
+
+### New Scope
+
+**In Scope (Phase 3)**:
+- Exploratory audit: enumerate all currently-visible sections per status and identify
+  specific confusion points from first-principles use of the live component.
+- Design and document 3 alternative layouts (A: flatten+filter, B: status-aware, C: tabs).
+- Pick a recommended layout based on complexity-vs-clarity tradeoff.
+- Implement the recommended alternative (or the highest-value subset of it).
+- Make AcCriteriaList collapsible (or move it into the CollapsibleGroup).
+- Group or consolidate the 4 audit/history sections into a single entry point.
+- Flip DescriptionSection to default-expanded.
+- Write E2E tests covering the changed section ordering and default-expanded states.
+
+**Out of Scope**:
+- Changing the LifecycleSummary badge accumulation (separate styling concern).
+- Adding new backend data to any section (display-layer changes only).
+- ManualOverrideSection visibility/placement — low-frequency power-user tool; leave as-is
+  unless the exploratory audit surfaces it as a real friction point.
+
+### New Constraints
+
+All existing Phase 1/Phase 2 constraints apply. Additional:
+- Any new section grouping must remain compatible with `useSectionExpandState` persistence
+  (expand state per item per section key stored in localStorage).
+- Do not introduce nested CollapsibleGroups — the current single Radix Accordion root
+  (ADR-027) provides roving-tabindex keyboard nav; nesting would break that contract.
+  Use a single flattened group with optional visual separators/headers between groups.
+
+### Open Questions (Phase 3)
+
+- Should Sessions, WorkflowHistory, ProgressHistory, and ActivityLog be merged into
+  one collapsible section with internal tab navigation, or remain separate sections
+  with a labeled visual grouping line between them? → Phase 3 research.
+- Should AcCriteriaList move into the CollapsibleGroup (collapsible) or remain
+  always-visible with a "collapse long lists" affordance (e.g. show N, expand to all)?
+  → Phase 3 research / dogfooding.

@@ -1819,6 +1819,13 @@ message UserPR {
   string                    host                 = 23; // never empty; "github.com" for github.com
   string                    account_login        = 24; // login name, never a token
   bool                      unresolved_threads_truncated = 25; // true when count was capped at 50
+  string                    node_id              = 26; // GitHub global node ID; empty when unknown
+  string                    body                 = 27;
+  repeated string           labels               = 28;
+  int32                     additions            = 29;
+  int32                     deletions            = 30;
+  int32                     changed_files        = 31;
+  repeated string           requested_reviewer_logins = 32;
 }
 
 // FailingCheck is a failed CheckRun or legacy StatusContext on a PR head.

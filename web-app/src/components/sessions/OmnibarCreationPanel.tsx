@@ -16,8 +16,9 @@ import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
   collapsibleContent, footer, button as buttonClass, buttonSecondary, buttonPrimary,
-  error as errorClass,
+  error as errorClass, backlogButton,
 } from "./Omnibar.css";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import * as styles from "./OmnibarCreationPanel.css";
 import { FileChipList, type AttachedFile } from "./FileChipList";
 import { RadioGroup } from "@/components/ui/RadioGroup";
@@ -26,6 +27,7 @@ import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
 import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import { MAX_FANOUT_VARIANTS } from "@/lib/hooks/useFanoutService";
 import { OmnibarPresetList } from "./OmnibarPresetList";
 import { ProgramProbeSection, PROGRAM_PROBE_STATUS_ID } from "./ProgramProbeSection";
 
@@ -149,6 +151,8 @@ export interface OmnibarCreationPanelProps {
   setFormField: <K extends keyof OmnibarFormState>(key: K, value: OmnibarFormState[K]) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  /** Opens backlog-item compose mode; when set, a footer button is shown beside Cancel/Create Session. */
+  onCreateBacklog?: () => void;
   worktrees: WorktreeEntry[];
   isWorktreesLoading?: boolean;
   /** Set when the worktree list request failed or timed out — shown as a hint. */
@@ -210,6 +214,7 @@ export function OmnibarCreationPanel({
   setFormField,
   onSubmit,
   onCancel,
+  onCreateBacklog,
   worktrees,
   isWorktreesLoading = false,
   worktreesError = null,
@@ -900,6 +905,33 @@ export function OmnibarCreationPanel({
           )}
         </div>
 
+        {/* Parallel fan-out: same prompt across N isolated worktree sessions (new_worktree only) */}
+        {sessionType === "new_worktree" && (
+          <div className={field}>
+            <label className={labelClass} htmlFor="omnibar-fanout-count">
+              Run as variants <span style={{ fontWeight: "normal", opacity: 0.6 }}>(1 = single session, max {MAX_FANOUT_VARIANTS})</span>
+            </label>
+            <input
+              id="omnibar-fanout-count"
+              data-testid="omnibar-fanout-count"
+              type="number"
+              min={1}
+              max={MAX_FANOUT_VARIANTS}
+              className={fieldInput}
+              value={formState.fanoutCount}
+              onChange={(e) => {
+                const n = Math.max(1, Math.min(MAX_FANOUT_VARIANTS, Math.floor(Number(e.target.value)) || 1));
+                setFormField("fanoutCount", n);
+              }}
+            />
+            {formState.fanoutCount >= 2 && (
+              <span className={hint} role="status" data-testid="omnibar-fanout-cost-warning">
+                {formState.fanoutCount} sessions will run simultaneously — monitor cost in Insights
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Presets — hand-edited, shareable launch shortcuts from launcher-presets.json.
             Placed above Advanced Options so it's visible without an extra click. */}
         <div className={collapsible}>
@@ -1018,6 +1050,13 @@ export function OmnibarCreationPanel({
 
       {/* Footer */}
       <div className={footer}>
+        {onCreateBacklog && (
+          <OmnibarBacklogButton
+            onClick={onCreateBacklog}
+            disabled={isSubmitting}
+            className={`${buttonClass} ${buttonSecondary} ${backlogButton}`}
+          />
+        )}
         <button type="button" className={`${buttonClass} ${buttonSecondary}`} onClick={onCancel}>
           Cancel
         </button>

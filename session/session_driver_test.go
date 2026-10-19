@@ -55,6 +55,8 @@ const trustDialogText = `Quick safety check: Is this a project you created or on
 ❯ 1. Yes, I trust this folder
   2. No, exit`
 
+func (m *stuckDialogProcessManager) WireLaunch(LaunchSpec)               {}
+func (m *stuckDialogProcessManager) AppendLaunchEnv(...string)           {}
 func (m *stuckDialogProcessManager) Start(dir string) error              { return nil }
 func (m *stuckDialogProcessManager) RestoreWithWorkDir(dir string) error { return nil }
 func (m *stuckDialogProcessManager) Close() error                        { return nil }
