@@ -181,13 +181,10 @@ func TestInjectedPostToolUseGroup_ShouldHaveNoMatcher_SoScheduleWakeupReceiptsAr
 	}
 }
 
-func TestScrape_ShouldCountAnswerDeliveryStates_WhenSentIndeterminateThenFinished(t *testing.T) {
+func TestScrape_ShouldCountUnconfirmed_WhenWriteIsIndeterminate(t *testing.T) {
 	d := NewGuidanceAckDetector(nil, nil, nil, nil)
-	sent := map[string]string{"state": "sent"}
-	unconfirmed := map[string]string{"state": "unconfirmed"}
-	beforeSent, beforeUnc := counterValue(t, metricGuidanceAnswerState, sent), counterValue(t, metricGuidanceAnswerState, unconfirmed)
+	before := counterValue(t, metricGuidanceUnconfirmed, nil)
 	d.Sent(SentDelivery{RowID: "r1"})
 	d.Sent(SentDelivery{RowID: "r2", Indeterminate: true})
-	assert.EqualValues(t, 2, counterValue(t, metricGuidanceAnswerState, sent)-beforeSent)
-	assert.EqualValues(t, 1, counterValue(t, metricGuidanceAnswerState, unconfirmed)-beforeUnc)
+	assert.EqualValues(t, 1, counterValue(t, metricGuidanceUnconfirmed, nil)-before)
 }

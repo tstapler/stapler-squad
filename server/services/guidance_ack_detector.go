@@ -81,9 +81,8 @@ func (a *GuidanceAckDetector) SetNotes(n ackNotes) { a.notes = n }
 
 // Sent starts tracking d. An indeterminate write is Unconfirmed at once.
 func (a *GuidanceAckDetector) Sent(d SentDelivery) {
-	recordAnswerDelivery("sent")
 	if d.Indeterminate {
-		recordAnswerDelivery("unconfirmed")
+		recordAnswerUnconfirmed()
 	}
 	a.track(d)
 }
@@ -211,7 +210,7 @@ func (a *GuidanceAckDetector) decide(ctx context.Context, e ackEntry) {
 		a.mu.Lock()
 		if live, ok := a.tracked[e.RowID]; ok {
 			if !live.unconfirmed {
-				recordAnswerDelivery("unconfirmed") // an indeterminate send already counted at Sent
+				recordAnswerUnconfirmed() // an indeterminate send already counted at Sent
 			}
 			live.decided, live.unconfirmed, live.lastSample = true, true, a.now()
 		}
@@ -232,7 +231,6 @@ func (a *GuidanceAckDetector) finish(ctx context.Context, e ackEntry, state doma
 		log.Warn("[AckDetector] delivery state not recorded", "row", e.RowID, "state", state, "applied", applied, "err", err)
 		return
 	}
-	recordAnswerDelivery(string(state))
 	a.moveCards(e.RowID, state)
 }
 

@@ -16,12 +16,12 @@ import (
 )
 
 // notification_quality_metrics.go holds the paired quality metrics of Epic 5
-// (requirements.md): reopen_after_action_total, the delivery-state counter, and
+// (requirements.md): reopen_after_action_total, the Unconfirmed counter, and
 // the ScheduleWakeup receipt counter behind the Epic 4 cost outcome.
 
 const (
 	metricReopenAfterAction    = "reopen_after_action_total"
-	metricGuidanceAnswerState  = "guidance_answer_delivery_total"
+	metricGuidanceUnconfirmed  = "guidance_answer_unconfirmed_total"
 	metricScheduleWakeupCalls  = "agent_schedule_wakeup_calls_total"
 	scheduleWakeupTool         = "ScheduleWakeup"
 	scheduleWakeupReceiptEvent = "schedule_wakeup_receipt"
@@ -33,15 +33,18 @@ const (
 	reopenWindow = 60 * time.Second
 )
 
-func counterOnce(name, desc string) func() metric.Int64Counter {
-	return sync.OnceValue(func() metric.Int64Counter {
+// counterNamed resolves the instrument on every use (the SDK returns the same
+// one per meter), so a test that swaps the meter provider is never stuck with a
+// counter bound to an earlier one.
+func counterNamed(name, desc string) func() metric.Int64Counter {
+	return func() metric.Int64Counter {
 		c, err := telemetry.GetMeter().Int64Counter(name, metric.WithDescription(desc))
 		if err != nil {
 			log.Error("services: failed to register "+name, "error", err)
 			return nil
 		}
 		return c
-	})
+	}
 }
 
 func addOne(c metric.Int64Counter, attrs ...attribute.KeyValue) {
@@ -51,11 +54,11 @@ func addOne(c metric.Int64Counter, attrs ...attribute.KeyValue) {
 }
 
 var (
-	reopenCounter = counterOnce(metricReopenAfterAction,
+	reopenCounter = counterNamed(metricReopenAfterAction,
 		"Operator opened a session's terminal within 60s of an applied inline answer to it")
-	answerDeliveryCounter = counterOnce(metricGuidanceAnswerState,
-		"Keystroke answers by delivery outcome: sent, acknowledged, failed, unconfirmed")
-	scheduleWakeupCounter = counterOnce(metricScheduleWakeupCalls,
+	answerUnconfirmedCounter = counterNamed(metricGuidanceUnconfirmed,
+		"Keystroke answers that entered the Unconfirmed sub-state (indeterminate write or no acknowledgement at 60s)")
+	scheduleWakeupCounter = counterNamed(metricScheduleWakeupCalls,
 		"ScheduleWakeup PostToolUse receipts by backlog role")
 )
 
@@ -121,10 +124,9 @@ func (t *reopenTracker) attached(ids ...string) {
 	}
 }
 
-// recordAnswerDelivery counts one keystroke-answer delivery state.
-func recordAnswerDelivery(state string) {
-	addOne(answerDeliveryCounter(), attribute.String("state", state))
-}
+// recordAnswerUnconfirmed counts one answer entering Unconfirmed; the other
+// delivery states are already in guidance_answer_delivery_total{route,state}.
+func recordAnswerUnconfirmed() { addOne(answerUnconfirmedCounter()) }
 
 // scheduleWakeupRoles resolves a session's backlog role for the receipt counter.
 type scheduleWakeupRoles struct{ lookup itemSessionLookup }
