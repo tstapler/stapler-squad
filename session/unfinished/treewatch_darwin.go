@@ -5,7 +5,6 @@ package unfinished
 import (
 	"errors"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/tstapler/stapler-squad/internal/fsevents"
@@ -48,20 +47,7 @@ func (w *fseventsTreeWatcher) Add(repoRoot string) error {
 		Paths:     []string{real},
 		SinceWhen: fsevents.SinceNow,
 		OnEvents: func(evs []fsevents.Event) {
-			// One onChange per batch (a build or checkout delivers thousands).
-			scope, relevant := gitEventRepoRoot, false
-			for _, e := range evs {
-				if e.Flags.NeedsRescan() {
-					scope, relevant = gitEventAllWorktrees, true
-					break
-				}
-				// .git is already covered (with finer classification) by fsnotifyLoop.
-				if e.Flags&fsevents.HistoryDone != 0 || strings.HasPrefix(e.Path+string(filepath.Separator), gitPrefix) {
-					continue
-				}
-				relevant = true
-			}
-			if relevant {
+			if scope, relevant := batchScope(gitPrefix, evs); relevant {
 				w.onChange(repoRoot, scope)
 			}
 		},

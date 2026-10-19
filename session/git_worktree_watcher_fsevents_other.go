@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package session
 
@@ -7,6 +7,6 @@ import (
 	"sync"
 )
 
-// startTreeWatch is a no-op off darwin: the periodic fingerprint loop remains
-// the working-tree signal (inotify on Linux has no cheap recursive equivalent).
+// startTreeWatch is a no-op off darwin and Linux: the periodic fingerprint loop remains
+// the working-tree signal.
 func (d *WorktreeChangeDetector) startTreeWatch(context.Context, *sync.WaitGroup) {}

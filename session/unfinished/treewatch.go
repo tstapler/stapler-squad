@@ -5,13 +5,18 @@ import (
 	"errors"
 	"time"
 
+	"path/filepath"
+	"strings"
+
+	"github.com/tstapler/stapler-squad/internal/fsevents"
 	"github.com/tstapler/stapler-squad/log"
 )
 
 // treeWatcher reports working-tree changes under a repo root. It exists
 // because the fsnotify watch covers only <repo>/.git, so an edit that never
-// touches .git is otherwise noticed only by the backstop tick. Implemented on
-// darwin via FSEvents (treewatch_darwin.go); nil elsewhere.
+// touches .git is otherwise noticed only by the backstop tick. Implemented via
+// FSEvents on darwin (treewatch_darwin.go) and recursive inotify on Linux
+// (treewatch_linux.go); nil elsewhere.
 type treeWatcher interface {
 	Add(repoRoot string) error
 	Remove(repoRoot string)
@@ -77,4 +82,22 @@ func (s *Scanner) installTreeWatcher(ctx context.Context, tw treeWatcher) {
 		<-ctx.Done()
 		tw.Close()
 	})
+}
+
+// batchScope folds one event batch into a single scope for repoRoot (a build
+// or checkout delivers thousands of events). .git is skipped: fsnotifyLoop
+// already covers it with finer classification. relevant is false when nothing
+// in the batch warrants invalidation.
+func batchScope(gitPrefix string, evs []fsevents.Event) (scope gitEventScope, relevant bool) {
+	scope = gitEventRepoRoot
+	for _, e := range evs {
+		if e.Flags.NeedsRescan() {
+			return gitEventAllWorktrees, true
+		}
+		if e.Flags&fsevents.HistoryDone != 0 || strings.HasPrefix(e.Path+string(filepath.Separator), gitPrefix) {
+			continue
+		}
+		relevant = true
+	}
+	return scope, relevant
 }
