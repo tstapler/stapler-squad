@@ -1375,3 +1375,22 @@ func TestStatFile_ShouldReportNotFoundDirAndTooLarge_Without_Content(t *testing.
 	_, err = realFileService(root).StatFile(context.Background(), connect.NewRequest(&sessionv1.StatFileRequest{}))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
+
+func TestListFiles_ShouldReturnOnlyInTreeRelativeSymlinkTargets_And_NeverHostPaths(t *testing.T) {
+	dir, outside := newResolverFixture(t)
+	got, err := realListFiles(t, dir, "")
+	require.NoError(t, err)
+	targets := map[string]string{}
+	for _, f := range got.Files {
+		if f.IsSymlink {
+			targets[f.Name] = f.SymlinkTarget
+		}
+	}
+
+	assert.Equal(t, "CLAUDE.md", targets["AGENTS.md"], "an in-tree relative target is useful and safe")
+	assert.Empty(t, targets["leak"], "an absolute host path never reaches the wire")
+	assert.Empty(t, targets["leak_rel"], "a ../ escape is hidden too")
+	for name, target := range targets {
+		assert.NotContains(t, target, outside, name)
+	}
+}

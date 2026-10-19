@@ -171,7 +171,7 @@ func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				return finishResolved(append(next, pending...), viaLink), viaLink, nil
 			}
-			return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat path"))
+			return "", false, internalIOError("resolve_lstat", ResolvedPath(nextPath), err, "failed to stat path")
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			cur = next
@@ -186,7 +186,7 @@ func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool
 		viaLink = true
 		target, err := root.Readlink(nextPath)
 		if err != nil {
-			return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read symlink"))
+			return "", false, internalIOError("readlink", ResolvedPath(nextPath), err, "failed to read symlink")
 		}
 		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
 			return "", false, symlinkDenied(nextPath, target)
@@ -283,6 +283,7 @@ func openRootError(err error) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return connect.NewError(connect.CodeNotFound, errors.New("working directory not found"))
 	}
+	log.Error("file I/O failed", "op", "open_root", "err", err)
 	return connect.NewError(connect.CodeInternal, errors.New("failed to open working directory"))
 }
 

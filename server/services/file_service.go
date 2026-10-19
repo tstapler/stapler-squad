@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,6 +22,7 @@ import (
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const (
@@ -158,7 +160,7 @@ func (fs *FileService) ListFiles(
 			if os.IsPermission(readErr) {
 				return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", requestedPath))
 			}
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read directory: %w", readErr))
+			return nil, internalIOError("read_dir", rr.Resolved, readErr, "failed to read directory")
 		}
 		if stat, statErr := rr.Root.Stat(rr.Resolved); statErr == nil {
 			fs.dirCache.Put(fullPath, entries, stat.ModTime())
@@ -193,7 +195,7 @@ func (fs *FileService) ListFiles(
 		if isSymlink {
 			target, readErr := rr.Root.Readlink(path.Join(string(rr.Resolved), name))
 			if readErr == nil {
-				symlinkTarget = target
+				symlinkTarget = publicLinkTarget(target)
 			}
 			// Symlinked directories are reported as non-expandable (isDir=false).
 			isDir = false
@@ -354,7 +356,8 @@ func (fs *FileService) SearchFiles(
 
 	files, truncated, totalMatches, walkErr := searchFilesInWorktree(ctx, basePath, req.Msg.Query, req.Msg.IncludeIgnored, maxResults, cachedPatterns)
 	if walkErr != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search failed: %w", walkErr))
+		log.Error("file name search failed", "err", walkErr)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("search failed"))
 	}
 
 	return connect.NewResponse(&sessionv1.SearchFilesResponse{
@@ -764,4 +767,14 @@ func rewriteRelativeHTMLLinks(html, sessionID, dir string) string {
 
 		return attr + eq + openQuote + newValue + closeQuote
 	})
+}
+
+// publicLinkTarget keeps a link target only when it is relative and stays inside the tree;
+// an absolute or escaping target would put a host path on the wire.
+func publicLinkTarget(target string) string {
+	clean := path.Clean(filepath.ToSlash(target))
+	if filepath.IsAbs(target) || strings.HasPrefix(clean, "/") || clean == ".." || strings.HasPrefix(clean, "../") {
+		return ""
+	}
+	return target
 }
