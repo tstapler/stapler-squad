@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WindowedFile } from "@/lib/files/windowedFile";
 import { useWindowedState } from "@/lib/files/useWindowedState";
 import { bucketBytes } from "@/lib/files/analytics/events";
@@ -50,9 +50,12 @@ export function WindowedFileView({ sessionId, path, source, language, accessible
   const transport = useFileTransport();
   const latency = useOpenLatency();
   const [current, setCurrent] = useState<{ file: WindowedFile; id: number } | null>(null);
+  // The file the open timer was armed for: in the commit where `path` changes, `state` still describes the previous file.
+  const armedFor = useRef<WindowedFile | null>(null);
   useEffect(() => {
     latency.restart();
     const f = new WindowedFile(transport, { sessionId, path }, source.size);
+    armedFor.current = f;
     setCurrent({ file: f, id: ++instances });
     return () => { f.dispose(); setCurrent(null); };
   }, [transport, sessionId, path, source.size, reloadKey, latency]);
@@ -62,8 +65,8 @@ export function WindowedFileView({ sessionId, path, source, language, accessible
   const { opened } = state;
   const { tier, size } = source;
   useEffect(() => {
-    if (opened) latency.finish({ size: bucketBytes(size), degraded: "false", tier });
-  }, [opened, latency, tier, size]);
+    if (opened && file === armedFor.current) latency.finish({ size: bucketBytes(size), degraded: "false", tier });
+  }, [opened, file, latency, tier, size]);
   const fallBack = state.demoted || state.openFailed;
   useEffect(() => { if (fallBack) onDemoted?.(); }, [fallBack, onDemoted]);
 

@@ -48,4 +48,23 @@ describe("files.perf.open_ms", () => {
     await waitFor(() => expect(opens(h)).toHaveLength(1), { timeout: 3000 });
     expect(opens(h)[0].labels).toMatchObject({ size: "gt1m", degraded: "false", tier: "t1" });
   });
+  it("openLatency_should_NotEmitForTheNewFile_When_PathChangesOnAMountedWindowedView", async () => {
+    const base = createVirtualRangeTransport({ lines: 200_000, size: 5 * 1024 * 1024 });
+    let releaseB: () => void = () => undefined;
+    const gateB = new Promise<void>((r) => { releaseB = r; });
+    const t = { ...base, size: base.size, read: async (ref: { path: string }, ...rest: Parameters<typeof base.read> extends [unknown, ...infer R] ? R : never) => { if (ref.path === "b.log") await gateB; return base.read(ref as never, ...(rest as never)); } };
+    const h = createFilesTestHarness({ sessionId: "s1", transport: t as never });
+    const source = (size: number) => ({ kind: "windowed" as const, tier: "t1" as const, size, windowStartLine: 1, analysis: "ready" as const });
+    const view = render(<FileContentViewer sessionId="s1" filePath="a.log" baseUrl="" source={source(base.size)} />, { wrapper: h.wrapper });
+    await waitFor(() => expect(opens(h)).toHaveLength(1), { timeout: 3000 });
+
+    view.rerender(<FileContentViewer sessionId="s1" filePath="b.log" baseUrl="" source={source(base.size + 1)} />);
+    await frame();
+    await frame();
+
+    expect(opens(h)).toHaveLength(1); // b.log has not painted yet: no event, certainly not a ~0 ms one
+    releaseB();
+    await waitFor(() => expect(opens(h)).toHaveLength(2), { timeout: 3000 });
+    expect(opens(h)[1].durationMs).toBeGreaterThan(0);
+  });
 });
