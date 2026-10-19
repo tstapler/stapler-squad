@@ -38,6 +38,10 @@ type tymuxGRPCSession struct {
 	// and nothing here assumes single-threaded callers.
 	mu sync.RWMutex
 
+	// command is the program Start() asks tymuxd to spawn, set via SetCommand
+	// before Start(). Empty means tymuxd defaults to $SHELL.
+	command string
+
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
 	// (v1.0, non-split) pane, cached from CreateSession/ReviveSession's
 	// response — GetSessionIdentifier() needs no RPC (architecture.md §1).
@@ -306,14 +310,27 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := validateWorkDir(dir); err != nil {
 		return err
 	}
+	s.mu.RLock()
+	command := s.command
+	s.mu.RUnlock()
 	resp, err := s.transport.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{
-		Name: dir,
-		Cwd:  dir,
+		Name:    dir,
+		Command: command,
+		Cwd:     dir,
 	}))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
 	return s.cacheFromSession(resp.Msg)
+}
+
+// SetCommand records the program Start() will ask tymuxd to spawn. Call
+// it before Start(); not consulted by RestoreWithWorkDir (a revived
+// session already has its process running).
+func (s *tymuxGRPCSession) SetCommand(command string) {
+	s.mu.Lock()
+	s.command = command
+	s.mu.Unlock()
 }
 
 // RestoreWithWorkDir reconciles this session against tymuxd after a
@@ -607,14 +624,16 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	return CellsToSGR(snap.GetGrid())
 }
 
-// CapturePaneContentRaw returns the live screen's plain text (Cell.text
-// only, no ANSI) — Task 2.2.2a.
+// CapturePaneContentRaw returns the live screen with SGR preserved, as the
+// ProcessManager contract (and the tmux backend) promises: the web terminal
+// paints its first frame from this, so plain text left panes uncolored until
+// live output arrived.
 func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
 		return "", err
 	}
-	return rowsToPlainText(snap.GetGrid()), nil
+	return CellsToSGR(snap.GetGrid())
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument

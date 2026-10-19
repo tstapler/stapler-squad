@@ -63,3 +63,44 @@ func TestLoadUserThemes_should_CapFilesAndTokens(t *testing.T) {
 	got := sanitizeUserTheme("big", userTheme{Tokens: tokens})
 	assert.LessOrEqual(t, len(got.Tokens), maxThemeTokens)
 }
+
+func TestMergeUserThemes_should_PreferLaterDirOnSameID(t *testing.T) {
+	global, workspace := t.TempDir(), t.TempDir()
+	put := func(dir, name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
+	}
+	put(global, "shared.json", `{"label":"Global"}`)
+	put(global, "only-global.json", `{}`)
+	put(workspace, "shared.json", `{"label":"Workspace"}`)
+	put(workspace, "only-ws.json", `{}`)
+
+	got := mergeUserThemes(global, workspace)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, []string{"only-global", "only-ws", "shared"}, []string{got[0].ID, got[1].ID, got[2].ID})
+	assert.Equal(t, "Workspace", got[2].Label)
+}
+
+func TestMergeUserThemes_should_CapTotalAndSkipDuplicateDirs(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for i := 0; i < maxUserThemes; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(a, fmt.Sprintf("a%03d.json", i)), []byte(`{}`), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(b, fmt.Sprintf("b%03d.json", i)), []byte(`{}`), 0o600))
+	}
+	assert.Len(t, mergeUserThemes(a, b), maxUserThemes)
+	assert.Len(t, mergeUserThemes(a, a+string(os.PathSeparator)), maxUserThemes)
+}
+
+func TestGlobalThemesDirFor_should_BeEmpty_When_Isolated(t *testing.T) {
+	assert.Empty(t, globalThemesDirFor(true))
+}
+
+func TestGlobalThemesDirFor_should_EndInSharedThemes_When_NotIsolated(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".stapler-squad", "themes"), globalThemesDirFor(false))
+}
+
+func TestGlobalThemesDir_should_BeEmpty_UnderGoTest(t *testing.T) {
+	assert.Empty(t, globalThemesDir(), "go test binaries are isolated (config.IsTestMode)")
+}

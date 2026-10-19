@@ -144,6 +144,11 @@ type BacklogLifecycleListener struct {
 	prPendingCheckerMu      sync.RWMutex
 	prPendingCheckerFactory func(repoPath string) prPendingChecker
 
+	// ciRerunner/ciReruns back maybeFlakyCheckRerun (ci_flaky_rerun.go); a nil
+	// ciRerunner disables the free-rerun shortcut.
+	ciRerunner ciRerunClient
+	ciReruns   ciRerunLedger
+
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
 	prCreatorMu      sync.RWMutex
 	prCreatorFactory func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator
@@ -701,8 +706,8 @@ func (l *BacklogLifecycleListener) getSessionArchiver() SessionArchiver {
 // worktrees and archive work/review sessions when an internal transition
 // path (not the manual RPC) drives an item straight to a terminal status.
 // Optional — nil means those paths fall back to the 60s
-// reconcileTerminalItemSessions safety-net sweep, same as before this was
-// wired.
+// reconcileTerminalItemWorktrees safety-net sweep (cleanup_terminal_worktrees
+// detector in ReconcileStuck), same as before this was wired.
 func (l *BacklogLifecycleListener) SetWorktreeCleaner(c WorktreeCleaner) {
 	l.worktreeCleanerMu.Lock()
 	defer l.worktreeCleanerMu.Unlock()
@@ -818,6 +823,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine, livenessEn
 		shutdownCtx:             ctx,
 		shutdownCancel:          cancel,
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
+		ciRerunner:              ghCIRerunClient{},
 		prCreatorFactory:        defaultPRCreatorFactory,
 		branchReconciler:        git.MergeMainIntoWorktree,
 		orphanedPRFinder:        defaultOrphanedPRFinder,
@@ -1472,6 +1478,17 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileTerminalItemSessions(ctx)
 	})
 
+	// Safety-net sweep: re-run worktree cleanup for items already in done/archived
+	// status whose synchronous WorktreeCleaner call (transitionBouncingItemToDone, the
+	// PR-merge-detected done path, the manual archive RPC) was missed or never fired
+	// (pre-existing terminal items from before those call sites existed, or a
+	// race/crash mid-transition). Unlike archive_terminal_sessions above, worktree
+	// cleanup previously had no periodic re-scan at all. See
+	// reconcileTerminalItemWorktrees' doc comment. No-op when unwired.
+	l.runStuckDetector("cleanup_terminal_worktrees", &okNames, &panickedNames, func() {
+		l.reconcileTerminalItemWorktrees(ctx)
+	})
+
 	// Self-heal items whose real, cached PR reference (prNumber/prUrl) has
 	// drifted out of ReconcilePRPending's status=="pr_pending" view — see
 	// FindDriftedPRItems' doc comment. Registered immediately before
@@ -2081,14 +2098,27 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 //	abandoned_review   -> anchor {review}               resolve when status not in anchor
 //	stale_work         -> anchor {in_progress}          resolve when status not in anchor
 //	bouncing           -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
+//	autonomous_stuck   -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
 //	orphaned_triage    -> anchor {idea}                 resolve when status not in anchor
+//	verdict_undelivered -> anchor {review}              resolve when status not in anchor
 //
-// autonomous_stuck, push_failed, and rework_cap have no non-terminal anchor
-// at all — before the item reaches done/archived they stay open, relying
-// entirely on the blanket terminal rule above (or, for autonomous_stuck and
-// push_failed, their own faster event-driven resolution paths — see
-// resolveAutonomousStuck in server/services/autonomous_orchestration_service.go
-// and resolveToPRPending respectively — which typically resolve the row
+// autonomous_stuck shares bouncing's two-status anchor rather than a single
+// {in_progress} one: onAutonomousDriverComplete's SessionRoleWork turn-cap-stop
+// path can force an in_progress->review transition while the item is still
+// genuinely stuck (the exact false-resolve risk the original PR #200
+// investigation ruled out for a naive {in_progress} anchor — see below), so
+// review has to stay IN the anchor, not outside it, for the same reason
+// bouncing already treats it that way. Added here because resolveAutonomousStuck's
+// point-of-success call (server/services/autonomous_orchestration_service.go) and
+// the blanket terminal rule above only cover two of the row's actual close paths —
+// confirmed live on item a0fb3466: its autonomous_stuck row stayed open after the
+// item cycled all the way back to "ready" (via its abandoned_review resolving,
+// not a driver success), a transition neither of those two paths observes.
+//
+// push_failed and rework_cap have no non-terminal anchor at all — before the
+// item reaches done/archived they stay open, relying entirely on the blanket
+// terminal rule above (or, for push_failed, its own faster event-driven
+// resolution path — see resolveToPRPending — which typically resolves the row
 // before this sweep's next tick even runs). Any future StuckReason added
 // without an explicit case here behaves the same way: excluded from
 // non-terminal anchoring, covered by the blanket rule once the item finishes.
@@ -2144,6 +2174,13 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		case domain.StuckReasonAbandonedReview:
 			resolve = row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonVerdictUndelivered:
+			// Point-of-success resolve is resolveVerdictUndeliveredLogged
+			// (server/services/backlog_service_verdict_steer.go); this is the
+			// backstop for every other way the item can leave review (ships,
+			// reopens for rework, is manually moved, etc.) without that call
+			// ever firing.
+			resolve = row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonStaleWork:
 			resolve = row.ItemStatus != BacklogStatusInProgress
 		case domain.StuckReasonBouncing, domain.StuckReasonBounceCapExhausted:
@@ -2152,6 +2189,15 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			// non-terminal anchor — this is a backstop for any status
 			// transition that bypasses reconcileBouncingItems' explicit
 			// resolve-alongside-bouncing call sites above.
+			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonAutonomousStuck:
+			// Shares bouncing's two-status anchor, not a single {in_progress}
+			// one — see this function's doc comment for why review must stay
+			// IN the anchor (a turn-cap-stop can force in_progress->review
+			// while genuinely still stuck) and for the live item (a0fb3466)
+			// this backstops: a row left open after the item cycled all the
+			// way back to "ready" through a path resolveAutonomousStuck's
+			// point-of-success call never observes.
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			// Generalized 2026-08-03 to also anchor at queued (see
@@ -2173,9 +2219,9 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			// else-branch (same-status, invisible to this sweep).
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		default:
-			// autonomous_stuck, push_failed, rework_cap, multiple_reasons, and
-			// any future reason with no non-terminal anchor: stays open until
-			// the blanket terminal rule above catches it, or its own
+			// push_failed, rework_cap, multiple_reasons, and any future
+			// reason with no non-terminal anchor: stays open until the
+			// blanket terminal rule above catches it, or its own
 			// event-site resolves it first. multiple_reasons specifically is
 			// resolved by its own detector (reconcileMultiReasonEscalation's
 			// de-escalate branch), not a status-anchor case here — its

@@ -14,7 +14,7 @@ on:
       - 'web-app/**.tsx'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/bun.lock'
       - 'web-app/jest.config.js'
       - 'tests/e2e/**'
       - '**.sh'
@@ -35,7 +35,7 @@ on:
       - 'web-app/**.tsx'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/bun.lock'
       - 'web-app/jest.config.js'
       - 'tests/e2e/**'
       - '**.sh'
@@ -65,17 +65,13 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
 
       # web-lint's Jest tests jest.mock() modules under web-app/src/gen/ — module
       # resolution needs the file to exist even for a mocked import. That requires
@@ -84,7 +80,7 @@ jobs:
       # required — see the original lint.yml's "Ordering bug history" comment).
       - name: Install web-app dependencies
         working-directory: web-app
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - uses: ./.github/actions/prepare-stub
         with:
@@ -284,17 +280,13 @@ jobs:
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
           filter: blob:none
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
 
       # Generated code is gitignored, not committed (see #445) — produced once by
       # lint-prepare and downloaded here so Jest/tsc/ESLint resolve gen/ imports.
@@ -305,7 +297,7 @@ jobs:
 
       - name: Install web-app dependencies
         working-directory: web-app
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Jest
         working-directory: web-app
@@ -323,7 +315,7 @@ jobs:
       # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
       - name: jscpd (web-app duplication)
         working-directory: web-app
-        run: pnpm run lint:duplicates
+        run: bun run lint:duplicates
 
       # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
       # this is this job's longest-running step. The whole original step body is wrapped
@@ -384,7 +376,7 @@ jobs:
 
       - name: CSS lint (stylelint + undefined variable check)
         working-directory: web-app
-        run: pnpm run lint:css
+        run: bun run lint:css
 
       - name: Validate feature catalog (typed feature registry)
         working-directory: web-app
@@ -392,4 +384,4 @@ jobs:
           # 1. TypeScript compile check on the features catalog — catches unknown FeatureId references
           node_modules/.bin/tsc --noEmit --project tsconfig.node.json
           # 2. Runtime catalog validation — catches features with empty testIds
-          pnpm run validate-catalog
+          bun run validate-catalog

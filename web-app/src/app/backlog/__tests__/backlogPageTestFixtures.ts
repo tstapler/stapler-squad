@@ -79,7 +79,11 @@ export function configMock() {
 }
 
 export function storeMock() {
-  return { useAppDispatch: () => jest.fn() };
+  const state = { backlogBulkSelection: { selectedIds: [] as string[], selectMode: false } };
+  return {
+    useAppDispatch: () => jest.fn(),
+    useAppSelector: (selector: (s: typeof state) => unknown) => selector(state),
+  };
 }
 
 export function useBacklogServiceMockFactory() {
@@ -90,6 +94,8 @@ export function useBacklogServiceMockFactory() {
       createBacklogItem: jest.fn(),
       importGitHubIssue: jest.fn(),
       triggerTriage: jest.fn(),
+      archiveBacklogItem: jest.fn(),
+      deleteBacklogItem: jest.fn(),
     }),
   };
 }

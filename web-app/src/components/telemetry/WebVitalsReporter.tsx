@@ -3,6 +3,7 @@
 // +feature: ui:web-vitals
 import { useReportWebVitals } from "next/dist/client/web-vitals";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { getActiveSessionUUID } from "@/lib/telemetry/active-session";
 
 type WebVital = Parameters<Parameters<typeof useReportWebVitals>[0]>[0];
 
@@ -38,6 +39,7 @@ export function WebVitalsReporter() {
       name: `web_vital.${metric.name.toLowerCase()}`,
       category: "performance",
       durationMs: isCLS ? Math.round(metric.value * 10000) : Math.round(metric.value),
+      sessionId: getActiveSessionUUID() ?? undefined,
       labels: {
         rating: metric.rating,
         id: metric.id,

@@ -307,6 +307,13 @@ message BacklogItem {
   // blocking lists the items waiting on this item. Populated only by
   // GetBacklogItem and the dependency RPCs, never by ListBacklogItems.
   repeated DependencyInfo blocking = 43;
+  // plugin_id is the ItemSourcePlugin id ("github_issues", "linear", ...) of
+  // the item's source, denormalized for the source badge/filter. Empty for
+  // locally-created items.
+  string plugin_id = 44;
+  // has_pending_guidance_requests is true while at least one GuidanceRequest
+  // scoped to this item is open (neither answered nor cancelled).
+  bool has_pending_guidance_requests = 45;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency
@@ -674,6 +681,9 @@ message ListBacklogItemsRequest {
   // session list's "Show Archived" toggle). Ignored when `status` is set
   // explicitly — an explicit status filter always wins.
   bool include_archived = 5;
+  // source_plugin_filter restricts results to items whose source plugin id is
+  // in this list. Empty means no restriction.
+  repeated string source_plugin_filter = 6;
 }
 
 message ListBacklogItemsResponse {
@@ -1402,6 +1412,12 @@ message BacklogItemEvent {
   // Synthetic marker (oneof left unset) sent periodically on an otherwise-
   // idle connection -- see SessionEvent.heartbeat's identical doc comment.
   bool heartbeat = 11;
+
+  // Identifies the server process that produced this event; constant for the process lifetime and
+  // different after every restart or redeploy. A change between events means the server restarted
+  // and seq has reset, so clients can tell a redeploy from a real seq anomaly. Empty from servers
+  // that predate this field.
+  string deploy_id = 12;
 }
 
 // BacklogItemStatusChangedEvent is emitted when an item's status transitions
@@ -1492,6 +1508,9 @@ message WatchBacklogItemsRequest {
   // Optional: resume a stream after this sequence number instead of
   // receiving a fresh initial snapshot (see pkg/events.EventsSince).
   uint64 after_seq = 3;
+
+  // Optional: only receive events for items whose source plugin id is in this list.
+  repeated string source_plugin_filter = 4;
 }
 
 // BacklogService manages backlog items and their lifecycle through AI-assisted
@@ -2100,6 +2119,11 @@ enum StuckReason {
   // — the item's PR is merged but no recorded branch/tip commit matches it, so
   // the auto-done transition was refused.
   STUCK_REASON_MERGED_PR_UNVERIFIED = 23;
+  // STUCK_REASON_VERDICT_UNDELIVERED: see domain.StuckReasonVerdictUndelivered
+  // — a recorded review verdict could not be steered into the item's live
+  // work session (timeout waiting for idle, a hidden-session refusal, or a
+  // steer delivery error).
+  STUCK_REASON_VERDICT_UNDELIVERED = 24;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

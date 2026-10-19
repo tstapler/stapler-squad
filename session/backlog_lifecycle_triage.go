@@ -38,6 +38,20 @@ type TriageRespawner interface {
 	// maxHeadlessTriageSessionStaleness because it's genuinely still running
 	// apart from one that's actually dead — it assumed the latter unconditionally.
 	IsTriageLive(itemID string) bool
+
+	// IsRetriagePointless reports whether itemID's title/description/acceptance
+	// criteria are unchanged since its last completed triage — i.e. AutoRespawnTriage
+	// would immediately self-skip (server/services' unchangedRetriageSkipReason)
+	// rather than attempt a real triage call. Added so
+	// retryOrphanedTriageWithBackoffGate can recognize this deterministic dead end
+	// BEFORE spending the shared remediation budget on it, mirroring the existing
+	// fan-out/cost-ceiling check just above its own call site: without this, the
+	// backoff schedule burns its full ~4.5-day fast schedule plus two 7-day cold
+	// retries on a guaranteed no-op, then permanently parks with a "use Reset to
+	// try again automatically" notification that doesn't name the real blocker and,
+	// if followed, would just restart the identical no-op loop (confirmed live on
+	// items 404b362c — stuck since 2026-10-16 — and ec050b7d — stuck 41+ days).
+	IsRetriagePointless(ctx context.Context, itemID string) bool
 }
 
 // headlessTriageSessionUUIDPrefix mirrors server/services/backlog_service_triage.go's
@@ -473,6 +487,26 @@ func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx contex
 			log.Info("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate: latest triage hit a spend/fan-out ceiling, not auto-retrying", "item", itemID, "endReason", latest.EndReason)
 			return
 		}
+	}
+
+	// A content-unchanged skip is just as deterministic as the ceiling abort
+	// above, but unlike that case it costs nothing to retry — AutoRespawnTriage's
+	// own unchanged-content gate (server/services' respawnTriage) never reaches
+	// the LLM, it's a free, idempotent no-op that posts the real "needs human
+	// action" note via recordTriageSkip. So rather than skip the retry outright,
+	// call it directly and return WITHOUT ever touching RemediationDue: spending
+	// the shared backoff budget on a call that can only ever self-skip would
+	// eventually park the row and fire a "use Reset to try again automatically"
+	// notification that doesn't name the real blocker and, if followed, would
+	// just restart the identical no-op loop (see IsRetriagePointless's doc
+	// comment on TriageRespawner for the live items this closes).
+	if respawner.IsRetriagePointless(ctx, itemID) {
+		go func() {
+			if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
+				log.Warn("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate: pointless-retriage self-skip failed", "item", itemID, "error", err)
+			}
+		}()
+		return
 	}
 
 	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)

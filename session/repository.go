@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -416,8 +417,10 @@ type BacklogItemData struct {
 	Labels     []string
 	ArchivedAt *time.Time
 	SourceID   string
-	PrURL      string
-	PrNumber   int
+	// SourcePluginID is the source plugin id, denormalized from the Source edge.
+	SourcePluginID string
+	PrURL          string
+	PrNumber       int
 	// ShippedCheckConclusion holds the durable GitHub CI-conclusion snapshot
 	// captured at ship time — genuine GitHub CI-conclusion values only, never
 	// a capture-failure sentinel. See ShippedSnapshotCaptureFailed.
@@ -471,6 +474,8 @@ type BacklogItemData struct {
 	TriggeredByChainDepth int
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+	// HasPendingGuidanceRequests is derived at read/publish time, not stored.
+	HasPendingGuidanceRequests bool
 	// ItemSessions holds the eagerly-loaded item sessions for this backlog item.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	ItemSessions []ItemSessionSummary
@@ -503,27 +508,29 @@ type BacklogItemData struct {
 // setting every one of these fields to stay in parity with the full
 // BacklogItemData/backlogItemToProto path.
 type BacklogItemSummary struct {
-	ID                  string               `json:"id"`
-	PublicIDRaw         string               `json:"public_id"`
-	ExternalID          string               `json:"external_id"`
-	ExternalURL         string               `json:"external_url"`
-	Labels              []string             `json:"labels"`
-	Title               string               `json:"title"`
-	Status              BacklogStatus        `json:"status"`
-	Priority            int                  `json:"priority"`
-	RepoPath            string               `json:"repo_path"`
-	AcceptanceCriteria  AcCriteriaJSON       `json:"acceptance_criteria"`
-	Notes               string               `json:"notes"`
-	PrURL               string               `json:"pr_url"`
-	PrNumber            int                  `json:"pr_number"`
-	CreatedAt           time.Time            `json:"created_at"`
-	UpdatedAt           time.Time            `json:"updated_at"`
-	ArchivedAt          *time.Time           `json:"archived_at"`
-	ItemSessions        []ItemSessionSummary `json:"-"`
-	SkipPlanning        bool                 `json:"skip_planning"`
-	PlanApproved        bool                 `json:"plan_approved"`
-	PlanArtifactsPath   string               `json:"plan_artifacts_path"`
-	PlanRejectionReason string               `json:"plan_rejection_reason"`
+	ID                         string               `json:"id"`
+	PublicIDRaw                string               `json:"public_id"`
+	ExternalID                 string               `json:"external_id"`
+	ExternalURL                string               `json:"external_url"`
+	SourcePluginID             string               `json:"source_plugin_id"`
+	HasPendingGuidanceRequests bool                 `json:"-"` // derived at read time
+	Labels                     []string             `json:"labels"`
+	Title                      string               `json:"title"`
+	Status                     BacklogStatus        `json:"status"`
+	Priority                   int                  `json:"priority"`
+	RepoPath                   string               `json:"repo_path"`
+	AcceptanceCriteria         AcCriteriaJSON       `json:"acceptance_criteria"`
+	Notes                      string               `json:"notes"`
+	PrURL                      string               `json:"pr_url"`
+	PrNumber                   int                  `json:"pr_number"`
+	CreatedAt                  time.Time            `json:"created_at"`
+	UpdatedAt                  time.Time            `json:"updated_at"`
+	ArchivedAt                 *time.Time           `json:"archived_at"`
+	ItemSessions               []ItemSessionSummary `json:"-"`
+	SkipPlanning               bool                 `json:"skip_planning"`
+	PlanApproved               bool                 `json:"plan_approved"`
+	PlanArtifactsPath          string               `json:"plan_artifacts_path"`
+	PlanRejectionReason        string               `json:"plan_rejection_reason"`
 }
 
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID
@@ -570,6 +577,8 @@ type BacklogItemFilter struct {
 	Statuses []string
 	// Priorities restricts results to these priority values. Empty means no restriction.
 	Priorities []int
+	// SourcePluginIDs restricts results to items whose source plugin is one of these. Empty means no restriction.
+	SourcePluginIDs []string
 	// SortBy controls ordering ("priority", "updated_at"). Empty means default ordering.
 	SortBy string
 	// ExcludeDone, when true and Statuses is empty, excludes items with status
@@ -777,6 +786,17 @@ type ShellRepository interface {
 type InitialPromptRepository interface {
 	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
 	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
+}
+
+// BundleStorage is the narrow persistence interface SessionBundleService needs
+// to assemble a RUM session diagnostic bundle. *Storage satisfies this interface.
+type BundleStorage interface {
+	// ListAnalyticsBySessionID returns up to 2000 analytics events for the given
+	// session UUID, ordered by created_at DESC (most-recent first).
+	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error)
+	// GetSessionArtifactsByUUID returns the artifact blob for the session with
+	// the given UUID, or (nil, nil) when the session has no stored artifacts.
+	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
 }
 
 // RepositoryOption is a function that configures a repository

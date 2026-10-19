@@ -1322,6 +1322,45 @@ func TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testi
 	var connErr *connect.Error
 	require.ErrorAs(t, err, &connErr)
 	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+	assert.Contains(t, connErr.Message(), "run TriggerTriage first", "an empty plan_artifacts_path means triage never produced one -- the message must not claim a path 'does not exist on disk', which implies one was recorded")
+}
+
+// TestApprovePlan_PlanArtifactsPathDeletedAfterTriage_ReturnsDistinctErrorMessage
+// is AC-7's regression test: ApprovePlan's error must distinguish "triage
+// never wrote plan_artifacts_path" (the case covered above) from "it was
+// written, but the directory is gone now" (e.g. a triage worktree reaped by
+// CleanupTerminalItem after the item went terminal and was then reopened) --
+// the single "re-run TriggerTriage" message both cases used to share was
+// actively misleading for this second case, since TriggerTriage already ran
+// successfully once.
+func TestApprovePlan_PlanArtifactsPathDeletedAfterTriage_ReturnsDistinctErrorMessage(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item whose plan artifacts were deleted",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	deletedPath := filepath.Join(t.TempDir(), "already-deleted")
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &deletedPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId: itemID,
+	}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+	assert.Contains(t, connErr.Message(), "no longer exists on disk", "a non-empty but stale path must say it's gone, not imply it was never written")
+	assert.Contains(t, connErr.Message(), "re-run triage")
+	assert.NotContains(t, connErr.Message(), "run TriggerTriage first", "must not reuse the empty-path message for a path that was actually recorded")
 }
 
 // UT-032b: ApprovePlan happy path — sets plan_approved=true and plan_approved_at
@@ -1502,6 +1541,40 @@ func TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testin
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// TestRejectPlan_PlanArtifactsPathDeletedAfterTriage_ReturnsFailedPrecondition
+// extends RejectPlan's guard (previously only an empty-path check) to also
+// reject a non-empty plan_artifacts_path that no longer exists on disk,
+// mirroring ApprovePlan's equivalent guard — rejecting a plan whose content
+// can no longer be read is just as nonsensical as approving one.
+func TestRejectPlan_PlanArtifactsPathDeletedAfterTriage_ReturnsFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item whose plan artifacts were deleted",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	deletedPath := filepath.Join(t.TempDir(), "already-deleted")
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &deletedPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "stale path, reject anyway",
+	}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+	assert.Contains(t, connErr.Message(), "no longer exists on disk")
 }
 
 // TestRejectPlan_ClearsExistingApproval is the symmetry-fix regression test:
@@ -4251,9 +4324,21 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 
 	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	expectedPath := filepath.Join(workDir, "project_plans", slug, "implementation")
-	assert.Equal(t, expectedPath, updated.PlanArtifactsPath,
-		"PlanArtifactsPath must point at the implementation/ subdir SDD's plan.md actually lives in")
+	// The recorded path is a durable copy of implementation/, not the in-worktree
+	// directory: worktrees are removed on terminal/reopen cleanup, which left the
+	// recorded path dangling (backlog item 1cfae441-8953-41e6-803d-959062119d4f).
+	assert.True(t, strings.HasSuffix(updated.PlanArtifactsPath, filepath.Join(item.ID, sddPlanSnapshotDirName)),
+		"PlanArtifactsPath %q must be the per-item durable plan snapshot", updated.PlanArtifactsPath)
+	assert.False(t, strings.HasPrefix(updated.PlanArtifactsPath, workDir), "must not point inside the triage worktree")
+	copied, readErr := os.ReadFile(filepath.Join(updated.PlanArtifactsPath, "plan.md"))
+	require.NoError(t, readErr, "the snapshot must contain plan.md directly (work-session context reads <path>/plan.md)")
+	assert.Equal(t, "# Plan\n", string(copied))
+
+	// Survival: remove the worktree the way terminal/reopen cleanup does; the
+	// recorded path must still resolve, so ApprovePlan does not report "does not exist".
+	require.NoError(t, os.RemoveAll(workDir))
+	_, approveErr := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: item.ID}))
+	require.NoError(t, approveErr, "plan path must survive removal of the triage worktree")
 }
 
 // TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession is the

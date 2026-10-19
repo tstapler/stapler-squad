@@ -1,6 +1,10 @@
 package tokens
 
-import "time"
+import (
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/pricing"
+)
 
 // ParseResult holds aggregated token data extracted from one JSONL file.
 // Privacy: only tool names, skill names (short strings), and token counts.
@@ -36,7 +40,8 @@ type TurnStats struct {
 	Output        int64
 	CacheCreation int64
 	CacheRead     int64
-	ToolNames     []string // tool_use block names in this message
+	ToolNames     []string      // tool_use block names in this message
+	Speed         pricing.Speed // billing speed from the transcript; empty = standard
 }
 
 // ContextTokens is the number of tokens occupying the context window on this
@@ -94,15 +99,8 @@ type TokenStoreReader interface {
 	Unsubscribe(ch <-chan *ParseResult)
 }
 
-// ModelPricing holds per-model token prices in USD per million tokens.
-type ModelPricing struct {
-	ModelFamily        string  // normalized key, e.g. "claude-sonnet-4"
-	InputPricePerMTok  float64 // USD per 1M input tokens
-	OutputPricePerMTok float64 // USD per 1M output tokens
-	CacheWritePerMTok  float64 // USD per 1M cache-write tokens
-	CacheReadPerMTok   float64 // USD per 1M cache-read tokens
-	EffectiveDate      string  // ISO date of last price update
-}
+// ModelPricing is the per-model price record; see package pricing.
+type ModelPricing = pricing.ModelPricing
 
 // PricingTable maps normalized model family names to pricing.
 // Hardcoded defaults; overridable via config JSON.

@@ -158,6 +158,9 @@ type BacklogService struct {
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
 	oneShotRunner PRRunner
+	// staleWorkInspector snapshots and nudges a stale work session before
+	// RemediateStaleWorkSession restarts it. nil keeps the plain restart.
+	staleWorkInspector StaleWorkInspector
 	// julesDispatcher drives DispatchToJules (backlog_service_jules.go). nil
 	// (the default — Jules disabled, or its dependencies unresolvable at
 	// startup) makes DispatchToJules return CodeFailedPrecondition pointing at
@@ -785,6 +788,11 @@ func (s *BacklogService) Shutdown() {
 	s.shutdownCancel()
 }
 
+// SetStaleWorkInspector wires the optional inspect-and-nudge step of RemediateStaleWorkSession.
+func (s *BacklogService) SetStaleWorkInspector(i StaleWorkInspector) {
+	s.staleWorkInspector = i
+}
+
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
@@ -1053,6 +1061,8 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.
 		PlanArtifactsPath:   item.PlanArtifactsPath,
 		PlanRejectionReason: item.PlanRejectionReason,
 	}
+	p.PluginId = item.SourcePluginID
+	p.HasPendingGuidanceRequests = item.HasPendingGuidanceRequests
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
@@ -1141,6 +1151,8 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,
 	}
+	p.PluginId = item.SourcePluginID
+	p.HasPendingGuidanceRequests = item.HasPendingGuidanceRequests
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}

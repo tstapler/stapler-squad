@@ -466,7 +466,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 		// Filtered before grouping/querying so a socket populated only by
 		// push-liveness instances triggers no ListSessions call at all --
 		// see ProcessManagerBackend.SkipsPollBasedLiveness's doc comment.
-		if inst.Backend.SkipsPollBasedLiveness() {
+		if inst.Snapshot().Backend.SkipsPollBasedLiveness() {
 			continue
 		}
 		instances = append(instances, inst)

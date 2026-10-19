@@ -486,7 +486,9 @@ export function BacklogSourcesSettings() {
               />
             ))}
           </div>
-          {schema.requiresToken && schema.credentialsManagedExternally ? (
+          {schema.requiresToken && schema.credentialsHelp ? (
+            <p className={styles.description}>{schema.credentialsHelp}</p>
+          ) : schema.requiresToken && schema.credentialsManagedExternally ? (
             <p className={styles.description}>
               This source authenticates using a connected GitHub account. Connect one under{" "}
               <Link href={routes.unfinished}>GitHub accounts</Link> if you haven&apos;t already.

@@ -1,0 +1,14 @@
+{
+  "id": "backlog:import-linear-issue",
+  "type": "backend",
+  "service": "MCP",
+  "method": "import_linear_issue",
+  "markerFound": false,
+  "handlerFile": "server/mcp/tools_backlog_import_tracker.go",
+  "tested": true,
+  "testIds": [
+    "TestImportLinearIssue_should_CreateItemFromIssue",
+    "TestImportLinearIssue_should_RejectBadInput_And_SurfaceFetchErrors"
+  ],
+  "lastModified": "2026-10-16T00:00:00-07:00"
+}

@@ -1705,6 +1705,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// selfHealStuck structurally cannot see (mirrors the
 		// PRReadyUnmerged handling immediately above).
 		l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRNeedsFix, "ReconcilePRPending/healthy")
+		l.ciReruns.clear(item.ID.String())
 		return
 	}
 
@@ -1726,6 +1727,15 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	supersededItemData := backlogItemToData(item)
 	if superseded := l.closeIfSupersededByMain(ctx, g, &supersededItemData); superseded {
 		return
+	}
+
+	// 2d. CI is the only problem and every failing test is outside this PR's
+	// diff: a free `gh run rerun --failed` first, fix session only if it fails again.
+	if prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts && !hasNewFeedback {
+		if runIDs, allActions := prStatus.FailedRunIDs(); allActions &&
+			l.maybeFlakyCheckRerun(ctx, item.ID.String(), item.RepoPath, item.PrNumber, runIDs) {
+			return
+		}
 	}
 
 	// 3. CI failure, review changes requested, or merge conflict → spawn fix session.

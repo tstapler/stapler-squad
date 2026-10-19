@@ -7,7 +7,9 @@ Source: [GitHub issue #120](https://github.com/TylerStaplerAtFanatics/stapler-sq
 The approval gate's security scanning currently lives as 5 (actually 12 today —
 see below) hardcoded `secretPatterns` in [`session/backlog_review.go`](../../session/backlog_review.go)'s
 `RunPreGateSecurityCheck(diff string) error`, called once, pre-diff, from
-[`session/review_gate.go:277`](../../session/review_gate.go#L277). It only catches secret-shaped
+[`session/review_gate.go:323`](../../session/review_gate.go#L323) (line drifted from
+`:277` since this doc was last verified; call site and behavior unchanged — reverified
+2026-08-21). It only catches secret-shaped
 strings — nothing about prompt injection, HTML/exfiltration content, etc. As the
 approval surface grows (more tool types, more backends, richer backlog fields),
 the pattern set needs to evolve independently of `session/` application logic.
@@ -39,7 +41,7 @@ scope** here unless trivial.
   in a stored `ReviewVerdict` summary. **The migrated package must preserve
   this contract exactly** — named pattern IDs in output, never the matched
   value — which is also explicitly required by the issue's acceptance criteria.
-- Sole caller: `session/review_gate.go:277`, inside `spawnReviewGate`, gating
+- Sole caller: `session/review_gate.go:323`, inside `spawnReviewGate`, gating
   before an LLM review call is spawned. On block it records a synthetic FAIL
   `ReviewVerdict` via `recordTerminalReviewVerdict` with ID prefix
   `"review-blocked-"` and feeds the auto-reopen/rework-cap machinery.

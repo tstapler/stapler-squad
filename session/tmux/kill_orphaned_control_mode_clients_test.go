@@ -16,6 +16,35 @@ import (
 	"go.uber.org/goleak"
 )
 
+// controlModeTestBudget scales a fixed wall-clock budget for a real tmux subprocess by the
+// same STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS override production uses (30s in CI).
+//
+// Root cause of the "signal: killed" flake (BUG-051, 2026-08-16/17 recurrences): these tests
+// bounded real tmux subprocesses with hardcoded 5s/10s deadlines. safeexec.CommandContext
+// keeps exec.CommandContext's default Cancel (SIGKILL on deadline), so a CPU-starved -race
+// runner surfaced a bare "signal: killed" instead of a timeout error. The new-session call
+// was already moved to createSessionWithRetry (#871); this covers the remaining budgets.
+// Never shrinks below base, so local runs keep their original budget.
+func controlModeTestBudget(base time.Duration) time.Duration {
+	return scaleControlModeBudget(base, sessionCreateTimeout)
+}
+
+// scaleControlModeBudget uses float math: Duration*Duration overflows int64 (5s*30s > 9.2e18ns).
+func scaleControlModeBudget(base, override time.Duration) time.Duration {
+	scaled := time.Duration(float64(base) * float64(override) / float64(sessionCreateTimeoutDefault))
+	if scaled > base {
+		return scaled
+	}
+	return base
+}
+
+func TestScaleControlModeBudget(t *testing.T) {
+	require.Equal(t, 5*time.Second, scaleControlModeBudget(5*time.Second, sessionCreateTimeoutDefault))
+	require.Equal(t, 15*time.Second, scaleControlModeBudget(5*time.Second, 30*time.Second))
+	require.Equal(t, 30*time.Second, scaleControlModeBudget(10*time.Second, 30*time.Second))
+	require.Equal(t, 10*time.Second, scaleControlModeBudget(10*time.Second, time.Second), "never shrinks below base")
+}
+
 // TestKillOrphanedControlModeClients is a regression test for BUG-042: a fresh process
 // instance must be able to reconcile control-mode clients left running by a prior
 // instance (which --tmux-keep-server intentionally didn't kill), or they accumulate one
@@ -29,7 +58,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 	// the default tmux server when running `go test ./...`.
 	socketName := fmt.Sprintf("test_killcm_%d_%d", os.Getpid(), time.Now().UnixNano())
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), controlModeTestBudget(10*time.Second))
 		defer cancel()
 		_ = safeexec.CommandContext(ctx, Binary(), "-L", socketName, "kill-server").Run()
 	})
@@ -90,7 +119,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 
 	require.NoError(t, wait.WaitForCondition(func() bool {
 		return countControlModeClients() >= 2
-	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "control-mode clients attach"}))
+	}, wait.WaitConfig{Timeout: controlModeTestBudget(5 * time.Second), PollInterval: 100 * time.Millisecond, Description: "control-mode clients attach"}))
 
 	killed, err := KillOrphanedControlModeClients(socketName)
 	require.NoError(t, err)
@@ -98,7 +127,7 @@ func TestKillOrphanedControlModeClients(t *testing.T) {
 
 	require.NoError(t, wait.WaitForCondition(func() bool {
 		return countControlModeClients() == 0
-	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "clients disappear"}))
+	}, wait.WaitConfig{Timeout: controlModeTestBudget(5 * time.Second), PollInterval: 100 * time.Millisecond, Description: "clients disappear"}))
 
 	// The session itself must survive -- only its clients were killed, not the session.
 	hasSessionCmd := safeexec.CommandContext(context.Background(), Binary(), "-L", socketName, "has-session", "-t", sessionName)
@@ -152,7 +181,7 @@ func TestControlModeSurvivesRestart_OnlyOneClientRemains(t *testing.T) {
 
 	socketName := fmt.Sprintf("test_restart_cm_%d_%d", os.Getpid(), time.Now().UnixNano())
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), controlModeTestBudget(10*time.Second))
 		defer cancel()
 		_ = safeexec.CommandContext(ctx, Binary(), "-L", socketName, "kill-server").Run()
 	})
@@ -163,7 +192,7 @@ func TestControlModeSurvivesRestart_OnlyOneClientRemains(t *testing.T) {
 	// "Process 1": creates the session and starts its own control-mode client.
 	sess1 := NewTmuxSessionWithServerSocket(sessionName, "sleep 30", TmuxPrefix, socketName, WithRegistry(nil))
 	require.NoError(t, sess1.RestoreWithWorkDir(workDir))
-	require.NoError(t, wait.WaitForCondition(sess1.DoesSessionExist, wait.WaitConfig{Timeout: 10 * time.Second, PollInterval: 100 * time.Millisecond, Description: "session start"}))
+	require.NoError(t, wait.WaitForCondition(sess1.DoesSessionExist, wait.WaitConfig{Timeout: controlModeTestBudget(10 * time.Second), PollInterval: 100 * time.Millisecond, Description: "session start"}))
 	require.NoError(t, sess1.StartControlMode())
 	// Deliberately never call sess1.StopControlMode() -- this is "process 1 dies
 	// without cleaning up," exactly what a real restart looks like under
@@ -189,7 +218,7 @@ func TestControlModeSurvivesRestart_OnlyOneClientRemains(t *testing.T) {
 
 	require.NoError(t, wait.WaitForCondition(func() bool {
 		return countControlModeClients(t, socketName) == 1
-	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "process 1's control-mode client attaches"}))
+	}, wait.WaitConfig{Timeout: controlModeTestBudget(5 * time.Second), PollInterval: 100 * time.Millisecond, Description: "process 1's control-mode client attaches"}))
 
 	// "Restart": the startup reconciliation this fix added runs before anything else
 	// touches control mode.
@@ -207,5 +236,5 @@ func TestControlModeSurvivesRestart_OnlyOneClientRemains(t *testing.T) {
 	// process-1-plus-process-2 pileup.
 	require.NoError(t, wait.WaitForCondition(func() bool {
 		return countControlModeClients(t, socketName) == 1
-	}, wait.WaitConfig{Timeout: 5 * time.Second, PollInterval: 100 * time.Millisecond, Description: "only process 2's control-mode client remains"}))
+	}, wait.WaitConfig{Timeout: controlModeTestBudget(5 * time.Second), PollInterval: 100 * time.Millisecond, Description: "only process 2's control-mode client remains"}))
 }

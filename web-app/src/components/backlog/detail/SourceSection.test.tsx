@@ -75,3 +75,13 @@ describe("SourceSection", () => {
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
   });
 });
+
+describe("SourceSection URL safety", () => {
+  it("renders no link for a javascript: externalUrl", () => {
+    const { container } = render(
+      <SourceSection externalUrl="javascript:alert(1)" externalId="42" labels={[]} defaultExpanded={true} />
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(screen.getByText("Issue #42")).toBeInTheDocument();
+  });
+});

@@ -248,6 +248,18 @@ export const sectionTitle = style({
   borderBottom: `1px solid ${vars.color.borderSubtle}`,
 });
 
+// Inert divider between accordion section groups; aria-hidden in the JSX.
+export const sectionGroupLabel = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  fontFamily: vars.font.mono,
+  paddingTop: vars.space["3"],
+  paddingBottom: vars.space["1"],
+});
+
 export const description = style({
   fontSize: vars.fontSize.sm,
   color: vars.color.textPrimary,

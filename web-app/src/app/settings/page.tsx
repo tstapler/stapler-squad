@@ -144,6 +144,11 @@ function SettingsPageInner() {
                   <Link href={routes.help} className={styles.helpLink}>
                     View documentation
                   </Link>
+                  {flags["changelog"] && (
+                    <Link href={routes.changelog} className={styles.helpLink} data-testid="settings-changelog-link">
+                      What&apos;s new (changelog)
+                    </Link>
+                  )}
                 </div>
               </div>
             </section>

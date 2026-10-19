@@ -1,0 +1,40 @@
+{
+  "name": "website",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "sync-content": "node scripts/sync-content.mjs",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit --no-coverage",
+    "test:integration": "vitest run tests/integration --no-coverage",
+    "preview:start": "astro build && astro preview --port 4321",
+    "preview:stop": "astro preview stop",
+    "lhci:desktop": "bun run preview:start && (npx lhci autorun --config=./lighthouserc.json; code=$?; bun run preview:stop; exit $code)",
+    "lhci:mobile": "bun run preview:start && (npx lhci autorun --config=./lighthouserc.mobile.json; code=$?; bun run preview:stop; exit $code)",
+    "test:a11y": "bun run preview:start && (npx playwright test tests/a11y.spec.ts; code=$?; bun run preview:stop; exit $code)",
+    "test:e2e": "bun run preview:start && (npx playwright test tests/e2e; code=$?; bun run preview:stop; exit $code)",
+    "lhci:desktop:ci": "npx lhci autorun --config=./lighthouserc.json",
+    "lhci:mobile:ci": "npx lhci autorun --config=./lighthouserc.mobile.json",
+    "test:a11y:ci": "npx playwright test tests/a11y.spec.ts",
+    "test:e2e:ci": "npx playwright test tests/e2e"
+  },
+  "dependencies": {
+    "@astrojs/mdx": "8.1.0",
+    "@astrojs/starlight": "^0.42.6",
+    "astro": "^7.2.10",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@lhci/cli": "^0.15.1",
+    "@playwright/test": "^1.64.1",
+    "js-yaml": "4.1.0",
+    "jsdom": "^26.1.0",
+    "vitest": "^5.0.5"
+  }
+}

@@ -187,7 +187,7 @@ func TestRestartFromPausedUsesWorktreeDir(t *testing.T) {
 	}
 
 	// Restart from Paused — should recreate worktree and start in correct dir.
-	if err := inst.Restart(false); err != nil {
+	if err := inst.Restart(false, ""); err != nil {
 		t.Fatalf("Restart from Paused: %v", err)
 	}
 	if inst.Status != Running {

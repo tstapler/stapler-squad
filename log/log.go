@@ -273,9 +273,9 @@ func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		LogsEnabled:    true,
 		LogsDir:        "",
-		LogMaxSize:     10, // 10MB
-		LogMaxFiles:    5,  // 5 backups
-		LogMaxAge:      30, // 30 days
+		LogMaxSize:     50,  // MB; keep in sync with config.DefaultLogMaxSizeMB (log can't import config)
+		LogMaxFiles:    100, // backups
+		LogMaxAge:      14,  // days
 		LogCompress:    true,
 		UseSessionLogs: true,
 		LogLevel:       INFO,  // Deprecated: kept for backward compatibility

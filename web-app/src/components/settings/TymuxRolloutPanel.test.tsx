@@ -12,6 +12,7 @@ const mockClient = {
   completeTymuxRollbackRehearsal: jest.fn(),
   setTymuxSessionOverride: jest.fn(),
   setTymuxGlobalOverride: jest.fn(),
+  restartSession: jest.fn(),
 };
 
 jest.mock("@connectrpc/connect", () => ({
@@ -138,5 +139,41 @@ describe("TymuxRolloutPanel", () => {
 
     await waitFor(() => expect(screen.queryByTestId("tymux-override-row")).not.toBeInTheDocument());
     expect(mockClient.setTymuxSessionOverride).toHaveBeenCalledWith({ sessionName: "staplersquad_canary" });
+  });
+
+  it("migrates a live session to tymux by its raw title, not the sanitized tmux name", async () => {
+    mockClient.getTymuxRolloutStatus.mockResolvedValue(emptyStatus());
+    mockClient.restartSession.mockResolvedValue({});
+    render(<TymuxRolloutPanel />);
+
+    // kibitzer:ignore replace-magic-literal -- repeating a data-testid string across
+    // getByTestId calls is this file's established test pattern (see the override tests above).
+    await waitFor(() => screen.getByTestId("tymux-migrate-input"));
+    fireEvent.change(screen.getByTestId("tymux-migrate-input"), { target: { value: "My Canary" } });
+    fireEvent.click(screen.getByTestId("tymux-migrate-to-tymux"));
+
+    expect(mockClient.restartSession).toHaveBeenCalledWith({
+      id: "My Canary",
+      preserveOutput: true,
+      backendOverride: "tymux",
+    });
+    await waitFor(() => expect(screen.getByText(/restarted on tymux/)).toBeInTheDocument());
+  });
+
+  it("migrates a live session back to tmux and surfaces a failure", async () => {
+    mockClient.getTymuxRolloutStatus.mockResolvedValue(emptyStatus());
+    mockClient.restartSession.mockRejectedValue(new Error("boom"));
+    render(<TymuxRolloutPanel />);
+
+    await waitFor(() => screen.getByTestId("tymux-migrate-input"));
+    fireEvent.change(screen.getByTestId("tymux-migrate-input"), { target: { value: "My Canary" } });
+    fireEvent.click(screen.getByTestId("tymux-migrate-to-tmux"));
+
+    expect(mockClient.restartSession).toHaveBeenCalledWith({
+      id: "My Canary",
+      preserveOutput: true,
+      backendOverride: "tmux",
+    });
+    await waitFor(() => expect(screen.getByText(/Failed to migrate "My Canary" to tmux/)).toBeInTheDocument());
   });
 });

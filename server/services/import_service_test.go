@@ -232,6 +232,14 @@ func (f *fakeImportCollisionStore) LoadInstances() ([]*session.Instance, error) 
 func (f *fakeImportCollisionStore) ListInstanceData() ([]session.InstanceData, error) {
 	return f.instances, nil
 }
+func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+	for i := range f.instances {
+		if f.instances[i].MatchesID(id) {
+			return &f.instances[i], nil
+		}
+	}
+	return nil, session.ErrInstanceDataNotFound
+}
 func (f *fakeImportCollisionStore) SaveInstances([]*session.Instance) error { return nil }
 func (f *fakeImportCollisionStore) AddInstance(inst *session.Instance) error {
 	f.added = append(f.added, inst)

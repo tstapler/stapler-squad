@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -9,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // blockedDequeueFixture seeds a queued dependent whose blocker is a not-yet-started
@@ -86,6 +89,56 @@ func TestDequeueNextQueuedItems_should_StartItem_When_BlockerDeleted(t *testing.
 	require.NoError(t, svc.DequeueNextQueuedItems(ctx))
 
 	assert.Equal(t, "in_progress", itemStatus(t, svc, dependentID))
+}
+
+// TestDequeueNextQueuedItems_should_NotStartItem_When_PlanArtifactsPathDeletedAfterApproval
+// is the defense-in-depth half of the fix for backlog item
+// 1cfae441-8953-41e6-803d-959062119d4f: a plan_artifacts_path that was valid
+// when the plan was approved can be deleted later (e.g. its triage worktree
+// reaped by CleanupTerminalItem after the item went terminal and was then
+// reopened). The dequeue sweep must leave the item queued rather than
+// claiming it into in_progress with no readable plan content.
+func TestDequeueNextQueuedItems_should_NotStartItem_When_PlanArtifactsPathDeletedAfterApproval(t *testing.T) {
+	svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: NewUnclaimedVerdict()})
+	svc.claimDedupFlag = func() bool { return false }
+	ctx := context.Background()
+
+	planDir := t.TempDir()
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:              "item with deleted plan artifacts",
+		RepoPath:           repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+		SkipTriage:         true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	planArtifactsPath := planDir
+	_, err = svc.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{PlanArtifactsPath: &planArtifactsPath}, nil)
+	require.NoError(t, err)
+	_, err = svc.ApprovePlan(ctx, connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{ItemId: itemID, TargetStatus: "ready"}))
+	require.NoError(t, err)
+	item, err := svc.storage.GetBacklogItem(ctx, itemID)
+	require.NoError(t, err)
+	_, err = svc.queueBacklogItem(ctx, item, false)
+	require.NoError(t, err)
+
+	// Simulate the triage worktree being reaped after the plan was approved.
+	require.NoError(t, os.RemoveAll(planDir))
+
+	require.NoError(t, svc.DequeueNextQueuedItems(ctx))
+
+	assert.Equal(t, "queued", itemStatus(t, svc, itemID), "item with a now-missing plan artifacts path must not be dequeued into in_progress")
+	assert.Empty(t, creator.calls, "no work session may be spawned when the plan can no longer be read")
+
+	// Criterion 6: the stale path must also be surfaced durably (a stuck row the
+	// item detail view and Unfinished tab read), not only logged.
+	stuck, err := svc.storage.HasOpenStuckReason(ctx, itemID, domain.StuckReasonPlanNotApproved)
+	require.NoError(t, err)
+	assert.True(t, stuck, "a queued item whose plan_artifacts_path vanished must get an open plan_not_approved stuck row")
 }
 
 func TestTransitionBacklogItemStatus_should_RejectInProgress_When_BlockerUnresolved(t *testing.T) {

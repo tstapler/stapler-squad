@@ -766,9 +766,19 @@ func (i *Instance) claudeSettingsEnvOverrideArgs() (string, string) {
 	return "--settings", shellQuote(string(payload))
 }
 
+// applyLaunchEnv forwards the VNC display and CDP env to the backend before Start.
+func (i *Instance) applyLaunchEnv() {
+	if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+		i.pm().AppendLaunchEnv(displayEnv)
+	}
+	if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+		i.pm().AppendLaunchEnv(cdpEnvs...)
+	}
+}
+
 // wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
 // and sets it on the instance's process manager.
-func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
+func (i *Instance) wireTmuxSession(program string) {
 	snap := i.Snapshot()
 	tmuxPrefix := snap.TmuxPrefix
 	if tmuxPrefix == "" {
@@ -776,28 +786,83 @@ func (i *Instance) wireTmuxSession(program string) *tmux.TmuxSession {
 	}
 
 	runner := i.executionTarget().Runner()
-	opts := []tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
-			// Kills a leftover pane process before a restart so it can't race the new one.
-			opts = append(opts, tmux.WithOrphanProcessGuard(mgr.CachedPanePIDStillAlive, mgr.TerminateCachedPanePID))
+	newTmuxSession := func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession {
+		opts := append([]tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}, extra...)
+		var session *tmux.TmuxSession
+		if snap.TmuxServerSocket != "" {
+			// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
+			session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
+				append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
+		} else {
+			session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
 		}
+		if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
+			session.SetExtraEnv(extraEnv)
+		}
+		return session
 	}
-	var session *tmux.TmuxSession
-	if snap.TmuxServerSocket != "" {
-		// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
-		session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
-			append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
-	} else {
-		session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
+	i.processManager.WireLaunch(LaunchSpec{Program: program, NewTmuxSession: newTmuxSession})
+}
+
+// updateProcessManagerForRestart swaps i.processManager and persists
+// i.Backend when migrating to a different backend, or reconfigures the
+// existing manager in place otherwise. Holds i.pmMu across all branches so a
+// concurrent Restart's pointer swap can never be observed mid-assignment by
+// this call's type assertions. Nests i.mu *inside* i.pmMu for the Backend
+// write below -- no call site anywhere else in the package nests the other
+// way (mu-then-pmMu), so keep that ordering if this ever changes.
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, program string) error {
+	i.pmMu.Lock()
+	defer i.pmMu.Unlock()
+
+	if !migrating {
+		// Same choke point initTmuxSession uses -- handles both TmuxBackend
+		// (SetSession, with the orphan-process guard and extra env) and
+		// TymuxBackend (SetCommand) dispatch internally.
+		i.wireTmuxSession(program)
+		return nil
 	}
-	if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
-		session.SetExtraEnv(extraEnv)
+
+	tmuxPrefix := i.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
 	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		tb.TmuxManager().SetSession(session)
+	// A different backend means a different daemon entirely (tmux vs.
+	// tymuxd) -- no live hand-off is possible, so build a brand-new
+	// ProcessManager via the same factory CreateSession uses.
+	newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
+		Backend:      backendOverride,
+		SessionName:  i.Title,
+		Program:      program,
+		Prefix:       tmuxPrefix,
+		ServerSocket: i.TmuxServerSocket,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
 	}
-	return session
+	i.processManager = newPM
+
+	i.mu.Lock()
+	i.Backend = backendOverride
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
+	return nil
+}
+
+// validateBackendOverride rejects an unrecognized backendOverride before
+// Restart tears down the live session -- NewProcessManager's own validation
+// runs too late for this call path, after KillSession has already run.
+func validateBackendOverride(backendOverride ProcessManagerBackend) error {
+	if backendOverride == "" {
+		return nil
+	}
+	switch backendOverride {
+	case BackendTmux, BackendNative, BackendTymux:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
+	}
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
@@ -1017,10 +1082,8 @@ func (i *Instance) IsBackendProcessAlive() bool {
 	if i.pm().HasLiveSessionNoCache() {
 		return true
 	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		if mgr, ok := tb.TmuxManager().(*TmuxProcessManager); ok {
-			return mgr.CachedPanePIDStillAlive()
-		}
+	if p, ok := capabilityOf[OrphanProber](i.processManager); ok {
+		return p.PanePIDStillAlive()
 	}
 	return false
 }
@@ -1075,15 +1138,11 @@ func (i *Instance) paneExitInfoIgnoringStatus() (dead bool, code int, signal str
 	if !i.started.Load() || !i.pm().HasSession() || !i.pm().IsAlive() {
 		return false, 0, ""
 	}
-	tb, ok := i.pm().(*TmuxBackend)
+	r, ok := capabilityOf[ExitStatusReporter](i.pm())
 	if !ok {
 		return false, 0, ""
 	}
-	tm := tb.TmuxManager()
-	if tm == nil {
-		return false, 0, ""
-	}
-	code, signal, dead = tm.PaneExitStatus()
+	code, signal, dead = r.PaneExitStatus()
 	return dead, code, signal
 }
 
@@ -1252,8 +1311,8 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 	if !i.started.Load() || i.Status == Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().CapturePaneContentPriority()
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		return p.CapturePaneContentPriority()
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentPriority")
 	return i.pm().CapturePaneContent()
@@ -1274,8 +1333,8 @@ func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub
 	if !i.started.Load() || i.Status == Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		content, err := tb.TmuxManager().CapturePaneContentRawPriority(ctx)
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		content, err := p.CapturePaneContentRawPriority(ctx)
 		return streamhub.RawPaneContent(content), err
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentRawPriority")
@@ -1289,8 +1348,8 @@ func (i *Instance) CapturePaneContentRawPriority(ctx context.Context) (streamhub
 // CapturePaneContentPriority's doc comment for the fallback rationale, and
 // CapturePaneContentRawPriority's for why ctx is caller-supplied.
 func (i *Instance) RefreshTmuxClientPriority(ctx context.Context) error {
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().RefreshClientPriority(ctx)
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		return p.RefreshClientPriority(ctx)
 	}
 	i.logFastLaneAssertionFailure("RefreshTmuxClientPriority")
 	return i.pm().RefreshClient()
@@ -1302,8 +1361,8 @@ func (i *Instance) RefreshTmuxClientPriority(ctx context.Context) error {
 // comment. ctx is caller-supplied, for the same shared-deadline reason as
 // CapturePaneContentRawPriority.
 func (i *Instance) GetPaneDimensionsPriority(ctx context.Context) (width, height int, err error) {
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		return tb.TmuxManager().GetPaneDimensionsPriority(ctx)
+	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
+		return p.GetPaneDimensionsPriority(ctx)
 	}
 	i.logFastLaneAssertionFailure("GetPaneDimensionsPriority")
 	return i.pm().GetPaneDimensions()
@@ -1341,15 +1400,11 @@ func (i *Instance) logFastLaneAssertionFailure(method string) {
 // (not an error) for a non-tmux backend or a failed query -- this is a
 // best-effort bootstrap, not a required capability.
 func (i *Instance) IsAlternateScreenActiveBootstrap() bool {
-	tb, ok := i.processManager.(*TmuxBackend)
+	q, ok := capabilityOf[AltScreenQuerier](i.processManager)
 	if !ok {
 		return false
 	}
-	tpm, ok := tb.TmuxManager().(*TmuxProcessManager)
-	if !ok {
-		return false
-	}
-	active, err := tpm.IsAlternateScreenActive()
+	active, err := q.IsAlternateScreenActive()
 	if err != nil {
 		log.ForSession(i.Title).Debug("IsAlternateScreenActiveBootstrap query failed", "err", err)
 		return false
@@ -1420,11 +1475,10 @@ func (i *Instance) SendPrompt(prompt string) error {
 // GetTmuxSession returns the underlying tmux session for direct access.
 // Returns nil if the session hasn't been started yet or if the backend is not tmux.
 func (i *Instance) GetTmuxSession() *tmux.TmuxSession {
-	tb, ok := i.pm().(*TmuxBackend)
-	if !ok {
-		return nil
+	if a, ok := capabilityOf[TmuxSessionAccessor](i.pm()); ok {
+		return a.TmuxSession()
 	}
-	return tb.TmuxManager().Session()
+	return nil
 }
 
 // ---- SessionStreamer delegation methods ----
@@ -1483,8 +1537,8 @@ func (i *Instance) UnsubscribeControlModeUpdates(id string) {
 
 // SetTmuxSession sets the tmux session for testing purposes.
 func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
-	if tb, ok := i.processManager.(*TmuxBackend); ok {
-		tb.TmuxManager().SetSession(session)
+	if a, ok := capabilityOf[TmuxSessionAccessor](i.processManager); ok {
+		a.SetTmuxSession(session)
 	}
 	i.started.Store(session != nil)
 }

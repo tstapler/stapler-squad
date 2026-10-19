@@ -1,12 +1,13 @@
 /**
  * Compose mode (dedicated textarea) opened by the omnibar's "Create Backlog
- * Item" button: text preservation, immediate close + background creation,
+ * Item" button: text preservation, hand-off to the AI intent review,
  * and no regression to the "backlog: " prefix path (see
  * Omnibar.backlogIntentReview.test.tsx).
  */
 
 import React from "react";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Omnibar } from "@/components/sessions/Omnibar";
 import {
   mockUsePathCompletions,
@@ -221,47 +222,48 @@ describe("Omnibar compose mode", () => {
     expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("draft");
   });
 
-  it("closes immediately on Create, then notifies with a deep link when creation finishes", async () => {
-    let resolveCreate: (v: unknown) => void = () => {};
-    const createBacklogItemFromChat = jest.fn(
-      () => new Promise((resolve) => { resolveCreate = resolve; })
-    );
-    mockBacklogService({ createBacklogItemFromChat: createBacklogItemFromChat as never });
+  it("creates the item in the background: closes the omnibar, skips intent parsing, notifies", async () => {
+    const parseBacklogItemIntent = jest.fn();
+    const createBacklogItemFromChat = jest
+      .fn()
+      .mockResolvedValue({ item: { id: "item-1", title: "Add dark mode" }, triageTriggered: true });
+    mockBacklogService({
+      parseBacklogItemIntent: parseBacklogItemIntent as never,
+      createBacklogItemFromChat: createBacklogItemFromChat as never,
+    });
     const onClose = jest.fn();
     renderOmnibar({ onClose });
 
     fireEvent.click(screen.getByTestId("mock-create-backlog"));
     fireEvent.change(screen.getByTestId("backlog-compose-textarea"), {
-      target: { value: "  add dark mode  " },
+      target: { value: "  add dark mode ![shot](/api/local/serve/x.png) " },
     });
-    fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    });
 
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(createBacklogItemFromChat).toHaveBeenCalledWith("add dark mode");
-    expect(mockAddNotification).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolveCreate({ item: { id: "item-9", title: "Add dark mode" }, triageTriggered: false });
-    });
-
-    await waitFor(() => expect(mockAddNotification).toHaveBeenCalledTimes(1));
-    const n = mockAddNotification.mock.calls[0][0];
-    expect(n.message).toBe("Add dark mode");
-    expect(n.notificationType).toBe("task_complete");
-    n.onView();
-    expect(mockPush).toHaveBeenCalledWith("/backlog?item=item-9");
+    expect(screen.queryByText(/Parsing your message/)).not.toBeInTheDocument();
+    expect(parseBacklogItemIntent).not.toHaveBeenCalled();
+    expect(createBacklogItemFromChat).toHaveBeenCalledWith("add dark mode ![shot](/api/local/serve/x.png)");
+    expect(mockAddNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Backlog item created — triage starting", message: "Add dark mode" })
+    );
   });
 
-  it("raises an error notification when creation fails", async () => {
-    mockBacklogService({ createBacklogItemFromChat: jest.fn().mockResolvedValue(null) });
+  it("raises an error notification when background creation fails", async () => {
+    mockBacklogService({ createBacklogItemFromChat: jest.fn().mockResolvedValue(null) as never });
     renderOmnibar();
 
     fireEvent.click(screen.getByTestId("mock-create-backlog"));
-    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "x" } });
-    fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "raw idea" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    });
 
-    await waitFor(() => expect(mockAddNotification).toHaveBeenCalledTimes(1));
-    expect(mockAddNotification.mock.calls[0][0].notificationType).toBe("error");
+    expect(mockAddNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Failed to create backlog item", notificationType: "error" })
+    );
   });
 
   it("rejects an image over 10 MB client-side without uploading", () => {
@@ -292,5 +294,86 @@ describe("Omnibar compose mode", () => {
       expect(screen.getByTestId("backlog-intent-review-parse-failed-banner")).toBeInTheDocument()
     );
     expect(screen.queryByTestId("backlog-compose-widget")).not.toBeInTheDocument();
+  });
+});
+
+describe("Omnibar footer / fallback Create Backlog Item button", () => {
+  afterEach(() => {
+    const atMock = jest.requireMock("@/lib/hooks/useAtCommandSuggestions").useAtCommandSuggestions as jest.Mock;
+    atMock.mockReturnValue({ isAtCommand: false, suggestions: [], complete: jest.fn() });
+  });
+
+  function enterCreationMode() {
+    fireEvent.click(screen.getByRole("button", { name: /^Create$/ }));
+  }
+
+  it("footer click seeds and focuses the compose textarea", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "fix the flaky login test");
+    enterCreationMode();
+
+    fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
+
+    const textarea = screen.getByTestId("backlog-compose-textarea");
+    expect(textarea).toHaveValue("fix the flaky login test");
+    expect(textarea).toHaveFocus();
+  });
+
+  it("plain Enter on the focused footer button opens compose and does not also run the submit path", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    // "backlog: ..." makes canSubmit true, so a leaked Enter would open the intent review.
+    await typeAndDetect(input, "backlog: fix login");
+    enterCreationMode();
+    expect(screen.getByTestId("omnibar-create-session-button")).toBeEnabled();
+
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    screen.getByTestId("omnibar-create-backlog-button").focus();
+    await user.keyboard("{Enter}");
+
+    // Had Enter also run handleSubmit, the intent review would have replaced the compose widget.
+    expect(screen.getByTestId("backlog-compose-textarea")).toBeInTheDocument();
+  });
+
+  it("Cancel from the footer-opened compose returns to the creation form with the input intact", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "/tmp");
+    enterCreationMode();
+
+    fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
+    fireEvent.click(screen.getByTestId("backlog-compose-cancel"));
+
+    expect(screen.getByTestId("omnibar-create-session-button")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /session source input/i })).toHaveValue("/tmp");
+  });
+
+  it("does not stop Escape on the button, so the modal handler still sees it", async () => {
+    mockBacklogService({});
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "/tmp");
+    enterCreationMode();
+    const onKeyDown = jest.fn();
+    const modal = screen.getByTestId("omnibar");
+    modal.addEventListener("keydown", onKeyDown);
+
+    fireEvent.keyDown(screen.getByTestId("omnibar-create-backlog-button"), { key: "Escape" });
+
+    expect(onKeyDown).toHaveBeenCalled();
+  });
+
+  it("shows the footer button in every discovery state, including while an @ command hides the list row", async () => {
+    mockBacklogService({});
+    const atMock = jest.requireMock("@/lib/hooks/useAtCommandSuggestions").useAtCommandSuggestions as jest.Mock;
+    const { input } = renderOmnibar();
+    await typeAndDetect(input, "fix login");
+    expect(screen.getByTestId("omnibar-create-backlog-button")).toBeInTheDocument();
+
+    atMock.mockReturnValue({ isAtCommand: true, suggestions: [], complete: jest.fn() });
+    await typeAndDetect(input, "@deploy");
+    fireEvent.click(screen.getByTestId("omnibar-create-backlog-button"));
+
+    expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("@deploy");
   });
 });

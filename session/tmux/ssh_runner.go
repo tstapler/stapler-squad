@@ -213,6 +213,25 @@ func NewSSHRunner(target SSHTarget, config ssh.ClientConfig, opts ...SSHRunnerOp
 
 var _ CommandRunner = (*SSHRunner)(nil)
 
+// DialFresh performs one SSH dial-and-handshake against target, bypassing
+// SSHClientPool entirely so config.HostKeyCallback always runs against the
+// remote's current key (a pooled hit never re-verifies it). It does not touch
+// pool state or reference counts; the caller owns and must Close the client.
+func DialFresh(ctx context.Context, target SSHTarget, config ssh.ClientConfig) (*ssh.Client, error) {
+	cfg := config
+	cfg.HostKeyCallback = wrapHostKeyCallback(config.HostKeyCallback)
+	pinModernAlgorithms(&cfg)
+
+	dialCtx, cancel := context.WithTimeout(ctx, DialTimeout)
+	defer cancel()
+
+	client, err := dialSSHContext(dialCtx, target.Addr, &cfg)
+	if err != nil {
+		return nil, fmt.Errorf("ssh: dial %s (%s): %w", target.Name, target.Addr, err)
+	}
+	return client, nil
+}
+
 // IsRemote implements CommandRunner. SSHRunner always runs commands on a
 // different host than this process (paired with LocalRunner.IsRemote()
 // returning false -- the single mechanism every "is this remote" check

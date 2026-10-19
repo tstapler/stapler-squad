@@ -83,6 +83,14 @@ linters:
               desc: "core packages (session/config/log) must not import the server layer"
             - pkg: "github.com/tstapler/stapler-squad/server/**"
               desc: "core packages must not import server subpackages"
+        # Allow-list rather than a deny-list: depguard's `/**` deny globs did not match
+        # subpackages (e.g. server/web) in a probe, so a deny rule here would silently pass.
+        isolate_threatscan_stdlib_only:
+          list-mode: strict
+          files:
+            - "**/pkg/threatscan/*.go"
+          allow:
+            - $gostd
         no_ioutil:
           files:
             - "$all"
@@ -496,6 +504,8 @@ linters:
       # introduced. Suppress blanket per-package; new packages (pkg/warren,
       # pkg/events) are NOT excluded and must not introduce globals.
       # ──────────────────────────────────────────────────────────────────────────
+      - path: "^internal/fsevents/stream_darwin\\.go"
+        linters: [gochecknoglobals] # purego FFI func vars + the one process-wide callback slot (NewCallback slots are never freed)
       - path: "^session/"
         linters: [gochecknoglobals]
       - path: "^server/"
@@ -508,6 +518,8 @@ linters:
         linters: [gochecknoglobals]
       - path: "^github/"
         linters: [gochecknoglobals]
+      - path: "^(linear|jira)/"
+        linters: [gochecknoglobals] # package-level keychain mutex, mirrors github/
       - path: "^daemon/"
         linters: [gochecknoglobals]
       - path: "^telemetry/"

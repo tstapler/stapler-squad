@@ -1,0 +1,252 @@
+name: Publish Website Demo GIFs
+
+# Manually dispatched, separate from demo-publish.yml on purpose (see
+# research/architecture.md §2). It records the SAME curated FEATURE_SPECS
+# set as demo-publish.yml/e2e-video.yml, but publishes to a NEW release tag
+# (website-demo-gifs-latest), never demo-gifs-latest. The site's
+# higher-production clips (branding/pacing work layered on top in Epic 5.2)
+# need their own release so they can be revised/rolled back independently of
+# the existing, working demo-publish.yml pipeline and its README-facing
+# output, with zero risk of asset-name collisions between the two releases.
+#
+# Trigger discipline mirrors demo-publish.yml exactly and must keep doing so:
+# workflow_dispatch only, no push/pull_request/schedule. Both workflows
+# publish durable Release assets (unlike e2e-video.yml's ephemeral,
+# retention-limited upload-artifact), so neither can be safely triggered by
+# an untrusted push/PR event. See research/pitfalls.md §4 — this is called
+# out there as a near-mechanical review check: diff this workflow's `on:`
+# block against demo-publish.yml's.
+
+on:
+  workflow_dispatch:
+
+# Feature specs recorded — must stay identical to demo-publish.yml's set.
+# Excludes terminal-flickering.spec.ts, accessibility.spec.ts, smoke.spec.ts
+# (see demo-publish.yml's own comment for why).
+env:
+  FEATURE_SPECS: >-
+    demo.spec.ts
+    review-queue.spec.ts
+    session-lifecycle.spec.ts
+    history-search.spec.ts
+    workspace-management.spec.ts
+
+jobs:
+  record-demos:
+    name: Record Demo Flows (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # ratchet:actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
+
+      - name: Build binary
+        run: go build -o stapler-squad .
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
+
+      - name: Install Playwright dependencies
+        run: |
+          cd tests/e2e
+          bun install --frozen-lockfile
+          npx playwright install chromium --with-deps
+
+      - name: Record demo flows (shard ${{ matrix.shard }}/2)
+        env:
+          RECORD_FEATURES: 'true'
+          TEST_SERVER_URL: http://localhost:8543
+        run: |
+          DEMO_DIR=$(mktemp -d)
+          go run ./tests/demo/seed "$DEMO_DIR" 6
+          echo "Seeded demo data into $DEMO_DIR"
+
+          STAPLER_SQUAD_USE_CONTROL_MODE=false \
+            ./stapler-squad --tmux-keep-server --test-mode --test-dir "$DEMO_DIR" &
+          SERVER_PID=$!
+
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8543/ > /dev/null 2>&1; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          cd tests/e2e
+          npx playwright test ${{ env.FEATURE_SPECS }} \
+            --shard=${{ matrix.shard }}/2 \
+            --reporter=list || true
+
+          kill $SERVER_PID 2>/dev/null || true
+          rm -rf "$DEMO_DIR"
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Convert videos to GIFs
+        id: convert-gifs
+        run: |
+          mkdir -p /tmp/demo-gifs
+          NAMES=""
+          WEBMS=$(
+            find tests/e2e/test-results/demo-Demo-Flow-chromium \
+              -maxdepth 1 -name "video.webm" 2>/dev/null | head -1
+            find tests/e2e/test-results -maxdepth 2 -name "video.webm" 2>/dev/null \
+              | grep -iv "terminal-flickering\|terminal-stress\|stress-test\|-retry[0-9]" \
+              | grep -v "demo-Demo-Flow"
+          )
+          for webm in $WEBMS; do
+            dir=$(basename "$(dirname "$webm")")
+            name=$(echo "$dir" | sed 's/-chromium$//;s/-firefox$//;s/-webkit$//')
+            gif="/tmp/demo-gifs/${name}.gif"
+            duration=$(ffprobe -v quiet -show_entries format=duration \
+              -of default=noprint_wrappers=1:nokey=1 "$webm" 2>/dev/null)
+            if [ -z "$duration" ] || awk "BEGIN{exit !(${duration:-0} < 1.0)}"; then
+              echo "Skipping $webm (too short: ${duration:-unknown}s)"
+              continue
+            fi
+            palette=$(mktemp --suffix=.png)
+            echo "Converting $webm -> $gif"
+            if ffmpeg -y -i "$webm" -vf "fps=8,scale=960:-2,palettegen=max_colors=128" -t 30 "$palette" 2>&1 \
+               && ffmpeg -y -i "$webm" -i "$palette" \
+                 -lavfi "fps=8,scale=960:-2[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3" \
+                 -loop 0 -t 30 "$gif" 2>&1; then
+              NAMES="${NAMES}${name},"
+              echo "Created $gif ($(du -h "$gif" | cut -f1))"
+            else
+              echo "Warning: ffmpeg conversion failed for $webm"
+            fi
+            rm -f "$palette"
+          done
+          echo "names=${NAMES%,}" >> $GITHUB_OUTPUT
+          if [ -z "$NAMES" ]; then
+            echo "::warning::No GIFs were produced in shard ${{ matrix.shard }} — WebM artifacts are still available"
+          fi
+
+      - name: Upload GIFs (shard ${{ matrix.shard }})
+        if: steps.convert-gifs.outputs.names != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
+        with:
+          name: website-demo-gifs-shard${{ matrix.shard }}
+          path: /tmp/demo-gifs/*.gif
+          retention-days: 5
+
+  publish-gifs:
+    name: Publish GIFs to website-demo-gifs-latest release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: record-demos
+    if: always()
+    permissions:
+      contents: write
+
+    steps:
+      # Needed (demo-publish.yml's publish-gifs job doesn't check out the
+      # repo at all) because this job also commits the updated
+      # AssetHealthManifest below.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # ratchet:actions/checkout@v4
+
+      - name: Download demo GIFs from both shards
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          pattern: website-demo-gifs-shard*
+          path: /tmp/demo-gifs
+          merge-multiple: true
+
+      - name: Upload GIFs as website-demo-gifs-latest release assets
+        id: upload-gifs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          gifs=(/tmp/demo-gifs/*.gif)
+          if [ ${#gifs[@]} -eq 0 ]; then
+            echo "No GIFs downloaded from either shard — nothing to publish"
+            echo "uploaded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh release view website-demo-gifs-latest --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create website-demo-gifs-latest \
+              --repo "${{ github.repository }}" \
+              --title "Website Demo GIFs (latest)" \
+              --notes "Auto-updated by website-demo-publish.yml. Not a versioned release -- assets here are overwritten on every run; link to https://github.com/${{ github.repository }}/releases/download/website-demo-gifs-latest/<name>.gif for a stable URL to the current GIF. Separate from demo-gifs-latest (owned by demo-publish.yml) -- never shares assets or tags with it." \
+              --latest=false
+          fi
+          # --clobber replaces an asset with the same filename in place, so
+          # the download URL for a given demo name stays stable across runs.
+          gh release upload website-demo-gifs-latest "${gifs[@]}" --repo "${{ github.repository }}" --clobber
+          echo "uploaded=true" >> "$GITHUB_OUTPUT"
+
+      # Content-identity check for pre-mortem.md Failure #5: --clobber makes
+      # the URL stable even when the bytes behind it change, so
+      # check-asset-health.mjs (Epic 2.2) needs a hash to compare against,
+      # not just an HTTP status. This step records that hash immediately
+      # after the upload it describes, so the manifest is never stale
+      # relative to the release.
+      - name: Record uploaded asset hashes in AssetHealthManifest
+        if: steps.upload-gifs.outputs.uploaded == 'true'
+        run: |
+          set -euo pipefail
+          manifest=website/scripts/asset-health-manifest.json
+          if [ ! -f "$manifest" ]; then
+            echo "::warning::$manifest not found (Epic 2.2 scaffold not merged yet) -- skipping manifest update"
+            exit 0
+          fi
+          tmp_manifest=$(mktemp)
+          cp "$manifest" "$tmp_manifest"
+          shopt -s nullglob
+          for gif in /tmp/demo-gifs/*.gif; do
+            name=$(basename "$gif")
+            hash=$(sha256sum "$gif" | cut -d' ' -f1)
+            jq --arg k "$name" --arg v "$hash" '.[$k] = $v' "$tmp_manifest" > "${tmp_manifest}.next"
+            mv "${tmp_manifest}.next" "$tmp_manifest"
+            echo "Recorded $name -> $hash"
+          done
+          cp "$tmp_manifest" "$manifest"
+          rm -f "$tmp_manifest"
+
+      # Bot-commit pattern copied from ci-duration-trend.yml: git
+      # config/add/commit with [skip ci], then a pull --rebase
+      # --autostash && push retry loop so a concurrent push (e.g. an
+      # overlapping manual dispatch) doesn't lose this update.
+      - name: Commit updated AssetHealthManifest
+        if: steps.upload-gifs.outputs.uploaded == 'true'
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          if [ ! -f website/scripts/asset-health-manifest.json ]; then
+            echo "No manifest file present -- nothing to commit"
+            exit 0
+          fi
+          git add website/scripts/asset-health-manifest.json
+          git diff --cached --quiet && echo "No manifest changes to commit" && exit 0
+          git commit -m "chore(website): record published demo-clip hashes [skip ci]"
+          for i in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 5; done

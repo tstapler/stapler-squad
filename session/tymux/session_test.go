@@ -133,6 +133,26 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 	assert.True(t, sess.HasSession())
 }
 
+func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	dir := t.TempDir()
+	var gotReq *v1.CreateSessionRequest
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			gotReq = req.Msg
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	sess.SetCommand("claude --resume abc")
+
+	err := sess.Start(dir)
+
+	require.NoError(t, err)
+	require.NotNil(t, gotReq)
+	assert.Equal(t, "claude --resume abc", gotReq.GetCommand(),
+		"Start must forward SetCommand's value as CreateSessionRequest.Command, not default to tymuxd's bare $SHELL")
+}
+
 func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
@@ -278,6 +298,19 @@ func startedSession(t *testing.T, snap *v1.PaneSnapshot) TymuxManager {
 	sess := NewTymuxGRPCSession(transport)
 	require.NoError(t, sess.Start(dir))
 	return sess
+}
+
+func TestTymuxGRPCSession_CapturePaneContentRaw_PreservesSGR(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid: []*v1.Row{{Cells: []*v1.Cell{{Text: "r", Fg: 1}, {Text: "e", Fg: 1}, {Text: "d"}}}},
+	}
+	sess := startedSession(t, snap)
+
+	content, err := sess.CapturePaneContentRaw()
+
+	require.NoError(t, err)
+	assert.Contains(t, content, "\x1b[", "first-paint capture must carry color attributes")
+	assert.Contains(t, content, "re")
 }
 
 func TestTymuxGRPCSession_CapturePaneContentRaw_JoinsRowCellText(t *testing.T) {

@@ -17,6 +17,10 @@ const (
 	StopReasonCancelledExternal  StopReason = "cancelled_external"
 	StopReasonCancelledShutdown  StopReason = "cancelled_shutdown"
 	StopReasonPanic              StopReason = "panic"
+	// StopReasonStaleWork and StopReasonDeadPane are recorded by the stale-work
+	// detector and the health checker, which restart a session without a driver stop.
+	StopReasonStaleWork StopReason = "stale_work"
+	StopReasonDeadPane  StopReason = "dead_pane"
 )
 
 // AllStopReasons lists every defined StopReason (not the empty legacy value).
@@ -33,6 +37,8 @@ var AllStopReasons = []StopReason{
 	StopReasonCancelledExternal,
 	StopReasonCancelledShutdown,
 	StopReasonPanic,
+	StopReasonStaleWork,
+	StopReasonDeadPane,
 }
 
 // OutcomeClass is the three-way split callers branch on, instead of a bare

@@ -138,6 +138,7 @@ export function SessionDetail({
       onBack={onBack}
       canGoBack={canGoBack}
       backlogItemId={backlogItemId}
+      isActive={isActive}
       backlogEntry={backlogEntry}
     />
   );

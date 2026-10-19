@@ -126,6 +126,19 @@ export function dispatchOmnibarAction(
       void deps.createBacklogItemFromChat(action.text);
       deps.close();
       return;
+    case "fan_out":
+      if (track) track({ name: "omnibar.fan_out", category: "user_action", labels: { count: String(action.count) } });
+      void deps.createSession({
+        title: action.title ?? action.prompt.slice(0, 40),
+        path: action.path,
+        sessionType: "new_worktree",
+        program: action.program ?? "",
+        autoYes: false,
+        initialPrompt: action.prompt,
+        fanoutCount: action.count,
+      });
+      deps.close();
+      return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅
   }
 }

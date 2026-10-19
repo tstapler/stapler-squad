@@ -75,6 +75,8 @@ type AutonomousOrchestrationService struct {
 	diagnoseNudgeEnabled func() bool
 	stallNudgeEnabled    func() bool
 	restartDriver        func(*session.Instance, time.Duration) error
+	// staleSnapshot replaces the real pane capture of InspectStaleWork (tests).
+	staleSnapshot func(*session.Instance) domain.StopSnapshot
 	// recoveries holds the cancel of each in-flight stall recovery, by session title (guarded by mu).
 	recoveries map[string]*stallRecovery
 }
@@ -917,19 +919,18 @@ func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(it
 // resolveAutonomousStuck best-effort closes any open autonomous_stuck row for
 // itemID. Mirrors the resolve-at-point-of-success pattern resolveToPRPending
 // uses for push_failed/abandoned_review (session/backlog_lifecycle.go:1729-1738).
-// autonomous_stuck has no non-terminal anchor in selfHealStuck's per-reason
-// sweep (session/backlog_lifecycle.go's selfHealStuck) — it relies on that
-// sweep's blanket terminal-status rule (any open row on a done/archived item
-// is resolved regardless of reason) to eventually catch it, or on a
-// human-initiated TransitionBacklogItemStatus RPC via
-// resolveStuckOnManualTransition (server/services/backlog_service_lifecycle.go).
-// This function exists to resolve the row immediately, at the moment of
-// success, rather than waiting for the next sweep tick: without it, items
-// that are marked autonomous_stuck and then later complete purely through the
-// automated pipeline (no human ever clicks a manual transition) would sit
-// with a stuck row open until the next selfHealStuck run. A failure here is
-// logged, not returned: this is bookkeeping cleanup and must never block the
-// caller's own notification/transition handling.
+// autonomous_stuck's non-terminal anchor in selfHealStuck's per-reason sweep
+// (session/backlog_lifecycle.go's selfHealStuck) only catches a row once the
+// item leaves BOTH in_progress and review (mirroring StuckReasonBouncing's
+// identical two-status anchor, for the same false-resolve-risk reason) — this
+// function exists to resolve the row immediately, at the moment of success,
+// rather than waiting for that sweep's next tick, AND to cover an item that
+// completes purely through the automated pipeline (no human ever clicks a
+// manual transition via resolveStuckOnManualTransition,
+// server/services/backlog_service_lifecycle.go) before the anchor's own status
+// check would otherwise catch it. A failure here is logged, not returned: this
+// is bookkeeping cleanup and must never block the caller's own
+// notification/transition handling.
 func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Context, storage *session.Storage, itemID string) {
 	if _, err := storage.ResolveStuck(ctx, itemID, domain.StuckReasonAutonomousStuck); err != nil {
 		log.Warn("[AutonomousDriver] resolveAutonomousStuck ResolveStuck(autonomous_stuck) failed", "item", itemID, "err", err)

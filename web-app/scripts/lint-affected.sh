@@ -2,8 +2,8 @@
 # Local-dev equivalent of .github/workflows/lint.yml's file-scoped ESLint
 # step: lint only files changed vs BASE (default origin/main) via
 # `next lint --file`, instead of a full-repo `next lint` surfacing every
-# pre-existing warning in the repo. Run from web-app/ (or via `pnpm run
-# lint:affected`); override the base with `BASE=some-ref pnpm run lint:affected`.
+# pre-existing warning in the repo. Run from web-app/ (or via `bun run
+# lint:affected`); override the base with `BASE=some-ref bun run lint:affected`.
 set -euo pipefail
 
 BASE="${BASE:-origin/main}"

@@ -22,6 +22,7 @@ Hard policy (owner, 2026-10-15): **go-git only**. No `exec`, no `git` subprocess
 - **Q3** answered: **want the best merge base**. `PaintDownBest` semantics are now the default `findMergeBase` (commit `fef7bb90f`: git-style paint-down-to-common, matches the `object.Commit.MergeBase` oracle on 100% of 600 single-merge/general cases). The `best_merge_base` flag and Story 2.2.3 are superseded: `MergeBaseMode` collapses to the paint-down walk; ADR-003's "preserve semantics" premise is replaced by "match the oracle".
 - **Q4/Q11** answered: **no live deploy**; estimate `s1` (labelled INFERRED; the STOP clause still needs a written owner confirmation). Owner merges after the current round lands. S1 measurement runs only on the isolated `:62871` manual instance.
 - **Q5/Q14** design rule: **lock-free algorithms and compare-and-set wherever possible** (ADR-009's arena and atomics); a mutex remains only around go-git object access. The 5% mutex-gate fraction stays as the contention threshold.
+- **Tier B update (2026-10-19)**: a Tier B-equivalent now exists on main via #1088 (pure-Go FSEvents binding and darwin working-tree watchers); GitHub issue #1062 is superseded by it. Tree events mark DirtyGen immediately (`Scanner.onTreeChange`), so they invalidate scan_skip caches.
 
 One block, five owner decisions (full text in "Unresolved Questions" below; numbering unchanged). Each carries the default that applies if it is unanswered, so no decision is a silent blocker.
 

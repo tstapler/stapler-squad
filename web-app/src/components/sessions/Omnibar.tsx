@@ -68,12 +68,17 @@ import {
   pathIndicatorInvalid,
   pathIndicatorLoading,
   createButton,
+  button as buttonClass,
+  buttonSecondary,
+  shortcutsBacklogButton,
   error as errorClass,
 } from "./Omnibar.css";
 import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
 import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
-import { useBacklogBackgroundCreate } from "@/lib/hooks/useBacklogBackgroundCreate";
-import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
+import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
+import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
@@ -145,6 +150,9 @@ export interface OmnibarFormState {
   // initialize a new git repository. Only applies to directory / new_worktree.
   createIfMissing: boolean;
   firstPrompt: string;
+  // Parallel fan-out: run the same prompt across this many isolated worktree sessions (1 = off,
+  // 2-5 = fan out; server caps at 5). Only meaningful for new_worktree sessions.
+  fanoutCount: number;
   // Autonomous mode: an orthogonal flag that composes with sessionType (any type
   // except one_off) rather than a session type of its own — see OmnibarCreationPanel's
   // "Autonomous mode" checkbox.
@@ -178,6 +186,7 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   newProjectSessionType: "new_worktree",
   createIfMissing: false,
   firstPrompt: "",
+  fanoutCount: 1,
   autonomousMode: false,
   autoApprove: false,
   extraArgs: [],
@@ -229,6 +238,8 @@ export interface OmnibarSessionData {
   // per ADR-001 (remote-as-orthogonal-flag). Undefined runs locally — see
   // OmnibarFormState.remoteName's doc comment.
   remoteName?: string;
+  // Parallel fan-out: when >= 2, the context layer calls FanOutSession instead of CreateSession.
+  fanoutCount?: number;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -274,6 +285,39 @@ export function Omnibar({
 }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
+  const { createBacklogItemFromChat } = useBacklogService();
+  const { trackItem } = useBacklogCreationNotifier();
+  const { addNotification } = useNotificationCommands();
+  const createBacklogItemInBackground = useCallback(
+    async (text: string) => {
+      let result: Awaited<ReturnType<typeof createBacklogItemFromChat>> = null;
+      try {
+        result = await createBacklogItemFromChat(text);
+      } catch {
+        // fall through to the failure notification
+      }
+      if (!result) {
+        addNotification({
+          sessionId: "",
+          sessionName: "",
+          title: "Failed to create backlog item",
+          message: `Your text was not saved: ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`,
+          notificationType: "error",
+        });
+        return;
+      }
+      trackItem(result.item.id, result.item.title);
+      addNotification({
+        sessionId: "",
+        sessionName: "",
+        title: "Backlog item created — triage starting",
+        message: result.item.title,
+        notificationType: "info",
+        onView: () => router.push(`/backlog?item=${result.item.id}`),
+      });
+    },
+    [createBacklogItemFromChat, trackItem, addNotification, router]
+  );
 
   // Input state
   const [input, setInput] = useState("");
@@ -330,7 +374,6 @@ export function Omnibar({
   // Dedicated multi-line compose mode opened by the "Create backlog item" button;
   // seeded from the current input so typed text is never discarded.
   const [backlogComposeText, setBacklogComposeText] = useState<string | null>(null);
-  const createBacklogInBackground = useBacklogBackgroundCreate();
   // Synchronous double-submit guard: `isSubmitting` state only becomes visible to
   // handleSubmit's closure after React commits the re-render, which leaves a window
   // for a second rapid click (e.g. a fast double-click) to read the same stale
@@ -1352,6 +1395,8 @@ export function Omnibar({
       return true;
     // Chat backlog item creation (backlog: <message>) needs no sessionName/path.
     if (detection?.type === InputType.ChatBacklogItem) return true;
+    // fanout N: <prompt> only prefills the variants count + first prompt; always submittable.
+    if (detection?.type === InputType.FanOut) return true;
     // Workflow invocation (@slug [arg]) is fire-and-forget, no sessionName/path needed.
     if (
       detection?.type === InputType.Workflow &&
@@ -1449,6 +1494,18 @@ export function Omnibar({
       isSubmittingRef.current = false;
       setBacklogComposeText(null);
       setBacklogReviewText(detection.parsedValue);
+      return;
+    }
+
+    // fanout N: <prompt> — prefill the variants input and first prompt, then let the user
+    // pick the repo path and submit through the normal creation flow.
+    if (detection?.type === InputType.FanOut) {
+      const count = Number(detection.metadata?.fanoutCount ?? 2);
+      setFormField("fanoutCount", count);
+      setFormField("firstPrompt", detection.parsedValue);
+      setFormField("sessionType", "new_worktree");
+      setInput("");
+      isSubmittingRef.current = false;
       return;
     }
 
@@ -1630,6 +1687,10 @@ export function Omnibar({
             pathDoesNotExist && createIfMissing ? true : undefined,
           initialPrompt: firstPromptText,
           extraArgs: extraArgsForSubmit,
+          fanoutCount:
+            sessionType === "new_worktree" && formState.fanoutCount >= 2
+              ? formState.fanoutCount
+              : undefined,
         };
 
         // Handle GitHub URLs - path will be resolved server-side
@@ -1745,8 +1806,8 @@ export function Omnibar({
     );
   }
 
-  // Compose mode: dedicated textarea; Create closes the omnibar immediately and
-  // finishes in the background (see useBacklogBackgroundCreate).
+  // Compose mode: dedicated textarea; Create closes the omnibar and creates the
+  // item in the background, with triage progress reported via notifications.
   if (backlogComposeText !== null) {
     return (
       <div
@@ -1763,7 +1824,7 @@ export function Omnibar({
             onSubmit={(text) => {
               setBacklogComposeText(null);
               onClose();
-              void createBacklogInBackground(text);
+              void createBacklogItemInBackground(text);
             }}
             onCancel={(draft) => {
               setInput(draft);
@@ -2127,6 +2188,7 @@ export function Omnibar({
             setFormField={setFormField}
             onSubmit={handleSubmit}
             onCancel={onClose}
+            onCreateBacklog={openBacklogCompose}
             worktrees={worktrees}
             isWorktreesLoading={isWorktreesLoading}
             worktreesError={worktreesError}
@@ -2230,6 +2292,10 @@ export function Omnibar({
               <span className={shortcut}>
                 <span className={shortcutKey}>↵</span> Jump
               </span>
+              <OmnibarBacklogButton
+                onClick={openBacklogCompose}
+                className={`${buttonClass} ${buttonSecondary} ${shortcutsBacklogButton}`}
+              />
             </>
           )}
           {!isDiscoveryMode && isDropdownVisible && (

@@ -26,6 +26,11 @@ type TymuxManager interface {
 	Close() error
 	IsAlive() bool
 
+	// SetCommand records the program the next Start() call should spawn in
+	// the pane -- tymux's equivalent of TmuxManager's baked-in-program
+	// SetSession(). Call it before Start().
+	SetCommand(command string)
+
 	// Identification
 	GetSessionIdentifier() string
 

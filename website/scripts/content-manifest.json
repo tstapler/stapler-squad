@@ -1,0 +1,117 @@
+[
+  {
+    "source": "docs/how-to/add-user-themes.md",
+    "include": true,
+    "slug": "help/add-user-themes"
+  },
+  {
+    "source": "docs/how-to/debug-with-logs.md",
+    "include": true,
+    "slug": "help/debug-with-logs"
+  },
+  {
+    "source": "docs/how-to/dispatch-work-to-google-jules.md",
+    "include": true,
+    "slug": "help/dispatch-work-to-google-jules"
+  },
+  {
+    "source": "docs/how-to/enable-pi-support.md",
+    "include": true,
+    "slug": "help/enable-pi-support"
+  },
+  {
+    "source": "docs/how-to/expose-github-webhook-endpoint.md",
+    "include": true,
+    "slug": "help/expose-github-webhook-endpoint"
+  },
+  {
+    "source": "docs/how-to/expose-slack-interactive-endpoint.md",
+    "include": true,
+    "slug": "help/expose-slack-interactive-endpoint"
+  },
+  {
+    "source": "docs/how-to/macos-codesigning.md",
+    "include": true,
+    "slug": "help/macos-codesigning"
+  },
+  {
+    "source": "docs/how-to/manage-notifications.md",
+    "include": true,
+    "slug": "help/manage-notifications"
+  },
+  {
+    "source": "docs/how-to/manage-systemd-service.md",
+    "include": true,
+    "slug": "help/manage-systemd-service"
+  },
+  {
+    "source": "docs/how-to/monitor-external-terminal-sessions.md",
+    "include": true,
+    "slug": "help/monitor-external-terminal-sessions"
+  },
+  {
+    "source": "docs/how-to/use-up-next-pr-tabs-and-ask-to-fix.md",
+    "include": true,
+    "slug": "help/use-up-next-pr-tabs-and-ask-to-fix"
+  },
+  {
+    "source": "docs/how-to/bundle-tmux.md",
+    "include": false,
+    "reason": "Single-binary tmux bundling is a build/packaging concern for maintainers, not end users"
+  },
+  {
+    "source": "docs/how-to/capture-terminal-stream-tap.md",
+    "include": false,
+    "reason": "Security-sensitive, records secrets; a debugging tool for maintainers, not public documentation"
+  },
+  {
+    "source": "docs/how-to/commit-sdd-planning-artifacts.md",
+    "include": false,
+    "reason": "Internal SDD workflow convention for contributors, not relevant to end users"
+  },
+  {
+    "source": "docs/how-to/enable-opentelemetry.md",
+    "include": false,
+    "reason": "Operator-facing observability setup (Datadog/OTLP), not an end-user feature"
+  },
+  {
+    "source": "docs/how-to/enable-otel-auto-instrumentation.md",
+    "include": false,
+    "reason": "Compile-time build flag for a dev/ops build variant, not end-user relevant"
+  },
+  {
+    "source": "docs/how-to/fix-playwright-chromium-install-stall.md",
+    "include": false,
+    "reason": "Troubleshooting for the e2e test suite's dev dependencies, not end-user relevant"
+  },
+  {
+    "source": "docs/how-to/flip-git-backend-cohort.md",
+    "include": false,
+    "reason": "Internal rollout/soak mechanism for maintainers, not end-user relevant"
+  },
+  {
+    "source": "docs/how-to/merge-prs-with-gh-cli.md",
+    "include": false,
+    "reason": "Contributor workflow using the gh CLI against this repo, not end-user relevant"
+  },
+  {
+    "source": "docs/how-to/profile-lockups.md",
+    "include": false,
+    "reason": "pprof/goroutine-dump profiling workflow for maintainers debugging the Go binary, not end-user relevant"
+  },
+  {
+    "source": "docs/how-to/roll-back-go-git-fork.md",
+    "include": false,
+    "reason": "Internal dependency-management procedure for maintainers, not end-user relevant"
+  },
+  {
+    "source": "docs/how-to/run-nil-safety-analysis.md",
+    "include": false,
+    "reason": "NilAway/go vet -nilness, dev-contributor-only tooling, no end-user relevance"
+  },
+  {
+    "source": "docs/how-to/use-bun-in-web-app.md",
+    "include": false,
+    "reason": "Frontend contributor tooling convention (Bun vs npm/yarn/pnpm), not end-user relevant"
+  }
+]

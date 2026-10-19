@@ -93,7 +93,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 		LastAttached:     time.Now(),
 	})
 	inst.LaunchCommand = "" // Restart must repopulate it, not inherit the previous value
-	require.NoError(t, inst.Restart(false), "Restart should succeed")
+	require.NoError(t, inst.Restart(false, ""), "Restart should succeed")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after Restart")
 	assert.Contains(t, inst.LaunchCommand, "--resume", "Restart() is expected to rebuild the launch command with --resume")
 	assert.Contains(t, inst.LaunchCommand, "550e8400-e29b-41d4-a716-446655440000")

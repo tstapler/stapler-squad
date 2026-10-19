@@ -182,6 +182,15 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:         ChangelogFlagName,
+		description:  "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        UpdateCheckFlagName,
+		description: "Update check: poll GitHub Releases (ETag-conditional, at most every 6 hours) and show a badge when a newer release exists. Contacts api.github.com, so it is opt-in. Never runs on source builds. Requires the changelog flag. Default: off.",
+	},
+	{
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",
 	},
@@ -208,6 +217,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        workspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
+	},
+	{
+		name:        completionReviewerFlagName,
+		description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
 		name:        crossHostClaimDedupFlagName,

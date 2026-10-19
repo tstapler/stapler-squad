@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"strings"
@@ -29,6 +30,25 @@ type SessionHealthChecker struct {
 	// comment). Directly overridable in tests (e.g. a zero time.Time is always
 	// outside the grace period).
 	startedAt time.Time
+
+	// deadPaneRecorder, when set, persists the dead-pane stop snapshot (the stuck
+	// row lives in the service layer, which this package cannot import).
+	deadPaneRecorder DeadPaneRecorder
+
+	// stopSourceFor builds the pane reader for a snapshot; nil means the live instance (tests inject fakes).
+	stopSourceFor func(*Instance) stopSource
+}
+
+// DeadPaneRecorder is told, before a dead pane is respawned, what its snapshot held.
+// It must not block for long: it runs on the health-check goroutine.
+type DeadPaneRecorder func(sessionUUID, title string, snap domain.StopSnapshot, state domain.ObservedState)
+
+// HealthCheckerOption configures a SessionHealthChecker at construction.
+type HealthCheckerOption func(*SessionHealthChecker)
+
+// WithDeadPaneRecorder installs the dead-pane snapshot sink.
+func WithDeadPaneRecorder(r DeadPaneRecorder) HealthCheckerOption {
+	return func(h *SessionHealthChecker) { h.deadPaneRecorder = r }
 }
 
 // failureThreshold is the number of consecutive failed health checks before
@@ -65,13 +85,17 @@ func markStartFailed(instance *Instance, err error) {
 }
 
 // NewSessionHealthChecker creates a new session health checker
-func NewSessionHealthChecker(storage *Storage) *SessionHealthChecker {
-	return &SessionHealthChecker{
+func NewSessionHealthChecker(storage *Storage, opts ...HealthCheckerOption) *SessionHealthChecker {
+	h := &SessionHealthChecker{
 		storage:       storage,
 		tmuxSocket:    realTmuxSocketQuerier{},
 		failureCounts: make(map[string]int),
 		startedAt:     time.Now(),
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // HealthCheckResult represents the result of a session health check
@@ -291,7 +315,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// their throwaway LoadInstances() copy can never populate real session
 	// state without an RPC round-trip fromInstanceData deliberately skips,
 	// so this probe would only ever misreport them as missing.
-	if instance.Started() && !instance.Backend.SkipsPollBasedLiveness() {
+	if instance.Started() && !instance.Snapshot().Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)
 	}
 
@@ -439,6 +463,8 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 		return
 	}
 
+	h.recordDeadPane(instance, exitCode, exitSignal)
+
 	// Only a session that already existed before this checker started could
 	// have been affected by a restart race; one created afterward was never
 	// "previously alive" from this process's perspective and gets no grace
@@ -454,6 +480,40 @@ func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, 
 	}
 
 	handleCrashedPane(instance, exitCode, exitSignal, result)
+}
+
+// logDeadPaneSnapshot records what the pane held before it is torn down and
+// respawned. A dead pane is never nudged: the dead flag and exit code are
+// forced from the health check, so the state reads exited/crashed whatever
+// the detector last saw. The tail is logged by size only (it is unredacted).
+func logDeadPaneSnapshot(title string, src stopSource, exitCode int, exitSignal string) domain.ObservedState {
+	_, state := observeDeadPane(title, src, exitCode, exitSignal)
+	return state
+}
+
+// recordDeadPane logs the snapshot and hands it to the recorder, if any.
+func (h *SessionHealthChecker) recordDeadPane(instance *Instance, exitCode int, exitSignal string) {
+	var src stopSource
+	if h.stopSourceFor != nil {
+		src = h.stopSourceFor(instance)
+	} else {
+		src = instanceStopSource{inst: instance, controller: instance.GetController()}
+	}
+	snap, state := observeDeadPane(instance.Title, src, exitCode, exitSignal)
+	if h.deadPaneRecorder != nil {
+		h.deadPaneRecorder(instance.UUID, instance.Title, snap, state)
+	}
+}
+
+func observeDeadPane(title string, src stopSource, exitCode int, exitSignal string) (domain.StopSnapshot, domain.ObservedState) {
+	snap := captureStopSnapshot(src, 0)
+	snap.PaneDead, snap.ExitCode = true, exitCode
+	state := domain.ClassifyObserved(snap)
+	log.Warn("health check: dead pane stop snapshot", "session", title,
+		"stop_reason", domain.StopReasonDeadPane.String(), "state", state.String(),
+		"exit_code", exitCode, "exit_signal", exitSignal,
+		"capture_err", snap.CaptureErr, "tail_bytes", len(snap.PaneTail))
+	return snap, state
 }
 
 // handleCrashedPane is handleDeadPane's post-grace-window branch: a pane that

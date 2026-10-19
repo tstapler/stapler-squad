@@ -15,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // gateTestClock is a mutex-guarded manual clock for the stats tests.
@@ -314,6 +315,13 @@ func TestShutdownFlush_ShouldReturnWithinStatsFlushTimeout_WhenFsyncStallsDuring
 	<-returned
 	assert.Equal(t, 1, warns("delivery_gate_stats_final_flush_timed_out"))
 	close(mfs.syncStall) // release the abandoned write so it can finish
+
+	// memFS stores the temp only after the stall releases, then renames it; wait
+	// for that rename so the assertion below doesn't race the in-flight write.
+	wait.RequireEventually(t, func() bool {
+		_, ok := mfs.get(testStatsDir + "/" + statsFileName)
+		return ok
+	}, 5*time.Second, time.Millisecond, "the abandoned write should finish once released")
 
 	// The abandoned write leaves at most a stale temp; the next start removes it.
 	store2, _ := newTestStore(t, mfs, clk, 1)

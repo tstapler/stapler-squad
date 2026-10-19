@@ -119,6 +119,14 @@ func (s *Scanner) disarmDirty(worktree string) {
 // worktree is still being created), which is a normal transient condition,
 // not a fault.
 func (s *Scanner) watchRepo(repoPath string) {
+	s.mu.RLock()
+	tw := s.treeWatch
+	s.mu.RUnlock()
+	if tw != nil {
+		if err := tw.Add(repoPath); err != nil {
+			log.Debug("could not watch working tree", "repo", repoPath, "err", err)
+		}
+	}
 	w := s.activeWatcher()
 	if w == nil {
 		return
@@ -217,6 +225,12 @@ func (s *Scanner) worktreeTargetFor(admin string) (worktreeTarget, bool) {
 // linked gitdirs) from the fsnotify watcher, avoiding a slow leak of watch
 // descriptors as repos come and go. No-op if fsnotify is unavailable.
 func (s *Scanner) unwatchRepo(repoPath string) {
+	s.mu.RLock()
+	tw := s.treeWatch
+	s.mu.RUnlock()
+	if tw != nil {
+		tw.Remove(repoPath)
+	}
 	w := s.activeWatcher()
 	if w == nil {
 		return

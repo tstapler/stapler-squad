@@ -15,22 +15,22 @@ End-to-end tests for stapler-squad web UI with **isolated test mode** to prevent
 ```bash
 # Install dependencies
 cd tests/e2e
-npm install
+bun install
 
 # Install Playwright browsers (first time only)
 npx playwright install chromium
 
 # Run tests (headless) - server starts automatically in test mode
-npm test
+bun run test
 
 # Run tests with browser UI
-npm run test:headed
+bun run test:headed
 
 # Run tests in debug mode
-npm run test:debug
+bun run test:debug
 
 # Run tests with interactive UI
-npm run test:ui
+bun run test:ui
 
 # Run specific test file
 npx playwright test smoke.spec.ts
@@ -171,13 +171,13 @@ The tests expect the following attributes in the web UI:
 ### Visual Debugging
 ```bash
 # See browser during test execution
-npm run test:headed
+bun run test:headed
 
 # Step through tests interactively
-npm run test:debug
+bun run test:debug
 
 # Use Playwright UI mode
-npm run test:ui
+bun run test:ui
 ```
 
 ### Screenshots and Videos
@@ -192,7 +192,7 @@ Find them in: `test-results/`
 The test server logs are available:
 ```bash
 # Watch test server output during development
-PLAYWRIGHT_DEBUG=1 npm test
+PLAYWRIGHT_DEBUG=1 bun run test
 ```
 
 ### Console Logs
@@ -265,13 +265,13 @@ jobs:
           go-version: '1.21'
 
       - name: Install test dependencies
-        run: cd tests/e2e && npm install
+        run: cd tests/e2e && bun install
 
       - name: Install Playwright browsers
         run: cd tests/e2e && npx playwright install --with-deps chromium
 
       - name: Run E2E tests
-        run: cd tests/e2e && npm test
+        run: cd tests/e2e && bun run test
 
       - name: Upload test results
         if: always()
