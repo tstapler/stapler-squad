@@ -91,12 +91,6 @@ var controlPolicies = map[Control]actionPolicy{
 	ControlResumeScheduled: {Tier: sessionv1.ActionTier_ACTION_TIER_A, RemoteAvailable: false},
 }
 
-// policyFor returns the row of kind; ok is false for a kind with no row.
-func policyFor(kind sessionv1.ActionKind) (actionPolicy, bool) {
-	p, ok := actionPolicies[kind]
-	return p, ok
-}
-
 // answerTier is the tier of an ANSWER_QUESTION on route: only a live keystroke
 // writes into a pane.
 func answerTier(route answerRoute) sessionv1.ActionTier {

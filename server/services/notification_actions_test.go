@@ -107,7 +107,7 @@ func (f *descriptorFixture) builder() *DescriptorBuilder {
 func kinds(r interface {
 	GetActions() []*sessionv1.NotificationActionDescriptor
 }) []string {
-	var out []string
+	out := make([]string, 0, len(r.GetActions()))
 	for _, d := range r.GetActions() {
 		out = append(out, kindName(d.GetKind()))
 	}
@@ -223,7 +223,7 @@ func TestBuildDescriptors_ShouldOfferDecisionChoices_WhenItemInReviewWithSchema(
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{review, pr, done}, ListenerClassRemote)
 
 	assert.Equal(t, []string{"BACKLOG_DECISION", "OPEN"}, kinds(review))
-	var values []string
+	values := make([]string, 0, len(review.Actions[0].Options))
 	for _, o := range review.Actions[0].Options {
 		values = append(values, o.Value)
 	}
@@ -233,7 +233,7 @@ func TestBuildDescriptors_ShouldOfferDecisionChoices_WhenItemInReviewWithSchema(
 }
 
 func optionValues(d *sessionv1.NotificationActionDescriptor) []string {
-	var out []string
+	out := make([]string, 0, len(d.GetOptions()))
 	for _, o := range d.GetOptions() {
 		out = append(out, o.GetValue())
 	}

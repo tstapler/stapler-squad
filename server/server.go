@@ -603,6 +603,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			triageRespawner = deps.BacklogService
 		}
 		guidanceRequestSvc := services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		if deps.SessionService != nil {
+			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
+				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService,
+			})
+		}
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))

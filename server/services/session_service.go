@@ -114,6 +114,9 @@ type SessionService struct {
 	// session (the O7 steer exemption).
 	backlogLinks BacklogLinkResolver
 
+	// actionDispatcher serves InvokeNotificationAction; nil reports FLAG_OFF.
+	actionDispatcher *NotificationActionDispatcher
+
 	// deliveryGate is the hidden-session delivery gate installed as the event bus
 	// publish filter at construction (nil when built through NewSessionService).
 	deliveryGate *deliverygate.Gate

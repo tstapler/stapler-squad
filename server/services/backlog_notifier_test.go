@@ -113,7 +113,7 @@ func TestEventBusNotifier_NotifyDecision_should_StampDecisionSchemaWithChoices_W
 		assert.Equal(t, "b608ab1e", ev.NotificationMetadata["item_id"])
 		var schema DecisionSchema
 		require.NoError(t, json.Unmarshal([]byte(ev.NotificationMetadata["decision_schema"]), &schema))
-		var values []string
+		values := make([]string, 0, len(schema.Choices))
 		for _, c := range schema.Choices {
 			values = append(values, c.Value)
 		}
