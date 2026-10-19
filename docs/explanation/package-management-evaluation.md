@@ -77,16 +77,18 @@ any production code:
   local plugins, gets a different key automatically — no cross-branch
   contamination, no stale-plugin bug.
 
-**Implementation**: [`scripts/shared-node-modules.sh`](../../scripts/shared-node-modules.sh),
+**Implementation**: [`tools/shared-node-modules`](../../tools/shared-node-modules/) (Go; replaces an earlier bash script that needed the Linux-only `flock` and `sha256sum` binaries),
 wired into the Makefile's `web-app/node_modules/.modules.yaml` target (the
 existing `pnpm install --frozen-lockfile` call site) and its re-install
 guard in the `web-app/out` target. Escape hatch:
 `STAPLER_SQUAD_SHARED_NODE_MODULES=0` forces a plain local install, e.g. to
 rule the shared mechanism in/out while debugging something unrelated.
-Regression tests: [`scripts/shared-node-modules.test.sh`](../../scripts/shared-node-modules.test.sh)
-(stubs `pnpm` so the suite is fast/offline/deterministic per the
-`deterministic-fast-tests` skill — it's testing this script's own
-hashing/locking/symlinking logic, not pnpm's install behavior).
+Regression tests: [`tools/shared-node-modules/run_test.go`](../../tools/shared-node-modules/run_test.go)
+(injects a fake installer instead of `pnpm` so the suite is fast/offline/deterministic per the
+`deterministic-fast-tests` skill — it's testing this tool's own
+hashing/locking/symlinking logic, not pnpm's install behavior) and
+[`scripts/shared-node-modules-makefile.test.sh`](../../scripts/shared-node-modules-makefile.test.sh)
+for the Makefile staleness rule.
 
 **What was actually tested, not just read about** (three scratch git
 worktrees via `git worktree add --detach`, plus one plain directory copy
