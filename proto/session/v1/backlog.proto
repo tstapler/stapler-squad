@@ -2194,7 +2194,11 @@ enum AutoMergeLookupStatus {
   AUTO_MERGE_LOOKUP_STATUS_ERROR = 5;
 }
 
-message ListStuckBacklogItemsRequest {}
+message ListStuckBacklogItemsRequest {
+  // refresh_auto_merge bypasses the repo-settings cache for the auto-merge
+  // lookup (interactive Retry in the stuck-item detail panel).
+  bool refresh_auto_merge = 1;
+}
 
 message ListStuckBacklogItemsResponse {
   repeated StuckBacklogItem items = 1;
