@@ -30,7 +30,7 @@ export function ViewportReadout() {
     };
   }, []);
 
-  const bar = { position: "fixed", left: 0, right: 0, height: 44, color: "#fff", display: "flex", alignItems: "center", zIndex: 50 } as const;
+  const bar = { position: "fixed", left: 0, right: 0, height: 44, color: "#fff", display: "flex", alignItems: "center", zIndex: 100000 } as const;
   return (
     <>
       <p data-testid="spike-vv-readout" style={{ fontFamily: "monospace", fontSize: 12 }}>
