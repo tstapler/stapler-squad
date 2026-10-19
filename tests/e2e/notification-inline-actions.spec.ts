@@ -24,6 +24,8 @@ import {
   INLINE_ACTIONS_FLAG,
   InlineActionRow,
   ToastDeck,
+  actionLatencies,
+  installActionLatencyProbe,
   openNotificationTray,
   setFeatureFlag,
 } from './pages/NotificationPanel';
@@ -232,5 +234,49 @@ test.describe('inline actions (descriptor and flag degradation)', () => {
     await resolveApprovalViaRpc(request, BASE_URL, second.approvalId, 'allow');
     await resolveApprovalViaRpc(request, BASE_URL, first.approvalId, 'allow').catch(() => {}); // already settled when the action applied
     await setFeatureFlag(request, BASE_URL, INLINE_ACTIONS_FLAG, true);
+  });
+});
+
+test.describe('inline actions (round-trip latency)', () => {
+  test.use(profiles.V1.use);
+  const latencySessionIds: string[] = [];
+
+  test.afterAll(async () => {
+    const client = new SessionClient(BASE_URL);
+    await Promise.all(latencySessionIds.map((id) => client.deleteSession(id, true).catch(() => {})));
+  });
+
+  test('approve_round_trip_p95_should_stay_under_one_second_over_20_approvals', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const runId = unique('lat');
+    // One session per approval: a session's approvals group into one card.
+    const approvals = [];
+    for (let i = 0; i < 20; i++) {
+      const created = await new SessionClient(BASE_URL).createSession({ title: `${runId}-s${i}`, path: '/tmp', program: 'sleep 3600' });
+      latencySessionIds.push(created.id);
+      approvals.push(await seedApproval(request, BASE_URL, created.id, `${runId}-${i}`));
+    }
+
+    await installActionLatencyProbe(page);
+    const tray = await openNotificationTray(page, BASE_URL);
+    // Approve whichever card of this run still has the buttons.
+    await tray.tray.getByRole('searchbox', { name: 'Search notifications' }).fill(runId);
+    const row = new InlineActionRow(page, runId);
+    for (let i = 0; i < approvals.length; i++) {
+      await row.press(row.approve.first());
+      await expect.poll(async () => (await actionLatencies(page)).length, { message: `latency sample ${i + 1}`, timeout: HOLD_TIMEOUT }).toBe(i + 1);
+    }
+
+    const sorted = [...(await actionLatencies(page))].sort((a, b) => a - b);
+    const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1];
+    test.info().annotations.push({ type: 'approve-latency-ms', description: `n=${sorted.length} p50=${Math.round(sorted[Math.floor(sorted.length / 2)])} p95=${Math.round(p95)} max=${Math.round(sorted[sorted.length - 1])}` });
+    expect(sorted).toHaveLength(20);
+    // Soft on CI: shared runners add noise the localhost budget (REQ-19) does not allow for.
+    if (process.env.CI) {
+      test.info().annotations.push({ type: 'soft', description: 'p95 < 1000 ms is advisory on CI' });
+      expect.soft(p95).toBeLessThan(1000);
+    } else {
+      expect(p95).toBeLessThan(1000);
+    }
   });
 });

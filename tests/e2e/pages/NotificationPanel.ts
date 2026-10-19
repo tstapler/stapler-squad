@@ -426,3 +426,39 @@ export async function waitForIdleFrames(page: Page, intervalMs = 300): Promise<n
     .toBe(true);
   return last;
 }
+
+/**
+ * Times inline actions in the page: from the InvokeNotificationAction request leaving (the commit
+ * delay before it is not part of the round trip) to the first "Approved" appearing in the tray, as
+ * the row's result line or as the legacy badge. Call before navigation.
+ */
+export async function installActionLatencyProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __actionLatencies: number[] };
+    w.__actionLatencies = [];
+    let startedAt = 0;
+    const seen = new WeakSet<Element>();
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('InvokeNotificationAction')) startedAt = performance.now();
+      return nativeFetch(input, init);
+    };
+    const scan = () => {
+      if (startedAt === 0) return;
+      const tray = document.querySelector('[data-testid="notification-tray"]');
+      for (const el of Array.from(tray?.querySelectorAll('[data-testid="action-status"], span') ?? [])) {
+        if (seen.has(el) || !/^(✓ )?Approved$/.test((el.textContent ?? '').trim())) continue;
+        seen.add(el);
+        w.__actionLatencies.push(performance.now() - startedAt);
+        startedAt = 0;
+        return;
+      }
+    };
+    new MutationObserver(scan).observe(document, { subtree: true, childList: true, characterData: true });
+  });
+}
+
+export function actionLatencies(page: Page): Promise<number[]> {
+  return page.evaluate(() => (window as unknown as { __actionLatencies: number[] }).__actionLatencies);
+}
