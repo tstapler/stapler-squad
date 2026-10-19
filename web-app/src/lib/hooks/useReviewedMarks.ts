@@ -70,9 +70,10 @@ export function useReviewedMarks() {
   const analytics = useContext(AnalyticsContext);
 
   const mark = useCallback(
-    (keys: readonly string[]) => {
+    (keys: readonly string[], options: { track?: boolean } = {}) => {
       const before = current();
       commit({ ...before, marks: new Set([...before.marks, ...keys]) });
+      if (options.track === false) return;
       analytics?.track({
         name: "background_reviewed_mark_total",
         category: "user_action",

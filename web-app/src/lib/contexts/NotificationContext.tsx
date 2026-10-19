@@ -21,6 +21,7 @@ import { useStreamConnectionState } from "@/lib/hooks/useNotificationConnectivit
 import { useToastQueue } from "@/lib/hooks/useToastQueue";
 import { useToastTimers } from "@/lib/hooks/useToastTimers";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useReviewedMarks } from "@/lib/hooks/useReviewedMarks";
 import { createToastTrayCommands, MOVE_UNDO_TIMER_ID, type MovedBatch } from "@/lib/contexts/toastTray";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapPriority } from "@/lib/utils/notificationMapping";
@@ -97,6 +98,7 @@ function reviewItemToNotificationType(reason: AttentionReason): NotificationData
   }
 }
 
+const handledKeyOf = (n: NotificationHistoryItem) => `answer:${n.id}@${n.timestamp}`;
 const newNotificationId = () => `notification-${Date.now()}-${Math.random()}`;
 const toIdSet = (id: string | string[]) => new Set(Array.isArray(id) ? id : [id]);
 
@@ -129,6 +131,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   const { announce } = useAnnounce();
   const announceRef = useRef(announce);
   announceRef.current = announce;
+
+  const handledMarks = useReviewedMarks();
+  const handledMarksRef = useRef(handledMarks);
+  handledMarksRef.current = handledMarks;
 
   const auditLog = useAuditLog();
   const streamLive = useStreamConnectionState() === "connected";
@@ -205,6 +211,12 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     const addToHistoryOnly: NotificationCommandsValue["addToHistoryOnly"] = (notification) =>
       addToHistory({ ...notification, id: notification.id ?? newNotificationId(), timestamp: Date.now() });
 
+    const markAnswerHandled: NotificationCommandsValue["markAnswerHandled"] = (ids) => {
+      const set = new Set(ids);
+      const keys = historyStateRef.current.filter((n) => set.has(n.id)).map(handledKeyOf);
+      handledMarksRef.current.mark(keys, { track: false });
+    };
+
     const markAsRead = (id: string | string[]) => {
       const ids = Array.isArray(id) ? id : [id];
       const idSet = new Set(ids);
@@ -217,6 +229,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
 
     return {
       addNotification,
+      markAnswerHandled,
       addToHistoryOnly,
       removeNotification: removeToast,
       dismissToast: removeToast,
@@ -396,15 +409,22 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   // Only one page of history is loaded, so the server's unread total is the floor: a badge
   // for 120 unread must not read 49 just because that is what has been paged in.
   const serverUnread = history.unreadCount ?? 0;
+  // Records the operator marked handled in this browser leave Needs you and the badge here only.
+  const isHandled = handledMarks.isReviewed;
+  const visibleHistory = useMemo(
+    () => notificationHistory.map((n) => (!n.isRead && isHandled(handledKeyOf(n)) ? { ...n, isRead: true, isPendingDecision: false } : n)),
+    [notificationHistory, isHandled],
+  );
+  const handledUnread = visibleHistory.filter((n, i) => n !== notificationHistory[i]).length;
   const unreadCount = useMemo(
-    () => Math.max(groupNotifications(notificationHistory.filter((n) => !n.isRead)).length, serverUnread),
-    [notificationHistory, serverUnread],
+    () => Math.max(groupNotifications(visibleHistory.filter((n) => !n.isRead)).length, serverUnread - handledUnread),
+    [visibleHistory, serverUnread, handledUnread],
   );
 
   const state = useMemo<NotificationStateValue>(
     () => ({
       notifications,
-      notificationHistory,
+      notificationHistory: visibleHistory,
       isPanelOpen,
       historyLoading: history.loading,
       historyHasMore: history.hasMore,
@@ -415,7 +435,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       answeredElsewhere,
       quietMode,
     }),
-    [notifications, notificationHistory, isPanelOpen, moved, quietMode, answeredElsewhere, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
+    [notifications, visibleHistory, isPanelOpen, moved, quietMode, answeredElsewhere, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
   );
 
   return (

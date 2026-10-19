@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { NotificationProvider, useNotifications } from "@/lib/contexts/NotificationContext";
 import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS } from "@/lib/notification-policy";
 import type { NotificationData } from "@/lib/types/notification";
+import { resetReviewedMarksForTests } from "@/lib/hooks/useReviewedMarks";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
 // AttentionReason numeric values — matches proto/session/v1/types.proto
@@ -1100,5 +1101,41 @@ describe("unread count floor (TH-1)", () => {
       result.current.markAsReadBySessionId("s1");
     });
     expect(mockMarkAsRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
+  afterEach(() => {
+    mockServerUnread = 0;
+    window.localStorage.clear();
+    resetReviewedMarksForTests();
+  });
+
+  it("marked_handled_should_leave_this_browsers_badge_and_Needs_you_without_a_server_write", () => {
+    mockServerUnread = 2;
+    mockMarkAsRead.mockClear();
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addToHistoryOnly(makeNotification({ id: "ans-1", sessionId: "a", isPendingDecision: true } as never));
+      result.current.addToHistoryOnly(makeNotification({ id: "ans-2", sessionId: "b", isPendingDecision: true } as never));
+    });
+    expect(result.current.getUnreadCount()).toBe(2);
+
+    act(() => result.current.markAnswerHandled(["ans-1"]));
+
+    expect(result.current.getUnreadCount()).toBe(1);
+    const handled = result.current.notificationHistory.find((n) => n.id === "ans-1");
+    expect(handled).toMatchObject({ isRead: true, isPendingDecision: false });
+    expect(result.current.notificationHistory.find((n) => n.id === "ans-2")?.isRead).toBe(false);
+    expect(mockMarkAsRead).not.toHaveBeenCalled();
+  });
+
+  it("marked_handled_should_survive_a_reload_in_this_browser_only", () => {
+    const first = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      first.result.current.addToHistoryOnly(makeNotification({ id: "ans-9", sessionId: "z" }));
+    });
+    act(() => first.result.current.markAnswerHandled(["ans-9"]));
+    expect(window.localStorage.getItem("ssq.background.reviewed")).toContain("answer:ans-9@");
   });
 });

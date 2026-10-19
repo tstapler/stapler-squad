@@ -11,6 +11,7 @@ import {
   type NotificationActionDescriptor,
 } from "@/gen/session/v1/notification_action_pb";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
+import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
 import type { BackgroundRow, BackgroundOutcome, HiddenSessionSummary } from "@/lib/utils/backgroundActivity";
 
 export function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
@@ -138,4 +139,38 @@ export function makeQuestionDescriptors(over: DescriptorInit = {}): Notification
 
 export function makeActionResponse(outcome: ActionOutcome, over: { staleReason?: string; retryAfterSeconds?: number; detail?: string } = {}) {
   return create(InvokeNotificationActionResponseSchema, { outcome, ...over });
+}
+
+/** A durable question row as GetGuidanceRequest returns it (hook-mirrored unless `over` says otherwise). */
+export function makeGuidanceRow(over: Partial<PlainGuidanceRequest> = {}): PlainGuidanceRequest {
+  return {
+    id: "q1",
+    scope: "session",
+    sessionUuid: "sess-1",
+    questionText: "Which cache?",
+    questionType: "multiple-choice",
+    options: [],
+    answer: "",
+    status: "pending",
+    createdAt: undefined,
+    answeredAt: undefined,
+    source: "ask_user_question_hook",
+    askerSessionUuid: "sess-1",
+    questions: [{ question: "Which cache?", header: "Cache", multiSelect: false, options: [{ label: "Redis", description: "" }, { label: "Memcached", description: "" }] }],
+    deliveryRoute: "live_keystroke",
+    deliveryState: "",
+    unacknowledged: false,
+    cancelReason: "",
+    sessionEnded: false,
+    sessionArchived: false,
+    ...over,
+  };
+}
+
+/** The question-card descriptor of a durable-record route (an agent-created request): Tier A, text allowed. */
+export function makeGuidanceDescriptors(over: DescriptorInit = {}): NotificationActionDescriptor[] {
+  return [
+    makeDescriptor({ kind: ActionKind.ANSWER_GUIDANCE, label: "Answer", targetKeyType: ActionTargetKey.GUIDANCE_REQUEST_ID, targetKey: "g1", ...over }),
+    makeDescriptor(),
+  ];
 }

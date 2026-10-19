@@ -6,9 +6,12 @@ import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
+import { useGuidanceRow } from "@/lib/hooks/useGuidanceRow";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
+import type { DeliveryView } from "@/lib/guidance/deliveryView";
 import { ActionKind } from "@/gen/session/v1/notification_action_pb";
 import { ActionRow } from "./notification-actions/ActionRow";
-import { INLINE_ACTIONS_FLAG, approvalDisplay, isLocalListener } from "./notification-actions/inlineActions";
+import { INLINE_ACTIONS_FLAG, STRUCTURED_QUESTION_FLAG, STRUCTURED_RENDER_SCOPE, approvalDisplay, isLocalListener } from "./notification-actions/inlineActions";
 import { replyAvailability } from "@/lib/reply/replyQuestion";
 import { BackgroundChip } from "./BackgroundChip";
 import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
@@ -143,6 +146,9 @@ export interface NotificationItemProps {
   onCreateRule?: (notification: NotificationData) => void;
 }
 
+/** Delivery rows after which the card has left Needs you: acknowledged, handled in the terminal, replaced, session ended. */
+const RETIRING_ROWS: ReadonlySet<number> = new Set([4, 11, 12, 17]);
+
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
 
 // notification=<id> lets the deleted-session card show this record's own text (Task 5.3e).
@@ -209,8 +215,32 @@ export function NotificationItem({
   const approvalKey = notification.notificationType === "approval_needed" ? notification.metadata?.approval_id : undefined;
   const legacyOnly = !!approvalKey && !!(resolvedApprovals[approvalKey] || blockedApprovals[approvalKey]);
   const hasInlineActions = descriptors.some((d) => d.kind !== ActionKind.OPEN);
-  const inlineFlag = useFeatureFlagValue(INLINE_ACTIONS_FLAG, undefined, false, hasInlineActions && !legacyOnly);
-  const rowOn = inlineFlag && hasInlineActions && !legacyOnly;
+  // A question mirrored to a durable row renders as the shared question card (render stage of the structured flag).
+  const guidanceId = notification.metadata?.["guidance_request_id"];
+  const structuredOn = useFeatureFlagValue(STRUCTURED_QUESTION_FLAG, STRUCTURED_RENDER_SCOPE, false, !!guidanceId && !legacyOnly);
+  const guidanceRow = useGuidanceRow(structuredOn ? guidanceId : undefined, lookupHidden && !notification.isRead);
+  const guidance = guidanceRow && (guidanceRow.questions?.length ?? 0) > 0 ? guidanceRow : undefined;
+  const inlineFlag = useFeatureFlagValue(INLINE_ACTIONS_FLAG, undefined, false, (hasInlineActions || !!guidance) && !legacyOnly);
+  const rowOn = inlineFlag && (hasInlineActions || !!guidance) && !legacyOnly;
+  const { markAnswerHandled } = useNotificationCommands();
+  // The server reopens an Unconfirmed answer and retires a settled one; history is not pushed for either.
+  const lastRow = useRef<number | undefined>(undefined);
+  const onDeliveryRow = useCallback(
+    (view: DeliveryView | null) => {
+      if (!view || view.row === lastRow.current) return;
+      lastRow.current = view.row;
+      const reopened = view.needsYou && notification.isRead;
+      const retired = !view.needsYou && RETIRING_ROWS.has(view.row) && !notification.isRead;
+      if (reopened || retired) onRefreshActions?.();
+    },
+    [notification.isRead, onRefreshActions],
+  );
+
+  // One history row can stand for several pending approvals of a session (the "x20" row). Deciding it
+  // decides one; the rest stay pending, so the row must not be marked read here. The server hands it on
+  // to the next approval and the history refresh brings that one back.
+  const stillPending = approvalKey && group.allIds.length === 1 ? Math.max(group.count - 1, 0) : 0;
+  const decidedIds = stillPending > 0 ? [] : group.allIds;
   const approval = rowOn && approvalKey ? approvalDisplay(notification) : undefined;
 
   const focusControl = hasSourceApp && notification.onFocusWindow && !sessionHidden && (
@@ -310,11 +340,11 @@ export function NotificationItem({
                       {/* No CI-checks URL (e.g. a reconciliation-race message) means there is
                           nothing left to "approve anyway" against — only Deny still applies. */}
                       {checksUrl && (
-                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
+                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
                           {isPending ? "…" : "Approve anyway"}
                         </button>
                       )}
-                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
+                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                         {isPending ? "…" : "✗ Deny"}
                       </button>
                     </div>
@@ -329,10 +359,10 @@ export function NotificationItem({
                       {failedMessage}
                     </span>
                   )}
-                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
+                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
                     {isPending ? "…" : "✓ Approve"}
                   </button>
-                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
+                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                     {isPending ? "…" : "✗ Deny"}
                   </button>
                 </>
@@ -420,7 +450,14 @@ export function NotificationItem({
           prNumber={notification.metadata?.["pr_number"]}
           openControl={openLinks}
           onRefresh={onRefreshActions}
-          onApplied={(_kind, summary) => onActionApplied?.(group.allIds, summary)}
+          onApplied={(kind, summary) => {
+            if (stillPending > 0 && (kind === ActionKind.APPROVE || kind === ActionKind.DENY)) onRefreshActions?.();
+            else onActionApplied?.(group.allIds, summary);
+          }}
+          remaining={stillPending}
+          guidance={guidance}
+          onMarkHandled={() => markAnswerHandled(group.allIds)}
+          onDeliveryRow={onDeliveryRow}
           elsewhere={group.allIds.map((id) => answeredElsewhere?.[id]).find((v) => v !== undefined)}
           onCreateRule={onCreateRule ? () => onCreateRule(notification) : undefined}
           localListener={isLocalListener()}

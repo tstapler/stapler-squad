@@ -48,6 +48,11 @@ export interface NotificationCommandsValue {
   acknowledgeNotification: (id: string | string[]) => void;
   /** Tells the other tabs which records an inline action just resolved, and with what result. */
   broadcastActionResolved: (ids: string[], summary: string) => void;
+  /**
+   * Browser-local "Mark as handled" of an Unconfirmed answer (design/ux.md 3.1): the records leave Needs
+   * you and this browser's badge. Nothing is written to the server, so it is not an acknowledgement.
+   */
+  markAnswerHandled: (ids: string[]) => void;
   /** Bulk clear that leaves pinned decisions in place. Never touches history. */
   clearAll: () => void;
   /** Takes one toast off the deck; its history row stays (a pinned toast is demoted, not deleted). */
@@ -132,6 +137,7 @@ const OUTSIDE_PROVIDER_COMMANDS = {
   removeToastByApprovalId: noop,
   acknowledgeNotification: noop,
   broadcastActionResolved: noop,
+  markAnswerHandled: noop,
   clearAll: noop,
   dismissToast: noop,
   moveAllToTray: () => [],

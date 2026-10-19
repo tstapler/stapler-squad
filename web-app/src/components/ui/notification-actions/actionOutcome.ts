@@ -7,6 +7,7 @@ import {
   answered,
   decided,
   handledByRule,
+  moreWaiting,
 } from "@/lib/copy/notificationCopy";
 
 export interface OutcomeContext {
@@ -16,6 +17,8 @@ export interface OutcomeContext {
   chosenLabel?: string;
   /** Set when the approval was auto-handled by a classifier rule. */
   ruleName?: string;
+  /** Other approvals of the session still pending behind a decided "xN" row. */
+  remaining?: number;
 }
 
 export type RetryMode = "none" | "direct" | "confirm" | "countdown";
@@ -35,12 +38,14 @@ export interface OutcomeView {
 
 const GONE = { settled: true, retry: "none" } as const;
 
+const withRemaining = (text: string, ctx: OutcomeContext) => (ctx.remaining ? `${text}. ${moreWaiting(ctx.remaining)}` : text);
+
 function applied(ctx: OutcomeContext): OutcomeView {
   switch (ctx.kind) {
     case ActionKind.APPROVE:
-      return { ...GONE, text: COPY.approved, announce: COPY.approved };
+      return { ...GONE, text: withRemaining(COPY.approved, ctx), announce: COPY.approved };
     case ActionKind.DENY:
-      return { ...GONE, text: COPY.denied, announce: COPY.denied };
+      return { ...GONE, text: withRemaining(COPY.denied, ctx), announce: COPY.denied };
     case ActionKind.BACKLOG_DECISION: {
       const text = decided(ctx.chosenLabel ?? "");
       return { ...GONE, text, announce: text };

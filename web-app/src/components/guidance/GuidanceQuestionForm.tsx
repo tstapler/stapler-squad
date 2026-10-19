@@ -126,7 +126,7 @@ function ReadOnlyForm({ id, questions, unrenderable, openControl, delivery }: Pi
       <p className={styles.helper}>{FORM_COPY.answerInSession}</p>
       <div className={styles.optionList}>
         {unrenderable && <span className={styles.textOption}>{FORM_COPY.viewFullPrompt}</span>}
-        {openControl}
+        {!delivery && openControl}
       </div>
       {delivery}
     </div>
@@ -182,7 +182,7 @@ function SingleQuestionCard({ s }: { s: Shared }) {
           <ActionButton id="other-send" label={FORM_COPY.send} minHeight={s.minHeight} disabled={s.blocked || other.trim() === ""} reasonId={s.reasonId} onClick={() => s.send([answerOf(q, [other.trim()])])} />
         </div>
       )}
-      <div className={styles.optionList}>{s.openControl}</div>
+      {!s.delivery && <div className={styles.optionList}>{s.openControl}</div>}
       <Footer s={s} />
     </form>
   );
@@ -382,7 +382,7 @@ function SelectionForm({ s }: { s: Shared }) {
         <button type="button" className={actionButton} data-testid="clear-answers" aria-disabled={s.blocked || undefined} style={{ minHeight: s.minHeight }} onClick={clear}>
           {FORM_COPY.clear}
         </button>
-        {s.openControl}
+        {!s.delivery && s.openControl}
       </div>
       <Footer s={s} />
     </form>

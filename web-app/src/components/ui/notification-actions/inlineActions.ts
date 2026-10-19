@@ -5,6 +5,10 @@ import type { ApprovalDisplay } from "./ActionRow";
 /** Gates descriptor-driven rendering; flag-off keeps the legacy Approve/Deny path. */
 export const INLINE_ACTIONS_FLAG = "notification_inline_actions";
 
+/** Gates the question card; its render stage chooses between the card and the plain option buttons. */
+export const STRUCTURED_QUESTION_FLAG = "askuserquestion_structured";
+export const STRUCTURED_RENDER_SCOPE = "stage:render";
+
 /** Approval fields the server stamps on the notification's metadata. */
 export function approvalDisplay(n: NotificationData): ApprovalDisplay {
   const md = n.metadata ?? {};

@@ -104,6 +104,7 @@ export const answered = (value: string) => `Answered: ${value}`;
 export const answeredElsewhere = (summary: string) => `Answered elsewhere: ${summary}`;
 export const alreadyHandled = (value?: string) => (value ? `Already handled: ${value}` : "Already handled");
 export const handledByRule = (name: string) => `Handled automatically by rule ${name}`;
+export const moreWaiting = (n: number) => `${n} more waiting.`;
 export const rateLimited = (seconds: number) => `Too many actions. Try again in ${seconds}s.`;
 export const pendingLabel = (verb: string) => `${verb}...`;
 export const mergePrompt = (pr?: string) => (pr ? `Merge PR #${pr}?` : "Merge this PR?");

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import {
   ActionKind,
   ActionOutcome,
+  ActionTier,
   type NotificationActionDescriptor,
 } from "@/gen/session/v1/notification_action_pb";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
@@ -18,6 +19,9 @@ import { PendingNotice, useActionsDisabledReason } from "../OfflineBanner";
 import { ActionButton } from "./ActionButton";
 import { ApprovalButtons, OtherButtons, type ButtonsUi } from "./ActionButtons";
 import { ApprovalCommand } from "./ApprovalCommand";
+import { GuidanceBody } from "./GuidanceBody";
+import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
+import type { DeliveryView } from "@/lib/guidance/deliveryView";
 import { MoreMenu } from "./MoreMenu";
 import { ConfirmStep, DenyStep, createRuleStepProps } from "./SubSteps";
 import { outcomeView, type OutcomeContext } from "./actionOutcome";
@@ -60,6 +64,14 @@ export interface ActionRowProps {
   elsewhere?: string;
   /** Overrides the shared connectivity reason (Offline, Reconnecting, Updating...). */
   disabledReason?: string;
+  /** The durable question behind this row: renders the shared question form and its delivery line. */
+  guidance?: PlainGuidanceRequest;
+  /** Approvals of the same session still pending behind this row after it is decided ("Approved. 19 more waiting."). */
+  remaining?: number;
+  /** Browser-local "Mark as handled" of an Unconfirmed answer. */
+  onMarkHandled?: () => void;
+  /** The delivery row the question card shows changed. */
+  onDeliveryRow?: (view: DeliveryView | null) => void;
 }
 
 type Step = "row" | "deny" | "confirm" | "retry-anyway" | "more" | "create-rule";
@@ -210,7 +222,8 @@ export function ActionRow(props: ActionRowProps) {
   // One short result per settled outcome, through the panel's single polite region.
   useEffect(() => {
     if (state.status !== "settled" || !view) return;
-    if (view.announce) announce(view.announce, "polite", `action-${rowId}`);
+    // A question card announces its own delivery transitions (GuidanceBody), once each.
+    if (view.announce && !props.guidance) announce(view.announce, "polite", `action-${rowId}`);
     if (state.response.outcome === ActionOutcome.APPLIED) onApplied?.(state.spec.kind, lastCtx.current?.chosenLabel ?? view.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
@@ -221,6 +234,7 @@ export function ActionRow(props: ActionRowProps) {
       tier: p.descriptor.tier,
       chosenLabel: p.option?.label,
       ruleName: approval?.ruleName,
+      remaining: props.remaining,
     });
 
   const onPress = (p: Pick) => {
@@ -355,7 +369,25 @@ export function ActionRow(props: ActionRowProps) {
   const sub = subStep();
 
   let body: ReactNode;
-  if (elsewhere !== undefined) {
+  const answerDescriptor = actionable.find((d) => d.kind === ActionKind.ANSWER_QUESTION || d.kind === ActionKind.ANSWER_GUIDANCE);
+  if (props.guidance) {
+    body = (
+      <GuidanceBody
+        rowId={rowId}
+        guidance={props.guidance}
+        descriptor={answerDescriptor}
+        state={state}
+        disabledReason={offlineReason}
+        minHeight={minHeight}
+        openControl={openButton}
+        invoke={(spec) => void commit(spec, { kind: spec.kind, tier: answerDescriptor?.tier ?? ActionTier.A, chosenLabel: spec.params?.answer })}
+        retry={() => void retry()}
+        reset={reset}
+        onMarkHandled={props.onMarkHandled}
+        onDeliveryRow={props.onDeliveryRow}
+      />
+    );
+  } else if (elsewhere !== undefined) {
     body = (
       <>
         {statusLine(answeredElsewhere(elsewhere))}

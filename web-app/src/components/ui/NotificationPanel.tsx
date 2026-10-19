@@ -31,6 +31,9 @@ import type { ActivityRow } from "@/lib/utils/backgroundActivity";
 import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 import { AutoHandledSection } from "./NotificationItem";
+import { SavedForLaterSection } from "./SavedForLaterSection";
+import { useSavedAnswers } from "@/lib/hooks/useSavedAnswers";
+import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
 import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";
 import { rulePrefillFor } from "./notification-actions/inlineActions";
 import { BackgroundActivity } from "./BackgroundActivity";
@@ -157,6 +160,12 @@ export function NotificationPanel() {
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [autoHandledOpen, setAutoHandledOpen] = useState(false);
+  const structuredOn = useFeatureFlagValue("askuserquestion_structured", "stage:render", false);
+  const savedAnswers = useSavedAnswers(isPanelOpen && structuredOn);
+  const sessionNames = useMemo(
+    () => Object.fromEntries(notificationHistory.filter((n) => n.sessionId && n.sessionName).map((n) => [n.sessionId, n.sessionName])),
+    [notificationHistory],
+  );
   const [expanded, setExpanded] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [scrolled, setScrolled] = useState(false);
@@ -925,6 +934,8 @@ export function NotificationPanel() {
             renderBody()
           )}
         </div>
+
+        {traySegment === "notifications" && <SavedForLaterSection rows={savedAnswers} sessionNames={sessionNames} onNavigate={close} />}
 
         {/* Auto-handled section — collapsible, always below main list */}
         <AutoHandledSection
