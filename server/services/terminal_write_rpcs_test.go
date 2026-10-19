@@ -67,6 +67,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"AddGitHubAccountFromCLI", "AddGitHubAccountWithToken", "GetGitHubAuthState", "ListGitHubAccounts",
 		"ListGitHubCLIHosts", "ListUserPRs", "PollGitHubDeviceAuth", "RevokeGitHubToken", "StartGitHubDeviceAuth",
 		"WatchUserPRs",
+		"ClosePRDirect", "ConvertPRToDraft", "MarkPRReady", "MergePRDirect", // GitHub-only PR actions; type into no pane
 	},
 	"GuidanceRequestService": {
 		"AnswerGuidanceRequest", "CreateGuidanceRequest", "GetGuidanceRequest", "ListAllPendingGuidanceRequests",
