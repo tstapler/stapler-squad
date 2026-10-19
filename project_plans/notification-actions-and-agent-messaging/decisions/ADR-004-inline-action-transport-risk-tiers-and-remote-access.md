@@ -1,6 +1,6 @@
 # ADR-004: Inline actions are risk-tiered; keystroke-writing actions stay localhost-only until the remote chain is reviewed
 
-**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); prior status: Proposed (2026-10-17) - requires owner confirmation (see plan Unresolved Questions); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
+**Status**: Accepted (2026-10-18, owner defaults accepted at the Phase 5 start gate); **Spike S6 result (2026-10-18, `research/spike-S6.md`): chain review PASS, Tier B promotion still gated on Story 2.8's authenticated Go integration test**; prior status: Proposed (2026-10-17) - requires owner confirmation (see plan Unresolved Questions); triad round 2: this ADR becomes Accepted when the owner-defaults list in plan `Unresolved Questions` is confirmed at the Phase 5 start gate (one explicit accept step for all eight ADRs; until then the stated defaults proceed)
 **Project**: notification-actions-and-agent-messaging
 **Flag**: `notification_inline_actions` (per-scope `channel:remote`)
 
@@ -15,6 +15,10 @@ Classify every `ActionKind` into a tier in the descriptor:
 - **Tier A, data-only** (names are the `ActionKind` enum values): `ANSWER_QUESTION` for a durable GuidanceRequest in a non-live route, `ANSWER_GUIDANCE` (a data write through `AnswerGuidanceRequest`; no pane write), `BACKLOG_DECISION`, `APPROVE`/`DENY` (already available remotely today through `ResolveApproval` - parity preserved), `CANCEL_WAKE` and `CANCEL_PEER_HELP` (row updates only), `OPEN`. Allowed on both listeners. Story 2.8 asserts each on the remote chain.
 - **Tier B, writes bytes into a live pane**: `ANSWER_QUESTION` with route `live_keystroke`, any steer. Allowed on `:8543` only in v1. On the remote listener the descriptor is emitted with `tier=B` and `available=false, reason="desktop_only"`; the UI shows "Answer from desktop" with Open session. The durable answer record route (saved for later / hook reply if ADR-005 selects it) remains Tier A, so a phone can still answer a question whose delivery is not a keystroke.
 - Tier B on the remote listener is promoted only after spike S6 passes (review of the `:8444` chain on the exact handlers: auth, Host allowlist, request-origin checks, no CSRF-able GET). Promotion is a per-scope live flag override (`notification_inline_actions` scope `channel:remote:tierB`), not a code change.
+
+## Spike S6 result (2026-10-18)
+
+Unauthenticated calls to `/api/session.v1.SessionService/*` on the remote listener return 401 and non-`/api` paths 302 to `/login` before any handler runs; no write RPC is Connect-GET enabled; foreign `Host` does not bypass auth (`research/spike-S6.md`). Two corrections to the Context above: (1) the `:8444` chain has **no Host allowlist** (`RebindingVerdict` skips the Host test when auth is required; the cookie and Origin test are the boundary); (2) `EvaluateLocalWrite` **allows** an authenticated remote caller (`LocalCallerVerdict` returns allowed when `AuthRequired`), so Reply and steer are not localhost-only on `:8444` today. Therefore `InvokeNotificationAction` must itself refuse Tier B `live_keystroke` when the stamped request listener is `remote` (`available=false`, `reason="desktop_only"`); it cannot rely on `EvaluateLocalWrite`. Tier B promotion needs the authenticated integration test of Story 2.8 first.
 
 ## Consequences
 
