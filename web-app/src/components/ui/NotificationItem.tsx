@@ -5,6 +5,10 @@ import { useCallback, useMemo, useRef } from "react";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
+import { ActionKind } from "@/gen/session/v1/notification_action_pb";
+import { ActionRow } from "./notification-actions/ActionRow";
+import { INLINE_ACTIONS_FLAG, approvalDisplay, isLocalListener } from "./notification-actions/inlineActions";
 import { replyAvailability } from "@/lib/reply/replyQuestion";
 import { BackgroundChip } from "./BackgroundChip";
 import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
@@ -129,6 +133,12 @@ export interface NotificationItemProps {
    * check then never asks the server, so a page load does not fan out GetSession calls.
    */
   lookupHidden?: boolean;
+  /** Refetches the history page, so INVALID can re-read descriptors. */
+  onRefreshActions?: () => void;
+  /** An inline action was applied: mark these records read and close their toasts. */
+  onActionApplied?: (ids: string[]) => void;
+  /** Opens the rule builder for the Create rule confirm (desktop More menu). */
+  onCreateRule?: (notification: NotificationData) => void;
 }
 
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
@@ -160,6 +170,9 @@ export function NotificationItem({
   onNavigate,
   offlineReason,
   lookupHidden = true,
+  onRefreshActions,
+  onActionApplied,
+  onCreateRule,
 }: NotificationItemProps) {
   const notification = group.notification;
   const contextString = getContextString(notification);
@@ -187,72 +200,63 @@ export function NotificationItem({
     onNavigate?.();
   };
 
-  return (
-    <div
-      key={notification.id}
-      className={`${item} ${notification.isRead ? read : unread}`}
-      style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
-    >
-      <div className={itemHeader}>
-        <div className={itemTitle}>
-          {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
-          <span className={typeIcon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</span>
-          <strong>{primaryTitle}</strong>
-          {sessionHidden && <BackgroundChip />}
-          <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
-            {notificationTypeLabel(notification.notificationType)}
-          </span>
-          {group.count > 1 && (
-            <span className={countBadge} aria-label={`${group.count} occurrences`}>
-              x{group.count}
-            </span>
-          )}
-        </div>
-        {removeFromHistory && (
-          <button
-            className={removeButton}
-            onClick={() => !offlineReason && removeFromHistory(notification.id)}
-            aria-label="Remove notification"
-            aria-disabled={offlineReason ? true : undefined}
-            title={offlineReason}
-          >
-            ✕
-          </button>
-        )}
-      </div>
+  // Descriptor-driven actions (ADR-002) replace the legacy buttons when the flag is on and the
+  // server sent something beyond Open; a resolved or CI-blocked approval keeps the legacy badge.
+  const descriptors = notification.actions ?? [];
+  const approvalKey = notification.notificationType === "approval_needed" ? notification.metadata?.approval_id : undefined;
+  const legacyOnly = !!approvalKey && !!(resolvedApprovals[approvalKey] || blockedApprovals[approvalKey]);
+  const hasInlineActions = descriptors.some((d) => d.kind !== ActionKind.OPEN);
+  const inlineFlag = useFeatureFlagValue(INLINE_ACTIONS_FLAG, undefined, false, hasInlineActions && !legacyOnly);
+  const rowOn = inlineFlag && hasInlineActions && !legacyOnly;
+  const approval = rowOn && approvalKey ? approvalDisplay(notification) : undefined;
 
-      {subtitleText && <div className={itemSubtitle}>{subtitleText}</div>}
-      {contextString && <div className={itemContext}>{contextString}</div>}
-      <p className={itemMessage}>{notification.message}</p>
-
-      {notification.notificationType === "approval_needed" && notification.metadata && (
-        <div className={approvalDetails}>
-          {notification.metadata.tool_name && (
-            <span className={approvalTool}>🔧 {notification.metadata.tool_name}</span>
+  const focusControl = hasSourceApp && notification.onFocusWindow && !sessionHidden && (
+    <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
+      🔗 Focus
+    </button>
+  );
+  const openLinks = (
+    <>
+          {notification.metadata?.["item_id"] && (
+            <Link
+              href={`/backlog?item=${encodeURIComponent(notification.metadata["item_id"])}`}
+              className={viewButton}
+              onClick={() => navigate(group.allIds, undefined, notification.sessionId)}
+              data-testid="notification-view-backlog"
+            >
+              View in Backlog
+            </Link>
           )}
-          {notification.metadata.tool_input_command && (
-            <code className={approvalCommand}>{notification.metadata.tool_input_command}</code>
+          {!notification.metadata?.["item_id"] && notification.sessionId && (
+            <>
+              <Link
+                href={
+                  sessionHidden
+                    ? hiddenSessionHref(notification.sessionId, notification.id)
+                    : getSessionHref(notification.sessionId)
+                }
+                className={viewButton}
+                onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
+              >
+                {sessionHidden ? "View output" : "View Session"}
+              </Link>
+              {sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable" && (
+                <Link
+                  href={`${hiddenSessionHref(notification.sessionId, notification.id)}&reply=1`}
+                  className={viewButton}
+                  onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                  data-testid="notification-reply"
+                >
+                  Reply
+                </Link>
+              )}
+            </>
           )}
-          {notification.metadata.tool_input_file && !notification.metadata.tool_input_command && (
-            <code className={approvalCommand}>{notification.metadata.tool_input_file}</code>
-          )}
-          {notification.metadata.cwd && (
-            <span className={approvalCwd} title={notification.metadata.cwd}>
-              📁 {notification.metadata.cwd.split("/").slice(-2).join("/")}
-            </span>
-          )}
-        </div>
-      )}
-
-      {notification.sourceWorkingDir && (
-        <div className={itemWorkingDir} title={notification.sourceWorkingDir}>
-          📁 {notification.sourceWorkingDir.split("/").slice(-2).join("/")}
-        </div>
-      )}
-
-      <div className={itemFooter}>
-        <span className={timestamp}>{formatRelativeTime(notification.timestamp)}</span>
-        <div className={itemActions}>
+    </>
+  );
+  const legacyActions = (
+    <>
           {notification.notificationType === "approval_needed" &&
             notification.metadata?.approval_id &&
             (() => {
@@ -331,49 +335,94 @@ export function NotificationItem({
                 </>
               );
             })()}
-          {hasSourceApp && notification.onFocusWindow && !sessionHidden && (
-            <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
-              🔗 Focus
-            </button>
-          )}
-          {notification.metadata?.["item_id"] && (
-            <Link
-              href={`/backlog?item=${encodeURIComponent(notification.metadata["item_id"])}`}
-              className={viewButton}
-              onClick={() => navigate(group.allIds, undefined, notification.sessionId)}
-              data-testid="notification-view-backlog"
-            >
-              View in Backlog
-            </Link>
-          )}
-          {!notification.metadata?.["item_id"] && notification.sessionId && (
-            <>
-              <Link
-                href={
-                  sessionHidden
-                    ? hiddenSessionHref(notification.sessionId, notification.id)
-                    : getSessionHref(notification.sessionId)
-                }
-                className={viewButton}
-                onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
-                data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
-              >
-                {sessionHidden ? "View output" : "View Session"}
-              </Link>
-              {sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable" && (
-                <Link
-                  href={`${hiddenSessionHref(notification.sessionId, notification.id)}&reply=1`}
-                  className={viewButton}
-                  onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
-                  data-testid="notification-reply"
-                >
-                  Reply
-                </Link>
-              )}
-            </>
+      {focusControl}
+      {openLinks}
+    </>
+  );
+
+  return (
+    <div
+      key={notification.id}
+      className={`${item} ${notification.isRead ? read : unread}`}
+      style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
+    >
+      <div className={itemHeader}>
+        <div className={itemTitle}>
+          {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
+          <span className={typeIcon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</span>
+          <strong>{primaryTitle}</strong>
+          {sessionHidden && <BackgroundChip />}
+          <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
+            {notificationTypeLabel(notification.notificationType)}
+          </span>
+          {group.count > 1 && (
+            <span className={countBadge} aria-label={`${group.count} occurrences`}>
+              x{group.count}
+            </span>
           )}
         </div>
+        {removeFromHistory && (
+          <button
+            className={removeButton}
+            onClick={() => !offlineReason && removeFromHistory(notification.id)}
+            aria-label="Remove notification"
+            aria-disabled={offlineReason ? true : undefined}
+            title={offlineReason}
+          >
+            ✕
+          </button>
+        )}
       </div>
+
+      {subtitleText && <div className={itemSubtitle}>{subtitleText}</div>}
+      {contextString && <div className={itemContext}>{contextString}</div>}
+      <p className={itemMessage}>{notification.message}</p>
+
+      {notification.notificationType === "approval_needed" && notification.metadata && (
+        <div className={approvalDetails}>
+          {!rowOn && notification.metadata.tool_name && (
+            <span className={approvalTool}>🔧 {notification.metadata.tool_name}</span>
+          )}
+          {!rowOn && notification.metadata.tool_input_command && (
+            <code className={approvalCommand}>{notification.metadata.tool_input_command}</code>
+          )}
+          {!rowOn && notification.metadata.tool_input_file && !notification.metadata.tool_input_command && (
+            <code className={approvalCommand}>{notification.metadata.tool_input_file}</code>
+          )}
+          {notification.metadata.cwd && (
+            <span className={approvalCwd} title={notification.metadata.cwd}>
+              📁 {notification.metadata.cwd.split("/").slice(-2).join("/")}
+            </span>
+          )}
+        </div>
+      )}
+
+      {notification.sourceWorkingDir && (
+        <div className={itemWorkingDir} title={notification.sourceWorkingDir}>
+          📁 {notification.sourceWorkingDir.split("/").slice(-2).join("/")}
+        </div>
+      )}
+
+      <div className={itemFooter}>
+        <span className={timestamp}>{formatRelativeTime(notification.timestamp)}</span>
+        <div className={itemActions}>
+          {rowOn ? focusControl : legacyActions}
+        </div>
+      </div>
+      {rowOn && (
+        <ActionRow
+          rowId={notification.id}
+          descriptors={descriptors}
+          approval={approval}
+          prNumber={notification.metadata?.["pr_number"]}
+          openControl={openLinks}
+          onRefresh={onRefreshActions}
+          onApplied={() => onActionApplied?.(group.allIds)}
+          onCreateRule={onCreateRule ? () => onCreateRule(notification) : undefined}
+          localListener={isLocalListener()}
+          disabledReason={offlineReason}
+        />
+      )}
     </div>
   );
 }

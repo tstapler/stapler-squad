@@ -55,11 +55,13 @@ export function resolveFlagValue(flags: FeatureFlag[], name: string, scope?: str
  * Reads a feature flag (optionally at a scope) through GetFeatureFlags, with a
  * short shared cache. Until loaded, and when the read fails, it returns
  * `fallback` (default OFF), so a failed read never enables a new path.
+ * `enabled=false` skips the read (the row has nothing the flag could change).
  */
-export function useFeatureFlagValue(name: string, scope?: string, fallback = false): boolean {
+export function useFeatureFlagValue(name: string, scope?: string, fallback = false, enabled = true): boolean {
   const [value, setValue] = useState<boolean>(fallback);
 
   useEffect(() => {
+    if (!enabled) return;
     let live = true;
     loadFlags(Date.now)
       .then((flags) => {
@@ -71,7 +73,7 @@ export function useFeatureFlagValue(name: string, scope?: string, fallback = fal
     return () => {
       live = false;
     };
-  }, [name, scope, fallback]);
+  }, [name, scope, fallback, enabled]);
 
   return value;
 }

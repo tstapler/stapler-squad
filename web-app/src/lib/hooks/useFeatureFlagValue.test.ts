@@ -38,6 +38,14 @@ describe("useFeatureFlagValue", () => {
     expect(result.current).toBe(false);
   });
 
+  it("useFeatureFlagValue_should_skipTheRead_When_notEnabled", async () => {
+    mockGetFeatureFlags.mockResolvedValue(flags(true));
+    const { result } = renderHook(() => useFeatureFlagValue(INLINE, undefined, false, false));
+    await Promise.resolve();
+    expect(mockGetFeatureFlags).not.toHaveBeenCalled();
+    expect(result.current).toBe(false);
+  });
+
   it("useFeatureFlagValue_should_returnFallback_When_flagUnknown", async () => {
     mockGetFeatureFlags.mockResolvedValue(flags(true));
     const { result } = renderHook(() => useFeatureFlagValue("nope", undefined, true));

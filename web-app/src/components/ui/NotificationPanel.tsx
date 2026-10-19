@@ -27,6 +27,8 @@ import {
 import type { ActivityRow } from "@/lib/utils/backgroundActivity";
 import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { AutoHandledSection } from "./NotificationItem";
+import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";
+import { rulePrefillFor } from "./notification-actions/inlineActions";
 import { BackgroundActivity } from "./BackgroundActivity";
 import {
   ActionsDisabledReasonContext,
@@ -521,6 +523,12 @@ export function NotificationPanel() {
             handleNotificationClick,
             onNavigate: closeForNavigation,
             lookupHidden: isPanelOpen,
+            onRefreshActions: () => void refreshHistory(),
+            onActionApplied: acknowledgeNotification,
+            onCreateRule: (n) => {
+              closeForNavigation();
+              window.location.assign(buildPrefillHref(rulePrefillFor(n)));
+            },
           }}
           offlineReason={offlineReason}
           scrollRef={scrollRef}
