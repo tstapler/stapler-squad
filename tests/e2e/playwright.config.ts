@@ -14,7 +14,7 @@ import { defineConfig, devices } from '@playwright/test';
 // delivery is the owner's manual check, Story 2.5.2). CI installs the browsers with `npx playwright install
 // firefox webkit --with-deps` and runs these two projects with `continue-on-error`; Chromium stays gating.
 const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
-const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
+const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
 
 export default defineConfig({
   globalSetup: './global-setup.ts',
