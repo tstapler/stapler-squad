@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef } from "react";
+import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
 import { useBackgroundSessions, type BackgroundSessionsState } from "@/lib/hooks/useBackgroundSessions";
 import {
   buildActivityRows,
@@ -11,6 +12,8 @@ import {
 import { knownHiddenSessions } from "@/lib/utils/hiddenSessionRegistry";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
 
+export const BACKGROUND_FEED_FLAG = "background_activity_feed";
+
 export interface BackgroundActivityState {
   rows: ActivityRow[];
   rollup: BackgroundRollup;
@@ -20,6 +23,8 @@ export interface BackgroundActivityState {
   hasHiddenSessions: boolean;
   /** Poll state, passed through unchanged so wrappers can add flag gating, telemetry and error UI. */
   poll: BackgroundSessionsState;
+  /** `background_activity_feed`; off means exception rows only and the legacy empty state. */
+  feedEnabled: boolean;
 }
 
 /**
@@ -31,6 +36,7 @@ export function useBackgroundActivity(
   enabled: boolean,
   history: readonly NotificationHistoryItem[],
 ): BackgroundActivityState {
+  const feedEnabled = useFeatureFlagValue(BACKGROUND_FEED_FLAG, undefined, true);
   const poll = useBackgroundSessions(enabled);
   const { sessions, departed, lastUpdatedAt } = poll;
 
@@ -49,10 +55,11 @@ export function useBackgroundActivity(
     const next = buildActivityRows(history, sessions, {
       previous: cycle.current.previous,
       departed: lastUpdatedAt === null ? knownHiddenSessions() : departed,
+      exceptionsOnly: !feedEnabled,
     });
     cycle.current.current = next;
     return next;
-  }, [history, sessions, departed, lastUpdatedAt]);
+  }, [history, sessions, departed, lastUpdatedAt, feedEnabled]);
 
   const rollup = useMemo(() => buildRollup(rows), [rows]);
 
@@ -62,5 +69,6 @@ export function useBackgroundActivity(
     exceptionCount: rollup.exceptions,
     hasHiddenSessions: sessions.length > 0 || departed.length > 0,
     poll,
+    feedEnabled,
   };
 }

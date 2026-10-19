@@ -13,6 +13,7 @@ import {
   type BackgroundRow,
 } from "@/lib/utils/backgroundActivity";
 import { BackgroundChip } from "./BackgroundChip";
+import { OfflineBanner, formatClockTime } from "./OfflineBanner";
 import {
   action,
   footer,
@@ -58,6 +59,8 @@ export interface BackgroundActivityProps {
   /** Only once Story 5.6 ships; a Reply action never renders before then. */
   replyEnabled?: boolean;
   rowCap?: number;
+  /** Flag `background_activity_feed` off: only exception rows exist; this picks the legacy empty copy. */
+  legacy?: { hasHiddenSessions: boolean };
 }
 
 /** The read-only deep link (Story 5.3); notification=<id> feeds the deleted-session card. */
@@ -110,6 +113,7 @@ function RowView({
           <span className={`${statusLabel} ${needsHuman ? statusLabelNeedsHuman : ""}`}>{ex.statusLabel}</span>
         ) : (
           <span
+            id={departed ? `${row.key}-departed` : undefined}
             className={`${stateChip} ${row.state === "stopped_unknown" ? stateChipUnknown : ""}`}
             data-testid="background-state-chip"
           >
@@ -126,6 +130,19 @@ function RowView({
       </div>
       {ex && !ex.sessionAvailable && <div className={rowMeta}>Session no longer available</div>}
       {ex?.message && <p className={rowMessage}>{ex.message}</p>}
+      {departed && (
+        <div className={rowActions}>
+          <button
+            type="button"
+            className={action}
+            aria-disabled="true"
+            aria-describedby={`${row.key}-departed`}
+            data-testid="notification-view-output"
+          >
+            View output
+          </button>
+        </div>
+      )}
       {!departed && (
         <div className={rowActions}>
           <Link
@@ -196,15 +213,18 @@ export function BackgroundActivity({
   onMergeNew,
   replyEnabled = false,
   rowCap = ACTIVITY_ROW_CAP,
+  legacy,
 }: BackgroundActivityProps) {
   const hasData = lastUpdatedAt !== null;
   const age = hasData ? formatRelativeTime(lastUpdatedAt) : null;
+  const dataTime = hasData ? formatClockTime(lastUpdatedAt) : null;
   const [showAll, setShowAll] = useState(false);
   const { shown, pending, merge } = useStableRows(rows, hasData);
 
   if (!hasData && loading && !failed) {
     return (
       <div className={section} aria-busy="true" data-testid="background-loading">
+        <OfflineBanner online loading hasData={false} onRetry={onRefresh} testId="background-connectivity" />
         <div className={skeleton} />
         <div className={skeleton} />
         <div className={skeleton} />
@@ -215,6 +235,7 @@ export function BackgroundActivity({
   if (!hasData && failed) {
     return (
       <div className={stateBox} data-testid="background-error">
+        <OfflineBanner online failed onRetry={onRefresh} showRetry={false} testId="background-connectivity" />
         <p>Could not load background activity.</p>
         {
           // analytics-exempt
@@ -229,6 +250,7 @@ export function BackgroundActivity({
   if (!hasData && offline) {
     return (
       <div className={stateBox} data-testid="background-offline">
+        <OfflineBanner online={false} testId="background-connectivity" />
         <p>Background activity will load when you reconnect.</p>
       </div>
     );
@@ -248,9 +270,16 @@ export function BackgroundActivity({
 
   return (
     <div className={section} data-testid="background-activity">
-      {failed && (
+      <OfflineBanner
+        online={!offline}
+        failed={failed}
+        onRetry={onRefresh}
+        showRetry={false}
+        testId="background-connectivity"
+      />
+      {failed && !offline && (
         <div data-testid="background-error">
-          <p className={staleLine}>Could not load background activity.</p>
+          <p className={staleLine}>Couldn&apos;t refresh background sessions. Showing data from {dataTime}.</p>
           {
             // analytics-exempt
             <button type="button" className={action} onClick={onRefresh}>
@@ -259,13 +288,21 @@ export function BackgroundActivity({
           }
         </div>
       )}
-      {(failed || offline) && age && (
-        <p className={staleLine} data-testid="background-stale">
-          {offline ? "Offline - showing" : "Showing"} data from {age}
-        </p>
-      )}
 
-      {settled && rollup.variant === "none" ? (
+      {legacy ? (
+        exceptionRows.length === 0 && (
+          <div
+            className={stateBox}
+            data-testid={legacy.hasHiddenSessions ? "background-empty-healthy" : "background-empty-none"}
+          >
+            <p>
+              {legacy.hasHiddenSessions
+                ? "Nothing needs attention in the background."
+                : "No background sessions have run recently."}
+            </p>
+          </div>
+        )
+      ) : settled && rollup.variant === "none" ? (
         <div className={stateBox} data-testid="background-empty-none">
           {rollupEl}
         </div>

@@ -27,6 +27,14 @@ import type { ActivityRow } from "@/lib/utils/backgroundActivity";
 import { readQuietMode, readTrayPinned, readWhatChangedSeen, writeTrayPinned, writeWhatChangedSeen } from "@/lib/utils/deckSettings";
 import { AutoHandledSection } from "./NotificationItem";
 import { BackgroundActivity } from "./BackgroundActivity";
+import {
+  ActionsDisabledReasonContext,
+  OfflineBanner,
+  actionsDisabledReason,
+  formatClockTime,
+  useAwaitingFresh,
+} from "./OfflineBanner";
+import { asOfLine } from "./OfflineBanner.css";
 import { segment, segments } from "./BackgroundActivity.css";
 import { TrayConfirm } from "./TrayConfirm";
 import { TrayHandle } from "./TrayHandle";
@@ -78,7 +86,6 @@ type TraySegment = "notifications" | "background";
 const TRAY_ID = "notification-tray";
 const HEADING_ID = "notification-tray-heading";
 const GRABBER_DRAG_PX = 80;
-const OFFLINE_REASON = "Offline";
 
 /**
  * NotificationPanel - the notification history surface.
@@ -113,6 +120,13 @@ export function NotificationPanel() {
   const { announce } = useAnnounce();
   const viewport = useDeckViewport();
   const { isOffline } = useNotificationConnectivity();
+  const awaitingFresh = useAwaitingFresh(isOffline, historyLastUpdatedAt);
+  const actionsReason = actionsDisabledReason({
+    online: !isOffline,
+    reconnecting: historyError !== null,
+    awaitingFresh,
+  });
+  const actionsDisabled = actionsReason !== undefined;
   const coarse = useCoarsePointer();
   const variant = selectTrayVariant(viewport);
   const isBottomSheet = variant === "bottom-sheet";
@@ -217,7 +231,7 @@ export function NotificationPanel() {
 
   const bulk = useTrayBulkActions({
     notificationHistory,
-    isOffline,
+    isOffline: actionsDisabled,
     needsAttention: countNeedsAttention(notificationHistory),
     scopedMarkReadIds,
     announce,
@@ -301,6 +315,13 @@ export function NotificationPanel() {
     if (!background.poll.loading) announcedBackgroundLoad.current = false;
   }, [backgroundVisible, background.poll.loading, announce]);
 
+  // The one polite region speaks each connectivity change once; the banner itself is plain text.
+  const wasOffline = useRef(isOffline);
+  useEffect(() => {
+    if (wasOffline.current !== isOffline) announce(isOffline ? "Offline" : "Back online", "polite", "connectivity");
+    wasOffline.current = isOffline;
+  }, [isOffline, announce]);
+
   const { rows: flatRows, needsAttention, setSize } = useMemo(
     () => flattenGroups(filteredNotifications, collapsed),
     [filteredNotifications, collapsed],
@@ -379,7 +400,7 @@ export function NotificationPanel() {
   });
   const banner = selectTrayBanner({ isOffline, hasLoadError: historyError !== null, rowCount: notificationHistory.length });
   const updatedAt = historyLastUpdatedAt ? new Date(historyLastUpdatedAt).toLocaleTimeString() : null;
-  const offlineReason = isOffline ? OFFLINE_REASON : undefined;
+  const offlineReason = actionsReason;
 
   // The one-time "What changed" card is announced once, politely, with no focus move (TM-13).
   const announcedWhatChanged = useRef(false);
@@ -396,7 +417,7 @@ export function NotificationPanel() {
         key: "clear-informational",
         label: `Clear informational (${bulk.informationalIds.length})`,
         caption: "Undo available",
-        disabledReason: isOffline ? OFFLINE_REASON : bulk.informationalIds.length === 0 ? "Nothing to clear" : undefined,
+        disabledReason: actionsReason ?? (bulk.informationalIds.length === 0 ? "Nothing to clear" : undefined),
         onSelect: () => bulk.openConfirm("informational"),
       },
     ],
@@ -406,7 +427,7 @@ export function NotificationPanel() {
         label: "Clear history...",
         icon: <span aria-hidden="true">⚠ </span>,
         caption: "cannot be undone",
-        disabledReason: isOffline ? OFFLINE_REASON : bulk.readIds.length === 0 ? "Nothing to clear" : undefined,
+        disabledReason: actionsReason ?? (bulk.readIds.length === 0 ? "Nothing to clear" : undefined),
         onSelect: () => bulk.openConfirm("history"),
       },
     ],
@@ -423,9 +444,9 @@ export function NotificationPanel() {
 
   const emptyStateText = () => {
     if (trayState.kind === "empty-filtered") return { icon: "🔍", text: "No matching notifications", sub: "Try adjusting your search or filter" };
-    if (trayState.kind === "offline") return { icon: "📡", text: "Offline - showing cached", sub: updatedAt ? `Updated ${updatedAt}` : "Reconnect to load notifications" };
-    if (trayState.kind === "load-error") return { icon: "⚠", text: "Could not load notifications.", sub: "" };
-    return { icon: "🔔", text: "All caught up", sub: "You'll see notifications from your sessions here" };
+    if (trayState.kind === "offline") return { icon: "📡", text: "Offline. Showing last known state.", sub: updatedAt ? `Updated ${updatedAt}` : "Reconnect to load notifications" };
+    if (trayState.kind === "load-error") return { icon: "⚠", text: "Couldn't load notifications.", sub: "" };
+    return { icon: "🔔", text: "Nothing needs you right now.", sub: "No recent activity." };
   };
 
   const renderBody = () => {
@@ -433,7 +454,13 @@ export function NotificationPanel() {
       return (
         <div className={empty} aria-busy="true" data-testid="tray-skeleton">
           <div className={emptyIcon} aria-hidden="true">⏳</div>
-          <p className={emptyText}>Loading notifications...</p>
+          <OfflineBanner
+            online
+            loading
+            hasData={false}
+            onRetry={() => refreshHistory()}
+            testId="tray-loading"
+          />
         </div>
       );
     }
@@ -548,7 +575,7 @@ export function NotificationPanel() {
   }[variant];
 
   return (
-    <>
+    <ActionsDisabledReasonContext.Provider value={actionsReason}>
       {modalSheet && <div className={sheetScrim} data-testid="tray-scrim" onClick={close} aria-hidden="true" />}
       <TrayHandle />
 
@@ -618,10 +645,10 @@ export function NotificationPanel() {
                 {scopedMarkReadIds.length > 0 && (
                   <button
                     className={trayButton}
-                    onClick={isOffline ? undefined : bulk.markActivityRead}
+                    onClick={actionsDisabled ? undefined : bulk.markActivityRead}
                     aria-label="Mark activity read"
-                    aria-disabled={isOffline ? true : undefined}
-                    title={isOffline ? OFFLINE_REASON : undefined}
+                    aria-disabled={actionsDisabled ? true : undefined}
+                    title={actionsReason}
                   >
                     Mark activity read
                   </button>
@@ -681,14 +708,13 @@ export function NotificationPanel() {
             {quietUnsaved && <span data-testid="tray-quiet-unsaved">Preference could not be saved</span>}
           </div>
         )}
-        {isOffline && (
-          <div className={trayBanner} data-testid="tray-banner-offline">
-            <span>Offline - showing cached{updatedAt ? `, updated ${updatedAt}` : ""}</span>
-          </div>
-        )}
+        <OfflineBanner online={!isOffline} testId="tray-banner-offline" />
         {banner === "load-error" && (
           <div className={trayBanner} data-testid="tray-banner-load-error">
-            <span>Could not load notifications.{updatedAt ? ` Showing cached - updated ${updatedAt}` : ""}</span>
+            <span>
+              Couldn&apos;t load notifications.
+              {historyLastUpdatedAt !== null ? ` Showing data from ${formatClockTime(historyLastUpdatedAt)}.` : ""}
+            </span>
             <button type="button" className={trayButton} onClick={() => refreshHistory()}>
               Retry
             </button>
@@ -795,6 +821,11 @@ export function NotificationPanel() {
             {cardsBlock}
             {filterBlock}
           </div>
+          {traySegment !== "background" && historyLastUpdatedAt !== null && (
+            <p className={asOfLine} data-testid="tray-as-of">
+              As of {formatClockTime(historyLastUpdatedAt)}
+            </p>
+          )}
           {traySegment === "background" ? (
             <BackgroundActivity
               rows={background.rows}
@@ -807,6 +838,7 @@ export function NotificationPanel() {
               onOpenRow={openBackgroundRow}
               onMergeNew={(n) => announce(`${n} new background ${n === 1 ? "session" : "sessions"}`, "polite", "background-new")}
               replyEnabled={replyEnabled}
+              legacy={background.feedEnabled ? undefined : { hasHiddenSessions: background.hasHiddenSessions }}
             />
           ) : (
             renderBody()
@@ -826,6 +858,6 @@ export function NotificationPanel() {
           </Link>
         </div>
       </div>
-    </>
+    </ActionsDisabledReasonContext.Provider>
   );
 }

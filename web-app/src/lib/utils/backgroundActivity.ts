@@ -214,6 +214,8 @@ export interface BuildActivityOptions {
   /** Hidden sessions seen earlier that the list no longer returns (keeps their unread exceptions). */
   departed?: readonly HiddenSessionRef[];
   now?: number;
+  /** Flag `background_activity_feed` off: emit only the exception rows (the pre-feed behaviour). */
+  exceptionsOnly?: boolean;
 }
 
 /**
@@ -224,7 +226,7 @@ export interface BuildActivityOptions {
 export function buildActivityRows(
   history: readonly NotificationHistoryItem[],
   hiddenSessions: readonly HiddenSessionSummary[],
-  { previous = [], departed = [], now = Date.now() }: BuildActivityOptions = {},
+  { previous = [], departed = [], now = Date.now(), exceptionsOnly = false }: BuildActivityOptions = {},
 ): ActivityRow[] {
   const exceptions = selectBackgroundRows(history, hiddenSessions, departed, now).rows;
   const exceptionBySession = new Map(exceptions.map((r) => [r.sessionId, r]));
@@ -238,6 +240,8 @@ export function buildActivityRows(
     timestampMs: r.timestampMs,
     exception: r,
   }));
+
+  if (exceptionsOnly) return pinned;
 
   const rest: ActivityRow[] = [];
   for (const s of hiddenSessions) {
