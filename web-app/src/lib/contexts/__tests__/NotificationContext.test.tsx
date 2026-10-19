@@ -1116,8 +1116,8 @@ describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
     mockMarkAsRead.mockClear();
     const { result } = renderHook(() => useNotifications(), { wrapper });
     act(() => {
-      result.current.addToHistoryOnly(makeNotification({ id: "ans-1", sessionId: "a", isPendingDecision: true } as never));
-      result.current.addToHistoryOnly(makeNotification({ id: "ans-2", sessionId: "b", isPendingDecision: true } as never));
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "a" }), id: "ans-1" });
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "b" }), id: "ans-2" });
     });
     expect(result.current.getUnreadCount()).toBe(2);
 
@@ -1133,7 +1133,7 @@ describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
   it("marked_handled_should_survive_a_reload_in_this_browser_only", () => {
     const first = renderHook(() => useNotifications(), { wrapper });
     act(() => {
-      first.result.current.addToHistoryOnly(makeNotification({ id: "ans-9", sessionId: "z" }));
+      first.result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "z" }), id: "ans-9" });
     });
     act(() => first.result.current.markAnswerHandled(["ans-9"]));
     expect(window.localStorage.getItem("ssq.background.reviewed")).toContain("answer:ans-9@");
