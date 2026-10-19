@@ -14,7 +14,11 @@ export const BANNER_PRIORITY = {
   beyond_loaded: 7,
   stale_clean: 8,
   reload_failed: 8,
+  load_failed: 8,
   informational: 9,
+  jump_progress: 9,
+  indexing: 9,
+  fallback: 9,
 } as const;
 
 export type BannerKind = keyof typeof BANNER_PRIORITY;

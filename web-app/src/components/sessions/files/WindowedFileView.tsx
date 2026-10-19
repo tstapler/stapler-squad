@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { EMPTY_WINDOWED_STATE, WindowedFile, type WindowedState } from "@/lib/files/windowedFile";
+import { useEffect, useState } from "react";
+import { WindowedFile } from "@/lib/files/windowedFile";
+import { useWindowedState } from "@/lib/files/useWindowedState";
 import type { BufferSource } from "@/lib/files/bufferReducer";
 import { useFileTransport } from "@/lib/hooks/useFileTransport";
 import { CodeEditor, type CodeEditorHandle } from "../CodeEditor";
+import { LargeFileStates } from "./LargeFileStates";
 import type { ReadViewHandle } from "./readViewHandle";
 
 type Windowed = Extract<BufferSource, { kind: "windowed" }>;
@@ -22,7 +24,6 @@ export interface WindowedFileViewProps {
 }
 
 let instances = 0;
-const noop = () => () => undefined;
 
 /** The editor handle the bridge sees: absolute line numbers, jumps that load their window first. */
 function bridgeHandle(editor: CodeEditorHandle, file: WindowedFile): ReadViewHandle {
@@ -48,21 +49,24 @@ export function WindowedFileView({ sessionId, path, source, language, reloadKey,
     return () => { f.dispose(); setCurrent(null); };
   }, [transport, sessionId, path, source.size, reloadKey]);
   const file = current?.file ?? null;
-  const state: WindowedState = useSyncExternalStore(file?.subscribe ?? noop, file?.getSnapshot ?? (() => EMPTY_WINDOWED_STATE), () => EMPTY_WINDOWED_STATE);
+  const state = useWindowedState(file);
   useEffect(() => { if (state.demoted) onDemoted?.(); }, [state.demoted, onDemoted]);
 
   if (!file) return null;
   return (
-    <CodeEditor
-      key={current?.id}
-      content=""
-      language={language}
-      path={path}
-      mode="Read"
-      onReady={(editor) => {
-        void file.attach(editor, language, source.windowStartLine);
-        onReady?.(bridgeHandle(editor, file));
-      }}
-    />
+    <>
+      <LargeFileStates file={file} state={state} />
+      <CodeEditor
+        key={current?.id}
+        content=""
+        language={language}
+        path={path}
+        mode="Read"
+        onReady={(editor) => {
+          void file.attach(editor, language, source.windowStartLine);
+          onReady?.(bridgeHandle(editor, file));
+        }}
+      />
+    </>
   );
 }

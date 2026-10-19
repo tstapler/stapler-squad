@@ -196,5 +196,7 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
 
   const dismissBeyond = useCallback(() => setBeyond(null), []);
 
-  return { onEditorReady, focusEditor, beyond: beyond && active && beyond.path === active.path ? beyond : null, dismissBeyond, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, swapView, outline };
+  const windowed = editor && active && editor.path === active.path ? (editor.handle.windowed ?? null) : null;
+
+  return { onEditorReady, windowed, focusEditor, beyond: beyond && active && beyond.path === active.path ? beyond : null, dismissBeyond, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, swapView, outline };
 }

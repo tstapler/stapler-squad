@@ -2,6 +2,7 @@
 
 import { detectLanguage } from "../FileContentViewer";
 import type { FilesV2 } from "@/lib/hooks/useFilesV2";
+import { useWindowedState } from "@/lib/files/useWindowedState";
 import { FeedbackToast } from "./FeedbackToast";
 import { StatusBar } from "./StatusBar";
 import { QuickfixChip, type QuickfixView } from "./SearchResults";
@@ -12,6 +13,8 @@ const languageName = (id: string) => (id === "text" ? "Plain Text" : id.charAt(0
 export function FilesV2Footer({ v2, quickfix }: { v2: FilesV2; quickfix?: QuickfixView | null }) {
   const { buffers, status, feedback } = v2;
   const active = buffers.active;
+  const file = v2.bridge.windowed;
+  const windowed = useWindowedState(file);
   if (!active) return null;
   const loaded = active.status === "loaded" ? active : null;
   return (
@@ -24,6 +27,7 @@ export function FilesV2Footer({ v2, quickfix }: { v2: FilesV2; quickfix?: Quickf
         encoding={loaded ? "UTF-8" : null}
         language={languageName(detectLanguage(active.path))}
         readOnly={loaded?.readOnly ?? "none"}
+        windowed={file ? windowed : null}
         dirty={!!loaded?.dirty}
         message={feedback.message}
         onDismissMessage={feedback.dismiss}

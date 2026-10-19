@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReadOnlyKind } from "@/lib/files/bufferReducer";
 import type { FeedbackMessage } from "@/lib/hooks/useFilesFeedback";
+import { approxLines } from "@/lib/files/windowedSource";
+import type { WindowedState } from "@/lib/files/windowedFile";
+import { IndexingChip } from "./LargeFileStates";
 import { bar, chip, dirtyDot, errorText, popover, region, segment } from "./StatusBar.css";
 
 const REASONS: Record<Exclude<ReadOnlyKind, "none">, { chip: string; why: string }> = {
@@ -22,6 +25,12 @@ export function readOnlyChipText(reason: Exclude<ReadOnlyKind, "none">, detail?:
   return `Read-only: ${detail ? `showing ${detail}` : REASONS[reason].chip}`;
 }
 
+const positionText = (line: number, col: number, w: StatusBarProps["windowed"]) => {
+  const ln = line.toLocaleString("en-US");
+  if (!w) return `Ln ${line}, Col ${col}`;
+  return `Ln ${ln} of ${w.exact ? w.lineCount.toLocaleString("en-US") : `about ${approxLines(w.lineCount)}`}, Col ${col}`;
+};
+
 interface StatusBarProps {
   line: number;
   col: number;
@@ -31,6 +40,8 @@ interface StatusBarProps {
   readOnly: ReadOnlyKind;
   /** Tail of the truncated chip, e.g. "first 1 MB of 3.2 MB". */
   readOnlyDetail?: string;
+  /** Windowed buffers: the line count ("of about N" until exact) and the indexing chip. */
+  windowed?: Pick<WindowedState, "lineCount" | "exact" | "indexing"> | null;
   dirty: boolean;
   offline?: boolean;
   message: FeedbackMessage | null;
@@ -57,7 +68,8 @@ export function StatusBar(p: StatusBarProps) {
 
   return (
     <div className={bar} data-testid="files-status-bar" style={{ position: "relative" }}>
-      <span className={segment}>Ln {p.line}, Col {p.col}</span>
+      <span className={segment}>{positionText(p.line, p.col, p.windowed)}</span>
+      {p.windowed?.indexing && <IndexingChip />}
       {p.eol && <span className={segment}>{p.eol}</span>}
       {p.encoding && <span className={segment}>{p.encoding}</span>}
       <span className={segment}>{p.language}</span>

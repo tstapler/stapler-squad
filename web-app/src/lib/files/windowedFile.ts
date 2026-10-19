@@ -32,10 +32,12 @@ export interface WindowedState {
   /** The router lost range reads: the viewer falls back to the truncated whole-file read. */
   demoted: boolean;
   openFailed: boolean;
+  /** A load found the file changed under the reader (torn twice); Reload from disk re-anchors the same line. */
+  stale: boolean;
 }
 
 export const EMPTY_WINDOWED_STATE: WindowedState = {
-  lineCount: 1, exact: false, opened: false, indexing: false, loading: [], failed: [], jump: null, notice: null, demoted: false, openFailed: false,
+  lineCount: 1, exact: false, opened: false, indexing: false, loading: [], failed: [], jump: null, notice: null, demoted: false, openFailed: false, stale: false,
 };
 
 export type GoResult = { line: number; clamped: boolean; cancelled: boolean };
@@ -43,6 +45,13 @@ export type GoResult = { line: number; clamped: boolean; cancelled: boolean };
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   const t = setTimeout(resolve, ms);
   signal.addEventListener("abort", () => { clearTimeout(t); reject(signal.reason); }, { once: true });
+});
+
+/** Settles with `p`, or rejects as soon as `signal` aborts (the shared index wait itself keeps running for other readers). */
+const abortable = <T,>(p: Promise<T>, signal: AbortSignal) => new Promise<T>((resolve, reject) => {
+  if (signal.aborted) return reject(signal.reason);
+  signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  p.then(resolve, reject);
 });
 
 const sameRange = (a: LineRange, b: LineRange) => a.startLine === b.startLine && a.endLine === b.endLine;
@@ -191,6 +200,7 @@ export class WindowedFile {
   private fail(err: unknown, opening = false): void {
     if (aborted(err)) return;
     if (err instanceof Rejected && err.reason === "unsupported") this.set({ demoted: true });
+    else if (err instanceof Rejected && err.reason === "stale") this.set({ stale: true });
     else if (opening) this.set({ openFailed: true });
   }
 
@@ -274,7 +284,7 @@ export class WindowedFile {
     this.life.signal.addEventListener("abort", () => ctl.abort(), { once: true });
     this.set({ jump: line, notice: null });
     try {
-      const r = await this.read(line, "around", WINDOW_LINES, ctl.signal);
+      const r = await abortable(this.read(line, "around", WINDOW_LINES, ctl.signal), ctl.signal);
       if (ctl.signal.aborted) return { line, clamped, cancelled: true };
       if (line > r.range.endLine && r.range.eof) { line = r.range.endLine; clamped = true; }
       const recount = this.noteCount(r);

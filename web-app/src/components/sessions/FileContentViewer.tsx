@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useGetFileContent } from "@/lib/hooks/useFileService";
 import type { ReadViewHandle } from "./files/readViewHandle";
 import type { BufferSource } from "@/lib/files/bufferReducer";
-import { FALLBACK_CHIP_TEXT } from "@/lib/files/transport/router";
+import { FallbackChip } from "./files/LargeFileStates";
 import { WindowedFileView } from "./files/WindowedFileView";
 import { ReadSurface } from "./files/ReadSurface";
 import { buildGutterMarks, type GutterMarkType } from "@/lib/utils/parseDiff";
@@ -381,7 +381,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
         wrapLines={wrapLines}
         onToggleWrap={() => setWrapLines((w) => !w)}
       />
-      {demoted && <div className={truncationWarning} role="status" data-testid="fallback-chip">{FALLBACK_CHIP_TEXT}</div>}
+      {demoted && <FallbackChip />}
       {data.isTruncated && (
         <div className={truncationWarning}>
           ⚠ File truncated to 1 MB — only the first portion is shown
