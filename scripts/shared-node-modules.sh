@@ -46,6 +46,11 @@
 #   STAPLER_SQUAD_SHARED_NODE_MODULES=0 scripts/shared-node-modules.sh web-app
 set -euo pipefail
 
+# web-app's preinstall guard requires bun's own user agent, but bun does not
+# override one inherited from a parent npm/npx/bunx (e.g. Playwright e2e
+# global-setup), so drop it and let bun set its own.
+unset npm_config_user_agent
+
 WEBAPP_DIR="${1:?usage: shared-node-modules.sh <web-app-dir>}"
 SHARED_ROOT="${STAPLER_SQUAD_SHARED_NODE_MODULES_DIR:-$HOME/.stapler-squad/shared-node-modules}"
 

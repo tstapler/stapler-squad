@@ -54,6 +54,10 @@ if [ -f FAIL_INSTALL ]; then
 	echo "stub bun: FAIL_INSTALL marker present, simulating a frozen-lockfile divergence" >&2
 	exit 1
 fi
+# Mirrors web-app's preinstall guard: bun must not see an inherited npm UA.
+case "${npm_config_user_agent:-}" in
+	npm/*|npx/*|pnpm/*|yarn/*) echo "stub bun: inherited npm_config_user_agent=$npm_config_user_agent" >&2; exit 1 ;;
+esac
 echo "install" >> "$INSTALL_COUNTER"
 mkdir -p node_modules
 mkdir -p node_modules/.bun
@@ -251,5 +255,16 @@ rm -f "$WT_A/node_modules/.ssq-install-stamp"
 "$SCRIPT" "$WT_A" > "$TMP/out-a3" 2>&1 || fail "scenario 9: fast-path re-run failed"
 [ -f "$WT_A/node_modules/.ssq-install-stamp" ] || fail "scenario 9: fast path did not refresh the stamp"
 echo "PASS: scenario 9 -- successful runs leave node_modules/.ssq-install-stamp"
+
+# --- Scenario 10: an inherited npm/npx user agent (Playwright global-setup,
+# bunx) must not reach bun, in both the shared and opt-out install paths. ---
+WT_K="$TMP/wt-k/web-app"
+mkdir -p "$WT_K"
+make_fixture "$WT_K"
+echo "bun-lock-content-scenario10" > "$WT_K/bun.lock"
+npm_config_user_agent="npm/10.0.0 node/v22" "$SCRIPT" "$WT_K" > "$TMP/out-k1" 2>&1 || { cat "$TMP/out-k1"; fail "scenario 10: shared install failed under inherited npm user agent"; }
+rm -f "$WT_K/node_modules"
+npm_config_user_agent="npx/10.0.0 node/v22" STAPLER_SQUAD_SHARED_NODE_MODULES=0 "$SCRIPT" "$WT_K" > "$TMP/out-k2" 2>&1 || { cat "$TMP/out-k2"; fail "scenario 10: opt-out install failed under inherited npx user agent"; }
+echo "PASS: scenario 10 -- inherited npm/npx user agent is not passed through to bun"
 
 echo "All shared-node-modules.sh scenarios passed."
