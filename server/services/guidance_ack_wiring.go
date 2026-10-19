@@ -80,6 +80,9 @@ func answerRouterDeps(w NotificationActionWiring, acks *GuidanceAckDetector) Ans
 // ObservePostToolUse routes a PostToolUse receipt to the detector. sessionID is
 // the hook header value, a session title or UUID.
 func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, toolName string) {
+	if toolName == scheduleWakeupTool {
+		s.observeScheduleWakeup(ctx, sessionID)
+	}
 	if toolName != askUserQuestion {
 		return
 	}
@@ -96,6 +99,19 @@ func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, tool
 			log.Warn("[GuidanceMirror] terminal answer not cleared", "session", inst.GetStableID(), "err", err)
 		}
 	}
+}
+
+// observeScheduleWakeup resolves the hook header (title or UUID) to the stable
+// session id before counting, so the log line and the role lookup agree.
+func (s *SessionService) observeScheduleWakeup(ctx context.Context, sessionID string) {
+	roles := scheduleWakeupRoles{}
+	if s.concStorage != nil {
+		roles.lookup = s.concStorage
+	}
+	if inst := s.findInstance(sessionID); inst != nil {
+		sessionID = inst.GetStableID()
+	}
+	observeScheduleWakeup(ctx, roles, sessionID)
 }
 
 // wireHookReply installs the pre-answered-question resolver. It stays inert

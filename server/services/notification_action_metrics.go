@@ -13,21 +13,21 @@ import (
 )
 
 // ActionMetrics records one finished InvokeNotificationAction call. The label
-// values are the lower-cased ActionKind and ActionOutcome names plus the caller
-// channel (web_local, web_remote, mcp, unknown).
+// values are the lower-cased ActionKind, ActionTier and ActionOutcome names plus
+// the caller channel (web_local, web_remote, mcp, unknown).
 type ActionMetrics interface {
 	Record(ActionSample)
 }
 
 // ActionSample is one finished call.
 type ActionSample struct {
-	Kind, Outcome, Channel string
-	Elapsed                time.Duration
+	Kind, Tier, Outcome, Channel string
+	Elapsed                      time.Duration
 }
 
 type otelActionMetrics struct {
 	total   metric.Int64Counter
-	latency metric.Float64Histogram
+	latency metric.Float64Histogram // seconds
 }
 
 var (
@@ -36,8 +36,8 @@ var (
 )
 
 // defaultActionMetrics returns the process-wide OTel-backed recorder:
-// notification_inline_action_total{kind,outcome,channel} and
-// notification_inline_action_latency_ms{kind}. A registration failure degrades
+// notification_inline_action_total{kind,tier,outcome,channel} and
+// notification_inline_action_duration_seconds{kind}. A registration failure degrades
 // to a no-op recorder; metrics never fail an action.
 func defaultActionMetrics() ActionMetrics {
 	otelActionMetricsOnce.Do(func() {
@@ -48,11 +48,12 @@ func defaultActionMetrics() ActionMetrics {
 			log.Error("services: failed to register notification_inline_action_total", "error", err)
 			return
 		}
-		latency, err := meter.Float64Histogram("notification_inline_action_latency_ms",
-			metric.WithUnit("ms"),
+		latency, err := meter.Float64Histogram("notification_inline_action_duration_seconds",
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
 			metric.WithDescription("InvokeNotificationAction handler latency by action kind"))
 		if err != nil {
-			log.Error("services: failed to register notification_inline_action_latency_ms", "error", err)
+			log.Error("services: failed to register notification_inline_action_duration_seconds", "error", err)
 			return
 		}
 		otelActionMetricsInst = &otelActionMetrics{total: total, latency: latency}
@@ -66,8 +67,8 @@ func defaultActionMetrics() ActionMetrics {
 func (m *otelActionMetrics) Record(a ActionSample) {
 	ctx := context.Background()
 	m.total.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("kind", a.Kind), attribute.String("outcome", a.Outcome), attribute.String("channel", a.Channel)))
-	m.latency.Record(ctx, float64(a.Elapsed.Microseconds())/1000, metric.WithAttributes(attribute.String("kind", a.Kind)))
+		attribute.String("kind", a.Kind), attribute.String("tier", a.Tier), attribute.String("outcome", a.Outcome), attribute.String("channel", a.Channel)))
+	m.latency.Record(ctx, a.Elapsed.Seconds(), metric.WithAttributes(attribute.String("kind", a.Kind)))
 }
 
 type noopActionMetrics struct{}

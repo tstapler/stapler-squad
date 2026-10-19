@@ -169,6 +169,7 @@ type NotificationActionDispatcher struct {
 	flags     actionFlags
 	audit     func() actionAudit
 	metrics   ActionMetrics
+	reopen    *reopenTracker
 	cache     *actionIdempotency
 	now       func() time.Time
 }
@@ -189,7 +190,7 @@ type ActionDelegates struct {
 func NewNotificationActionDispatcher(d ActionDelegates, audit func() actionAudit) *NotificationActionDispatcher {
 	return &NotificationActionDispatcher{
 		approvals: d.Approvals, questions: d.Questions, guidance: d.Guidance, backlog: d.Backlog, cancels: d.Cancels, resolver: d.Resolver,
-		flags: configActionFlags{ev: compiledFlagEvidence}, audit: audit, metrics: defaultActionMetrics(),
+		flags: configActionFlags{ev: compiledFlagEvidence}, audit: audit, metrics: defaultActionMetrics(), reopen: defaultReopenTracker,
 		cache: newActionIdempotency(actionCacheMax), now: time.Now,
 	}
 }
@@ -505,10 +506,33 @@ func (d *NotificationActionDispatcher) record(m *sessionv1.InvokeNotificationAct
 	if err != nil {
 		label = "error"
 	}
-	d.metrics.Record(ActionSample{Kind: strings.ToLower(kindName(m.GetActionKind())), Outcome: label, Channel: c.channel, Elapsed: elapsed})
+	d.metrics.Record(ActionSample{Kind: strings.ToLower(kindName(m.GetActionKind())), Tier: d.tierLabel(m), Outcome: label, Channel: c.channel, Elapsed: elapsed})
+	d.reopen.noteApplied(m, res)
 	if preExecution(res.Outcome) {
 		d.appendResultLine(d.auditLine(m, c), res.Outcome)
 	}
+}
+
+// tierLabel is the lower-cased tier of the call ("a", "b"), or "unknown" when
+// the kind or the answer's route cannot be resolved.
+func (d *NotificationActionDispatcher) tierLabel(m *sessionv1.InvokeNotificationActionRequest) string {
+	kind := m.GetActionKind()
+	pol, known := actionPolicies[kind]
+	if !known {
+		return "unknown"
+	}
+	tier := pol.Tier
+	if kind == sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION {
+		if d.questions == nil || m.GetSessionId() == "" {
+			return "unknown"
+		}
+		route, ok := d.questions.RouteFor(m.GetSessionId())
+		if !ok {
+			return "unknown"
+		}
+		tier = answerTier(route)
+	}
+	return strings.ToLower(strings.TrimPrefix(tier.String(), "ACTION_TIER_"))
 }
 
 // preExecution reports outcomes that never reach execute, which writes its own line.
