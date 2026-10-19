@@ -37,6 +37,12 @@ instance. Nothing here touches the live service on `:8543`.
 
 ### Task 0.1.5b: phone check of the input and viewport page
 
+> **PROVISIONAL, EMULATED (not an owner phone verdict).** Only the `--` and `"x"` ASCII check (row 5 of the table) was
+> exercised, with synthetic key events in emulated Chromium. It passed (both stayed plain ASCII). Soft-keyboard height,
+> GREEN/RED bar behaviour, caret visibility, IME (`keyCode 229`), Bluetooth-keyboard signals and the fixture exports are NOT
+> verified; the table rows below stay blank until the owner fills them on the phone. The `inputProfile` `it.skip` fixtures
+> are untouched. The owner can still overturn or complete this.
+
 Open `/spike-files/`. The page shows a live readout line (`innerHeight`, `vv.height`, `vv.offsetTop`, `keyboard`,
 `maxKeyboard`), a CodeMirror 6 editor with a 5,000-line document, a RED bar fixed at `bottom: 0` and a GREEN bar pinned
 to the visual viewport, and the key-event capture panel.
@@ -95,6 +101,11 @@ the 4-week review. A trial you cannot complete on the phone is recorded as "not 
 
 ### Task 0.1.6b: VoiceOver / TalkBack check (criteria R1 to R4)
 
+> **PROVISIONAL, EMULATED (not an owner phone verdict).** An emulated Pixel 7 Chromium run checked the R1/R2 analogue in DOM
+> and ARIA terms only: lines are sequential and numbered; Go to line 1234 shows "Lines 1001-1500 of 3000" and "Line 1234";
+> the skip link, headings and the Pager landmark are present. Real VoiceOver/TalkBack was NOT used, so the R1-R4 table below
+> stays blank (R3 and R4 not run). The owner can still overturn it.
+
 Open `/spike-files/?v=a11y`. The page has a region "Editor" holding the skip link "Switch to accessible view", a
 CodeMirror 6 read-only view, and the Accessible view (pages of 500 lines, a pager, a Go to line field). Turn on VoiceOver
 (iOS) or TalkBack (Android). Record device, OS and screen-reader version.
@@ -124,6 +135,13 @@ Story 1.5.4 starts. R3 and R4 only set the wording of the known-limits section o
 
 ### Task 0.1.4d: engine verdict for the lazy-document models
 
+> **PROVISIONAL, EMULATED (not an owner phone verdict).** Emulated Pixel 7 Chromium, real touch flings, 6x CPU throttle,
+> 250 ms latency. a2 gap-line: PASS (0 blank bands in 150 samples; typing and scrolling OK; a far jump lands within a few
+> thousand lines of the target, as expected). a1 window swap: PASS, and it refuses a swap with dirty edits as designed.
+> Provisional selection: **a2 gap-line module for Story 1.6.4**; Epic 1.7 (custom engine) is not built. Real-finger feel on
+> iOS Safari / Android Chrome (S-T3 residual) is NOT verified. The owner can still overturn it by recording a different
+> verdict in the table below.
+
 Open `/spike-lazydoc/?m=a2`, then `/spike-lazydoc/?m=a1`. Each page shows a virtual 1,000,000-line file (about 50 MB) and a
 stats line. For each model:
 
@@ -146,3 +164,29 @@ Verdict rule from the plan: a2 PASS selects the gap-line module (Story 1.6.4); a
 (Task 1.6.4d) and the single-editable-window UX; both FAIL activates the contingent custom engine (contingent Epic 1.7)
 and until it ships T1 and T2 files are view-only through the Accessible-view pager. Record the verdict here and in
 ADR-036 "Spike outcomes".
+
+## Phone-only checks still unverified
+
+Everything below needs the owner's real phone, real assistive technology or a real keyboard. Emulated runs (see the
+PROVISIONAL notes above) do not close any of these. Plan line numbers refer to `plan.md`.
+
+| Check | Task / source | Status |
+|---|---|---|
+| Real soft-keyboard height; GREEN bar above and RED bar covered; caret visible on focus | Task 0.1.5b (plan 410) | Unverified |
+| IME composition (`keyCode 229`), no duplicated text; soft-keyboard and Bluetooth `inputProfile` fixtures exported (un-skip `inputProfile_should_ReplayOwnerCapturedFixtures_When_ExportedFromPhone`) | Tasks 0.1.5b, 0.1.5c (plan 407, 410) | Unverified |
+| Bluetooth keyboard signals (S4 readout shrink), Esc / Ctrl+key / F-keys; Enter/Backspace on the soft keyboard never hides the key bar, Esc on Bluetooth does | Task 0.1.5b; Story 2.5.2 (plan 2108) | Unverified |
+| Android Back with the keyboard open; `inputmode=none` in Read mode | Stories 0.1.5, 1.5.1 / 1.5.2 (plan 163, 1247) | Unverified |
+| Real iOS PWA keyboard bar, `visualViewport`, vim best-effort | Open question (plan 163); Story 2.5.2 (plan 2096-2102) | Unverified |
+| Time-to-answer baseline: three timed find-a-string-and-reach-the-line trials | Task 0.1.5d (plan 414) | Not done |
+| VoiceOver / TalkBack R1-R4 (R1/R2 required; R3/R4 informational) on the spike page | Task 0.1.6b (plan 436) | DOM/ARIA analogue only (emulated) |
+| S-T3 real-finger fling feel and far-jump / typing feel on the phone (a2, a1) | Task 0.1.4d (plan 384; open question plan 165) | Emulated PASS only; owner verdict open |
+| S-T1 leg: response size and latency from the phone over `:62872` / Tailscale | Task 0.1.7a (ADR-036 "Spike outcomes") | PENDING-OWNER |
+| Real-path streaming check on the phone | Task 0.1.1b (plan 311) | Unverified |
+| Gate G1 phone smoke of the read-only flows (open, search, jump, rotate) with the Accessible view and a VoiceOver/TalkBack quick check of R1/R2 against the built component | Task 1.5.3c (plan 1272); Story 1.5.4 | Not due yet; blocks Epic 2.2/2.3/2.4 |
+| Informational: scroll and jump in a 50 MB file when `files:range-read` is on in the isolated instance | Task 1.5.3c (plan 1273) | Not due yet |
+| Windowed large-file reading on the phone (fast scroll, far jump, search hit, Accessible view, background/foreground the PWA); gates the live `files:range-read` flip | Task 1.6.7c (plan 1502); Story 1.6.5 on-device large file | Not due yet |
+| Phone dogfood script and sign-off (incl. `files:merge-phone` decision); gates the global `files:editing` flip | Task 2.5.4a (plan 2154) | Not due yet |
+| VoiceOver / TalkBack script for CodeMirror on touch (R1-R4 re-run) | Task 2.5.4b (plan 2158) | Not due yet |
+| Per-browser chord table (Chrome, Firefox, Safari), non-US layout AltGr+8, Edit-layout at three phone viewports | Story 2.5.2 (plan 2108) | Not due yet |
+| Large-file editing script on the phone link (5 MB and 50 MB edit/save, conflict, rebase, kill switch, offline draft); gates `files:delta-write` / `files:edit-large` | Story 2.5.5 (plan 2171) | Not due yet |
+| Custom-engine phone gate | Task 1.7.6d (plan 2386) | Only if Epic 1.7 is activated (not expected) |

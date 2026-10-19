@@ -102,6 +102,14 @@ The 1 MB rows are dominated by the temp-file `fsync` (about 12 ms on this btrfs 
 - Scan: **replace the whole-file read with streaming for any file above the old per-file cap.** Reading a 64 MiB file whole costs 64 MiB of heap per worker (67 MB/op; 24 parallel workers could pin 1.6 GB), against 1 MB/op streaming, and streaming is also 2.5x faster here. Proposed scan constants for the Story 1.1 implementation: stream files up to 64 MiB (about 20-45 ms each warm); skip larger files with a counted "too large" outcome unless `IncludeIgnored`-style opt-in is added. UNVERIFIED on a cold cache.
 - **PENDING-OWNER: the phone/LAN leg of S-T1** (on-the-wire range response from the phone over `:62872` or Tailscale) remains unmeasured; S-T2 is host-only by nature and does not need the phone.
 
+### Engine verdict summary (Task 0.1.4d; EMULATED, PROVISIONAL, not an owner phone verdict)
+Emulated Pixel 7 Chromium with real touch flings, 6x CPU throttle and 250 ms latency; not real iOS Safari or Android Chrome, not the owner's fingers.
+- **a2 gap-line: PASS.** 0 blank bands in 150 samples; typing and scrolling OK; a far jump lands within a few thousand lines of the target, as the model predicts.
+- **a1 window swap: PASS.** It refuses a swap while the window has dirty edits, as designed.
+- **Provisional selection: a2 gap-line module for Story 1.6.4.** Epic 1.7 (contingent custom engine) is not built; its activation rule (a2 and a1 both FAIL) is not met.
+- **Related, also emulated:** the Story 0.1.6 R1/R2 analogue passes in DOM/ARIA terms (real VoiceOver/TalkBack not verified); of Task 0.1.5b only the `--` and `"x"` ASCII check passed, with synthetic key events (soft-keyboard height, IME, Bluetooth, caret not verified).
+- **Owner can overturn this.** A real-phone verdict recorded in `manual-verification-checklist.md` (Task 0.1.4d) replaces it; a2 FAIL with a1 PASS would switch to Task 1.6.4d. Open real-device checks are listed in the checklist section "Phone-only checks still unverified".
+
 ## Editor engine (added 2026-10-16 after owner decision: the engine is not fixed)
 Full comparison: `research/transport.md` section 11. Evidence limits: `web-app/package.json` VERIFIED to carry CodeMirror 6, `@lezer/highlight`, `@monaco-editor/react` + `monaco-editor` (used by `web-app/src/app/config/ConfigPageContent.tsx:8`) and `@xterm/*`; `node_modules` is absent in this worktree so engine behavior is INFERRED from public APIs until extended Spike S-T3 runs.
 - **Decision 19 (engine seam).** The Files tab depends on `EditorEngine` (lazy `VirtualDoc` source, `onNeedRange/provideRange/evictRange`, `onEdits/takePending/ack` in absolute line/col_utf16, `reveal`, `setMode`, `features{vim,mergeView,lazyDoc}`), plus `Highlighter` and `MergeSurface` ports, owned by plan Story 1.2.1. A shared `runEngineConformance` suite gates every engine. No `@codemirror/*` import outside the `CmEngine` adapter.

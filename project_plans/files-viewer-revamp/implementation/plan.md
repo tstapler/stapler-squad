@@ -382,6 +382,7 @@ Parallel lanes after Phase 0: (server search 1.1.x) || (frontend seams 1.2.x the
 - Files: `web-app/src/components/sessions/__tests__/cm6LazyDocSpike.test.tsx`, `web-app/src/app/spike-lazydoc/` (throwaway page, removed before merge), `tests/e2e/files-lazydoc-spike.spec.ts`
 
 ##### Task 0.1.4d: Owner phone gate for S-T3: record PASS/FAIL for a2 and a1 (XS; wall-clock blocker)
+- Status (2026-10-19): EMULATED / PROVISIONAL, not an owner phone verdict: emulated Pixel 7 a2 PASS and a1 PASS; a2 provisionally selected for Story 1.6.4; Epic 1.7 not built. Owner verdict still open (see the checklist and ADR-036 "Engine verdict summary").
 - Owner, same sitting as Tasks 0.1.5b, 0.1.5d and 0.1.6b (appended last, after 0.1.6b); no code. Records the engine verdict (a2 / a1 / contingent custom engine) in `manual-verification-checklist.md` and in ADR-036 "Spike outcomes". Blocks Story 1.6.4 (and with it Epic 1.6's windowed viewer); Stories 1.6.1 to 1.6.3 (server index, `ReadFileRange`, transport) do not wait for it.
 - Files: `project_plans/files-viewer-revamp/implementation/manual-verification-checklist.md`, `project_plans/files-viewer-revamp/decisions/ADR-036-pluggable-range-and-delta-file-transport.md`
 
@@ -408,6 +409,7 @@ Parallel lanes after Phase 0: (server search 1.1.x) || (frontend seams 1.2.x the
 - Files: `web-app/src/app/` (throwaway spike page, same file as Task 0.1.5a), `web-app/src/lib/files/__tests__/inputProfile.test.ts`
 
 ##### Task 0.1.5b: Owner phone check of the spike page, recorded (XS)
+- Status (2026-10-19): EMULATED / PROVISIONAL, not an owner phone verdict: only the `--` and `"x"` ASCII check passed (synthetic key events); keyboard height, IME, Bluetooth and caret unverified.
 - Wall-clock blocker (owner). Serve from the isolated instance on `:62871`; results go in the PR description and `manual-verification-checklist.md`; the page is deleted afterwards.
 - Files: `project_plans/files-viewer-revamp/implementation/manual-verification-checklist.md`
 
@@ -434,6 +436,7 @@ Parallel lanes after Phase 0: (server search 1.1.x) || (frontend seams 1.2.x the
 - Files: `web-app/src/app/` (throwaway spike page), `web-app/src/components/sessions/__tests__/accessibleViewStructure.test.tsx`, `tests/e2e/files-viewer.spec.ts`
 
 ##### Task 0.1.6b: Owner VoiceOver/TalkBack check against criteria R1-R4, recorded (XS)
+- Status (2026-10-19): EMULATED / PROVISIONAL, not an owner phone verdict: R1/R2 analogue passes in DOM/ARIA terms; real VoiceOver/TalkBack unverified.
 - Wall-clock blocker (owner), run in the same sitting as Task 0.1.5b; results into the checklist spike notes and ADR-033.
 - Files: `project_plans/files-viewer-revamp/implementation/manual-verification-checklist.md`
 
