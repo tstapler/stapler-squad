@@ -156,3 +156,137 @@ export function selectBackgroundRows(
   }
   return { rows, completedOkToday, running };
 }
+
+// ---------------------------------------------------------------------------
+// Activity feed (Epic 1): one row per hidden session, exceptions pinned first.
+// ---------------------------------------------------------------------------
+
+export type SessionRole = "review" | "diagnose" | "triage" | "other";
+export type ActivityState =
+  | "running"
+  | "finished"
+  | "stopped_unknown"
+  | "exception_failure"
+  | "exception_needs_human"
+  | "departed";
+
+export interface ActivityRow {
+  key: string;
+  sessionId: string;
+  sessionTitle: string;
+  role: SessionRole;
+  state: ActivityState;
+  timestampMs: number;
+  /** Set for the two exception states: the unread record(s) behind the row. */
+  exception?: BackgroundRow;
+}
+
+export type RollupVariant = "none" | "no_failures_reported" | "needs_attention";
+
+export interface BackgroundRollup {
+  variant: RollupVariant;
+  total: number;
+  /** Rows in an exception state; the only count the tab's accessible name carries. */
+  exceptions: number;
+  lastActivityMs: number | null;
+}
+
+export function isExceptionState(state: ActivityState): boolean {
+  return state === "exception_failure" || state === "exception_needs_human";
+}
+
+export function roleOf(session: HiddenSessionRef): SessionRole {
+  const prefix = (session.title || session.id).split(":", 1)[0];
+  return prefix === "review" || prefix === "diagnose" || prefix === "triage" ? prefix : "other";
+}
+
+// `finished` needs positive server evidence; history never supplies it (ADR-001 decision 6).
+function stateOfSession(s: HiddenSessionSummary): ActivityState {
+  if (s.state === "running") return "running";
+  if (s.backgroundOutcome === "failed") return "exception_failure";
+  if (s.state === "stopped" && s.backgroundOutcome === "completed") return "finished";
+  return "stopped_unknown";
+}
+
+export interface BuildActivityOptions {
+  /** Rows of the previous poll: a session missing now becomes `departed` for one cycle. */
+  previous?: readonly ActivityRow[];
+  /** Hidden sessions seen earlier that the list no longer returns (keeps their unread exceptions). */
+  departed?: readonly HiddenSessionRef[];
+  now?: number;
+}
+
+/**
+ * Exceptions (unread failure/needs-human records, or a server-reported failed outcome) pin
+ * first and win over the session's own row; the rest follow newest-first. Pure and
+ * deterministic, so the same input polled twice yields the same order.
+ */
+export function buildActivityRows(
+  history: readonly NotificationHistoryItem[],
+  hiddenSessions: readonly HiddenSessionSummary[],
+  { previous = [], departed = [], now = Date.now() }: BuildActivityOptions = {},
+): ActivityRow[] {
+  const exceptions = selectBackgroundRows(history, hiddenSessions, departed, now).rows;
+  const exceptionBySession = new Map(exceptions.map((r) => [r.sessionId, r]));
+
+  const pinned: ActivityRow[] = exceptions.map((r) => ({
+    key: r.key,
+    sessionId: r.sessionId,
+    sessionTitle: r.sessionTitle,
+    role: roleOf({ id: r.sessionId, title: r.sessionTitle }),
+    state: r.kind === "failure" ? "exception_failure" : "exception_needs_human",
+    timestampMs: r.timestampMs,
+    exception: r,
+  }));
+
+  const rest: ActivityRow[] = [];
+  for (const s of hiddenSessions) {
+    if (exceptionBySession.has(s.id)) continue;
+    rest.push({
+      key: `bg:${s.id}`,
+      sessionId: s.id,
+      sessionTitle: s.title,
+      role: roleOf(s),
+      state: stateOfSession(s),
+      timestampMs: s.updatedAtMs,
+    });
+  }
+  rest.sort((a, b) => {
+    const aFailed = a.state === "exception_failure";
+    const bFailed = b.state === "exception_failure";
+    if (aFailed !== bFailed) return aFailed ? -1 : 1;
+    return b.timestampMs - a.timestampMs || a.sessionId.localeCompare(b.sessionId);
+  });
+
+  const emitted = new Set([...pinned, ...rest].map((r) => r.key));
+  const gone: ActivityRow[] = previous
+    .filter((p) => p.state !== "departed" && !emitted.has(p.key))
+    .map((p) => ({ ...p, state: "departed" as const, exception: undefined }));
+
+  return [...pinned, ...rest, ...gone];
+}
+
+export function buildRollup(rows: readonly ActivityRow[]): BackgroundRollup {
+  const live = rows.filter((r) => r.state !== "departed");
+  const exceptions = live.filter((r) => isExceptionState(r.state)).length;
+  const times = live.map((r) => r.timestampMs).filter((t) => t > 0);
+  return {
+    variant: live.length === 0 ? "none" : exceptions > 0 ? "needs_attention" : "no_failures_reported",
+    total: live.length,
+    exceptions,
+    lastActivityMs: times.length > 0 ? Math.max(...times) : null,
+  };
+}
+
+/** Roll-up line; never claims health, since a stopped session with no failure record is not proof. */
+export function rollupCopy(rollup: BackgroundRollup, relativeTime: (ms: number) => string): string {
+  if (rollup.variant === "none") {
+    return "No background work. Review and diagnose sessions will appear here while they run.";
+  }
+  const noun = rollup.total === 1 ? "background session" : "background sessions";
+  const head =
+    rollup.variant === "needs_attention"
+      ? `${rollup.total} ${noun}, ${rollup.exceptions} ${rollup.exceptions === 1 ? "needs" : "need"} attention.`
+      : `${rollup.total} ${noun}, no failures reported.`;
+  return rollup.lastActivityMs === null ? head : `${head} Last activity ${relativeTime(rollup.lastActivityMs)}.`;
+}
