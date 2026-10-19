@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
@@ -62,4 +63,35 @@ func recordRangeMetrics(ctx context.Context, outcome string, total time.Duration
 	attrs := metric.WithAttributes(attribute.String("outcome", outcome))
 	filesRangeTotal.Add(ctx, 1, attrs)
 	filesRangeDurationMS.Record(ctx, float64(total.Milliseconds()), attrs)
+}
+
+var (
+	filesStatTotal = mustInt64Counter(telemetry.GetMeter(), "files.stat.total",
+		metric.WithDescription("StatFile calls by outcome (ok, invalid, denied, refused, error)"))
+
+	filesStatDurationMS = mustFloat64Histogram(telemetry.GetMeter(), "files.stat.duration_ms",
+		metric.WithDescription("Wall-clock duration of a StatFile call, in milliseconds"),
+		metric.WithUnit("ms"))
+)
+
+func statOutcome(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	switch connect.CodeOf(err) {
+	case connect.CodeInvalidArgument, connect.CodeNotFound:
+		return "invalid"
+	case connect.CodePermissionDenied:
+		return "denied"
+	case connect.CodeFailedPrecondition:
+		return "refused"
+	default:
+		return "error"
+	}
+}
+
+func recordStatMetrics(ctx context.Context, err error, total time.Duration) {
+	attrs := metric.WithAttributes(attribute.String("outcome", statOutcome(err)))
+	filesStatTotal.Add(ctx, 1, attrs)
+	filesStatDurationMS.Record(ctx, float64(total)/float64(time.Millisecond), attrs)
 }

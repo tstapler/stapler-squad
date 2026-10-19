@@ -292,7 +292,9 @@ func (fs *FileService) StatFile(
 	ctx context.Context,
 	req *connect.Request[sessionv1.StatFileRequest],
 ) (*connect.Response[sessionv1.StatFileResponse], error) {
+	start := time.Now()
 	resp, err := fs.ops.StatWith(ctx, req.Msg)
+	recordStatMetrics(ctx, err, time.Since(start))
 	if err != nil {
 		return nil, err
 	}
