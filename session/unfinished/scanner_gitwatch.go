@@ -154,9 +154,15 @@ func (s *Scanner) watchTierA(w gitWatcher, repoPath, gitDir string) bool {
 	} else {
 		s.armDirty(repoPath)
 	}
-	entries, err := os.ReadDir(filepath.Join(gitDir, "worktrees"))
+	worktreesDir := filepath.Join(gitDir, "worktrees")
+	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
 		return true
+	}
+	// Watches are not recursive: once worktrees/ exists, `git worktree add` and
+	// `prune` change only its children, which emit nothing on <repo>/.git.
+	if err := w.Add(worktreesDir); err != nil {
+		log.Debug("could not watch worktrees dir", "dir", worktreesDir, "err", err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -216,6 +222,9 @@ func (s *Scanner) unwatchRepo(repoPath string) {
 		return
 	}
 	_ = w.Remove(filepath.Join(repoPath, ".git"))
+	if s.gitwatch.watchWorktreeGitdirs {
+		_ = w.Remove(filepath.Join(repoPath, ".git", "worktrees"))
+	}
 	s.disarmDirty(repoPath)
 	type removal struct{ admin, worktree string }
 	var removals []removal
@@ -307,7 +316,33 @@ func (s *Scanner) noteErrorAll() {
 	})
 }
 
+// dropRemovedAdmin forgets a pruned linked worktree's admin dir and schedules a
+// rescan of its repo, reporting whether event.Name was a watched admin dir.
+func (s *Scanner) dropRemovedAdmin(ctx context.Context, event fsnotify.Event) bool {
+	if !event.Has(fsnotify.Remove) || !s.gitwatch.watchWorktreeGitdirs {
+		return false
+	}
+	s.fsMu.Lock()
+	t, ok := s.gitwatch.targets[event.Name]
+	delete(s.gitwatch.targets, event.Name)
+	s.fsMu.Unlock()
+	if !ok {
+		return false
+	}
+	if w := s.activeWatcher(); w != nil {
+		_ = w.Remove(event.Name)
+	}
+	s.disarmDirty(t.worktree)
+	s.noteDirty(t.worktree, EventDirChange)
+	s.dropRefSnapshot(t.repoRoot)
+	s.scheduleWorktreeEvent(ctx, t)
+	return true
+}
+
 func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
+	if s.dropRemovedAdmin(ctx, event) {
+		return
+	}
 	if !s.eventWanted(event) {
 		return
 	}

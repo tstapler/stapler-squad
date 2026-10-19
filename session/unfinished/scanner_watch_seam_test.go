@@ -96,7 +96,7 @@ func TestWatchRepo_ShouldWatchLinkedWorktreeGitdir_WhenTierAEnabled(t *testing.T
 
 	s.watchRepo(f.mainDir)
 
-	assert.ElementsMatch(t, []string{filepath.Join(f.mainDir, ".git"), f.adminDir1, admin2}, fw.addedPaths())
+	assert.ElementsMatch(t, []string{filepath.Join(f.mainDir, ".git"), filepath.Join(f.mainDir, ".git", "worktrees"), f.adminDir1, admin2}, fw.addedPaths())
 
 	// Seed fresh caches so invalidation scope is observable.
 	c1, c2 := &worktreeCache{ttl: time.Hour}, &worktreeCache{ttl: time.Hour}
@@ -215,4 +215,24 @@ func TestWatchRepo_ShouldWatchOnlyDotGit_WhenTierADisabled(t *testing.T) {
 
 	assert.Equal(t, []string{filepath.Join(f.mainDir, ".git"), filepath.Join(f.linked1, ".git")}, fw.addedPaths())
 	require.Empty(t, s.gitwatch.targets)
+}
+
+func TestFsnotifyLoop_ShouldForgetAdminDirAndRescan_WhenWorktreeIsPruned(t *testing.T) {
+	t.Parallel()
+	f := newLinkedFixture(t)
+	s, fw := newSeamScanner(true)
+	s.watchRepo(f.mainDir)
+	_, ok := s.worktreeTargetFor(f.adminDir1)
+	require.True(t, ok, "precondition: admin dir is a target")
+
+	runLoop(t, s)
+	send(t, fw, fsnotify.Event{Name: f.adminDir1, Op: fsnotify.Remove})
+	task := nextTask(t, s)
+
+	assert.Equal(t, f.mainDir, task.repoPath)
+	_, ok = s.worktreeTargetFor(f.adminDir1)
+	assert.False(t, ok, "the pruned admin dir is no longer a target")
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	assert.Contains(t, fw.removed, f.adminDir1)
 }

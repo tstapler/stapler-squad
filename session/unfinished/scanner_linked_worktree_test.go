@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
@@ -155,4 +156,53 @@ func TestLinkedWorktree_RelativePointerFiles_ShouldResolveGitdirCommondirAndWork
 	wt, ok := linkedWorktreePath(f.adminDir1)
 	require.True(t, ok)
 	assert.Equal(t, f.linked1, wt)
+}
+
+// kqueue/inotify watches are not recursive: with <repo>/.git/worktrees already
+// present, a new admin dir under it emits nothing on <repo>/.git. The sentinel
+// create is ordered after it, so seeing the sentinel first proves no earlier event.
+func TestLinkedWorktree_WorktreesDirChild_ShouldEmitNothingOnGitDirWatch(t *testing.T) {
+	t.Parallel()
+	f := newLinkedFixture(t)
+	_, w := newWatchingScanner(t)
+	gitDir := filepath.Join(f.mainDir, ".git")
+	require.NoError(t, w.Add(gitDir))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "worktrees", "wt3"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "worktrees", "wt3", "gitdir"), []byte("x\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "zz-sentinel"), nil, 0o644))
+
+	select {
+	case ev := <-w.Events:
+		assert.Equal(t, "zz-sentinel", filepath.Base(ev.Name), "the new admin dir produced no event before the sentinel")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no event for the sentinel")
+	}
+}
+
+// With Tier A, a linked worktree added after .git/worktrees exists is picked up
+// from the event on the worktrees dir itself.
+func TestWatchRepo_TierA_ShouldRegisterWorktreeAddedAfterWorktreesDirExists(t *testing.T) {
+	t.Parallel()
+	f := newLinkedFixture(t)
+	s, w := newWatchingScanner(t)
+	s.gitwatch.watchWorktreeGitdirs = true
+	s.fsDebounce = 0
+	s.watchRepo(f.mainDir)
+	worktreesDir := filepath.Join(f.mainDir, ".git", "worktrees")
+	require.Contains(t, w.WatchList(), worktreesDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.fsnotifyLoop(ctx)
+
+	admin3 := filepath.Join(worktreesDir, "wt3")
+	linked3 := filepath.Join(testrepo.TempDir(t), "wt3")
+	require.NoError(t, os.MkdirAll(admin3, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(admin3, "gitdir"), []byte(filepath.Join(linked3, ".git")+"\n"), 0o644))
+
+	require.NoError(t, wait.WaitForCondition(func() bool {
+		_, ok := s.worktreeTargetFor(admin3)
+		return ok
+	}, wait.FastWaitConfig()), "the new admin dir is registered without any other .git event")
 }
