@@ -284,7 +284,21 @@ function QuestionGroup({ q, qi, total, picked, other, error, s, groupRef, onTogg
       {s.canTypeText && (
         <div className={styles.otherRow}>
           <label htmlFor={`${uid}-other`}>{FORM_COPY.otherLabel}</label>
-          <input id={`${uid}-other`} type="text" className={styles.otherField} value={other} autoComplete="off" onChange={(e) => onOther(e.target.value)} />
+          <input
+            id={`${uid}-other`}
+            type="text"
+            className={styles.otherField}
+            value={other}
+            autoComplete="off"
+            onChange={(e) => onOther(e.target.value)}
+            onKeyDown={(e) => {
+              // Cmd/Ctrl+Enter sends (UX-AC21); browsers differ on implicit submission with a modifier held.
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
         </div>
       )}
       {error && (

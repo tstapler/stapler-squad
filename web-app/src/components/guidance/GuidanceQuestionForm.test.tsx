@@ -84,6 +84,15 @@ describe("GuidanceQuestionForm single select (UX-AC18)", () => {
     expect(onSubmit.mock.calls[0][0][0].selected).toEqual(["Valkey"]);
   });
 
+  it.each(["Control", "Meta"])("sends the typed Other answer on %s+Enter from a single-select card (UX-AC21)", async (modifier) => {
+    const { onSubmit } = setup({ canTypeText: true });
+    await userEvent.type(screen.getByLabelText("Other"), "Valkey");
+    expect(onSubmit).not.toHaveBeenCalled();
+    await userEvent.keyboard(`{${modifier}>}{Enter}{/${modifier}}`);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0][0].selected).toEqual(["Valkey"]);
+  });
+
   it("keeps option controls aria-disabled with the reason as their description while offline", async () => {
     const { onSubmit } = setup({ disabledReason: "Offline" });
     const redis = screen.getByRole("button", { name: /Redis/ });
@@ -163,6 +172,15 @@ describe("GuidanceQuestionForm multi-select and multi-question (UX-AC19, UX-AC20
     await userEvent.selectOptions(select, "Option 7");
     await userEvent.click(screen.getByTestId("submit-answers"));
     expect(onSubmit.mock.calls[0][0][0].selected).toEqual(["Option 7"]);
+  });
+
+  it.each(["Control", "Meta"])("submits a multi-select card's Other answer on %s+Enter (UX-AC21)", async (modifier) => {
+    const { onSubmit } = setup({ questions: [regions], canTypeText: true });
+    await userEvent.type(screen.getByLabelText("Other"), "eu-west");
+    expect(onSubmit).not.toHaveBeenCalled();
+    await userEvent.keyboard(`{${modifier}>}{Enter}{/${modifier}}`);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0][0].selected).toEqual(["eu-west"]);
   });
 
   it("gives Other a 16px-friendly field on text routes and folds it into the answer", async () => {
