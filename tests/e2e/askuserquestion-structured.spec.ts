@@ -10,7 +10,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 import { postToolUseInTerminal, readGuidanceRow, seedQuestionCard } from './helpers/notification-action-seed';
 import { INLINE_ACTIONS_FLAG, QuestionCard, openNotificationTray, setFeatureFlag } from './pages/NotificationPanel';
@@ -47,6 +47,28 @@ async function fakePaneSession(client: SessionClient, title: string, mode = ''):
 }
 
 const receivedKey = (keyFile: string) => (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8') : '');
+/** The tabbed fake pane records one key name per line. */
+const receivedKeys = (keyFile: string) => receivedKey(keyFile).split('\n').filter(Boolean);
+
+// The measured two-question dialog (session/testdata/reply_dialogs/claude_auq_twoq_*.txt) and the recorded keys for Redis + [A, B].
+const TABBED_QUESTIONS = [
+  { text: 'Which cache?', header: 'Cache', multiSelect: false, options: ['Redis', 'Memcached', 'None'] },
+  { text: 'Which letters?', header: 'Letters', multiSelect: true, options: ['A', 'B', 'C'] },
+];
+const NINE_KEYS = ['Enter', 'Enter', 'Down', 'Enter', 'Down', 'Down', 'Down', 'Enter', 'Enter'];
+
+/** A tabbed-dialog fake pane, its hook question card revealed in the tray and Redis, A, B picked. */
+async function pickedTabbedCard(page: Page, request: APIRequestContext, mode: 'tabbed' | 'tabbed-drift') {
+  const { title, keyFile } = await fakePaneSession(new SessionClient(BASE_URL), unique(mode), mode);
+  await seedQuestionCard(request, BASE_URL, { sessionId: title, source: HOOK, questions: TABBED_QUESTIONS });
+  await openNotificationTray(page, BASE_URL);
+  const card = new QuestionCard(page, title);
+  await card.reveal();
+  await expect(card.other).toHaveCount(0); // keys cannot carry typed text
+  await card.press(card.group(/Which cache\?/).getByRole('button', { name: 'Redis' }));
+  for (const letter of ['A', 'B']) await card.press(card.group(/Which letters\?/).getByRole('checkbox', { name: letter }));
+  return { card, keyFile };
+}
 
 for (const key of ['V1', 'V2'] as const) {
   test.describe(`hook question answered from the tray (${profiles[key].name})`, () => {
@@ -168,5 +190,30 @@ test.describe('question cards (desktop)', () => {
     await saved.getByRole('button', { name: /Saved for later/ }).click();
     await expect(saved.getByTestId('saved-for-later-list')).toContainText(`${question} - Yes`);
     await expect(saved.getByRole('link', { name: 'Open session' }).first()).toBeVisible();
+  });
+
+  test('tabbed_answer_should_type_the_recorded_nine_keys_and_read_answered_once_the_dialog_is_gone', async ({ page, request }) => {
+    const { card, keyFile } = await pickedTabbedCard(page, request, 'tabbed');
+
+    await card.press(card.submit);
+
+    await expect.poll(() => receivedKeys(keyFile), { message: 'the pane received the recorded key sequence', timeout: ACK_TIMEOUT }).toEqual(NINE_KEYS);
+    await expect(card.deliveryText).toHaveText('Answered: Redis; A, B', { timeout: ACK_TIMEOUT });
+    expect(receivedKeys(keyFile)).toEqual(NINE_KEYS); // still exactly nine
+  });
+
+  test('tabbed_answer_should_stop_and_pin_an_aborted_card_when_the_pane_changes_mid_sequence', async ({ page, request }) => {
+    const { card, keyFile } = await pickedTabbedCard(page, request, 'tabbed-drift');
+
+    await card.press(card.submit);
+
+    await expect(card.deliveryText).toHaveText(/Part of your answer was sent, then the prompt changed/, { timeout: ACK_TIMEOUT });
+    expect(receivedKeys(keyFile)).toEqual(NINE_KEYS.slice(0, 3)); // no key after the frame check failed
+    await expect(card.submit).toHaveAttribute('aria-disabled', 'true');
+    await expect(card.row.getByRole('link', { name: 'View Session' })).toBeVisible(); // the tray's Open session control
+    await expect(card.row.getByTestId('action-delivery-retry')).toHaveCount(0);
+    await expect(card.row.getByTestId('action-delivery-retryAnyway')).toHaveCount(0);
+    await card.press(card.row.getByTestId('action-delivery-dismissConfirm'));
+    await expect(card.row.getByTestId('delivery-confirm')).toContainText('Dismiss without finishing?');
   });
 });

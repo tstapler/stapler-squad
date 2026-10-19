@@ -176,7 +176,8 @@ export interface SeededQuestionCard {
 
 /**
  * Raises a durable question for a live session through the e2e-local seed endpoint and the history
- * row that carries it. `hook` rows are registered as the on-screen dialog (a keystroke answer);
+ * row that carries it. `hook` rows are registered as the on-screen dialog (a keystroke answer; the
+ * single-select digit, or the measured single-then-multi pair typed as a key sequence);
  * `agent_mcp` rows are stored answers (multi-select, several questions, free text).
  */
 export async function seedQuestionCard(
@@ -195,6 +196,7 @@ export async function seedQuestionCard(
   const { id, sessionUuid } = (await seeded.json()) as { id: string; sessionUuid: string };
   const first = opts.questions[0];
   const hook = opts.source === 'ask_user_question_hook';
+  const digit = hook && opts.questions.length === 1 && !first.multiSelect; // one digit answers it
   await sendNotification(request, baseUrl, {
     sessionId: sessionUuid,
     type: 'INPUT_REQUIRED',
@@ -202,8 +204,10 @@ export async function seedQuestionCard(
     message: first.text,
     metadata: {
       guidance_request_id: id,
-      question_shape: hook ? 'single' : 'multi',
-      ...(hook ? { question_id: id, question_options: JSON.stringify(first.options) } : {}),
+      question_shape: digit ? 'single' : 'multi',
+      // A hook's measured tabbed dialog is addressed by its row id too, but has no single option list.
+      ...(hook ? { question_id: id } : {}),
+      ...(digit ? { question_options: JSON.stringify(first.options) } : {}),
     },
   });
   await untilPersisted(request, baseUrl, 'guidance_request_id', id);
