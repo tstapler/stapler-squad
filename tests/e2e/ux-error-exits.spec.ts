@@ -18,7 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
-import { DIALOG_QUESTION, answerGuidanceViaRpc, fakePaneSession, postToolUseInTerminal, seedGuidance, seedQuestionCard } from './helpers/notification-action-seed';
+import { DIALOG_QUESTION, answerGuidanceViaRpc, fakePaneSession, postToolUseInTerminal, seedApproval, seedGuidance, seedQuestionCard } from './helpers/notification-action-seed';
 import { fakeHiddenSessions, hidden, seedFailureAt, type HiddenFixture } from './pages/HiddenSessionsFake';
 import {
   BackgroundSegment,
@@ -150,7 +150,6 @@ const NO_EXIT_BY_DESIGN: Readonly<Record<string, string>> = {
 
 /** States this isolated instance cannot reach without faking the producer. Not asserted; revisit on a real-device pass. */
 export const MANUAL_ONLY_STATES: Readonly<Record<string, string>> = {
-  '1.3-failure-and-decision': 'NotificationPanel does not pass BackgroundActivity its needsYou map (only unit tests do), so the "Needs you (1)" chip (BackgroundActivity.tsx:171) never renders in the app, and when it does it is a span, not the link ux.md describes. Product gap to fix before this row can be asserted',
   '3.3-layout-drift-canary': 'The canary trips on a DialogMatch mismatch share above 50% over at least 5 attempts in 1 h across sessions (plan.md Task 3.3h, line 192), and only cards created afterwards degrade to read-only; five drifted answers on the isolated server would be a staged metric, not the real trigger',
   '3.3-multi-select-unmeasured': 'The unmeasured shape is the S1c FAIL fallback (plan.md Story 3.5); this build ships the measured multi-question path (the tabbed fixture answers it), so no state in this instance renders it',
   '3.3-unrenderable-options': 'NewQuestionPayload rejects an empty question list (session/domain/guidance_request_source.go:196), so seed-question cannot create a card with nothing to render, and the only other route is a stubbed descriptor',
@@ -232,6 +231,21 @@ const BACKGROUND_ROWS: ExitRow[] = [
       const background = await failingPoll(ctx, 'bg-poll');
       await expect(background.error).toContainText("Couldn't refresh background sessions. Showing data from");
       return background.error;
+    },
+  },
+  {
+    id: '1.3-failure-and-decision',
+    reach: 'stubbed-response',
+    exits: [{ name: /^Needs you \(\d+\): open the Needs you item/ }],
+    open: async ({ page, request }) => {
+      const id = unique('review:bg-decision');
+      await fakeHiddenSessions(page, () => [hidden(id)]);
+      await seedFailureAt(request, BASE_URL, id);
+      await seedApproval(request, BASE_URL, id, unique('decide-cmd'));
+      const background = await backgroundOf(page);
+      const row = background.rows.filter({ hasText: id });
+      await expect(row).toHaveCount(1);
+      return row;
     },
   },
   {

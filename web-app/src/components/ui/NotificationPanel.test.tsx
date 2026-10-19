@@ -855,6 +855,18 @@ describe("tray Background segment (Story 5.4)", () => {
     expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
   });
 
+  it("needs_you_chip_should_show_for_a_hidden_session_and_move_focus_to_its_needs_you_item", () => {
+    mockHistory = [...mockHistory, pending("p1", "review:h1")];
+    renderTray();
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    const chip = screen.getByTestId("background-needs-you-chip");
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip).toHaveTextContent("Needs you (1)");
+    fireEvent.click(chip);
+    expect(screen.getByTestId("tray-tab-notifications")).toHaveAttribute("aria-selected", "true");
+    expect(document.activeElement).toBe(document.querySelector('[data-tray-row="p1"]'));
+  });
+
   it("tablist_should_move_focus_with_arrows_and_name_the_background_tab_by_exception_count_only", () => {
     const sessions = Array.from({ length: 11 }, (_, i) => ({ id: `review:s${i}`, title: `review:s${i}`, state: "stopped", updatedAtMs: Date.now() - i * 1000 }));
     mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions }));

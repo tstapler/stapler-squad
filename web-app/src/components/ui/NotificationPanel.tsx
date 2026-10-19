@@ -434,6 +434,26 @@ export function NotificationPanel() {
     }
   };
 
+  const needsYouBySession = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const n of notificationHistory) if (isNeedsYou(n) && n.sessionId) m.set(n.sessionId, (m.get(n.sessionId) ?? 0) + 1);
+    return m;
+  }, [notificationHistory]);
+  // Chip -> the Notifications segment, then focus the first pending item of that session.
+  const needsYouFocusId = useRef<string | null>(null);
+  const focusNeedsYou = (sessionId: string) => {
+    needsYouFocusId.current = notificationHistory.find((n) => isNeedsYou(n) && n.sessionId === sessionId)?.id ?? null;
+    setTraySegment("notifications");
+  };
+  useEffect(() => {
+    const id = needsYouFocusId.current;
+    if (!id || traySegment !== "notifications") return;
+    const el = trayRef.current?.querySelector<HTMLElement>(`[data-tray-row="${CSS.escape(id)}"]`);
+    if (!el) return;
+    needsYouFocusId.current = null;
+    el.focus({ preventScroll: true });
+  });
+
   const openBackgroundRow = (row: ActivityRow) => {
     if (row.exception) {
       markAsRead(row.exception.recordIds);
@@ -933,6 +953,8 @@ export function NotificationPanel() {
               onNewFailures={(n) => announce(`${n} background ${n === 1 ? "session needs" : "sessions need"} attention`, "polite", "background-failure")}
               onMergeNew={(n) => announce(`${n} new background ${n === 1 ? "session" : "sessions"}`, "polite", "background-new")}
               replyEnabled={replyEnabled}
+              needsYou={needsYouBySession}
+              onFocusNeedsYou={focusNeedsYou}
               failureStripSlot={slotEl}
               legacy={background.feedEnabled ? undefined : { hasHiddenSessions: background.hasHiddenSessions }}
             />

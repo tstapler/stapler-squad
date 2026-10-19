@@ -48,6 +48,7 @@ import {
   messageClamped,
   noteLine,
   rowTitleButton,
+  needsYouChip,
 } from "./BackgroundActivity.css";
 
 export const ACTIVITY_ROW_CAP = 100;
@@ -76,6 +77,8 @@ export interface BackgroundActivityProps {
   legacy?: { hasHiddenSessions: boolean };
   /** Unresolved actionable items per hidden session; they live only in Needs you, the row shows a link chip. */
   needsYou?: ReadonlyMap<string, number>;
+  /** The Needs-you chip's action: the host reveals and focuses that session's Needs-you item. */
+  onFocusNeedsYou?: (sessionId: string) => void;
   /** The tray's reserved status slot: the failure strip renders there, so it moves no row. */
   failureStripSlot?: HTMLElement | null;
   /** Called once per batch of newly named failures (the host speaks it in the polite region). */
@@ -110,6 +113,7 @@ function RowView({
   row,
   replyEnabled,
   needsYou,
+  onFocusNeedsYou,
   focusId,
   onOpenRow,
   onMark,
@@ -118,6 +122,7 @@ function RowView({
   row: ActivityRow;
   replyEnabled: boolean;
   needsYou: number;
+  onFocusNeedsYou?: (sessionId: string) => void;
   focusId: string;
   onOpenRow: (row: ActivityRow) => void;
   onMark?: () => void;
@@ -169,9 +174,16 @@ function RowView({
         <span className={roleTag}>{row.role}</span>
         <BackgroundChip />
         {needsYou > 0 && (
-          <span className={stateChip} data-testid="background-needs-you-chip">
+          // analytics-exempt
+          <button
+            type="button"
+            className={needsYouChip}
+            data-testid="background-needs-you-chip"
+            aria-label={`Needs you (${needsYou}): open the Needs you item for ${row.sessionTitle}`}
+            onClick={() => onFocusNeedsYou?.(row.sessionId)}
+          >
             Needs you ({needsYou})
-          </span>
+          </button>
         )}
       </div>
       <div className={rowMeta}>
@@ -304,6 +316,7 @@ export function BackgroundActivity({
   rowCap = ACTIVITY_ROW_CAP,
   legacy,
   needsYou,
+  onFocusNeedsYou,
   onNewFailures,
   failureStripSlot,
   now = Date.now(),
@@ -439,6 +452,7 @@ export function BackgroundActivity({
         row={r}
         replyEnabled={replyEnabled}
         needsYou={needsYou?.get(r.sessionId) ?? 0}
+        onFocusNeedsYou={onFocusNeedsYou}
         focusId={`row:${r.key}`}
         onOpenRow={onOpenRow}
         remindMe={remindMe}

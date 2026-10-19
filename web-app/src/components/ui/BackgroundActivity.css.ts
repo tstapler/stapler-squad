@@ -137,6 +137,17 @@ export const stateChip = style({
   whiteSpace: "nowrap",
 });
 
+// A link-like button; 44px on coarse pointers (UX-AC72).
+export const needsYouChip = style([
+  stateChip,
+  {
+    background: "transparent",
+    cursor: "pointer",
+    textDecoration: "underline",
+    "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px" } },
+  },
+]);
+
 // Dashed border: "unknown" reads differently from "Finished" without relying on colour.
 export const stateChipUnknown = style({
   borderStyle: "dashed",
