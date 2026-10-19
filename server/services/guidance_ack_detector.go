@@ -119,6 +119,8 @@ func (a *GuidanceAckDetector) Restore(ctx context.Context) {
 		d := SentDelivery{RowID: row.ID, SessionUUID: row.AskerSessionUUID, Route: row.DeliveryRoute}
 		if dialog, ok := dialogFromRow(row); ok {
 			d.Dialog = dialog
+		} else if qs, ok := tabbedFromRow(row); ok {
+			d.Matches = tabbedHeadersMatch(qs)
 		}
 		a.Sent(d)
 	}
@@ -159,6 +161,9 @@ func (a *GuidanceAckDetector) Run(ctx context.Context) {
 func (e *ackEntry) presence(capture string, err error) (own bool, p session.DialogPresence) {
 	if err != nil {
 		return false, session.DialogIndeterminate
+	}
+	if e.Matches != nil {
+		return e.Matches(capture), session.PaneShowsDialog(capture)
 	}
 	return session.DialogMatch(capture, e.Dialog), session.PaneShowsDialog(capture)
 }

@@ -54,12 +54,7 @@ func (r *AnswerRouter) sequenceQuestions(ctx context.Context, questionID string)
 	if err != nil || row.QuestionsJSON == "" || row.Status() != session.GuidanceRequestStatusPending {
 		return nil, false
 	}
-	payload, err := domain.ParseQuestionPayload([]byte(row.QuestionsJSON))
-	if err != nil {
-		return nil, false
-	}
-	qs := tabbedQuestions(payload)
-	return qs, session.MeasuredTabbedShape(qs)
+	return tabbedFromRow(row)
 }
 
 func tabbedQuestions(p domain.QuestionPayload) []session.TabbedQuestion {
@@ -109,6 +104,7 @@ func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in Que
 	track.finish(ctx, res, nil, SentDelivery{
 		RowID: in.QuestionID, SessionUUID: s.inst.GetStableID(), Route: domain.DeliveryRouteLiveKeystroke,
 		Indeterminate: res.Outcome == sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE,
+		Matches:       tabbedHeadersMatch(qs),
 	}, EncodeSequencePicks(picks))
 	return res, nil
 }

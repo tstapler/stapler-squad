@@ -21,7 +21,9 @@ type SentDelivery struct {
 	RowID       string
 	SessionUUID string
 	Dialog      session.QuestionDialog
-	Route       domain.DeliveryRoute
+	// Matches overrides the Dialog check for a dialog DialogMatch cannot describe (the tabbed multi-question shape).
+	Matches func(capture string) bool
+	Route   domain.DeliveryRoute
 	// Indeterminate marks a write that may or may not have landed
 	// (SEND_INDETERMINATE); it is unconfirmed from the first moment.
 	Indeterminate bool

@@ -167,6 +167,18 @@ export function makeGuidanceRow(over: Partial<PlainGuidanceRequest> = {}): Plain
   };
 }
 
+/** The measured two-question dialog (Spike S1c): Cache single-select, Letters multi-select. */
+export function makeTabbedGuidanceRow(over: Partial<PlainGuidanceRequest> = {}): PlainGuidanceRequest {
+  const opts = (...labels: string[]) => labels.map((label) => ({ label, description: "" }));
+  return makeGuidanceRow({
+    questions: [
+      { question: "Which cache?", header: "Cache", multiSelect: false, options: opts("Redis", "Memcached", "None") },
+      { question: "Which letters?", header: "Letters", multiSelect: true, options: opts("A", "B", "C") },
+    ],
+    ...over,
+  });
+}
+
 /** The question-card descriptor of a durable-record route (an agent-created request): Tier A, text allowed. */
 export function makeGuidanceDescriptors(over: DescriptorInit = {}): NotificationActionDescriptor[] {
   return [

@@ -1,5 +1,5 @@
 import { ANNOUNCE } from "@/lib/copy/notificationCopy";
-import { announceTransition, deliveryView, snapshotOf, type ClientDelivery, type DeliverySnapshot } from "./deliveryView";
+import { announceTransition, deliveryView, displayAnswer, snapshotOf, type ClientDelivery, type DeliverySnapshot } from "./deliveryView";
 
 const base: DeliverySnapshot = {
   status: "pending",
@@ -122,5 +122,18 @@ describe("announceTransition", () => {
 
   it("announces a card flipping to Already handled once (UX-AC26)", () => {
     expect(announceTransition(null, view(row({ status: "cancelled", cancelReason: "answered_in_terminal" })))).toBe("Already handled in the session. No action needed.");
+  });
+});
+
+describe("multi-question answers", () => {
+  it("renders a stored label-list sequence as one readable answer and leaves other text alone", () => {
+    expect(displayAnswer('[["Redis"],["A","B"]]')).toBe("Redis; A, B");
+    expect(displayAnswer("Redis")).toBe("Redis");
+    expect(displayAnswer("[[not json")).toBe("[[not json");
+  });
+
+  it("pins an aborted-partial durable row in Needs you with only Open session and a confirmed Dismiss", () => {
+    const v = deliveryView(row({ deliveryState: "aborted_partial" }));
+    expect(v).toMatchObject({ row: 14, needsYou: true, locked: true, actions: ["open", "dismissConfirm"] });
   });
 });

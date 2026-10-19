@@ -74,10 +74,24 @@ function cancelled(snap: DeliverySnapshot): DeliveryView {
   return view(10, COPY.sessionEnded, ["open", "dismiss"]);
 }
 
+/** A multi-question answer is stored as a JSON list of label lists; show it as "Redis; A, B". */
+export function displayAnswer(answer: string): string {
+  if (!answer.startsWith("[[")) return answer;
+  try {
+    const picks: unknown = JSON.parse(answer);
+    if (Array.isArray(picks) && picks.every((p) => Array.isArray(p) && p.every((l) => typeof l === "string"))) {
+      return (picks as string[][]).map((p) => p.join(", ")).join("; ");
+    }
+  } catch {
+    // not a sequence: show it as typed
+  }
+  return answer;
+}
+
 function answeredRow(snap: DeliverySnapshot, client: ClientDelivery): DeliveryView | null {
   switch (snap.deliveryState) {
     case "acknowledged":
-      return view(4, answered(snap.answer), []);
+      return view(4, answered(displayAnswer(snap.answer)), []);
     case "sent":
       if (snap.sessionEnded) return view(17, DELIVERY_COPY.sentSessionEnded, OPEN);
       return snap.unacknowledged || client.indeterminate ? unconfirmed(!!client.indeterminate) : view(2, COPY.sentWaiting, []);
@@ -86,11 +100,14 @@ function answeredRow(snap: DeliverySnapshot, client: ClientDelivery): DeliveryVi
     case "saved_for_later":
       return snap.deliveryRoute === "read_only" ? view(9, DELIVERY_COPY.savedArchived, OPEN) : view(8, DELIVERY_COPY.savedStopped, OPEN);
     default:
-      return view(4, answered(snap.answer), []);
+      return view(4, answered(displayAnswer(snap.answer)), []);
   }
 }
 
+const abortedPartial = () => view(14, DELIVERY_COPY.aborted, ["open", "dismissConfirm"], { needsYou: true });
+
 function pendingRow(snap: DeliverySnapshot, client: ClientDelivery): DeliveryView | null {
+  if (snap.deliveryState === "aborted_partial") return abortedPartial(); // survives a reload: the durable row says so
   // UX-AC27: the archived copy shows before the operator acts, and the card stays answerable.
   if (snap.sessionArchived && !snap.deliveryState) return view(9, DELIVERY_COPY.savedArchived, OPEN, { locked: false });
   if (snap.deliveryState === "pending") return view(1, DELIVERY_COPY.sending, [], { locked: false });
@@ -121,7 +138,7 @@ function clientRow(client: ClientDelivery): DeliveryView | null {
  */
 export function deliveryView(snap: DeliverySnapshot | null, client: ClientDelivery = {}): DeliveryView | null {
   if (client.elsewhere !== undefined) return view(13, answeredElsewhere(client.elsewhere), []);
-  if (client.abortedPartial) return view(14, DELIVERY_COPY.aborted, ["open", "dismissConfirm"], { needsYou: true });
+  if (client.abortedPartial) return abortedPartial();
   if (client.desktopOnly) return view(15, COPY.desktopOnly, OPEN, { locked: false });
   if (client.sending) return clientRow(client);
   if (!snap) return clientRow(client);

@@ -72,7 +72,7 @@ message GuidanceRequest {
   bool multi_select = 18; // question 1's checkbox flag, for old readers
   repeated GuidanceQuestion questions = 19; // 1-4 questions; empty for agent_mcp rows
   string delivery_route = 20; // "" | "hook_reply" | "live_keystroke" | "resume" | "read_only"
-  string delivery_state = 21; // "" | "pending" | "sent" | "acknowledged" | "delivery_failed" | "saved_for_later" | "stale"
+  string delivery_state = 21; // "" | "pending" | "sent" | "acknowledged" | "delivery_failed" | "saved_for_later" | "stale" | "aborted_partial"
   int32 delivery_attempts = 22;
   string hook_call_id = 23;
   google.protobuf.Timestamp expires_at = 24; // set only for source == "peer"

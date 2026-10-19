@@ -14,6 +14,8 @@ import { buildSpec } from "./actionSpec";
 
 const isLive = (d?: NotificationActionDescriptor) => d?.kind === ActionKind.ANSWER_QUESTION;
 const REASON_READ_ONLY = "read_only";
+/** ActionResult.StaleReason (server/services/question_answer_sequence.go) when part of a multi-question answer was typed. */
+const ANSWER_ABORTED_PARTIAL = "answer_aborted_partial";
 
 /** What this browser knows about the last attempt, in the vocabulary of the delivery line. */
 export function clientDeliveryOf(state: InvokeState): ClientDelivery {
@@ -29,6 +31,7 @@ export function clientDeliveryOf(state: InvokeState): ClientDelivery {
     case ActionOutcome.SEND_INDETERMINATE:
       return { indeterminate: true };
     case ActionOutcome.STALE:
+      if (staleReason === ANSWER_ABORTED_PARTIAL) return { abortedPartial: true };
       return { staleReason: staleReason === "dialog_replaced" || staleReason === "session_ended" ? staleReason : "dialog_gone" };
     case ActionOutcome.FORBIDDEN:
       return detail === "desktop_only" ? { desktopOnly: true } : {};
@@ -47,8 +50,22 @@ export const toFormQuestions = (g: PlainGuidanceRequest): FormQuestion[] =>
     options: q.options.map((o) => ({ label: o.label, description: o.description || undefined })),
   }));
 
-/** A keystroke route writes one digit: only a single-select question with one pick can use it. */
-const keystrokeShape = (qs: FormQuestion[]) => qs.length === 1 && !qs[0].multiSelect;
+const hasOptions = (q: FormQuestion) => q.options.length > 0;
+
+/** A single-select question: one digit answers it. */
+const singleDigitShape = (qs: FormQuestion[]) => qs.length === 1 && !qs[0].multiSelect;
+
+/**
+ * The one two-question shape with a recorded key sequence (Spike S1c, mirrors session.MeasuredTabbedShape):
+ * a single-select, then a multi-select. It is answered by one Submit carrying every pick.
+ */
+export const tabbedShape = (qs: FormQuestion[]) => qs.length === 2 && !qs[0].multiSelect && qs[1].multiSelect && qs.every(hasOptions);
+
+/** A keystroke route writes keys: only a single digit or the measured tabbed sequence is safe. */
+const keystrokeShape = (qs: FormQuestion[]) => singleDigitShape(qs) || tabbedShape(qs);
+
+/** The answer of a live route: the label for one digit, else one list of labels per question as JSON (EncodeSequencePicks). */
+export const liveAnswer = (answers: QuestionAnswer[]): string => (answers.length === 1 ? answers[0].selected[0] : JSON.stringify(answers.map((a) => a.selected)));
 
 export interface GuidanceBodyProps {
   rowId: string;
@@ -99,7 +116,7 @@ export function GuidanceBody(props: GuidanceBodyProps) {
 
   const send = (answers: QuestionAnswer[]) => {
     if (!descriptor) return;
-    const text = isLive(descriptor) ? answers[0].selected[0] : formatAnswers(answers);
+    const text = isLive(descriptor) ? liveAnswer(answers) : formatAnswers(answers);
     invoke(buildSpec({ descriptor, option: create(ActionOptionSchema, { label: text }) }));
   };
 

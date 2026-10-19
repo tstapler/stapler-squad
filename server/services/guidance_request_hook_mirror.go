@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,7 +74,8 @@ type HookMirrorRequest struct {
 	// HookCallID is the hook's tool_use_id; empty falls back to the payload hash.
 	HookCallID string
 	Asked      AskedQuestion
-	// Replyable is true when the sender proof verified and the shape is single-select.
+	// Replyable is true when the sender proof verified and the shape is single-select
+	// or the measured tabbed multi-question dialog (AskedQuestion.Tabbed).
 	Replyable bool
 }
 
@@ -184,6 +186,39 @@ func dialogFromRow(row *session.GuidanceRequestData) (session.QuestionDialog, bo
 		return session.QuestionDialog{}, false
 	}
 	return session.QuestionDialog{Question: qs[0].Text, Header: qs[0].Header, Labels: labels}, true
+}
+
+// tabbedFromRow returns the questions of a replyable hook row in the measured
+// tabbed shape. It is the identity the router and the descriptor builder share:
+// such a row is answered by the stepwise driver and re-verified with
+// session.ParseTabbedFrame, never session.DialogMatch.
+func tabbedFromRow(row *session.GuidanceRequestData) ([]session.TabbedQuestion, bool) {
+	if row.Source != domain.QuestionSourceHook || row.DeliveryRoute != domain.DeliveryRouteLiveKeystroke || row.QuestionsJSON == "" {
+		return nil, false
+	}
+	payload, err := domain.ParseQuestionPayload([]byte(row.QuestionsJSON))
+	if err != nil {
+		return nil, false
+	}
+	qs := tabbedQuestions(payload)
+	return qs, tabbedReplyable(payload)
+}
+
+// tabbedHeadersMatch reports whether a capture shows a recognised tabbed frame
+// whose tab headers are the row's.
+func tabbedHeadersMatch(qs []session.TabbedQuestion) func(capture string) bool {
+	return func(capture string) bool {
+		f, ok := session.ParseTabbedFrame(capture)
+		if !ok || len(f.Tabs) != len(qs) {
+			return false
+		}
+		for i, t := range f.Tabs {
+			if t.Header != strings.Join(strings.Fields(qs[i].Header), " ") {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 // register puts a durable row back in the verified-proof cache. The row id is

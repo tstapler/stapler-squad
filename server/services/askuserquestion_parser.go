@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -20,6 +21,9 @@ type AskedQuestion struct {
 	// Replyable is true only for a single-select shape; multi-select and
 	// multi-question stay false until stepwise answering (Story 3.5).
 	Replyable bool
+	// Tabbed is true for the one multi-question shape with a recorded key
+	// sequence (session.MeasuredTabbedShape) whose texts and labels are usable.
+	Tabbed bool
 }
 
 // ParseAskUserQuestion classifies tool_input. The real shape is
@@ -67,7 +71,26 @@ func ParseAskUserQuestion(toolInput map[string]interface{}) AskedQuestion {
 		out.Shape = QuestionShapeSingle
 	}
 	out.Replyable = out.Shape == QuestionShapeSingle
+	out.Tabbed = out.Shape == QuestionShapeMulti && multiPresent && tabbedReplyable(out.Payload)
 	return out
+}
+
+// tabbedReplyable reports a payload the stepwise driver can answer: the measured
+// two-question shape, every question with a text and a header, every label usable.
+func tabbedReplyable(p domain.QuestionPayload) bool {
+	if p.IsZero() {
+		return false
+	}
+	qs := tabbedQuestions(p)
+	if !session.MeasuredTabbedShape(qs) {
+		return false
+	}
+	for _, q := range qs {
+		if strings.TrimSpace(q.Text) == "" || strings.TrimSpace(q.Header) == "" || !replyableLabels(q.Labels) {
+			return false
+		}
+	}
+	return true
 }
 
 // parseQuestionMap reads one question; the bool reports whether multiSelect was present.

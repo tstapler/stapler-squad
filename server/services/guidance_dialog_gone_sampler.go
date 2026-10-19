@@ -44,6 +44,9 @@ func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialo
 		return verdictIndeterminate
 	}
 	presence := session.PaneShowsDialog(capture)
+	if qs, tabbed := tabbedFromRow(row); tabbed {
+		return judgeTabbed(tabbedHeadersMatch(qs), capture, presence)
+	}
 	dialog, known := dialogFromRow(row)
 	if known && session.DialogMatch(capture, dialog) {
 		return verdictMatch
@@ -52,6 +55,20 @@ func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialo
 	case presence.Absent():
 		return verdictGone
 	case presence == session.DialogShowing && known:
+		return verdictReplaced
+	}
+	return verdictIndeterminate
+}
+
+// judgeTabbed is judgeRow for a tabbed row: its own frame is a match, any
+// other dialog on screen replaced it, and an unrecognised layout is not judged.
+func judgeTabbed(own func(string) bool, capture string, presence session.DialogPresence) dialogVerdict {
+	switch {
+	case own(capture):
+		return verdictMatch
+	case presence.Absent():
+		return verdictGone
+	case presence == session.DialogShowing:
 		return verdictReplaced
 	}
 	return verdictIndeterminate

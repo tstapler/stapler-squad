@@ -3,10 +3,12 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -145,6 +147,8 @@ type OpenGuidance struct {
 	Source domain.QuestionSource
 	// PeerHelp marks an agent-to-agent request: the operator may also withdraw it.
 	PeerHelp bool
+	// Tabbed holds the questions of a hook row in the measured multi-question shape.
+	Tabbed []session.TabbedQuestion
 }
 
 // GuidanceLookup returns the open guidance requests among ids.
@@ -325,7 +329,7 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 	}
 	q, live := st.questions[key]
 	if !live {
-		return nil
+		return b.tabbedQuestionDescriptor(r, st, lc)
 	}
 	tier := answerTier(routeLiveKeystrokeHidden)
 	d := &sessionv1.NotificationActionDescriptor{
@@ -336,6 +340,12 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 	for _, l := range q.Dialog.Labels {
 		d.Options = append(d.Options, &sessionv1.ActionOption{Label: l})
 	}
+	return b.limitAnswer(d, lc)
+}
+
+// limitAnswer degrades an ANSWER_QUESTION descriptor the layout canary or the
+// remote channel does not allow, and wraps it as the builder's result.
+func (b *DescriptorBuilder) limitAnswer(d *sessionv1.NotificationActionDescriptor, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
 	if b.sources.Canary.Tripped() && !b.hookReplyOn() {
 		d.Available, d.UnavailableReason = false, unavailableReadOnly
 	}
@@ -343,6 +353,28 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 		d.Available, d.UnavailableReason = false, unavailableDesktopOnly
 	}
 	return []*sessionv1.NotificationActionDescriptor{d}
+}
+
+// tabbedQuestionDescriptor is ANSWER_QUESTION for an open hook row in the
+// measured multi-question shape. Its options carry the question index in
+// ActionOption.value, so a client can group them without a proto change; the
+// answer travels as EncodeSequencePicks in params.answer.
+func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHistoryRecord, st pageState, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
+	id := r.GetMetadata()[metaGuidanceRequestID]
+	g, open := st.guidance[id]
+	if id == "" || !open || len(g.Tabbed) == 0 || r.GetSessionId() == "" {
+		return nil
+	}
+	d := &sessionv1.NotificationActionDescriptor{
+		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: answerTier(routeLiveKeystrokeHidden), Available: true,
+		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: id, SessionId: r.GetSessionId(),
+	}
+	for i, q := range g.Tabbed {
+		for _, l := range q.Labels {
+			d.Options = append(d.Options, &sessionv1.ActionOption{Label: l, Value: strconv.Itoa(i)})
+		}
+	}
+	return b.limitAnswer(d, lc)
 }
 
 func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {

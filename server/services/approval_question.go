@@ -119,9 +119,14 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 	if cause == "" && h.questions.store == nil {
 		cause = replyCauseNoProof
 	}
-	mirrorID := h.mirrorQuestion(sessionID, hookCallID, asked, cause == "")
+	// A verified measured multi-question dialog is answered through its durable row, not the pending-question store.
+	tabbed := qa.cause == "" && asked.Tabbed
+	mirrorID := h.mirrorQuestion(sessionID, hookCallID, asked, cause == "" || tabbed)
 	if mirrorID != "" {
 		meta[metaGuidanceRequestID] = mirrorID
+		if tabbed {
+			meta[metaQuestionID] = mirrorID
+		}
 	}
 	if cause != "" {
 		meta[metaReplyUnavailable] = cause
