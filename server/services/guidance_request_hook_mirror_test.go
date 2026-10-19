@@ -302,3 +302,47 @@ func peeked(s *PendingQuestionStore, k QuestionKey) bool {
 	_, ok := s.Peek(k)
 	return ok
 }
+
+// Story 4.5: a peer answer reaches the asker through its guidance_answered wake, so no
+// human-guidance notifyAnswered notification is created for the asker.
+func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *testing.T) {
+	t.Parallel()
+	const asker, peer = "asker-uuid", "peer-uuid"
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(10)
+	svc := NewGuidanceRequestService(storage, bus, nil)
+	ctx := context.Background()
+	ch, subID := bus.Subscribe(ctx)
+	defer bus.Unsubscribe(subID)
+
+	peerReq, err := domain.NewGuidanceRequest(domain.GuidanceRequestParams{
+		Scope: domain.RequestScopeSession, SessionUUID: asker, Source: domain.QuestionSourcePeer,
+		AskerSessionUUID: asker, AnswererKind: domain.AnswererKindSession, AnswererSessionUUID: peer,
+		QuestionText: "How do I run the linter?", QuestionType: domain.QuestionTypeShortAnswer,
+	})
+	require.NoError(t, err)
+	row, err := storage.CreateMirroredGuidanceRequest(ctx, peerReq, 0)
+	require.NoError(t, err)
+
+	_, applied, err := svc.AnswerAs(ctx, row.ID, "make lint", SessionAnswerer(peer))
+	require.NoError(t, err)
+	require.True(t, applied)
+	select {
+	case ev := <-ch:
+		t.Fatalf("unexpected notification for a peer answer: %+v", ev)
+	default:
+	}
+
+	agent, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+		Scope: domain.RequestScopeSession, SessionUUID: asker, QuestionText: "Ship it?", QuestionType: domain.QuestionTypeYesNo,
+	})
+	require.NoError(t, err)
+	_, applied, err = svc.AnswerAs(ctx, agent.ID, "yes", HumanAnswerer())
+	require.NoError(t, err)
+	require.True(t, applied)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("an agent-created answer still notifies (the suppression is per source, not global)")
+	}
+}
