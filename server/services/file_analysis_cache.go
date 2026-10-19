@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"syscall"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
@@ -182,10 +183,27 @@ func (c *analysisCache) runEntry(ctx context.Context, e *analysisEntry, run anal
 	defer c.mu.Unlock()
 	switch {
 	case err != nil:
-		// Cancel, stale and I/O errors alike are never cached: waiters holding e still read e.err, the next request starts fresh.
-		c.dropLocked(e)
+		if isTransientAnalysisError(err) {
+			c.dropLocked(e) // waiters holding e still read e.err; the next request starts fresh
+		}
 		e.state, e.err = analysisStateFailed, err
 	default:
 		e.state, e.result = analysisStateReady, res
 	}
+}
+
+// isTransientAnalysisError reports errors a retry can outlive: cancellation, a file that moved
+// under the pass, and resource exhaustion. Anything else (EACCES, a torn file) stays cached as
+// FAILED until the validator changes.
+func isTransientAnalysisError(err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(err, errAnalysisStale):
+		return true
+	}
+	for _, errno := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.EINTR, syscall.EAGAIN, syscall.ENOMEM, syscall.EBUSY} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }

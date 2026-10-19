@@ -2,9 +2,10 @@ package services
 
 import (
 	"context"
-	"errors"
+	"io/fs"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,23 +120,45 @@ func TestAnalysisCache_ShouldNotCacheFailure_When_PassFailsWithTransientError(t 
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	c := newAnalysisCache(analysisCacheEntries, 1)
 	defer c.Close()
-	k := keyOf("/w/eio.log", 10)
+	k := keyOf("/w/emfile.log", 10)
 	var runs atomic.Int32
 	run := func(context.Context) (*Analysis, error) {
 		if runs.Add(1) == 1 {
-			return nil, errors.New("input/output error")
+			return nil, &fs.PathError{Op: "open", Path: "emfile.log", Err: syscall.EMFILE}
 		}
 		return &Analysis{LineCount: 7}, nil
 	}
 
 	_, err := c.Await(context.Background(), k, run)
-	require.ErrorContains(t, err, "input/output error")
+	require.ErrorIs(t, err, syscall.EMFILE)
 	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateUnspecified })
 
 	got, err := c.Await(context.Background(), k, run)
 	require.NoError(t, err)
 	assert.Equal(t, int64(7), got.LineCount)
 	assert.Equal(t, int32(2), runs.Load())
+}
+
+func TestAnalysisCache_ShouldCacheFailedState_When_PassFailsDeterministically(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	c := newAnalysisCache(analysisCacheEntries, 1)
+	defer c.Close()
+	k := keyOf("/w/denied.log", 10)
+	var runs atomic.Int32
+	run := func(context.Context) (*Analysis, error) {
+		runs.Add(1)
+		return nil, &fs.PathError{Op: "open", Path: "denied.log", Err: syscall.EACCES}
+	}
+
+	state, _ := c.Start(k, run)
+	assert.Equal(t, analysisStatePending, state)
+	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateFailed })
+	state, _ = c.Start(k, run)
+	assert.Equal(t, analysisStateFailed, state, "terminal until the validator changes")
+	assert.Equal(t, int32(1), runs.Load(), "a persistent failure is not re-analysed per request")
+
+	c.Start(keyOf("/w/denied.log", 11), run) // the file changed: a fresh attempt
+	analysisEventually(t, func() bool { return runs.Load() == 2 })
 }
 
 func TestAnalysisCache_ShouldKeepPassRunning_When_StartedCacheOwnedAndWaiterLeaves(t *testing.T) {
