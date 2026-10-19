@@ -44,7 +44,7 @@ func (f *fakeAckStore) ListGuidanceByDelivery(context.Context, domain.DeliveryRo
 func (f *fakeAckStore) states() []domain.DeliveryState {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []domain.DeliveryState
+	out := make([]domain.DeliveryState, 0, len(f.moves))
 	for _, m := range f.moves {
 		out = append(out, m.state)
 	}

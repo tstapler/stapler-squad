@@ -470,7 +470,7 @@ func TestListGuidanceByDelivery_should_FilterByStateAndOptionalRoute(t *testing.
 	move("toolu_c", domain.DeliveryRouteLiveKeystroke, domain.DeliveryStatePending)
 
 	ids := func(rows []*GuidanceRequestData) []string {
-		var out []string
+		out := make([]string, 0, len(rows))
 		for _, r := range rows {
 			out = append(out, r.ID)
 		}

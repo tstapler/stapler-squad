@@ -78,10 +78,11 @@ func TestHumanActiveGuard_ShouldIgnoreControlModeClientsAndCountAHumansAttach(t 
 	guard := NewHumanActiveGuard(NewHumanActivity(clock.Now), lister)
 	inst := namedInstance(t, "ssq_a")
 
-	listed = []tmux.ClientActivity{{Session: "ssq_a", ControlMode: true, Activity: clock.Now().Add(-time.Second)}}
+	control := tmux.ClientActivity{Session: "ssq_a", ControlMode: true, Activity: clock.Now().Add(-time.Second)}
+	listed = []tmux.ClientActivity{control}
 	assert.False(t, guard.Active(context.Background(), inst), "ssq's own control-mode client is not a human")
 
-	listed = append(listed, tmux.ClientActivity{Session: "ssq_a", Activity: clock.Now().Add(-2 * time.Second)})
+	listed = []tmux.ClientActivity{control, {Session: "ssq_a", Activity: clock.Now().Add(-2 * time.Second)}}
 	assert.True(t, guard.Active(context.Background(), inst), "a plain attached client active 2 s ago is a human")
 
 	listed = []tmux.ClientActivity{{Session: "ssq_other", Activity: clock.Now().Add(-time.Second)}}
