@@ -1,6 +1,8 @@
 package services
 
 import (
+	"strconv"
+
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
@@ -58,16 +60,35 @@ func (n *EventBusNotifier) NotifySession(sessionID, title, message string, notif
 // needs-human CONFIRMATION_NEEDED type (ADR-002 decision 6, so the delivery gate
 // keeps it for hidden sessions) and stamps decision_schema so the history page
 // can offer the choices inline (Story 2.2).
-func (n *EventBusNotifier) NotifyDecision(itemID, title, message string, schema DecisionSchema) {
+//
+// A schema that offers merge also carries pr_number (when prNumber > 0), so the
+// Merge confirm names the pull request it will merge.
+func (n *EventBusNotifier) NotifyDecision(itemID, title, message string, schema DecisionSchema, prNumber int) {
 	if n == nil || n.Bus == nil {
 		return
+	}
+	meta := map[string]string{metaItemID: itemID, metaDecisionSchema: EncodeDecisionSchema(schema)}
+	if prNumber > 0 && schemaOffers(schema, choiceMerge) {
+		meta[metaPRNumber] = strconv.Itoa(prNumber)
 	}
 	n.Bus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED), derivePriority(true, true),
 		title, message,
-		map[string]string{metaItemID: itemID, metaDecisionSchema: EncodeDecisionSchema(schema)},
+		meta,
 	))
+}
+
+// metaPRNumber is the pull request a merge decision acts on.
+const metaPRNumber = "pr_number"
+
+func schemaOffers(s DecisionSchema, choice string) bool {
+	for _, c := range s.Choices {
+		if c.Value == choice {
+			return true
+		}
+	}
+	return false
 }
 
 // NotifyAutoRemediating implements session.AutoRemediatingNotifier: Notify plus the

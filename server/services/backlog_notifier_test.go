@@ -106,7 +106,7 @@ func TestEventBusNotifier_NotifyDecision_should_StampDecisionSchemaWithChoices_W
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	(&EventBusNotifier{Bus: bus}).NotifyDecision("b608ab1e", "Review passed", "accept, rework or merge", DefaultDecisionSchema())
+	(&EventBusNotifier{Bus: bus}).NotifyDecision("b608ab1e", "Review passed", "accept, rework or merge", DefaultDecisionSchema(), 42)
 
 	select {
 	case ev := <-ch:
@@ -119,7 +119,38 @@ func TestEventBusNotifier_NotifyDecision_should_StampDecisionSchemaWithChoices_W
 		}
 		assert.Equal(t, []string{"accept", "rework", "merge"}, values)
 		assert.Equal(t, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED), ev.NotificationType)
+		assert.Equal(t, "42", ev.NotificationMetadata["pr_number"], "a schema that offers merge names the pull request")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected a notification event after NotifyDecision")
+	}
+}
+
+func TestEventBusNotifier_NotifyDecision_should_OmitPRNumber_When_NoMergeChoiceOrNoPR(t *testing.T) {
+	t.Parallel()
+	noMerge := DecisionSchema{Choices: []DecisionChoice{backlogChoices[choiceAccept]}}
+	tests := []struct {
+		name     string
+		schema   DecisionSchema
+		prNumber int
+	}{
+		{"no merge choice", noMerge, 42},
+		{"no pull request", DefaultDecisionSchema(), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := events.NewEventBus(1)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ch, _ := bus.Subscribe(ctx)
+
+			(&EventBusNotifier{Bus: bus}).NotifyDecision("b608ab1e", "Review passed", "msg", tt.schema, tt.prNumber)
+
+			select {
+			case ev := <-ch:
+				assert.NotContains(t, ev.NotificationMetadata, "pr_number")
+			case <-time.After(2 * time.Second):
+				t.Fatal("expected a notification event")
+			}
+		})
 	}
 }

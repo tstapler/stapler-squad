@@ -749,6 +749,10 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		metadata["tool_input_description"] = desc
 	}
 
+	if toolInputUnrenderable(approval.ToolInput) {
+		metadata[metaToolInputUnrenderable] = boolTrue
+	}
+
 	title := fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
 	message := buildApprovalMessage(approval)
 
