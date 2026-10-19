@@ -7,6 +7,8 @@ import {
 } from "./fileTransport";
 
 export const DEMOTE_AFTER_FAILURES = 3;
+/** A transport-failure demotion lapses after this long, so a network blip never pins a session to a lower rung. */
+export const DEMOTE_COOLDOWN_MS = 60_000;
 export const SUPPORTED_PROTOCOL_MAJOR = 1;
 export const FALLBACK_CHIP_TEXT = "Using simpler file mode";
 
@@ -23,6 +25,8 @@ export interface RouterOptions {
   /** May throw a ConnectError `Unimplemented` (older server): the router then pins `full`. */
   fetchCapabilities(sessionId: string): Promise<FileCapabilities>;
   analytics?: Pick<FilesEmitter, "emit">;
+  /** Clock for demotion cool-downs (tests). */
+  now?: () => number;
   /** Asks the banner stack for the quiet "Using simpler file mode" chip. */
   onFallback?: (info: { op: FileOpName; from: TransportId; to: TransportId; text: string }) => void;
 }
@@ -35,7 +39,7 @@ export class FileTransportRouter {
   /** Why the last capabilities fetch failed (not Unimplemented); cleared on success. */
   private capsFailure: unknown = null;
   private readonly byId = new Map<TransportId, FileTransport>();
-  private readonly ceiling = new Map<FileOpName, number>();
+  private readonly ceiling = new Map<FileOpName, { rung: number; until: number }>();
   private readonly streak = new Map<FileOpName, { id: TransportId; failures: number }>();
   private readonly announced = new Map<FileOpName, TransportId>();
 
@@ -124,7 +128,7 @@ export class FileTransportRouter {
     };
     const caps = this.caps;
     if (!caps || this.pin) return floor();
-    for (const rung of LADDER.slice(this.ceiling.get(op) ?? 0)) {
+    for (const rung of LADDER.slice(this.ceilingOf(op))) {
       if (rung === "full") break;
       const adapter = this.byId.get(rung);
       if (!adapter || !caps.wires.includes(rung) || !caps.ops.includes(need)) continue;
@@ -134,9 +138,24 @@ export class FileTransportRouter {
     return floor();
   }
 
+  private now(): number {
+    return (this.opts.now ?? Date.now)();
+  }
+
+  /** First ladder rung the op may use; a lapsed demotion is forgotten so the higher rung gets another try. */
+  private ceilingOf(op: FileOpName): number {
+    const c = this.ceiling.get(op);
+    if (!c) return 0;
+    if (this.now() >= c.until) {
+      this.ceiling.delete(op);
+      return 0;
+    }
+    return c.rung;
+  }
+
   private selectReason(op: FileOpName): SelectReason {
     if (this.pin) return this.pin;
-    return (this.ceiling.get(op) ?? 0) > 0 && this.transportFor(op) === "full" ? "pinned_full" : "capabilities";
+    return this.ceilingOf(op) > 0 && this.transportFor(op) === "full" ? "pinned_full" : "capabilities";
   }
 
   /** One `files.transport.select` per op whenever its resolved transport changes. */
@@ -166,7 +185,7 @@ export class FileTransportRouter {
     if (failures < DEMOTE_AFTER_FAILURES) return;
 
     this.streak.delete(op);
-    this.ceiling.set(op, LADDER.indexOf(transport.id) + 1);
+    this.ceiling.set(op, { rung: LADDER.indexOf(transport.id) + 1, until: this.now() + DEMOTE_COOLDOWN_MS });
     let to: TransportId = "full";
     try {
       to = this.transportFor(op);

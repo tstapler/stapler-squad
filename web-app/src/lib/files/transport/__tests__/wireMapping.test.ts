@@ -13,6 +13,13 @@ describe("mapError network failures", () => {
     expect((wrapped as TransportFailure).reason).toBe("network");
   });
 
+  it("mapError_should_NotRelabelProgrammingTypeErrorsAsNetwork_When_MessageIsNotAFetchFailure", () => {
+    const bug = new TypeError("Cannot read properties of undefined (reading 'x')");
+
+    expect(mapError(bug)).toBe(bug);
+    expect(mapError(ConnectError.from(bug))).not.toBeInstanceOf(TransportFailure);
+  });
+
   it("mapError_should_PassThroughApplicationErrors_When_NotANetworkFailure", () => {
     const internal = new ConnectError("boom", Code.Internal);
     const plain = new Error("bug");

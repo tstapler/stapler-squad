@@ -1,7 +1,7 @@
 import { Code, ConnectError } from "@connectrpc/connect";
 import { createFakeTransport, fakeCapabilities } from "../../__tests__/fixtures/fakeTransport";
 import { Rejected, TransportFailure, type AdvertisedOp, type TransportId } from "../fileTransport";
-import { DEMOTE_AFTER_FAILURES, FALLBACK_CHIP_TEXT, FileTransportRouter } from "../router";
+import { DEMOTE_AFTER_FAILURES, DEMOTE_COOLDOWN_MS, FALLBACK_CHIP_TEXT, FileTransportRouter } from "../router";
 
 const REF = { sessionId: "s1", path: "a.go" };
 const READ_ALL = { kind: "all" } as const;
@@ -123,5 +123,25 @@ describe("FileTransportRouter", () => {
     expect(err).not.toBeInstanceOf(Rejected);
     await router.read(REF, lines).catch(() => undefined);
     expect(fetchCapabilities).toHaveBeenCalledTimes(2); // the failure is retried, not remembered
+  });
+  it("router_should_RetryTheHigherRung_When_NetworkDemotionCooldownPassesAfterBackOnline", async () => {
+    let now = 1_000;
+    const files = { "a.go": "package a\n" };
+    const full = createFakeTransport({ id: "full", ops: FULL_OPS, files });
+    const ws = createFakeTransport({ id: "ws_stream", ops: RICH_OPS, files, withPatch: true });
+    const unary = createFakeTransport({ id: "connect_unary", ops: RICH_OPS, files, withPatch: true });
+    const router = new FileTransportRouter({
+      full, adapters: [ws, unary], now: () => now,
+      fetchCapabilities: async () => fakeCapabilities({ wires: ["ws_stream", "connect_unary"], ops: RICH_OPS }),
+    });
+    ws.failures.read = Array.from({ length: DEMOTE_AFTER_FAILURES }, () => new TransportFailure("network")); // offline taps
+    for (let i = 0; i < DEMOTE_AFTER_FAILURES; i++) await router.read(REF, READ_ALL).catch(() => undefined);
+    expect(router.transportFor("read")).toBe("connect_unary");
+
+    now += DEMOTE_COOLDOWN_MS; // back online
+    await router.read(REF, READ_ALL);
+
+    expect(router.transportFor("read")).toBe("ws_stream");
+    expect(ws.calls.at(-1)).toBe("read:a.go");
   });
 });

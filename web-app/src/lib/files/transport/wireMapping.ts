@@ -42,12 +42,15 @@ export function readOnlyOf(reason: ReadOnlyReason, isBinary: boolean, truncated:
 // The server sends no typed detail for "index still building"; this is its message (file_ops_range.go lineRangeWindow).
 const INDEX_PENDING = /line index/i;
 
+// fetch() rejects with a TypeError worded per browser (Chrome, Firefox, Safari); other TypeErrors are bugs.
+const FETCH_FAILURE = /failed to fetch|networkerror|load failed|network request failed/i;
+const isFetchFailure = (e: unknown): boolean => e instanceof TypeError && FETCH_FAILURE.test(e.message);
+
 /** Typed refusals become `Rejected`; wire-level failures become `TransportFailure`; the rest pass through. */
 export function mapError(err: unknown): unknown {
-  // fetch() rejects with a TypeError when the network is down; connect may wrap it as Code.Unknown.
-  if (err instanceof TypeError) return new TransportFailure("network", err);
+  if (isFetchFailure(err)) return new TransportFailure("network", err);
   if (!(err instanceof ConnectError)) return err;
-  if (err.code === Code.Unknown && err.cause instanceof TypeError) return new TransportFailure("network", err);
+  if (err.code === Code.Unknown && isFetchFailure(err.cause)) return new TransportFailure("network", err);
   switch (err.code) {
     case Code.NotFound:
       return new Rejected("not_found");
