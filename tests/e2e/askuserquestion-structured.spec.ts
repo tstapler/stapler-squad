@@ -40,9 +40,9 @@ test.afterAll(async ({ request }) => {
 });
 
 /** A session whose pane shows the fixture dialog; `keyFile` receives the key it is sent. */
-async function fakePaneSession(client: SessionClient, title: string): Promise<{ title: string; keyFile: string }> {
+async function fakePaneSession(client: SessionClient, title: string, mode = ''): Promise<{ title: string; keyFile: string }> {
   const keyFile = path.join(os.tmpdir(), `ssq-fake-pane-${title}.key`);
-  await client.createSession({ title, path: '/tmp', program: `bash ${FAKE_PANE} ${keyFile}` });
+  await client.createSession({ title, path: '/tmp', program: `bash ${FAKE_PANE} ${keyFile} ${mode}`.trim() });
   return { title, keyFile };
 }
 
@@ -92,6 +92,27 @@ test.describe('question cards (desktop)', () => {
     await expect(card.deliveryText).toHaveText('Already handled in the session. No action needed.', { timeout: 15_000 });
     await expect(option).toBeFocused();
     await expect(option).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('retry_anyway_should_reverify_the_dialog_and_write_one_more_key_when_the_first_answer_left_it_showing', async ({ page, request }) => {
+    const client = new SessionClient(BASE_URL);
+    const { title, keyFile } = await fakePaneSession(client, unique('sticky-pane'), 'sticky');
+    await seedQuestionCard(request, BASE_URL, { sessionId: title, source: HOOK, questions: [{ ...DIALOG_QUESTION, multiSelect: false }] });
+    await openNotificationTray(page, BASE_URL);
+    const card = new QuestionCard(page, title);
+    await card.reveal();
+
+    await card.press(card.option('Red'));
+
+    await expect.poll(() => receivedKey(keyFile), { message: 'the first digit reached the pane' }).toBe('1');
+    await expect(card.deliveryText).toHaveText(/couldn't confirm it arrived/);
+    await card.press(card.row.getByRole('button', { name: 'Retry anyway' }));
+    await expect(card.row.getByTestId('delivery-confirm')).toContainText('Retry anyway?');
+    await card.press(card.row.getByTestId('delivery-confirm').getByRole('button', { name: 'Retry', exact: true }));
+
+    await expect.poll(() => receivedKey(keyFile), { message: 'exactly one more digit after the re-verify' }).toBe('11');
+    await expect(card.deliveryText).toHaveText('Answered: Red', { timeout: ACK_TIMEOUT });
+    expect(receivedKey(keyFile)).toBe('11');
   });
 
   test('multi_question_agent_card_should_validate_inline_then_store_one_formatted_answer', async ({ page, request }) => {
