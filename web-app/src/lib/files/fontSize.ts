@@ -14,8 +14,12 @@ export const MAX_PX = 28;
 export const defaultFontPx = (coarse: boolean) => (coarse ? COARSE_MIN_PX : DESKTOP_DEFAULT_PX);
 export const clampFontPx = (px: number, coarse: boolean) => Math.min(MAX_PX, Math.max(coarse ? COARSE_MIN_PX : DESKTOP_MIN_PX, Math.round(px)));
 
+/** Set only while storage rejects writes, so the step still applies for this session. */
+let unsavedPx: number | null = null;
+
 /** The stepped size for this device, or the default; never below the touch floor on a coarse pointer. */
 export function readFontPx(coarse: boolean): number {
+  if (unsavedPx !== null) return clampFontPx(unsavedPx, coarse);
   try {
     const stored = Number(window.localStorage.getItem(KEY));
     if (Number.isFinite(stored) && stored > 0) return clampFontPx(stored, coarse);
@@ -30,8 +34,9 @@ export function stepFontPx(delta: 1 | -1, coarse: boolean): number {
   const next = clampFontPx(readFontPx(coarse) + delta, coarse);
   try {
     window.localStorage.setItem(KEY, String(next));
+    unsavedPx = null;
   } catch {
-    // not persisted, still applied for this session through the event
+    unsavedPx = next;
   }
   window.dispatchEvent(new Event(CHANGE));
   return next;

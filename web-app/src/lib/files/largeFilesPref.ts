@@ -5,8 +5,12 @@ import { useSyncExternalStore } from "react";
 const KEY = "ssq.files.search.largeFiles";
 const CHANGE = "ssq-files-large-files-change";
 
+/** Set only while storage rejects writes, so the toggle still applies for this session. */
+let unsaved: boolean | null = null;
+
 /** Per-device "Include large files" search toggle; off until the user turns it on. */
 export function readLargeFiles(): boolean {
+  if (unsaved !== null) return unsaved;
   try {
     return window.localStorage.getItem(KEY) === "1";
   } catch {
@@ -17,8 +21,9 @@ export function readLargeFiles(): boolean {
 export function writeLargeFiles(on: boolean): void {
   try {
     window.localStorage.setItem(KEY, on ? "1" : "0");
+    unsaved = null;
   } catch {
-    // not persisted; the event below still applies it for this session
+    unsaved = on;
   }
   window.dispatchEvent(new Event(CHANGE));
 }
