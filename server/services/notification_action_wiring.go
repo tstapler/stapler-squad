@@ -21,6 +21,7 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 	src := DescriptorSources{
 		Approvals: NewApprovalLookup(s.approvalStore),
 		Questions: s.replyState().store,
+		Canary:    s.wireDialogCanary(),
 	}
 	acks := s.wireGuidanceAcks(w.Storage)
 	s.wireHookReply(w.Storage, acks)
@@ -35,6 +36,7 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 	}
 	if w.Guidance != nil {
 		delegates.Guidance = NewGuidanceAnswerer(w.Guidance)
+		w.Guidance.SetDeliveryProbes(s.deliveryProbes(acks))
 	}
 	// A nil *BacklogService boxed into the interface would defeat the nil check.
 	if w.Backlog != nil && w.Storage != nil {

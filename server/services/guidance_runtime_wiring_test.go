@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -51,4 +52,33 @@ func TestGetGuidanceRequest_should_DeriveUnacknowledgedSessionEndedAndCancelReas
 	assert.False(t, get(open).GetSessionEnded(), "only sent or failed rows carry the probe")
 	require.NoError(t, m.Clear(ctx, open, domain.CancelReasonAnsweredInTerminal))
 	assert.Equal(t, "answered_in_terminal", get(open).GetCancelReason())
+}
+
+func TestListSavedGuidanceAnswers_should_ReturnOnlyAgentCreatedSavedRows(t *testing.T) {
+	t.Parallel()
+	m, storage, _, _ := newTestMirror(t)
+	svc := NewGuidanceRequestService(storage, nil, nil)
+	ctx := context.Background()
+	save := func(id string, route domain.DeliveryRoute) {
+		_, err := storage.AnswerGuidanceRequest(ctx, uuid.MustParse(id), "Redis")
+		require.NoError(t, err)
+		_, err = storage.SetGuidanceDelivery(ctx, uuid.MustParse(id), route, domain.DeliveryStateSavedForLater, 0)
+		require.NoError(t, err)
+	}
+	agent, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+		Scope: domain.RequestScopeSession, SessionUUID: mirrorSession, QuestionText: "Which cache?",
+		QuestionType: domain.QuestionTypeMultipleChoice, Options: `["Redis","Memcached"]`,
+	})
+	require.NoError(t, err)
+	save(agent.ID, domain.DeliveryRouteResume)
+	hook, _ := m.Mirror(mirrorReq(t, "toolu_h", "Hook?", true))
+	save(hook, domain.DeliveryRouteReadOnly)
+
+	resp, err := svc.ListSavedGuidanceAnswers(ctx, connect.NewRequest(&sessionv1.ListSavedGuidanceAnswersRequest{}))
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.GetRequests(), 1)
+	got := resp.Msg.GetRequests()[0]
+	assert.Equal(t, agent.ID, got.GetId())
+	assert.Equal(t, "resume", got.GetDeliveryRoute(), "stopped, not archived")
 }

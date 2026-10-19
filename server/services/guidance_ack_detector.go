@@ -32,6 +32,14 @@ type ackStore interface {
 	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*session.GuidanceRequestData, error)
 }
 
+// ackNotes moves the question's notification cards to match the delivery state:
+// an unconfirmed or still-showing answer is back in Needs you, an acknowledged
+// one or one whose session ended leaves it. Optional.
+type ackNotes interface {
+	ResolveQuestionNotifications(questionID string)
+	ReopenQuestionNotifications(questionID string)
+}
+
 // ackCapture takes a fresh pane capture. underLease asks for it to be taken
 // holding the write lease, so no writer is mid-keystroke (the 60 s decision).
 type ackCapture func(ctx context.Context, sessionUUID string, underLease bool) (string, error)
@@ -53,6 +61,7 @@ type GuidanceAckDetector struct {
 	capture ackCapture
 	ended   func(sessionUUID string) bool
 	now     func() time.Time
+	notes   ackNotes
 
 	mu      sync.Mutex
 	tracked map[string]*ackEntry
@@ -66,6 +75,9 @@ func NewGuidanceAckDetector(store ackStore, capture ackCapture, ended func(strin
 	}
 	return &GuidanceAckDetector{store: store, capture: capture, ended: ended, now: now, tracked: map[string]*ackEntry{}}
 }
+
+// SetNotes installs the notification mover; call it before Run.
+func (a *GuidanceAckDetector) SetNotes(n ackNotes) { a.notes = n }
 
 // Sent starts tracking d. An indeterminate write is Unconfirmed at once.
 func (a *GuidanceAckDetector) Sent(d SentDelivery) {
@@ -119,6 +131,7 @@ func (a *GuidanceAckDetector) Tick(ctx context.Context) {
 		switch {
 		case a.ended != nil && a.ended(e.SessionUUID):
 			a.drop(e.RowID)
+			a.moveCards(e.RowID, domain.DeliveryStateAcknowledged) // row 17: leaves Needs you and the badge
 		case !e.decided && now.Sub(e.sentAt) >= ackDecideAfter:
 			a.decide(ctx, e)
 		case now.Sub(e.lastSample) >= ackSampleEvery:
@@ -187,6 +200,7 @@ func (a *GuidanceAckDetector) decide(ctx context.Context, e ackEntry) {
 			live.decided, live.unconfirmed, live.lastSample = true, true, a.now()
 		}
 		a.mu.Unlock()
+		a.moveCards(e.RowID, domain.DeliveryStateFailed) // Unconfirmed: back in Needs you
 	}
 }
 
@@ -200,6 +214,24 @@ func (a *GuidanceAckDetector) finish(ctx context.Context, e ackEntry, state doma
 	applied, err := a.store.SetGuidanceDelivery(ctx, id, e.Route, state, 0)
 	if err != nil || !applied {
 		log.Warn("[AckDetector] delivery state not recorded", "row", e.RowID, "state", state, "applied", applied, "err", err)
+		return
+	}
+	a.moveCards(e.RowID, state)
+}
+
+// moveCards reopens the card of an answer that needs the operator again
+// (delivery_failed) and retires it when the answer is acknowledged or its
+// session ended. Any other state leaves the card where it is.
+func (a *GuidanceAckDetector) moveCards(rowID string, state domain.DeliveryState) {
+	if a.notes == nil {
+		return
+	}
+	switch state {
+	case domain.DeliveryStateFailed:
+		a.notes.ReopenQuestionNotifications(rowID)
+	case domain.DeliveryStateAcknowledged:
+		a.notes.ResolveQuestionNotifications(rowID)
+	case domain.DeliveryStatePending, domain.DeliveryStateSent, domain.DeliveryStateSavedForLater, domain.DeliveryStateStale:
 	}
 }
 

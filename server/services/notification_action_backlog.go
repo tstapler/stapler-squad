@@ -226,3 +226,13 @@ func (r historyItemResolver) ResolveApprovalNotifications(approvalID string) {
 		log.Warn("[NotificationAction] could not retire approval notifications", "approval", approvalID, "err", err)
 	}
 }
+
+// ReopenQuestionNotifications puts a question's cards back in Needs you.
+func (r historyItemResolver) ReopenQuestionNotifications(questionID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ReopenQuestion(questionID); err != nil {
+		log.Warn("[NotificationAction] could not reopen question notifications", "question", questionID, "err", err)
+	}
+}

@@ -38,3 +38,25 @@ func (s *NotificationHistoryStore) resolveByMetadata(key, id string) (int, error
 	}
 	return s.MarkReadWhere(func(r *NotificationRecord) bool { return r.Metadata[key] == id })
 }
+
+// ReopenQuestion marks the read records of a question unread again and returns
+// how many it reopened: a sent answer the agent has not confirmed needs the
+// operator back in Needs you (UX-AC24).
+func (s *NotificationHistoryStore) ReopenQuestion(questionID string) (int, error) {
+	if questionID == "" {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, r := range s.records {
+		if r.IsRead && r.Metadata[metaQuestionID] == questionID {
+			r.IsRead, r.ReadAt = false, nil
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return n, s.saveToDisk()
+}

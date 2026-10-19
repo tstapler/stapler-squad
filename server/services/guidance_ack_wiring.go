@@ -26,6 +26,7 @@ func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *GuidanceAck
 	d := NewGuidanceAckDetector(storage, s.ackCapture, func(uuid string) bool {
 		return s.answerSessions()(uuid).phase != phaseLive
 	}, nil)
+	d.SetNotes(historyItemResolver{store: s.GetNotificationStore()})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	s.ackCancel, s.ackDone, s.guidanceAcks = cancel, done, d

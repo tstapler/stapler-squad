@@ -33,6 +33,11 @@ service GuidanceRequestService {
   // ListAllPendingGuidanceRequests lists every open GuidanceRequest across
   // every scope — backs the global nav badge (Epic 7).
   rpc ListAllPendingGuidanceRequests(ListAllPendingGuidanceRequestsRequest) returns (ListAllPendingGuidanceRequestsResponse) {}
+
+  // ListSavedGuidanceAnswers lists answers stored for a session that is stopped
+  // or archived (delivery_state saved_for_later), agent-created requests only.
+  // Backs the read-only "Saved for later (N)" list in Recent activity.
+  rpc ListSavedGuidanceAnswers(ListSavedGuidanceAnswersRequest) returns (ListSavedGuidanceAnswersResponse) {}
 }
 
 // GuidanceRequest is the wire representation of one durable question/answer
@@ -149,5 +154,11 @@ message ListGuidanceRequestsResponse {
 message ListAllPendingGuidanceRequestsRequest {}
 
 message ListAllPendingGuidanceRequestsResponse {
+  repeated GuidanceRequest requests = 1;
+}
+
+message ListSavedGuidanceAnswersRequest {}
+
+message ListSavedGuidanceAnswersResponse {
   repeated GuidanceRequest requests = 1;
 }

@@ -212,3 +212,50 @@ func TestAckDetector_ShouldResumeTrackingSentRows_WhenRestored(t *testing.T) {
 
 	assert.Equal(t, []domain.DeliveryState{domain.DeliveryStateAcknowledged}, e.store.states())
 }
+
+// ackCards records where the question's notification cards were moved.
+type ackCards struct{ resolved, reopened []string }
+
+func (c *ackCards) ResolveQuestionNotifications(id string) { c.resolved = append(c.resolved, id) }
+func (c *ackCards) ReopenQuestionNotifications(id string)  { c.reopened = append(c.reopened, id) }
+
+func TestAckDetector_ShouldKeepTheCardInNeedsYou_WhileUnconfirmedAndRetireItOnALateAcknowledgement(t *testing.T) {
+	e := newAckEnv(t)
+	cards := &ackCards{}
+	e.det.SetNotes(cards)
+	e.sent(false)
+	e.capErr = errors.New("tmux gone")
+
+	e.tick(61 * time.Second)
+
+	assert.Equal(t, []string{e.rowID}, cards.reopened, "Unconfirmed puts the card back in Needs you")
+	assert.Empty(t, cards.resolved)
+
+	e.det.Receipt(context.Background(), "s1", askUserQuestion)
+
+	assert.Equal(t, []string{e.rowID}, cards.resolved, "the late acknowledgement retires it")
+}
+
+func TestAckDetector_ShouldReopenTheCard_WhenTheDialogIsStillShowingAt60Seconds(t *testing.T) {
+	e := newAckEnv(t)
+	cards := &ackCards{}
+	e.det.SetNotes(cards)
+	e.sent(false)
+
+	e.tick(61 * time.Second)
+
+	assert.Equal(t, []string{e.rowID}, cards.reopened, "row 16 stays in Needs you and in the badge")
+}
+
+func TestAckDetector_ShouldRetireTheCard_WhenTheSessionEndsOnASentAnswer(t *testing.T) {
+	e := newAckEnv(t)
+	cards := &ackCards{}
+	e.det.SetNotes(cards)
+	e.sent(false)
+	e.ended = true
+
+	e.tick(61 * time.Second)
+
+	assert.Equal(t, []string{e.rowID}, cards.resolved, "row 17 moves to Recent activity and leaves the badge")
+	assert.Empty(t, cards.reopened)
+}

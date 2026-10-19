@@ -105,3 +105,26 @@ func TestResolveApproval_ShouldRetireTheApprovalRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 }
+
+func TestReopenQuestion_should_MarkOnlyThatQuestionsReadRecordsUnread(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	require.NoError(t, store.Append(questionRecord("n1", "s1", "Which one?", "a|b", "q1")))
+	require.NoError(t, store.Append(questionRecord("n2", "s2", "Which two?", "a|b", "q2")))
+	_, err := store.ResolveQuestion("q1")
+	require.NoError(t, err)
+	_, err = store.ResolveQuestion("q2")
+	require.NoError(t, err)
+
+	n, err := store.ReopenQuestion("q1")
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, n)
+	q1, _ := store.GetByID("n1")
+	q2, _ := store.GetByID("n2")
+	assert.False(t, q1.IsRead)
+	assert.True(t, q2.IsRead)
+	again, err := store.ReopenQuestion("q1")
+	require.NoError(t, err)
+	assert.Zero(t, again, "an unread record is left alone")
+}

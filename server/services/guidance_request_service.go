@@ -459,3 +459,24 @@ func (s *GuidanceRequestService) ListAllPendingGuidanceRequests(
 	}
 	return connect.NewResponse(&sessionv1.ListAllPendingGuidanceRequestsResponse{Requests: protoRows}), nil
 }
+
+// ListSavedGuidanceAnswers lists the answers stored for stopped or archived
+// sessions. Hook and peer rows are never saved for later (their context dies
+// with the session), so only agent-created requests are returned.
+// +api: guidance-request:list-saved
+func (s *GuidanceRequestService) ListSavedGuidanceAnswers(
+	ctx context.Context,
+	_ *connect.Request[sessionv1.ListSavedGuidanceAnswersRequest],
+) (*connect.Response[sessionv1.ListSavedGuidanceAnswersResponse], error) {
+	rows, err := s.storage.ListGuidanceByDelivery(ctx, "", domain.DeliveryStateSavedForLater)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	out := make([]*sessionv1.GuidanceRequest, 0, len(rows))
+	for _, r := range rows {
+		if r.Source == domain.QuestionSourceAgentMCP {
+			out = append(out, s.toProto(r))
+		}
+	}
+	return connect.NewResponse(&sessionv1.ListSavedGuidanceAnswersResponse{Requests: out}), nil
+}
