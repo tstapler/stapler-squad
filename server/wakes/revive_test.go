@@ -201,3 +201,21 @@ func TestReviver_should_ReportGone_When_OwnerNoLongerQualifies(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ReviveOwnerGone, out)
 }
+
+func TestReviver_should_NotStart_When_OwnerIsStillStarting(t *testing.T) {
+	t.Parallel()
+	owners := newFakeOwners()
+	target := &spyTarget{}
+	owners.set("o1", OwnerFacts{Exists: true, Starting: true, Revive: target})
+	adm := &slotAdmission{cap: 2}
+	rv := NewReviver(adm, owners, NewFakeClock(t0), 0)
+
+	out, err := rv.TryRevive(context.Background(), "o1")
+
+	require.NoError(t, err)
+	assert.Equal(t, ReviveNotDone, out)
+	recovered, started := target.calls()
+	assert.Zero(t, recovered)
+	assert.Zero(t, started)
+	assert.Zero(t, adm.calls.Load())
+}

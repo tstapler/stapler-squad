@@ -37,6 +37,9 @@ func Decide(allowRevive bool, owner OwnerFacts) Verdict {
 		return Verdict{Kind: VerdictSkip, Reason: domain.WakeReasonItemTerminal}
 	case owner.Live:
 		return Verdict{Kind: VerdictDeliver}
+	case owner.Starting:
+		// Same liveness notion as PeerFaultOf: a Creating/Restoring owner is not stopped, so wait.
+		return Verdict{Kind: VerdictWait}
 	case allowRevive:
 		return Verdict{Kind: VerdictNeedsRevive}
 	default:

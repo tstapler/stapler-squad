@@ -71,6 +71,9 @@ func (r *Reviver) TryRevive(ctx context.Context, ownerUUID string) (ReviveOutcom
 	if facts.Live {
 		return ReviveOwnerLive, nil
 	}
+	if facts.Starting {
+		return ReviveNotDone, nil
+	}
 	if facts.Revive == nil {
 		return ReviveNotDone, fmt.Errorf("revive %s: stopped owner has no revive target", ownerUUID)
 	}

@@ -67,3 +67,13 @@ func TestIsStartingStatus_should_OnlyBeTrueForCreatingAndRestoring(t *testing.T)
 		assert.False(t, isStartingStatus(s), s.String())
 	}
 }
+
+func TestWakeOwners_should_ReadCreatingAndRestoringAsStartingOnly(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[session.Status]bool{
+		session.Creating: true, session.Restoring: true,
+		session.Active: false, session.Stopped: false,
+	} {
+		assert.Equal(t, want, isStartingStatus(status), status.String())
+	}
+}

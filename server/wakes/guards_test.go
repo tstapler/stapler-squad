@@ -23,6 +23,10 @@ func TestDecide_should_FollowTheOwnerStateTable(t *testing.T) {
 		{"terminal item is skipped", false, OwnerFacts{Exists: true, Live: true, ItemTerminal: true}, Verdict{VerdictSkip, domain.WakeReasonItemTerminal}},
 		{"stopped with allow_revive needs revive", true, OwnerFacts{Exists: true}, Verdict{Kind: VerdictNeedsRevive}},
 		{"stopped without allow_revive is owner_stopped, never needs_revive", false, OwnerFacts{Exists: true}, Verdict{VerdictSkip, domain.WakeReasonOwnerStopped}},
+		{"creating owner waits, never needs_revive", true, OwnerFacts{Exists: true, Starting: true}, Verdict{Kind: VerdictWait}},
+		{"restoring owner waits without allow_revive", false, OwnerFacts{Exists: true, Starting: true}, Verdict{Kind: VerdictWait}},
+		{"archived starting owner is archived", true, OwnerFacts{Exists: true, Starting: true, Archived: true}, Verdict{VerdictSkip, domain.WakeReasonArchived}},
+		{"starting owner of a terminal item is skipped", true, OwnerFacts{Exists: true, Starting: true, ItemTerminal: true}, Verdict{VerdictSkip, domain.WakeReasonItemTerminal}},
 		{"archived stopped owner is archived even with allow_revive", true, OwnerFacts{Exists: true, Archived: true}, Verdict{VerdictSkip, domain.WakeReasonArchived}},
 	}
 	for _, tt := range tests {
