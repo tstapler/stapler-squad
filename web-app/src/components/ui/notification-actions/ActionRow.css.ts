@@ -36,6 +36,10 @@ export const actionButton = style({
   },
   "@media": {
     [narrow]: { width: "100%", minHeight: "44px", fontSize: "1rem" },
+    // Opacity is not a signal in forced-colors mode; use the system disabled colour.
+    "(forced-colors: active)": {
+      selectors: { '&[aria-disabled="true"]': { color: "GrayText", borderColor: "GrayText", opacity: 1 } },
+    },
   },
 });
 

@@ -135,7 +135,8 @@ export function TrayList({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest("input, textarea, select")) return;
+    // Shortcuts are inert in fields, the terminal and mid-composition (ux.md 7.1, WCAG 2.1.4).
+    if (target.closest("input, textarea, select, [contenteditable], .xterm") || e.nativeEvent.isComposing) return;
     const rowEl = target.closest<HTMLElement>("[data-tray-row]");
     const currentKey = rowEl?.dataset.trayRow ?? tabbableKey;
     const at = focusableKeys.indexOf(currentKey ?? "");

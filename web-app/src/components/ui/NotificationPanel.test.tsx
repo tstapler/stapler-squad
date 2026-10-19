@@ -646,6 +646,8 @@ describe("tray", () => {
       expect(tray).toHaveAttribute("data-sheet", "expanded");
       expect(tray).not.toHaveAttribute("aria-modal");
       expect(screen.queryByTestId("tray-scrim")).toBeNull();
+      // Presentation rule (ux.md): on a touch phone nothing is a dialog or modal.
+      expect(document.querySelectorAll("[role=dialog],[aria-modal=true]")).toHaveLength(0);
       window.matchMedia = original;
     });
 
