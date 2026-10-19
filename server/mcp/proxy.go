@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -30,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // ErrProxyUnavailable wraps any failure to connect to the running HTTP MCP
@@ -73,8 +75,31 @@ func ProxyHeaders() map[string]string {
 		if tok := localtoken.FromConfigDir(dir); tok != "" {
 			headers["Authorization"] = "Bearer " + tok
 		}
+		if proof := readSessionProof(dir, headers["X-Stapler-Session-UUID"]); proof != "" {
+			headers[session.MCPProofHeader] = proof
+		}
 	}
 	return headers
+}
+
+// readSessionProof returns the session's MCP proof from its 0600 proof file
+// (never an environment variable, ADR-007 rule 0), or "" when there is no
+// session, no file or a malformed one; the server then treats the caller as
+// unverified.
+func readSessionProof(configDir, sessionUUID string) string {
+	if !session.ValidMCPSessionUUID(sessionUUID) {
+		return ""
+	}
+	// #nosec G304 -- the path is built from the config dir and a validated uuid.
+	raw, err := os.ReadFile(session.MCPProofFilePath(configDir, sessionUUID))
+	if err != nil {
+		return ""
+	}
+	proof := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(proof, session.MCPProofValuePrefix) {
+		return ""
+	}
+	return proof
 }
 
 // NewProxyCore connects to an already-running stapler-squad HTTP server at

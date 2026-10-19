@@ -869,6 +869,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 	// Reply: hook sender proofs (best-effort provenance) and the pending-question registry.
 	wireHookProofsAndQuestions(approvalHandler, deps, srv.goBackground)
+	wireMCPProofs(serverCtx, deps, srv.goBackground) // per-session MCP credential (ADR-007 rule 0)
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
@@ -1110,12 +1111,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
-	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
-			r = r.WithContext(servermcp.WithSessionUUID(r.Context(), uuid))
-		}
-		mcpHTTPHandler.ServeHTTP(w, r)
-	})
+	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)
 	srv.mux.Handle("/mcp/", mcpWithUUID)
 	deps.SessionService.SetMCPServerURL(func() string { return "http://" + srv.GetAddr() + "/mcp" })
