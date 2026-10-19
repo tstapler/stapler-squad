@@ -85,6 +85,10 @@ func (t deliveryTrack) finish(ctx context.Context, res ActionResult, err error, 
 			t.acks.Sent(sent)
 		}
 	case sessionv1.ActionOutcome_ACTION_OUTCOME_STALE:
+		if res.StaleReason == StaleReasonAnswerPartial {
+			t.move(ctx, domain.DeliveryStateAbortedPartial, 0)
+			return
+		}
 		t.move(ctx, domain.DeliveryStateStale, 0)
 	case sessionv1.ActionOutcome_ACTION_OUTCOME_UNSPECIFIED, sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED,
 		sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED,

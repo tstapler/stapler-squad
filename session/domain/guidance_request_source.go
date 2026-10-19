@@ -79,6 +79,9 @@ const (
 	DeliveryStateFailed        DeliveryState = "delivery_failed"
 	DeliveryStateSavedForLater DeliveryState = "saved_for_later"
 	DeliveryStateStale         DeliveryState = "stale"
+	// DeliveryStateAbortedPartial: part of a multi-question answer was typed, then
+	// the dialog changed. The row stays unanswered, so it stays in Needs you.
+	DeliveryStateAbortedPartial DeliveryState = "aborted_partial"
 )
 
 // IsValid reports whether s is a known state; the untracked state is not valid.
@@ -90,13 +93,14 @@ func (s DeliveryState) IsValid() bool {
 // deliveryTransitions is the single transition table. The empty state is the
 // start: a read-only or stopped-session row is born saved_for_later, stale or failed.
 var deliveryTransitions = map[DeliveryState][]DeliveryState{
-	"":                         {DeliveryStatePending, DeliveryStateSavedForLater, DeliveryStateStale, DeliveryStateFailed},
-	DeliveryStatePending:       {DeliveryStateSent, DeliveryStateFailed, DeliveryStateSavedForLater, DeliveryStateStale},
-	DeliveryStateSent:          {DeliveryStateAcknowledged, DeliveryStateFailed, DeliveryStateStale},
-	DeliveryStateSavedForLater: {DeliveryStatePending, DeliveryStateStale},
-	DeliveryStateFailed:        {DeliveryStatePending, DeliveryStateStale},
-	DeliveryStateAcknowledged:  nil,
-	DeliveryStateStale:         nil,
+	"":                          {DeliveryStatePending, DeliveryStateSavedForLater, DeliveryStateStale, DeliveryStateFailed},
+	DeliveryStatePending:        {DeliveryStateSent, DeliveryStateFailed, DeliveryStateSavedForLater, DeliveryStateStale, DeliveryStateAbortedPartial},
+	DeliveryStateSent:           {DeliveryStateAcknowledged, DeliveryStateFailed, DeliveryStateStale},
+	DeliveryStateSavedForLater:  {DeliveryStatePending, DeliveryStateStale},
+	DeliveryStateFailed:         {DeliveryStatePending, DeliveryStateStale},
+	DeliveryStateAcknowledged:   nil,
+	DeliveryStateStale:          nil,
+	DeliveryStateAbortedPartial: nil,
 }
 
 // CanTransitionTo reports whether next may follow s.
@@ -159,6 +163,7 @@ const (
 	MaxQuestionHeaderRunes  = 64
 	MaxOptionLabelRunes     = 200
 	MaxOptionDescriptionLen = 1000
+	MaxQuestionProfileRunes = 32
 )
 
 // ErrInvalidQuestionPayload wraps every QuestionPayload validation failure.
@@ -177,6 +182,9 @@ type Question struct {
 	Header      string   `json:"header,omitempty"`
 	Options     []Option `json:"options"`
 	MultiSelect bool     `json:"multiSelect"`
+	// Profile names the non-Claude harness profile that detected this question
+	// (questions_json.profile); empty for Claude's hook payload.
+	Profile string `json:"profile,omitempty"`
 }
 
 // QuestionPayload is the canonical, validated set of 1-4 questions stored in
@@ -210,6 +218,8 @@ func validateQuestion(q Question) error {
 		return bad("question text over %d characters", MaxQuestionTextRunes)
 	case utf8.RuneCountInString(q.Header) > MaxQuestionHeaderRunes:
 		return bad("header over %d characters", MaxQuestionHeaderRunes)
+	case utf8.RuneCountInString(q.Profile) > MaxQuestionProfileRunes:
+		return bad("profile over %d characters", MaxQuestionProfileRunes)
 	case len(q.Options) < 1 || len(q.Options) > MaxQuestionOptions:
 		return bad("need 1-%d options, got %d", MaxQuestionOptions, len(q.Options))
 	}

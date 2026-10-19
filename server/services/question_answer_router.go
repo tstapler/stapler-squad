@@ -131,6 +131,9 @@ func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (
 
 // liveKeystroke writes one digit into the on-screen dialog.
 func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in QuestionAnswer) (ActionResult, error) {
+	if qs, ok := r.sequenceQuestions(ctx, in.QuestionID); ok {
+		return r.liveSequence(ctx, s, in, qs)
+	}
 	key := QuestionKey{SessionUUID: in.SessionID, QuestionID: in.QuestionID}
 	q, ok := r.questions.Peek(key)
 	if !ok && r.ensure != nil && r.ensure(ctx, key) {

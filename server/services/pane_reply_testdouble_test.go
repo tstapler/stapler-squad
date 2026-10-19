@@ -41,6 +41,10 @@ type replyPM struct {
 	gate     chan struct{} // when set, SendKeys blocks until closed
 	entered  chan struct{}
 	capErr   error
+	// frames, when set, replaces dialog/after: the pane shows frames[n] after n
+	// writes (the last frame repeats). failAt (1-based) limits sendErr to that write.
+	frames []string
+	failAt int
 }
 
 func (r *replyPM) GetSessionIdentifier() string     { return "" }
@@ -61,11 +65,12 @@ func (r *replyPM) SendKeys(keys string) (int, error) {
 	if r.probe != nil {
 		r.probed = append(r.probed, r.probe())
 	}
-	if r.sendErr != nil && r.sendN == 0 {
+	failing := r.sendErr != nil && (r.failAt == 0 || len(r.sent)+1 == r.failAt)
+	if failing && r.sendN == 0 {
 		return 0, r.sendErr // provably nothing reached the pane
 	}
 	r.sent = append(r.sent, keys)
-	if r.sendErr != nil {
+	if failing {
 		return r.sendN, r.sendErr
 	}
 	return len(keys), nil
@@ -76,6 +81,9 @@ func (r *replyPM) CapturePaneContent() (string, error) {
 	defer r.mu.Unlock()
 	if r.capErr != nil {
 		return "", r.capErr
+	}
+	if r.frames != nil {
+		return r.frames[min(len(r.sent), len(r.frames)-1)], nil
 	}
 	if len(r.sent) > 0 && !r.keepOpen {
 		return r.after, nil
