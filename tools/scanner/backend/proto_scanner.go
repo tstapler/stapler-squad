@@ -80,6 +80,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"CreateCheckpoint":          "checkpoint:create",
 	"ListCheckpoints":           "checkpoint:list",
 	"ForkSession":               "session:fork",
+	"FanOutSession":             "session:fanout",
+	"PickFanoutWinner":          "session:fanout-pick",
 	"ListFiles":                 "file:list",
 	"GetFileContent":            "file:get-content",
 	"SearchFiles":               "file:search",
