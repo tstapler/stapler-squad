@@ -74,3 +74,33 @@ export const ANNOUNCE = {
   answerSent: "Answer sent",
   notDelivered: "Answer not delivered",
 } as const;
+
+/** The three consequential taps that wait 3 s behind an Undo (design/ux.md 2.4), keyed by action. */
+export type HoldKey = "approve" | "rework" | "accept";
+
+export const HOLD_COPY: Record<HoldKey, { button: string; verbing: string; pending: string; undone: string; cancelled: string }> = {
+  approve: {
+    button: "Approve",
+    verbing: "Approving",
+    pending: "Approval pending",
+    undone: "Approval undone",
+    cancelled: "Approval cancelled when you left. Tap Approve to try again.",
+  },
+  rework: {
+    button: "Send back",
+    verbing: "Sending back",
+    pending: "Send back pending",
+    undone: "Send back undone",
+    cancelled: "Send back cancelled when you left. Tap Send back to try again.",
+  },
+  accept: {
+    button: "Mark done",
+    verbing: "Marking done",
+    pending: "Mark done pending",
+    undone: "Mark done undone",
+    cancelled: "Mark done cancelled when you left. Tap Mark done to try again.",
+  },
+};
+
+export const holdCountdown = (verbing: string, seconds: number) => `${verbing} in ${seconds}s`;
+export const UNDO_LABEL = "Undo";

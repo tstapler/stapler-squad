@@ -12,7 +12,8 @@ import { useCardEngagement, useEngagement } from "@/lib/hooks/useEngagedCard";
 import { useInvokeNotificationAction, type ActionSpec } from "@/lib/hooks/useInvokeNotificationAction";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { clearDraft, readDraft, writeDraft } from "@/lib/utils/sessionDrafts";
-import { COPY, cancelPrompt, mergePrompt, rateLimited } from "@/lib/copy/notificationCopy";
+import { COPY, HOLD_COPY, UNDO_LABEL, cancelPrompt, holdCountdown, mergePrompt, rateLimited, type HoldKey } from "@/lib/copy/notificationCopy";
+import { useCommitDelay } from "@/lib/hooks/useCommitDelay";
 import { PendingNotice, useActionsDisabledReason } from "../OfflineBanner";
 import { ActionButton } from "./ActionButton";
 import { ApprovalButtons, OtherButtons, type ButtonsUi } from "./ActionButtons";
@@ -20,7 +21,7 @@ import { ApprovalCommand } from "./ApprovalCommand";
 import { MoreMenu } from "./MoreMenu";
 import { ConfirmStep, DenyStep, createRuleStepProps } from "./SubSteps";
 import { outcomeView, type OutcomeContext } from "./actionOutcome";
-import { KNOWN_KINDS, CANCEL_KINDS, buildSpec, isMerge, kindSlug, needsConfirm, unavailableReason, type Pick } from "./actionSpec";
+import { KNOWN_KINDS, CANCEL_KINDS, buildSpec, holdKeyOf, isMerge, kindSlug, needsConfirm, unavailableReason, type Pick } from "./actionSpec";
 import { TOUCH_TARGET_PX } from "./layout";
 import { buttons, root, secondaryVariant, status } from "./ActionRow.css";
 
@@ -137,9 +138,8 @@ export function ActionRow(props: ActionRowProps) {
   const view = useMemo(() => (state.status === "settled" && lastCtx.current ? outcomeView(state.response, lastCtx.current) : null), [state]);
   const recovering = failed || (!!view && !view.settled && view.retry !== "countdown");
   const countdown = useCountdown(view?.retry === "countdown" ? view.countdownSeconds : undefined, reset);
-  const blocked = pending || countdown > 0 || !!offlineReason;
 
-  const dispatch = useCallback(
+  const commit = useCallback(
     (spec: ActionSpec, ctx: OutcomeContext) => {
       lastCtx.current = ctx;
       focusWasInside.current = !!rootRef.current?.contains(document.activeElement);
@@ -147,6 +147,41 @@ export function ActionRow(props: ActionRowProps) {
       return invoke(spec);
     },
     [invoke],
+  );
+
+  // Approve, Send back and Mark done wait behind Undo; leaving cancels and sends nothing.
+  const holdMarker = `hold:${rowId}`;
+  const [cancelledKey, setCancelledKey] = useState<HoldKey | null>(() => (readDraft(holdMarker) || null) as HoldKey | null);
+  const delay = useCommitDelay<{ spec: ActionSpec; ctx: OutcomeContext; key: HoldKey }>({
+    onCommit: (h) => void commit(h.spec, h.ctx),
+    onCancel: (h, reason) => {
+      announce(HOLD_COPY[h.key].undone, "polite", `hold-${rowId}`);
+      if (reason === "leave") {
+        writeDraft(holdMarker, h.key);
+        setCancelledKey(h.key);
+      }
+    },
+  });
+  const holding = delay.held;
+  const blocked = pending || countdown > 0 || !!offlineReason || holding !== null;
+  useEffect(() => engagement.setHold(holding !== null), [engagement, holding]);
+  const undoRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (holding) undoRef.current?.focus();
+  }, [holding]);
+
+  const dispatch = useCallback(
+    (spec: ActionSpec, ctx: OutcomeContext) => {
+      const key = holdKeyOf(spec);
+      if (!key) return commit(spec, ctx);
+      clearDraft(holdMarker);
+      setCancelledKey(null);
+      setStep("row");
+      announce(HOLD_COPY[key].pending, "polite", `hold-${rowId}`);
+      delay.start({ spec, ctx, key });
+      return Promise.resolve(null);
+    },
+    [commit, delay, holdMarker, announce, rowId],
   );
 
   // Sub-steps and drafts keep the card engaged; a final state releases it (design/ux.md 7.1).
@@ -239,6 +274,7 @@ export function ActionRow(props: ActionRowProps) {
     mobile,
     minHeight,
     pendingKind: state.status === "pending" ? state.spec.kind : undefined,
+    holding: holding ? { key: holding.key, text: holdCountdown(HOLD_COPY[holding.key].verbing, delay.secondsLeft) } : undefined,
     reasonFor,
     onPress: (p) => {
       rememberOpener();
@@ -355,6 +391,11 @@ export function ActionRow(props: ActionRowProps) {
     const showRow = step === "row" || step === "more";
     body = (
       <>
+        {cancelledKey && !holding && (
+          <p className={status} data-testid="hold-cancelled">
+            {HOLD_COPY[cancelledKey].cancelled}
+          </p>
+        )}
         {hasApproval && !failClosed && <ApprovalCommand tool={approval?.tool} text={approval?.text} />}
         {failClosed && (
           <p className={status} data-testid="approval-unrenderable">
@@ -377,6 +418,9 @@ export function ActionRow(props: ActionRowProps) {
               />
             )}
             <OtherButtons descriptors={others} ui={ui} />
+            {holding && (
+              <ActionButton id="undo" label={UNDO_LABEL} buttonRef={undoRef} minHeight={TOUCH_TARGET_PX} onClick={delay.undo} />
+            )}
             {openButton}
           </div>
         ) : (

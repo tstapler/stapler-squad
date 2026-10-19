@@ -1,5 +1,5 @@
 import { ActionKind, type ActionOption, type NotificationActionDescriptor } from "@/gen/session/v1/notification_action_pb";
-import { COPY, PENDING_VERB } from "@/lib/copy/notificationCopy";
+import { COPY, PENDING_VERB, type HoldKey } from "@/lib/copy/notificationCopy";
 import type { ActionSpec } from "@/lib/hooks/useInvokeNotificationAction";
 
 /** A descriptor, plus the option the operator picked from it. */
@@ -41,4 +41,11 @@ export function pendingVerb(kind: ActionKind): string {
   if (kind === ActionKind.APPROVE) return PENDING_VERB.approve;
   if (kind === ActionKind.DENY) return PENDING_VERB.deny;
   return PENDING_VERB.other;
+}
+
+/** Approve, Send back (`rework`) and Mark done (`accept`) wait behind Undo; nothing else does. */
+export function holdKeyOf(spec: ActionSpec): HoldKey | null {
+  if (spec.kind === ActionKind.APPROVE) return "approve";
+  if (spec.kind === ActionKind.BACKLOG_DECISION && (spec.params?.choice === "rework" || spec.params?.choice === "accept")) return spec.params.choice;
+  return null;
 }

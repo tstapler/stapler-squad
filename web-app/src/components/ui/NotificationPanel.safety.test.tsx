@@ -259,3 +259,41 @@ describe("Story 2.10b: digit and focus guards", () => {
     expect(document.activeElement).toBe(field);
   });
 });
+
+describe("Task 2.10c: closing the panel mid-hold cancels", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    setTimingForTests({ settleMs: 0, commitDelayMs: 3_000 });
+    panelState.isOpen = true;
+    window.sessionStorage.clear();
+  });
+  afterEach(() => {
+    panelState.isOpen = true;
+  });
+
+  it("sends nothing when the panel closes, then shows the cancellation line with the item still counted and unacknowledged", () => {
+    const { refreshPanel, announce } = renderPanel();
+    act(() => approveOf(0).click());
+    expect(screen.getByTestId("action-undo")).toBeInTheDocument();
+    panelState.isOpen = false;
+    refreshPanel();
+    advance(10_000);
+    panelState.isOpen = true;
+    refreshPanel();
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(panelState.acknowledge).not.toHaveBeenCalled();
+    expect(screen.getByTestId("hold-cancelled")).toHaveTextContent("Approval cancelled when you left. Tap Approve to try again.");
+    expect(screen.getByTestId("tray-needs-attention")).toHaveTextContent("3 need you");
+    expect(announce.mock.calls.filter(([t]) => t === "Approval undone")).toHaveLength(1);
+  });
+
+  it("holds the Needs-you list still while the hold runs, with focus on Undo", () => {
+    const { container, refreshPanel } = renderPanel();
+    act(() => approveOf(0).click());
+    panelState.history = [...pendingApprovals(1, 9), ...panelState.history];
+    refreshPanel();
+    expect(screen.getByTestId("tray-new-pill")).toHaveTextContent("1 new");
+    expect(needsYou(container)).toEqual(["n0", "n1", "n2"]);
+  });
+});

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ActionKind, type NotificationActionDescriptor } from "@/gen/session/v1/notification_action_pb";
-import { cancelPrompt, pendingLabel } from "@/lib/copy/notificationCopy";
+import { cancelPrompt, pendingLabel, type HoldKey } from "@/lib/copy/notificationCopy";
 import { ActionButton } from "./ActionButton";
 import { CANCEL_KINDS, OPTION_KINDS, kindSlug, pendingVerb, type Pick } from "./actionSpec";
 import { APPROVE_EXTRA_GAP_PX } from "./layout";
@@ -18,11 +18,14 @@ export interface ButtonsUi {
   /** Id of the element describing why `d` cannot run, if any. */
   reasonFor: (d: NotificationActionDescriptor) => string | undefined;
   onPress: (p: Pick) => void;
+  /** A commit delay is running: the pressed button reads "Approving in 3s". */
+  holding?: { key: HoldKey; text: string };
 }
 
 function PrimaryButton({ d, ui }: { d: NotificationActionDescriptor; ui: ButtonsUi }) {
   const isApprove = d.kind === ActionKind.APPROVE;
-  const label = ui.pendingKind === d.kind ? pendingLabel(pendingVerb(d.kind)) : d.label;
+  const holdText = isApprove && ui.holding?.key === "approve" ? ui.holding.text : undefined;
+  const label = holdText ?? (ui.pendingKind === d.kind ? pendingLabel(pendingVerb(d.kind)) : d.label);
   return (
     <ActionButton
       id={kindSlug(d.kind)}
@@ -52,7 +55,7 @@ export function OptionGroup({ d, ui }: { d: NotificationActionDescriptor; ui: Bu
         <ActionButton
           key={`${o.value}-${o.label}`}
           id={`${kindSlug(d.kind)}-${o.value || i}`}
-          label={o.label}
+          label={d.kind === ActionKind.BACKLOG_DECISION && ui.holding?.key === o.value ? ui.holding.text : o.label}
           variant={secondaryVariant}
           disabled={ui.blocked || !d.available}
           reasonId={ui.reasonFor(d)}

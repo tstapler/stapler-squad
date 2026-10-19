@@ -37,6 +37,7 @@ const blank = (): Card => ({
 export class EngagementTracker {
   private cards = new Map<string, Card>();
   private listeners = new Set<() => void>();
+  private closeListeners = new Set<() => void>();
   private frozen = false;
   private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private touchTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -217,8 +218,15 @@ export class EngagementTracker {
     this.recompute();
   }
 
+  /** Runs `fn` when the panel closes (holds cancel then). */
+  onClose = (fn: () => void): (() => void) => {
+    this.closeListeners.add(fn);
+    return () => this.closeListeners.delete(fn);
+  };
+
   /** The panel closed: nothing is engaged any more and the list unfreezes at once. */
   reset(): void {
+    this.closeListeners.forEach((fn) => fn());
     this.cards.clear();
     this.touchTimers.forEach((t) => clearTimeout(t));
     this.touchTimers.clear();
