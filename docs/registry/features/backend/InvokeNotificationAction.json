@@ -1,0 +1,12 @@
+{
+  "id": "InvokeNotificationAction",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "InvokeNotificationAction",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/notification_action_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-19T00:12:57.505390086-07:00"
+}

@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package session.v1;
+
+// Inline notification actions (project notification-actions-and-agent-messaging,
+// ADR-002 and ADR-004). The server computes descriptors at read time from the
+// underlying entity; one RPC, SessionService.InvokeNotificationAction, applies
+// them. Expected business conditions are ActionOutcome values, never Connect errors.
+
+// ActionKind is the closed set of inline actions. Unknown values degrade to OPEN.
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  // Open the session or item. Always available.
+  ACTION_KIND_OPEN = 1;
+  ACTION_KIND_APPROVE = 2;
+  ACTION_KIND_DENY = 3;
+  ACTION_KIND_ANSWER_QUESTION = 4;
+  ACTION_KIND_BACKLOG_DECISION = 5;
+  ACTION_KIND_ANSWER_GUIDANCE = 6;
+  ACTION_KIND_CANCEL_WAKE = 7;
+  ACTION_KIND_CANCEL_PEER_HELP = 8;
+}
+
+// ActionTier classifies the blast radius of an action (ADR-004).
+enum ActionTier {
+  ACTION_TIER_UNSPECIFIED = 0;
+  // Data-only write; allowed on both listeners.
+  ACTION_TIER_A = 1;
+  // Writes bytes into a live pane; desktop (local listener) only in v1.
+  ACTION_TIER_B = 2;
+}
+
+// ActionOutcome is the typed result of InvokeNotificationAction.
+enum ActionOutcome {
+  ACTION_OUTCOME_UNSPECIFIED = 0;
+  ACTION_OUTCOME_APPLIED = 1;
+  ACTION_OUTCOME_ALREADY_RESOLVED = 2;
+  // The target is no longer what the descriptor described; see stale_reason.
+  ACTION_OUTCOME_STALE = 3;
+  // Failed strictly before the first byte; Retry with the same key is safe.
+  ACTION_OUTCOME_NOT_SENT = 4;
+  // A byte may have been written; no Retry.
+  ACTION_OUTCOME_SEND_INDETERMINATE = 5;
+  ACTION_OUTCOME_RATE_LIMITED = 6;
+  ACTION_OUTCOME_FORBIDDEN = 7;
+  // The flag for this decision point is off; no side effect occurred.
+  ACTION_OUTCOME_FLAG_OFF = 8;
+  ACTION_OUTCOME_INVALID = 9;
+}
+
+// ActionTargetKey names which id space target_key belongs to. The history
+// record id is never an action key.
+enum ActionTargetKey {
+  ACTION_TARGET_KEY_UNSPECIFIED = 0;
+  ACTION_TARGET_KEY_APPROVAL_ID = 1;
+  ACTION_TARGET_KEY_QUESTION_ID = 2;
+  ACTION_TARGET_KEY_GUIDANCE_REQUEST_ID = 3;
+  ACTION_TARGET_KEY_ITEM_ID = 4;
+}
+
+// ActionOption is one selectable answer or decision choice.
+message ActionOption {
+  string label = 1;
+  // Stable machine value (e.g. a backlog choice "accept"); empty for answers.
+  string value = 2;
+  string description = 3;
+}
+
+// NotificationActionDescriptor describes one action valid on a notification
+// right now. Never stored on the history row.
+message NotificationActionDescriptor {
+  ActionKind kind = 1;
+  string label = 2;
+  ActionTier tier = 3;
+  // False when the action exists but cannot run on this listener or now.
+  bool available = 4;
+  // Set when available is false, e.g. "desktop_only".
+  string unavailable_reason = 5;
+  bool requires_confirm = 6;
+  ActionTargetKey target_key_type = 7;
+  string target_key = 8;
+  // Answer labels or decision choices.
+  repeated ActionOption options = 9;
+  // Session the action targets; required to invoke ANSWER_QUESTION.
+  string session_id = 10;
+}
+
+// NotificationActionParams carries the kind-specific arguments.
+message NotificationActionParams {
+  // ANSWER_QUESTION: the chosen option label. ANSWER_GUIDANCE: the free-text answer.
+  string answer = 1;
+  // BACKLOG_DECISION: the chosen ActionOption.value.
+  string choice = 2;
+  // DENY: optional reason shown to the agent.
+  string reason = 3;
+  // The caller acknowledged a guarded action (e.g. "Approve anyway", merge).
+  bool confirm = 4;
+}
+
+message InvokeNotificationActionRequest {
+  ActionKind action_kind = 1;
+  ActionTargetKey target_key_type = 2;
+  string target_key = 3;
+  // Session of an ANSWER_QUESTION target.
+  string session_id = 4;
+  NotificationActionParams params = 5;
+  // Client-generated per attempt; a Retry reuses it. Same key with a different
+  // payload is INVALID.
+  string idempotency_key = 6;
+}
+
+message InvokeNotificationActionResponse {
+  ActionOutcome outcome = 1;
+  // Selects the copy for STALE: dialog_gone, dialog_replaced, session_ended.
+  string stale_reason = 2;
+  // Seconds before a retry when outcome is RATE_LIMITED.
+  int32 retry_after_seconds = 3;
+  // Human-readable detail for INVALID, FORBIDDEN and NOT_SENT.
+  string detail = 4;
+}
