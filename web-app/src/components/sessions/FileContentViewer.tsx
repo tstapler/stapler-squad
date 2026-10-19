@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useGetFileContent } from "@/lib/hooks/useFileService";
-import { CodeEditor, type CodeEditorHandle } from "./CodeEditor";
+import type { ReadViewHandle } from "./files/readViewHandle";
+import { ReadSurface } from "./files/ReadSurface";
 import { buildGutterMarks, type GutterMarkType } from "@/lib/utils/parseDiff";
 import {
   container, emptyState, emptyIcon, emptyHint,
@@ -200,11 +201,15 @@ interface FileContentViewerProps {
   /** Changes when the open file must be fetched again (stale-banner Reload). */
   reloadKey?: number;
   /** Called with each editor instance as it mounts, with the path it shows. */
-  onEditorReady?: (handle: CodeEditorHandle, path: string) => void;
+  onEditorReady?: (handle: ReadViewHandle, path: string) => void;
+  /** Show the plain paged Accessible view instead of CodeMirror (per-device choice). */
+  accessible?: boolean;
+  /** The buffer has unsaved edits (the Accessible view labels them). */
+  dirty?: boolean;
 }
 
 // +feature: file-content-viewer
-export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, reloadKey, onEditorReady }: FileContentViewerProps) {
+export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, reloadKey, onEditorReady, accessible = false, dirty = false }: FileContentViewerProps) {
   const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl, reloadKey);
   const [wrapLines, setWrapLines] = useState(false);
   const gutterMarks = useMemo(
@@ -355,12 +360,13 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
         </div>
       )}
       <div className={viewer}>
-        <CodeEditor
-          key={`${filePath}:${reloadKey ?? 0}`}
+        <ReadSurface
+          key={`${filePath}:${reloadKey ?? 0}:${accessible}`}
+          accessible={accessible}
+          dirty={dirty}
           content={data.content}
           language={lang}
           path={filePath}
-          mode="Read"
           wrapLines={wrapLines}
           gutterMarks={hasGutterMarks ? gutterMarks : undefined}
           onReady={onEditorReady && ((handle) => onEditorReady(handle, filePath))}

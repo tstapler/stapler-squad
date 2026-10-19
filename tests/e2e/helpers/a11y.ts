@@ -8,8 +8,9 @@ import AxeBuilder from "@axe-core/playwright";
  * 2.02:1) and axe's scrollable-region-focusable on its tabindex=-1 scroller (the contenteditable inside is
  * focusable) are an editor-theme follow-up, not a Files layout defect.
  */
-export async function axeAaViolations(page: Page): Promise<string[]> {
-  const result = await new AxeBuilder({ page }).include("[data-layout]").include("[role=dialog]").exclude(".cm-scroller").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+export async function axeAaViolations(page: Page, scope?: string): Promise<string[]> {
+  const builder = new AxeBuilder({ page });
+  const result = await (scope ? builder.include(scope) : builder.include("[data-layout]").include("[role=dialog]").exclude(".cm-scroller")).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`);
 }
 

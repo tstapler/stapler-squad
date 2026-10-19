@@ -23,6 +23,7 @@ import { useActiveBufferWait } from "./files/ActiveBufferWait";
 import type { SearchPanelHandle } from "./files/SearchPanel";
 import type { QuickfixView } from "./files/SearchResults";
 import { useSearchPane } from "@/lib/hooks/useSearchPane";
+import { AccessibleSkipLink } from "./files/AccessibleView";
 import { tabPanel } from "./files/FilesV2Chrome.css";
 import { container, treePane, treePaneCollapsed, contentPane, mobileBackButton, mobileSearchButton, expandStrip } from "./FilesTab.css";
 
@@ -160,6 +161,7 @@ function FilesTabView({
   useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, onSearch: v2 ? search.openSearch : undefined,
     onNextHit: v2 ? () => searchRef.current?.step(1) : undefined, onPrevHit: v2 ? () => searchRef.current?.step(-1) : undefined, ...v2?.shortcuts });
   const wait = useActiveBufferWait(v2, fileTreeRef);
+  const active = v2?.buffers.active;
 
   const treePaneClasses = [treePane, panel.collapsed && !mobile ? treePaneCollapsed : ""].filter(Boolean).join(" ");
 
@@ -215,6 +217,7 @@ function FilesTabView({
           </button>
           {v2 && <FilesV2Chrome v2={v2} fileTreeRef={fileTreeRef} panelId={PANEL_ID} mobile={mobile} onQuickOpen={openQuickOpen} onSearch={search.openSearch} />}
           <div className={tabPanel} role={v2 ? "tabpanel" : undefined} id={PANEL_ID} aria-labelledby={v2 ? `files-tab-${v2.buffers.state.activeIndex}` : undefined}>
+            {v2 && active && <AccessibleSkipLink on={v2.accessible.on} onToggle={() => v2.accessible.toggle("skip_link")} />}
             {wait.node}
             <div hidden={wait.hideViewer} style={wait.hideViewer ? undefined : { display: "contents" }}>
               <FileContentViewer
@@ -224,6 +227,8 @@ function FilesTabView({
                 diffContent={diff?.content}
                 reloadKey={v2?.bridge.reloadKey}
                 onEditorReady={v2?.bridge.onEditorReady}
+                accessible={v2?.accessible.on}
+                dirty={v2?.buffers.active?.status === "loaded" && v2.buffers.active.dirty}
               />
             </div>
           </div>

@@ -60,7 +60,7 @@ Labels shown per event are in addition to the four stamped labels. `dur` = `dura
 | `files.stale.action` | user_action | `action` {reload,review,dismiss} | |
 | `files.vim.toggle` | user_action | `to` {on,off}, `source` {status_bar,overflow,palette,auto_hardware} | |
 | `files.vim.escape` | user_action | `via` {esc_esc,status_control,ex_leave}, `mode` {normal,insert,visual,command} | |
-| `files.a11y.accessible_view` | user_action | `to` {on,off}, `via` {overflow,palette,skip_link}, `size` bucket | Accessible view toggle (ux.md 8.10, Story 1.5.4); the only signal of assistive-technology use, deliberately not inferred |
+| `files.a11y.accessible_view` | user_action | `to` {on,off}, `via` {overflow,palette,skip_link,toolbar}, `size` bucket | Accessible view toggle (ux.md 8.10, Story 1.5.4); the only signal of assistive-technology use, deliberately not inferred |
 | `files.input.profile_change` | navigation | `to` {touch,hardware}, `source` {override,auto_pointer,auto_chord,auto_key,auto_viewport} | Session-only auto-detect flips and manual overrides (ux.md 8.8); a flip to `hardware` on a `form=mobile` event with no later hardware-key use is the detector false-positive signal |
 | `files.mobile.layout_fallback` | navigation | `step` {vim_row_merged,banner_folded,top_bar_hidden,status_hidden,floor}, `viewport` {xs_portrait,s_portrait,landscape} | Edit-layout ladder (ux.md 7.1a); coalesced within 2 s; shows how often phones need the fallbacks |
 | `files.mobile.pane_switch` | navigation | `from`/`to` {files,editor,search}, `via` {bottom_bar,back_arrow,system_back,tap_hit} | |

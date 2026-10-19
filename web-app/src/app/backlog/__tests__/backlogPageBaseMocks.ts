@@ -20,3 +20,5 @@ jest.doMock("@/lib/config", () => fixtures().configMock());
 jest.doMock("@/lib/store", () => fixtures().storeMock());
 jest.doMock("@/lib/hooks/useBacklogService", () => fixtures().useBacklogServiceMockFactory());
 jest.doMock("@/lib/hooks/useWatchBacklogItems", () => fixtures().useWatchBacklogItemsMock());
+
+export {};

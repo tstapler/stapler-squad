@@ -68,6 +68,7 @@ export function MobileFilesLayout(p: MobileFilesLayoutProps) {
     const active = v2.buffers.active;
     return [
       { label: "Outline", run: () => v2.bridge.setOverlay("outline"), disabled: !active },
+      { label: v2.accessible.on ? "Switch to code editor" : "Switch to accessible view", run: () => v2.accessible.toggle("overflow"), disabled: !active },
       { label: "Copy path", run: () => active && tabActions.copyPath(active.path), disabled: !active },
       { label: "Text larger (A+)", run: () => void stepFontPx(1, coarse) },
       { label: "Text smaller (A-)", run: () => void stepFontPx(-1, coarse) },

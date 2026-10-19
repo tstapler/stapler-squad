@@ -14,7 +14,7 @@ const load = (path: string): BufferAction[] => [
 const seed = (...actions: BufferAction[]) => actions.reduce(bufferReducer, initialBufferState(10));
 const THREE = () => seed(...load("a.go"), ...load("b.go"), ...load("c.go"), { type: "activate", path: "b.go" });
 
-interface Spies { back: jest.Mock; forward: jest.Mock; setOverlay: jest.Mock }
+interface Spies { back: jest.Mock; forward: jest.Mock; setOverlay: jest.Mock; toggleAccessible: jest.Mock }
 
 function Harness({ initial, width = 390, spies }: { initial: BufferState; width?: number; spies: Spies }) {
   const [state, dispatch] = useReducer(bufferReducer, initial);
@@ -30,6 +30,7 @@ function Harness({ initial, width = 390, spies }: { initial: BufferState; width?
     },
     bridge: { activate: (path: string) => dispatch({ type: "activate", path }), back: spies.back, forward: spies.forward, setOverlay: spies.setOverlay },
     feedback: { announceSuccess: jest.fn() },
+    accessible: { on: false, toggle: spies.toggleAccessible },
   } as unknown as FilesV2;
   return (
     <MobileFilesLayout
@@ -52,7 +53,7 @@ function Harness({ initial, width = 390, spies }: { initial: BufferState; width?
 
 function mount(initial: BufferState = THREE(), width = 390) {
   const h = createFilesTestHarness();
-  const spies = { back: jest.fn(), forward: jest.fn(), setOverlay: jest.fn() };
+  const spies = { back: jest.fn(), forward: jest.fn(), setOverlay: jest.fn(), toggleAccessible: jest.fn() };
   const view = render(<Harness initial={initial} width={width} spies={spies} />, { wrapper: h.wrapper });
   return { h, spies, ...view };
 }
@@ -259,5 +260,14 @@ describe("MobileFilesLayout overflow menu", () => {
     await open();
     await user.click(screen.getByRole("menuitem", { name: "Text smaller (A-)" }));
     expect(window.localStorage.getItem("ssq.files.fontPx")).toBe("12");
+  });
+
+  it("overflowMenu_should_OfferSwitchToAccessibleView_ViaOverflow_When_FileOpen", async () => {
+    const { spies } = mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByText("tap-file"));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Switch to accessible view" }));
+    expect(spies.toggleAccessible).toHaveBeenCalledWith("overflow");
   });
 });

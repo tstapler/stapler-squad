@@ -26,3 +26,5 @@ jest.doMock("@/lib/constants/programs", () => fixtures().mockConstantsPrograms()
 jest.doMock("@/lib/store", () => fixtures().mockStore());
 jest.doMock("@/lib/store/sessionsSlice", () => fixtures().mockSessionsSlice());
 jest.doMock("@/lib/hooks/useShells", () => fixtures().mockUseShells());
+
+export {};

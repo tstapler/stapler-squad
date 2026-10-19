@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CodeEditorHandle, ScrollSnapshot } from "@/components/sessions/CodeEditor";
+import type { ScrollSnapshot } from "@/components/sessions/CodeEditor";
+import type { ReadViewHandle } from "@/components/sessions/files/readViewHandle";
 import { detectLanguage } from "@/components/sessions/FileContentViewer";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 import { clampLine } from "@/lib/files/deepLink";
@@ -28,7 +29,7 @@ const depthBucket = (n: number) => (n <= 1 ? "1" : n <= 5 ? "2-5" : "6+") as "1"
  */
 export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks = {}) {
   const analytics = useFilesAnalytics({ component: "FileContentViewer" });
-  const [editor, setEditor] = useState<{ handle: CodeEditorHandle; path: string } | null>(null);
+  const [editor, setEditor] = useState<{ handle: ReadViewHandle; path: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [beyond, setBeyond] = useState<{ path: string; line: number } | null>(null);
@@ -36,7 +37,7 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
   const keepScroll = useRef<{ path: string; snapshot: ScrollSnapshot } | null>(null);
   const { state, active, revealed, recordViewState } = buffers;
 
-  const onEditorReady = useCallback((handle: CodeEditorHandle, path: string) => setEditor({ handle, path }), []);
+  const onEditorReady = useCallback((handle: ReadViewHandle, path: string) => setEditor({ handle, path }), []);
 
   const { pendingReveal } = state;
   useEffect(() => {
@@ -138,6 +139,15 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
     buffers.jump(active.path, cursor.line, { col: cursor.col, chain: "step" });
   }, [active, editor, buffers]);
 
+  /** The read view is about to be swapped (CodeMirror <-> Accessible view): carry the line across to whichever mounts next. */
+  const swapView = useCallback(() => {
+    if (!active || editor?.path !== active.path) return;
+    let cursor: { line: number; col: number };
+    try { cursor = editor.handle.getCursor(); } catch { return; }
+    setEditor(null);
+    buffers.jump(active.path, cursor.line, { col: cursor.col, chain: "step" });
+  }, [active, editor, buffers]);
+
   const outline = useCallback((): OutlineResult => {
     if (!editor || !active || editor.path !== active.path) return { kind: "unavailable", reason: "error" };
     try {
@@ -182,5 +192,5 @@ export function useEditorBridge(buffers: OpenBuffers, { announce }: BridgeHooks 
 
   const dismissBeyond = useCallback(() => setBeyond(null), []);
 
-  return { onEditorReady, focusEditor, beyond: beyond && active && beyond.path === active.path ? beyond : null, dismissBeyond, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, outline };
+  return { onEditorReady, focusEditor, beyond: beyond && active && beyond.path === active.path ? beyond : null, dismissBeyond, inspect, eol, text, reloadKey, overlay, setOverlay, open, activate, jumpTo, back, forward, goToLine, reload, swapView, outline };
 }

@@ -79,6 +79,7 @@ export function FilesV2Chrome({ v2, fileTreeRef, panelId, mobile = false, onQuic
         <span className={spacer} />
         {onQuickOpen && <button type="button" className={navButton} style={{ minHeight: target, minWidth: target }} aria-haspopup="dialog" title="Quick open (Ctrl+P)" onClick={onQuickOpen}>Quick open</button>}
         {onSearch && <button type="button" className={navButton} style={{ minHeight: target, minWidth: target }} title="Search (Ctrl+Shift+F)" onClick={onSearch}>Search</button>}
+        <button type="button" className={navButton} style={{ minHeight: target, minWidth: target }} aria-pressed={v2.accessible.on} disabled={!buffers.active} title="Accessible view: plain paged text for screen readers" onClick={() => v2.accessible.toggle("toolbar")}>Accessible view</button>
         <button type="button" className={navButton} style={{ minHeight: target, minWidth: target }} aria-haspopup="dialog" disabled={!buffers.active} onClick={() => bridge.setOverlay("outline")}>Outline</button>
         <button type="button" className={navButton} style={{ minHeight: target, minWidth: target }} aria-haspopup="dialog" disabled={!buffers.active} title="Go to line (Ctrl+G)" onClick={() => bridge.setOverlay("goto")}>Go to line</button>
       </div>}

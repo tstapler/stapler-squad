@@ -1,4 +1,4 @@
-// @feature files:tabs, files:mobile
+// @feature files:tabs, files:mobile, files:accessible-view
 // Story 1.3.6b: the Explorer|Search panel handle is a keyboard-operable separator. The axe cases for
 // U-A11Y-1/2/3/5 are added to this file by Story 1.5.3b. Written against the real Files tab; not yet run
 // in CI at the time of writing (needs a built server).
@@ -59,6 +59,36 @@ test.describe("Files tab axe and keyboard (U-A11Y-1/2/3/5/8)", () => {
     await files.openSearch();
     await files.typeQuery("needle_fn", "a.go");
     expect(await axeAaViolations(page)).toEqual([]);
+  });
+
+  test("accessibleView_should_BeReachableFromSkipLink_PassAxe_And_PersistPerDevice_When_DesktopFileOpen", async ({ page }) => {
+    const files = await FilesTabView.create(page, seedSearchFixture);
+    await files.goto();
+    await files.treeFile("big_a.go").click();
+    const skip = page.getByRole("button", { name: "Switch to accessible view" });
+    await skip.focus();
+    await page.keyboard.press("Enter");
+
+    const region = page.getByRole("region", { name: "big_a.go, accessible view" });
+    await expect(region).toBeVisible();
+    await expect(region.getByTestId("accessible-view-line")).toHaveCount(500);
+    await expect(region.getByTestId("accessible-view-label")).toHaveText("Lines 1-500 of 1001");
+    expect(await axeAaViolations(page, '[data-testid="accessible-view"]')).toEqual([]);
+
+    await region.getByLabel("Go to line").fill("734");
+    await region.getByRole("button", { name: "Go", exact: true }).click();
+    await expect(region.getByTestId("accessible-view-label")).toHaveText("Lines 501-1000 of 1001");
+    await expect(page.locator('[data-line="734"]')).toBeFocused();
+    await expect(region.getByTestId("accessible-view-announce")).toHaveText("Line 734");
+
+    await page.reload();
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await files.treeFile("big_a.go").click();
+    await expect(page.getByRole("region", { name: "big_a.go, accessible view" })).toBeVisible();
+    await page.getByRole("button", { name: "Switch to code editor" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("region", { name: "big_a.go, accessible view" })).toHaveCount(0);
+    await expect(files.codeContent).toBeVisible();
   });
 
   test.describe("mobile", () => {

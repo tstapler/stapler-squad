@@ -1,4 +1,4 @@
-// @feature files:mobile, files:content-search
+// @feature files:mobile, files:content-search, files:accessible-view
 // Story 1.5.3b. Runs in the mobile-chromium (gating) and mobile-webkit projects. The visualViewport stub
 // emulates a soft keyboard; real keyboard behavior is the owner's phone check (Task 1.5.3c / 2.5.2).
 // Written against the real Files tab; not run at the time of writing (needs a built server).
@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 import { test, expect } from "@playwright/test";
 import { FilesTabView, seedSearchFixture } from "./pages/files-tab.page";
-import { assertReflow, setVisualViewportHeight, stubVisualViewport } from "./helpers/a11y";
+import { assertReflow, axeAaViolations, setVisualViewportHeight, stubVisualViewport } from "./helpers/a11y";
 
 const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
 const NARROW = { viewport: { width: 320, height: 568 }, isMobile: true, hasTouch: true };
@@ -20,6 +20,23 @@ function seedLarge(): string {
 
 test.describe("phone 390x844", () => {
   test.use(PHONE);
+
+  test("accessibleView_should_SwitchFromOverflowMenu_And_PassAxe_When_MobileFileOpen", async ({ page }) => {
+    const files = await FilesTabView.create(page, seedSearchFixture);
+    await files.goto();
+    await files.treeFile("big_a.go").click();
+    await files.overflowButton.click();
+    await page.getByRole("menuitem", { name: "Switch to accessible view" }).click();
+    const region = page.getByRole("region", { name: "big_a.go, accessible view" });
+    await expect(region).toBeVisible();
+    await expect(region.getByTestId("accessible-view-line")).toHaveCount(500);
+    for (const name of ["Previous page", "Next page", "Go"]) {
+      const box = await region.getByRole("button", { name, exact: true }).boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+    }
+    expect(await axeAaViolations(page)).toEqual([]);
+  });
 
   test("filesMobile_should_OpenSearchJumpAndReturnToResults_When_390x844", async ({ page }) => {
     const files = await FilesTabView.create(page, seedSearchFixture);

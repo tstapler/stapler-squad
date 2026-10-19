@@ -22,3 +22,5 @@ jest.doMock("@/lib/store", () => fixtures().mockStoreModule());
 jest.doMock("@/lib/store/sessionsSlice", () => fixtures().mockSessionsSliceModule());
 jest.doMock("@/components/sessions/OmnibarResultList", () => fixtures().mockOmnibarResultListModule());
 jest.doMock("@/lib/api/transport", () => fixtures().mockApiTransportModule());
+
+export {};

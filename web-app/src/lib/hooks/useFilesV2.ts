@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type { PaletteCommand } from "@/components/sessions/QuickOpenPalette";
+import { useAccessibleView } from "./useAccessibleView";
 import { useBufferFreshness, type StaleAction } from "./useBufferFreshness";
 import { useEditorBridge } from "./useEditorBridge";
 import { useFileTransport } from "./useFileTransport";
@@ -20,7 +21,8 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   const freshness = useBufferFreshness({ active: buffers.active, enabled: true, sessionRunning, onAdoptToken: buffers.adoptToken });
   const { active, close } = buffers;
   const { stale, resolve } = freshness;
-  const { back, forward, setOverlay, reload } = bridge;
+  const { back, forward, setOverlay, reload, swapView, text } = bridge;
+  const accessible = useAccessibleView({ textLength: useCallback(() => text()?.length ?? 0, [text]), swapView });
   const transport = useFileTransport();
   const status = useStatusModel(bridge);
   const { announceSuccess, announceProgress, announceError } = feedback;
@@ -56,12 +58,13 @@ export function useFilesV2(sessionId: string, sessionRunning: boolean, options: 
   const dirty = active?.status === "loaded" && active.dirty;
   const paletteCommands = useMemo<PaletteCommand[]>(() => [
     { id: "goto_line", label: "Go to line", shortcut: "Ctrl+G", disabledReason: active ? undefined : "no file open", run: () => setOverlay("goto") },
+    { id: "toggle_accessible_view", label: accessible.on ? "Switch to code editor" : "Switch to accessible view", disabledReason: active ? undefined : "no file open", run: () => accessible.toggle("palette") },
     { id: "reload", label: "Reload from disk", disabledReason: active?.status === "loaded" ? undefined : "no file open", run: reloadFromDisk },
     { id: "save", label: "Save", shortcut: "Ctrl+S", disabledReason: dirty ? "saving is not available yet" : "no changes", run: () => undefined },
-  ], [active, dirty, setOverlay, reloadFromDisk]);
+  ], [active, dirty, setOverlay, reloadFromDisk, accessible]);
 
   const recentPaths = useMemo(() => buffers.mru.slice(0, RECENT_LIMIT), [buffers.mru]);
-  return { buffers, bridge, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands, reloadFailed, reloadFromDisk, clearReloadFailed: () => setReloadFailed(null) };
+  return { buffers, bridge, accessible, stale, sessionRunning, shortcuts, recentPaths, onStaleAction, feedback, status, paletteCommands, reloadFailed, reloadFromDisk, clearReloadFailed: () => setReloadFailed(null) };
 }
 
 export type FilesV2 = ReturnType<typeof useFilesV2>;

@@ -94,7 +94,7 @@ const BASE_EVENTS = {
   "files.vim.escape": ev("user_action", {
     via: ["esc_esc", "status_control", "ex_leave"], mode: ["normal", "insert", "visual", "command"],
   }),
-  "files.a11y.accessible_view": ev("user_action", { to: ["on", "off"], via: ["overflow", "palette", "skip_link"], size: SIZE }),
+  "files.a11y.accessible_view": ev("user_action", { to: ["on", "off"], via: ["overflow", "palette", "skip_link", "toolbar"], size: SIZE }),
   "files.input.profile_change": ev("navigation", {
     to: ["touch", "hardware"], source: ["override", "auto_pointer", "auto_chord", "auto_key", "auto_viewport"],
   }),

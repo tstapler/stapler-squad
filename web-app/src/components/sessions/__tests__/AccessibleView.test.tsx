@@ -1,7 +1,8 @@
-import { act, render, screen, fireEvent } from "@testing-library/react";
-import { AccessibleView } from "../files/AccessibleView";
+import { act, render, screen, fireEvent, renderHook } from "@testing-library/react";
+import { AccessibleView, AccessibleSkipLink } from "../files/AccessibleView";
 import type { ReadViewHandle } from "../files/readViewHandle";
 import { paginateLines, textPageSource } from "@/lib/files/pageSource";
+import { useAccessibleView } from "@/lib/hooks/useAccessibleView";
 
 const doc = (n: number) => Array.from({ length: n }, (_, i) => `row ${i + 1}`).join("\n");
 
@@ -132,5 +133,50 @@ describe("paginateLines and textPageSource", () => {
     const last = paginateLines(src, 9, 2);
     expect(last).toMatchObject({ first: 3, last: 3, pages: 2, label: "Lines 3-3 of 3" });
     expect(paginateLines(textPageSource(""), 0)).toMatchObject({ total: 1, label: "Lines 1-1 of 1", lines: [""] });
+  });
+});
+
+describe("skip link and useAccessibleView", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("skipLink_should_NameTheOtherView_And_BeTheFirstFocusableOfTheEditorRegion", () => {
+    const onToggle = jest.fn();
+    const { rerender } = render(
+      <div role="tabpanel" aria-label="editor"><AccessibleSkipLink on={false} onToggle={onToggle} /><button>other</button></div>,
+    );
+    const first = document.querySelector<HTMLElement>("button, a, input, [tabindex='0']");
+    expect(first).toBe(screen.getByRole("button", { name: "Switch to accessible view" }));
+    fireEvent.click(first as HTMLElement);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    rerender(<div role="tabpanel" aria-label="editor"><AccessibleSkipLink on onToggle={onToggle} /></div>);
+    expect(screen.getByRole("button", { name: "Switch to code editor" })).toBeInTheDocument();
+  });
+
+  it("useAccessibleView_should_PersistPerDevice_And_SwapTheViewOnToggle", () => {
+    const swapView = jest.fn();
+    const first = renderHook(() => useAccessibleView({ textLength: () => 5, swapView }));
+    expect(first.result.current.on).toBe(false);
+    act(() => first.result.current.toggle("skip_link"));
+    expect(first.result.current.on).toBe(true);
+    expect(swapView).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem("files.accessibleView")).toBe("1");
+    first.unmount();
+
+    const second = renderHook(() => useAccessibleView({ textLength: () => 5, swapView }));
+    expect(second.result.current.on).toBe(true);
+    act(() => second.result.current.toggle("toolbar"));
+    expect(second.result.current.on).toBe(false);
+    expect(window.localStorage.getItem("files.accessibleView")).toBe("0");
+  });
+
+  it("useAccessibleView_should_StayOffAndNotThrow_When_StorageIsBlocked", () => {
+    const spy = jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    const setSpy = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    const { result } = renderHook(() => useAccessibleView({ textLength: () => 0, swapView: jest.fn() }));
+    expect(result.current.on).toBe(false);
+    act(() => result.current.toggle("overflow"));
+    expect(result.current.on).toBe(true);
+    spy.mockRestore();
+    setSpy.mockRestore();
   });
 });
