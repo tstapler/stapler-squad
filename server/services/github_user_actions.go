@@ -84,7 +84,7 @@ func finishPRAction(ctx context.Context, d prActionDeps, err error, failure, suc
 	return connect.NewResponse(&sessionv1.PRActionResponse{Success: true, Message: success}), nil
 }
 
-// +api: github-user:merge-pr-direct
+// +api: MergePRDirect
 func (s *GitHubUserService) MergePRDirect(
 	ctx context.Context,
 	req *connect.Request[sessionv1.MergePRDirectRequest],
@@ -109,7 +109,7 @@ func (s *GitHubUserService) MergePRDirect(
 		"failed to merge PR", fmt.Sprintf("PR #%d merged using method '%s'", m.Number, method))
 }
 
-// +api: github-user:close-pr-direct
+// +api: ClosePRDirect
 func (s *GitHubUserService) ClosePRDirect(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ClosePRDirectRequest],
@@ -125,7 +125,7 @@ func (s *GitHubUserService) ClosePRDirect(
 		"failed to close PR", fmt.Sprintf("PR #%d closed", m.Number))
 }
 
-// +api: github-user:convert-pr-to-draft
+// +api: ConvertPRToDraft
 func (s *GitHubUserService) ConvertPRToDraft(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PRDraftToggleRequest],
@@ -133,7 +133,7 @@ func (s *GitHubUserService) ConvertPRToDraft(
 	return s.toggleDraft(ctx, req.Msg, true)
 }
 
-// +api: github-user:mark-pr-ready
+// +api: MarkPRReady
 func (s *GitHubUserService) MarkPRReady(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PRDraftToggleRequest],

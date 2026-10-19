@@ -4,8 +4,13 @@
   "service": "GitHubUserService",
   "method": "ConvertPRToDraft",
   "protoFile": "proto/session/v1/github_user.proto",
-  "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-10-19T02:29:23.89580217-07:00"
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_actions.go",
+  "tested": true,
+  "testIds": [
+    "TestDraftToggle_should_CallMutationAndRefresh_When_NodeIDPresent",
+    "TestDraftToggle_should_ReturnFailedPrecondition_When_NodeIDEmptyOrNoAccount",
+    "TestDraftToggle_should_ReturnFailedPreconditionWithoutMutating_When_CachedNodeIDEmpty"
+  ],
+  "lastModified": "2026-10-19T02:43:14.356791114-07:00"
 }
