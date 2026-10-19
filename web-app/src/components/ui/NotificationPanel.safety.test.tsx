@@ -350,3 +350,31 @@ describe("Task 2.10d: reserved status slot and fling guard", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 });
+
+describe("Task 2.7c: cross-tab id-set sync", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    setTimingForTests({ settleMs: 0, commitDelayMs: 0 });
+    panelState.broadcast.mockClear();
+    panelState.answeredElsewhere = {};
+    panelState.history = pendingQuestions(2);
+  });
+
+  it("shows Answered elsewhere: Redis on exactly the answered record, without moving focus", () => {
+    const { container, refreshPanel } = renderPanel();
+    const q1 = container.querySelector('[data-tray-row="q1"]') as HTMLElement;
+    operatorFocus(q1);
+    panelState.answeredElsewhere = { q0: "Redis" };
+    refreshPanel();
+    expect(within(container.querySelector('[data-tray-row="q0"]') as HTMLElement).getByText("Answered elsewhere: Redis")).toBeInTheDocument();
+    expect(within(q1).queryByText(/Answered elsewhere/)).toBeNull();
+    expect(document.activeElement).toBe(q1);
+  });
+
+  it("broadcasts the resolved ids and result when this tab's action is applied", async () => {
+    respondWith(ActionOutcome.APPLIED);
+    renderPanel();
+    await act(async () => void screen.getAllByTestId("action-answer_question-0")[0].click());
+    expect(panelState.broadcast).toHaveBeenCalledWith(["q0"], "Redis");
+  });
+});

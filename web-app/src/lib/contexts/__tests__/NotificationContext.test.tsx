@@ -969,6 +969,27 @@ describe("NotificationContext", () => {
       expect(result.current.notificationHistory.map((n) => n.id).sort()).toEqual(["b", "c"]);
     });
 
+    it("action_resolved_sync_should_mark_exactly_the_id_set_answered_elsewhere_and_be_idempotent_when_replayed", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+      const message = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["a", "ghost"], summary: "Redis" };
+
+      act(() => capturedSubscribeHandler?.(message));
+      act(() => capturedSubscribeHandler?.(message));
+
+      expect(result.current.answeredElsewhere).toEqual({ a: "Redis", ghost: "Redis" });
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["b", "c"]);
+      const byId = (id: string) => result.current.notificationHistory.find((n) => n.id === id);
+      expect(byId("a")?.isRead).toBe(true);
+      expect(byId("b")?.isRead).toBe(false);
+    });
+
+    it("broadcastActionResolved sends the id set and the result to the other tabs", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      act(() => result.current.broadcastActionResolved(["q1"], "Redis"));
+      expect(mockBroadcast).toHaveBeenCalledWith({ type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1"], summary: "Redis" });
+    });
+
     it("moveAllToTray broadcasts the moved ids once", () => {
       const { result } = renderHook(() => useNotifications(), { wrapper });
       seed(result);

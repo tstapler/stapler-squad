@@ -62,7 +62,7 @@ describe("NotificationItem inline actions", () => {
     await userEvent.click(screen.getByTestId("action-approve"));
     await screen.findByText("Approved");
     expect(resolveApproval).not.toHaveBeenCalled();
-    expect(onActionApplied).toHaveBeenCalledWith(["notif-1"]);
+    expect(onActionApplied).toHaveBeenCalledWith(["notif-1"], "Approved");
   });
 
   it("shows the command once, inside the action row", () => {

@@ -12,7 +12,7 @@ import { useCardEngagement, useEngagement } from "@/lib/hooks/useEngagedCard";
 import { useInvokeNotificationAction, type ActionSpec } from "@/lib/hooks/useInvokeNotificationAction";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { clearDraft, readDraft, writeDraft } from "@/lib/utils/sessionDrafts";
-import { COPY, HOLD_COPY, UNDO_LABEL, cancelPrompt, holdCountdown, mergePrompt, rateLimited, type HoldKey } from "@/lib/copy/notificationCopy";
+import { COPY, HOLD_COPY, answeredElsewhere, UNDO_LABEL, cancelPrompt, holdCountdown, mergePrompt, rateLimited, type HoldKey } from "@/lib/copy/notificationCopy";
 import { useCommitDelay } from "@/lib/hooks/useCommitDelay";
 import { PendingNotice, useActionsDisabledReason } from "../OfflineBanner";
 import { ActionButton } from "./ActionButton";
@@ -54,7 +54,10 @@ export interface ActionRowProps {
   onCreateRule?: () => void;
   /** The More menu is never rendered on the remote listener. */
   localListener?: boolean;
-  onApplied?: (kind: ActionKind) => void;
+  /** The result in short form ("Redis", "Approved"), for other tabs to show. */
+  onApplied?: (kind: ActionKind, summary: string) => void;
+  /** Another tab resolved this record: show its result, in place, without moving focus. */
+  elsewhere?: string;
   /** Overrides the shared connectivity reason (Offline, Reconnecting, Updating...). */
   disabledReason?: string;
 }
@@ -190,7 +193,8 @@ export function ActionRow(props: ActionRowProps) {
     engagement.setSubStep(step !== "row" || draftOpen);
     return () => engagement.setSubStep(false);
   }, [engagement, step, draftOpen]);
-  const finalState = !!view?.settled;
+  const elsewhere = view?.settled ? undefined : props.elsewhere;
+  const finalState = !!view?.settled || elsewhere !== undefined;
   useEffect(() => {
     engagement.setResolved(finalState);
     return () => engagement.setResolved(false);
@@ -207,7 +211,7 @@ export function ActionRow(props: ActionRowProps) {
   useEffect(() => {
     if (state.status !== "settled" || !view) return;
     if (view.announce) announce(view.announce, "polite", `action-${rowId}`);
-    if (state.response.outcome === ActionOutcome.APPLIED) onApplied?.(state.spec.kind);
+    if (state.response.outcome === ActionOutcome.APPLIED) onApplied?.(state.spec.kind, lastCtx.current?.chosenLabel ?? view.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
@@ -351,7 +355,14 @@ export function ActionRow(props: ActionRowProps) {
   const sub = subStep();
 
   let body: ReactNode;
-  if (view?.settled) {
+  if (elsewhere !== undefined) {
+    body = (
+      <>
+        {statusLine(answeredElsewhere(elsewhere))}
+        <div className={buttons}>{openButton}</div>
+      </>
+    );
+  } else if (view?.settled) {
     body = (
       <>
         {statusLine(view.text)}

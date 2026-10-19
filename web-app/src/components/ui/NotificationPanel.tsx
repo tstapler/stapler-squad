@@ -119,6 +119,8 @@ export function NotificationPanel() {
     loadMoreHistory,
     refreshHistory,
     clearHistoryByIds,
+    broadcastActionResolved,
+    answeredElsewhere,
     showActionToast,
     addNotification,
     quietMode,
@@ -559,9 +561,11 @@ export function NotificationPanel() {
             onNavigate: closeForNavigation,
             lookupHidden: isPanelOpen,
             onRefreshActions: () => void refreshHistory(),
-            onActionApplied: (ids) => {
+            answeredElsewhere,
+            onActionApplied: (ids, summary) => {
               ids.forEach((id) => operatorResolved.current.add(id));
               acknowledgeNotification(ids);
+              broadcastActionResolved?.(ids, summary);
             },
             onCreateRule: (n) => {
               closeForNavigation();

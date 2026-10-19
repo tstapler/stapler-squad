@@ -18,6 +18,8 @@ export interface NotificationStateValue {
   unreadCount: number;
   /** Set for the undo window after "Move all to tray"; toasts are off the deck, history untouched. */
   movedToTray: { count: number } | null;
+  /** Records another tab resolved with an inline action, id to the short result ("Redis"). */
+  answeredElsewhere: Readonly<Record<string, string>>;
   /** Per-device Quiet mode: every non-pinned toast is demoted to the tray. Pending decisions still toast. */
   quietMode: boolean;
 }
@@ -44,6 +46,8 @@ export interface NotificationCommandsValue {
    * so the two operations are always kept in sync.
    */
   acknowledgeNotification: (id: string | string[]) => void;
+  /** Tells the other tabs which records an inline action just resolved, and with what result. */
+  broadcastActionResolved: (ids: string[], summary: string) => void;
   /** Bulk clear that leaves pinned decisions in place. Never touches history. */
   clearAll: () => void;
   /** Takes one toast off the deck; its history row stays (a pinned toast is demoted, not deleted). */
@@ -113,6 +117,7 @@ const OUTSIDE_PROVIDER_STATE: NotificationStateValue = {
   historyLastUpdatedAt: null,
   unreadCount: 0,
   movedToTray: null,
+  answeredElsewhere: {},
   quietMode: false,
 };
 
@@ -126,6 +131,7 @@ const OUTSIDE_PROVIDER_COMMANDS = {
   removeNotification: noop,
   removeToastByApprovalId: noop,
   acknowledgeNotification: noop,
+  broadcastActionResolved: noop,
   clearAll: noop,
   dismissToast: noop,
   moveAllToTray: () => [],

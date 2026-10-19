@@ -58,6 +58,7 @@ export const PENDING_VERB = { approve: "Approving", deny: "Denying", other: "Sen
 
 export const decided = (choice: string) => `Decided: ${choice}`;
 export const answered = (value: string) => `Answered: ${value}`;
+export const answeredElsewhere = (summary: string) => `Answered elsewhere: ${summary}`;
 export const alreadyHandled = (value?: string) => (value ? `Already handled: ${value}` : "Already handled");
 export const handledByRule = (name: string) => `Handled automatically by rule ${name}`;
 export const rateLimited = (seconds: number) => `Too many actions. Try again in ${seconds}s.`;

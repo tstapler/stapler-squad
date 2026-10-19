@@ -6,6 +6,8 @@ export const panelState = {
   isOpen: true,
   acknowledge: jest.fn(),
   refresh: jest.fn(),
+  broadcast: jest.fn(),
+  answeredElsewhere: {} as Record<string, string>,
 };
 
 export const notificationsModule = () => ({
@@ -15,6 +17,8 @@ export const notificationsModule = () => ({
     togglePanel: jest.fn(),
     markAsRead: jest.fn(),
     acknowledgeNotification: panelState.acknowledge,
+    broadcastActionResolved: panelState.broadcast,
+    answeredElsewhere: panelState.answeredElsewhere,
     clearHistoryByIds: jest.fn(),
     showActionToast: jest.fn(),
     getUnreadCount: () => panelState.history.length,

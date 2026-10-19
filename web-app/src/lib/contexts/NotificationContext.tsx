@@ -139,6 +139,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   const historyRef = useRef(history);
   historyRef.current = history;
   const [quietMode, setQuietModeState] = useState(false);
+  const [answeredElsewhere, setAnsweredElsewhere] = useState<Readonly<Record<string, string>>>({});
   const quietRef = useRef(false);
   // Read after mount so server and client render the same first frame.
   useEffect(() => {
@@ -290,6 +291,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
         dispatch({ type: "remove", ids: idSet });
         markAsRead(ids);
       },
+      broadcastActionResolved: (ids, summary) => sendToOtherTabs({ type: "NOTIFICATION_ACTION_RESOLVED", ids, summary }),
       markAsReadBySessionId: (sessionId) => {
         const sessionIds = toIdSet(sessionId);
         const idsToMark = historyStateRef.current
@@ -365,6 +367,13 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
           prev.map((n) => (n.id === notificationId ? { ...n, isRead: true, isPendingDecision: false } : n))
         );
       }
+      if (message.type === "NOTIFICATION_ACTION_RESOLVED") {
+        const ids = new Set(message.ids);
+        ids.forEach((id) => timers.cancel(id));
+        dispatch({ type: "remove", ids });
+        setAnsweredElsewhere((prev) => ({ ...prev, ...Object.fromEntries(message.ids.map((id) => [id, message.summary])) }));
+        setNotificationHistory((prev) => prev.map((n) => (ids.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n)));
+      }
       if (message.type === "NOTIFICATIONS_BULK_DISMISSED") {
         const ids = new Set(message.ids);
         ids.forEach((id) => timers.cancel(id));
@@ -403,9 +412,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       historyLastUpdatedAt: history.lastUpdatedAt,
       unreadCount,
       movedToTray: moved ? { count: moved.toasts.length } : null,
+      answeredElsewhere,
       quietMode,
     }),
-    [notifications, notificationHistory, isPanelOpen, moved, quietMode, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
+    [notifications, notificationHistory, isPanelOpen, moved, quietMode, answeredElsewhere, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
   );
 
   return (

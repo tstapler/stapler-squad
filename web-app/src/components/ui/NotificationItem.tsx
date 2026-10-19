@@ -136,7 +136,9 @@ export interface NotificationItemProps {
   /** Refetches the history page, so INVALID can re-read descriptors. */
   onRefreshActions?: () => void;
   /** An inline action was applied: mark these records read and close their toasts. */
-  onActionApplied?: (ids: string[]) => void;
+  onActionApplied?: (ids: string[], summary: string) => void;
+  /** Records another tab resolved, id to result: the row shows "Answered elsewhere". */
+  answeredElsewhere?: Readonly<Record<string, string>>;
   /** Opens the rule builder for the Create rule confirm (desktop More menu). */
   onCreateRule?: (notification: NotificationData) => void;
 }
@@ -172,6 +174,7 @@ export function NotificationItem({
   lookupHidden = true,
   onRefreshActions,
   onActionApplied,
+  answeredElsewhere,
   onCreateRule,
 }: NotificationItemProps) {
   const notification = group.notification;
@@ -417,7 +420,8 @@ export function NotificationItem({
           prNumber={notification.metadata?.["pr_number"]}
           openControl={openLinks}
           onRefresh={onRefreshActions}
-          onApplied={() => onActionApplied?.(group.allIds)}
+          onApplied={(_kind, summary) => onActionApplied?.(group.allIds, summary)}
+          elsewhere={group.allIds.map((id) => answeredElsewhere?.[id]).find((v) => v !== undefined)}
           onCreateRule={onCreateRule ? () => onCreateRule(notification) : undefined}
           localListener={isLocalListener()}
           disabledReason={offlineReason}
