@@ -77,6 +77,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_MERGED_PR_UNVERIFIED
 	case domain.StuckReasonVerdictUndelivered:
 		return sessionv1.StuckReason_STUCK_REASON_VERDICT_UNDELIVERED
+	case domain.StuckReasonTransitionDenied:
+		return sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -136,6 +138,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonMergedPRUnverified
 	case sessionv1.StuckReason_STUCK_REASON_VERDICT_UNDELIVERED:
 		return domain.StuckReasonVerdictUndelivered
+	case sessionv1.StuckReason_STUCK_REASON_TRANSITION_DENIED:
+		return domain.StuckReasonTransitionDenied
 	default:
 		return ""
 	}
@@ -166,6 +170,11 @@ func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBac
 	}
 	if row.NextRemediationAt != nil {
 		item.NextRemediationAt = timestamppb.New(*row.NextRemediationAt)
+	}
+	if row.Reason == domain.StuckReasonTransitionDenied {
+		if d, ok := domain.ParseTransitionDeniedContext(row.Context); ok {
+			item.DeniedCaller, item.DeniedFrom, item.DeniedTo, item.DeniedReason = d.Caller, d.From, d.To, d.Reason
+		}
 	}
 	return item
 }
