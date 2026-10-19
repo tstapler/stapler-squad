@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { WindowedFile } from "@/lib/files/windowedFile";
 import { useWindowedState } from "@/lib/files/useWindowedState";
+import { bucketBytes } from "@/lib/files/analytics/events";
 import type { BufferSource } from "@/lib/files/bufferReducer";
 import { useFileTransport } from "@/lib/hooks/useFileTransport";
 import { CodeEditor, type CodeEditorHandle } from "../CodeEditor";
 import { AccessibleView } from "./AccessibleView";
 import { LargeFileStates } from "./LargeFileStates";
 import type { ReadViewHandle } from "./readViewHandle";
+import { useOpenLatency } from "./useOpenLatency";
 
 type Windowed = Extract<BufferSource, { kind: "windowed" }>;
 
@@ -46,15 +48,22 @@ function bridgeHandle(editor: CodeEditorHandle, file: WindowedFile): ReadViewHan
 /** A windowed (T1/T2) file in Read mode: CodeMirror over a lazy document that loads line windows on demand. */
 export function WindowedFileView({ sessionId, path, source, language, accessible = false, dirty = false, reloadKey, onReady, onDemoted }: WindowedFileViewProps) {
   const transport = useFileTransport();
+  const latency = useOpenLatency();
   const [current, setCurrent] = useState<{ file: WindowedFile; id: number } | null>(null);
   useEffect(() => {
+    latency.restart();
     const f = new WindowedFile(transport, { sessionId, path }, source.size);
     setCurrent({ file: f, id: ++instances });
     return () => { f.dispose(); setCurrent(null); };
-  }, [transport, sessionId, path, source.size, reloadKey]);
+  }, [transport, sessionId, path, source.size, reloadKey, latency]);
   const file = current?.file ?? null;
   const state = useWindowedState(file);
   // An open that fails has no window to show; the full read is the always-working floor, so fall back like a demotion.
+  const { opened } = state;
+  const { tier, size } = source;
+  useEffect(() => {
+    if (opened) latency.finish({ size: bucketBytes(size), degraded: "false", tier });
+  }, [opened, latency, tier, size]);
   const fallBack = state.demoted || state.openFailed;
   useEffect(() => { if (fallBack) onDemoted?.(); }, [fallBack, onDemoted]);
 
