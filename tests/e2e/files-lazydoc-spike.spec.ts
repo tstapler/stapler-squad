@@ -33,6 +33,22 @@ async function call<T>(page: Page, fn: keyof Api, ...args: unknown[]): Promise<T
   ) as Promise<T>;
 }
 
+/** Polls until the top line is real text and unchanged across consecutive reads, so reveal/demand settling is not measured as drift. */
+async function settledTop(page: Page): Promise<number> {
+  let prev = -2;
+  let stable = 0;
+  await expect
+    .poll(async () => {
+      const t = await call<number>(page, "topAbs");
+      stable = t > 0 && t === prev ? stable + 1 : 0;
+      prev = t;
+      await page.evaluate(() => new Promise<void>((r) => setTimeout(r, 100)));
+      return stable;
+    }, { timeout: 15000 })
+    .toBeGreaterThanOrEqual(5);
+  return prev;
+}
+
 for (const model of ["a2", "a1", "engine"] as const) {
   test.describe(`lazy document model ${model}`, () => {
     test.beforeEach(async ({ page }) => {
@@ -45,12 +61,10 @@ for (const model of ["a2", "a1", "engine"] as const) {
       const lh = await call<number>(page, "lineHeight");
       await call(page, "scrollToAbs", 500_000);
       // a2 fills the viewport asynchronously; measure only once the top line is real text.
-      await expect.poll(() => call<number>(page, "topAbs")).toBeGreaterThan(0);
-      const top0 = await call<number>(page, "topAbs");
+      const top0 = await settledTop(page);
       const y0 = await call<number>(page, "topLineClientTop");
       const { ok } = await call<{ ok: boolean }>(page, "loadAboveViewport", 3000);
-      await expect.poll(() => call<number>(page, "topAbs")).toBeGreaterThan(0);
-      const top1 = await call<number>(page, "topAbs");
+      const top1 = await settledTop(page);
       const y1 = await call<number>(page, "topLineClientTop");
       console.log(`SPIKE 0.1.4c ${model} ${browserName} anchor: loaded=${ok} topAbs ${top0}->${top1} clientTop ${y0}->${y1} lineHeight=${lh}`);
       expect(Math.abs(top1 - top0)).toBeLessThanOrEqual(1);

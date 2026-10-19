@@ -4,6 +4,7 @@ import { runEngineConformance } from "./engineConformance";
 runEngineConformance("CmEngine", () => new CmEngine());
 
 describe("CmEngine", () => {
+  // Name is fixed by validation.md (REQ-43); CmEngine now reports lazyDoc true, so the lazy cases run, not skip.
   it("runEngineConformance_should_PassForCmEngine_AndReportLazyCasesSkippedWhenLazyDocFalse", () => {
     const f = new CmEngine().features;
     expect(f.lazyDoc).toBe(true);

@@ -58,17 +58,23 @@ jest.mock("@codemirror/view", () => {
     }),
   };
   const Decoration = { none: {}, mark: () => ({ range: () => ({}) }), set: () => ({}) };
-  return { EditorView, gutter, GutterMarker, keymap, Decoration };
+  class WidgetType {}
+  const ViewPlugin = { fromClass: () => ({}) };
+  const lineNumbers = () => ({});
+  return { EditorView, gutter, GutterMarker, keymap, Decoration, WidgetType, ViewPlugin, lineNumbers };
 });
 
 jest.mock("@codemirror/state", () => ({
   EditorState: {
     readOnly: { of: (v: unknown) => ({ readOnly: v }) },
+    changeFilter: { of: (f: unknown) => ({ changeFilter: f }) },
     create: (opts: unknown) => opts,
   },
   // Module-scope definitions in extensions/searchHighlight.ts need these to exist.
   StateEffect: { define: () => ({ of: (value: unknown) => ({ value }), is: () => false }) },
   StateField: { define: () => ({}) },
+  // Module-scope Facet.define in the engine's cm6LazyDoc modules (pulled in by CmEngine).
+  Facet: { define: () => ({}) },
   // Minimal stand-in for CodeMirror's Compartment: of()/reconfigure() just
   // need to be callable and return something dispatch() (also mocked) can
   // accept; the real reconfiguration behavior is CodeMirror's own, not this
