@@ -118,6 +118,17 @@ describe("BackgroundActivity", () => {
     expect(document.activeElement).toBe(toggleOf(screen.getAllByTestId("background-row")[0]));
   });
 
+  it("BackgroundActivity_should_renderTheFailureStripInTheHostStatusSlot_When_oneIsGiven", () => {
+    const slot = document.body.appendChild(document.createElement("div"));
+    const sessions = [...makeStoppedSessions(2), makeHiddenSession({ id: "review:pr-1042" })];
+    const { update, container } = setup(buildActivityRows([], sessions), { failureStripSlot: slot });
+    update(buildActivityRows([], sessions.map((s) => (s.id === "review:pr-1042" ? { ...s, backgroundOutcome: "failed" as const } : s))), { failureStripSlot: slot });
+    const strip = screen.getByTestId("background-failure-strip");
+    expect(slot).toContainElement(strip);
+    expect(container).not.toContainElement(strip);
+    slot.remove();
+  });
+
   it("BackgroundActivity_should_nameNewFailureInStickyStripAndNotMoveRows_When_cardEngaged", () => {
     const sessions = [...makeStoppedSessions(3), makeHiddenSession({ id: "review:pr-1042" })];
     const onNewFailures = jest.fn();

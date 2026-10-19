@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import {
@@ -70,6 +71,8 @@ export interface BackgroundActivityProps {
   legacy?: { hasHiddenSessions: boolean };
   /** Unresolved actionable items per hidden session; they live only in Needs you, the row shows a link chip. */
   needsYou?: ReadonlyMap<string, number>;
+  /** The tray's reserved status slot: the failure strip renders there, so it moves no row. */
+  failureStripSlot?: HTMLElement | null;
   /** Called once per batch of newly named failures (the host speaks it in the polite region). */
   onNewFailures?: (count: number) => void;
   now?: number;
@@ -290,6 +293,7 @@ export function BackgroundActivity({
   legacy,
   needsYou,
   onNewFailures,
+  failureStripSlot,
   now = Date.now(),
 }: BackgroundActivityProps) {
   const hasData = lastUpdatedAt !== null;
@@ -459,14 +463,11 @@ export function BackgroundActivity({
     </button>
   );
 
+  const strip = <BackgroundFailureStrip failures={newFailures} hrefFor={rowHref} onShow={show} onOpen={onOpenRow} />;
+
   return (
     <div className={section} data-testid="background-activity" ref={root}>
-      <BackgroundFailureStrip
-        failures={newFailures}
-        hrefFor={rowHref}
-        onShow={show}
-        onOpen={onOpenRow}
-      />
+      {failureStripSlot ? createPortal(strip, failureStripSlot) : strip}
       <OfflineBanner
         online={!offline}
         failed={failed}

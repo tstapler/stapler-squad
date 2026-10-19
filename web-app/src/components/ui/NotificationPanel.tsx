@@ -14,6 +14,7 @@ import { useNotificationConnectivity } from "@/lib/hooks/useNotificationConnecti
 import { useStableRowOrder } from "@/lib/hooks/useStableRowOrder";
 import { EngagementContext, useEngagementTracker } from "@/lib/hooks/useEngagedCard";
 import { useFrozenList } from "@/lib/hooks/useFrozenList";
+import { useScrollSettle } from "@/lib/hooks/useScrollSettle";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useBackgroundActivity } from "@/lib/hooks/useBackgroundActivity";
 import { usePaneOpenTiming } from "@/lib/hooks/usePaneOpenTiming";
@@ -68,6 +69,7 @@ import {
   sheetGrabber,
   sheetGrabberRow,
   sheetScrim,
+  statusSlot,
   trayAttention,
   trayCounts,
   trayBanner,
@@ -141,6 +143,8 @@ export function NotificationPanel() {
   const isSheet = isBottomSheet;
   const isSideOverlay = variant === "side-overlay";
 
+  const scrollSettle = useScrollSettle();
+  const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
   const operatorResolved = useRef<Set<string>>(new Set());
   const trayRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -542,11 +546,6 @@ export function NotificationPanel() {
     }
     return (
       <>
-        {newCount > 0 && (
-          <button type="button" className={newPill} data-testid="tray-new-pill" onClick={mergeNew}>
-            {newCount} new
-          </button>
-        )}
         <TrayList
           rows={listRows}
           setSize={setSize}
@@ -771,7 +770,6 @@ export function NotificationPanel() {
             {quietUnsaved && <span data-testid="tray-quiet-unsaved">Preference could not be saved</span>}
           </div>
         )}
-        <OfflineBanner online={!isOffline} testId="tray-banner-offline" />
         {banner === "load-error" && (
           <div className={trayBanner} data-testid="tray-banner-load-error">
             <span>
@@ -870,6 +868,21 @@ export function NotificationPanel() {
           })}
         </div>
 
+        {/* Banner, "N new", failure strip and "As of" share one reserved slot, outside the scroll region. */}
+        <div ref={setSlotEl} className={statusSlot} data-testid="tray-status-slot">
+          <OfflineBanner online={!isOffline} testId="tray-banner-offline" />
+          {traySegment !== "background" && newCount > 0 && (
+            <button type="button" className={newPill} data-testid="tray-new-pill" onClick={mergeNew}>
+              {newCount} new
+            </button>
+          )}
+          {traySegment !== "background" && historyLastUpdatedAt !== null && (
+            <p className={asOfLine} data-testid="tray-as-of">
+              As of {formatClockTime(historyLastUpdatedAt)}
+            </p>
+          )}
+        </div>
+
         {/* Notification List */}
         <div
           ref={scrollRef}
@@ -878,17 +891,16 @@ export function NotificationPanel() {
           id="tray-segment-panel"
           role="tabpanel"
           aria-labelledby={`tray-tab-${traySegment}`}
-          onScroll={(e) => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}
+          {...scrollSettle}
+          onScroll={(e) => {
+            scrollSettle.onScroll();
+            setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0);
+          }}
         >
           <div ref={headRef} data-testid="tray-scroll-head" hidden={traySegment === "background"}>
             {cardsBlock}
             {filterBlock}
           </div>
-          {traySegment !== "background" && historyLastUpdatedAt !== null && (
-            <p className={asOfLine} data-testid="tray-as-of">
-              As of {formatClockTime(historyLastUpdatedAt)}
-            </p>
-          )}
           {traySegment === "background" ? (
             <BackgroundActivity
               rows={background.rows}
@@ -902,6 +914,7 @@ export function NotificationPanel() {
               onNewFailures={(n) => announce(`${n} background ${n === 1 ? "session needs" : "sessions need"} attention`, "polite", "background-failure")}
               onMergeNew={(n) => announce(`${n} new background ${n === 1 ? "session" : "sessions"}`, "polite", "background-new")}
               replyEnabled={replyEnabled}
+              failureStripSlot={slotEl}
               legacy={background.feedEnabled ? undefined : { hasHiddenSessions: background.hasHiddenSessions }}
             />
           ) : (

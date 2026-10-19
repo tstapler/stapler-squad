@@ -127,6 +127,7 @@ globalStyle(`[data-sheet="peek"] ${headerActions} > ${closeButton}`, { order: 0,
 
 export const content = style({
   flex: 1,
+  overflowAnchor: "auto",
   overflowY: "auto",
   overflowX: "hidden",
   padding: 0,
@@ -1234,11 +1235,18 @@ export const trayFooter = style({
   },
 });
 
+/** One always-rendered slot above the scroll region: showing or hiding anything in it moves no row. */
+export const statusSlot = style({
+  minHeight: "44px",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  overflowAnchor: "none",
+  flexShrink: 0,
+});
+
 export const newPill = style({
-  position: "sticky",
-  top: 8,
-  alignSelf: "center",
-  zIndex: zIndex.raised,
   minHeight: "44px",
   padding: "0 16px",
   borderRadius: "22px",

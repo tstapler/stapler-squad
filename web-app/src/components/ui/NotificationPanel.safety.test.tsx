@@ -16,8 +16,9 @@ jest.mock("@/lib/contexts/NotificationContext", () => require("./__fixtures__/pa
 jest.mock("@/lib/hooks/useBackgroundSessions", () => ({
   useBackgroundSessions: () => ({ sessions: [], departed: [], loading: false, failed: false, lastUpdatedAt: null, refresh: () => {} }),
 }));
+const mockConnectivity = { offline: false };
 jest.mock("@/lib/hooks/useNotificationConnectivity", () => ({
-  useNotificationConnectivity: () => ({ state: "connected", isOffline: false }),
+  useNotificationConnectivity: () => ({ state: "connected", isOffline: mockConnectivity.offline }),
 }));
 jest.mock("@connectrpc/connect", () => ({ createClient: jest.fn(() => ({})) }));
 jest.mock("@connectrpc/connect-web", () => ({ createConnectTransport: jest.fn(() => ({})) }));
@@ -34,6 +35,7 @@ beforeEach(() => {
   setTimingForTests({ settleMs: 0, commitDelayMs: 0 });
   panelState.history = pendingApprovals(3);
   panelState.acknowledge.mockClear();
+  mockConnectivity.offline = false;
 });
 afterEach(() => {
   jest.useRealTimers();
@@ -295,5 +297,56 @@ describe("Task 2.10c: closing the panel mid-hold cancels", () => {
     refreshPanel();
     expect(screen.getByTestId("tray-new-pill")).toHaveTextContent("1 new");
     expect(needsYou(container)).toEqual(["n0", "n1", "n2"]);
+  });
+});
+
+describe("Task 2.10d: reserved status slot and fling guard", () => {
+  const rowOffsets = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("[data-tray-row]")).map((el) => `${el.dataset.trayRow}@${el.parentElement?.style.transform}`);
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    setTimingForTests({ settleMs: 0, commitDelayMs: 0 });
+  });
+
+  it("renders the status slot from first paint, outside the scroll region, and moves no row when the banner and the N new pill appear", () => {
+    const { container, refreshPanel } = renderPanel();
+    const slot = screen.getByTestId("tray-status-slot");
+    expect(screen.getByTestId("tray-scroll").contains(slot)).toBe(false);
+    expect(slot).toContainElement(screen.getByTestId("tray-as-of"));
+    const before = rowOffsets(container);
+
+    operatorFocus(approveOf(0));
+    panelState.history = [...pendingApprovals(1, 9), ...panelState.history];
+    refreshPanel();
+    expect(slot).toContainElement(screen.getByTestId("tray-new-pill"));
+    expect(rowOffsets(container)).toEqual(before);
+
+    mockConnectivity.offline = true;
+    refreshPanel();
+    expect(slot).toContainElement(screen.getByTestId("tray-banner-offline"));
+    expect(rowOffsets(container)).toEqual(before);
+  });
+
+  it("swallows a touch that begins 100 ms after a scroll event and activates one that begins at 200 ms", () => {
+    renderPanel();
+    const scroll = screen.getByTestId("tray-scroll");
+    const deny = screen.getAllByTestId("action-deny")[0];
+    act(() => void fireEvent.scroll(scroll));
+    advance(100);
+    act(() => {
+      fireEvent.pointerDown(deny);
+      fireEvent.click(deny);
+    });
+    expect(screen.queryByTestId("deny-step")).toBeNull();
+
+    act(() => void fireEvent.scroll(scroll));
+    advance(200);
+    act(() => {
+      fireEvent.pointerDown(deny);
+      fireEvent.click(deny);
+    });
+    expect(screen.getByTestId("deny-step")).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });
