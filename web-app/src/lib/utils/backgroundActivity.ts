@@ -7,9 +7,13 @@ export interface HiddenSessionRef {
   title: string;
 }
 
+export type BackgroundOutcome = "completed" | "failed" | "unknown";
+
 export interface HiddenSessionSummary extends HiddenSessionRef {
   state: "running" | "stopped" | "other";
   updatedAtMs: number;
+  /** Server-computed outcome; the hook always sets it ("unknown" when an older server omits it). */
+  backgroundOutcome?: BackgroundOutcome;
 }
 
 export type BackgroundRowKind = "failure" | "needs_human";
