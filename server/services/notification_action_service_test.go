@@ -80,8 +80,22 @@ func (f *fakeBacklogDecider) Decide(context.Context, BacklogDecision) (ActionRes
 }
 
 type fakeResolver struct {
-	mu    sync.Mutex
-	items []string
+	mu        sync.Mutex
+	items     []string
+	questions []string
+	approvals []string
+}
+
+func (f *fakeResolver) ResolveQuestionNotifications(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.questions = append(f.questions, id)
+}
+
+func (f *fakeResolver) ResolveApprovalNotifications(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.approvals = append(f.approvals, id)
 }
 
 func (f *fakeResolver) ResolveItemNotifications(id string) {
@@ -486,4 +500,26 @@ func TestMapReplyOutcome_ShouldCoverEveryReplyOutcome(t *testing.T) {
 	}
 	assert.Equal(t, "dialog_gone", mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING}).StaleReason)
 	assert.Equal(t, "dialog_replaced", mapReplyOutcome(&sessionv1.ReplyToPendingQuestionResponse{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT}).StaleReason)
+}
+
+func TestInvokeNotificationAction_ShouldRetireTheDecidedCard_WhenAnswerOrApprovalApplied(t *testing.T) {
+	t.Parallel()
+	f := newDispatchFixture()
+	ctx := localCtx(t)
+
+	f.invoke(t, ctx, answerReq("k-q"), nil)
+	f.invoke(t, ctx, approveReq("k-a"), nil)
+
+	assert.Equal(t, []string{"q1"}, f.resolver.questions)
+	assert.Equal(t, []string{"a1"}, f.resolver.approvals)
+}
+
+func TestInvokeNotificationAction_ShouldKeepTheCard_WhenAnswerWasNotApplied(t *testing.T) {
+	t.Parallel()
+	f := newDispatchFixture()
+	f.questions.result = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+
+	f.invoke(t, localCtx(t), answerReq("k-q"), nil)
+
+	assert.Empty(t, f.resolver.questions)
 }

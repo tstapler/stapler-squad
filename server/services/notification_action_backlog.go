@@ -208,3 +208,21 @@ func (r historyItemResolver) ResolveItemNotifications(itemID string) {
 		log.Warn("[NotificationAction] could not retire decision notifications", "item", itemID, "err", err)
 	}
 }
+
+func (r historyItemResolver) ResolveQuestionNotifications(questionID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ResolveQuestion(questionID); err != nil {
+		log.Warn("[NotificationAction] could not retire question notifications", "question", questionID, "err", err)
+	}
+}
+
+func (r historyItemResolver) ResolveApprovalNotifications(approvalID string) {
+	if r.store == nil {
+		return
+	}
+	if _, err := r.store.ResolveApproval(approvalID); err != nil {
+		log.Warn("[NotificationAction] could not retire approval notifications", "approval", approvalID, "err", err)
+	}
+}

@@ -112,9 +112,13 @@ type CancelDelegate interface {
 	CancelPeerHelp(ctx context.Context, requestID string) (ActionResult, error)
 }
 
-// NotificationResolver retires the history rows of a decided target.
+// NotificationResolver retires the history rows of a decided target. The
+// dispatcher calls it once the entity has changed, so a card never outlives its
+// decision in another tab.
 type NotificationResolver interface {
 	ResolveItemNotifications(itemID string)
+	ResolveQuestionNotifications(questionID string)
+	ResolveApprovalNotifications(approvalID string)
 }
 
 // actionFlags resolves the flag decision points the dispatcher consults.
@@ -392,14 +396,22 @@ func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv
 		if d.approvals == nil {
 			return notWired(), nil
 		}
-		return d.approvals.ResolveApproval(ctx, ApprovalChoice{
+		res, err := d.approvals.ResolveApproval(ctx, ApprovalChoice{
 			ApprovalID: m.GetTargetKey(), Allow: m.GetActionKind() == sessionv1.ActionKind_ACTION_KIND_APPROVE,
 			Reason: p.GetReason(), Override: p.GetConfirm(),
 		})
+		if err == nil && res.Outcome == sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED && d.resolver != nil {
+			d.resolver.ResolveApprovalNotifications(m.GetTargetKey())
+		}
+		return res, err
 	case sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION:
-		return d.questions.ReplyToQuestion(ctx, QuestionAnswer{
+		res, err := d.questions.ReplyToQuestion(ctx, QuestionAnswer{
 			SessionID: m.GetSessionId(), QuestionID: m.GetTargetKey(), OptionLabel: p.GetAnswer(), ReplyID: m.GetIdempotencyKey(),
 		})
+		if err == nil && res.Outcome == sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED && d.resolver != nil {
+			d.resolver.ResolveQuestionNotifications(m.GetTargetKey())
+		}
+		return res, err
 	case sessionv1.ActionKind_ACTION_KIND_ANSWER_GUIDANCE:
 		if d.guidance == nil {
 			return notWired(), nil
