@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // Atomic replace (ADR-031): write a temp file in the target's own directory (rename is
@@ -52,9 +54,10 @@ func withoutAtomicTemps(entries []os.DirEntry) []os.DirEntry {
 
 // atomicWriter replaces files under one os.Root. The fields after root are test seams.
 type atomicWriter struct {
-	root     *os.Root
-	now      func() time.Time
-	writeAll func(f *os.File, data []byte) error
+	root      *os.Root
+	now       func() time.Time
+	writeAll  func(f *os.File, data []byte) error
+	syncDirFn func(dir string) error
 }
 
 func newAtomicWriter(root *WorktreeRoot) atomicWriter {
@@ -119,6 +122,17 @@ func (w atomicWriter) replaceChecked(rel ResolvedPath, data []byte, beforeRename
 		return fmt.Errorf("rename temp: %w", err)
 	}
 	committed = true
+	// The new bytes are already the file; failing the write here would make the client retry into a conflict with itself.
+	if serr := w.syncDirAfterCommit(dir); serr != nil {
+		log.Warn("directory fsync after rename failed; write reported as saved", "dir", dir, "err", serr)
+	}
+	return nil
+}
+
+func (w atomicWriter) syncDirAfterCommit(dir string) error {
+	if w.syncDirFn != nil {
+		return w.syncDirFn(dir)
+	}
 	return w.syncDir(dir)
 }
 

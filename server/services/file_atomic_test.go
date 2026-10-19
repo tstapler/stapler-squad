@@ -239,3 +239,18 @@ func TestFileServiceListFiles_ShouldHideAtomicTempFiles(t *testing.T) {
 	require.Len(t, resp.Msg.Files, 1)
 	assert.Equal(t, "a.txt", resp.Msg.Files[0].Name)
 }
+
+func TestAtomicReplace_ShouldReportSuccess_When_DirectorySyncFailsAfterRename(t *testing.T) {
+	dir, root := atomicRoot(t)
+	target := filepath.Join(dir, "f.txt")
+	require.NoError(t, os.WriteFile(target, []byte("original"), 0o644))
+	w := newAtomicWriter(root)
+	w.syncDirFn = func(string) error { return errors.New("input/output error") }
+
+	err := w.replace("f.txt", []byte("replacement"))
+
+	require.NoError(t, err, "the rename already committed; the client must not retry into its own version")
+	got, _ := os.ReadFile(target)
+	assert.Equal(t, "replacement", string(got))
+	assert.Empty(t, tempNames(t, dir))
+}
