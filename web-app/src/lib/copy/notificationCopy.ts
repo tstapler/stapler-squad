@@ -53,6 +53,49 @@ export const COPY = {
   retryAnywayConfirm: "Retry",
 } as const;
 
+/**
+ * The delivery-state line of a question card (design/ux.md 3.1; UX-AC23). Rows 4 and 13
+ * ("Answered: {value}", "Answered elsewhere: {value}") are the `answered` and `answeredElsewhere`
+ * helpers below; the rest of the 17 settled-state strings, and the human_active variant of row 5
+ * (`COPY.notSentHumanActive`), are here and in `COPY`.
+ */
+export const DELIVERY_COPY = {
+  sending: "Sending...",
+  unconfirmed: "Sent, but the agent hasn't confirmed yet. Open session.",
+  unconfirmedChip: "Unconfirmed",
+  clientFailure: "Couldn't send your answer. Retry",
+  savedStopped: "Your answer is saved. The agent can read it once you resume the session.",
+  savedArchived: "This session is archived. Your answer will be saved but not delivered unless you resume it.",
+  aborted: "Part of your answer was sent, then the prompt changed. Open session to finish.",
+  stillShowing: "Sent, but the question is still showing. Check the session before retrying.",
+  sentSessionEnded: "Sent, but the session ended before confirming it.",
+  markHandled: "Mark as handled",
+  markHandledPrompt: "Mark as handled in this browser?",
+  markHandledConfirm: "Mark handled",
+  dismissUnfinishedPrompt: "Dismiss without finishing?",
+  dismissUnfinishedConfirm: "Dismiss",
+} as const;
+
+/** Labels and helper text of the question form (design/ux.md 3.1 and 3.3). */
+export const QUESTION_FORM_COPY = {
+  submitAnswers: "Submit answers",
+  clear: "Clear",
+  send: "Send",
+  otherLabel: "Other",
+  chooseAtLeastOne: "Choose at least one option",
+  viewFullPrompt: "View full prompt in session",
+  answerInSession: "Answer in the session",
+  noDeliveryYet: "Delivery: (none until sent)",
+  questionOf: (n: number, total: number) => `Question ${n} of ${total}`,
+  chooseAny: "(choose any)",
+  selectedCount: (n: number) => `${n} selected`,
+  answerToContinue: (n: number) => `Answer question ${n} to continue`,
+  answerFor: (question: string) => `Answer: ${question}`,
+  savedForLater: (n: number) => `Saved for later (${n})`,
+  savedStopped: "stopped",
+  savedArchived: "archived",
+} as const;
+
 /** Inline "Approving..." text while a request is in flight. */
 export const PENDING_VERB = { approve: "Approving", deny: "Denying", other: "Sending" } as const;
 
@@ -74,6 +117,10 @@ export const ANNOUNCE = {
   applied: (text: string) => text,
   answerSent: "Answer sent",
   notDelivered: "Answer not delivered",
+  stillShowing: "Answer sent, question still showing",
+  notConfirmed: "Answer not confirmed",
+  partlySent: "Answer partly sent",
+  handledInSession: "Already handled in the session. No action needed.",
 } as const;
 
 /** The three consequential taps that wait 3 s behind an Undo (design/ux.md 2.4), keyed by action. */

@@ -68,7 +68,11 @@ func (s *SessionService) ensureRegistered(explicit *GuidanceHookMirror) func(con
 // deliveryProbes reads unconfirmed answers from the detector and session
 // liveness from the live service. acks may be nil.
 func (s *SessionService) deliveryProbes(acks *GuidanceAckDetector) DeliveryProbes {
-	p := DeliveryProbes{SessionEnded: func(sessionUUID string) bool { return s.answerSessions()(sessionUUID).phase != phaseLive }}
+	phase := func(sessionUUID string) answerPhase { return s.answerSessions()(sessionUUID).phase }
+	p := DeliveryProbes{
+		SessionEnded:    func(sessionUUID string) bool { return phase(sessionUUID) != phaseLive },
+		SessionArchived: func(sessionUUID string) bool { return phase(sessionUUID) == phaseArchived },
+	}
 	if acks != nil {
 		p.Unconfirmed = acks.Unconfirmed
 	}

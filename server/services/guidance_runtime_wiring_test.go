@@ -21,8 +21,9 @@ func TestGetGuidanceRequest_should_DeriveUnacknowledgedSessionEndedAndCancelReas
 	ended := false
 	unconfirmed := true
 	svc.SetDeliveryProbes(DeliveryProbes{
-		Unconfirmed:  func(string) bool { return unconfirmed },
-		SessionEnded: func(string) bool { return ended },
+		Unconfirmed:     func(string) bool { return unconfirmed },
+		SessionEnded:    func(string) bool { return ended },
+		SessionArchived: func(string) bool { return ended },
 	})
 	ctx := context.Background()
 	get := func(id string) *sessionv1.GuidanceRequest {
@@ -49,7 +50,8 @@ func TestGetGuidanceRequest_should_DeriveUnacknowledgedSessionEndedAndCancelReas
 	assert.True(t, got.GetSessionEnded(), "row 17: the session ended while the answer was sent")
 
 	open, _ := m.Mirror(mirrorReq(t, "toolu_open", "Open?", true))
-	assert.False(t, get(open).GetSessionEnded(), "only sent or failed rows carry the probe")
+	assert.False(t, get(open).GetSessionEnded(), "only sent or failed rows carry the ended probe")
+	assert.True(t, get(open).GetSessionArchived(), "an open card on an archived session says so before the operator acts")
 	require.NoError(t, m.Clear(ctx, open, domain.CancelReasonAnsweredInTerminal))
 	assert.Equal(t, "answered_in_terminal", get(open).GetCancelReason())
 }

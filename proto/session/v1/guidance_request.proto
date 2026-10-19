@@ -80,6 +80,7 @@ message GuidanceRequest {
   bool unacknowledged = 25; // sent, and the agent has not confirmed it (the Unconfirmed chip)
   string cancel_reason = 26; // why a cancelled row was cancelled, e.g. "answered_in_terminal"
   bool session_ended = 27; // the asker session is gone, archived or stopped; set only for sent or failed rows
+  bool session_archived = 28; // the session is archived: an answer is stored, never delivered (UX-AC27)
 }
 
 // GuidanceQuestion is one question of a mirrored harness prompt; its shape

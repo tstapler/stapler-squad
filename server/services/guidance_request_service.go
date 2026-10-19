@@ -36,16 +36,18 @@ type GuidanceRequestService struct {
 	probes          atomic.Pointer[DeliveryProbes]
 }
 
-// DeliveryProbes answer the two questions the delivery-state line needs that no
-// column stores. Either may be nil.
+// DeliveryProbes answer the questions the delivery-state line needs that no
+// column stores. Any may be nil.
 type DeliveryProbes struct {
 	// Unconfirmed reports a sent answer the agent has not confirmed.
 	Unconfirmed func(rowID string) bool
 	// SessionEnded reports a session that is gone, archived or stopped.
 	SessionEnded func(sessionUUID string) bool
+	// SessionArchived reports a session that was deliberately archived.
+	SessionArchived func(sessionUUID string) bool
 }
 
-// SetDeliveryProbes installs the probes behind unacknowledged and session_ended.
+// SetDeliveryProbes installs the probes behind unacknowledged, session_ended and session_archived.
 func (s *GuidanceRequestService) SetDeliveryProbes(p DeliveryProbes) { s.probes.Store(&p) }
 
 // toProto is guidanceRequestToProto plus the derived delivery fields.
@@ -56,15 +58,35 @@ func (s *GuidanceRequestService) toProto(d *session.GuidanceRequestData) *sessio
 	if p == nil || d.Source != domain.QuestionSourceHook && d.Source != domain.QuestionSourceAgentMCP {
 		return out
 	}
+	if d.Status() != session.GuidanceRequestStatusCancelled {
+		out.SessionArchived = p.archived(askerSessionOf(d))
+	}
 	switch d.DeliveryState {
 	case domain.DeliveryStateSent:
 		out.Unacknowledged = p.Unconfirmed != nil && p.Unconfirmed(d.ID)
 		fallthrough
 	case domain.DeliveryStateFailed:
-		out.SessionEnded = d.AskerSessionUUID != "" && p.SessionEnded != nil && p.SessionEnded(d.AskerSessionUUID)
+		out.SessionEnded = p.ended(askerSessionOf(d))
 	default:
 	}
 	return out
+}
+
+// askerSessionOf is the session a row's dialog or question lives in: the asker
+// of a hook row, else the session a session-scope request is about.
+func askerSessionOf(d *session.GuidanceRequestData) string {
+	if d.AskerSessionUUID != "" {
+		return d.AskerSessionUUID
+	}
+	return d.SessionUUID
+}
+
+func (p *DeliveryProbes) ended(sessionUUID string) bool {
+	return sessionUUID != "" && p.SessionEnded != nil && p.SessionEnded(sessionUUID)
+}
+
+func (p *DeliveryProbes) archived(sessionUUID string) bool {
+	return sessionUUID != "" && p.SessionArchived != nil && p.SessionArchived(sessionUUID)
 }
 
 // SetAnswerListener registers fn to run after each successfully applied answer.
