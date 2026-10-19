@@ -367,7 +367,7 @@ func (d *Dispatcher) fireIfAlreadyHolds(ctx context.Context, row *session.WakeTr
 
 func (d *Dispatcher) schedule(ctx context.Context, req ScheduleRequest) (*session.WakeTriggerData, bool, error) {
 	now := d.cfg.Clock.Now()
-	in, err := d.buildCreateInput(req, now)
+	in, err := d.buildCreateInput(ctx, req, now)
 	if err != nil {
 		return nil, false, err
 	}
@@ -389,7 +389,7 @@ func (d *Dispatcher) refuse(limit, detail string) error {
 	return &CapExceededError{Limit: limit, Detail: detail}
 }
 
-func (d *Dispatcher) buildCreateInput(req ScheduleRequest, now time.Time) (session.CreateWakeTriggerInput, error) {
+func (d *Dispatcher) buildCreateInput(ctx context.Context, req ScheduleRequest, now time.Time) (session.CreateWakeTriggerInput, error) {
 	lim := d.limits
 	if n := len([]rune(req.Action.Payload)); n > lim.PayloadChars {
 		d.limitHit(LimitPayloadSize, PhaseCreate)
@@ -405,7 +405,7 @@ func (d *Dispatcher) buildCreateInput(req ScheduleRequest, now time.Time) (sessi
 	if err := ValidateSpec(req.Spec); err != nil {
 		return session.CreateWakeTriggerInput{}, err
 	}
-	if err := d.checkSource(req.Spec); err != nil {
+	if err := d.checkSource(ctx, req.Owner, req.Spec); err != nil {
 		return session.CreateWakeTriggerInput{}, err
 	}
 	next, timed, err := d.firstFire(req.Spec, now)

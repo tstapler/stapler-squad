@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -34,6 +35,8 @@ const (
 	roleTriage   callerRole = "triage"
 	roleReview   callerRole = "review"
 	roleDiagnose callerRole = "diagnose"
+	// roleUnknown is a failed role lookup; it is on no allowlist, so the gate fails closed.
+	roleUnknown callerRole = "unknown"
 )
 
 // Tool names of the identity-gated surface.
@@ -135,18 +138,27 @@ func rawTypedError(e typedError) *mcpgo.CallToolResult {
 	return mcpgo.NewToolResultText(string(b))
 }
 
+// roleLookupFrom resolves a role from a backlog-link read. Only "no link" means
+// a work session; any other error yields roleUnknown, which no tool allows.
+func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)) callerRoleLookup {
+	return func(ctx context.Context, sessionUUID string) callerRole {
+		link, err := get(ctx, sessionUUID)
+		switch {
+		case errors.Is(err, session.ErrNotFound):
+			return roleWork
+		case err != nil:
+			return roleUnknown
+		}
+		return roleOfItemSession(link.Role)
+	}
+}
+
 // registerIdentityGatedTools registers the five wake and peer-help tools behind
 // one identity gate whose role lookup reads the caller's backlog link.
 func registerIdentityGatedTools(s *mcpserver.MCPServer, storage *session.Storage) {
 	gate := &callerIdentityGate{
 		metrics: wakes.NewMetrics(),
-		roleOf: func(ctx context.Context, sessionUUID string) callerRole {
-			link, err := storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
-			if err != nil {
-				return roleWork
-			}
-			return roleOfItemSession(link.Role)
-		},
+		roleOf:  roleLookupFrom(storage.GetItemSessionBySessionUUID),
 	}
 	registerWakeTools(s, newWakeHandlers(gate))
 	registerPeerHelpTools(s, newPeerHelpHandlers(gate, storage))

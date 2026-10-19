@@ -167,9 +167,11 @@ type GuidanceFacts struct {
 	Answered bool
 	// Cancelled is a request withdrawn before an answer; the asker is woken
 	// with "cancelled" so it stops waiting.
-	Cancelled           bool
-	CancelReason        string
-	Answer              string
+	Cancelled    bool
+	CancelReason string
+	Answer       string
+	// AskerSessionUUID is the session whose question this is; only it may wait on the answer.
+	AskerSessionUUID    string
 	AnswererKind        string
 	AnswererSessionUUID string
 }

@@ -172,6 +172,8 @@ func scheduleErrorResult(err error) *mcpgo.CallToolResult {
 		return typedErrorResult(CodeUnavailable, "event_stream", "event stream unavailable", "Time-based wakes (at, cron) still work.")
 	case errors.Is(err, wakes.ErrUnavailable):
 		return typedErrorResult(CodeUnavailable, "source", err.Error(), "")
+	case errors.Is(err, wakes.ErrForbidden):
+		return errResult(ErrPermissionDenied, err.Error(), "")
 	case errors.Is(err, wakes.ErrInvalid):
 		return errResult(ErrInvalidArgument, err.Error(), "")
 	default:

@@ -37,9 +37,17 @@ type fakeGuidance struct {
 	rows map[string]GuidanceFacts
 }
 
+// open seeds an unanswered request asked by asker.
+func (f *fakeGuidance) open(id, asker string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[id] = GuidanceFacts{Exists: true, AskerSessionUUID: asker}
+}
+
 func (f *fakeGuidance) answer(id string, facts GuidanceFacts) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	facts.AskerSessionUUID = f.rows[id].AskerSessionUUID
 	facts.Exists, facts.Answered = true, true
 	f.rows[id] = facts
 }
@@ -123,7 +131,63 @@ func newSourceRig(t *testing.T) *sourceRig {
 	s.dispatcherRig = newDispatcherRig(t, func(c *Config) {
 		c.Sessions, c.Guidance, c.PRs = s.sessions, s.guidance, s.prs
 	})
+	for _, id := range []string{"owner-1", "p1"} {
+		s.owners.set(id, OwnerFacts{Exists: true, Live: true, WorkspaceKey: "ws-a"})
+	}
 	return s
+}
+
+// scheduleAs schedules spec for owner and returns the error, leaving no assertions to the caller.
+func (s *sourceRig) scheduleAs(owner string, spec domain.WakeSpec) error {
+	s.t.Helper()
+	action, err := domain.NewWakeAction(domain.WakeActionSteerText, "x")
+	require.NoError(s.t, err)
+	_, _, err = s.d.Schedule(context.Background(), ScheduleRequest{Owner: owner, Spec: spec, Action: action})
+	return err
+}
+
+func (s *sourceRig) requireNoRows(owner string) {
+	s.t.Helper()
+	live, err := s.repo.CountLiveWakeTriggersByOwner(context.Background(), owner)
+	require.NoError(s.t, err)
+	assert.Zero(s.t, live)
+}
+
+func TestSchedule_should_RefuseGuidanceAnswered_When_CallerIsNotTheAsker(t *testing.T) {
+	t.Parallel()
+	r := newSourceRig(t)
+	r.guidance.open("gB", "session-b")
+	r.guidance.answer("gB", GuidanceFacts{Answer: "secret answer for B"})
+
+	err := r.scheduleAs("session-a", domain.GuidanceAnsweredSpec{GuidanceRequestID: "gB"})
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.NotContains(t, err.Error(), "secret")
+	r.requireNoRows("session-a")
+
+	require.ErrorIs(t, r.scheduleAs("session-a", domain.GuidanceAnsweredSpec{GuidanceRequestID: "missing"}), ErrForbidden)
+	r.requireNoRows("session-a")
+}
+
+func TestSchedule_should_AllowGuidanceAnswered_When_CallerIsTheAsker(t *testing.T) {
+	t.Parallel()
+	r := newSourceRig(t)
+	r.guidance.open("gB", "session-b")
+	require.NoError(t, r.scheduleAs("session-b", domain.GuidanceAnsweredSpec{GuidanceRequestID: "gB"}))
+}
+
+func TestSchedule_should_RefuseSessionState_When_TargetIsInAnotherWorkspace(t *testing.T) {
+	t.Parallel()
+	r := newSourceRig(t)
+	r.owners.set("other", OwnerFacts{Exists: true, Live: true, WorkspaceKey: "ws-b"})
+	r.owners.set("ghost", OwnerFacts{})
+
+	for _, target := range []string{"other", "ghost"} {
+		require.ErrorIs(t, r.scheduleAs("owner-1", domain.SessionStateSpec{SessionUUID: target, State: "idle"}), ErrForbidden, target)
+	}
+	r.requireNoRows("owner-1")
+
+	require.NoError(t, r.scheduleAs("owner-1", domain.SessionStateSpec{SessionUUID: "p1", State: "idle"}), "same workspace")
+	require.NoError(t, r.scheduleAs("owner-1", domain.SessionStateSpec{SessionUUID: "owner-1", State: "idle"}), "itself")
 }
 
 func (s *sourceRig) schedule(spec domain.WakeSpec, payload string) *session.WakeTriggerData {
@@ -222,6 +286,7 @@ func TestGuidanceSource_should_ClaimOnce_When_AnswerListenerRunsThenRestartRecon
 	t.Parallel()
 	r := newSourceRig(t)
 	r.start(r.d)
+	r.guidance.open("g1", "owner-1")
 	row := r.schedule(domain.GuidanceAnsweredSpec{GuidanceRequestID: "g1"}, "your question was answered")
 	r.eventually(func() bool { return len(r.d.index.lookup(domain.WakeTriggerGuidanceAnswered, "g1")) == 1 })
 
@@ -239,6 +304,7 @@ func TestGuidanceSource_should_ClaimOnce_When_AnswerListenerRunsThenRestartRecon
 func TestGuidanceSource_should_DeliverViaReconcile_When_AnsweredBeforeDispatcherRan(t *testing.T) {
 	t.Parallel()
 	r := newSourceRig(t)
+	r.guidance.open("g2", "owner-1")
 	row := r.schedule(domain.GuidanceAnsweredSpec{GuidanceRequestID: "g2"}, "answered?")
 	r.guidance.answer("g2", GuidanceFacts{Answer: "yes"})
 

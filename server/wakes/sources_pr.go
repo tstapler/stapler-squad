@@ -14,6 +14,10 @@ import (
 // not have, or the source does not hold the subject (typed `unavailable`).
 var ErrUnavailable = errors.New("unavailable")
 
+// ErrForbidden means the owner may not watch the subject: another session's
+// guidance request, or a session in another repository (typed FORBIDDEN).
+var ErrForbidden = errors.New("forbidden")
+
 // ciFinal reports whether a poller check conclusion is a finished one.
 func ciFinal(conclusion string) bool { return conclusion != "" && conclusion != "pending" }
 
@@ -61,7 +65,7 @@ func (d *Dispatcher) registerPRSource() {
 
 // checkSource reports ErrUnavailable when spec's PR is not one the poller
 // holds, so schedule_wake refuses instead of arming a trigger nothing can fire.
-func (d *Dispatcher) checkSource(spec domain.WakeSpec) error {
+func (d *Dispatcher) checkSource(ctx context.Context, owner string, spec domain.WakeSpec) error {
 	var key PRKey
 	switch s := spec.(type) {
 	case domain.PREventSpec:
@@ -72,12 +76,12 @@ func (d *Dispatcher) checkSource(spec domain.WakeSpec) error {
 		if d.cfg.Sessions == nil {
 			return fmt.Errorf("%w: session state is not wired", ErrUnavailable)
 		}
-		return nil
+		return d.authorizeSessionTarget(ctx, owner, s.SessionUUID)
 	case domain.GuidanceAnsweredSpec:
 		if d.cfg.Guidance == nil {
 			return fmt.Errorf("%w: guidance requests are not wired", ErrUnavailable)
 		}
-		return nil
+		return d.authorizeGuidanceRequest(ctx, owner, s.GuidanceRequestID)
 	default:
 		return nil
 	}
@@ -86,6 +90,37 @@ func (d *Dispatcher) checkSource(spec domain.WakeSpec) error {
 	}
 	if _, open := d.cfg.PRs.Open(key); !open {
 		return fmt.Errorf("%w: %s is not an open pull request of a connected account", ErrUnavailable, prCellKey(key))
+	}
+	return nil
+}
+
+// authorizeGuidanceRequest limits a guidance_answered wake to the asker, since
+// the wake echoes the answer into the owner's pane.
+func (d *Dispatcher) authorizeGuidanceRequest(ctx context.Context, owner, requestID string) error {
+	f, err := d.cfg.Guidance.Guidance(ctx, requestID)
+	if err != nil {
+		return fmt.Errorf("%w: guidance request lookup: %v", ErrUnavailable, err)
+	}
+	if !f.Exists || f.AskerSessionUUID == "" || f.AskerSessionUUID != owner {
+		return fmt.Errorf("%w: guidance request %s is not yours", ErrForbidden, requestID)
+	}
+	return nil
+}
+
+// authorizeSessionTarget limits a session_state wake to the owner itself or a
+// session in the owner's repository (same boundary as PeerFaultOf).
+func (d *Dispatcher) authorizeSessionTarget(ctx context.Context, owner, target string) error {
+	if target == owner {
+		return nil
+	}
+	denied := fmt.Errorf("%w: session %s is not in your workspace", ErrForbidden, target)
+	tf, err := d.cfg.Owners.Owner(ctx, target)
+	if err != nil || !tf.Exists {
+		return denied
+	}
+	of, err := d.cfg.Owners.Owner(ctx, owner)
+	if err != nil || !of.Exists || tf.WorkspaceKey == "" || tf.WorkspaceKey != of.WorkspaceKey {
+		return denied
 	}
 	return nil
 }

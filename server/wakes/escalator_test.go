@@ -203,13 +203,14 @@ func TestPeerFaultOf_should_classifyNotSentFromStalled(t *testing.T) {
 func (f *fakeGuidance) cancel(id, reason string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.rows[id] = GuidanceFacts{Exists: true, Cancelled: true, CancelReason: reason}
+	f.rows[id] = GuidanceFacts{Exists: true, Cancelled: true, CancelReason: reason, AskerSessionUUID: f.rows[id].AskerSessionUUID}
 }
 
 func TestEscalator_should_deliverOnBehalfOfProvenanceToAsker_When_operatorAnswersForPeer(t *testing.T) {
 	t.Parallel()
 	r := newSourceRig(t)
 	r.start(r.d)
+	r.guidance.open("g1", "owner-1")
 	row := r.schedule(domain.GuidanceAnsweredSpec{GuidanceRequestID: "g1"}, "your help request was answered")
 	r.eventually(func() bool { return len(r.d.index.lookup(domain.WakeTriggerGuidanceAnswered, "g1")) == 1 })
 
@@ -227,6 +228,7 @@ func TestGuidanceSource_should_WakeTheAskerWithCancelled_When_OperatorCancelsThe
 	t.Parallel()
 	r := newSourceRig(t)
 	r.start(r.d)
+	r.guidance.open("g3", "owner-1")
 	row := r.schedule(domain.GuidanceAnsweredSpec{GuidanceRequestID: "g3"}, "your help request was answered")
 	r.eventually(func() bool { return len(r.d.index.lookup(domain.WakeTriggerGuidanceAnswered, "g3")) == 1 })
 

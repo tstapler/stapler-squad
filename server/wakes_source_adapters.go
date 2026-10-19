@@ -73,9 +73,19 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 		Cancelled:           data.Status() == session.GuidanceRequestStatusCancelled,
 		CancelReason:        string(data.CancelReason),
 		Answer:              data.Answer,
+		AskerSessionUUID:    askerOf(data),
 		AnswererKind:        string(data.AnswererKind),
 		AnswererSessionUUID: data.AnswererSessionUUID,
 	}, nil
+}
+
+// askerOf is the session a request's question lives in: the hook-row asker,
+// else the session a session-scope request is about.
+func askerOf(d *session.GuidanceRequestData) string {
+	if d.AskerSessionUUID != "" {
+		return d.AskerSessionUUID
+	}
+	return d.SessionUUID
 }
 
 // wakePRSource adapts the UserPRCache poller (Spike S4: it lists open PRs

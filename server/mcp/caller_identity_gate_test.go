@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"testing"
@@ -107,6 +109,29 @@ func TestRoleOfItemSession_should_MapHiddenRolesAndDefaultToWork(t *testing.T) {
 	assert.Equal(t, roleDiagnose, roleOfItemSession(session.SessionRoleDiagnose))
 	assert.Equal(t, roleWork, roleOfItemSession(session.SessionRoleWork))
 	assert.Equal(t, roleWork, roleOfItemSession(""))
+}
+
+func TestRoleLookupFrom_should_FailClosedOnTransientError_And_DefaultToWorkOnNotFound(t *testing.T) {
+	t.Parallel()
+	lookup := func(err error, role string) callerRoleLookup {
+		return roleLookupFrom(func(context.Context, string) (session.ItemSessionSummary, error) {
+			return session.ItemSessionSummary{Role: role}, err
+		})
+	}
+	ctx := context.Background()
+	assert.Equal(t, roleWork, lookup(fmt.Errorf("%w: no link", session.ErrNotFound), "")(ctx, "s"))
+	assert.Equal(t, roleReview, lookup(nil, session.SessionRoleReview)(ctx, "s"))
+	assert.Equal(t, roleUnknown, lookup(errors.New("database is locked"), "")(ctx, "s"))
+}
+
+func TestIdentityGate_should_DenyEveryGatedTool_When_RoleIsUnknown(t *testing.T) {
+	t.Parallel()
+	r := newToolRig(t)
+	r.roles["w1"] = roleUnknown
+	for _, tool := range newToolNames {
+		assert.Equal(t, ErrPermissionDenied, resultCode(r.call(as("w1"), tool, probeArgs)), tool)
+	}
+	assert.Empty(t, r.backend.scheduleCalls(), "a denied schedule_wake wrote nothing")
 }
 
 func TestWithCallerIdentityGate_should_PanicAtRegistration_When_ToolHasNoAllowlistRow(t *testing.T) {
