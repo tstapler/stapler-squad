@@ -93,8 +93,15 @@ func fanoutGitRun(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, string(out))
 }
 
+// fanoutGitRepo callers must not be t.Parallel: it sets process-wide git identity env, which
+// CommitChanges and the native merge need on runners with no global git config.
 func fanoutGitRepo(t *testing.T) string {
 	t.Helper()
+	for k, v := range map[string]string{
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+	} {
+		t.Setenv(k, v)
+	}
 	dir := t.TempDir()
 	fanoutGitRun(t, dir, "init", "-q", "-b", "main")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("base\n"), 0o644))
