@@ -752,6 +752,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.shutdownHooks = append(srv.shutdownHooks, deps.WorkflowScheduler.Stop)
 		log.Info("WorkflowScheduler started")
 	}
+	startWakes(serverCtx, srv, deps) // ADR-006 wake timer; server/wakes_module.go
 
 	// Register BacklogService shutdown so in-flight triage goroutines are signalled
 	// to stop acquiring new semaphore slots and existing calls can complete cleanly.
