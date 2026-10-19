@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/internal/fsevents"
 )
 
@@ -42,12 +43,23 @@ func TestTrailingDebouncer_CoalescesBurstAndStopsAfterCancel(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		d.poke()
 	}
-	assert.Eventually(t, func() bool { return n.Load() == 1 }, time.Second, time.Millisecond)
-	time.Sleep(30 * time.Millisecond) // lets a wrongly-armed second fire show up
-	assert.EqualValues(t, 1, n.Load(), "burst must fire exactly once")
+	require.Eventually(t, func() bool { return n.Load() >= 1 }, time.Second, time.Millisecond)
+
+	// All 50 pokes landed before the first fire, so a coalescing bug would
+	// already show as n > 1; a second burst must then fire exactly once more.
+	require.Eventually(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return !d.armed
+	}, time.Second, time.Millisecond)
+	assert.EqualValues(t, 1, n.Load(), "first burst must fire exactly once")
+	d.poke()
+	require.Eventually(t, func() bool { return n.Load() == 2 }, time.Second, time.Millisecond)
 
 	cancel()
 	d.poke()
-	time.Sleep(30 * time.Millisecond)
-	assert.EqualValues(t, 1, n.Load(), "no fire after ctx cancelled")
+	d.mu.Lock()
+	armed := d.armed
+	d.mu.Unlock()
+	assert.False(t, armed, "poke after ctx cancelled must not arm a timer")
 }
