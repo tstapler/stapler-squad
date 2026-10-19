@@ -222,6 +222,7 @@ type PaneReplyCore struct {
 	count            func(label string)
 	after            func(time.Duration) <-chan time.Time
 	controllerActive func(*session.Instance) bool
+	canary           *DialogMatchCanary
 }
 
 // paneReplyCore builds the core from the service's current seams.
@@ -230,7 +231,7 @@ func (s *SessionService) paneReplyCore() *PaneReplyCore {
 	return &PaneReplyCore{
 		store: st.store, limiters: st.limiters,
 		auditSink: s.auditSink, count: s.countReply,
-		after: s.replyAfter, controllerActive: s.controllerActiveFor,
+		after: s.replyAfter, controllerActive: s.controllerActiveFor, canary: s.dialogCanary.Load(),
 	}
 }
 
@@ -351,7 +352,9 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 		if err != nil {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, replyStageNotWaiting}
 		}
-		if !session.DialogMatch(capture, claim.Question().Dialog) {
+		matched := session.DialogMatch(capture, claim.Question().Dialog)
+		c.canary.Record(DialogMatchResultOf(matched))
+		if !matched {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT, replyStageStalePrompt}
 		}
 		return nil

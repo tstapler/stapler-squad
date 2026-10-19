@@ -43,6 +43,7 @@ const (
 	CounterReplyUnreplyable      = "hidden_session_reply_registered_unreplyable_total" // cause
 	CounterGuidanceMirrorFailed  = "guidance_mirror_failed_total"                      // reason
 	CounterGuidanceMirrorCleared = "guidance_mirror_cleared_total"                     // reason
+	CounterQuestionDialogMatch   = "question_dialog_match_total"                       // result,claude_version
 	histogramFilterDurationSec   = "notification_gate_filter_duration_seconds"         // OTel only
 	counterLabelSeparator        = "|"
 )
@@ -69,6 +70,7 @@ var counterLabelKeys = map[string][]string{
 
 	CounterGuidanceMirrorFailed:  {"reason"},
 	CounterGuidanceMirrorCleared: {"reason"},
+	CounterQuestionDialogMatch:   {"result", "claude_version"},
 }
 
 // maxLabels is the widest counter label set (suppressed: channel, type, reason, kind).
@@ -283,6 +285,7 @@ var counterShortNames = map[string]string{
 
 	CounterGuidanceMirrorFailed:  "guidance_mirror_failed",
 	CounterGuidanceMirrorCleared: "guidance_mirror_cleared",
+	CounterQuestionDialogMatch:   "question_dialog_match",
 }
 
 // ShortCounterName is the name the stats RPC reports for a counter.

@@ -33,6 +33,10 @@ func ListenerClassFrom(ctx context.Context) ListenerClass {
 // unavailableDesktopOnly is the descriptor reason for a Tier B action on the remote listener.
 const unavailableDesktopOnly = "desktop_only"
 
+// unavailableReadOnly is the descriptor reason for a hook-mirrored question
+// whose answer control is withdrawn while the layout-drift canary is tripped.
+const unavailableReadOnly = "read_only"
+
 // Notification metadata keys read by the builder.
 const (
 	metaApprovalID         = "approval_id"
@@ -108,6 +112,8 @@ type DescriptorSources struct {
 	Questions QuestionLookup
 	Backlog   BacklogDecisionLookup
 	Guidance  GuidanceLookup
+	// Canary degrades hook-mirrored answers to read_only when the layout drifts (optional).
+	Canary *DialogMatchCanary
 }
 
 // ApprovalLookup returns the ids of approvals still waiting for a decision.
@@ -145,13 +151,15 @@ type DescriptorBuilder struct {
 	sources DescriptorSources
 	// flag resolves a notification_inline_actions decision point; tests inject it.
 	flag func(decisionPoint string) bool
+	// hookReplyOn reports whether the keystroke-free hook_reply route answers; tests inject it.
+	hookReplyOn func() bool
 }
 
 // NewDescriptorBuilder builds a builder reading the live flags.
 func NewDescriptorBuilder(src DescriptorSources) *DescriptorBuilder {
 	return &DescriptorBuilder{sources: src, flag: func(dp string) bool {
 		return effectiveFlag(notificationInlineActionsFlagName, dp)
-	}}
+	}, hookReplyOn: func() bool { return effectiveAnswerQuestion(routeHookReply) }}
 }
 
 // pageKeys are the entity keys of the unresolved records of one page.
@@ -321,6 +329,9 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 	}
 	for _, l := range q.Dialog.Labels {
 		d.Options = append(d.Options, &sessionv1.ActionOption{Label: l})
+	}
+	if b.sources.Canary.Tripped() && !b.hookReplyOn() {
+		d.Available, d.UnavailableReason = false, unavailableReadOnly
 	}
 	if lc == ListenerClassRemote && !actionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
 		d.Available, d.UnavailableReason = false, unavailableDesktopOnly

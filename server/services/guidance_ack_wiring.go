@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // guidance_ack_wiring.go binds the acknowledgement detector to this service's
@@ -77,11 +79,21 @@ func answerRouterDeps(w NotificationActionWiring, acks *GuidanceAckDetector) Ans
 // ObservePostToolUse routes a PostToolUse receipt to the detector. sessionID is
 // the hook header value, a session title or UUID.
 func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, toolName string) {
-	if s.guidanceAcks == nil || toolName != askUserQuestion {
+	if toolName != askUserQuestion {
 		return
 	}
-	if inst := s.findInstance(sessionID); inst != nil {
+	inst := s.findInstance(sessionID)
+	if inst == nil {
+		return
+	}
+	if s.guidanceAcks != nil {
 		s.guidanceAcks.Receipt(ctx, inst.GetStableID(), toolName)
+	}
+	// Whatever the receipt did not acknowledge was answered in the terminal.
+	if m := s.guidanceMirror.Load(); m != nil {
+		if err := m.ClearOpenForSession(ctx, inst.GetStableID(), domain.CancelReasonAnsweredInTerminal); err != nil {
+			log.Warn("[GuidanceMirror] terminal answer not cleared", "session", inst.GetStableID(), "err", err)
+		}
 	}
 }
 

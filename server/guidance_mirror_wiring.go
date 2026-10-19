@@ -27,8 +27,11 @@ func wireGuidanceMirror(h *services.ApprovalHandler, deps *ServerDependencies, s
 	mirror := services.NewGuidanceHookMirror(deps.Storage, deps.SessionService.PendingQuestions(),
 		count(deliverygate.CounterGuidanceMirrorFailed), cleared)
 	h.SetGuidanceMirror(mirror)
+	deps.SessionService.SetGuidanceMirror(mirror)
 	reaper := services.NewGuidanceSessionReaper(deps.Storage, storageSessionEnds{storage: deps.Storage}, mirror, cleared)
 	goBackground(func() { reaper.Run(serverCtx, deps.EventBus) })
+	sampler := services.NewDialogGoneSampler(deps.Storage, deps.SessionService.PaneCapture, mirror, nil)
+	goBackground(func() { sampler.Run(serverCtx) })
 }
 
 // storageSessionEnds answers the reaper's session questions from stored instances.

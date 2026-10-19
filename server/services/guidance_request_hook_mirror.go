@@ -46,6 +46,13 @@ type GuidanceHookMirror struct {
 	bound   time.Duration
 	failed  func(reason string)
 	cleared func(reason string)
+	// capture takes one fresh pane capture; nil disables on-demand re-verification.
+	capture func(ctx context.Context, sessionUUID string) (string, error)
+}
+
+// SetPaneCapture installs the capture used to re-verify open rows at the cap.
+func (m *GuidanceHookMirror) SetPaneCapture(fn func(ctx context.Context, sessionUUID string) (string, error)) {
+	m.capture = fn
 }
 
 // NewGuidanceHookMirror builds the mirror. failed and cleared count
@@ -104,6 +111,9 @@ func (m *GuidanceHookMirror) Mirror(req HookMirrorRequest) (id string, ok bool) 
 	done := make(chan result, 1) // buffered so a late write never blocks its goroutine
 	go func() {
 		row, cerr := m.store.CreateMirroredGuidanceRequest(ctx, gr, 0)
+		if errors.Is(cerr, session.ErrPendingCapExceeded) && m.reverifyOpen(ctx, req.SessionUUID) > 0 {
+			row, cerr = m.store.CreateMirroredGuidanceRequest(ctx, gr, 0)
+		}
 		done <- result{row, cerr}
 	}()
 	select {
@@ -255,6 +265,52 @@ func (m *GuidanceHookMirror) ClearByHookCall(ctx context.Context, sessionUUID, h
 			if cerr := m.Clear(ctx, row.ID, reason); cerr != nil {
 				return cerr
 			}
+		}
+	}
+	return nil
+}
+
+// reverifyOpen takes one capture per open hook row of the session and clears the
+// rows whose dialog is gone or replaced, so rows the sampler stopped watching
+// cannot starve the cap (Task 3.3g). It is one pass, not a poll, and returns
+// how many rows it cleared.
+func (m *GuidanceHookMirror) reverifyOpen(ctx context.Context, sessionUUID string) int {
+	if m.capture == nil {
+		return 0
+	}
+	rows, err := m.store.ListOpenGuidanceRequestsByAsker(ctx, sessionUUID, domain.QuestionSourceHook)
+	if err != nil {
+		log.Warn("[GuidanceMirror] cap re-verification could not list rows", "session", sessionUUID, "err", err)
+		return 0
+	}
+	cleared := 0
+	for _, row := range rows {
+		capture, cerr := m.capture(ctx, sessionUUID)
+		reason, terminal := judgeRow(row, capture, cerr).cancelReason()
+		if !terminal {
+			continue
+		}
+		if err := m.Clear(ctx, row.ID, reason); err != nil {
+			log.Warn("[GuidanceMirror] cap re-verification clear failed", "row", row.ID, "err", err)
+			continue
+		}
+		cleared++
+	}
+	return cleared
+}
+
+// ClearOpenForSession clears every open hook row of a session: a PostToolUse
+// receipt for AskUserQuestion means its current dialog was answered in the
+// terminal, and any older open row's dialog is necessarily gone too. Rows
+// already answered through the pane are not open, so they are untouched.
+func (m *GuidanceHookMirror) ClearOpenForSession(ctx context.Context, sessionUUID string, reason domain.CancelReason) error {
+	rows, err := m.store.ListOpenGuidanceRequestsByAsker(ctx, sessionUUID, domain.QuestionSourceHook)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if cerr := m.Clear(ctx, row.ID, reason); cerr != nil {
+			return cerr
 		}
 	}
 	return nil

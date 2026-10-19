@@ -119,8 +119,11 @@ type SessionService struct {
 	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
 	guidanceAcks *GuidanceAckDetector
 	hookReply    atomic.Pointer[hookReplyResolver]
-	ackCancel    context.CancelFunc
-	ackDone      chan struct{}
+	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
+	dialogCanary   atomic.Pointer[DialogMatchCanary]
+	guidanceMirror atomic.Pointer[GuidanceHookMirror]
+	ackCancel      context.CancelFunc
+	ackDone        chan struct{}
 
 	// deliveryGate is the hidden-session delivery gate installed as the event bus
 	// publish filter at construction (nil when built through NewSessionService).

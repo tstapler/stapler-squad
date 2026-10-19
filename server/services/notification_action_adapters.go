@@ -171,8 +171,6 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 		visible: s.paneReplyCore, guard: NewHumanActiveGuard(defaultHumanActivity, tmux.ListClientActivity),
 		flags: configActionFlags{ev: compiledFlagEvidence}, rows: d.Rows, acks: d.Acks,
 	}
-	if d.Mirror != nil {
-		r.ensure = d.Mirror.EnsureRegistered
-	}
+	r.ensure = s.ensureRegistered(d.Mirror)
 	return r
 }

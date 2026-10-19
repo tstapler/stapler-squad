@@ -33,6 +33,38 @@ type GuidanceRequestService struct {
 	notifier        *EventBusNotifier
 	triageRespawner TriageRespawner
 	answerListener  atomic.Pointer[AnswerListener]
+	probes          atomic.Pointer[DeliveryProbes]
+}
+
+// DeliveryProbes answer the two questions the delivery-state line needs that no
+// column stores. Either may be nil.
+type DeliveryProbes struct {
+	// Unconfirmed reports a sent answer the agent has not confirmed.
+	Unconfirmed func(rowID string) bool
+	// SessionEnded reports a session that is gone, archived or stopped.
+	SessionEnded func(sessionUUID string) bool
+}
+
+// SetDeliveryProbes installs the probes behind unacknowledged and session_ended.
+func (s *GuidanceRequestService) SetDeliveryProbes(p DeliveryProbes) { s.probes.Store(&p) }
+
+// toProto is guidanceRequestToProto plus the derived delivery fields.
+func (s *GuidanceRequestService) toProto(d *session.GuidanceRequestData) *sessionv1.GuidanceRequest {
+	out := guidanceRequestToProto(d)
+	out.CancelReason = d.CancelReason.String()
+	p := s.probes.Load()
+	if p == nil || d.Source != domain.QuestionSourceHook && d.Source != domain.QuestionSourceAgentMCP {
+		return out
+	}
+	switch d.DeliveryState {
+	case domain.DeliveryStateSent:
+		out.Unacknowledged = p.Unconfirmed != nil && p.Unconfirmed(d.ID)
+		fallthrough
+	case domain.DeliveryStateFailed:
+		out.SessionEnded = d.AskerSessionUUID != "" && p.SessionEnded != nil && p.SessionEnded(d.AskerSessionUUID)
+	default:
+	}
+	return out
 }
 
 // SetAnswerListener registers fn to run after each successfully applied answer.
@@ -317,7 +349,7 @@ func (s *GuidanceRequestService) CreateGuidanceRequest(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(&sessionv1.CreateGuidanceRequestResponse{Request: guidanceRequestToProto(data)}), nil
+	return connect.NewResponse(&sessionv1.CreateGuidanceRequestResponse{Request: s.toProto(data)}), nil
 }
 
 // AnswerGuidanceRequest records a human's answer. No ownership check — this
@@ -350,7 +382,7 @@ func (s *GuidanceRequestService) AnswerGuidanceRequest(
 	}
 
 	return connect.NewResponse(&sessionv1.AnswerGuidanceRequestResponse{
-		Request: guidanceRequestToProto(data),
+		Request: s.toProto(data),
 		Applied: applied,
 	}), nil
 }
@@ -374,7 +406,7 @@ func (s *GuidanceRequestService) GetGuidanceRequest(
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	return connect.NewResponse(&sessionv1.GetGuidanceRequestResponse{Request: guidanceRequestToProto(data)}), nil
+	return connect.NewResponse(&sessionv1.GetGuidanceRequestResponse{Request: s.toProto(data)}), nil
 }
 
 // ListGuidanceRequests lists open GuidanceRequests for one (scope, scope_key)
@@ -401,7 +433,7 @@ func (s *GuidanceRequestService) ListGuidanceRequests(
 	}
 	protoRows := make([]*sessionv1.GuidanceRequest, 0, len(rows))
 	for _, r := range rows {
-		protoRows = append(protoRows, guidanceRequestToProto(r))
+		protoRows = append(protoRows, s.toProto(r))
 	}
 	return connect.NewResponse(&sessionv1.ListGuidanceRequestsResponse{
 		Requests:     protoRows,
@@ -423,7 +455,7 @@ func (s *GuidanceRequestService) ListAllPendingGuidanceRequests(
 	}
 	protoRows := make([]*sessionv1.GuidanceRequest, 0, len(rows))
 	for _, r := range rows {
-		protoRows = append(protoRows, guidanceRequestToProto(r))
+		protoRows = append(protoRows, s.toProto(r))
 	}
 	return connect.NewResponse(&sessionv1.ListAllPendingGuidanceRequestsResponse{Requests: protoRows}), nil
 }
