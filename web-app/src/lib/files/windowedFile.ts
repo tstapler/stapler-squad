@@ -208,6 +208,7 @@ export class WindowedFile {
     const count = lineCountOf(this.size, first);
     this.set({ lineCount: count.count, exact: count.exact });
     await this.swapBuffer();
+    if (this.engine !== engine) return;
     this.set({ opened: true });
     this.provide(first);
     const landed = deferred === null ? Math.min(Math.max(1, anchorLine), Math.max(first.range.endLine, 1)) : 1;
@@ -273,7 +274,9 @@ export class WindowedFile {
     if (!e || !this.noteCount(r)) return false;
     const top = e.getViewport().startLine;
     await this.swapBuffer();
+    if (this.engine !== e) return true;
     const again = await this.read(top, "around", WINDOW_LINES);
+    if (this.engine !== e) return true;
     this.provide(again);
     e.gotoLine(top);
     return true;
