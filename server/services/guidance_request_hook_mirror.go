@@ -92,6 +92,9 @@ func (r HookMirrorRequest) route() domain.DeliveryRoute {
 	return ""
 }
 
+// Enabled reports whether the rollout flag currently allows mirroring.
+func (m *GuidanceHookMirror) Enabled() bool { return m.enabled == nil || m.enabled() }
+
 // Mirror writes the row within the bound and returns its id. Any failure is
 // counted and logged and yields ok=false; the caller carries on without a row.
 func (m *GuidanceHookMirror) Mirror(req HookMirrorRequest) (id string, ok bool) {

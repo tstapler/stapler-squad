@@ -504,6 +504,10 @@ func (d *Dispatcher) processNeedsRevive(ctx context.Context, row *session.WakeTr
 		d.expire(ctx, id, row, now)
 		return
 	}
+	// Re-read: the user may have cancelled the wake since the reconcile snapshot.
+	if cur, gerr := d.cfg.Store.GetWakeTrigger(ctx, id); gerr == nil && (cur == nil || cur.Status != domain.WakeStatusNeedsRevive) {
+		return
+	}
 	outcome, err := d.reviver.TryRevive(ctx, row.OwnerSessionUUID)
 	if err != nil {
 		log.Warn("wake dispatcher: revive failed; row stays needs_revive", "trigger_id", row.ID, errKey, err)

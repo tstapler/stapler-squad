@@ -163,7 +163,7 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa questionAttribut
 // mirrorQuestion writes the durable row and returns its id, or "" when mirroring
 // is off, the session has no UUID or the write failed (fail open).
 func (h *ApprovalHandler) mirrorQuestion(sessionID, hookCallID string, asked AskedQuestion, replyable bool) string {
-	if h.questions.mirror == nil {
+	if h.questions.mirror == nil || !h.questions.mirror.Enabled() {
 		return ""
 	}
 	sessionUUID := h.sessionUUIDFor(sessionID)
