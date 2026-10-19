@@ -46,7 +46,7 @@ func TestEffectiveFlags_ShouldForceDependentOff_WhenDependencyOffAndWarnOnce(t *
 	}
 }
 
-func TestFlags_ShouldDefaultAllOff_WhenConfigUntouched(t *testing.T) {
+func TestFlags_ShouldBeAllOff_WhenSnapshotUnsetOrConfigEmpty(t *testing.T) {
 	prev := flagsSnapshot.Load()
 	t.Cleanup(func() { flagsSnapshot.Store(prev) })
 	flagsSnapshot.Store(nil)

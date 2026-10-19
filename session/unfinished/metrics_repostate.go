@@ -35,7 +35,6 @@ type repostateInputs struct {
 	scan         ScanStateStats
 	skip         ScanSkipStats
 	parity       ParityStats
-	tierBArmed   int64
 	internerSize int64
 	reachBuilds  repostate.ReachStats
 	statCalls    int64
@@ -238,7 +237,6 @@ var repostateCatalog = []seriesSpec{
 	{"repostates", "Live RepoState count", "", kindGauge},
 	{"repostate_bytes", "Summed RepoState bytes", "", kindGauge},
 	{"path_interner_bytes", "Path interner bytes (interner not built: always 0)", "", kindGauge},
-	{"dirty_tierb_armed", "Tier B watchers armed (Tier B is not built: always 0)", "", kindGauge},
 	{"refsnapshot_reused_across_bursts_total", "RefSnapshots that outlived their Burst (must stay 0)", "", kindCounter},
 	{"scan_signature_checks_total", "Committed-state lookups that had a ScanSignature", "", kindCounter},
 	{"scan_signature_skips_total", "Lookups served from the stored committed state (skip engagement)", "", kindCounter},
@@ -291,7 +289,6 @@ func (in repostateInputs) points() []seriesPoint {
 	add("repostates", "", in.repoStates)
 	add("repostate_bytes", "", in.repoBytes)
 	add("path_interner_bytes", "", in.internerSize)
-	add("dirty_tierb_armed", "", in.tierBArmed)
 	add("refsnapshot_reused_across_bursts_total", "", in.scan.ReusedAcrossBursts)
 	add("scan_signature_checks_total", "", in.scan.SignatureChecks)
 	add("scan_signature_skips_total", "", in.scan.SignatureSkips)
