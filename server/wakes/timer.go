@@ -23,9 +23,9 @@ const errKey = "error"
 // ErrNotLeader is returned by Start when another process holds the leader guard.
 var ErrNotLeader = errors.New("wakes: another process holds the wake dispatcher leader guard")
 
-// Store is the slice of the wake repository the timer needs; *session.Storage
-// and *session.EntRepository satisfy it.
-type Store interface {
+// timerStore is the slice of the wake repository the timer needs;
+// *session.Storage and *session.EntRepository satisfy it.
+type timerStore interface {
 	NextWakeFireAt(ctx context.Context) (time.Time, bool, error)
 	ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*session.WakeTriggerData, error)
 	ClaimWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
@@ -44,7 +44,7 @@ type MissedFunc func(ctx context.Context, missed *session.WakeTriggerData)
 // due rows, and re-arms when a row is created, cancelled or changed (Rearm,
 // fed by the repository change hook) and on start.
 type Timekeeper struct {
-	store   Store
+	store   timerStore
 	clock   Clock
 	claimed ClaimedFunc
 	missed  MissedFunc
@@ -68,7 +68,7 @@ func WithLeaderGuard(g LeaderGuard) TimekeeperOption { return func(t *Timekeeper
 func WithMissedFunc(fn MissedFunc) TimekeeperOption { return func(t *Timekeeper) { t.missed = fn } }
 
 // NewTimekeeper builds a Timekeeper; claimed is called for every row it claims.
-func NewTimekeeper(store Store, clock Clock, claimed ClaimedFunc, opts ...TimekeeperOption) *Timekeeper {
+func NewTimekeeper(store timerStore, clock Clock, claimed ClaimedFunc, opts ...TimekeeperOption) *Timekeeper {
 	t := &Timekeeper{
 		store:   store,
 		clock:   clock,

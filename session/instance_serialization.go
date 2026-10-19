@@ -509,7 +509,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// budget once a couple thousand archived sessions accumulate).
 		//
 		// Also skip for one-shot sessions (backlog:triage/backlog:review tags, see
-		// isOneShot): session_driver.go's handleStoppedStatus already treats their
+		// IsOneShot): session_driver.go's handleStoppedStatus already treats their
 		// Stopped status as terminal and deliberately does not retry them
 		// ("BacklogLifecycleListener handles this; driver exits cleanly"). Reviving
 		// one here contradicts that decision and respawns the same one-shot
@@ -518,7 +518,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// production for an archived backlog item's stale review session, whose own
 		// ArchivedAt was nil (set only by archiveItemWorkSessions, which this old
 		// session predates) so only this check protects it.
-		if instance.ArchivedAt != nil || isOneShot(instance) {
+		if instance.ArchivedAt != nil || IsOneShot(instance) {
 			instance.started.Store(true)
 		} else {
 			paneExited := false
