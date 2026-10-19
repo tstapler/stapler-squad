@@ -116,9 +116,10 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
   useEffect(() => {
     if (p.focusToken > 0) inputRef.current?.focus();
   }, [p.focusToken]);
+  // Streamed batches grow `hits`; only a new query (or cleared results) should drop the selection.
   useEffect(() => {
     setActiveKey(null);
-  }, [search.hits]);
+  }, [search.answered]);
   useEffect(() => {
     if (includeFocusRequest > 0) includeRef.current?.focus();
   }, [includeFocusRequest]);

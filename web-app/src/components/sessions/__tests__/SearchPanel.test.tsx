@@ -340,6 +340,22 @@ describe("SearchPanel", () => {
     expect(h.analytics.events.filter((e) => e.name === "files.search.results")).toHaveLength(1);
   });
 
+  it("searchPanel_should_KeepActiveRow_When_AnotherBatchStreamsIn", async () => {
+    const { c, fire, input } = mount();
+    await fire("foo");
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("a.go", 12), searchHit("a.go", 30)] }));
+    await flush();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const active = input.getAttribute("aria-activedescendant");
+    expect(active).toBeTruthy();
+
+    act(() => c.requests[0].push({ type: "batch", matches: [searchHit("b.go", 5)] }));
+    await flush();
+
+    expect(input).toHaveAttribute("aria-activedescendant", active);
+  });
+
   it("searchPanel_should_EmitNoOpenHit_When_FlowCancelledBeforeAHit", async () => {
     const { h, c, fire } = mount();
     await fire("foo");
