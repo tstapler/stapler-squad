@@ -59,6 +59,10 @@ type EntRepository struct {
 	// NewTestEntRepository.
 	seedURI string
 
+	// wakeChanged is called after any WakeTrigger row change so the wake timer
+	// can re-arm (set once at wiring via SetWakeChangeHook, before use).
+	wakeChanged func()
+
 	// itemChangePublisher is nil-safe — every hooked backlog mutation method
 	// nil-checks before calling it (publish is best-effort and never blocks
 	// or fails the underlying mutation). Wired via SetItemChangePublisher,
