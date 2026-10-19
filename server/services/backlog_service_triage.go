@@ -845,6 +845,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 		s.handleClaimError(ctx, item, fromStatus, claimErr)
 		return false
 	}
+	s.resolveTransitionDeniedLogged(ctx, item.ID)
 
 	resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
 	if spawnErr != nil {
@@ -903,6 +904,8 @@ func (s *BacklogService) handleClaimError(ctx context.Context, item session.Back
 				log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
 			}
 		}
+	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, session.ErrGateNotSatisfied):
+		s.notifyClaimDenied(ctx, &item, fromStatus, claimErr)
 	default:
 		log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
 	}

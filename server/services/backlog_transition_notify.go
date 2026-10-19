@@ -32,6 +32,21 @@ func classifyTransitionDenial(err error) (reason string, ok bool) {
 	return "", false
 }
 
+// notifyClaimDenied records an engine denial of the dequeue claim; a no-op for
+// errors classifyTransitionDenial does not recognise.
+func (s *BacklogService) notifyClaimDenied(ctx context.Context, item *session.BacklogItemData, from session.BacklogStatus, denyErr error) {
+	reason, ok := classifyTransitionDenial(denyErr)
+	if !ok {
+		return
+	}
+	s.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
+		Caller: transitionCallerDequeueClaim,
+		From:   string(from),
+		To:     string(session.BacklogStatusInProgress),
+		Reason: reason,
+	}, denyErr)
+}
+
 // notifyTransitionDenied makes a denied automatic transition visible: a
 // transition_denied stuck row, one progress comment and one notification,
 // idempotent per (item, caller, from, to, reason) while the row stays open. It
