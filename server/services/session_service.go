@@ -1094,6 +1094,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc.wireLeaseFlag()
 	svc.wireGuardsFlag()
 	svc.wireReplyFlag()
+	wireNotificationActionFlags(svc.featureFlagSvc)
 	return svc
 }
 
@@ -1130,6 +1131,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
 		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
+	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built
