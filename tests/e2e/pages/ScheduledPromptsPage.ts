@@ -22,6 +22,7 @@ export interface FakeTrigger {
   /** Minutes from now; omit for an event trigger. */
   inMinutes?: number;
   operatorReminder?: boolean;
+  ownerArchived?: boolean;
 }
 
 export interface FakePeer {
@@ -52,6 +53,7 @@ export class ScheduledPromptsFake {
       ownerSessionUuid: `uuid-${t.id}`,
       ownerTitle: t.ownerTitle,
       ownerExists: true,
+      ownerArchived: t.ownerArchived ?? false,
       triggerType: t.triggerType ?? 'at',
       condition: t.condition ?? '',
       actionKind: t.operatorReminder ? 'notify_operator' : 'steer_text',

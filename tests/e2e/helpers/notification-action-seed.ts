@@ -4,7 +4,10 @@
  * backlog debug endpoints and SendNotification for the history row that carries the metadata keys the
  * descriptor builder reads (server/services/notification_actions.go).
  */
+import os from 'os';
+import path from 'path';
 import { expect, type APIRequestContext } from '@playwright/test';
+import type { SessionClient } from './session-client';
 import { sendNotification } from '../pages/NotificationPanel';
 import { createBacklogItemDirect } from '../pages/BacklogMutations';
 
@@ -228,4 +231,16 @@ export async function postToolUseInTerminal(request: APIRequestContext, baseUrl:
     data: {},
   });
   if (!response.ok()) throw new Error(`post-tool-use failed: ${response.status()}`);
+}
+
+const FAKE_PANE = path.resolve(__dirname, '../fixtures/fake-question-pane.sh');
+
+// The captured dialog's own question and labels (session/testdata/reply_dialogs/question_single_select_3opts.txt).
+export const DIALOG_QUESTION = { text: 'Which color should the spike use?', header: 'Color', options: ['Red', 'Green', 'Blue'] };
+
+/** A session whose pane shows the fixture dialog; `keyFile` receives the key it is sent. */
+export async function fakePaneSession(client: SessionClient, title: string, mode = ''): Promise<{ title: string; keyFile: string }> {
+  const keyFile = path.join(os.tmpdir(), `ssq-fake-pane-${title}.key`);
+  await client.createSession({ title, path: '/tmp', program: `bash ${FAKE_PANE} ${keyFile} ${mode}`.trim() });
+  return { title, keyFile };
 }

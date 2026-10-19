@@ -8,20 +8,15 @@
  * question is replaced by the e2e-local seed endpoint.
  */
 import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
-import { postToolUseInTerminal, readGuidanceRow, seedQuestionCard } from './helpers/notification-action-seed';
+import { DIALOG_QUESTION, fakePaneSession, postToolUseInTerminal, readGuidanceRow, seedQuestionCard } from './helpers/notification-action-seed';
 import { INLINE_ACTIONS_FLAG, QuestionCard, openNotificationTray, setFeatureFlag } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 const STRUCTURED_FLAG = 'askuserquestion_structured';
-const FAKE_PANE = path.resolve(__dirname, 'fixtures/fake-question-pane.sh');
 const HOOK = 'ask_user_question_hook';
-// The captured dialog's own question and labels (session/testdata/reply_dialogs/question_single_select_3opts.txt).
-const DIALOG_QUESTION = { text: 'Which color should the spike use?', header: 'Color', options: ['Red', 'Green', 'Blue'] };
 const ACK_TIMEOUT = 30_000;
 const unique = (tag: string) => `${tag}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
@@ -38,13 +33,6 @@ test.afterAll(async ({ request }) => {
   await setFeatureFlag(request, BASE_URL, INLINE_ACTIONS_FLAG, false);
   await setFeatureFlag(request, BASE_URL, STRUCTURED_FLAG, false);
 });
-
-/** A session whose pane shows the fixture dialog; `keyFile` receives the key it is sent. */
-async function fakePaneSession(client: SessionClient, title: string, mode = ''): Promise<{ title: string; keyFile: string }> {
-  const keyFile = path.join(os.tmpdir(), `ssq-fake-pane-${title}.key`);
-  await client.createSession({ title, path: '/tmp', program: `bash ${FAKE_PANE} ${keyFile} ${mode}`.trim() });
-  return { title, keyFile };
-}
 
 const receivedKey = (keyFile: string) => (fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8') : '');
 /** The tabbed fake pane records one key name per line. */
