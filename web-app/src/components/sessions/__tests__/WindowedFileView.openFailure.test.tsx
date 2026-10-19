@@ -1,11 +1,11 @@
 import React from "react";
 import { act, render } from "@testing-library/react";
-import { Rejected } from "@/lib/files/transport/fileTransport";
+import { TransportFailure } from "@/lib/files/transport/fileTransport";
 import { createVirtualRangeTransport } from "@/lib/files/__tests__/fixtures/virtualRangeTransport";
 import type { WindowedEngine } from "@/lib/files/windowedFile";
 import { WindowedFileView } from "../files/WindowedFileView";
 
-const transport = createVirtualRangeTransport({ lines: 500_000, failures: [new Rejected("transport")] });
+const transport = createVirtualRangeTransport({ lines: 500_000, failures: [new TransportFailure("unavailable")] });
 jest.mock("@/lib/hooks/useFileTransport", () => ({ useFileTransport: () => transport }));
 jest.mock("../CodeEditor", () => ({
   CodeEditor: ({ onReady }: { onReady: (e: unknown) => void }) => {
