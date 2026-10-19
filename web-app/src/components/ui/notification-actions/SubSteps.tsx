@@ -3,7 +3,7 @@
 import type { Ref } from "react";
 import { COPY, createRulePrompt } from "@/lib/copy/notificationCopy";
 import { ActionButton } from "./ActionButton";
-import { approveVariant, denyVariant, field, stepActions, subStep } from "./ActionRow.css";
+import { approveVariant, denyVariant, field, stepActions, stickyBar, subStep } from "./ActionRow.css";
 
 interface StepBase {
   onBack: () => void;
@@ -40,7 +40,7 @@ interface DenyStepProps extends StepBase {
   reason: string;
   onReason: (v: string) => void;
   onSend: () => void;
-  fieldRef: Ref<HTMLTextAreaElement>;
+  fieldRef: Ref<HTMLInputElement>;
 }
 
 /** Optional one-line reason; Back keeps the draft. */
@@ -48,16 +48,28 @@ export function DenyStep({ fieldId, reason, onReason, onSend, onBack, fieldRef, 
   return (
     <div className={subStep} data-testid="deny-step">
       <label htmlFor={fieldId}>{COPY.denyReasonLabel}</label>
-      <textarea
+      <input
         id={fieldId}
         ref={fieldRef}
-        rows={1}
+        type="text"
         className={field}
         value={reason}
         data-testid="deny-reason"
+        // Mobile keyboard matrix (ux.md 11.4): Enter sends a single-line reason.
+        enterKeyHint="send"
+        autoCapitalize="sentences"
+        autoComplete="off"
+        spellCheck
+        onFocus={(e) => e.currentTarget.scrollIntoView?.({ block: "nearest" })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing && !busy) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
         onChange={(e) => onReason(e.target.value)}
       />
-      <div className={stepActions}>
+      <div className={`${stepActions} ${stickyBar}`}>
         <ActionButton id="send-denial" label={COPY.sendDenial} onClick={onSend} variant={denyVariant} disabled={busy} minHeight={minHeight} />
         <ActionButton id="back" label={COPY.back} onClick={onBack} minHeight={minHeight} />
       </div>

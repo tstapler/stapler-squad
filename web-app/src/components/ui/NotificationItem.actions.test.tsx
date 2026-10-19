@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ActionOutcome } from "@/gen/session/v1/notification_action_pb";
 import { NotificationItem, type NotificationItemProps } from "./NotificationItem";
-import { makeApprovalDescriptors, makeDecisionDescriptors, makeDescriptor, makeNotification } from "./__fixtures__/notificationFixtures";
+import { makeApprovalDescriptors, makeDecisionDescriptors, makeDescriptor, makeNotification, makeQuestionDescriptors } from "./__fixtures__/notificationFixtures";
 import { invokeMock, respondWith } from "./__fixtures__/actionRowHarness";
 
 jest.mock("next/link", () => ({
@@ -120,5 +120,22 @@ describe("NotificationItem inline actions", () => {
   it("renders no dismiss control for an unread actionable item when removeFromHistory is omitted", () => {
     renderItem();
     expect(screen.queryByLabelText("Remove notification")).toBeNull();
+  });
+
+  it("shows a desktop-only answer as aria-disabled with its reason, beside a working Open link and an enabled Tier A action", () => {
+    const n = makeNotification({
+      notificationType: "approval_needed",
+      metadata: { approval_id: "appr-1" },
+      actions: [
+        ...makeApprovalDescriptors(),
+        ...makeQuestionDescriptors({ available: false, unavailableReason: "desktop_only" }).slice(0, 1),
+      ],
+    });
+    renderItem(n);
+    const option = screen.getByTestId("action-answer_question-0");
+    expect(option).toHaveAttribute("aria-disabled", "true");
+    expect(document.getElementById(option.getAttribute("aria-describedby") as string)).toHaveTextContent("Answer from desktop");
+    expect(screen.getByTestId("notification-view-session")).toHaveAttribute("href", "/?session=sess-1");
+    expect(screen.getByTestId("action-approve")).not.toHaveAttribute("aria-disabled");
   });
 });

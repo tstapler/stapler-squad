@@ -171,7 +171,7 @@ export function ActionRow(props: ActionRowProps) {
   };
 
   // Focus follows the operator's own sub-step; Back returns it to the control that opened it.
-  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const fieldRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);

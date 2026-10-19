@@ -121,3 +121,15 @@ export const stepActions = style({
   flexWrap: "wrap",
   gap: "8px",
 });
+
+// Below 900px the step's buttons stay in view above the keyboard while the field is focused.
+export const stickyBar = style({
+  "@media": {
+    [narrow]: {
+      position: "sticky",
+      bottom: 0,
+      padding: "8px 0",
+      background: vars.color.cardBackground,
+    },
+  },
+});

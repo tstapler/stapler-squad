@@ -220,6 +220,19 @@ describe("ActionRow inline sub-steps", () => {
     expect(screen.getByTestId("deny-reason")).toHaveValue("too risky");
   });
 
+  it("sends the denial from the keyboard's Enter, with the single-line field attributes", async () => {
+    respondWith(ActionOutcome.APPLIED);
+    renderRow({ descriptors: approvals() });
+    await userEvent.click(screen.getByTestId("action-deny"));
+    const field = screen.getByTestId("deny-reason");
+    expect(field).toHaveAttribute("enterkeyhint", "send");
+    expect(field).toHaveAttribute("autocapitalize", "sentences");
+    expect(field).toHaveAttribute("autocomplete", "off");
+    await userEvent.type(field, "nope{Enter}");
+    await screen.findByText("Denied");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("Send denial dispatches DENY with the reason", async () => {
     respondWith(ActionOutcome.APPLIED);
     renderRow({ descriptors: approvals() });
