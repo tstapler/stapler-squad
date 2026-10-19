@@ -36,7 +36,6 @@ const unavailableDesktopOnly = "desktop_only"
 // Notification metadata keys read by the builder.
 const (
 	metaApprovalID         = "approval_id"
-	metaGuidanceRequestID  = "guidance_request_id"
 	metaItemID             = "item_id"
 	metaDecisionSchema     = "decision_schema"
 	boolTrue               = "true"
