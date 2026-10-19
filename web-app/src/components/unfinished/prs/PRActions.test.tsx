@@ -1,6 +1,7 @@
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
+import axe from "axe-core";
 import { PRActionResponseSchema } from "@/gen/session/v1/github_user_pb";
 import type { PRActionClient } from "@/lib/hooks/usePRActions";
 import { PRCard } from "./PRCard";
@@ -148,5 +149,20 @@ describe("PRCard actions", () => {
   it("prCard_should_DisableDraftToggle_When_NodeIdMissing", () => {
     render(<PRCard pr={makePR({ nodeId: "" })} actionClient={fakeClient()} />);
     expect(screen.getByTestId("pr-draft-toggle-button")).toBeDisabled();
+  });
+});
+
+describe("PRCard accessibility", () => {
+  it("prCard_should_HaveNoWcagAAViolations_When_ActionsDetailsAndCloseDialogOpen", async () => {
+    const pr = makePR({ nodeId: "PR_1", body: "hi", labels: ["bug"], requestedReviewerLogins: ["bob"] });
+    const { container } = render(<PRCard pr={pr} actionClient={fakeClient()} />);
+    fireEvent.click(screen.getByTestId("pr-details-toggle"));
+    fireEvent.click(screen.getByTestId("pr-close-button"));
+    // jsdom can't compute layout/colors, so color-contrast is excluded.
+    const results = await axe.run(container, {
+      runOnly: ["wcag2a", "wcag2aa"],
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 });
