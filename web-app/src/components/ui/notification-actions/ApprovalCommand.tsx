@@ -1,3 +1,4 @@
+// +feature: notification-inline-actions
 "use client";
 
 import { useState } from "react";

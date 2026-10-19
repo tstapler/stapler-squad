@@ -1,3 +1,4 @@
+// +feature: notification-inline-actions
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
