@@ -1,4 +1,4 @@
-import { answerCountsTowardBadge, badgeCount, type BadgeInputs } from "./badgeCount";
+import { badgeCount, type BadgeInputs } from "./badgeCount";
 
 const none: BadgeInputs = { unreadActionable: 0, unconfirmedAnswers: 0, unacknowledgedFailures: 0, escalatedPeerRequests: 0 };
 
@@ -19,11 +19,5 @@ describe("badgeCount", () => {
     ["ignored kinds only", { ignored: 25 }, { bell: 0, background: 0 }],
   ])("badgeCount_should_composeTable_When_%s", (_name, over, expected) => {
     expect(badgeCount({ ...none, ...over })).toEqual(expected);
-  });
-
-  it("ux_ac67_should_countIndeterminateAt5sButNotPlainSentAt30s", () => {
-    expect(answerCountsTowardBadge("send_indeterminate", 5_000)).toBe(true);
-    expect(answerCountsTowardBadge("sent", 30_000)).toBe(false);
-    expect(answerCountsTowardBadge("sent", 61_000)).toBe(true);
   });
 });

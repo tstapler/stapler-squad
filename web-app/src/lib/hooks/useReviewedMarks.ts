@@ -93,5 +93,3 @@ export function useReviewedMarks() {
     storage: snap.storage,
   };
 }
-
-export type ReviewedMarks = ReturnType<typeof useReviewedMarks>;

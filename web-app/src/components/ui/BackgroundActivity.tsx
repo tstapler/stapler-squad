@@ -14,6 +14,7 @@ import {
   type BackgroundRow,
 } from "@/lib/utils/backgroundActivity";
 import { markKeyOf, useReviewedMarks } from "@/lib/hooks/useReviewedMarks";
+import { isRowTextClick } from "@/lib/utils/rowClick";
 import { BackgroundChip } from "./BackgroundChip";
 import { BackgroundFailureStrip } from "./BackgroundFailureStrip";
 import { RemindMeMenu } from "./RemindMeMenu";
@@ -64,6 +65,8 @@ export interface BackgroundActivityProps {
   onRefresh: () => void;
   /** Called when a row's "View output" is followed: the host marks its records read and closes the tray. */
   onOpenRow: (row: ActivityRow) => void;
+  /** Called with the notification records behind rows the operator marked reviewed, so the bell drops them too. */
+  onReviewed?: (recordIds: string[]) => void;
   /** Called with the number of rows merged when "N new" is activated. */
   onMergeNew?: (count: number) => void;
   /** Only once Story 5.6 ships; a Reply action never renders before then. */
@@ -127,9 +130,8 @@ function RowView({
   const departed = row.state === "departed";
   const hasDetails = Boolean(ex?.message);
   // Row text toggles the details; a control inside the row never does (UX-AC71).
-  const toggleFromText = (e: React.MouseEvent) => {
-    const control = (e.target as HTMLElement).closest("a,button");
-    if (!control || control.hasAttribute("data-row-toggle")) setExpanded((v) => !v);
+  const toggleFromText = (e: React.MouseEvent<HTMLElement>) => {
+    if (isRowTextClick(e)) setExpanded((v) => !v);
   };
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- the title button is the keyboard path
@@ -297,6 +299,7 @@ export function BackgroundActivity({
   onRefresh,
   onOpenRow,
   onMergeNew,
+  onReviewed,
   replyEnabled = false,
   rowCap = ACTIVITY_ROW_CAP,
   legacy,
@@ -403,14 +406,20 @@ export function BackgroundActivity({
     </p>
   );
 
+  const reviewRecords = (reviewed: readonly ActivityRow[]) => {
+    const ids = reviewed.flatMap((r) => r.exception?.recordIds ?? []);
+    if (ids.length > 0) onReviewed?.(ids);
+  };
   const markRow = (row: ActivityRow, group: readonly ActivityRow[], groupId: string) => {
     const next = group[group.findIndex((r) => r.key === row.key) + 1];
     setFocusTarget(next ? { kind: "row", key: next.key } : { kind: "group", id: groupId });
     marks.mark([markKeyOf(row)]);
+    reviewRecords([row]);
   };
   const markAll = (group: readonly ActivityRow[], groupId: string) => {
     setFocusTarget({ kind: "group", id: groupId });
     marks.mark(group.map(markKeyOf));
+    reviewRecords(group);
   };
   const show = (row: ActivityRow) => {
     mergeKeys([row.key]);

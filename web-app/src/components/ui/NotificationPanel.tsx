@@ -128,6 +128,7 @@ export function NotificationPanel() {
     answeredElsewhere,
     showActionToast,
     addNotification,
+    markBackgroundReviewed,
     quietMode,
     setQuietMode,
   } = useNotifications();
@@ -928,6 +929,7 @@ export function NotificationPanel() {
               lastUpdatedAt={background.poll.lastUpdatedAt}
               onRefresh={background.poll.refresh}
               onOpenRow={openBackgroundRow}
+              onReviewed={markBackgroundReviewed}
               onNewFailures={(n) => announce(`${n} background ${n === 1 ? "session needs" : "sessions need"} attention`, "polite", "background-failure")}
               onMergeNew={(n) => announce(`${n} new background ${n === 1 ? "session" : "sessions"}`, "polite", "background-new")}
               replyEnabled={replyEnabled}

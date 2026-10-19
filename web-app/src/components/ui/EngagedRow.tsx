@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { CardEngagementContext, useEngagedCard } from "@/lib/hooks/useEngagedCard";
+import { isRowTextClick } from "@/lib/utils/rowClick";
 
 const INERT_TARGET = "input, textarea, select, [contenteditable], .xterm";
-const INTERACTIVE = "button, a, input, textarea, select, [role=button], [role=menuitem]";
 const DIGIT = /^[1-9]$/;
-const TOUCH_CLICK_MS = 1_000;
 
 interface Props extends HTMLAttributes<HTMLDivElement> {
   cardId: string;
@@ -19,13 +18,12 @@ const hasActions = (el: HTMLElement) => !!el.querySelector('[data-testid="action
 
 /**
  * A Needs-you card as the engagement tracker sees it (design/ux.md 7.1): reports the operator's
- * focus, pointer and touch, toggles expansion on Enter, Space or a tap, collapses on Esc, and
+ * focus, pointer and touch, toggles expansion on Enter, Space or a click or tap on row text, collapses on Esc, and
  * moves focus (never sends) to the Nth option on a digit while the card is digit-armed.
  */
 export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...rest }: Props) {
   const { tracker, handlers, card } = useEngagedCard(cardId);
   const [expansion, setExpansion] = useState(() => tracker?.expansion(cardId) ?? "none");
-  const lastTouchAt = useRef(Number.NEGATIVE_INFINITY);
 
   useEffect(() => {
     if (!tracker || !preExpand) return;
@@ -63,8 +61,7 @@ export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...
 
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
     rest.onClick?.(e);
-    const touched = Date.now() - lastTouchAt.current < TOUCH_CLICK_MS;
-    if (touched && !(e.target as HTMLElement).closest(INTERACTIVE) && hasActions(e.currentTarget)) toggle();
+    if (isRowTextClick(e) && hasActions(e.currentTarget)) toggle();
   };
 
   return (
@@ -72,10 +69,6 @@ export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...
       <div
         {...rest}
         {...handlers}
-        onTouchStart={(e) => {
-          lastTouchAt.current = Date.now();
-          handlers.onTouchStart(e);
-        }}
         onKeyDown={onKey}
         onClick={onClick}
         data-engaged-card={cardId}

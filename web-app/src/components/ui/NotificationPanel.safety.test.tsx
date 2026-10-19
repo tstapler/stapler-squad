@@ -218,6 +218,16 @@ describe("Story 2.10b: digit and focus guards", () => {
     expect(first).toHaveAttribute("data-expanded", "operator");
   });
 
+  it("toggles a card on a mouse click on its text but not on a control inside it (UX-AC71)", () => {
+    const { container } = renderPanel();
+    const q1 = rowOf(container, "q1");
+    expect(q1).not.toHaveAttribute("data-expanded");
+    act(() => void fireEvent.click(within(q1).getByText("Something happened")));
+    expect(q1).toHaveAttribute("data-expanded", "operator");
+    act(() => void fireEvent.click(optionButtons(container, "q1")[0]));
+    expect(q1).toHaveAttribute("data-expanded", "operator");
+  });
+
   it("holds an operator-expanded card engaged on touch, 10 s after the tap, until it is collapsed", () => {
     const { container, refreshPanel } = renderPanel();
     const q1 = rowOf(container, "q1");

@@ -401,6 +401,22 @@ describe("BackgroundActivity", () => {
     expect(props.onOpenRow).not.toHaveBeenCalled();
   });
 
+  it("BackgroundActivity_should_reportTheRecordsBehindReviewedRows_So_theBellDropsThem", () => {
+    const row = exceptionRow();
+    const onReviewed = jest.fn();
+    setup([row], { onReviewed });
+    fireEvent.click(screen.getByTestId("background-mark-reviewed"));
+    expect(onReviewed).toHaveBeenCalledWith(row.exception?.recordIds);
+  });
+
+  it("BackgroundActivity_should_notToggleDetails_When_ClickEndsATextSelection", () => {
+    setup([exceptionRow()]);
+    const row = screen.getByTestId("background-row");
+    jest.spyOn(window, "getSelection").mockReturnValue({ toString: () => "3 tests" } as Selection);
+    fireEvent.click(within(row).getByText("3 tests failing"));
+    expect(toggleOf(row)).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("BackgroundActivity_should_notAdvertiseExpandableDetails_When_rowHasNoMessage", () => {
     setup(eleven());
     for (const row of screen.getAllByTestId("background-row")) {

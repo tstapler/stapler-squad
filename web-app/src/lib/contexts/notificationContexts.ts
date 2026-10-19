@@ -53,6 +53,11 @@ export interface NotificationCommandsValue {
    * you and this browser's badge. Nothing is written to the server, so it is not an acknowledgement.
    */
   markAnswerHandled: (ids: string[]) => void;
+  /**
+   * Browser-local "Mark reviewed" of Background exception rows (UX-AC67): the records stay in the
+   * Background list but leave this browser's bell count.
+   */
+  markBackgroundReviewed: (ids: string[]) => void;
   /** Bulk clear that leaves pinned decisions in place. Never touches history. */
   clearAll: () => void;
   /** Takes one toast off the deck; its history row stays (a pinned toast is demoted, not deleted). */
@@ -138,6 +143,7 @@ const OUTSIDE_PROVIDER_COMMANDS = {
   acknowledgeNotification: noop,
   broadcastActionResolved: noop,
   markAnswerHandled: noop,
+  markBackgroundReviewed: noop,
   clearAll: noop,
   dismissToast: noop,
   moveAllToTray: () => [],

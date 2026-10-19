@@ -1130,6 +1130,23 @@ describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
     expect(mockMarkAsRead).not.toHaveBeenCalled();
   });
 
+  it("reviewed_background_records_should_leave_the_bell_but_stay_unread_in_the_list_with_no_server_write", () => {
+    mockServerUnread = 2;
+    mockMarkAsRead.mockClear();
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "a" }), id: "bg-1" });
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "b" }), id: "bg-2" });
+    });
+    expect(result.current.getUnreadCount()).toBe(2);
+
+    act(() => result.current.markBackgroundReviewed(["bg-1"]));
+
+    expect(result.current.getUnreadCount()).toBe(1);
+    expect(result.current.notificationHistory.find((n) => n.id === "bg-1")?.isRead).toBe(false);
+    expect(mockMarkAsRead).not.toHaveBeenCalled();
+  });
+
   it("marked_handled_should_survive_a_reload_in_this_browser_only", () => {
     const first = renderHook(() => useNotifications(), { wrapper });
     act(() => {

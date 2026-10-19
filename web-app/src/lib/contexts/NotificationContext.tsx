@@ -99,6 +99,7 @@ function reviewItemToNotificationType(reason: AttentionReason): NotificationData
 }
 
 const handledKeyOf = (n: NotificationHistoryItem) => `answer:${n.id}@${n.timestamp}`;
+const reviewedKeyOf = (n: NotificationHistoryItem) => `bgrecord:${n.id}@${n.timestamp}`;
 const newNotificationId = () => `notification-${Date.now()}-${Math.random()}`;
 const toIdSet = (id: string | string[]) => new Set(Array.isArray(id) ? id : [id]);
 
@@ -217,6 +218,12 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       handledMarksRef.current.mark(keys, { track: false });
     };
 
+    const markBackgroundReviewed: NotificationCommandsValue["markBackgroundReviewed"] = (ids) => {
+      const set = new Set(ids);
+      const keys = historyStateRef.current.filter((n) => set.has(n.id)).map(reviewedKeyOf);
+      handledMarksRef.current.mark(keys, { track: false });
+    };
+
     const markAsRead = (id: string | string[]) => {
       const ids = Array.isArray(id) ? id : [id];
       const idSet = new Set(ids);
@@ -230,6 +237,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     return {
       addNotification,
       markAnswerHandled,
+      markBackgroundReviewed,
       addToHistoryOnly,
       removeNotification: removeToast,
       dismissToast: removeToast,
@@ -416,10 +424,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     [notificationHistory, isHandled],
   );
   const handledUnread = visibleHistory.filter((n, i) => n !== notificationHistory[i]).length;
-  const unreadCount = useMemo(
-    () => Math.max(groupNotifications(visibleHistory.filter((n) => !n.isRead)).length, serverUnread - handledUnread),
-    [visibleHistory, serverUnread, handledUnread],
-  );
+  // Reviewed Background records stay unread in the list (their row must keep its exception state) but not in the bell.
+  const unreviewedUnread = visibleHistory.filter((n) => !n.isRead && !isHandled(reviewedKeyOf(n)));
+  const reviewedUnread = visibleHistory.filter((n) => !n.isRead).length - unreviewedUnread.length;
+  const unreadCount = Math.max(groupNotifications(unreviewedUnread).length, serverUnread - handledUnread - reviewedUnread);
 
   const state = useMemo<NotificationStateValue>(
     () => ({

@@ -14,14 +14,6 @@ export interface BadgeCounts {
   background: number;
 }
 
-export const UNCONFIRMED_AFTER_MS = 60_000;
-
-/** UX-AC67: a `sent` answer counts only once it has gone unconfirmed for 60 s; an indeterminate send counts at once. */
-export function answerCountsTowardBadge(delivery: "sent" | "send_indeterminate" | "unconfirmed", ageMs: number): boolean {
-  if (delivery === "sent") return ageMs >= UNCONFIRMED_AFTER_MS;
-  return true;
-}
-
 export function badgeCount(i: BadgeInputs): BadgeCounts {
   return {
     bell: i.unreadActionable + i.unconfirmedAnswers + i.unacknowledgedFailures + i.escalatedPeerRequests,
