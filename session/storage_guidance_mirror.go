@@ -1,0 +1,24 @@
+package session
+
+import (
+	"context"
+
+	"github.com/google/uuid"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+)
+
+// CreateMirroredGuidanceRequest forwards to EntRepository.CreateMirroredGuidanceRequest.
+func (s *Storage) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*GuidanceRequestData, error) {
+	return s.repo.CreateMirroredGuidanceRequest(ctx, req, capLimit)
+}
+
+// SetGuidanceDelivery forwards to EntRepository.SetDelivery.
+func (s *Storage) SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error) {
+	return s.repo.SetDelivery(ctx, id, route, state, addAttempts)
+}
+
+// ListOpenGuidanceRequestsByAsker forwards to EntRepository.ListOpenGuidanceRequestsByAsker.
+func (s *Storage) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*GuidanceRequestData, error) {
+	return s.repo.ListOpenGuidanceRequestsByAsker(ctx, askerSessionUUID, sources...)
+}
