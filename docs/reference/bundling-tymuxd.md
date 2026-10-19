@@ -175,6 +175,26 @@ registered for it at all, regardless of the flag — `StopTymuxd()` has no
 ownership check beyond a PID file, so stopping a daemon this process doesn't
 own could kill one a sibling process still depends on.
 
+## Upgrading and downgrading the running daemon
+
+A running `tymuxd` keeps serving until it is replaced, so a new build that embeds a
+different `TYMUX_VERSION` does not change the daemon you are talking to. Settings → Features →
+"tymuxd version" (and `GetTymuxRolloutStatus.daemon`) shows both versions and whether replacing
+would be an upgrade or a downgrade; `ReplaceTymuxd` does it.
+
+- **Detection** (`session/tymux/version.go`): finds the listener on the configured address
+  (`lsof`, falling back to `ss`), resolves its executable, and runs `--version` on it. The pid file
+  is deliberately not used: it records only the last daemon this process spawned and goes stale.
+  Once tymux ships `GetServerInfo` (tstapler/tymux#56) this should ask the daemon directly.
+- **Replacement**: SIGTERM (tymuxd flushes its session records), wait for the port to free, SIGKILL
+  as a last resort, then `EnsureDaemonRunning` spawns the configured binary. The direction is
+  whatever the configured binary is relative to the running one, so a downgrade is: pin an older
+  `TYMUX_VERSION` (or `TYMUXD_BIN`), rebuild, then replace.
+- **Live sessions**: a revived pane respawns its program, so replacement is refused with
+  `FAILED_PRECONDITION` while any session is live unless `allow_interrupt_live_sessions` is set.
+- The embedded binary is extracted write-then-rename, so a newer build can replace the cached file
+  while the old daemon still runs from it.
+
 ## Escape hatches
 
 Two environment variables let a developer bypass the normal binary
