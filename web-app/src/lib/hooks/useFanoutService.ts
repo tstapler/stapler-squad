@@ -1,6 +1,7 @@
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import type { CreateSessionRequest } from "@/gen/session/v1/session_pb";
+import type { CreateSessionRequestSchema } from "@/gen/session/v1/session_pb";
+import type { MessageInitShape } from "@bufbuild/protobuf";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 
@@ -30,7 +31,7 @@ function client() {
 }
 
 export async function fanOutSession(
-  base: Partial<CreateSessionRequest>,
+  base: MessageInitShape<typeof CreateSessionRequestSchema>,
   count: number,
   programOverrides: string[] = [],
 ): Promise<{ groupId: string; sessions: Session[] }> {

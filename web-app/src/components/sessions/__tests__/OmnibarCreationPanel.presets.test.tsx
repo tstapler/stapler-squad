@@ -31,6 +31,7 @@ const DEFAULT_FORM_STATE: OmnibarFormState = {
   autonomousMode: false,
   autoApprove: false,
   extraArgs: [],
+  fanoutCount: 1,
 };
 
 function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): OmnibarCreationPanelProps {
