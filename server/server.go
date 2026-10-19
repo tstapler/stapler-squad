@@ -1190,6 +1190,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		backlogMutateHandler := services.NewBacklogDebugMutateHandler(deps.Storage)
 		backlogMutateHandler.RegisterRoutes(srv.mux)
 		log.Info("Registered backlog debug mutate handlers at /api/debug/backlog/mutate-* (e2e-local only)")
+
+		if deps.SessionService != nil {
+			services.NewGuidanceDebugSeedHandler(deps.SessionService, deps.Storage).RegisterRoutes(srv.mux)
+			log.Info("Registered guidance debug seed handler at /api/debug/guidance/seed-question (e2e-local only)")
+		}
 	}
 
 	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.

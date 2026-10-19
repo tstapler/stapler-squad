@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -72,9 +73,37 @@ func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string
 		return nil, false, err
 	}
 	if applied {
+		s.saveForLaterIfSessionEnded(ctx, data)
 		s.notifyAnswered(data)
 		s.resumeTriageIfHalted(data)
 		s.notifyAnswerListener(ctx, data.ID)
 	}
 	return data, applied, nil
+}
+
+// saveForLaterIfSessionEnded marks an answer to an agent-created session question
+// as saved for later when its session is stopped (resume route) or archived (read_only
+// route): the agent reads it with get_guidance_request once the operator resumes the
+// session. Nothing is delivered or revived here (ADR-005 rung 3). Hook and peer rows
+// die with their session and are never saved.
+func (s *GuidanceRequestService) saveForLaterIfSessionEnded(ctx context.Context, data *session.GuidanceRequestData) {
+	p := s.probes.Load()
+	if p == nil || data.Source != domain.QuestionSourceAgentMCP || data.Scope != domain.RequestScopeSession {
+		return
+	}
+	sessionUUID := askerSessionOf(data)
+	route := domain.DeliveryRouteResume
+	switch {
+	case p.archived(sessionUUID):
+		route = domain.DeliveryRouteReadOnly
+	case !p.ended(sessionUUID):
+		return
+	}
+	id, err := uuid.Parse(data.ID)
+	if err != nil {
+		return
+	}
+	if _, err := s.storage.SetGuidanceDelivery(ctx, id, route, domain.DeliveryStateSavedForLater, 0); err != nil {
+		log.Warn("[GuidanceRequest] answer stored but not marked saved for later", "id", data.ID, "err", err)
+	}
 }

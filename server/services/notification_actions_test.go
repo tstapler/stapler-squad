@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type fakeApprovals struct {
@@ -207,6 +208,23 @@ func TestBuildDescriptors_ShouldOfferAnswerGuidance_WhenGuidanceOpen(t *testing.
 	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(open))
 	assert.True(t, open.Actions[0].Available, "guidance is Tier A and works remotely")
 	assert.Equal(t, []string{"OPEN"}, kinds(closed))
+}
+
+func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookOrPeerSourced(t *testing.T) {
+	t.Parallel()
+	f := newDescriptorFixture()
+	f.guidance.open["hook"] = OpenGuidance{Source: domain.QuestionSourceHook}
+	f.guidance.open["peer"] = OpenGuidance{Source: domain.QuestionSourcePeer}
+	f.guidance.open["agent"] = OpenGuidance{Source: domain.QuestionSourceAgentMCP}
+	rec := func(id string) *sessionv1.NotificationHistoryRecord {
+		return &sessionv1.NotificationHistoryRecord{Id: "n-" + id, Metadata: map[string]string{metaGuidanceRequestID: id}}
+	}
+	hook, peer, agent := rec("hook"), rec("peer"), rec("agent")
+	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{hook, peer, agent}, ListenerClassLocal)
+
+	assert.Equal(t, []string{"OPEN"}, kinds(hook), "a hook question is answered through its pane route, never as a stored answer")
+	assert.Equal(t, []string{"OPEN"}, kinds(peer))
+	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(agent))
 }
 
 func TestBuildDescriptors_ShouldOfferDecisionChoices_WhenItemInReviewWithSchema(t *testing.T) {

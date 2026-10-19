@@ -7,6 +7,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // notification_actions.go computes the inline-action descriptors of a
@@ -139,6 +140,9 @@ type BacklogDecisionLookup interface {
 // OpenGuidance is an unanswered guidance request.
 type OpenGuidance struct {
 	Options []string
+	// Source is who raised it. A hook-mirrored question is answered by ANSWER_QUESTION (the pane
+	// route) and a peer request by the peer session, so only agent-created rows get ANSWER_GUIDANCE.
+	Source domain.QuestionSource
 }
 
 // GuidanceLookup returns the open guidance requests among ids.
@@ -342,7 +346,7 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
 	id := r.GetMetadata()[metaGuidanceRequestID]
 	g, open := st.guidance[id]
-	if id == "" || !open {
+	if id == "" || !open || g.Source == domain.QuestionSourceHook || g.Source == domain.QuestionSourcePeer {
 		return nil
 	}
 	d := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_ANSWER_GUIDANCE, "Answer",

@@ -84,3 +84,44 @@ func TestListSavedGuidanceAnswers_should_ReturnOnlyAgentCreatedSavedRows(t *test
 	assert.Equal(t, agent.ID, got.GetId())
 	assert.Equal(t, "resume", got.GetDeliveryRoute(), "stopped, not archived")
 }
+
+func TestAnswerAs_should_SaveAnAgentAnswerForLater_WhenItsSessionIsStoppedOrArchived_AndNeverRevive(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewGuidanceRequestService(storage, nil, nil)
+	ended, archived := false, false
+	svc.SetDeliveryProbes(DeliveryProbes{
+		SessionEnded:    func(string) bool { return ended },
+		SessionArchived: func(string) bool { return archived },
+	})
+	ctx := context.Background()
+	ask := func(text string) string {
+		row, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+			Scope: domain.RequestScopeSession, SessionUUID: mirrorSession, QuestionText: text,
+			QuestionType: domain.QuestionTypeMultipleChoice, Options: `["Redis","Memcached"]`,
+		})
+		require.NoError(t, err)
+		return row.ID
+	}
+	answer := func(id string) *session.GuidanceRequestData {
+		_, applied, err := svc.AnswerAs(ctx, id, "Redis", HumanAnswerer())
+		require.NoError(t, err)
+		require.True(t, applied)
+		row, err := storage.GetGuidanceRequest(ctx, uuid.MustParse(id))
+		require.NoError(t, err)
+		return row
+	}
+
+	live := answer(ask("live?"))
+	assert.Empty(t, live.DeliveryState, "a live session's agent reads the answer itself")
+
+	ended = true
+	stopped := answer(ask("stopped?"))
+	assert.Equal(t, domain.DeliveryStateSavedForLater, stopped.DeliveryState)
+	assert.Equal(t, domain.DeliveryRouteResume, stopped.DeliveryRoute)
+
+	archived = true
+	gone := answer(ask("archived?"))
+	assert.Equal(t, domain.DeliveryStateSavedForLater, gone.DeliveryState)
+	assert.Equal(t, domain.DeliveryRouteReadOnly, gone.DeliveryRoute, "archived: stored, never delivered unless the operator resumes it")
+}

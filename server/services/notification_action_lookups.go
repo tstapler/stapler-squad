@@ -48,7 +48,7 @@ func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (
 	out := map[string]OpenGuidance{}
 	for _, r := range rows {
 		if want[r.ID] {
-			out[r.ID] = OpenGuidance{Options: decodeGuidanceOptions(r.Options)}
+			out[r.ID] = OpenGuidance{Options: decodeGuidanceOptions(r.Options), Source: r.Source}
 		}
 	}
 	return out, nil
