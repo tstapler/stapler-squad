@@ -1734,3 +1734,9 @@ W0 implementation found these plan errors; each was checked against code before 
 - Story 1.2.2: structured denial fields live in the stuck row's `context` string (parsed into proto fields 17-20), not new ent columns; `ErrTransitionNotAllowed` is re-exported from `session/storage_backlog.go`.
 - Story 1.2.2: a snoozed `transition_denied` row is invisible to the dedupe check (`FindOpenStuckStates` excludes snoozed), so a snoozed row gets a fresh comment and notification on the next sweep. Unaddressed.
 - Story 3.1.1: `RepoSettings` returns `Status=OK` with `Stale=true` when a refresh fails but an earlier OK value is retained (for Story 3.1.3).
+
+## Errata from W7 (2026-10-19)
+
+- Story 3.1.2 `Files:` extended to include `server/services/backlog_service.go` (`repoSettings` field and `SetRepoSettingsLookup`) and `server/dependencies.go` (injection). The RPC that populates the report is `ListStuckBacklogItems`, not `GetBacklogStuckReport`; population is in the handler (`populateAutoMerge`), not the mapper. New proto: `AutoMergeLookupStatus`, `StuckBacklogItem` fields 21-22.
+- Story 1.2.3 `Files:` extended with `server/actuator_test.go`. `TransitionCaller` is a bare `string` type in `session/workflow_engine_bypass.go`; Story 1.5.1 must move or extend it. Recount matched the plan (38 + 9 sites; 40 pending across 32 entries, 5 exempt, 5 engine-routed); line numbers shifted (rollbacks now at `backlog_service_triage.go:853,2131,2487`, `SyncLoop` at `backlog_sync.go:462`). The 3 rollback and 2 debug sites are listed `pending` (not `exempt`) until Story 1.5.6.
+- Workers' branches merge `main`, so merging them pulls in main's new proto (e.g. fan-out); rerun `make proto-gen` after each merge before testing.
