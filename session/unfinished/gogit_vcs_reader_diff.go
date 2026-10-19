@@ -11,6 +11,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -153,14 +154,28 @@ func (g *GoGitVCSReader) diffShortstatUncachedPass(worktreePath string, pass *st
 	// largest allocator in the app (~163GB cum in one profiling session),
 	// since ignored build trees were read just like any other untracked file.
 	// untrackedMatcher was resolved in Phase 1 above (cached on entry, F6).
-	_ = g.walkUntrackedSkip(worktreePath, indexedNames, untrackedMatcher, tg, func(absPath string) {
-		d.Files++
-		if n, ok := countFileLines(absPath); ok {
-			d.Insertions += n
-		}
-	})
+	files, insertions, walkErr := g.countUntracked(worktreePath, indexedNames, untrackedMatcher, tg)
+	d.Files += files
+	d.Insertions += insertions
+	if walkErr != nil {
+		// Keep the partial stat (an unreadable subdirectory must not blank the
+		// whole badge) but say it is incomplete.
+		log.WarningLog().Printf("[GoGitVCSReader] untracked walk of %s aborted, diff stat undercounts untracked files: %v", worktreePath, walkErr)
+	}
 
 	return d, nil
+}
+
+// countUntracked counts untracked files as pure insertions. On a walk error it
+// returns what was counted before the walk aborted, plus the error.
+func (g *GoGitVCSReader) countUntracked(worktreePath string, indexed map[string]struct{}, matcher gitignore.Matcher, tg trackedGen) (files, insertions int, err error) {
+	err = g.walkUntrackedSkip(worktreePath, indexed, matcher, tg, func(absPath string) {
+		files++
+		if n, ok := countFileLines(absPath); ok {
+			insertions += n
+		}
+	})
+	return files, insertions, err
 }
 
 // indexMeta is one stage-0 index entry classified against HEAD.

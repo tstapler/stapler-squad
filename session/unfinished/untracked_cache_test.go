@@ -410,3 +410,21 @@ func TestUntrackedWalkSkip_ShouldMatchOldImplementation_WhenColdAndWarm(t *testi
 	assert.Equal(t, want, got, "cap: both report the same number of files")
 	assert.Equal(t, 3, got)
 }
+
+func TestCountUntracked_ShouldReturnPartialCountAndError_WhenSubdirectoryUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newWalkFixture(t)
+	f.write("a.txt", "one\ntwo\n")
+	f.write("locked/b.txt", "x\n")
+	locked := f.path("locked")
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	files, ins, err := f.g.countUntracked(f.root, f.indexed, f.matcher, f.tg)
+
+	require.Error(t, err, "an aborted walk must be reported, not swallowed")
+	assert.LessOrEqual(t, files, 1)
+	assert.LessOrEqual(t, ins, 2)
+}

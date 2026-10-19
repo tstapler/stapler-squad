@@ -43,7 +43,8 @@ const scanSkipAgeTicks = 3
 
 // fullWalkMaxAge bounds how long a clean verdict can be trusted: a multiple of
 // the backstop tick, so a missed event is corrected within scanSkipAgeTicks
-// ticks (ADR-006).
+// ticks (ADR-006). It is a fixed multiple of the default tick (15 min): DirtyGen
+// has no Scanner, so a custom tick interval does not rescale it.
 const fullWalkMaxAge = scanSkipAgeTicks * defaultScanTickInterval
 
 // EventKind classifies one watcher observation fed into DirtyGen.
