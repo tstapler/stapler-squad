@@ -51,7 +51,7 @@ jobs:
       # make stapler-squad's ensure-tools prerequisite hard-requires buf on PATH
       # (Makefile's ASDF_STAMP check), even when proto-gen itself is a cached
       # no-op — without this the Playwright global-setup's rebuild
-      # (tests/e2e/helpers/test-server.ts) fails with "go/buf/pnpm not found"
+      # (tests/e2e/helpers/test-server.ts) fails with "go/buf/bun not found"
       # before any test runs. Mirrors build.yml's buf setup.
       - name: Cache buf binary
         uses: actions/cache@v4
@@ -65,17 +65,13 @@ jobs:
           version: '1.41.0'
           setup_only: 'true'
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: tests/e2e/pnpm-lock.yaml
 
       - name: Download generated files
         uses: actions/download-artifact@v4
@@ -89,12 +85,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/pnpm-lock.yaml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
 
       - name: Install Playwright + test dependencies
         run: |
           cd tests/e2e
-          pnpm install --frozen-lockfile
+          bun install --frozen-lockfile
           npx playwright install chromium --with-deps
 
       - name: Start test server
