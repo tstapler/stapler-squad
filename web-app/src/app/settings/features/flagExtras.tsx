@@ -5,6 +5,8 @@ import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDi
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import { GateStatusLine } from "./GateStatusLine";
 import { GateKindOverrides, type OverrideMode } from "./GateKindOverrides";
+import Link from "next/link";
+import { routes } from "@/lib/routes";
 import { flagDescription } from "./page.css";
 
 // Mirrors config.HiddenSessionGateFeatureFlag on the server.
@@ -92,6 +94,15 @@ function changeKindOverride(setFlag: FlagSetter, scope: string, mode: OverrideMo
 const AUTONOMOUS_GROUP = "Autonomous backlog";
 
 export const FLAG_EXTRAS: Record<string, FlagExtra> = {
+  backlog: {
+    renderExtras: () => (
+      <div className={flagDescription}>
+        <Link href={routes.settingsBacklogQuota} data-testid="feature-flag-quota-link">
+          Backlog Quota settings
+        </Link>
+      </div>
+    ),
+  },
   [PI_SUPPORT_FLAG_NAME]: {
     confirmDisable: { needsConfirm: piExtensionInstalled, Dialog: PiDisableWarningDialog },
   },

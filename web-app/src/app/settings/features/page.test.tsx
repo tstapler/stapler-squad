@@ -109,8 +109,8 @@ describe("FeaturesPage", () => {
     const descriptionLine = screen.getByText(
       "Backlog management with external sync sources and AI-driven triage"
     );
-    // flagName + description + the (empty) row status region; no extra detail line
-    expect(descriptionLine.parentElement?.children.length).toBe(3);
+    // flagName + description + the Backlog Quota link (flagExtras) + the (empty) row status region; no extra detail line
+    expect(descriptionLine.parentElement?.children.length).toBe(4);
     expect(screen.getByTestId("feature-flag-row-status")).toBeEmptyDOMElement();
     expect(container.querySelectorAll("div").length).toBeGreaterThan(0);
   });
