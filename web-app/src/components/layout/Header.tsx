@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { AppLink } from "@/components/ui/AppLink";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
@@ -119,16 +120,18 @@ export function Header() {
             <MemoryNavBadge />
             <ConnectionIndicator />
             <WorkspaceSwitcher />
-            <button
-              className={styles.newSessionButton}
-              onClick={openOmnibar}
-              aria-label="Create new session (⌘K)"
-              title="Create new session (⌘K)"
-            >
-              <span className={styles.newSessionIcon} aria-hidden="true">+</span>
-              <span className={styles.newSessionLabel}>New Session</span>
-            </button>
+            <Tooltip label="Create new session (⌘K)" side="bottom" helpSlug="omnibar">
+              <button
+                className={styles.newSessionButton}
+                onClick={openOmnibar}
+                aria-label="Create new session (⌘K)"
+              >
+                <span className={styles.newSessionIcon} aria-hidden="true">+</span>
+                <span className={styles.newSessionLabel}>New Session</span>
+              </button>
+            </Tooltip>
             <ApprovalNavBadge onClick={() => setIsApprovalDrawerOpen(true)} />
+            <Tooltip label="Notifications" side="bottom" helpSlug="notifications">
             <button
               className={styles.notificationButton}
               onClick={togglePanel}
@@ -137,7 +140,6 @@ export function Header() {
               aria-label="Open notifications"
               aria-expanded={isPanelOpen}
               aria-controls="notification-tray"
-              title="Notifications"
             >
               <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -147,6 +149,7 @@ export function Header() {
                 <span className={styles.notificationBadge} aria-label={`${unreadCount} unread`}>{unreadCount}</span>
               )}
             </button>
+            </Tooltip>
             <button
               className={styles.debugButton}
               onClick={(event) => {
@@ -160,16 +163,17 @@ export function Header() {
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
               </svg>
             </button>
+            <Tooltip label="Keyboard shortcuts (?)" side="bottom" helpSlug="keyboard-shortcuts">
             <button
               className={styles.helpButton}
               onClick={() => {
                 window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
               }}
               aria-label="Show keyboard shortcuts"
-              title="Keyboard shortcuts (?)"
             >
               ?
             </button>
+            </Tooltip>
           </div>
         </div>
       </header>

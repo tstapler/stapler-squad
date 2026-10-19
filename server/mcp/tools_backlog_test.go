@@ -5364,6 +5364,58 @@ func TestSubmitReviewVerdict_should_NotSurfaceError_When_AutoReopenerFails(t *te
 	assert.Equal(t, []string{itemID}, reopener.calledWith())
 }
 
+// --- findSessionTitleByUUID ---
+
+// fakeErrInstanceStore is an InstanceStore fake used only to verify that
+// findSessionTitleByUUID passes a non-"not found" store error straight
+// through to its caller, rather than mapping every error onto the
+// "no session found" message.
+type fakeErrInstanceStore struct {
+	stubStore
+	findErr error
+}
+
+func (f *fakeErrInstanceStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+	return nil, f.findErr
+}
+
+func TestFindSessionTitleByUUID_should_ReturnTitle_When_UUIDMatchesStoredInstance(t *testing.T) {
+	uuid := "sess-uuid-1"
+	store := &stubStore{instances: []*session.Instance{
+		{UUID: uuid, Title: "matching-session", Path: t.TempDir()},
+		{UUID: "other-uuid", Title: "other-session", Path: t.TempDir()},
+	}}
+
+	title, err := findSessionTitleByUUID(store, uuid)
+
+	require.NoError(t, err)
+	assert.Equal(t, "matching-session", title)
+}
+
+func TestFindSessionTitleByUUID_should_ReturnNotFoundError_When_NoInstanceMatchesUUID(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{
+		{UUID: "other-uuid", Title: "other-session", Path: t.TempDir()},
+	}}
+
+	title, err := findSessionTitleByUUID(store, "missing-uuid")
+
+	require.Error(t, err)
+	assert.Empty(t, title)
+	assert.Contains(t, err.Error(), "no session found with UUID missing-uuid")
+}
+
+func TestFindSessionTitleByUUID_should_PassThroughUnderlyingStoreError_When_FindFails(t *testing.T) {
+	store := &fakeErrInstanceStore{findErr: errors.New("db unavailable")}
+
+	title, err := findSessionTitleByUUID(store, "any-uuid")
+
+	require.Error(t, err)
+	assert.Empty(t, title)
+	assert.NotContains(t, err.Error(), "no session found",
+		"a genuine store error must surface as-is, not be mapped onto the not-found message")
+	assert.Contains(t, err.Error(), "db unavailable")
+}
+
 // --- wait_for_backlog_event ---
 
 // waitCallOutcome carries both the result and error of a

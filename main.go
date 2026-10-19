@@ -932,7 +932,11 @@ func init() {
 	rootCmd.AddCommand(newIntegrationCredentialCmd())
 	rootCmd.AddCommand(newContractBundleCmd())
 	rootCmd.AddCommand(printQRCodesCmd)
-	rootCmd.AddCommand(commands.GetSessionCmd)
+	rootCmd.AddCommand(commands.NewGetSessionCmd())
+	rootCmd.AddCommand(commands.NewCreateSessionCmd())
+	rootCmd.AddCommand(commands.NewListSessionsCmd())
+	rootCmd.AddCommand(commands.NewSteerCmd())
+	rootCmd.AddCommand(commands.NewGetDiffCmd())
 	rootCmd.AddCommand(commands.EnsurePortsFreeCmd)
 }
 
@@ -1755,7 +1759,11 @@ func main() {
 		buildinfo.Version = version
 	}
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		// stderr, and not at all when the subcommand already reported it, so
+		// scripts capturing stdout (id=$(ssq create-session ...)) never see errors.
+		if !commands.IsReported(err) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		// Every invocation of this binary exited 0 regardless of success or
 		// failure before this line existed — verified: `./stapler-squad
 		// nonexistent-command; echo $?` printed the cobra error and still

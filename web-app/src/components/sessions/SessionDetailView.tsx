@@ -24,6 +24,7 @@ import { getProgramDisplay, isKnownProgram } from "@/lib/constants/programs";
 import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Modal";
 import { ResumeSessionModal } from "./ResumeSessionModal";
+import { ExportBundleModal } from "./ExportBundleModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
@@ -36,6 +37,7 @@ import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { markSessionViewed } from "@/lib/utils/viewedSessions";
+import { setActiveSessionUUID } from "@/lib/telemetry/active-session";
 import { usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
@@ -449,6 +451,16 @@ export function SessionDetailView({
   // Tell the notification deck which session is on screen so it can skip redundant non-pinned toasts.
   useEffect(() => markSessionViewed(session.id), [session.id]);
 
+  // Attach the active session UUID to all OTel spans created while this view
+  // is mounted, so traces are queryable by session. Cleared on unmount so
+  // spans from unrelated pages do not carry a stale session UUID.
+  useEffect(() => {
+    setActiveSessionUUID(session.id);
+    return () => {
+      setActiveSessionUUID(null);
+    };
+  }, [session.id]);
+
   // The mobile toast deck docks directly under this tab row.
   const tabRowRef = useRef<HTMLDivElement>(null);
   usePublishStackTopOffset(tabRowRef);
@@ -507,6 +519,7 @@ export function SessionDetailView({
   const [workingDirValue, setWorkingDirValue] = useState(session.workingDir || "");
   // Action sheet state
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  const [exportBundleOpen, setExportBundleOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showResumeModal, setShowResumeModal] = useState(false);
   const resumeTriggerRef = useRef<HTMLElement | null>(null);
@@ -1708,6 +1721,16 @@ export function SessionDetailView({
       )}
       </div>
 
+      {exportBundleOpen && (
+        <ExportBundleModal
+          open={exportBundleOpen}
+          onOpenChange={setExportBundleOpen}
+          sessionId={session.id}
+          sessionTitle={session.title}
+          repoPath={session.path}
+        />
+      )}
+
       {/* Workspace Switch Modal */}
       {showWorkspaceSwitchModal && (
         <WorkspaceSwitchModal
@@ -1793,6 +1816,13 @@ export function SessionDetailView({
               data-testid="action-spawn-shell"
             >
               &gt;_ Spawn new shell
+            </button>
+            <button
+              className={styles.actionSheetItem}
+              onClick={() => { setActionSheetOpen(false); setExportBundleOpen(true); }}
+              data-testid="export-diagnostics-action"
+            >
+              📦 Export Diagnostics
             </button>
             <hr className={styles.actionDivider} />
             <button

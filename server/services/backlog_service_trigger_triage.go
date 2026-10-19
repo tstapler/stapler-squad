@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,119 @@ func sanitizeTriageTitle(title, itemID string) string {
 		return s
 	}
 	return "item-" + itemID[:min(len(itemID), 8)]
+}
+
+// sddPlanArtifactsSubdirs are the project_plans/<name>/ subdirectories SDD
+// triage may have written plan.md into, tried in order. "implementation" is
+// what sddTriagePromptTemplate (session/pipeline_mode_seed.go) asks for; the
+// empty string (project_plans/<name>/ itself) covers the LLM skipping that
+// subdirectory — the next most common drift observed across this repo's own
+// project_plans/ history (13 of 257 real plan.md files land flat at the
+// project root rather than under implementation/, per a 2026-10-17 sweep —
+// see backlog item 1cfae441-8953-41e6-803d-959062119d4f).
+var sddPlanArtifactsSubdirs = []string{"implementation", ""}
+
+// resolveSDDPlanArtifactsPath returns the first project_plans/<name>/<subdir>
+// directory (sddPlanArtifactsSubdirs order) that actually contains a plan.md
+// after an SDD-mode triage run, or the documented "implementation" location
+// if none do. This disambiguation needs the stricter plan.md-level check —
+// project_plans/<name>/ itself almost always exists (requirements.md etc.
+// land there regardless), so a directory-level check on the root candidate
+// would trivially "succeed" even when plan.md actually landed in some other
+// subdirectory entirely (e.g. decisions/) — but the caller's own persistence
+// gate deliberately stays directory-level once a candidate is chosen here
+// (see its call site's comment for why). This function never creates a
+// directory; returning the "implementation" fallback here is only a label
+// for the not-found case, not a claim that it exists.
+// kibitzer:ignore primitive-obsession -- two plain path components for a
+// private path-join helper; matches sanitizeTriageTitle's identical shape
+// immediately above, no behavior hides behind either string here.
+func resolveSDDPlanArtifactsPath(triageWorkDir, sanitizedTitle string) string {
+	base := filepath.Join(triageWorkDir, "project_plans", sanitizedTitle)
+	for _, sub := range sddPlanArtifactsSubdirs {
+		candidate := filepath.Join(base, sub)
+		if _, err := os.Stat(filepath.Join(candidate, "plan.md")); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join(base, "implementation")
+}
+
+// sddPlanSnapshotDirName holds the copied SDD plan inside an item's durable triage dir.
+const sddPlanSnapshotDirName = "sdd-plan"
+
+const (
+	maxSDDPlanSnapshotFiles = 500
+	maxSDDPlanSnapshotBytes = 20 << 20
+)
+
+// snapshotSDDPlanOutOfWorktree copies the SDD plan from its triage worktree (removed on
+// cleanup) into dst and returns dst. Only regular files are copied: the plan is written by
+// an agent, so symlinks are skipped rather than followed out of the tree. A failed copy
+// leaves any previous dst intact.
+func snapshotSDDPlanOutOfWorktree(src, dst string) (string, error) {
+	if fi, err := os.Lstat(src); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("plan source %q is not a real directory (err: %v)", src, err)
+	}
+	tmp, old := dst+".tmp", dst+".old"
+	if err := os.RemoveAll(tmp); err != nil {
+		return "", fmt.Errorf("clear temp plan snapshot: %w", err)
+	}
+	if err := copyRegularFiles(src, tmp); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", fmt.Errorf("copy plan out of worktree: %w", err)
+	}
+	// Swap via .old so dst is missing only between two renames, and is restored if the second fails.
+	_ = os.RemoveAll(old)
+	if err := os.Rename(dst, old); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.RemoveAll(tmp)
+		return "", fmt.Errorf("move previous plan snapshot aside: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Rename(old, dst)
+		_ = os.RemoveAll(tmp)
+		return "", fmt.Errorf("install plan snapshot: %w", err)
+	}
+	_ = os.RemoveAll(old)
+	return dst, nil
+}
+
+// copyRegularFiles copies directories and regular files from src to dst, skipping symlinks
+// and anything else, and fails past the file-count or byte caps.
+func copyRegularFiles(src, dst string) error {
+	var files int
+	var total int64
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, 0o755)
+		case !d.Type().IsRegular():
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if files++; files > maxSDDPlanSnapshotFiles {
+			return fmt.Errorf("more than %d files", maxSDDPlanSnapshotFiles)
+		}
+		if total += info.Size(); total > maxSDDPlanSnapshotBytes {
+			return fmt.Errorf("more than %d bytes", maxSDDPlanSnapshotBytes)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 // retitleTriageWorktreeToFinalBranch moves wt's branch from its provisional
@@ -654,31 +768,64 @@ func (s *BacklogService) TriggerTriage(
 		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
 		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
-			pap = filepath.Join(triageWorkDir, "project_plans", sanitizedTitle, "implementation")
+			pap = resolveSDDPlanArtifactsPath(triageWorkDir, sanitizedTitle)
 		}
 		approvalReset := false
 		clearedReason := ""
 		update := session.BacklogItemUpdate{
-			PlanArtifactsPath:   &pap,
 			PlanApproved:        &approvalReset,
 			PlanRejectionReason: &clearedReason,
 			ClearPlanRejectedAt: true,
 		}
-		// Opt-in: skip the manual "Approve Plan" click when the item is configured
-		// to auto-approve, same precedent as AutoSpawnSession/AutoCreatePR (default
-		// false; existing manual approval flow is unchanged unless explicitly opted
-		// in). Only approves when pap actually exists on disk — mirroring
-		// ApprovePlan's own os.Stat precondition — so a triage run that produced no
-		// usable plan content still leaves the item gated for a human to notice via
-		// the "Retry Triage" / plan_not_approved stuck-detector paths, rather than
-		// silently marking a nonexistent plan approved.
-		if item.AutoApprovePlan {
-			if _, statErr := os.Stat(pap); statErr == nil {
+		// Only persist plan_artifacts_path when the directory triage was
+		// supposed to write into actually exists on disk — never
+		// unconditionally, which previously left items with a path pointing
+		// at a directory nothing ever wrote to (confirmed live on 3
+		// production items: the LLM wrote project_plans/<name>/ but not the
+		// implementation/ subdirectory, or the directory was deleted after a
+		// worktree cleanup). resolveSDDPlanArtifactsPath above already picked
+		// whichever of the two observed real-world locations actually has a
+		// plan.md, so this check mirrors the pre-existing auto-approve guard
+		// it replaces (directory-level, not plan.md-level — default-mode
+		// items' artifactAbsPath is unconditionally mkdir'd earlier in this
+		// function regardless of whether triage wrote anything into it, so a
+		// plan.md-level check here would wrongly treat that as "never
+		// written"). Leaving the pointer nil means "don't update" to the repo
+		// layer, which preserves any prior good value from an earlier
+		// successful triage run rather than clearing it on a failed re-triage.
+		//
+		// Also gates auto-approval (opt-in: skip the manual "Approve Plan"
+		// click when the item is configured to auto-approve, same precedent as
+		// AutoSpawnSession/AutoCreatePR) — a triage run that produced no usable
+		// plan content still leaves the item gated for a human to notice via
+		// the "Retry Triage" / plan_not_approved stuck-detector paths, rather
+		// than silently marking a nonexistent plan approved.
+		if _, statErr := os.Stat(pap); statErr == nil {
+			staleSnapshot := false
+			if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+				snapDir := filepath.Join(artifactAbsPath, sddPlanSnapshotDirName)
+				if durable, snapErr := snapshotSDDPlanOutOfWorktree(pap, snapDir); snapErr == nil {
+					pap = durable
+				} else if _, prevErr := os.Stat(snapDir); prevErr == nil {
+					// Keep the earlier durable pointer rather than the ephemeral worktree path, but its content
+					// predates this triage run, so it must not be auto-approved.
+					log.Warn("[TriggerTriage] could not refresh SDD plan snapshot; keeping the earlier one and skipping auto-approval", "item", itemID, "error", snapErr)
+					pap, staleSnapshot = snapDir, true
+				} else {
+					// Still exists now, so record it; it may go stale later and ApprovePlan will say so.
+					log.Warn("[TriggerTriage] could not copy SDD plan out of the worktree; recording the in-worktree path", "item", itemID, "path", pap, "error", snapErr)
+				}
+			}
+			update.PlanArtifactsPath = &pap
+			if item.AutoApprovePlan && !staleSnapshot {
 				approved := true
 				approvedAt := time.Now()
 				update.PlanApproved = &approved
 				update.PlanApprovedAt = &approvedAt
-			} else {
+			}
+		} else {
+			log.Warn("[TriggerTriage] plan_artifacts_path directory not created by triage — leaving plan_artifacts_path unset", "path", pap, "item", itemID, "error", statErr)
+			if item.AutoApprovePlan {
 				log.Warn("[TriggerTriage] auto_approve_plan set but plan artifacts path missing", "path", pap, "item", itemID, "error", statErr)
 			}
 		}

@@ -53,17 +53,13 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # ratchet:pnpm/action-setup@v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: tests/e2e/pnpm-lock.yaml
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
@@ -75,12 +71,12 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/pnpm-lock.yaml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
 
       - name: Install Playwright dependencies
         run: |
           cd tests/e2e
-          pnpm install --frozen-lockfile
+          bun install --frozen-lockfile
           npx playwright install chromium --with-deps
 
       - name: Record demo flows (shard ${{ matrix.shard }}/2)

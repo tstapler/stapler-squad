@@ -504,6 +504,8 @@ linters:
       # introduced. Suppress blanket per-package; new packages (pkg/warren,
       # pkg/events) are NOT excluded and must not introduce globals.
       # ──────────────────────────────────────────────────────────────────────────
+      - path: "^internal/fsevents/stream_darwin\\.go"
+        linters: [gochecknoglobals] # purego FFI func vars + the one process-wide callback slot (NewCallback slots are never freed)
       - path: "^session/"
         linters: [gochecknoglobals]
       - path: "^server/"
@@ -516,6 +518,8 @@ linters:
         linters: [gochecknoglobals]
       - path: "^github/"
         linters: [gochecknoglobals]
+      - path: "^(linear|jira)/"
+        linters: [gochecknoglobals] # package-level keychain mutex, mirrors github/
       - path: "^daemon/"
         linters: [gochecknoglobals]
       - path: "^telemetry/"

@@ -37,10 +37,11 @@ type jsonlMessage struct {
 
 // jsonlUsage contains the token counts for a message.
 type jsonlUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
+	Speed                    string `json:"speed"` // "standard" or a faster billing mode
 }
 
 // jsonlContent is one element in the content array of an assistant message.

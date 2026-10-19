@@ -22,6 +22,7 @@ export enum InputType {
   Preset = "preset",
   PresetNotFound = "preset_not_found",
   ChatBacklogItem = "chat_backlog_item",
+  FanOut = "fan_out",
 }
 
 export interface InputTypeInfo {
@@ -120,6 +121,11 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "Backlog Item",
     icon: "📝",
     description: "Create a backlog item from a free-text message (backlog: <message>)",
+  },
+  [InputType.FanOut]: {
+    label: "Run as N variants",
+    icon: "🔀",
+    description: "Run one prompt across N isolated sessions (fanout N: <prompt>)",
   },
 };
 

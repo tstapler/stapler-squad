@@ -361,6 +361,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 	// Resolve source ID from the eager-loaded edge when available.
 	if item.Edges.Source != nil {
 		data.SourceID = item.Edges.Source.ID.String()
+		data.SourcePluginID = item.Edges.Source.PluginID
 	}
 	// Propagate eagerly-loaded status events when present.
 	if item.Edges.StatusEvents != nil {
@@ -517,6 +518,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 	result := backlogItemToData(item)
+	r.attachPendingGuidance(ctx, &result)
 	return &result, nil
 }
 
@@ -959,6 +961,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 
+	q = applySourcePluginFilter(q, filter.SourcePluginIDs)
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1010,6 +1013,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 	if len(parsedUUIDs) == 0 {
 		return result, nil
 	}
+	r.applyPendingGuidanceToData(ctx, result)
 
 	// Eager-load item sessions via a single batched query, matching
 	// ListBacklogItemSummaries's pattern, so WatchBacklogItems' fresh-connection
@@ -1046,6 +1050,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
 		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
+	q = applySourcePluginFilter(q, filter.SourcePluginIDs)
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
 	}
@@ -1079,7 +1084,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	}
 
 	// Phase 1: load scalar fields; avoid Select/Scan to sidestep nullable-time pitfalls.
-	items, err := q.All(ctx)
+	items, err := q.WithSource().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list backlog item summaries: %w", err)
 	}
@@ -1092,6 +1097,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 			PublicIDRaw:         item.PublicID,
 			ExternalID:          item.ExternalID,
 			ExternalURL:         item.ExternalURL,
+			SourcePluginID:      sourcePluginIDOf(item),
 			Labels:              item.Labels,
 			Title:               item.Title,
 			Status:              BacklogStatus(item.Status),
@@ -1115,6 +1121,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 	if len(parsedUUIDs) == 0 {
 		return summaries, nil
 	}
+	r.applyPendingGuidanceToSummaries(ctx, summaries)
 
 	// Phase 2+3: load item sessions with review verdicts via edge loading.
 	sessions, err := r.client.ItemSession.Query().
@@ -2041,6 +2048,7 @@ func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Cont
 func (r *EntRepository) publishItemChanged(ctx context.Context, item *BacklogItemData, change BacklogItemChange) {
 	r.attachItemSessionsForPublish(ctx, item)
 	r.attachStatusEventsForPublish(ctx, item)
+	r.attachPendingGuidance(ctx, item)
 	r.publishItemChangedSnapshot(item, change)
 }
 

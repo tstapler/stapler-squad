@@ -173,5 +173,6 @@ func (s *BacklogService) buildPendingGatesGuardInput(
 	guardInput.OverallOutcome = overallOutcome
 	guardInput.HasUnshippedCode = hasUnshippedCode
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
+	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	return guardInput
 }

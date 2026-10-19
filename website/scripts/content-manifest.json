@@ -110,8 +110,8 @@
     "reason": "NilAway/go vet -nilness, dev-contributor-only tooling, no end-user relevance"
   },
   {
-    "source": "docs/how-to/use-pnpm-in-web-app.md",
+    "source": "docs/how-to/use-bun-in-web-app.md",
     "include": false,
-    "reason": "Frontend contributor tooling convention (pnpm vs npm), not end-user relevant"
+    "reason": "Frontend contributor tooling convention (Bun vs npm/yarn/pnpm), not end-user relevant"
   }
 ]

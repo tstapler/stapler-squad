@@ -21,6 +21,8 @@ type fakePauseResumeProcessManager struct {
 
 func (f *fakePauseResumeProcessManager) IsAlive() bool { return f.alive }
 
+func (f *fakePauseResumeProcessManager) WireLaunch(LaunchSpec) {}
+
 func (f *fakePauseResumeProcessManager) Start(dir string) error {
 	f.startCall++
 	return f.startErr

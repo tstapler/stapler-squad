@@ -1,6 +1,6 @@
 # BUG-113: tymux backend never passes the target program — every session launches `$SHELL` instead [SEVERITY: High]
 
-**Status**: 🐛 Open
+**Status**: 🐛 Partially fixed — the command is now delivered on every start/restore/resume path (`ProcessManager.WireLaunch`), but tymuxd execs `command` as a single program name, so a launch with arguments (`claude --resume <id>`) fails to spawn. Blocked on [tymux#54](https://github.com/tstapler/tymux/pull/54) (`args`/`env`); then bump the client and send `/bin/sh -c <launch command>`.
 **Discovered**: 2026-09-16, user report: "our implementation of the stapler-squad tymux integration doesn't start the right target program", plus a related report that streaming logs don't work.
 
 ## Problem Description

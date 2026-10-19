@@ -39,6 +39,9 @@ type GitHubUserService struct {
 	// the service serves requests; nil ports fall back to cache where it fits.
 	nudge nudgeDeps
 
+	// actions backs the session-less PR action RPCs (github_user_actions.go).
+	actions prActionDeps
+
 	funnelMu     sync.Mutex
 	funnelLast   funnelCounts
 	funnelLogged bool
@@ -456,6 +459,14 @@ func userPRsToProto(prs []githubpkg.UserPR) []*sessionv1.UserPR {
 			Host:                       defaultHostIfEmpty(pr.Host),
 			AccountLogin:               pr.AccountLogin,
 			UnresolvedThreadsTruncated: pr.UnresolvedThreadsTruncated,
+
+			NodeId:                  pr.NodeID,
+			Body:                    pr.Body,
+			Labels:                  pr.Labels,
+			Additions:               int32(pr.Additions),    // #nosec G115 -- GitHub line counts, far below int32 range.
+			Deletions:               int32(pr.Deletions),    // #nosec G115 -- see Additions.
+			ChangedFiles:            int32(pr.ChangedFiles), // #nosec G115 -- GitHub caps a PR at 3000 files.
+			RequestedReviewerLogins: pr.RequestedReviewerLogins,
 		}
 		p.LinkedSessions = linkedSessionsToProto(pr.LinkedSessions)
 		if pr.UnresolvedThreadCount != nil {

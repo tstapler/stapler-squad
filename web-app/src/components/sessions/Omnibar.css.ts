@@ -237,12 +237,19 @@ export const collapsibleContent = style({
 
 export const footer = style({
   display: "flex",
+  flexWrap: "wrap",
   justifyContent: "flex-end",
   gap: 8,
   padding: 16,
   borderTop: `1px solid ${vars.color.borderColor}`,
   background: vars.color.hoverBackground,
 });
+
+// Pushes the backlog action to the left edge of the footer row.
+export const backlogButton = style({ marginRight: "auto" });
+
+// Right-aligns the backlog action at the end of the discovery shortcuts row.
+export const shortcutsBacklogButton = style({ marginLeft: "auto" });
 
 export const button = style({
   padding: "8px 16px",
@@ -259,9 +266,13 @@ export const buttonSecondary = style({
   color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderColor}`,
   selectors: {
-    "&:hover": {
+    "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
       color: vars.color.textPrimary,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
     },
   },
 });

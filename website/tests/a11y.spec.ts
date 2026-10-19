@@ -85,7 +85,7 @@ test.describe('Accessibility (WCAG 2.1 AA) — stapler-squad-website', () => {
 
 	// design/ux.md §5 criterion 19: the combined CI gate -- Lighthouse
 	// accessibility/performance/best-practices >=0.90 (enforced separately
-	// by lighthouserc.json + lighthouserc.mobile.json via `pnpm run
+	// by lighthouserc.json + lighthouserc.mobile.json via `bun run
 	// lhci:desktop`/`lhci:mobile`, website/tests/unit/lighthouserc.test.ts,
 	// and website/tests/integration/lighthouse.integration.test.ts -- not
 	// re-implemented here) plus zero critical/serious axe-core violations on

@@ -1944,14 +1944,55 @@ func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHit
 	}
 }
 
+// TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget_When_RetriageIsPointless
+// pins the fix for items 404b362c/ec050b7d: content-unchanged (needs a human to approve the
+// plan or edit the item) is just as deterministic a dead end as a fan-out/cost-ceiling abort,
+// but — unlike that case — the self-skip itself is free, so AutoRespawnTriage IS still called
+// (it idempotently posts the real "needs human action" note) while RemediationDue's
+// attempt/park bookkeeping is never touched, so the row can never reach the misleading
+// "use Reset to try again automatically" park notification for a retry that could not have
+// helped regardless of how many times it ran.
+func TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget_When_RetriageIsPointless(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	respawner.pointlessIDs = map[string]bool{item.ID: true}
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID, "the free self-skip must still run so it can post its note")
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the pointless-retriage self-skip")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	require.True(t, ok, "the orphaned_triage row must stay open")
+	assert.Zero(t, row.RemediationAttempts, "a pointless retriage must never spend the shared remediation budget")
+}
+
 // fakeTriageRespawner is a test double implementing TriageRespawner, recording
 // every AutoRespawnTriage call on a buffered channel (not a plain counter)
 // because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
 // mirrors fakeStaleWorkRemediator's identical rationale.
 type fakeTriageRespawner struct {
-	calls   chan string
-	err     error
-	liveIDs map[string]bool
+	calls        chan string
+	err          error
+	liveIDs      map[string]bool
+	pointlessIDs map[string]bool
 }
 
 func newFakeTriageRespawner() *fakeTriageRespawner {
@@ -1965,6 +2006,10 @@ func (f *fakeTriageRespawner) AutoRespawnTriage(ctx context.Context, itemID stri
 
 func (f *fakeTriageRespawner) IsTriageLive(itemID string) bool {
 	return f.liveIDs[itemID]
+}
+
+func (f *fakeTriageRespawner) IsRetriagePointless(ctx context.Context, itemID string) bool {
+	return f.pointlessIDs[itemID]
 }
 
 // TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds
@@ -2743,6 +2788,162 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 
 	assert.Equal(t, []string{"swept-twice-work-session", "swept-twice-work-session"}, archiver.archivedUUIDs,
 		"the sweep itself calls ArchiveSessionByUUID once per tick per session — idempotency is the archiver's responsibility (CAS), proven separately for SessionService.ArchiveSessionByUUID")
+}
+
+// --- cleanup_terminal_worktrees: safety-net sweep for backlog item worktrees that
+// accumulate forever because WorktreeCleaner.CleanupTerminalItem was previously only
+// invoked synchronously, on specific internal transition paths — see
+// reconcileTerminalItemWorktrees' doc comment. ---
+
+// TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone proves the
+// sweep invokes the wired WorktreeCleaner for a done item, mirroring
+// TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyDone above.
+func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-done item missed by the synchronous cleanup call",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID)
+}
+
+// TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchived mirrors
+// the done case for an already-archived item.
+func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchived(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-archived item missed by the synchronous cleanup call",
+		Status: string(BacklogStatusArchived),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID)
+}
+
+// TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal guards
+// against sweeping an item that is still in flight.
+func TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "still in-flight item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Empty(t, cleaner.calls(), "an in-flight item's worktree must not be swept")
+}
+
+// TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired proves the
+// detector degrades gracefully (and skips the ListBacklogItems query entirely) when no
+// WorktreeCleaner has been wired, matching WorktreeCleaner's nil-safety contract.
+func TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with no cleaner wired",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	// SetWorktreeCleaner deliberately not called — must degrade gracefully, not panic.
+	assert.NotPanics(t, func() {
+		listener.reconcileTerminalItemWorktrees(ctx)
+	})
+}
+
+// TestReconcileTerminalItemWorktrees_should_BeIdempotent_When_RunTwice proves the sweep
+// is safe to re-run every tick: a second run over an already-cleaned item must not error
+// or panic. The real WorktreeCleaner implementation (BacklogService.CleanupTerminalItem)
+// is itself safe to re-run — its git.Cleanup() call no-ops (logs at Info, not
+// Warn/Error) when the worktree directory is already gone, verified directly against
+// session/git/native/worktree_remove.go's RemoveWorktree — so this test only proves the
+// sweep's own iteration doesn't choke on repeated runs, mirroring
+// TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice above.
+func TestReconcileTerminalItemWorktrees_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item swept twice",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+	listener.reconcileTerminalItemWorktrees(ctx)
+
+	assert.Equal(t, []string{item.ID, item.ID}, cleaner.calls(),
+		"the sweep itself calls CleanupTerminalItem once per tick per item — idempotency is the cleaner's responsibility, proven separately for BacklogService.CleanupTerminalItem")
+}
+
+// TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees proves the
+// cleanup_terminal_worktrees detector is actually wired into the periodic ReconcileStuck
+// sweep (not just callable in isolation), mirroring
+// TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue's pattern for a different
+// detector.
+func TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item relying on the ReconcileStuck-level sweep",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	listener.ReconcileStuck(ctx)
+
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"ReconcileStuck must invoke the cleanup_terminal_worktrees detector, which must in turn call the wired WorktreeCleaner")
 }
 
 // --- Story 2.1.4: bouncing ---
@@ -4234,6 +4435,104 @@ func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInRe
 	assert.Equal(t, domain.StuckReasonBounceCapExhausted, open[0].Reason)
 }
 
+// TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOrReview pins the
+// fix for item a0fb3466: its autonomous_stuck row stayed open after the item cycled all the
+// way back to "ready" (via its abandoned_review resolving, not a driver success) — a
+// transition resolveAutonomousStuck's point-of-success call never observes. Mirrors
+// StuckReasonBouncing's identical two-status anchor; the negative case (the item merely
+// cycling forward into review, not yet leaving the anchor) is already pinned by
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState.
+func TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOrReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous-stuck item back to ready",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress, "turn-cap stop, awaiting manual attention")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item's abandoned_review resolves and sends it all the way back to "ready" for a
+	// fresh dispatch — not a driver success, and not a status onAutonomousDriverComplete's
+	// forced in_progress->review path ever produces, so the two-status anchor is safe to
+	// resolve here.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "autonomous_stuck row must resolve once the item's status leaves in_progress/review")
+}
+
+// TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview is
+// the backstop test for StuckReasonVerdictUndelivered's single-status {review}
+// anchor: resolveVerdictUndeliveredLogged (server/services/backlog_service_verdict_steer.go)
+// is the point-of-success resolve, but any other way the item leaves review
+// (ships, is manually moved, etc.) must also clear the row via this sweep.
+func TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Verdict-undelivered item back to in_progress",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonVerdictUndelivered, BacklogStatusReview, "session never went idle")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "verdict_undelivered row must resolve once the item's status leaves review")
+}
+
+// TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInReview
+// is the negative counterpart: the row must stay open while the item is still
+// in review, even after an unrelated self-heal tick.
+func TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInReview(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Verdict-undelivered item still in review",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonVerdictUndelivered, BacklogStatusReview, "session never went idle")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "verdict_undelivered row must stay open while the item is still in review")
+	assert.Equal(t, domain.StuckReasonVerdictUndelivered, open[0].Reason)
+}
+
 // TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
 // verifies rework_cap rows — the one remaining reason with no non-terminal
 // anchor at all — stay open while the item has not yet reached done/archived.
@@ -4335,6 +4634,7 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 		{"autonomous_stuck", domain.StuckReasonAutonomousStuck, BacklogStatusInProgress},
 		{"push_failed", domain.StuckReasonPushFailed, BacklogStatusReview},
 		{"rework_cap", domain.StuckReasonReworkCap, BacklogStatusInProgress},
+		{"verdict_undelivered", domain.StuckReasonVerdictUndelivered, BacklogStatusReview},
 	}
 	terminals := []BacklogStatus{BacklogStatusDone, BacklogStatusArchived}
 

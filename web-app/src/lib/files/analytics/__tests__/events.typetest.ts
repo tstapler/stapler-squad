@@ -1,4 +1,4 @@
-// Compiled by tsc only (`pnpm exec tsc --noEmit`): each @ts-expect-error line must fail to compile,
+// Compiled by tsc only (`bunx tsc --noEmit`): each @ts-expect-error line must fail to compile,
 // so the build breaks if the registry ever loosens.
 import { createFilesEmitter } from "../filesAnalytics";
 

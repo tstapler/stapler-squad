@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const verdictSteerSessionUUID = "verdict-steer-work-uuid"
@@ -170,4 +172,88 @@ func TestVerdictSteering_NewerVerdictSupersedesWaitingOne(t *testing.T) {
 	calls := steerer.calls()
 	require.Len(t, calls, 1)
 	assert.Contains(t, calls[0].message, "second")
+}
+
+// A verdict steer that times out waiting for the session to go idle must
+// leave a durable StuckReasonVerdictUndelivered row behind, not just the
+// one-shot notification — the notification alone ages out of
+// NotificationHistoryStore's 7-day/500-row cap with no trace (confirmed
+// live 2026-10-17 on backlog items 4666bc80/1cfae441/6c24cbab).
+func TestVerdictSteering_NeverIdle_MarksVerdictUndeliveredStuck(t *testing.T) {
+	svc, steerer, bus, item := newVerdictSteerFixture(t, true)
+	svc.verdictSteerReadyTimeout = 50 * time.Millisecond
+	steerer.notReady = map[string]bool{verdictSteerSessionUUID: true}
+	svc.StartVerdictSteering()
+
+	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
+
+	require.Eventually(t, func() bool {
+		return openStuckReasons(t, svc)[domain.StuckReasonVerdictUndelivered]
+	}, 3*time.Second, 10*time.Millisecond)
+	assert.Empty(t, steerer.calls())
+}
+
+// A steer that actually reaches SteerActiveSession but errors (e.g. the pane
+// went away between the readiness check and the write) must also mark the
+// row — not just the "never went idle" timeout path.
+func TestVerdictSteering_DeliveryError_MarksVerdictUndeliveredStuck(t *testing.T) {
+	svc, steerer, bus, item := newVerdictSteerFixture(t, true)
+	steerer.mu.Lock()
+	steerer.steerErr[verdictSteerSessionUUID] = errors.New("steer delivery boom")
+	steerer.mu.Unlock()
+	svc.StartVerdictSteering()
+
+	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
+
+	require.Eventually(t, func() bool {
+		return openStuckReasons(t, svc)[domain.StuckReasonVerdictUndelivered]
+	}, 3*time.Second, 10*time.Millisecond)
+}
+
+// A successful steer must resolve a previously-open StuckReasonVerdictUndelivered
+// row for the item — the reconciler's "retry via a later bounce cycle" path and
+// selfHealStuck's status-anchor backstop both depend on the point-of-success
+// resolve firing so a since-recovered item doesn't sit flagged forever.
+func TestVerdictSteering_SuccessfulSteer_ResolvesVerdictUndeliveredRow(t *testing.T) {
+	svc, _, bus, item := newVerdictSteerFixture(t, true)
+	_, err := svc.storage.MarkStuck(context.Background(), item.ID, domain.StuckReasonVerdictUndelivered, session.BacklogStatusReview, "a prior attempt never went idle")
+	require.NoError(t, err)
+	require.True(t, openStuckReasons(t, svc)[domain.StuckReasonVerdictUndelivered], "fixture setup: row must start open")
+
+	svc.StartVerdictSteering()
+	publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
+
+	require.Eventually(t, func() bool {
+		return !openStuckReasons(t, svc)[domain.StuckReasonVerdictUndelivered]
+	}, 3*time.Second, 10*time.Millisecond)
+}
+
+// Two consecutive failed steer attempts for the same item must leave exactly
+// one open row, not two — MarkStuck's (item_id, reason) upsert is what
+// guarantees this, but this test pins the behavior at the call-site level
+// too, matching the spirit of the other dedup test above
+// (TestVerdictSteering_DuplicateEvent_SteersOnce).
+func TestVerdictSteering_RepeatedFailures_DoNotDuplicateStuckRow(t *testing.T) {
+	svc, steerer, bus, item := newVerdictSteerFixture(t, true)
+	svc.verdictSteerReadyTimeout = 50 * time.Millisecond
+	steerer.notReady = map[string]bool{verdictSteerSessionUUID: true}
+	svc.StartVerdictSteering()
+
+	publishVerdict(bus, item, session.ReviewOutcomeFail, "first")
+	require.Eventually(t, func() bool {
+		return openStuckReasons(t, svc)[domain.StuckReasonVerdictUndelivered]
+	}, 3*time.Second, 10*time.Millisecond)
+
+	publishVerdict(bus, item, session.ReviewOutcomeFail, "second")
+	require.Eventually(t, func() bool {
+		open, err := svc.storage.FindOpenStuckStates(context.Background())
+		require.NoError(t, err)
+		count := 0
+		for _, row := range open {
+			if row.ItemID == item.ID && row.Reason == domain.StuckReasonVerdictUndelivered {
+				count++
+			}
+		}
+		return count == 1
+	}, 3*time.Second, 10*time.Millisecond)
 }

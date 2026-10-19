@@ -1302,7 +1302,7 @@ func TestGetInsightsSummary_WhenOneSessionHasDegenerateData_ExpectOtherSessionsF
 
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Findings, 1)
-	assert.Equal(t, float64(1), resp.Msg.Findings[0].DollarImpactUsd)
+	assert.InDelta(t, 1.0, resp.Msg.Findings[0].DollarImpactUsd, 1e-9) // per-turn summation reorders float adds
 }
 
 // --------------------------------------------------------------------------

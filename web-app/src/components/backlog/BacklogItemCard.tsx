@@ -10,13 +10,14 @@ import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
 import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
 import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
 import { blockedByLabel } from "@/lib/backlog/dependencies";
 import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
 import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
-import { parseExternalRef } from "./externalRef";
+import { safeExternalHref } from "./externalRef";
 import * as styles from "./BacklogItemCard.css";
 
 interface BacklogItemCardProps {
@@ -59,17 +60,25 @@ interface BacklogItemCardProps {
 
 // The bare externalId is only an issue number, so repo-qualify it from the URL
 // (stapler-mcp#22 vs stapler-squad#22); unparseable URLs keep the bare "#N".
-function ProvenanceBadge({ externalUrl, externalId }: { externalUrl: string; externalId: string }) {
-  const ref = parseExternalRef(externalUrl);
-  const fullRef = ref ? `${ref.repo}#${ref.number}` : `#${externalId}`;
-  const shortRef = ref ? `${ref.repo.split("/")[1]}#${ref.number}` : fullRef;
+function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: string; externalId: string; pluginId?: string }) {
+  const source = getSourceBadgeConfig(pluginId);
+  const { fullRef, shortRef } = buildExternalRefLabels(pluginId, externalUrl, externalId);
+  const href = safeExternalHref(externalUrl);
+  if (!href) {
+    return (
+      <span className={styles.provenanceBadge} title={fullRef} data-action-button="true">
+        <CircleDot aria-hidden="true" size={12} />
+        {shortRef}
+      </span>
+    );
+  }
   return (
     <a
-      href={externalUrl}
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
       className={styles.provenanceBadge}
-      aria-label={`Imported from GitHub issue ${fullRef}`}
+      aria-label={`Imported from ${source.label} issue ${fullRef}`}
       title={fullRef}
       data-action-button="true"
       onClick={(e) => e.stopPropagation()}
@@ -235,7 +244,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
           <VerdictBadge item={item} />
         </span>
         {item.externalUrl && item.externalId && (
-          <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} />
+          <ProvenanceBadge externalUrl={item.externalUrl} externalId={item.externalId} pluginId={item.pluginId} />
         )}
         {claim && <ClaimChip claim={claim} />}
         <button

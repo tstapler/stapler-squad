@@ -24,3 +24,17 @@ export function parseExternalRef(externalUrl: string | undefined): ExternalRef |
   if (!match) return undefined;
   return { repo: `${match[1]}/${match[2]}`, number: match[3] };
 }
+
+/**
+ * Returns the normalized href only for http(s) URLs, so a tracker-supplied
+ * `javascript:`/`data:` URL is never rendered as a link target.
+ */
+export function safeExternalHref(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}

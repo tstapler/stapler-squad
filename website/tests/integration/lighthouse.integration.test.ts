@@ -7,7 +7,7 @@
 // this repo's "run it, don't read it" convention).
 //
 // Heavy (spawns a real build, a real `astro preview` server, and a real
-// headless Chrome per config) -- excluded from the default `pnpm test` run
+// headless Chrome per config) -- excluded from the default `bun run test` run
 // the same way every other *.integration.test.ts file here is (see
 // vitest.config.ts's `test:integration` script).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -88,7 +88,7 @@ describe('lighthouseCi against real built dist/', () => {
 		// stop on its own -- tear it down explicitly, same as the manual
 		// desktop/mobile runs this test automates.
 		try {
-			execFileSync('pnpm', ['run', 'astro', '--', 'preview', 'stop'], { cwd: WEBSITE_ROOT, stdio: 'ignore' });
+			execFileSync('bun', ['run', 'astro', '--', 'preview', 'stop'], { cwd: WEBSITE_ROOT, stdio: 'ignore' });
 		} catch {
 			// No server was running -- nothing to stop.
 		}
