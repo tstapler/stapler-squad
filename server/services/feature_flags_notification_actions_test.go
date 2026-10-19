@@ -70,6 +70,7 @@ func TestUpdateFeatureFlag_ShouldRefuseLooseningFlip_WhenAuditSinkDown(t *testin
 	err := e.flip(backgroundActivityFeedFlagName, true)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "flag change not audited, nothing persisted")
 	v, ok := overrideOf(backgroundActivityFeedFlagName)
 	assert.True(t, ok && !v, "the flag keeps its prior explicit OFF")
 	assert.False(t, listedFlag(t, e.svc, backgroundActivityFeedFlagName).Enabled)

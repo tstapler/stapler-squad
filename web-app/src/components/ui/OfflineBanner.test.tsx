@@ -9,6 +9,7 @@ import {
   useActionsDisabledReason,
   useAwaitingFresh,
 } from "./OfflineBanner";
+import { useOnlineStatus } from "@/lib/hooks/useOnlineStatus";
 
 const advance = (ms: number) => act(() => void jest.advanceTimersByTime(ms));
 
@@ -57,6 +58,37 @@ describe("OfflineBanner", () => {
     rerender(<OfflineBanner online failed />);
     advance(30_000);
     expect(container.querySelectorAll("[role='status'], [role='alert'], [aria-live]")).toHaveLength(0);
+  });
+
+  it("OfflineBanner_should_leaveATypedDraftAndFocusUntouched_When_connectivityFlipsOfflineThenOnline", () => {
+    const Host = () => {
+      const online = useOnlineStatus();
+      const [draft, setDraft] = React.useState("");
+      return (
+        <>
+          <OfflineBanner online={online} />
+          <textarea aria-label="Answer draft" value={draft} onChange={(e) => setDraft(e.target.value)} />
+        </>
+      );
+    };
+    const setOnline = (value: boolean) => {
+      Object.defineProperty(window.navigator, "onLine", { configurable: true, value });
+      act(() => void window.dispatchEvent(new Event(value ? "online" : "offline")));
+    };
+    render(<Host />);
+    const draft = screen.getByLabelText("Answer draft");
+    fireEvent.change(draft, { target: { value: "half-typed answer" } });
+    act(() => draft.focus());
+
+    setOnline(false);
+    expect(screen.getByText("Offline. Showing last known state.")).toBeInTheDocument();
+    expect(draft).toHaveValue("half-typed answer");
+    expect(document.activeElement).toBe(draft);
+
+    setOnline(true);
+    expect(screen.queryByText("Offline. Showing last known state.")).toBeNull();
+    expect(draft).toHaveValue("half-typed answer");
+    expect(document.activeElement).toBe(draft);
   });
 
   it("OfflineBanner_should_renderNothing_When_onlineAndSettled", () => {
