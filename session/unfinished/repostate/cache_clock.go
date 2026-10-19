@@ -33,6 +33,9 @@ const (
 	// maxStallSpins bounds the hand's wait for a producer that claimed a slot
 	// but has not stored its entry yet (a few instructions in practice).
 	maxStallSpins = 64
+	// maxIdleSweeps bounds how long a sweeper waits for entries other
+	// sweepers hold; it only matters if one of them stalls.
+	maxIdleSweeps = 1024
 )
 
 type clockEntry[K comparable, V any] struct {
@@ -143,6 +146,10 @@ type clockCore[K comparable, V any] struct {
 	index *xsync.Map[K, *clockEntry[K, V]]
 	ring  *clockRing[K, V]
 	bytes atomic.Int64
+	// held counts goroutines that popped or are about to pop an entry: an entry
+	// in their hands is in neither the ring nor evictable, so an empty ring
+	// with held > 0 is transient, not "nothing left to evict".
+	held atomic.Int64
 }
 
 func newClockCore[K comparable, V any]() *clockCore[K, V] {
@@ -194,17 +201,30 @@ func (k *clockCore[K, V]) unindex(e *clockEntry[K, V]) {
 // protect is the entry whose insert triggered the sweep.
 func (k *clockCore[K, V]) sweep(budget int64, protect *clockEntry[K, V], yield func(), n *clockCounters) {
 	maxSteps := 3*k.ring.length() + 16
+	idle := 0
 	for steps := uint64(0); steps < maxSteps && k.bytes.Load() > budget; steps++ {
+		k.held.Add(1)
 		e, ok := k.ring.pop(&n.casRetries, yield)
 		if !ok {
-			return
+			k.held.Add(-1)
+			// Bailing here would leave the overshoot to nobody: entries other
+			// sweepers hold will be re-pushed or evicted, so wait for them.
+			// With none held, the bytes over budget are unpushed in-flight
+			// inserts whose owners sweep themselves.
+			if idle++; idle > maxIdleSweeps || (k.held.Load() == 0 && k.ring.length() == 0) {
+				return
+			}
+			runtime.Gosched()
+			steps--
+			continue
 		}
 		n.handSteps.Add(1)
 		if e == protect && e.state.Load()&entryEvicted == 0 {
 			k.ring.push(e) // the entry being inserted is not its own victim
-			continue
+		} else {
+			k.judge(e, yield, n)
 		}
-		k.judge(e, yield, n)
+		k.held.Add(-1)
 	}
 }
 
@@ -248,12 +268,15 @@ func (k *clockCore[K, V]) compact(yield func(), n *clockCounters) {
 		return
 	}
 	for steps := k.ring.length(); steps > 0 && k.ring.length() > live+clockChunkSlots; steps-- {
+		k.held.Add(1)
 		e, ok := k.ring.pop(&n.casRetries, yield)
 		if !ok {
+			k.held.Add(-1)
 			return
 		}
 		if e.state.Load()&entryEvicted == 0 {
 			k.ring.push(e)
 		}
+		k.held.Add(-1)
 	}
 }
