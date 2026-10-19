@@ -149,6 +149,7 @@ func (d *WorktreeChangeDetector) Start() {
 		wg.Add(1)
 		go d.gitWatchLoop(ctx, &wg, watcher)
 	}
+	d.startTreeWatch(ctx, &wg)
 	go func() {
 		wg.Wait()
 		close(d.stopped)

@@ -426,3 +426,63 @@ func TestScanner_scheduleGitEvent_should_flushOnce_When_DebounceElapses(t *testi
 	s.fsMu.Unlock()
 	assert.False(t, pending, "pending marker must clear so the next burst re-arms")
 }
+
+// ---- working-tree watcher (darwin FSEvents) ---------------------------------
+
+type fakeTreeWatcher struct{ added, removed []string }
+
+func (f *fakeTreeWatcher) Add(r string) error { f.added = append(f.added, r); return nil }
+func (f *fakeTreeWatcher) Remove(r string)    { f.removed = append(f.removed, r) }
+func (f *fakeTreeWatcher) Close()             {}
+
+func TestScanner_backstopInterval_should_stretchTwofold_When_TreeWatcherActive(t *testing.T) {
+	t.Parallel()
+	s := &Scanner{tickInterval: time.Minute}
+	assert.Equal(t, time.Minute, s.backstopInterval())
+
+	s.treeWatch = &fakeTreeWatcher{}
+	assert.Equal(t, 2*time.Minute, s.backstopInterval())
+}
+
+func TestScanner_watchRepo_should_registerWithTreeWatcher_When_Present(t *testing.T) {
+	t.Parallel()
+	fw := &fakeTreeWatcher{}
+	s := &Scanner{scanQueue: make(chan scanTask, 50), treeWatch: fw}
+
+	s.watchRepo("/r/repo")
+	s.unwatchRepo("/r/repo")
+
+	assert.Equal(t, []string{"/r/repo"}, fw.added)
+	assert.Equal(t, []string{"/r/repo"}, fw.removed)
+}
+
+// A tree event must reach the scan queue via the debounce path alone, far
+// sooner than even the unstretched backstop tick, so lengthening the tick 2x
+// cannot add change-detection latency.
+func TestScanner_treeChange_should_enqueueBeforeBackstopTick_When_TreeWatcherActive(t *testing.T) {
+	t.Parallel()
+	repo := "/r/repo"
+	s := newScannerWithFreshWorktrees(repo, repo)
+	s.tickInterval = time.Hour
+	s.treeWatch = &fakeTreeWatcher{}
+	s.fsDebounce = 5 * time.Millisecond
+	require.Equal(t, 2*time.Hour, s.backstopInterval())
+
+	start := time.Now()
+	s.scheduleGitEvent(context.Background(), repo, gitEventRepoRoot) // what the watcher callback does
+	err := wait.WaitForCondition(func() bool { return len(s.scanQueue) == 1 }, wait.FastWaitConfig())
+	require.NoError(t, err)
+	assert.Less(t, time.Since(start), time.Minute)
+}
+
+func TestScanner_startTreeWatch_should_watchReposAddedBeforeStart(t *testing.T) {
+	t.Parallel()
+	fw := &fakeTreeWatcher{}
+	s := &Scanner{scanQueue: make(chan scanTask, 50)}
+	s.repoSet.Store("/r/early", true)
+
+	s.installTreeWatcher(context.Background(), fw)
+
+	assert.Equal(t, []string{"/r/early"}, fw.added)
+	assert.Equal(t, 2*time.Minute, func() time.Duration { s.tickInterval = time.Minute; return s.backstopInterval() }())
+}
