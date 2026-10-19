@@ -732,3 +732,34 @@ func TestWalkGate_ShouldReportPositionChange_And_NeverLeakSlot_When_WaiterAbando
 	g.Release()
 	assert.Zero(t, g.running)
 }
+
+func TestSearchRegistry_ShouldTolerateEndCalledTwice(t *testing.T) {
+	var reg SearchRegistry
+	_, end := reg.Begin(context.Background(), SearchKey{SessionID: "s", ClientID: "c"})
+
+	end()
+
+	assert.NotPanics(t, end)
+}
+
+func TestSearchHandler_ShouldKeepRunningSearch_When_RefusedRequestForSameKeyComesFromAnotherHost(t *testing.T) {
+	rig := newRig(t, dirWorkspaces{"s1": fillWorktree(t, map[string]string{"a.txt": "x\n"})})
+	gs := newGatedSearcher()
+	rig.h.searcher = gs
+	rig.h.gate = newWalkGate(4)
+	rig.h.limiter = newIPLimiter(ipCaps{PerHost: 1, Total: 1})
+	first := make(chan error, 1)
+	go func() {
+		first <- rig.h.Handle(context.Background(), searchReq("s1", "tab", "needle"), "10.0.0.1:1", (&sink{}).send)
+	}()
+	eventually(t, func() bool { return gs.started.Load() == 1 }, "first search running")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // a bug would let this request run and block
+	defer cancel()
+	err := rig.h.Handle(ctx, searchReq("s1", "tab", "needle"), "10.0.0.2:1", (&sink{}).send)
+
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+	assert.EqualValues(t, 1, gs.current.Load(), "the refused request must not cancel the running search")
+	close(gs.release)
+	require.NoError(t, <-first)
+}

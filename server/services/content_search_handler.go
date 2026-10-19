@@ -37,6 +37,7 @@ type SearchRegistry struct {
 
 type searchRun struct {
 	cancel   context.CancelCauseFunc
+	host     string
 	finished chan struct{} // closed by end, after the run has released everything it held
 }
 
@@ -44,15 +45,23 @@ type searchRun struct {
 // (a Load-then-Store pair would let two concurrent starts both survive). The returned
 // end must be called when the search finishes.
 func (r *SearchRegistry) Begin(parent context.Context, key SearchKey) (context.Context, func()) {
-	ctx, end, _ := r.begin(parent, key)
+	ctx, end, _ := r.begin(parent, key, "")
 	return ctx, end
+}
+
+// heldBy reports whether the live search for key came from host, so cancelling it frees a slot that host holds.
+func (r *SearchRegistry) heldBy(key SearchKey, host string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.active[key]
+	return run != nil && run.host == host
 }
 
 // begin is Begin that also returns a channel closed once the superseded run (nil if
 // none) has finished, so the caller can wait for the slots it held.
-func (r *SearchRegistry) begin(parent context.Context, key SearchKey) (context.Context, func(), <-chan struct{}) {
+func (r *SearchRegistry) begin(parent context.Context, key SearchKey, host string) (context.Context, func(), <-chan struct{}) {
 	ctx, cancel := context.WithCancelCause(parent)
-	run := &searchRun{cancel: cancel, finished: make(chan struct{})}
+	run := &searchRun{cancel: cancel, host: host, finished: make(chan struct{})}
 	r.mu.Lock()
 	if r.active == nil {
 		r.active = map[SearchKey]*searchRun{}
@@ -64,14 +73,17 @@ func (r *SearchRegistry) begin(parent context.Context, key SearchKey) (context.C
 	}
 	r.active[key] = run
 	r.mu.Unlock()
+	var once sync.Once
 	return ctx, func() {
-		r.mu.Lock()
-		if r.active[key] == run {
-			delete(r.active, key)
-		}
-		r.mu.Unlock()
-		cancel(nil)
-		close(run.finished)
+		once.Do(func() {
+			r.mu.Lock()
+			if r.active[key] == run {
+				delete(r.active, key)
+			}
+			r.mu.Unlock()
+			cancel(nil)
+			close(run.finished)
+		})
 	}, prevDone
 }
 
@@ -130,22 +142,33 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 		call.outcome = SearchOutcomeInvalid
 		return err
 	}
-	// Begin first so the search this one replaces is cancelled; end runs after release (LIFO), so prevDone means its slot is free.
-	sctx, end, prevDone := h.registry.begin(ctx, SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()})
-	defer end()
-	release, refused := h.limiter.Acquire(remoteAddr)
-	if refused != "" && prevDone != nil {
+	key := SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()}
+	host := remoteHost(remoteAddr)
+	// Slot first, then registration; release runs before end so a superseder that waits on end finds the slot free.
+	var release, end func() = func() {}, func() {}
+	defer func() { release(); end() }()
+	var sctx context.Context
+	var refused SearchBusyReason
+	var freed func()
+	if freed, refused = h.limiter.Acquire(remoteAddr); refused == "" {
+		release = freed
+		sctx, end, _ = h.registry.begin(ctx, key, host)
+	} else if h.registry.heldBy(key, host) {
+		// Only this host's own earlier search for the key can free a slot for it, so only then is superseding it a fair trade.
+		var prevDone <-chan struct{}
+		sctx, end, prevDone = h.registry.begin(ctx, key, host)
 		select {
 		case <-prevDone:
 		case <-sctx.Done():
 		}
-		release, refused = h.limiter.Acquire(remoteAddr)
+		if freed, refused = h.limiter.Acquire(remoteAddr); refused == "" {
+			release = freed
+		}
 	}
 	if refused != "" {
 		call.outcome = SearchOutcomeBusy
 		return busyError(refused)
 	}
-	defer release()
 
 	root, closer, err := h.ops.openSearchRoot(msg.GetSessionId())
 	if err != nil {
