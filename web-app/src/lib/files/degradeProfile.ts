@@ -34,10 +34,13 @@ export function longestLineLength(doc: string): number {
   return longest;
 }
 
-/** Desktop and small files keep everything; only a coarse pointer degrades. */
-export function degradeProfile({ doc, pointerCoarse }: { doc: string; pointerCoarse: boolean }): DegradeProfile {
+/**
+ * Desktop and small files keep everything; only a coarse pointer degrades. A windowed file (over 1 MiB, served by
+ * range reads) is never degraded whole: `doc` is only the loaded text, which still decides wrapping.
+ */
+export function degradeProfile({ doc, pointerCoarse, windowed = false }: { doc: string; pointerCoarse: boolean; windowed?: boolean }): DegradeProfile {
   if (!pointerCoarse) return FULL_PROFILE;
   const wrap = longestLineLength(doc) < LONG_LINE_CHARS;
-  if (doc.length < DEGRADE_MIN_CHARS) return wrap ? FULL_PROFILE : { ...FULL_PROFILE, wrap };
+  if (windowed || doc.length < DEGRADE_MIN_CHARS) return wrap ? FULL_PROFILE : { ...FULL_PROFILE, wrap };
   return { degraded: true, syntaxHighlight: false, bracketMatching: false, activeLine: false, foldGutter: false, wrap, notice: DEGRADE_NOTICE };
 }

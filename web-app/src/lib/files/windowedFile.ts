@@ -68,6 +68,10 @@ export class WindowedFile {
   private running = 0;
   private jumpCtl: AbortController | null = null;
   private indexWait: Promise<void> | null = null;
+  /** Last line the reader was put on, so a remounted view reopens where the old one was. */
+  private anchor: number | null = null;
+  /** The editor's lazy document is being built; jumps wait for it. */
+  private attaching: Promise<void> = Promise.resolve();
 
   constructor(private readonly transport: FileTransportPort, private readonly ref: FileRef, private readonly size: number) {}
 
@@ -168,8 +172,21 @@ export class WindowedFile {
     this.engine.provideRange({ startLine: r.range.startLine, endLine }, text);
   }
 
+  /** The editor went away (view swap or unmount): stop feeding it. */
+  detach(): void {
+    this.engine = null;
+    this.queue = [];
+    this.set({ opened: false, loading: [] });
+  }
+
   /** Mounts the lazy document on `engine` and paints the window around `anchorLine`; the cursor lands on that exact line. */
-  async attach(engine: WindowedEngine, language: string, anchorLine: number): Promise<void> {
+  attach(engine: WindowedEngine, language: string, startLine: number): Promise<void> {
+    this.attaching = this.mount(engine, language, startLine);
+    return this.attaching;
+  }
+
+  private async mount(engine: WindowedEngine, language: string, startLine: number): Promise<void> {
+    const anchorLine = this.anchor ?? startLine;
     this.engine = engine;
     this.language = language;
     engine.onNeedRange((range) => this.request(range));
@@ -193,7 +210,9 @@ export class WindowedFile {
     await this.swapBuffer();
     this.set({ opened: true });
     this.provide(first);
-    engine.gotoLine(deferred === null ? Math.min(Math.max(1, anchorLine), Math.max(first.range.endLine, 1)) : 1);
+    const landed = deferred === null ? Math.min(Math.max(1, anchorLine), Math.max(first.range.endLine, 1)) : 1;
+    this.anchor = landed;
+    engine.gotoLine(landed);
     if (deferred !== null) void this.goTo(deferred);
   }
 
@@ -275,6 +294,7 @@ export class WindowedFile {
   }
 
   private async jump(requested: number): Promise<GoResult> {
+    await this.attaching;
     const e = this.engine;
     let line = Math.max(1, Math.trunc(requested));
     let clamped = false;
@@ -293,6 +313,7 @@ export class WindowedFile {
         this.provide(r);
         e.gotoLine(line);
       }
+      this.anchor = line;
       if (clamped) this.set({ notice: `Line ${requested.toLocaleString("en-US")} is past the end; showing line ${line.toLocaleString("en-US")}` });
       return { line, clamped, cancelled: false };
     } catch (err) {

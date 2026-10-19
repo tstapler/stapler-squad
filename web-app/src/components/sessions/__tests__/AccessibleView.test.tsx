@@ -1,8 +1,11 @@
-import { act, render, screen, fireEvent, renderHook } from "@testing-library/react";
+import { act, render, screen, fireEvent, renderHook, waitFor } from "@testing-library/react";
 import { AccessibleView, AccessibleSkipLink } from "../files/AccessibleView";
 import type { ReadViewHandle } from "../files/readViewHandle";
 import { paginateLines, textPageSource } from "@/lib/files/pageSource";
 import { useAccessibleView } from "@/lib/hooks/useAccessibleView";
+import { Rejected } from "@/lib/files/transport/fileTransport";
+import { WindowedFile } from "@/lib/files/windowedFile";
+import { createVirtualRangeTransport } from "@/lib/files/__tests__/fixtures/virtualRangeTransport";
 
 const doc = (n: number) => Array.from({ length: n }, (_, i) => `row ${i + 1}`).join("\n");
 
@@ -124,6 +127,48 @@ describe("AccessibleView", () => {
     expect(screen.getByTestId("accessible-view-label").textContent).toBe("Lines 501-1000 of 20000");
   });
 });
+
+describe("AccessibleView over a windowed buffer", () => {
+  it("accessibleView_should_ReadPagesThroughTransport_ForWindowedBuffer_WithAboutNAndRetry", async () => {
+    let ready = false;
+    const t = createVirtualRangeTransport({ lines: 120_000, size: 1_440_000, ready: () => ready });
+    const file = new WindowedFile(t, { sessionId: "s1", path: "big.log" }, t.size);
+    let handle: ReadViewHandle | undefined;
+    render(<AccessibleView path="big.log" windowed={file} onReady={(h) => { handle = h; }} />);
+
+    // Each 500-line page is one read(lines); until the count is exact the pager says "about N".
+    await screen.findByText("Lines 1-500 of about 144000");
+    expect(t.reads).toHaveLength(1);
+    expect(t.reads[0]).toMatchObject({ anchorLine: 1, dir: "fwd", wantLines: 500 });
+    expect(screen.getAllByTestId("accessible-view-line")).toHaveLength(500);
+    expect(handle?.windowed).toBe(file);
+
+    // A failed page announces politely and offers Retry; the retry is another single read.
+    t.failures.push(new Rejected("busy"));
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    await screen.findByRole("button", { name: "Retry" });
+    await waitFor(() => expect(screen.getByTestId("accessible-view-announce").textContent).toBe("Couldn't load lines 501-1000. Retry"));
+    ready = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Lines 501-1000 of 120000");
+    expect(t.reads.map((r) => r.anchorLine)).toEqual([1, 501, 501]);
+    expect(document.querySelector('[data-line="501"]')?.textContent).toBe("501 line 501");
+
+    // Go to line loads the page holding it; past the end clamps to the last line.
+    act(() => handle?.gotoLine(119_999));
+    await screen.findByText("Lines 119501-120000 of 120000");
+    await waitForLine(119_999);
+    act(() => handle?.gotoLine(500_000));
+    await waitForLine(120_000);
+
+    // A buffer read whole still pages from its own text: no transport call.
+    const before = t.reads.length;
+    mount({}, 600);
+    expect(t.reads).toHaveLength(before);
+  });
+});
+
+const waitForLine = (n: number) => waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-line="${n}"]`)));
 
 describe("paginateLines and textPageSource", () => {
   it("paginateLines_should_ClampPagesAndStripCarriageReturns", () => {

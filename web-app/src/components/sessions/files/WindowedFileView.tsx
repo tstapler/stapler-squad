@@ -6,6 +6,7 @@ import { useWindowedState } from "@/lib/files/useWindowedState";
 import type { BufferSource } from "@/lib/files/bufferReducer";
 import { useFileTransport } from "@/lib/hooks/useFileTransport";
 import { CodeEditor, type CodeEditorHandle } from "../CodeEditor";
+import { AccessibleView } from "./AccessibleView";
 import { LargeFileStates } from "./LargeFileStates";
 import type { ReadViewHandle } from "./readViewHandle";
 
@@ -16,6 +17,9 @@ export interface WindowedFileViewProps {
   path: string;
   source: Windowed;
   language: string;
+  /** The per-device Accessible view: pages come from the same windowed file through `read(lines)`. */
+  accessible?: boolean;
+  dirty?: boolean;
   /** Changes when the file must be read again (stale-banner Reload). */
   reloadKey?: number;
   onReady?: (handle: ReadViewHandle) => void;
@@ -40,7 +44,7 @@ function bridgeHandle(editor: CodeEditorHandle, file: WindowedFile): ReadViewHan
 }
 
 /** A windowed (T1/T2) file in Read mode: CodeMirror over a lazy document that loads line windows on demand. */
-export function WindowedFileView({ sessionId, path, source, language, reloadKey, onReady, onDemoted }: WindowedFileViewProps) {
+export function WindowedFileView({ sessionId, path, source, language, accessible = false, dirty = false, reloadKey, onReady, onDemoted }: WindowedFileViewProps) {
   const transport = useFileTransport();
   const [current, setCurrent] = useState<{ file: WindowedFile; id: number } | null>(null);
   useEffect(() => {
@@ -53,20 +57,30 @@ export function WindowedFileView({ sessionId, path, source, language, reloadKey,
   useEffect(() => { if (state.demoted) onDemoted?.(); }, [state.demoted, onDemoted]);
 
   if (!file) return null;
+  if (accessible) {
+    return <AccessibleView path={path} windowed={file} dirty={dirty} saveDisabledReason="saving is not available yet" onReady={onReady} />;
+  }
   return (
     <>
       <LargeFileStates file={file} state={state} />
-      <CodeEditor
-        key={current?.id}
-        content=""
-        language={language}
-        path={path}
-        mode="Read"
-        onReady={(editor) => {
-          void file.attach(editor, language, source.windowStartLine);
-          onReady?.(bridgeHandle(editor, file));
-        }}
-      />
+      <WindowedEditor key={current?.id} file={file} path={path} language={language} startLine={source.windowStartLine} onReady={onReady} />
     </>
+  );
+}
+
+function WindowedEditor({ file, path, language, startLine, onReady }: { file: WindowedFile; path: string; language: string; startLine: number; onReady?: (handle: ReadViewHandle) => void }) {
+  useEffect(() => () => file.detach(), [file]);
+  return (
+    <CodeEditor
+      content=""
+      language={language}
+      path={path}
+      mode="Read"
+      windowed
+      onReady={(editor) => {
+        void file.attach(editor, language, startLine);
+        onReady?.(bridgeHandle(editor, file));
+      }}
+    />
   );
 }

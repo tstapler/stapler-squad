@@ -40,6 +40,15 @@ export interface Page {
 export const pageCount = (total: number, size = ACCESSIBLE_PAGE_SIZE) => Math.max(1, Math.ceil(total / size));
 export const pageOfLine = (line: number, size = ACCESSIBLE_PAGE_SIZE) => Math.floor((line - 1) / size);
 
+/** A page from lines the caller already read (windowed files); until `exact`, the total is an estimate. */
+export function pageFromLines(lines: string[], page: number, total: number, exact: boolean, size = ACCESSIBLE_PAGE_SIZE): Page {
+  const pages = pageCount(total, size);
+  const first = Math.min(Math.max(0, page), pages - 1) * size + 1;
+  const last = first + lines.length - 1;
+  const shown = lines.length > 0 ? last : Math.min(first + size - 1, total); // an unloaded page still names its range
+  return { first, last, total, pages, lines, label: `Lines ${first}-${shown} of ${exact ? "" : "about "}${total}` };
+}
+
 /** The `page`-th (0-based) page of at most `size` lines; an out-of-range page clamps to the last. */
 export function paginateLines(source: PageSource, page: number, size = ACCESSIBLE_PAGE_SIZE): Page {
   const total = source.lineCount;

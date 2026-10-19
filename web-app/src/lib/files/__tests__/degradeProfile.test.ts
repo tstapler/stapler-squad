@@ -44,4 +44,13 @@ describe("degradeProfile", () => {
     expect(DEGRADE_MIN_CHARS).toBeLessThan(600 * KB);
     expect(LONG_LINE_CHARS).toBe(4000);
   });
+
+  it("degradeProfile_should_NotDegradeWholeFile_When_WindowedByRangeReads_And_StillDegradeUnder1MiB", () => {
+    const loaded = lines80(600 * KB);
+    // A windowed file (over 1 MiB, range reads active) is never degraded whole; its loaded text still decides wrapping.
+    expect(degradeProfile({ doc: loaded, pointerCoarse: true, windowed: true })).toEqual(FULL_PROFILE);
+    expect(degradeProfile({ doc: text(LONG_LINE_CHARS), pointerCoarse: true, windowed: true }).wrap).toBe(false);
+    // 700 KB on a phone is under the windowing threshold, so the base rule applies as before.
+    expect(degradeProfile({ doc: lines80(700 * KB), pointerCoarse: true }).degraded).toBe(true);
+  });
 });

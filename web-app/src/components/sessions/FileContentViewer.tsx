@@ -253,6 +253,8 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
             path={filePath}
             source={windowed}
             language={detectLanguage(filePath)}
+            accessible={accessible}
+            dirty={dirty}
             reloadKey={reloadKey}
             onReady={onEditorReady && ((handle) => onEditorReady(handle, filePath))}
             onDemoted={() => setDemoted(true)}
