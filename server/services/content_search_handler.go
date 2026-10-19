@@ -35,20 +35,32 @@ type SearchRegistry struct {
 	active map[SearchKey]*searchRun
 }
 
-type searchRun struct{ cancel context.CancelCauseFunc }
+type searchRun struct {
+	cancel   context.CancelCauseFunc
+	finished chan struct{} // closed by end, after the run has released everything it held
+}
 
 // Begin registers a search for key, cancelling the previous one inside the same lock
 // (a Load-then-Store pair would let two concurrent starts both survive). The returned
 // end must be called when the search finishes.
 func (r *SearchRegistry) Begin(parent context.Context, key SearchKey) (context.Context, func()) {
+	ctx, end, _ := r.begin(parent, key)
+	return ctx, end
+}
+
+// begin is Begin that also returns a channel closed once the superseded run (nil if
+// none) has finished, so the caller can wait for the slots it held.
+func (r *SearchRegistry) begin(parent context.Context, key SearchKey) (context.Context, func(), <-chan struct{}) {
 	ctx, cancel := context.WithCancelCause(parent)
-	run := &searchRun{cancel: cancel}
+	run := &searchRun{cancel: cancel, finished: make(chan struct{})}
 	r.mu.Lock()
 	if r.active == nil {
 		r.active = map[SearchKey]*searchRun{}
 	}
+	var prevDone <-chan struct{}
 	if prev := r.active[key]; prev != nil {
 		prev.cancel(errSearchSuperseded)
+		prevDone = prev.finished
 	}
 	r.active[key] = run
 	r.mu.Unlock()
@@ -59,7 +71,8 @@ func (r *SearchRegistry) Begin(parent context.Context, key SearchKey) (context.C
 		}
 		r.mu.Unlock()
 		cancel(nil)
-	}
+		close(run.finished)
+	}, prevDone
 }
 
 // SearchHandler serves SearchContent: validation, stream and walk admission, then the
@@ -117,7 +130,17 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 		call.outcome = SearchOutcomeInvalid
 		return err
 	}
+	// Begin first so the search this one replaces is cancelled; end runs after release (LIFO), so prevDone means its slot is free.
+	sctx, end, prevDone := h.registry.begin(ctx, SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()})
+	defer end()
 	release, refused := h.limiter.Acquire(remoteAddr)
+	if refused != "" && prevDone != nil {
+		select {
+		case <-prevDone:
+		case <-sctx.Done():
+		}
+		release, refused = h.limiter.Acquire(remoteAddr)
+	}
 	if refused != "" {
 		call.outcome = SearchOutcomeBusy
 		return busyError(refused)
@@ -130,8 +153,6 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 	}
 	defer func() { _ = closer.Close() }()
 
-	sctx, end := h.registry.Begin(ctx, SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()})
-	defer end()
 	if err := h.awaitWalkSlot(sctx, call, send); err != nil {
 		return searchStopError(ctx, sctx, call, err)
 	}

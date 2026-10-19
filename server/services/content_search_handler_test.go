@@ -488,6 +488,34 @@ func TestStreamLimiter_ShouldRefuseFourthStreamWithSearchBusy_When_SameRemoteIpH
 	}
 }
 
+func TestStreamLimiter_ShouldNotRefuseSupersedingSearch_When_SameIpHoldsThreeAndNewestWinsForOneKey(t *testing.T) {
+	rig := newRig(t, dirWorkspaces{"s1": fillWorktree(t, map[string]string{"a.txt": "x\n"})})
+	gs := newGatedSearcher()
+	rig.h.searcher = gs
+	rig.h.gate = newWalkGate(maxSearchStreamsTotal)
+	const ip = "192.168.1.9:%d"
+	errs := make(chan error, maxSearchStreamsPerOrigin+1)
+	for i := 0; i < maxSearchStreamsPerOrigin; i++ {
+		go func() {
+			errs <- rig.h.Handle(context.Background(), searchReq("s1", fmt.Sprintf("tab%d", i), "needle"), fmt.Sprintf(ip, 4000+i), (&sink{}).send)
+		}()
+	}
+	eventually(t, func() bool { return gs.started.Load() == 3 }, "three streams open")
+
+	superseding := make(chan error, 1)
+	go func() {
+		superseding <- rig.h.Handle(context.Background(), searchReq("s1", "tab0", "needle2"), fmt.Sprintf(ip, 4999), (&sink{}).send)
+	}()
+
+	eventually(t, func() bool { return gs.started.Load() == 4 }, "the newest search for tab0 replaces the old one instead of being refused per_ip")
+	close(gs.release)
+	require.NoError(t, <-superseding)
+	for i := 0; i < maxSearchStreamsPerOrigin; i++ {
+		<-errs
+	}
+	assert.Equal(t, 0, rig.h.limiter.heldTotal())
+}
+
 func TestStreamLimiter_ShouldEnforceTotalCap_And_AcceptNewStream_When_OneOfThreeEnds(t *testing.T) {
 	l := newIPLimiter(ipCaps{PerHost: maxSearchStreamsPerOrigin, Total: maxSearchStreamsTotal})
 	var releases []func()
