@@ -364,7 +364,7 @@ function SelectionForm({ s }: { s: Shared }) {
       ))}
       {questions.some((q) => q.multiSelect) && (
         <p className={styles.helper} data-testid="selected-count">
-          {FORM_COPY.selectedCount(picks.reduce((n, p) => n + p.length, 0))}
+          {FORM_COPY.selectedCount(picks.reduce((n, p, i) => n + (questions[i].multiSelect ? p.length : 0), 0))}
         </p>
       )}
       {firstEmpty >= 0 && questions.length > 1 && <p className={styles.helper}>{FORM_COPY.answerToContinue(firstEmpty + 1)}</p>}

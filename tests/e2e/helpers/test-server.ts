@@ -82,6 +82,9 @@ export class TestServer {
         // config.GetConfigDirForDir), so this only affects the debug-handler
         // gate and log prefix, not data isolation.
         STAPLER_SQUAD_INSTANCE: 'e2e-local',
+        // A private tmux server, so this run's sessions never share the live service's
+        // default server (where its leaked-control-mode sweeper could see them).
+        STAPLER_SQUAD_TMUX_SOCKET: this.tmuxSocket(),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -117,9 +120,16 @@ export class TestServer {
       this.process = null;
       console.log('✅ Test server stopped');
     }
+    // --tmux-keep-server leaves the private tmux server behind; it holds only this run's sessions.
+    await execPromise(`tmux -L ${this.tmuxSocket()} kill-server`).catch(() => undefined);
 
     await this.cleanupTestDir();
     await this.cleanupBinDir();
+  }
+
+  /** The private tmux socket name of this run: port-scoped, so concurrent runs never share one. */
+  tmuxSocket(): string {
+    return `ssq-e2e-${this.config.port}`;
   }
 
   getBaseUrl(): string {

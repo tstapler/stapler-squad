@@ -101,3 +101,14 @@ describe("NotificationItem question card", () => {
     expect(onRefreshActions).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("NotificationItem saved answers", () => {
+  it("tells the Saved for later list to re-read as soon as its answer is saved", () => {
+    row = makeGuidanceRow({ source: "agent_mcp", status: "answered", answer: "Redis", deliveryState: "saved_for_later", deliveryRoute: "resume" });
+    const changed = jest.fn();
+    window.addEventListener("ssq:saved-answers-changed", changed);
+    renderQuestion(question({ isRead: true, isPendingDecision: false }));
+    window.removeEventListener("ssq:saved-answers-changed", changed);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+});

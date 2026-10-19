@@ -12,9 +12,12 @@ const cache: FormQuestion = {
 const regions: FormQuestion = { text: "Which regions?", multiSelect: true, options: [{ label: "A" }, { label: "B" }, { label: "C" }] };
 const open = <button type="button">Open session</button>;
 
+// Drafts also live in a module-level memory map, so each test gets its own request id.
+let requestCounter = 0;
+
 function setup(over: Partial<GuidanceQuestionFormProps> = {}) {
   const onSubmit = jest.fn();
-  const utils = render(<GuidanceQuestionForm id="q1" questions={[cache]} mode="answer" onSubmit={onSubmit} openControl={open} {...over} />);
+  const utils = render(<GuidanceQuestionForm id={`q${++requestCounter}`} questions={[cache]} mode="answer" onSubmit={onSubmit} openControl={open} {...over} />);
   return { onSubmit, ...utils };
 }
 
@@ -34,7 +37,7 @@ describe("GuidanceQuestionForm single select (UX-AC18)", () => {
     await userEvent.click(screen.getByRole("button", { name: /Memcached/ }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toEqual([{ question: cache.text, header: undefined, selected: ["Memcached"] }]);
-    rerender(<GuidanceQuestionForm id="q1" questions={[cache]} mode="answer" locked onSubmit={onSubmit} openControl={open} />);
+    rerender(<GuidanceQuestionForm id="lock-q" questions={[cache]} mode="answer" locked onSubmit={onSubmit} openControl={open} />);
     screen.getAllByRole("button", { name: /Redis|Memcached/ }).forEach((b) => expect(b).toHaveAttribute("aria-disabled", "true"));
     await userEvent.click(screen.getByRole("button", { name: /Redis/ }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -112,6 +115,13 @@ describe("GuidanceQuestionForm multi-select and multi-question (UX-AC19, UX-AC20
     expect(screen.getByText(/Which regions\?/)).toBeInTheDocument();
   });
 
+  it("counts only the multi-select question's picks, not a single-select answer beside it", async () => {
+    setup({ questions: [cache, regions] });
+    await userEvent.click(screen.getByRole("button", { name: /Redis/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "B" }));
+    expect(screen.getByTestId("selected-count")).toHaveTextContent("1 selected");
+  });
+
   it("shows an inline error linked by aria-describedby and moves focus into the first invalid group", async () => {
     const { onSubmit } = setup({ questions: [cache, regions] });
     await userEvent.click(screen.getByRole("button", { name: /Redis/ }));
@@ -139,10 +149,10 @@ describe("GuidanceQuestionForm multi-select and multi-question (UX-AC19, UX-AC20
   });
 
   it("restores the draft selections after a remount (UX-AC30)", async () => {
-    const first = setup({ questions: [regions] });
+    const first = setup({ id: "draft-q", questions: [regions] });
     await userEvent.click(screen.getByRole("checkbox", { name: "B" }));
     first.unmount();
-    setup({ questions: [regions] });
+    setup({ id: "draft-q", questions: [regions] });
     expect(screen.getByRole("checkbox", { name: "B" })).toBeChecked();
   });
 

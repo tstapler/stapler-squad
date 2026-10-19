@@ -7,6 +7,7 @@ import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
 import { useGuidanceRow } from "@/lib/hooks/useGuidanceRow";
+import { SAVED_ANSWERS_CHANGED } from "@/lib/hooks/useSavedAnswers";
 import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import type { DeliveryView } from "@/lib/guidance/deliveryView";
 import { ActionKind } from "@/gen/session/v1/notification_action_pb";
@@ -149,6 +150,9 @@ export interface NotificationItemProps {
 /** Delivery rows after which the card has left Needs you: acknowledged, handled in the terminal, replaced, session ended. */
 const RETIRING_ROWS: ReadonlySet<number> = new Set([4, 11, 12, 17]);
 
+/** Delivery rows 8 and 9: the answer was stored for a stopped or archived session. */
+const SAVED_ROWS: ReadonlySet<number> = new Set([8, 9]);
+
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
 
 // notification=<id> lets the deleted-session card show this record's own text (Task 5.3e).
@@ -229,6 +233,7 @@ export function NotificationItem({
     (view: DeliveryView | null) => {
       if (!view || view.row === lastRow.current) return;
       lastRow.current = view.row;
+      if (SAVED_ROWS.has(view.row)) window.dispatchEvent(new Event(SAVED_ANSWERS_CHANGED));
       const reopened = view.needsYou && notification.isRead;
       const retired = !view.needsYou && RETIRING_ROWS.has(view.row) && !notification.isRead;
       if (reopened || retired) onRefreshActions?.();

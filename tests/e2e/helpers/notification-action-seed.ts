@@ -161,3 +161,67 @@ export async function resolveApprovalViaRpc(request: APIRequestContext, baseUrl:
   const response = await rpc(request, baseUrl, 'ResolveApproval', { approvalId, decision });
   if (!response.ok()) throw new Error(`ResolveApproval failed: ${response.status()} ${await response.text()}`);
 }
+
+export interface SeedQuestion {
+  text: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: string[];
+}
+
+export interface SeededQuestionCard {
+  rowId: string;
+  question: string;
+}
+
+/**
+ * Raises a durable question for a live session through the e2e-local seed endpoint and the history
+ * row that carries it. `hook` rows are registered as the on-screen dialog (a keystroke answer);
+ * `agent_mcp` rows are stored answers (multi-select, several questions, free text).
+ */
+export async function seedQuestionCard(
+  request: APIRequestContext,
+  baseUrl: string,
+  opts: { sessionId: string; source: 'ask_user_question_hook' | 'agent_mcp'; questions: SeedQuestion[] },
+): Promise<SeededQuestionCard> {
+  const hookCallId = opts.source === 'ask_user_question_hook' ? `toolu_${Date.now()}_${Math.floor(Math.random() * 1e6)}` : '';
+  let seeded = await request.post(`${baseUrl}/api/debug/guidance/seed-question`, { headers: { 'Content-Type': 'application/json' }, data: { sessionId: opts.sessionId, source: opts.source, hookCallId, questions: opts.questions } });
+  // A session just created is not live until its pane has started.
+  for (let attempt = 0; attempt < 30 && seeded.status() === 404; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    seeded = await request.post(`${baseUrl}/api/debug/guidance/seed-question`, { headers: { 'Content-Type': 'application/json' }, data: { sessionId: opts.sessionId, source: opts.source, hookCallId, questions: opts.questions } });
+  }
+  if (!seeded.ok()) throw new Error(`seed-question failed: ${seeded.status()} ${await seeded.text()}`);
+  const { id, sessionUuid } = (await seeded.json()) as { id: string; sessionUuid: string };
+  const first = opts.questions[0];
+  const hook = opts.source === 'ask_user_question_hook';
+  await sendNotification(request, baseUrl, {
+    sessionId: sessionUuid,
+    type: 'INPUT_REQUIRED',
+    title: 'Claude has a question',
+    message: first.text,
+    metadata: {
+      guidance_request_id: id,
+      question_shape: hook ? 'single' : 'multi',
+      ...(hook ? { question_id: id, question_options: JSON.stringify(first.options) } : {}),
+    },
+  });
+  await untilPersisted(request, baseUrl, 'guidance_request_id', id);
+  return { rowId: id, question: first.text };
+}
+
+/** Reads a durable question back, the way the card does. */
+export async function readGuidanceRow(request: APIRequestContext, baseUrl: string, id: string) {
+  const response = await rpc(request, baseUrl, 'GetGuidanceRequest', { id }, 'GuidanceRequestService');
+  const body = (await response.json()) as { request: { status: string; answer?: string; deliveryState?: string; cancelReason?: string } };
+  return body.request;
+}
+
+/** What the session's PostToolUse hook sends when the operator answered the dialog in the terminal. */
+export async function postToolUseInTerminal(request: APIRequestContext, baseUrl: string, sessionTitle: string): Promise<void> {
+  const response = await request.post(`${baseUrl}/api/hooks/post-tool-use`, {
+    headers: { 'X-CS-Session-ID': sessionTitle, 'X-CS-Tool-Name': 'AskUserQuestion' },
+    data: {},
+  });
+  if (!response.ok()) throw new Error(`post-tool-use failed: ${response.status()}`);
+}

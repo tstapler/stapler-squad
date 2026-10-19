@@ -53,7 +53,7 @@ export async function setFeatureFlag(
 
 export interface SeededNotification {
   sessionId: string;
-  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'CUSTOM' | 'INFO' | 'TASK_COMPLETE';
+  type: 'ERROR' | 'WARNING' | 'APPROVAL_NEEDED' | 'INPUT_REQUIRED' | 'CUSTOM' | 'INFO' | 'TASK_COMPLETE';
   title: string;
   message?: string;
   metadata?: Record<string, string>;
@@ -282,14 +282,37 @@ export class InlineActionRow {
     return this.row.locator('[data-action-option]').filter({ hasText: label });
   }
 
-  async press(control: Locator, { tap = false }: { tap?: boolean } = {}): Promise<void> {
+  async press(control: Locator, { tap = false, force = false }: { tap?: boolean; force?: boolean } = {}): Promise<void> {
     await expect(control).toBeVisible();
     // Scroll first: the click's own scroll-into-view would fire a scroll event right before the press.
     await control.scrollIntoViewIfNeeded();
     await waitForStableBox(control);
     await waitForTrayScrollIdle(this.page);
-    if (tap) await control.tap();
-    else await control.click();
+    if (tap) await control.tap({ force });
+    else await control.click({ force });
+  }
+}
+
+/** A question card (session:guidance-structured): the shared form and its one delivery-state line. */
+export class QuestionCard extends InlineActionRow {
+  readonly form: Locator;
+  readonly deliveryText: Locator;
+  readonly chip: Locator;
+  readonly submit: Locator;
+  readonly other: Locator;
+
+  constructor(page: Page, text: string) {
+    super(page, text);
+    this.form = this.row.getByRole('form');
+    this.deliveryText = this.row.getByTestId('delivery-text');
+    this.chip = this.row.getByTestId('delivery-chip');
+    this.submit = this.row.getByTestId('submit-answers');
+    this.other = this.row.getByTestId('guidance-other');
+  }
+
+  /** A question's group of options, by the question text. */
+  group(question: string | RegExp): Locator {
+    return this.row.getByRole('group', { name: question });
   }
 }
 

@@ -8,7 +8,10 @@ import { getConnectTransport } from "@/lib/api/transport";
 import { toPlainObject } from "@/lib/api/serialization";
 import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
 
-export const SAVED_POLL_MS = 30_000;
+export const SAVED_POLL_MS = 15_000;
+
+/** A card saw its answer become "saved for later": re-read the list now rather than at the next poll. */
+export const SAVED_ANSWERS_CHANGED = "ssq:saved-answers-changed";
 
 /**
  * Answers stored for a stopped or archived session (agent-created requests only). Read while
@@ -26,8 +29,11 @@ export function useSavedAnswers(enabled: boolean): PlainGuidanceRequest[] {
         .catch(() => {});
     void read();
     const timer = setInterval(() => void read(), SAVED_POLL_MS);
+    const onChanged = () => void read();
+    window.addEventListener(SAVED_ANSWERS_CHANGED, onChanged);
     return () => {
       clearInterval(timer);
+      window.removeEventListener(SAVED_ANSWERS_CHANGED, onChanged);
       ctrl.abort();
     };
   }, [enabled]);
