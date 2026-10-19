@@ -85,20 +85,21 @@ func TestPickFanoutWinner_UnknownGroupIsNotFound(t *testing.T) {
 }
 
 // fanoutGitRepo creates a repo with one commit on branch "main" and returns its path.
+func fanoutGitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+}
+
 func fanoutGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, string(out))
-	}
-	run("init", "-q", "-b", "main")
+	fanoutGitRun(t, dir, "init", "-q", "-b", "main")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("base\n"), 0o644))
-	run("add", ".")
-	run("commit", "-q", "-m", "init")
+	fanoutGitRun(t, dir, "add", ".")
+	fanoutGitRun(t, dir, "commit", "-q", "-m", "init")
 	return dir
 }
 
@@ -150,15 +151,9 @@ func TestPickFanoutWinner_ConflictReturnsAbortedAndArchivesNothing(t *testing.T)
 	fix.poller.SetInstances([]*session.Instance{winner, loser})
 
 	// Diverge the base branch on the same file so the winner's merge conflicts.
-	for _, args := range [][]string{{"add", "."}, {"commit", "-q", "-m", "base edit"}} {
-		if args[0] == "add" {
-			require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("from base\n"), 0o644))
-		}
-		cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", repo}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, string(out))
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("from base\n"), 0o644))
+	fanoutGitRun(t, repo, "add", ".")
+	fanoutGitRun(t, repo, "commit", "-q", "-m", "base edit")
 
 	_, err := fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{
 		GroupId: groupID, WinnerSessionId: winner.UUID,
@@ -206,9 +201,7 @@ func TestPickFanoutWinner_PausedWinnerWithRemovedWorktreeMergesItsBranch(t *test
 	require.NoError(t, err)
 	require.NoError(t, wt.CommitChanges("variant work"))
 	// pause_session deletes the worktree directory but keeps the branch.
-	cmd := safeexec.CommandContext(context.Background(), "git", "-C", repo, "worktree", "remove", "--force", wt.GetWorktreePath())
-	out, cerr := cmd.CombinedOutput()
-	require.NoError(t, cerr, string(out))
+	fanoutGitRun(t, repo, "worktree", "remove", "--force", wt.GetWorktreePath())
 	winner.ForceStatus(session.Paused)
 	fix.poller.SetInstances([]*session.Instance{winner})
 
@@ -250,4 +243,18 @@ func TestPickFanoutWinner_ConcurrentPicksMergeOnlyOneWinner(t *testing.T) {
 	_, aErr := os.Stat(filepath.Join(repo, "a-only.txt"))
 	_, bErr := os.Stat(filepath.Join(repo, "b-only.txt"))
 	assert.NotEqual(t, aErr == nil, bErr == nil, "exactly one variant's file is merged")
+}
+
+func TestFanOutSession_RejectsInvalidBranchName(t *testing.T) {
+	t.Parallel()
+	svc := &SessionService{}
+	for _, branch := range []string{"-rf", "bad..name", "has space", "end."} {
+		_, err := svc.FanOutSession(context.Background(), connect.NewRequest(&sessionv1.FanOutSessionRequest{
+			Base:  &sessionv1.CreateSessionRequest{Title: "t", Path: "/tmp", Branch: branch},
+			Count: 2,
+		}))
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("branch %q: want InvalidArgument, got %v", branch, err)
+		}
+	}
 }

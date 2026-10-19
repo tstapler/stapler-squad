@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git/native"
 )
 
@@ -26,6 +27,7 @@ type BranchMergeResult struct {
 // ref: the branch tip is exposed as a temporary refs/remotes/origin/<branch> (restoring any
 // real one afterwards) and the fetch step is skipped. On conflict the merge is aborted, so
 // callers never see a half-merged tree.
+//
 // kibitzer:ignore primitive-obsession -- mirrors MergeMainIntoWorktree(worktreePath, mainBranch)
 func MergeBranchIntoCheckedOut(repoPath, branch string) (*BranchMergeResult, error) {
 	if branch == "" || strings.HasPrefix(branch, "-") {
@@ -46,10 +48,14 @@ func MergeBranchIntoCheckedOut(repoPath, branch string) (*BranchMergeResult, err
 		return nil, fmt.Errorf("expose %q for merge: %w", branch, err)
 	}
 	defer func() {
+		var restoreErr error
 		if priorErr == nil {
-			_ = repo.Storer.SetReference(prior)
+			restoreErr = repo.Storer.SetReference(prior)
 		} else {
-			_ = repo.Storer.RemoveReference(trackingName)
+			restoreErr = repo.Storer.RemoveReference(trackingName)
+		}
+		if restoreErr != nil {
+			log.Warn("failed to restore temporary merge ref", "ref", trackingName.String(), "err", restoreErr)
 		}
 	}()
 

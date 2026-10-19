@@ -27,6 +27,7 @@ import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
 import type { LauncherPresetEntry } from "@/lib/hooks/useLauncherPresets";
+import { MAX_FANOUT_VARIANTS } from "@/lib/hooks/useFanoutService";
 import { OmnibarPresetList } from "./OmnibarPresetList";
 import { ProgramProbeSection, PROGRAM_PROBE_STATUS_ID } from "./ProgramProbeSection";
 
@@ -908,18 +909,18 @@ export function OmnibarCreationPanel({
         {sessionType === "new_worktree" && (
           <div className={field}>
             <label className={labelClass} htmlFor="omnibar-fanout-count">
-              Run as variants <span style={{ fontWeight: "normal", opacity: 0.6 }}>(1 = single session, max 5)</span>
+              Run as variants <span style={{ fontWeight: "normal", opacity: 0.6 }}>(1 = single session, max {MAX_FANOUT_VARIANTS})</span>
             </label>
             <input
               id="omnibar-fanout-count"
               data-testid="omnibar-fanout-count"
               type="number"
               min={1}
-              max={5}
+              max={MAX_FANOUT_VARIANTS}
               className={fieldInput}
               value={formState.fanoutCount}
               onChange={(e) => {
-                const n = Math.max(1, Math.min(5, Math.floor(Number(e.target.value)) || 1));
+                const n = Math.max(1, Math.min(MAX_FANOUT_VARIANTS, Math.floor(Number(e.target.value)) || 1));
                 setFormField("fanoutCount", n);
               }}
             />

@@ -17,7 +17,7 @@ export function fanoutGroupIdOf(session: Pick<Session, "tags">): string | undefi
 
 export function fanoutVariantOf(session: Pick<Session, "tags">): number {
   const tag = session.tags.find((t) => t.startsWith(FANOUT_VARIANT_TAG_PREFIX));
-  return tag ? Number(tag.slice(FANOUT_VARIANT_TAG_PREFIX.length)) : 0;
+  return tag ? Number.parseInt(tag.slice(FANOUT_VARIANT_TAG_PREFIX.length), 10) || 0 : 0;
 }
 
 export function fanoutComparisonPath(groupId: string): string {

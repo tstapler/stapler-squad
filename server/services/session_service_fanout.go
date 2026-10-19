@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 
 	"connectrpc.com/connect"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -21,6 +23,8 @@ import (
 
 // Fan-out group membership is stored as session tags, so no schema change is needed and
 // the group survives restarts with the rest of the session's tags.
+var errNoWorktree = errors.New("worktree unavailable")
+
 const (
 	// MinFanoutVariants and MaxFanoutVariants bound FanOutSession's count (Orca's cap is 5).
 	MinFanoutVariants = 2
@@ -31,9 +35,18 @@ const (
 	fanoutBaseTagPrefix    = "fanout-base:"
 )
 
-// fanoutPickLocks serializes PickFanoutWinner per group: two picks would otherwise run
-// concurrent merges in the same repo and each archive the other's winner.
-var fanoutPickLocks sync.Map // groupID -> *sync.Mutex
+// fanoutPickLocks serializes PickFanoutWinner per group (striped by group id, so memory is
+// fixed regardless of client-supplied ids): two picks would otherwise run concurrent merges
+// in the same repo and each archive the other's winner.
+var fanoutPickLocks [64]sync.Mutex //nolint:gochecknoglobals // fixed lock table
+
+func lockFanoutGroup(groupID string) (unlock func()) {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(groupID))
+	mu := &fanoutPickLocks[h.Sum32()%uint32(len(fanoutPickLocks))]
+	mu.Lock()
+	return mu.Unlock
+}
 
 // +api: session:fanout
 // FanOutSession creates count sessions from one prompt. CreateSession returns once the
@@ -55,6 +68,14 @@ func (s *SessionService) FanOutSession(
 	if len(req.Msg.ProgramOverrides) > count {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("program_overrides has %d entries for %d variants", len(req.Msg.ProgramOverrides), count))
+	}
+
+	if base.Branch != "" {
+		if strings.HasPrefix(base.Branch, "-") ||
+			plumbing.NewBranchReferenceName(base.Branch).Validate() != nil ||
+			plumbing.NewBranchReferenceName(base.Branch+"-v1").Validate() != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid branch name %q", base.Branch))
+		}
 	}
 
 	groupID := uuid.NewString()
@@ -120,8 +141,8 @@ func (s *SessionService) fanoutGroupMembers(groupID string) []*session.Instance 
 
 func fanoutBaseBranch(inst *session.Instance) string {
 	for _, t := range inst.GetTags() {
-		if strings.HasPrefix(t, fanoutBaseTagPrefix) {
-			return strings.TrimPrefix(t, fanoutBaseTagPrefix)
+		if v, ok := strings.CutPrefix(t, fanoutBaseTagPrefix); ok {
+			return v
 		}
 	}
 	return ""
@@ -130,68 +151,24 @@ func fanoutBaseBranch(inst *session.Instance) string {
 // +api: session:fanout-pick
 // PickFanoutWinner merges the winner's branch into the group's base branch and archives
 // every other member through ArchiveSession (so ArchivedAt is set via the existing path).
+// Repeating a pick for the same winner is idempotent and retries any failed loser archival.
 func (s *SessionService) PickFanoutWinner(
 	ctx context.Context,
 	req *connect.Request[sessionv1.PickFanoutWinnerRequest],
 ) (*connect.Response[sessionv1.PickFanoutWinnerResponse], error) {
-	if req.Msg.GroupId == "" || req.Msg.WinnerSessionId == "" {
+	groupID := req.Msg.GroupId
+	if groupID == "" || req.Msg.WinnerSessionId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("group_id and winner_session_id are required"))
 	}
-	mu, _ := fanoutPickLocks.LoadOrStore(req.Msg.GroupId, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	defer lockFanoutGroup(groupID)()
 
-	members := s.fanoutGroupMembers(req.Msg.GroupId)
-	if len(members) == 0 {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fan-out group not found: %s", req.Msg.GroupId))
-	}
-	var winner *session.Instance
-	for _, m := range members {
-		if m.MatchesID(req.Msg.WinnerSessionId) {
-			winner = m
-		}
-	}
-	if winner == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("session %s is not in fan-out group %s", req.Msg.WinnerSessionId, req.Msg.GroupId))
-	}
-	if winner.IsArchived() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("winner session is archived"))
-	}
-
-	claude := detection.StatusUnknown
-	if s.statusManager != nil {
-		claude = s.statusManager.GetStatus(winner).ClaudeStatus
-	}
-	if err := fanoutWinnerEligibility(session.Status(winner.GetStatus()), claude); err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	}
-
-	wt, err := winner.GetGitWorktree()
+	winner, members, err := s.resolveFanoutWinner(groupID, req.Msg.WinnerSessionId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("winner %s has no git worktree: %w", winner.UUID, err))
+		return nil, err
 	}
-	if wt == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("winner %s has no git worktree", winner.UUID))
-	}
-	baseBranch := fanoutBaseBranch(winner)
-	if baseBranch == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("fan-out group has no recorded base branch"))
-	}
-	current, err := git.GetCurrentBranchName(wt.GetRepoPath())
+	wt, baseBranch, err := checkFanoutMergeTarget(winner)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("cannot read the checked-out branch of %s: %w", wt.GetRepoPath(), err))
-	}
-	if current != baseBranch {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("repository must have base branch %q checked out to merge (found %q)", baseBranch, current))
-	}
-	if dirty, err := git.RepoHasUncommittedChanges(wt.GetRepoPath()); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check %s for uncommitted changes: %w", wt.GetRepoPath(), err))
-	} else if dirty {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("repository %s has uncommitted changes; commit or stash them before picking a winner", wt.GetRepoPath()))
+		return nil, err
 	}
 
 	// A paused session's worktree is deleted but its branch keeps the committed work, so
@@ -211,17 +188,82 @@ func (s *SessionService) PickFanoutWinner(
 				wt.GetBranchName(), strings.Join(result.ConflictedFiles, ", ")))
 	}
 
-	var archived, archiveFailed []string
+	archived, archiveFailed := s.archiveFanoutLosers(ctx, groupID, members, winner)
+	return connect.NewResponse(&sessionv1.PickFanoutWinnerResponse{BaseBranch: baseBranch, ArchivedSessionIds: archived, FailedArchiveSessionIds: archiveFailed}), nil
+}
+
+// resolveFanoutWinner returns the group's members and the pickable winner among them.
+func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *session.Instance, members []*session.Instance, err error) {
+	members = s.fanoutGroupMembers(groupID)
+	if len(members) == 0 {
+		return nil, nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fan-out group not found: %s", groupID))
+	}
 	for _, m := range members {
-		if m == winner || m.IsArchived() {
+		if m.MatchesID(winnerID) {
+			winner = m
+		}
+	}
+	if winner == nil {
+		return nil, nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("session %s is not in fan-out group %s", winnerID, groupID))
+	}
+	if winner.IsArchived() {
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("winner session is archived"))
+	}
+	claude := detection.StatusUnknown
+	if s.statusManager != nil {
+		claude = s.statusManager.GetStatus(winner).ClaudeStatus
+	}
+	if eligErr := fanoutWinnerEligibility(session.Status(winner.GetStatus()), claude); eligErr != nil {
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, eligErr)
+	}
+	return winner, members, nil
+}
+
+// checkFanoutMergeTarget verifies the winner's repo is ready to receive the merge: the group's
+// base branch is checked out and the tree is clean.
+func checkFanoutMergeTarget(winner *session.Instance) (wt *git.GitWorktree, baseBranch string, err error) {
+	wt, wtErr := winner.GetGitWorktree()
+	if wtErr != nil || wt == nil {
+		return nil, "", connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("winner %s has no git worktree: %w", winner.UUID, errors.Join(wtErr, errNoWorktree)))
+	}
+	baseBranch = fanoutBaseBranch(winner)
+	if baseBranch == "" {
+		return nil, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("fan-out group has no recorded base branch"))
+	}
+	repo := wt.GetRepoPath()
+	current, branchErr := git.GetCurrentBranchName(repo)
+	if branchErr != nil {
+		return nil, "", connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("cannot read the checked-out branch of %s: %w", repo, branchErr))
+	}
+	if current != baseBranch {
+		return nil, "", connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repository must have base branch %q checked out to merge (found %q)", baseBranch, current))
+	}
+	dirty, dirtyErr := git.RepoHasUncommittedChanges(repo)
+	if dirtyErr != nil {
+		return nil, "", connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check %s for uncommitted changes: %w", repo, dirtyErr))
+	}
+	if dirty {
+		return nil, "", connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("repository %s has uncommitted changes; commit or stash them before picking a winner", repo))
+	}
+	return wt, baseBranch, nil
+}
+
+func (s *SessionService) archiveFanoutLosers(ctx context.Context, groupID string, members []*session.Instance, winner *session.Instance) (archived, failed []string) {
+	for _, m := range members {
+		if m.UUID == winner.UUID || m.IsArchived() {
 			continue
 		}
 		if _, err := s.ArchiveSession(ctx, connect.NewRequest(&sessionv1.ArchiveSessionRequest{SessionId: m.UUID})); err != nil {
-			log.Warn("failed to archive fan-out loser", "group_id", req.Msg.GroupId, "session", m.UUID, "err", err)
-			archiveFailed = append(archiveFailed, m.UUID)
+			log.Warn("failed to archive fan-out loser", "group_id", groupID, "session", m.UUID, "err", err)
+			failed = append(failed, m.UUID)
 			continue
 		}
 		archived = append(archived, m.UUID)
 	}
-	return connect.NewResponse(&sessionv1.PickFanoutWinnerResponse{BaseBranch: baseBranch, ArchivedSessionIds: archived, FailedArchiveSessionIds: archiveFailed}), nil
+	return archived, failed
 }
