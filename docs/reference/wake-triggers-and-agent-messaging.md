@@ -166,3 +166,52 @@ reconcile, so claims stay fire-once. Each `trigger:<type>` scope is read at fire
 time: a pending row of an off type is neither fired nor marked `missed`, except
 that `expires_at` always wins (ADR-008). While the dispatcher is stopped nothing
 marks rows `missed`; expired rows end at the next start.
+
+## Trigger types, states and limits
+
+Added so the page names the values the metrics and alerts use. Source:
+`session/domain/wake_trigger.go` and `server/wakes/limits.go`.
+
+Trigger types: `at`, `cron` (time based; `cron` recurs), `backlog_event`,
+`pr_event`, `ci_event`, `session_state`, `guidance_answered`.
+
+Row states: `pending`, `claimed`, `delivered`, `needs_revive`, `missed`,
+`cancelled`, `skipped`. A claim moves `pending` to `claimed`; the delivery
+write moves `claimed` to `delivered` only after a confirmed write; reconcile
+re-queues a stale claim. A `claimed` row that reconcile cannot re-queue ends as
+`missed`.
+
+Limits. Defaults are config values; ceilings are compiled in and cannot be
+raised by an agent or by config. A refusal at create is a typed `cap_exceeded`
+result naming the limit; every hit counts in `wake_limit_hit_total{limit,phase}`
+(`docs/reference/notification-actions-observability.md`).
+
+| `limit` label | Default | Ceiling | Phase |
+|---|---|---|---|
+| `min_interval` (shortest cron gap) | 10 min, derived as `max(5, ceil(60 / per-owner limit))` | 5 min floor at any setting | create |
+| `pending_per_owner` | 5 | 10 | create |
+| `max_fires` | 1 (12 for `cron`) | 48 | create |
+| `expires_horizon` | 24 h | 7 days | create |
+| `generation` (a woken turn scheduling another wake) | 3 | 5 | create |
+| `fires_per_owner_hour` | 6 | 12 | fire |
+| `fires_global_hour` | 60 | 120 | fire |
+| `peer_open_per_asker` | 3 | 5 | create |
+| `payload_size` | 2,000 chars | 4,000 | create |
+| `debounce` | 5 s | 60 s | none found |
+| `busy_hold` | 30 min | 2 h | none found |
+| `revive_lock` | 30 s | 60 s | none found |
+
+"None found" means the limit exists in `ResolveLimits` but no call to
+`wake_limit_hit_total` carries that label (`grep -rn LimitBusyHold server`), so the
+series stays empty.
+
+The two hourly delivery limits count `steer_text` deliveries only. A deferred
+one-shot row becomes `skipped` (reason `rate_limited`) after 3 consecutive
+deferrals; a `cron` row skips only that occurrence (`maxRateDeferrals`).
+Hitting a limit raises one failure digest per owner per hour.
+
+Expired rows: `ListWakeTriggers` first sweeps pending rows past `expires_at` to
+`missed` (`wakes.ExpireOverdue`, `server/wake_trigger_wiring.go`), so a stopped
+dispatcher still reports them. The next dispatcher start also marks them
+missed in its reconcile. Each swept row raises one failure notification that
+names the trigger id.
