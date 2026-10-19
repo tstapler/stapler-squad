@@ -53,8 +53,8 @@ export function useContentSearch({ sessionId, enabled = true, stream }: Options)
   const run = useMemo<SearchStream>(() => stream ?? connectSearchStream(sessionId, clientId.current), [stream, sessionId]);
 
   const [state, setState] = useState<SearchState>(INITIAL);
-  const live = useRef({ state, analytics, run });
-  live.current = { state, analytics, run };
+  const live = useRef({ state, analytics, run, onFlagOff });
+  live.current = { state, analytics, run, onFlagOff };
   const requestId = useRef(0);
   const controller = useRef<AbortController | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -122,7 +122,7 @@ export function useContentSearch({ sessionId, enabled = true, stream }: Options)
         if (!isLive()) return;
         const { kind, message } = classifySearchError(err);
         if (kind === "cancelled") return;
-        if (kind === "flag_off") void onFlagOff();
+        if (kind === "flag_off") void live.current.onFlagOff();
         const status: SearchStatus = kind === "worktree" ? "worktree_unavailable" : kind === "flag_off" ? "disabled" : kind;
         setState((s) => ({ ...s, status, ahead: 0, message: message ?? null }));
         finish(kind === "invalid" ? "invalid_regex" : kind === "worktree" ? "worktree_unavailable" : kind === "busy" ? "busy" : kind === "flag_off" ? "flag_off" : "error", null);
