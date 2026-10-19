@@ -86,6 +86,18 @@ func (c *RepoCache[K, V]) Get(key K) (V, bool) {
 	return e.val, true
 }
 
+// peek returns the live value for key without touching counters or the
+// reference bit. A flight uses it to notice a value published by the flight that
+// just finished.
+func (c *RepoCache[K, V]) peek(key K) (V, bool) {
+	e, ok := c.core.Load().index.Load(key)
+	if !ok || (e.expires != 0 && c.opts.now().UnixNano() >= e.expires) {
+		var zero V
+		return zero, false
+	}
+	return e.val, true
+}
+
 // Put stores val under key, evicting with the CLOCK hand to stay within
 // budget. A value larger than the whole budget, and any value stored while the
 // pressure function reports pressure, is not retained. Bytes are added before
@@ -175,6 +187,11 @@ func (c *RepoCache[K, V]) computeMissKeep(key K, fn func() (V, error), keep func
 				doErr = fmt.Errorf("repostate compute panic: %v", r)
 			}
 		}()
+		// A caller can miss in Get, then reach DoChan after the previous flight
+		// already published: without this re-check it would build a second time.
+		if v, ok := c.peek(key); ok {
+			return v, nil
+		}
 		led = true
 		v, fnErr := fn()
 		if fnErr != nil {
