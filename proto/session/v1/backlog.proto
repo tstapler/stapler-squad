@@ -2124,6 +2124,10 @@ enum StuckReason {
   // work session (timeout waiting for idle, a hidden-session refusal, or a
   // steer delivery error).
   STUCK_REASON_VERDICT_UNDELIVERED = 24;
+  // STUCK_REASON_TRANSITION_DENIED: see domain.StuckReasonTransitionDenied — an
+  // automated claim was denied by the workflow engine; the denied_* fields on
+  // StuckBacklogItem say which edge and why.
+  STUCK_REASON_TRANSITION_DENIED = 25;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
@@ -2170,6 +2174,12 @@ message StuckBacklogItem {
   // report_duplicate claim (see BacklogItem.duplicate_pending).
   bool duplicate_pending = 15;
   string duplicate_ref = 16;
+  // Populated only for STUCK_REASON_TRANSITION_DENIED. denied_reason is
+  // "config_graph" or "operator_gate".
+  string denied_caller = 17;
+  string denied_from = 18;
+  string denied_to = 19;
+  string denied_reason = 20;
 }
 
 message ListStuckBacklogItemsRequest {}
