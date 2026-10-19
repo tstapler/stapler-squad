@@ -148,3 +148,17 @@ func TestMergePRDirect_should_RejectUnknownMethod(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 	assert.Zero(t, r.merged)
 }
+
+func TestDraftToggle_should_ReturnFailedPreconditionWithoutMutating_When_CachedNodeIDEmpty(t *testing.T) {
+	r := &actionRecorder{}
+	svc := newActionService(r, true)
+	svc.actions.snapshot = fixedSnapshot{{Owner: "o", Repo: "r", Number: 7, Host: "github.com"}}
+	req := &sessionv1.PRDraftToggleRequest{Owner: "o", Repo: "r", Number: 7}
+
+	_, err := svc.ConvertPRToDraft(context.Background(), connect.NewRequest(req))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = svc.MarkPRReady(context.Background(), connect.NewRequest(req))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Nil(t, r.draft, "no GraphQL mutation may run without a node_id")
+	assert.Zero(t, r.refreshed)
+}
