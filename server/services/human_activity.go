@@ -74,13 +74,19 @@ type tmuxClientLister func(ctx context.Context, serverSocket string) ([]tmux.Cli
 type HumanActiveGuard struct {
 	activity *HumanActivity
 	clients  tmuxClientLister
+	// ours says a listed client is ssq's own pty attach; tests inject it.
+	ours func(tmux.ClientActivity) bool
 }
 
 // NewHumanActiveGuard builds the guard. clients may be nil: signal (b) is then unavailable.
 func NewHumanActiveGuard(activity *HumanActivity, clients tmuxClientLister) *HumanActiveGuard {
-	return &HumanActiveGuard{activity: activity, clients: clients}
+	return &HumanActiveGuard{activity: activity, clients: clients, ours: tmux.ClientActivity.IsOurs}
 }
 
+// ssq attaches a (non control-mode) pty client to every session it starts; that client's
+// activity is the app resizing or redrawing, not a person, so it is skipped (client_pid is
+// our child).
+//
 // Active is true when (a) the web terminal sent input to the session within the
 // window or (b) a non-control-mode tmux client attached to it had input within
 // the window (a person's own `tmux attach`; ssq's control-mode clients are
@@ -101,7 +107,7 @@ func (g *HumanActiveGuard) Active(ctx context.Context, inst *session.Instance) b
 	}
 	now := g.activity.now()
 	for _, c := range clients {
-		if !c.ControlMode && c.Session == name && now.Sub(c.Activity) <= humanActiveWindow {
+		if !c.ControlMode && c.Session == name && now.Sub(c.Activity) <= humanActiveWindow && !g.ours(c) {
 			return true
 		}
 	}

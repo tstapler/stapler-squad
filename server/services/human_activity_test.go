@@ -92,6 +92,21 @@ func TestHumanActiveGuard_ShouldIgnoreControlModeClientsAndCountAHumansAttach(t 
 	assert.False(t, guard.Active(context.Background(), inst), "an idle attached client is quiet")
 }
 
+// The e2e run found that the pty client ssq attaches to every session it starts is a plain (non
+// control-mode) client whose activity moves on resize, so it must not read as a person typing.
+func TestHumanActiveGuard_ShouldNotCountSsqsOwnPtyAttach_AsAHuman(t *testing.T) {
+	clock := newManualClock()
+	listed := []tmux.ClientActivity{{Session: "ssq_a", Activity: clock.Now().Add(-time.Second), PID: 7001}}
+	guard := NewHumanActiveGuard(NewHumanActivity(clock.Now), func(context.Context, string) ([]tmux.ClientActivity, error) { return listed, nil })
+	inst := namedInstance(t, "ssq_a")
+
+	guard.ours = func(c tmux.ClientActivity) bool { return c.PID == 7001 }
+	assert.False(t, guard.Active(context.Background(), inst), "a child of ssq is the app's own attach")
+
+	guard.ours = func(tmux.ClientActivity) bool { return false }
+	assert.True(t, guard.Active(context.Background(), inst), "the same client with a shell parent is a person")
+}
+
 func TestHumanActiveGuard_ShouldFallBackToWebTerminalSignal_WhenListClientsFails(t *testing.T) {
 	clock := newManualClock()
 	activity := NewHumanActivity(clock.Now)
