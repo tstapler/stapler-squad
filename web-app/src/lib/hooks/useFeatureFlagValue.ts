@@ -53,8 +53,10 @@ export function resolveFlagValue(flags: FeatureFlag[], name: string, scope?: str
 
 /**
  * Reads a feature flag (optionally at a scope) through GetFeatureFlags, with a
- * short shared cache. Until loaded, and when the read fails, it returns
- * `fallback` (default OFF), so a failed read never enables a new path.
+ * short shared cache. Until loaded, and when the first read fails, it returns
+ * `fallback` (default OFF), so a failed read never enables a new path. It re-reads
+ * every cache TTL so a kill switch reaches an open page; a failed re-read keeps the
+ * last known value rather than reverting to `fallback`.
  * `enabled=false` skips the read (the row has nothing the flag could change).
  */
 export function useFeatureFlagValue(name: string, scope?: string, fallback = false, enabled = true): boolean {
@@ -63,15 +65,17 @@ export function useFeatureFlagValue(name: string, scope?: string, fallback = fal
   useEffect(() => {
     if (!enabled) return;
     let live = true;
-    loadFlags(Date.now)
-      .then((flags) => {
-        if (live) setValue(resolveFlagValue(flags, name, scope) ?? fallback);
-      })
-      .catch(() => {
-        if (live) setValue(fallback);
-      });
+    const read = () =>
+      loadFlags(Date.now)
+        .then((flags) => {
+          if (live) setValue(resolveFlagValue(flags, name, scope) ?? fallback);
+        })
+        .catch(() => {});
+    void read();
+    const timer = setInterval(() => void read(), CACHE_TTL_MS);
     return () => {
       live = false;
+      clearInterval(timer);
     };
   }, [name, scope, fallback, enabled]);
 

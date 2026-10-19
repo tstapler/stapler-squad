@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { resetFeatureFlagValueCache, resolveFlagValue, useFeatureFlagValue, flagOffMessage } from "./useFeatureFlagValue";
 
 const mockGetFeatureFlags = jest.fn();
@@ -36,6 +36,26 @@ describe("useFeatureFlagValue", () => {
     const { result } = renderHook(() => useFeatureFlagValue(INLINE));
     await waitFor(() => expect(mockGetFeatureFlags).toHaveBeenCalled());
     expect(result.current).toBe(false);
+  });
+
+  it("useFeatureFlagValue_should_pickUpAKillSwitchFlipAndKeepItThroughAFailedReread_When_30sPass", async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetFeatureFlags.mockResolvedValue(flags(true));
+      const { result } = renderHook(() => useFeatureFlagValue(INLINE));
+      await act(async () => {});
+      expect(result.current).toBe(true);
+
+      mockGetFeatureFlags.mockResolvedValue(flags(false));
+      await act(async () => void jest.advanceTimersByTime(30_001));
+      expect(result.current).toBe(false);
+
+      mockGetFeatureFlags.mockRejectedValue(new Error("down"));
+      await act(async () => void jest.advanceTimersByTime(30_001));
+      expect(result.current).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("useFeatureFlagValue_should_skipTheRead_When_notEnabled", async () => {
