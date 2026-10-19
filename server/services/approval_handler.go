@@ -725,9 +725,13 @@ func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
 	return sessionID
 }
 
-// broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
-// The approval ID is passed in the notification metadata so the UI can resolve it.
-func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+func approvalNotificationTitle(approval *PendingApproval) string {
+	return fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+}
+
+// approvalNotificationMetadata is the display metadata of an approval's
+// notification: the id to resolve it by and the fields the card shows.
+func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
 	metadata := map[string]string{
 		"approval_id": approval.ID,
 		"tool_name":   approval.ToolName,
@@ -752,8 +756,15 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 	if toolInputUnrenderable(approval.ToolInput) {
 		metadata[metaToolInputUnrenderable] = boolTrue
 	}
+	return metadata
+}
 
-	title := fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+// broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
+// The approval ID is passed in the notification metadata so the UI can resolve it.
+func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+	metadata := approvalNotificationMetadata(approval)
+
+	title := approvalNotificationTitle(approval)
 	message := buildApprovalMessage(approval)
 
 	event := events.NewNotificationEvent(
