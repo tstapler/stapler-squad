@@ -12,6 +12,7 @@ import { GESTURE_IGNORE_SELECTOR } from "@/lib/hooks/useTerminalGestures";
 import React from "react";
 import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { NotificationPanel } from "./NotificationPanel";
+import { formatClockTime } from "./OfflineBanner";
 import { TrayErrorBoundary } from "./TrayErrorBoundary";
 import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { writeQuietMode } from "@/lib/utils/deckSettings";
@@ -577,7 +578,7 @@ describe("tray", () => {
       mockConnectivity = { state: "disconnected", isOffline: true };
       mockHistory = [pending("p1"), info("a")];
       renderTray();
-      expect(screen.getByTestId("tray-banner-offline")).toHaveTextContent("Offline - showing cached");
+      expect(screen.getByTestId("tray-banner-offline")).toHaveTextContent("Offline. Showing last known state.");
       expect(screen.getByRole("button", { name: "Mark activity read" })).toHaveAttribute("aria-disabled", "true");
       const approve = screen.getAllByRole("button", { name: /Approve/ })[0];
       expect(approve).toBeDisabled();
@@ -602,7 +603,7 @@ describe("tray", () => {
       mockHistoryError = new Error("x");
       mockHistory = [info("a")];
       renderTray();
-      expect(screen.getByTestId("tray-banner-load-error")).toHaveTextContent("Could not load notifications.");
+      expect(screen.getByTestId("tray-banner-load-error")).toHaveTextContent("Couldn't load notifications. Showing data from");
       expect(screen.queryByTestId("tray-banner-offline")).toBeNull();
       fireEvent.click(within(screen.getByTestId("tray-banner-load-error")).getByRole("button", { name: "Retry" }));
       expect(mockRefresh).toHaveBeenCalled();
@@ -618,7 +619,8 @@ describe("tray", () => {
       mockHistoryLoading = false;
       mockLastUpdatedAt = 1;
       const second = renderTray();
-      expect(screen.getByText("All caught up")).toBeInTheDocument();
+      expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+      expect(screen.getByText("No recent activity.")).toBeInTheDocument();
       second.unmount();
 
       mockHistory = [info("a")];
@@ -1250,6 +1252,10 @@ describe("tray spec gaps (Phase 5)", () => {
     mockConnectivity = { state: "connected", isOffline: false };
     view.rerender(tree());
     expect(screen.queryByTestId("tray-banner-offline")).toBeNull();
+    // Back online but not yet refreshed: controls wait with the reason "Updating...".
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("title", "Updating...");
+    mockLastUpdatedAt = (mockLastUpdatedAt ?? 0) + 1;
+    view.rerender(tree());
     expect(screen.getByLabelText("Remove notification")).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "Mark activity read" })).not.toHaveAttribute("aria-disabled");
     swipe(screen.getByTestId("tray-swipe-row"), 90);
@@ -1392,5 +1398,66 @@ describe("tray spec gaps (Phase 5)", () => {
     const handle = screen.getByTestId("tray-handle");
     expect(handle).toBeEnabled();
     expect(handle).toHaveAttribute("aria-controls", "notification-tray");
+  });
+});
+
+describe("tray recovery and tier copy (Story 1.6e)", () => {
+  beforeEach(resetTrayState);
+
+  it("Recovery_should_keepControlsDisabledUpdatingUntilFirstRefresh_And_showAsOf", () => {
+    mockHistory = [info("a", "s1")];
+    mockConnectivity = { state: "disconnected", isOffline: true };
+    const view = renderTray();
+    const rerender = () =>
+      view.rerender(
+        <DeckViewportContext.Provider value={{ isInnerScreen: true, isVirtualKeyboardOpen: false }}>
+          <NotificationPanel />
+        </DeckViewportContext.Provider>,
+      );
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("title", "Offline");
+
+    mockConnectivity = { state: "connected", isOffline: false };
+    rerender();
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("title", "Updating...");
+    expect(screen.getByTestId("tray-as-of")).toHaveTextContent(`As of ${formatClockTime(1)}`);
+
+    mockLastUpdatedAt = 60_000;
+    rerender();
+    expect(screen.getByLabelText("Remove notification")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("tray-as-of")).toHaveTextContent(`As of ${formatClockTime(60_000)}`);
+  });
+
+  it("Tiers_should_showEmptyLoadingAndFetchFailedCopy", () => {
+    jest.useFakeTimers();
+    mockHistoryLoading = true;
+    mockLastUpdatedAt = null;
+    const loading = renderTray();
+    const skeleton = screen.getByTestId("tray-skeleton");
+    expect(skeleton).not.toHaveTextContent("Loading...");
+    act(() => void jest.advanceTimersByTime(151));
+    expect(skeleton).toHaveTextContent("Loading...");
+    act(() => void jest.advanceTimersByTime(8_000));
+    expect(skeleton).toHaveTextContent("Still loading.");
+    fireEvent.click(within(skeleton).getByRole("button", { name: "Retry" }));
+    expect(mockRefresh).toHaveBeenCalled();
+    loading.unmount();
+    jest.useRealTimers();
+
+    mockHistoryLoading = false;
+    mockLastUpdatedAt = 1;
+    mockHistory = [];
+    const empty = renderTray();
+    expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+    expect(screen.getByText("No recent activity.")).toBeInTheDocument();
+    empty.unmount();
+
+    mockHistory = [info("a")];
+    mockHistoryError = new Error("x");
+    renderTray();
+    expect(screen.getByTestId("tray-banner-load-error")).toHaveTextContent(
+      `Couldn't load notifications. Showing data from ${formatClockTime(1)}.`,
+    );
+    expect(screen.getAllByTestId("tray-row")).toHaveLength(1);
   });
 });

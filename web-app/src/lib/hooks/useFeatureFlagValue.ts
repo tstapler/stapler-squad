@@ -10,6 +10,7 @@ import type { FeatureFlag } from "@/gen/session/v1/session_pb";
 export const flagOffMessage = "This action is turned off. Open session.";
 
 const CACHE_TTL_MS = 30_000;
+const FETCH_TIMEOUT_MS = 10_000;
 
 let cached: { at: number; flags: FeatureFlag[] } | null = null;
 let inFlight: Promise<FeatureFlag[]> | null = null;
@@ -25,7 +26,8 @@ async function loadFlags(now: () => number): Promise<FeatureFlag[]> {
   if (!inFlight) {
     const client = createClient(SessionService, getConnectTransport());
     inFlight = client
-      .getFeatureFlags({})
+      // Shared across hook instances, so a per-component abort would cancel others' read; bound it by time instead.
+      .getFeatureFlags({}, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
       .then((res) => {
         cached = { at: now(), flags: res.flags };
         return res.flags;

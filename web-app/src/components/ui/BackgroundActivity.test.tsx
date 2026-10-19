@@ -2,6 +2,7 @@ import React from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { BackgroundActivity, type BackgroundActivityProps } from "./BackgroundActivity";
 import { buildActivityRows, buildRollup, type ActivityRow } from "@/lib/utils/backgroundActivity";
+import { formatClockTime } from "./OfflineBanner";
 import { makeBackgroundRow, makeElevenStopped, makeHiddenSession } from "./__fixtures__/notificationFixtures";
 
 jest.mock("next/link", () => ({
@@ -142,9 +143,11 @@ describe("BackgroundActivity", () => {
   });
 
   it("ba5_should_show_error_retry_and_stale_age", () => {
-    const { props } = setup([exceptionRow()], { failed: true, lastUpdatedAt: Date.now() - 2 * 60_000 });
-    expect(screen.getByText("Could not load background activity.")).toBeInTheDocument();
-    expect(screen.getByTestId("background-stale")).toHaveTextContent("Showing data from 2m ago");
+    const at = new Date(2026, 9, 18, 10, 3).getTime();
+    const { props } = setup([exceptionRow()], { failed: true, lastUpdatedAt: at });
+    expect(screen.getByTestId("background-error")).toHaveTextContent(
+      `Couldn't refresh background sessions. Showing data from ${formatClockTime(at)}.`,
+    );
     expect(screen.getByTestId("background-row")).toBeInTheDocument(); // last good data stays
     fireEvent.click(within(screen.getByTestId("background-error")).getByRole("button", { name: "Retry" }));
     expect(props.onRefresh).toHaveBeenCalledTimes(1);
@@ -158,7 +161,7 @@ describe("BackgroundActivity", () => {
     failed.unmount();
     const offline = setup(rows, { offline: true, lastUpdatedAt: Date.now() - 60_000 });
     expect(screen.queryByTestId("background-empty-healthy")).toBeNull();
-    expect(screen.getByTestId("background-stale")).toHaveTextContent("Offline - showing data from 1m ago");
+    expect(screen.getByTestId("background-connectivity")).toHaveTextContent("Offline. Showing last known state.");
     offline.unmount();
     setup(rows, { loading: true, lastUpdatedAt: null });
     expect(screen.queryByTestId("background-empty-healthy")).toBeNull();
@@ -183,14 +186,18 @@ describe("BackgroundActivity", () => {
     expect(within(r).getByTestId("notification-view-output")).toBeInTheDocument();
   });
 
-  it("a departed informational row has no link and says the session no longer exists", () => {
+  it("ux_ac6_should_showSessionNoLongerExists_When_openOnDepartedRow", () => {
     const sessions = [makeHiddenSession({ id: "review:old" }), makeHiddenSession({ id: "review:keep" })];
     const first = buildActivityRows([], sessions);
     const rows = buildActivityRows([], sessions.slice(1), { previous: first });
     setup(rows);
     const departed = screen.getAllByTestId("background-row").find((r) => r.getAttribute("data-state") === "departed");
     expect(departed).toHaveTextContent("Session no longer exists");
-    expect(within(departed as HTMLElement).queryByTestId("notification-view-output")).toBeNull();
+    const open = within(departed as HTMLElement).getByTestId("notification-view-output");
+    expect(open).not.toHaveAttribute("href");
+    expect(open).toHaveAttribute("aria-disabled", "true");
+    const reason = document.getElementById(open.getAttribute("aria-describedby") as string);
+    expect(reason).toHaveTextContent("Session no longer exists");
   });
 
   it("ba10_should_show_reply_only_for_pending_question", () => {
@@ -214,5 +221,38 @@ describe("BackgroundActivity", () => {
     fireEvent.click(screen.getByTestId("background-refresh"));
     expect(props.onRefresh).not.toHaveBeenCalled();
     act(() => {});
+  });
+
+  it("ux_ac5_should_showCouldntRefreshBannerAndRetryRecovers_When_listFails", () => {
+    const at = new Date(2026, 9, 18, 10, 3).getTime();
+    const failed = setup(eleven(), { failed: true, lastUpdatedAt: at });
+    expect(screen.getAllByTestId("background-row")).toHaveLength(11);
+    expect(screen.getByTestId("background-error")).toHaveTextContent(
+      `Couldn't refresh background sessions. Showing data from ${formatClockTime(at)}.`,
+    );
+    fireEvent.click(within(screen.getByTestId("background-error")).getByRole("button", { name: "Retry" }));
+    expect(failed.props.onRefresh).toHaveBeenCalledTimes(1);
+    failed.update(eleven(), { failed: false });
+    expect(screen.queryByTestId("background-error")).toBeNull();
+  });
+
+  it("BackgroundActivity_should_reachCantReachTheServerWithRetryAfter30s_And_keepRows_When_pollKeepsFailing", () => {
+    jest.useFakeTimers();
+    const { props } = setup(eleven(), { failed: true });
+    expect(screen.getByTestId("background-connectivity")).toHaveAttribute("data-state", "reconnecting");
+    act(() => void jest.advanceTimersByTime(30_000));
+    expect(screen.getByTestId("background-connectivity")).toHaveTextContent("Can't reach the server.");
+    expect(screen.getAllByTestId("background-row")).toHaveLength(11);
+    expect(props.onRefresh).toHaveBeenCalled(); // backoff retries
+    jest.useRealTimers();
+  });
+
+  it("BackgroundActivity_should_showLegacyEmptyCopyAndNoActivityRows_When_feedFlagOff", () => {
+    const off = setup([], { legacy: { hasHiddenSessions: true } });
+    expect(screen.getByTestId("background-empty-healthy")).toHaveTextContent("Nothing needs attention in the background.");
+    expect(screen.queryByTestId("background-rollup")).toBeNull();
+    off.unmount();
+    setup([], { legacy: { hasHiddenSessions: false } });
+    expect(screen.getByTestId("background-empty-none")).toHaveTextContent("No background sessions have run recently.");
   });
 });
