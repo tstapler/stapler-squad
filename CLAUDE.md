@@ -22,7 +22,7 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 ./stapler-squad --tmux-keep-server                     # Keep tmux server alive after sessions close
 ```
 
-**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `docs/explanation/tmux-keep-server-on-restart.md`.
+**Note:** `make install-service` restarts the running service, but this does not kill live tmux sessions — `scripts/install-service.sh` has deployed the unit with `--tmux-keep-server` on both platforms since #180, so the tmux server and every session (including the one you're working in) survive the restart. See `docs/explanation/tmux-keep-server-on-restart.md` for the historical bug this fixed and how to re-verify the deployed unit if you ever suspect regression.
 
 ### Profiling
 
@@ -260,7 +260,7 @@ make e2e-lighthouse
 
 ### Manual/interactive testing without touching the live deployed instance
 
-Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `docs/explanation/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
+Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it briefly takes the live server down during the restart and ships your in-progress build to every session/backlog item in flight; tmux sessions themselves survive the restart — see the Note above — but the binary swap and restart-window downtime are still real). To click around a change by hand instead, run a second, fully separate instance:
 
 ```bash
 mkdir -p ~/.stapler-squad/manual-builds/manual-1
@@ -349,7 +349,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
-| Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
+| Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always pnpm in web-app/, never npm/yarn | `docs/how-to/use-pnpm-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
