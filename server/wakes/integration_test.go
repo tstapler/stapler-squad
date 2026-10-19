@@ -98,7 +98,9 @@ func TestRestart_should_deliverEachOfThreePendingTriggersOnceAndMatchReconcileCo
 	dueRow := newRow(t, first.repo, rowOpts{owner: "owner-1", payload: "due during downtime", spec: domain.AtSpec{At: due}, nextFire: &due, expiresAt: &expires})
 	eventRow := backlogRow(t, &dispatcherRig{repo: first.repo}, itemX, "verdict_recorded", rowOpts{owner: "owner-2", payload: "condition true while down", expiresAt: &expires})
 	claimedAt := t0.Add(-5 * time.Minute)
-	staleRow := claimedRow(t, first.repo, claimedAt, rowOpts{owner: "owner-3", payload: "claimed by the dead process", expiresAt: &expires})
+	// Not yet due, so the running dispatcher cannot claim it before the test does.
+	staleFire := t0.Add(5 * time.Hour)
+	staleRow := claimedRow(t, first.repo, claimedAt, rowOpts{owner: "owner-3", payload: "claimed by the dead process", spec: domain.AtSpec{At: staleFire}, nextFire: &staleFire, expiresAt: &expires})
 	first.kill()
 
 	h.clock.Advance(20 * time.Minute) // downtime

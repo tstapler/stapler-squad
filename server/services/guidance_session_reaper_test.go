@@ -144,8 +144,11 @@ func TestReaper_Run_should_RehydrateAfterTheStartupPass_AndStopWhenTheBusCloses(
 		5*time.Second, 5*time.Millisecond, "the open replyable row is rehydrated on start")
 	bus.Publish(events.NewSessionArchivedEvent(mirrorSession))
 	require.Eventually(t, func() bool { return f.cancelled(t, f.hookID) }, 5*time.Second, 5*time.Millisecond)
-	_, stillCached := f.mirror.pending.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: f.hookID})
-	assert.False(t, stillCached)
+	// The reaper cancels the row before evicting the cache entry, so eviction is asynchronous to the cancel.
+	require.Eventually(t, func() bool {
+		_, stillCached := f.mirror.pending.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: f.hookID})
+		return !stillCached
+	}, 5*time.Second, 5*time.Millisecond, "the cancelled row leaves the pending cache")
 
 	bus.Close()
 	<-done
