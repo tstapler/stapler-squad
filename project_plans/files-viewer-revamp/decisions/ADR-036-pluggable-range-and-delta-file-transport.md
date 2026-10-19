@@ -129,6 +129,16 @@ This is about a third of the S-T2 prototype's single-pass rate (1.25-1.4 GB/s) b
 
 **Constants after this task:** `hash_cap_bytes` 64 MiB, the 1 GiB read ceiling, the 4,096-line checkpoints, the 400-line / 128 KiB default window and the 8 / 64 MiB cache budgets are **unchanged**: nothing measured here argues for a different value (Analyze of 64 MB is 0.16 s; a window read is well under a millisecond; a 63 MiB scan is 32 ms). No constant was adjusted.
 
+### Wire-contract deviations recorded at verification (Story 1.6.3 / 1.6.6; added 2026-10-19)
+Built behavior that differs from the plan's literal wording. None changes the proto; each is a client-visible limit to know before relying on it.
+1. **CRC32C is verified client-side only for LF or all-CRLF valid-UTF-8 windows.** The server hashes the raw on-disk bytes but returns LF-normalized, BOM-less, UTF-8-repaired text, so the client can rebuild the raw bytes only in those cases (`connectUnaryTransport.ts` `rawBytesOf`). Mixed-EOL, binary and non-UTF-8 windows are not checked.
+2. **"Line index not ready" is an untyped `FailedPrecondition`.** There is no detail for it; the client recognizes the message text (`wireMapping.ts` `INDEX_PENDING`) and maps it to `Rejected("index_pending")`. Server-side the cause is the sentinel `errRangeIndexPending`, so `files.range.total` can label it `index_pending` (other refusals: `disabled`, `too_large`, `refused`).
+3. **`READ_ALL` (and `STAT`) are always advertised and are served on `connect_unary` as well as on `full`.** They do not follow `files:range-read`; only `READ_LINES`/`READ_BYTES` do.
+4. **`SearchMatch` carries no `file_size`.** The "large file" badge is the heuristic `byte_offset >= 2 MiB` (`searchClient.ts` `isLargeFileHit`), so a big file with an early match shows no badge.
+5. **Demotion lapses.** A transport-failure demotion (3 consecutive failures) is forgotten after 60 s (`DEMOTE_COOLDOWN_MS`), so an offline spell does not pin a session to a lower rung; a `TypeError` is treated as a network failure only when its message is a fetch failure. A failed capabilities fetch is retried and raises `TransportFailure("unavailable")` for ops only a higher rung serves, never `Rejected("unsupported")`.
+6. **Analysis failures.** A deterministic pass failure (for example `EACCES`) is cached as `FAILED` until the validator changes; cancellation, a changed file and resource exhaustion (`EMFILE`, `ENFILE`, `EINTR`, `EAGAIN`, `ENOMEM`, `EBUSY`) are never cached.
+7. **Request bodies are bounded after gzip inflation.** `BodyLimit` inflates a gzip unary body itself under the cap (WriteFile 1.5 MiB; ReadFileRange, StatFile and GetFileTransportCapabilities 256 KiB); `SearchContent` (server-streaming) is capped only on the wire.
+
 ### Engine verdict summary (Task 0.1.4d; EMULATED, PROVISIONAL, not an owner phone verdict)
 Emulated Pixel 7 Chromium with real touch flings, 6x CPU throttle and 250 ms latency; not real iOS Safari or Android Chrome, not the owner's fingers.
 - **a2 gap-line: PASS.** 0 blank bands in 150 samples; typing and scrolling OK; a far jump lands within a few thousand lines of the target, as the model predicts.

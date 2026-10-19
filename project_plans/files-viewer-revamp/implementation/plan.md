@@ -481,7 +481,7 @@ Parallel lanes after Phase 0: (server search 1.1.x) || (frontend seams 1.2.x the
 **As a** security-conscious owner, **I want** every file RPC confined by one symlink-safe resolver, **so that** neither reads nor writes can escape the worktree.
 **Acceptance Criteria**:
 - Symlink escape is rejected on read (closes the latent hole at `file_service.go:106-116`).
-  - *Given* a worktree containing `leak -> /etc/hostname` and `SessionId` `s1`, *When* `GetFileContent(s1, "leak")` is called, *Then* it returns `PermissionDenied` with a typed `ReadOnlyReason=Symlink` detail that carries the link's target string (a `Readlink`, metadata only), and no content bytes.
+  - *Given* a worktree containing `leak -> /etc/hostname` and `SessionId` `s1`, *When* `GetFileContent(s1, "leak")` is called, *Then* it returns `PermissionDenied` with a typed `ReadOnlyReason=Symlink` detail and no content bytes. **Amended:** the detail does not carry the link's target string (an absolute target is a host path); the target is logged server-side only, and `ListFiles` returns a target only when it is relative and in-tree.
 - Legitimate symlinks keep working (pre-mortem #3: read regression from the retrofit).
   - *Given* in-tree links `docs/alias.md -> ../README.md` and `AGENTS.md -> CLAUDE.md` (both resolve inside the root and never through `.git`), *When* `GetFileContent` and `ListFiles` run, *Then* the file content is returned with `ReadOnlyReason=Symlink` (viewable, not editable; the tree marks it as a link), and an in-tree directory symlink `shared -> pkg/shared` lists and reads through `os.Root` without escaping; a link that resolves outside the root or into `.git` is the only case refused.
 - The policy is chosen from the owner's real worktrees, not from fixtures.
@@ -1191,6 +1191,8 @@ Parallel lanes after Phase 0: (server search 1.1.x) || (frontend seams 1.2.x the
 **Goal**: All read-only flows one-handed with 44px targets and no layout break when the keyboard opens.
 
 #### Story 1.5.1: Three-pane mobile layout
+> **OPEN OWNER DECISION (not decided here):** the built `chooseFilesLayout` picks the layout from the Files-tab container width (and a coarse device with a short side under 600 px), which contradicts the tablet AC below (`>= 768px` coarse pointer shows the desktop layout) whenever the container is narrower than the screen. `ux.md` section 0 documents the built rule; this plan has not been reconciled with it. Pick one rule before the tablet AC is treated as met.
+
 **As a** phone user, **I want** a nav-stack of Files, Editor, Search with a thumb-zone action bar, **so that** I can navigate one-handed.
 **Acceptance Criteria**:
 - Panes and back.
@@ -1369,6 +1371,8 @@ Parallel lanes after Phase 0: (server search 1.1.x) || (frontend seams 1.2.x the
 - Files: `server/services/file_ops_conformance_test.go`, `server/services/testdata/files_range/`, `server/services/file_ops_range_corpus_test.go`
 
 #### Story 1.6.3: `ConnectUnaryTransport` reads, chunk cache and prefetch
+> **Built-scope deviations (2026-10-19):** see ADR-036 "Wire-contract deviations recorded at verification" (CRC verified only for LF or all-CRLF valid-UTF-8 windows; index-not-ready is an untyped `FailedPrecondition`; `READ_ALL` advertised on `connect_unary`; no `SearchMatch.file_size`, so the badge is a `byte_offset >= 2 MiB` heuristic; demotions lapse after 60 s).
+
 **As a** user scrolling a large file, **I want** the next window to be there before I reach it and a changed file to be noticed, **so that** big files feel like normal ones without holding connections open.
 **Acceptance Criteria**:
 - Reads through the port.
