@@ -38,6 +38,7 @@ LOGS=()
 die() { echo "wake-baseline: $*" >&2; exit 2; }
 
 # epoch of the "time" field of one JSON log line, honouring its UTC offset
+# shellcheck disable=SC2016  # jq program, not shell
 EPOCH_JQ='def epoch: capture("^(?<d>[0-9T:-]{19})(?:\\.[0-9]+)?(?<z>Z|[+-][0-9]{2}:[0-9]{2})$") as $m
   | ($m.d + "Z" | fromdateiso8601)
     - (if $m.z == "Z" then 0 else (($m.z[0:1] + "1" | tonumber) * ($m.z[1:3] | tonumber * 3600 + ($m.z[4:6] | tonumber) * 60)) end);'
@@ -130,16 +131,16 @@ self_test() {
   # refusal: flag on
   echo '{"feature_flag_scopes":{"agent_wake_triggers":{"trigger:at":true}}}' >"$dir/config.json"
   bash "$0" --now "$now" "$dir/logs/staplersquad.log" >/dev/null 2>"$dir/err" && rc=0 || rc=$?
-  [[ $rc -eq 2 ]] && grep -q 'is on' "$dir/err" || { echo "FAIL: flag-on refusal (rc=$rc)"; fail=1; }
+  if ! { [[ $rc -eq 2 ]] && grep -q 'is on' "$dir/err"; }; then echo "FAIL: flag-on refusal (rc=$rc)"; fail=1; fi
   echo '{}' >"$dir/config.json"
 
   # refusal: window shorter than 7 days
   jq -nc --argjson now "$now" '{time: (($now - 3 * 86400) | todate), msg: "boot"}, {time: ($now | todate), msg: "tick"}' >"$dir/logs/short.log"
   bash "$0" --now "$now" "$dir/logs/short.log" >/dev/null 2>"$dir/err" && rc=0 || rc=$?
-  [[ $rc -eq 2 ]] && grep -q 'need 7 days' "$dir/err" || { echo "FAIL: short-window refusal (rc=$rc)"; fail=1; }
+  if ! { [[ $rc -eq 2 ]] && grep -q 'need 7 days' "$dir/err"; }; then echo "FAIL: short-window refusal (rc=$rc)"; fail=1; fi
   cat "$dir/err"
 
-  (( fail == 0 )) && echo "self-test: PASS" || { echo "self-test: FAIL"; return 1; }
+  if (( fail == 0 )); then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
 }
 
 while (( $# )); do
