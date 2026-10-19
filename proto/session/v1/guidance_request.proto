@@ -57,6 +57,34 @@ message GuidanceRequest {
   // status is derived (never stored) from answered_at/cancelled_at — see
   // session.GuidanceRequestData.Status(). "pending" | "answered" | "cancelled".
   string status = 13;
+
+  // Live-question and peer-help fields (ADR-003). Rows written before they
+  // existed read back with source "agent_mcp" and answerer_kind "human".
+  string source = 14; // "agent_mcp" | "ask_user_question_hook" | "peer"
+  string asker_session_uuid = 15;
+  string answerer_kind = 16; // "human" | "session"
+  string answerer_session_uuid = 17;
+  bool multi_select = 18; // question 1's checkbox flag, for old readers
+  repeated GuidanceQuestion questions = 19; // 1-4 questions; empty for agent_mcp rows
+  string delivery_route = 20; // "" | "hook_reply" | "live_keystroke" | "resume" | "read_only"
+  string delivery_state = 21; // "" | "pending" | "sent" | "acknowledged" | "delivery_failed" | "saved_for_later" | "stale"
+  int32 delivery_attempts = 22;
+  string hook_call_id = 23;
+  google.protobuf.Timestamp expires_at = 24; // set only for source == "peer"
+}
+
+// GuidanceQuestion is one question of a mirrored harness prompt; its shape
+// follows the AskUserQuestion tool input.
+message GuidanceQuestion {
+  string question = 1;
+  string header = 2;
+  repeated GuidanceOption options = 3;
+  bool multi_select = 4;
+}
+
+message GuidanceOption {
+  string label = 1;
+  string description = 2;
 }
 
 message CreateGuidanceRequestRequest {

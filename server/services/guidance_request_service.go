@@ -202,6 +202,7 @@ func guidanceRequestToProto(d *session.GuidanceRequestData) *sessionv1.GuidanceR
 	if d.CancelledAt != nil {
 		out.CancelledAt = timestamppb.New(*d.CancelledAt)
 	}
+	setGuidanceMirrorFields(out, d)
 	return out
 }
 

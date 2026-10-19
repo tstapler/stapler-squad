@@ -68,6 +68,43 @@ func (GuidanceRequest) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("When this request was cancelled (e.g. its owning item/session went away before being answered). Terminal — dominates answered_at if somehow both are set."),
+		// Additive columns for live-question mirroring and peer help (ADR-003). Every
+		// one has a default so rows written before they existed stay valid under
+		// auto-migration; validation lives in domain.NewGuidanceRequest.
+		field.String("source").
+			Default("agent_mcp").
+			Comment("domain.QuestionSource: agent_mcp / ask_user_question_hook / peer. Selects the pending-cap class and the coalescing key."),
+		field.String("asker_session_uuid").
+			Optional().
+			Comment("The session waiting on the answer. Loose string reference, not an ent edge."),
+		field.String("answerer_kind").
+			Default("human").
+			Comment("domain.AnswererKind: human / session."),
+		field.String("answerer_session_uuid").
+			Optional().
+			Comment("The named peer session; set only when answerer_kind=session."),
+		field.Bool("multi_select").
+			Default(false).
+			Comment("Checkbox variant of the question."),
+		field.String("questions_json").
+			Optional().
+			Comment("Canonical domain.QuestionPayload (1-4 questions). question_text/options keep carrying question 1 for old readers."),
+		field.String("delivery_route").
+			Optional().
+			Comment("domain.DeliveryRoute: hook_reply / live_keystroke / resume / read_only; empty until routed."),
+		field.String("delivery_state").
+			Optional().
+			Comment("domain.DeliveryState; empty until a delivery is tracked. Separate from answered_at: answered is not delivered."),
+		field.Int("delivery_attempts").
+			Default(0).
+			Comment("Bounded retry accounting for delivery."),
+		field.Time("expires_at").
+			Optional().
+			Nillable().
+			Comment("When an open peer-help row lapses (created_at + domain.PeerHelpTTL); NULL for rows that do not expire."),
+		field.String("hook_call_id").
+			Optional().
+			Comment("The Claude tool_use_id of the hook invocation; with asker_session_uuid it is the coalescing key for hook rows."),
 	}
 }
 
@@ -111,5 +148,9 @@ func (GuidanceRequest) Indexes() []ent.Index {
 		// FK-bearing table in this schema — without it, a backlog-item
 		// hard-delete's OnDelete:SetNull full-table-scans this table.
 		index.Fields("item_id"),
+		// Lookup for the (asker_session_uuid, hook_call_id) dedup of non-agent_mcp
+		// sources. Not unique: a nullable column is distinct per row in SQLite and
+		// legacy rows carry empty values (ADR-003 rule 1).
+		index.Fields("asker_session_uuid", "hook_call_id"),
 	}
 }

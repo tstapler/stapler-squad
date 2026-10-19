@@ -57,6 +57,19 @@ type GuidanceRequestData struct {
 	NotifiedAt   *time.Time
 	AnsweredAt   *time.Time
 	CancelledAt  *time.Time
+
+	// Live-question and peer-help columns (ADR-003); legacy rows carry the defaults.
+	Source              domain.QuestionSource
+	AskerSessionUUID    string
+	AnswererKind        domain.AnswererKind
+	AnswererSessionUUID string
+	MultiSelect         bool
+	QuestionsJSON       string
+	DeliveryRoute       domain.DeliveryRoute
+	DeliveryState       domain.DeliveryState
+	DeliveryAttempts    int
+	HookCallID          domain.HookCallID
+	ExpiresAt           *time.Time
 }
 
 // Status derives the row's lifecycle state from its timestamps. Cancelled is
@@ -87,6 +100,18 @@ type CreateGuidanceRequestInput struct {
 	// Zero means "use DefaultGuidanceRequestPendingCap" — see that constant's
 	// doc comment for why this is a parameter rather than a config read here.
 	Cap int
+
+	// mirror is set only by CreateMirroredGuidanceRequest, from a request that
+	// passed domain.NewGuidanceRequest; nil means a legacy agent_mcp create.
+	mirror *domain.GuidanceRequestParams
+}
+
+// source is the pending-cap class and coalescing-key selector of this create.
+func (in CreateGuidanceRequestInput) source() domain.QuestionSource {
+	if in.mirror != nil {
+		return in.mirror.Source
+	}
+	return domain.QuestionSourceAgentMCP
 }
 
 // scopeKey derives the always-non-null dedup/cap key described on the
@@ -122,6 +147,18 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 		NotifiedAt:   row.NotifiedAt,
 		AnsweredAt:   row.AnsweredAt,
 		CancelledAt:  row.CancelledAt,
+
+		Source:              domain.QuestionSource(row.Source),
+		AskerSessionUUID:    row.AskerSessionUUID,
+		AnswererKind:        domain.AnswererKind(row.AnswererKind),
+		AnswererSessionUUID: row.AnswererSessionUUID,
+		MultiSelect:         row.MultiSelect,
+		QuestionsJSON:       row.QuestionsJSON,
+		DeliveryRoute:       domain.DeliveryRoute(row.DeliveryRoute),
+		DeliveryState:       domain.DeliveryState(row.DeliveryState),
+		DeliveryAttempts:    row.DeliveryAttempts,
+		HookCallID:          domain.HookCallID(row.HookCallID),
+		ExpiresAt:           row.ExpiresAt,
 	}
 }
 
@@ -164,6 +201,31 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 //     re-asking an identical question at cap succeed instead of being
 //     cap-rejected.
 func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in CreateGuidanceRequestInput) (*GuidanceRequestData, error) {
+	return r.createGuidanceRequest(ctx, in)
+}
+
+// CreateMirroredGuidanceRequest creates (or, for a hook or peer source, dedups
+// to) a row from a validated domain.GuidanceRequest. A hook or peer source
+// coalesces on (asker_session_uuid, hook_call_id) and bypasses the legacy
+// (scope, scope_key, question_text) coalesce; every source is capped per
+// (scope, scope_key, source). capLimit <= 0 means the default cap.
+func (r *EntRepository) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*GuidanceRequestData, error) {
+	p := req.Params()
+	in := CreateGuidanceRequestInput{
+		Scope: p.Scope, SessionUUID: p.SessionUUID, QuestionText: p.QuestionText,
+		QuestionType: p.QuestionType, Options: p.Options, Cap: capLimit, mirror: &p,
+	}
+	if p.ItemID != "" {
+		itemID, err := uuid.Parse(p.ItemID)
+		if err != nil {
+			return nil, fmt.Errorf("create mirrored guidance request: item id %q: %w", p.ItemID, err)
+		}
+		in.ItemID = &itemID
+	}
+	return r.createGuidanceRequest(ctx, in)
+}
+
+func (r *EntRepository) createGuidanceRequest(ctx context.Context, in CreateGuidanceRequestInput) (*GuidanceRequestData, error) {
 	capLimit, scopeKey, err := validateCreateGuidanceRequestInput(in)
 	if err != nil {
 		return nil, err
@@ -185,7 +247,7 @@ func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in CreateGuid
 		// A genuinely new row was just created (not a dedup hit) — the cap
 		// check only ever applies to this case. See the doc comment above for
 		// why dedup must be resolved BEFORE this check runs.
-		if err := enforceGuidanceRequestPendingCap(ctx, tx, in.Scope, scopeKey, capLimit); err != nil {
+		if err := enforceGuidanceRequestPendingCap(ctx, tx, in.Scope, scopeKey, in.source(), capLimit); err != nil {
 			return nil, fmt.Errorf("create guidance request: %w", err)
 		}
 	}
@@ -229,15 +291,7 @@ func validateCreateGuidanceRequestInput(in CreateGuidanceRequestInput) (capLimit
 // returned ID against candidateID is how the caller distinguishes "created
 // new" from "resolved to existing".
 func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceRequestInput, scopeKey string, candidateID uuid.UUID) (uuid.UUID, error) {
-	existing, err := tx.GuidanceRequest.Query().
-		Where(
-			guidancerequest.Scope(string(in.Scope)),
-			guidancerequest.ScopeKey(scopeKey),
-			guidancerequest.QuestionText(in.QuestionText),
-			guidancerequest.AnsweredAtIsNil(),
-			guidancerequest.CancelledAtIsNil(),
-		).
-		First(ctx)
+	existing, err := tx.GuidanceRequest.Query().Where(coalescePredicates(in, scopeKey)...).First(ctx)
 	switch {
 	case err == nil:
 		return existing.ID, nil
@@ -256,6 +310,11 @@ func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceReq
 	if in.ItemID != nil {
 		create = create.SetItemID(*in.ItemID)
 	}
+	if in.mirror != nil {
+		if create, err = setMirrorFields(create, *in.mirror); err != nil {
+			return uuid.Nil, err
+		}
+	}
 	created, err := create.Save(ctx)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create guidance request row: %w", err)
@@ -268,12 +327,14 @@ func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceReq
 // row just created by the caller pushed that count past capLimit. The
 // newly-created row is already included in the count, so the boundary check
 // is count > capLimit (not >=) — that correctly allows the row that brings
-// the count exactly to the cap.
-func enforceGuidanceRequestPendingCap(ctx context.Context, tx *ent.Tx, scope domain.RequestScope, scopeKey string, capLimit int) error {
+// the count exactly to the cap. The count is per source class, so hook and
+// peer rows can neither exhaust agent_mcp slots nor each other (ADR-003 rule 1).
+func enforceGuidanceRequestPendingCap(ctx context.Context, tx *ent.Tx, scope domain.RequestScope, scopeKey string, source domain.QuestionSource, capLimit int) error {
 	count, err := tx.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Scope(string(scope)),
 			guidancerequest.ScopeKey(scopeKey),
+			guidancerequest.Source(string(source)),
 			guidancerequest.AnsweredAtIsNil(),
 			guidancerequest.CancelledAtIsNil(),
 		).
@@ -283,10 +344,10 @@ func enforceGuidanceRequestPendingCap(ctx context.Context, tx *ent.Tx, scope dom
 	}
 	if count > capLimit {
 		log.WarningLog().Printf(
-			"guidance request pending cap exceeded: scope=%s scope_key=%s current_count=%d cap=%d",
-			scope, scopeKey, count, capLimit,
+			"guidance request pending cap exceeded: scope=%s scope_key=%s source=%s current_count=%d cap=%d",
+			scope, scopeKey, source, count, capLimit,
 		)
-		return fmt.Errorf("%w: scope=%s current count=%d cap=%d", ErrPendingCapExceeded, scope, count, capLimit)
+		return fmt.Errorf("%w: scope=%s source=%s current count=%d cap=%d", ErrPendingCapExceeded, scope, source, count, capLimit)
 	}
 	return nil
 }
