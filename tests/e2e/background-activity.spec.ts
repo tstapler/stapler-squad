@@ -256,6 +256,64 @@ for (const key of ['V1', 'V2'] as const) {
       await expect(background.stateChips).toHaveText(Array(11).fill('Stopped, outcome unknown'));
     });
 
+    test('ux_ac68_should_retireElevenRowsAndKeepThemRetiredAfterReload_When_markAllReviewed', async ({ page }) => {
+      const stopped = elevenStopped(`bg-mark-${key}-${Date.now()}`, () => 'unknown');
+      await fakeHiddenSessions(page, () => stopped);
+
+      await openTray(page);
+      const background = new BackgroundSegment(page);
+      await background.tab.click();
+      await expect(background.rows).toHaveCount(11);
+      await background.markAll.click();
+      await expect(background.rows).toHaveCount(0);
+      await expect(background.rollup).toContainText('no failures reported (11 reviewed)');
+
+      await reopenTray(page);
+      await background.tab.click();
+      await expect(background.rollup).toContainText('no failures reported (11 reviewed)');
+      await expect(background.rows).toHaveCount(0);
+    });
+
+    test('ux_ac69_should_collapseRowsOlderThan24hIntoOlderDisclosure_When_poll_returnsOldStoppedSessions', async ({ page }) => {
+      const old = new Date(Date.now() - 30 * 3_600_000).toISOString();
+      const sessions = [
+        ...Array.from({ length: 3 }, (_, i) => hidden(`review:bg-new-${key}-${i}`, 'SESSION_STATUS_STOPPED')),
+        ...Array.from({ length: 12 }, (_, i) => hidden(`review:bg-old-${key}-${i}`, 'SESSION_STATUS_STOPPED', old)),
+      ];
+      await fakeHiddenSessions(page, () => sessions);
+
+      await openTray(page);
+      const background = new BackgroundSegment(page);
+      await background.tab.click();
+      await expect(background.rows).toHaveCount(3);
+      await expect(background.older).toHaveText('Older (12)');
+      await expect(background.older).toHaveAttribute('aria-expanded', 'false');
+      await background.older.click();
+      await expect(background.rows).toHaveCount(15);
+    });
+
+    test('ux_ac66_should_nameNewFailureInStickyStripWithoutMovingRows_When_pollMarksSessionFailed', async ({ page }) => {
+      const sessions = elevenStopped(`bg-strip-${key}-${Date.now()}`, () => 'unknown');
+      let failedId: string | null = null;
+      await fakeHiddenSessions(page, () => sessions.map((s) => (s.id === failedId ? { ...s, backgroundOutcome: 'failed' as const } : s)));
+
+      await openTray(page);
+      const background = new BackgroundSegment(page);
+      await background.tab.click();
+      await expect(background.rows).toHaveCount(11);
+      const before = await background.rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-session-id')));
+
+      failedId = sessions[4].id;
+      await background.refresh.click();
+      await expect(background.failureStrip).toContainText(`${failedId} failed`);
+      expect(await background.rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-session-id')))).toEqual(before);
+
+      await background.failureStrip.getByRole('button', { name: 'Show' }).click();
+      await expect(background.failureStrip).toHaveCount(0);
+      await expect(background.rows.first()).toHaveAttribute('data-session-id', failedId);
+      await expect(background.rows.first().locator('[data-row-toggle]')).toBeFocused();
+    });
+
     test('flag_off_should_show_the_legacy_empty_state_and_no_activity_rows_when_background_activity_feed_is_false', async ({ page }) => {
       const stopped = elevenStopped(`bg-off-${key}-${Date.now()}`, () => 'completed');
       await fakeHiddenSessions(page, () => stopped);

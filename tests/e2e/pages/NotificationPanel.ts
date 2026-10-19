@@ -162,6 +162,9 @@ export class BackgroundSegment {
   readonly refresh: Locator;
   readonly error: Locator;
   readonly emptyHealthy: Locator;
+  readonly failureStrip: Locator;
+  readonly markAll: Locator;
+  readonly older: Locator;
 
   constructor(page: Page) {
     this.tab = page.getByTestId('tray-tab-background');
@@ -173,6 +176,9 @@ export class BackgroundSegment {
     this.refresh = page.getByTestId('background-refresh');
     this.error = page.getByTestId('background-error');
     this.emptyHealthy = page.getByTestId('background-empty-healthy');
+    this.failureStrip = page.getByTestId('background-failure-strip');
+    this.markAll = page.getByRole('button', { name: 'Mark all reviewed' });
+    this.older = page.getByTestId('background-older-toggle');
   }
 }
 
