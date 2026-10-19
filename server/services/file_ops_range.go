@@ -146,13 +146,13 @@ func (o *FileOps) lineRangeWindow(ctx context.Context, rd *rangeRead, a *session
 	if first > 1 {
 		off, err := rd.analysis.LineToByte(rd.file, first-1)
 		if err != nil {
-			return rangeWindow{}, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to locate line"))
+			return rangeWindow{}, internalIOError("locate_line", rd.rr.Resolved, err, "failed to locate line")
 		}
 		start = off
 	}
 	raw, err := readAtFull(rd.file, start, min(lim.Bytes, size-start))
 	if err != nil {
-		return rangeWindow{}, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file range"))
+		return rangeWindow{}, internalIOError("read_range", rd.rr.Resolved, err, "failed to read file range")
 	}
 	raw, partial := cutAtLines(raw, lim.Lines, start+int64(len(raw)) >= size)
 	return rangeWindow{Start: start, Raw: raw, StartLine: first, Partial: partial}, nil
@@ -163,7 +163,7 @@ func (o *FileOps) byteRangeWindow(rd *rangeRead, a *sessionv1.ByteAnchor, lim ra
 	start, length := byteWindowStart(a, size, lim)
 	win, err := readByteWindow(rd.file, size, start, length)
 	if err != nil {
-		return rangeWindow{}, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file range"))
+		return rangeWindow{}, internalIOError("read_range", rd.rr.Resolved, err, "failed to read file range")
 	}
 	switch {
 	case win.Start == 0:
@@ -265,5 +265,5 @@ func openReadError(err error, relPath string) error {
 	if os.IsNotExist(err) {
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", relPath))
 	}
-	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open file"))
+	return internalIOError("open", ResolvedPath(relPath), err, "failed to open file")
 }

@@ -23,3 +23,10 @@ func TestRangeOutcome_ShouldLabelEachFailedPreconditionByCause(t *testing.T) {
 		assert.Equal(t, want, rangeOutcome(nil, err), want)
 	}
 }
+
+func TestInternalIOError_ShouldKeepCauseOffTheWire(t *testing.T) {
+	err := internalIOError("read", "dir/f.txt", errors.New("read /home/u/secret/dir/f.txt: input/output error"), "failed to read file")
+
+	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
+	assert.Equal(t, "internal: failed to read file", err.Error())
+}

@@ -171,7 +171,7 @@ func readDisk(rr *opsRequest) (diskFile, error) {
 		return diskFile{Missing: true}, nil
 	}
 	if err != nil {
-		return diskFile{}, connect.NewError(connect.CodeInternal, errors.New("failed to stat file"))
+		return diskFile{}, internalIOError("stat", rr.Resolved, err, "failed to stat file")
 	}
 	if info.IsDir() {
 		return diskFile{}, connect.NewError(connect.CodeInvalidArgument, errors.New("path is a directory, not a file"))
@@ -184,19 +184,19 @@ func readDisk(rr *opsRequest) (diskFile, error) {
 		return diskFile{Missing: true}, nil
 	}
 	if err != nil {
-		return diskFile{}, connect.NewError(connect.CodeInternal, errors.New("failed to open file"))
+		return diskFile{}, internalIOError("open", rr.Resolved, err, "failed to open file")
 	}
 	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, truncateSize+1))
 	if err != nil {
-		return diskFile{}, connect.NewError(connect.CodeInternal, errors.New("failed to read file"))
+		return diskFile{}, internalIOError("read", rr.Resolved, err, "failed to read file")
 	}
 	if len(raw) > truncateSize {
 		return diskFile{TooLarge: true}, nil
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		return diskFile{}, connect.NewError(connect.CodeInternal, errors.New("failed to stat file"))
+		return diskFile{}, internalIOError("fstat", rr.Resolved, err, "failed to stat file")
 	}
 	return diskFile{Raw: raw, MtimeNs: fi.ModTime().UnixNano()}, nil
 }

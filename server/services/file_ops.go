@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -193,6 +195,12 @@ func (o *FileOps) readFileFacts(sessionID, relPath string) (*fileRead, error) {
 	return fr, nil
 }
 
+// internalIOError logs the I/O cause server-side and returns a generic Internal error, so the wire never carries host detail.
+func internalIOError(op string, path ResolvedPath, cause error, clientMsg string) *connect.Error {
+	log.Error("file I/O failed", "op", op, "path", string(path), "err", cause)
+	return connect.NewError(connect.CodeInternal, errors.New(clientMsg))
+}
+
 // classifyOpenFile sniffs, caps and classifies an opened file.
 func classifyOpenFile(f FileHandle, rr *opsRequest, relPath string, info os.FileInfo) (*fileRead, error) {
 	fr := &fileRead{Size: info.Size()}
@@ -210,7 +218,7 @@ func classifyOpenFile(f FileHandle, rr *opsRequest, relPath string, info os.File
 	}
 	raw, truncated, readErr := readTextCapped(f, fr.Size)
 	if readErr != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file content"))
+		return nil, internalIOError("read_content", rr.Resolved, readErr, "failed to read file content")
 	}
 	if truncated {
 		raw = truncateOnRuneBoundary(raw)
@@ -235,7 +243,7 @@ func lstatForRead(rr *opsRequest, relPath string) (os.FileInfo, error) {
 		if os.IsPermission(err) {
 			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", relPath))
 		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat file"))
+		return nil, internalIOError("stat", rr.Resolved, err, "failed to stat file")
 	}
 	if info.IsDir() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is a directory, not a file"))
