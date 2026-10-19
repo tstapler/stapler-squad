@@ -254,7 +254,7 @@ func (g *GoGitVCSReader) unstagedTargetList(worktreePath string, metas []indexMe
 		wtPath := filepath.Join(worktreePath, m.name)
 		info, serr := g.lstatTracked(&passCursor, m.name, wtPath)
 		if serr != nil {
-			if os.IsNotExist(serr) && !(skipSparse && m.skipWorktree) {
+			if os.IsNotExist(serr) && (!skipSparse || !m.skipWorktree) {
 				unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, true})
 			}
 			continue

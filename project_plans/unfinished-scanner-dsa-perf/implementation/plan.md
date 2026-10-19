@@ -1776,3 +1776,13 @@ Deferred, with reason: none of the nine gaps; two choices are owner decisions by
 
 - 3.2.1: candidate (a) `MyersEditCounts` chosen (ADR-005 "Spike result"): 0 mismatches on 10,000 pairs, 0 B/op and 0 allocs/op against `lcsLength`'s 32,768 B / 2 allocs on the G5 fixture; (b) `diffmatchpatch` also exact but 511,184 B / 453 allocs. G5 test and its negative twin live in `myers_test.go`; call sites are not swapped (Story 3.2.2). Numbers are recorded in ADR-005, not `baseline.md` (owned by another worker this wave).
 - 4.2.1: Q5 answered "no cache-tree in go-git-written indexes" (ADR-006 addendum); `TestStagedVsHead_...` (validation row S3, cond 4.2.1) is not built. Spike file `index_spike_test.go` kept as a regression record rather than deleted.
+
+## Follow-ups (deferred, repair iteration 2)
+
+- Thread ctx through scanRepo/VCSReader into repostate walks (interface change, ~73 call sites; singleflight shares leader ctx) - deferred, walks bounded by mergeBaseBFSLimit.
+- Package-level flagsSnapshot/currentScanner injection.
+- Shadow oracle refcount.
+- Rate-limited Drop on ErrGraphFull.
+- Comment-density sweep.
+- Split gogit_vcs_reader_diff.go, scanner_gitwatch.go and scanstate.go.
+- Nested (non-root) .gitignore edits between HEAD moves still leave the ignore matcher stale; only the root .gitignore stat signature keys the cache.
