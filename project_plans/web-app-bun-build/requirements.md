@@ -39,7 +39,7 @@ Compared to the baseline above, measured on the same host with the same method:
 XL (> 15M CU; plan.md estimates about 25.8M CU with the verification multiplier, range 22.1–29.4M, plus contingency lines C1–C3 outside the base) — informational only per ESTIMATION.md. Full scope is the default and not a question for the owner.
 
 **Wall-clock blockers**:
-- Owner decision: router (React Router 7 library mode vs TanStack Router) — recommendation exists, not yet confirmed.
+- Owner decision: router — DECIDED 2026-10-19: React Router 7 (ADR-001). Gate S4 still validates it technically before Epic 4.
 - The pnpm → Bun package-manager PR (worktree session in flight) must merge first.
 - CI-only verification (workflows cannot be run locally).
 - Upstream fix to vanilla-extract's `eval` dependency (nice-to-have; the repo carries a local `bun patch` meanwhile).
@@ -130,7 +130,7 @@ XL (> 15M CU; plan.md estimates about 25.8M CU with the verification multiplier,
 
 ## Open Questions
 *(Marked against "Phase 2 Resolutions" below and the plan; RESOLVED means answered by research or a decision already taken, with the owner story that carries the evidence. Only the router is still open.)*
-- **OPEN until plan Story 0.6**: Router: React Router 7 library mode vs TanStack Router. Default is React Router 7.18.4 behind the `src/lib/nav` facade (F1, ADR-001); the owner signs off in Story 0.6 after gate S4 reports and before Epic 4 starts (plan "Owner handoff and sign-off points").
+- **RESOLVED 2026-10-19 (owner: React Router 7; S4 evidence gate remains)**: Router: React Router 7 library mode vs TanStack Router. Chosen: React Router 7.18.4 behind the `src/lib/nav` facade (F1, ADR-001); the owner signs off in Story 0.6 after gate S4 reports and before Epic 4 starts (plan "Owner handoff and sign-off points").
 - **RESOLVED**: Storybook: which Next-free framework. It already runs on `@storybook/react-webpack5`; `@storybook/nextjs` is an unused leftover; keep and delete the leftover (ADR-002, Story 6.6).
 - **RESOLVED**: Is `next lint`'s rule set (`next/core-web-vitals`) worth reproducing? It reduces to react + react-hooks + 6 jsx-a11y warnings + `import/no-anonymous-default-export`; reproduce those, drop `@next/next/*` (Story 6.1).
 - **RESOLVED**: HTML generation: one `index.html` with SPA routing and Go's SPA fallback; the emitted-HTML location is settled by gate S1 (layout A' or B, Stories 0.2, 5.5).
@@ -142,5 +142,5 @@ XL (> 15M CU; plan.md estimates about 25.8M CU with the verification multiplier,
 ## Phase 2 Resolutions (added after research)
 Answered by research (see research/*.md): Storybook already runs on `@storybook/react-webpack5` (`@storybook/nextjs` is an unused leftover, 50 stories, no CI/Chromatic); `next/core-web-vitals` reduces to react + react-hooks + 6 jsx-a11y warnings + `import/no-anonymous-default-export`; HTML = one hand-written `index.html` with Go's SPA fallback; `next dev` has no backend proxy (cross-origin via `NEXT_PUBLIC_API_URL` + `STAPLER_SQUAD_EXTRA_ORIGINS`); `bun patch` of `eval` is the primary fix (upstream issue vanilla-extract#1664); asset paths must stay under `/_next/static/` (Go `auth.go:95-101`, `static.go:76`) unless both Go files change together.
 Corrections to counts: 42 `page.tsx` files (new: `fanout`), 43 test files mock `next/navigation`/`next/link`, only 4 of 16 layouts do more than export a title (root + feature-flag guards on backlog, changelog, settings/backlog-sources).
-*(unresolved after Phase 2 research — owner decisions, planned as flagged choices)*: router (default React Router 7.18.4 pinned exactly; TanStack only at an audited pin); keep or delete Storybook; when to rename the `/_next/` asset prefix; minification timing (own PR 8b after cutover, ADR-004); `size-limit` budget shape (framework/main chunk globs have no Bun equivalent).
+*(unresolved after Phase 2 research — owner decisions, planned as flagged choices)*: router (RESOLVED 2026-10-19: React Router 7.18.4 pinned exactly); Storybook (RESOLVED 2026-10-19: drop `@storybook/nextjs`, keep react-webpack5); when to rename the `/_next/` asset prefix; minification timing (own PR 8b after cutover, ADR-004); `size-limit` budget shape (framework/main chunk globs have no Bun equivalent).
 Base for this work: PR #1100 (pnpm → Bun package manager; open) and #1097 (keyframes fix; merged).

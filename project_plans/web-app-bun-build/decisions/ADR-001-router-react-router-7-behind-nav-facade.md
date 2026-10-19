@@ -1,6 +1,6 @@
 # ADR-001: Client router is React Router 7.18.4 (pinned) behind the `src/lib/nav` facade
 
-Status: Proposed — default pending owner confirmation (flagged choice F1). Date: 2026-10-19
+Status: Accepted — owner chose React Router 7 on 2026-10-19 (flagged choice F1). Gate S4 still has to pass before Epic 4; if it fails, re-open. Date: 2026-10-19
 Evidence: `research/build-vs-buy.md` §2, `research/stack.md` §4, `research/architecture.md` §3-4, `research/pitfalls.md` §5.
 
 ## Context

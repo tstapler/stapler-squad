@@ -196,8 +196,8 @@
 
 | ID | Choice | Default in this plan | ADR | If the owner chooses otherwise |
 |----|--------|---------------------|-----|-------------------------------|
-| F1 | Router | React Router **7.18.4**, exact pin, behind `src/lib/nav`. TanStack Router only at an audited exact pin >= 1.170.0 (never 1.169.5 / 1.169.8); not recommended | ADR-001 | Rewrite `impl.router.tsx`, re-run S4 against it, re-plan Epic 4; Epics 1-3 unchanged |
-| F2 | Storybook | Keep on `react-webpack5`; delete unused `@storybook/nextjs`; CI `storybook build` job | ADR-002 | Delete Storybook entirely (Story 6.6 variant) |
+| F1 | Router (**owner-confirmed 2026-10-19**) | React Router **7.18.4**, exact pin, behind `src/lib/nav`. TanStack Router only at an audited exact pin >= 1.170.0 (never 1.169.5 / 1.169.8); not recommended | ADR-001 | Rewrite `impl.router.tsx`, re-run S4 against it, re-plan Epic 4; Epics 1-3 unchanged |
+| F2 | Storybook (**owner-confirmed 2026-10-19**) | Keep on `react-webpack5`; delete unused `@storybook/nextjs`; CI `storybook build` job | ADR-002 | Delete Storybook entirely (Story 6.6 variant) |
 | F3 | Asset prefix | Keep `/_next/static/` through the dual period; rename later with `auth.go` + `static.go` + Go test in one PR (Story 9.4) | ADR-003 | Rename at cutover: fold Story 9.4 into PR 8 (loses the one-line rollback) |
 | F4 | Minification timing | The cutover (PR 8) ships Bun unminified, parity with today's deployment; minify is switched on by its own revertible PR 8b after the first Soak window. Size budgets are enforced on a minified CI build from PR 5a on | ADR-004 | Fold Story 8.6 into PR 8 (minified at cutover, the original default; loses attribution of minifier vs bundler bugs) |
 | F5 | Budget shape | Total JS + Initial JS + Largest chunk in `budgets.json`; `size-limit` only for Total JS | ADR-005 | Total JS only (loses first-load guard) |
@@ -225,7 +225,7 @@
 
 | Point | When | Decision | What waits on it | What does not wait |
 |---|---|---|---|---|
-| **F1 router sign-off, relative to gate S4** | Story 0.6, **after** gate S4 reports and **before** Epic 4 starts. It is not asked earlier: S4 is the evidence (matching, titles, search params, foreign `history.state`, tarball checks) the owner signs against | Confirm React Router 7.18.4 (default), or choose TanStack at an audited pin >= 1.170.0 | Epic 4 (PR 4) and everything after it, including PR 5a's router entry; S4 PASS **and** the F1 sign-off must both be in the `GateRecord` | Epics 1, 2 and 3 and PR 7a are router-independent (the facade sits in front of either router), so they proceed while S4 runs and while the owner decides |
+| **F1 router sign-off, relative to gate S4** | Story 0.6, **after** gate S4 reports and **before** Epic 4 starts. It is not asked earlier: S4 is the evidence (matching, titles, search params, foreign `history.state`, tarball checks) the owner signs against | F1 CONFIRMED by owner 2026-10-19 (React Router 7.18.4); S4 PASS is still required. Original options: confirm React Router 7.18.4, or choose TanStack at an audited pin >= 1.170.0 | Epic 4 (PR 4) and everything after it, including PR 5a's router entry; S4 PASS **and** the F1 sign-off must both be in the `GateRecord` | Epics 1, 2 and 3 and PR 7a are router-independent (the facade sits in front of either router), so they proceed while S4 runs and while the owner decides |
 | If F1 flips to TanStack | Story 0.6 | Re-run S4 against the chosen pin; rewrite `impl.router.tsx` (Epic 4 re-planned) | Epic 4 only | Epics 1-3 unchanged |
 | F2-F7, D1-D7 and the 11 accepted scope additions | Story 0.6 (one reply) | Accept, decline or bound each; declining removes the named story or flips its flag | Only the story named in each row | Everything else |
 | Budget relaxation (6,349,052 B vs today's 5 MB gate) | Story 0.6, from Task 0.4d | Accept the relaxation or set the lower ceiling | Story 5.9 | Everything before PR 5a |

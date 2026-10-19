@@ -1,6 +1,6 @@
 # ADR-002: Storybook stays on `@storybook/react-webpack5`; `@storybook/nextjs` is deleted
 
-Status: Proposed — default pending owner confirmation (flagged choice F2). Date: 2026-10-19
+Status: Accepted — owner chose to drop `@storybook/nextjs` on 2026-10-19 (flagged choice F2). Date: 2026-10-19
 Evidence: `research/stack.md` §0 and §6, `research/build-vs-buy.md` §4. `web-app/.storybook/main.ts:1,20`.
 
 ## Context
