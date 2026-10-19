@@ -842,6 +842,9 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// safe to do that a later bounce cycle's fresh verdict wouldn't already do
 	// on its own.
 	domain.StuckReasonVerdictUndelivered: true,
+	// StuckReasonTransitionDenied: the dequeue sweep itself is the retry (every
+	// tick re-attempts the claim and self-clears the row on success).
+	domain.StuckReasonTransitionDenied: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

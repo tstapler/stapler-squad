@@ -681,7 +681,7 @@ func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.
 	from := session.BacklogStatus(item.Status)
 	fallback := session.BuildStageConfigSnapshotFallback(item)
 	if !s.engine.CanTransition(from, to, fallback) {
-		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
+		return nil, fmt.Errorf("invalid transition from %q to %q: %w", from, to, session.ErrTransitionNotAllowed)
 	}
 	guardInput := session.NewBacklogItemTransitionInput(item, from)
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
