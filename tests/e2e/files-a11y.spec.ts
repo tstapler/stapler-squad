@@ -78,7 +78,7 @@ test.describe("Files tab axe and keyboard (U-A11Y-1/2/3/5/8)", () => {
     await region.getByLabel("Go to line").fill("734");
     await region.getByRole("button", { name: "Go", exact: true }).click();
     await expect(region.getByTestId("accessible-view-label")).toHaveText("Lines 501-1000 of 1001");
-    await expect(page.locator('[data-line="734"]')).toBeFocused();
+    await expect(region.getByTestId("accessible-view-line").nth(734 - 501)).toBeFocused(); // page 2 starts at line 501
     await expect(region.getByTestId("accessible-view-announce")).toHaveText("Line 734");
 
     await page.reload();

@@ -126,7 +126,7 @@ export class FilesTabView {
   }
 
   // Mobile layout (nav-stack panes, top bar, bottom bar, tab sheet).
-  get layoutRoot(): Locator { return this.treePane.locator(".."); }
+  get layoutRoot(): Locator { return this.page.getByTestId("files-tab"); }
   get topBar(): Locator { return this.page.getByTestId("mobile-top-bar"); }
   get bottomBar(): Locator { return this.page.getByRole("navigation", { name: "Files actions" }); }
   bottomBarButton(name: string): Locator { return this.bottomBar.getByRole("button", { name, exact: true }); }

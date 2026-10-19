@@ -166,7 +166,7 @@ function FilesTabView({
   const treePaneClasses = [treePane, panel.collapsed && !mobile ? treePaneCollapsed : ""].filter(Boolean).join(" ");
 
   return (
-    <div className={container} ref={panel.containerRef} data-layout={layout} data-pane={nav.pane} data-chrome={v2 ? "v2" : "legacy"}>
+    <div className={container} ref={panel.containerRef} data-testid="files-tab" data-layout={layout} data-pane={nav.pane} data-chrome={v2 ? "v2" : "legacy"}>
       <MobileFilesLayout
         active={mobile}
         v2={v2}

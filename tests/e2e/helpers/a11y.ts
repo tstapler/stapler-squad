@@ -67,3 +67,52 @@ export async function stubVisualViewport(page: Page): Promise<void> {
 export async function setVisualViewportHeight(page: Page, height: number): Promise<void> {
   await page.evaluate((h) => (window as unknown as { __setVisualViewportHeight: (n: number) => void }).__setVisualViewportHeight(h), height);
 }
+
+/**
+ * Non-text contrast (WCAG 1.4.11, axe does not check it): for each element found by `data-testid`, the best ratio
+ * between one of its visual cues (outline, border, own fill) and the background behind it must reach `min`.
+ * Runs under both color schemes; returns the failing cases (empty when clean).
+ */
+export async function assertNonTextContrast(page: Page, testIds: string[], min = 3): Promise<string[]> {
+  const problems: string[] = [];
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    const rows = await page.evaluate((ids) => {
+      type Rgba = [number, number, number, number];
+      const parse = (css: string): Rgba | null => {
+        const m = css.match(/rgba?\(([^)]+)\)/);
+        if (!m) return null;
+        const [r, g, b, a = 1] = m[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+        return [r, g, b, a];
+      };
+      const lum = ([r, g, b]: Rgba) => {
+        const f = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+      };
+      const ratio = (a: Rgba, b: Rgba) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+      const backdrop = (el: Element | null): Rgba => {
+        for (let n = el; n; n = n.parentElement) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c && c[3] > 0.99) return c;
+        }
+        return [255, 255, 255, 1];
+      };
+      return ids.map((id) => {
+        const el = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+        if (!el) return { id, best: -1, cues: "missing" };
+        const cs = getComputedStyle(el);
+        const behind = backdrop(el.parentElement);
+        const cues: [string, Rgba | null][] = [
+          ["outline", cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0 ? parse(cs.outlineColor) : null],
+          ["border", parseFloat(cs.borderTopWidth) > 0 ? parse(cs.borderTopColor) : null],
+          ["fill", parse(cs.backgroundColor)],
+        ];
+        const ratios = cues.filter(([, c]) => c && c[3] > 0.99).map(([name, c]) => [name, ratio(c as Rgba, behind)] as const);
+        return { id, best: Math.max(-1, ...ratios.map(([, r]) => r)), cues: ratios.map(([n, r]) => `${n} ${r.toFixed(2)}`).join(", ") };
+      });
+    }, testIds);
+    for (const r of rows) if (r.best < min) problems.push(`${scheme}: ${r.id} best cue ${r.best.toFixed(2)}:1 < ${min}:1 (${r.cues})`);
+  }
+  await page.emulateMedia({ colorScheme: null });
+  return problems;
+}

@@ -26,7 +26,11 @@ export const control = style({
   selectors: { "&[aria-disabled='true'], &:disabled": { opacity: 0.5, cursor: "default" } },
 });
 
-export const gotoInput = style({ minHeight: "44px", width: "7em", font: "inherit", padding: "0 8px", marginLeft: "6px" });
+export const gotoInput = style({
+  minHeight: "44px", width: "7em", font: "inherit", padding: "0 8px", marginLeft: "6px",
+  // 16px stops iOS Safari zooming the page on focus; `font: inherit` follows the page, which may be smaller.
+  "@media": { "(pointer: coarse)": { fontSize: "16px" } },
+});
 
 export const pageLabel = style({ fontVariantNumeric: "tabular-nums" });
 

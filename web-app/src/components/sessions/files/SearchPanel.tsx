@@ -261,9 +261,9 @@ export const SearchPanel = forwardRef<SearchPanelHandle, SearchPanelProps>(funct
           />
         </div>
         <div className={toggleRow}>
-          <button type="button" className={toggle} aria-pressed={form.caseSensitive} aria-label="Match case" title="Match case" onClick={() => change({ ...form, caseSensitive: !form.caseSensitive }, true)}>Aa</button>
-          <button type="button" className={toggle} aria-pressed={form.wholeWord} aria-label="Match whole word" title="Match whole word" onClick={() => change({ ...form, wholeWord: !form.wholeWord }, true)}>ab</button>
-          <button type="button" className={toggle} aria-pressed={form.regex} aria-label="Use regular expression" title="Use regular expression" onClick={() => change({ ...form, regex: !form.regex }, true)}>.*</button>
+          <button type="button" className={toggle} aria-pressed={form.caseSensitive} data-testid="search-toggle-case" aria-label="Match case" title="Match case" onClick={() => change({ ...form, caseSensitive: !form.caseSensitive }, true)}>Aa</button>
+          <button type="button" className={toggle} aria-pressed={form.wholeWord} data-testid="search-toggle-word" aria-label="Match whole word" title="Match whole word" onClick={() => change({ ...form, wholeWord: !form.wholeWord }, true)}>ab</button>
+          <button type="button" className={toggle} aria-pressed={form.regex} data-testid="search-toggle-regex" aria-label="Use regular expression" title="Use regular expression" onClick={() => change({ ...form, regex: !form.regex }, true)}>.*</button>
           <button type="button" className={textButton} aria-expanded={showFilters} onClick={() => setShowFilters((v) => !v)}>Filters</button>
         </div>
         {showFilters && (

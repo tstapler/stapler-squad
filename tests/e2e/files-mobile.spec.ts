@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 import { test, expect } from "@playwright/test";
 import { FilesTabView, seedSearchFixture } from "./pages/files-tab.page";
-import { assertReflow, axeAaViolations, setVisualViewportHeight, stubVisualViewport } from "./helpers/a11y";
+import { assertNonTextContrast, assertReflow, axeAaViolations, setVisualViewportHeight, stubVisualViewport } from "./helpers/a11y";
 
 const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
 const NARROW = { viewport: { width: 320, height: 568 }, isMobile: true, hasTouch: true };
@@ -30,6 +30,7 @@ test.describe("phone 390x844", () => {
     const region = page.getByRole("region", { name: "big_a.go, accessible view" });
     await expect(region).toBeVisible();
     await expect(region.getByTestId("accessible-view-line")).toHaveCount(500);
+    expect(await region.getByRole("spinbutton", { name: "Go to line" }).evaluate((el) => getComputedStyle(el).fontSize)).toBe("16px");
     for (const name of ["Previous page", "Next page", "Go"]) {
       const box = await region.getByRole("button", { name, exact: true }).boundingBox();
       expect(box!.height).toBeGreaterThanOrEqual(44);
@@ -105,8 +106,9 @@ test.describe("phone 390x844", () => {
         expect(box.width).toBeGreaterThanOrEqual(44);
       }
     }
-    const padding = await files.bottomBar.evaluate((el) => getComputedStyle(el).paddingBottom);
-    expect(padding).toBeDefined();
+    // Playwright cannot emulate a device inset, so assert the rule that reserves it (resolves to 0px here).
+    const reservesInset = await files.bottomBar.evaluate((el) => [...document.styleSheets].some((sheet) => [...sheet.cssRules].some((r) => r instanceof CSSStyleRule && el.matches(r.selectorText) && r.cssText.includes("safe-area-inset-bottom"))));
+    expect(reservesInset).toBe(true);
     expect(await assertReflow(page)).toEqual([]);
   });
 
@@ -139,6 +141,31 @@ test.describe("phone 390x844", () => {
 
     await files.bottomBarButton("Search").click();
     expect(await px(files.searchQuery)).toBe("16px");
+
+    await files.bottomBarButton("Quick open").click();
+    expect(await px(page.getByRole("combobox"))).toBe("16px");
+    await page.keyboard.press("Escape");
+  });
+
+  test("breadcrumbActions_should_Measure44px_When_FileOpenOnCoarse", async ({ page }) => {
+    const files = await FilesTabView.create(page, seedSearchFixture);
+    await files.goto();
+    await files.treeFile("a.txt").click();
+    const targets = [page.getByRole("button", { name: /Wrap/ }), page.getByRole("link", { name: /Open/ }), page.getByRole("link", { name: /Download/ })];
+    for (const t of targets) {
+      const box = await t.boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("searchToggles_should_MeetNonTextContrast_When_PressedInLightAndDark", async ({ page }) => {
+    const files = await FilesTabView.create(page, seedSearchFixture);
+    await files.goto();
+    await files.bottomBarButton("Search").click();
+    for (const name of ["Match case", "Match whole word", "Use regular expression"]) await page.getByRole("button", { name, exact: true }).click();
+
+    expect(await assertNonTextContrast(page, ["search-toggle-case", "search-toggle-word", "search-toggle-regex"], 3)).toEqual([]);
   });
 
   test("codeEditor_should_NotFocusOrResizeViewport_When_TapInReadModeOnCoarse", async ({ page }) => {
