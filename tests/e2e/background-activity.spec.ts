@@ -11,7 +11,7 @@
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { BackgroundSegment, NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
+import { BackgroundSegment, NotificationTray, ToastDeck, clickWhenScrollIdle, openNotificationTray, sendNotification } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -104,13 +104,7 @@ async function seedFailure(request: APIRequestContext, sessionId: string, title 
 }
 
 async function openTray(page: Page): Promise<NotificationTray> {
-  const tray = new NotificationTray(page);
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-  const deck = new ToastDeck(page);
-  await tray.handle.or(deck.chip).or(tray.entryOpen).locator('visible=true').first().click();
-  await tray.expectOpen();
-  await tray.dismissWhatChanged();
-  return tray;
+  return openNotificationTray(page, BASE_URL);
 }
 
 /** Reloads and leaves the tray open, whether or not the app restored it open (a click would then close it). */
@@ -125,6 +119,7 @@ async function reopenTray(page: Page): Promise<void> {
       return false;
     }, { timeout: 15_000 })
     .toBe(true);
+  await tray.expandIfPeek();
 }
 
 for (const key of ['V1', 'V2'] as const) {
@@ -189,7 +184,7 @@ for (const key of ['V1', 'V2'] as const) {
       await expect(row).not.toContainText('Session no longer available');
 
       present = false;
-      await background.refresh.click();
+      await clickWhenScrollIdle(page, background.refresh);
       await expect(row).toContainText('Session no longer available');
       await expect(row).toContainText('3 tests failing');
       await expect(row.getByTestId('notification-view-output')).toBeVisible();
@@ -208,12 +203,12 @@ for (const key of ['V1', 'V2'] as const) {
       await expect(row).toHaveCount(1);
 
       mode = 'error';
-      await background.refresh.click();
+      await clickWhenScrollIdle(page, background.refresh);
       await expect(background.error).toContainText("Couldn't refresh background sessions. Showing data from");
       await expect(row).toHaveCount(1);
 
       mode = 'ok';
-      await background.error.getByRole('button', { name: 'Retry' }).click();
+      await clickWhenScrollIdle(page, background.error.getByRole('button', { name: 'Retry' }));
       await expect(background.error).toHaveCount(0);
       await expect(row).toHaveCount(1);
     });
@@ -264,7 +259,7 @@ for (const key of ['V1', 'V2'] as const) {
       const background = new BackgroundSegment(page);
       await background.tab.click();
       await expect(background.rows).toHaveCount(11);
-      await background.markAll.click();
+      await clickWhenScrollIdle(page, background.markAll);
       await expect(background.rows).toHaveCount(0);
       await expect(background.rollup).toContainText('no failures reported (11 reviewed)');
 
@@ -288,7 +283,7 @@ for (const key of ['V1', 'V2'] as const) {
       await expect(background.rows).toHaveCount(3);
       await expect(background.older).toHaveText('Older (12)');
       await expect(background.older).toHaveAttribute('aria-expanded', 'false');
-      await background.older.click();
+      await clickWhenScrollIdle(page, background.older);
       await expect(background.rows).toHaveCount(15);
     });
 
@@ -304,11 +299,11 @@ for (const key of ['V1', 'V2'] as const) {
       const before = await background.rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-session-id')));
 
       failedId = sessions[4].id;
-      await background.refresh.click();
+      await clickWhenScrollIdle(page, background.refresh);
       await expect(background.failureStrip).toContainText(`${failedId} failed`);
       expect(await background.rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-session-id')))).toEqual(before);
 
-      await background.failureStrip.getByRole('button', { name: 'Show' }).click();
+      await clickWhenScrollIdle(page, background.failureStrip.getByRole('button', { name: 'Show' }));
       await expect(background.failureStrip).toHaveCount(0);
       await expect(background.rows.first()).toHaveAttribute('data-session-id', failedId);
       await expect(background.rows.first().locator('[data-row-toggle]')).toBeFocused();

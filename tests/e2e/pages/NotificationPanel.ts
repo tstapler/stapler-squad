@@ -102,6 +102,36 @@ export class ToastDeck {
 // Notification tray
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolves once the tray's scroll region has been quiet for `quietMs`. The tray swallows a press
+ * that starts within 120 ms of a scroll event (fling guard, useScrollSettle), and a layout shift
+ * (a strip, banner or rows appearing) fires one, so a click straight after such a shift is dropped.
+ */
+export async function waitForTrayScrollIdle(page: Page, quietMs = 200): Promise<void> {
+  await page.getByTestId('notification-tray').getByRole('tabpanel').evaluate(
+    (el, quiet) =>
+      new Promise<void>((resolve) => {
+        let timer = window.setTimeout(done, quiet);
+        function done() {
+          el.removeEventListener('scroll', onScroll);
+          resolve();
+        }
+        function onScroll() {
+          window.clearTimeout(timer);
+          timer = window.setTimeout(done, quiet);
+        }
+        el.addEventListener('scroll', onScroll);
+      }),
+    quietMs,
+  );
+}
+
+/** Clicks a control inside the tray once the scroll region is quiet, so the fling guard cannot eat the press. */
+export async function clickWhenScrollIdle(page: Page, control: Locator): Promise<void> {
+  await waitForTrayScrollIdle(page);
+  await control.click();
+}
+
 /** The non-modal tray, its entry points and the terminal facts its invariants are about. */
 export class NotificationTray {
   readonly tray: Locator;
@@ -139,6 +169,19 @@ export class NotificationTray {
     await expect(this.tray).toHaveAttribute('data-state', 'closed');
   }
 
+  /** A phone opens the tray as a ~220px peek sheet with no room for rows; expand it to reach them. */
+  async expandIfPeek(): Promise<void> {
+    if ((await this.tray.getAttribute('data-sheet')) === 'peek') {
+      await this.tray.getByTestId('tray-expand').click();
+      await expect(this.tray).toHaveAttribute('data-sheet', 'expanded');
+    }
+  }
+
+  /** See `waitForTrayScrollIdle`. */
+  async waitForScrollIdle(quietMs = 200): Promise<void> {
+    await waitForTrayScrollIdle(this.page, quietMs);
+  }
+
   async clickMenuItem(item: 'clear-informational' | 'clear-history' | 'settings'): Promise<void> {
     await this.overflow.click();
     await this.tray.getByTestId(`tray-menu-${item}`).click();
@@ -149,6 +192,30 @@ export class NotificationTray {
     const dismiss = this.tray.getByTestId('tray-what-changed-dismiss');
     if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
   }
+}
+
+const ONBOARDED_STORAGE_KEY = 'stapler-squad:onboarded';
+
+/** Marks the app onboarded for this page, loads it and opens the tray (expanded on a phone). */
+export async function openNotificationTray(page: Page, baseUrl: string): Promise<NotificationTray> {
+  await page.addInitScript((k) => localStorage.setItem(k, 'true'), ONBOARDED_STORAGE_KEY);
+  const tray = new NotificationTray(page);
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  const entry = tray.handle.or(new ToastDeck(page).chip).or(tray.entryOpen).locator('visible=true').first();
+  // The entry is server-rendered before it hydrates, so an early click can be lost; click until open.
+  await expect
+    .poll(
+      async () => {
+        if ((await tray.tray.getAttribute('data-state')) === 'open') return true;
+        await entry.click();
+        return false;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  await tray.expandIfPeek();
+  await tray.dismissWhatChanged();
+  return tray;
 }
 
 /** The tray's Background segment (Story 5.4). */
