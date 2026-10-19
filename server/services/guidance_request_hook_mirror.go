@@ -51,6 +51,8 @@ type GuidanceHookMirror struct {
 	capture func(ctx context.Context, sessionUUID string) (string, error)
 	// retireCard moves a cleared question's card out of Needs you; nil leaves it.
 	retireCard func(rowID string)
+	// enabled is read on every Mirror call so a live flag flip applies without a restart.
+	enabled func() bool
 }
 
 // SetCardRetirer installs what moves the card of a question cleared by a terminal
@@ -65,7 +67,8 @@ func (m *GuidanceHookMirror) SetPaneCapture(fn func(ctx context.Context, session
 // NewGuidanceHookMirror builds the mirror. failed and cleared count
 // guidance_mirror_failed_total and guidance_mirror_cleared_total; either may be nil.
 func NewGuidanceHookMirror(store guidanceMirrorStore, pending *PendingQuestionStore, failed, cleared func(reason string)) *GuidanceHookMirror {
-	return &GuidanceHookMirror{store: store, pending: pending, bound: guidanceMirrorBound, failed: failed, cleared: cleared}
+	return &GuidanceHookMirror{store: store, pending: pending, bound: guidanceMirrorBound, failed: failed, cleared: cleared,
+		enabled: func() bool { return effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender) }}
 }
 
 // HookMirrorRequest is one AskUserQuestion to mirror.
@@ -92,6 +95,10 @@ func (r HookMirrorRequest) route() domain.DeliveryRoute {
 // Mirror writes the row within the bound and returns its id. Any failure is
 // counted and logged and yields ok=false; the caller carries on without a row.
 func (m *GuidanceHookMirror) Mirror(req HookMirrorRequest) (id string, ok bool) {
+	// Flag off writes no durable row, so the hook path stays exactly the legacy one (ADR-008).
+	if m.enabled != nil && !m.enabled() {
+		return "", false
+	}
 	payload, err := redactedPayload(req.Asked.Payload)
 	if err != nil {
 		m.fail(mirrorFailBadPayload, req.SessionUUID, err)

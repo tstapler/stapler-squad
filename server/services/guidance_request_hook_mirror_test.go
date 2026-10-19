@@ -41,6 +41,9 @@ func (c *mirrorCounts) failures() []string {
 	return append([]string(nil), c.failed...)
 }
 
+// mirrorFlagOn pins askuserquestion_structured on for tests that probe the mirror itself.
+func mirrorFlagOn() bool { return true }
+
 func newTestMirror(t *testing.T) (*GuidanceHookMirror, *session.Storage, *PendingQuestionStore, *mirrorCounts) {
 	t.Helper()
 	storage := createTestStorage(t)
@@ -54,6 +57,7 @@ func newTestMirror(t *testing.T) (*GuidanceHookMirror, *session.Storage, *Pendin
 func newRealStoreMirror(storage *session.Storage, pending *PendingQuestionStore, counts *mirrorCounts) *GuidanceHookMirror {
 	m := NewGuidanceHookMirror(storage, pending, counts.onFailed, counts.onCleared)
 	m.bound = 10 * time.Second
+	m.enabled = mirrorFlagOn
 	return m
 }
 
@@ -166,6 +170,7 @@ func TestMirror_should_FailOpenWithinBound_WhenRepositoryBlocksOrErrors(t *testi
 			t.Parallel()
 			counts := &mirrorCounts{}
 			m := NewGuidanceHookMirror(tc.store, NewPendingQuestionStore(nil), counts.onFailed, counts.onCleared)
+			m.enabled = mirrorFlagOn
 			if tc.store.release != nil {
 				t.Cleanup(func() { close(tc.store.release) })
 			}
@@ -197,6 +202,7 @@ func TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog(t
 
 	restarted := NewPendingQuestionStore(nil) // the service restart: the in-memory cache is empty
 	m2 := NewGuidanceHookMirror(m.store, restarted, nil, nil)
+	m2.enabled = mirrorFlagOn
 	n, err := m2.Rehydrate(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "the read_only row is not replyable")

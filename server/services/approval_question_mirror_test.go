@@ -72,7 +72,9 @@ func TestAskUserQuestionHook_should_ReplyDeferWithinBound_WhenMirrorRepositoryBl
 	store := &blockingMirrorStore{release: make(chan struct{})}
 	t.Cleanup(func() { close(store.release) })
 	counts := &mirrorCounts{}
-	q.h.SetGuidanceMirror(NewGuidanceHookMirror(store, q.store, counts.onFailed, counts.onCleared))
+	blocked := NewGuidanceHookMirror(store, q.store, counts.onFailed, counts.onCleared)
+	blocked.enabled = mirrorFlagOn
+	q.h.SetGuidanceMirror(blocked)
 
 	srv := httptest.NewServer(http.HandlerFunc(q.h.HandlePermissionRequest))
 	t.Cleanup(srv.Close)
