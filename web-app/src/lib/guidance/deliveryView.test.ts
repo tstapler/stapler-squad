@@ -95,6 +95,12 @@ describe("deliveryView", () => {
     expect(deliveryView(row({ status: "answered", deliveryState: "acknowledged", answer: "x" }), { elsewhere: "No" })?.text).toBe("Answered elsewhere: No");
   });
 
+  it("falls back to reload copy when the other tab sent no value (design/ux.md 3.3)", () => {
+    const v = deliveryView(row({}), { elsewhere: "" });
+    expect(v?.text).toBe("Already answered - reload to see the answer");
+    expect(v?.row).toBe(13);
+  });
+
   it("tolerates a snapshot from an older server", () => {
     expect(snapshotOf({ status: "answered", answer: "a" })?.sessionEnded).toBe(false);
     expect(snapshotOf(undefined)).toBeNull();

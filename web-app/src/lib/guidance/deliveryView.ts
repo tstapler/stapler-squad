@@ -137,7 +137,8 @@ function clientRow(client: ClientDelivery): DeliveryView | null {
  * then this browser's in-flight state.
  */
 export function deliveryView(snap: DeliverySnapshot | null, client: ClientDelivery = {}): DeliveryView | null {
-  if (client.elsewhere !== undefined) return view(13, answeredElsewhere(client.elsewhere), []);
+  // Row 13; with no value from the other tab the card can only say it was answered (design/ux.md 3.3).
+  if (client.elsewhere !== undefined) return view(13, client.elsewhere ? answeredElsewhere(client.elsewhere) : DELIVERY_COPY.alreadyAnsweredReload, []);
   if (client.abortedPartial) return abortedPartial();
   if (client.desktopOnly) return view(15, COPY.desktopOnly, OPEN, { locked: false });
   if (client.sending) return clientRow(client);

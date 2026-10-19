@@ -68,6 +68,7 @@ export const DELIVERY_COPY = {
   savedArchived: "This session is archived. Your answer will be saved but not delivered unless you resume it.",
   aborted: "Part of your answer was sent, then the prompt changed. Open session to finish.",
   stillShowing: "Sent, but the question is still showing. Check the session before retrying.",
+  alreadyAnsweredReload: "Already answered - reload to see the answer",
   sentSessionEnded: "Sent, but the session ended before confirming it.",
   markHandled: "Mark as handled",
   markHandledPrompt: "Mark as handled in this browser?",
