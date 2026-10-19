@@ -1,28 +1,31 @@
 #!/usr/bin/env bash
 # Materialize web-app/node_modules as a symlink into a content-addressed
-# shared directory instead of a full per-worktree pnpm install.
+# shared directory instead of a full per-worktree bun install.
 #
-# Why: pnpm's global content-addressable store (~/.local/share/pnpm/store)
-# already dedupes package *bytes* across every worktree of this repo -- that
-# part was never the problem. What isn't deduped is the *file/symlink tree
-# structure* pnpm materializes into each worktree's node_modules (~82,000
-# filesystem entries per install, measured via `find web-app/node_modules |
-# wc -l`), and that's what was driving btrfs metadata-chunk/inode pressure
-# across the dozens of concurrent git worktrees this repo accumulates. See
+# Why: Bun's global install cache (~/.bun/install/cache) already dedupes
+# package *bytes* across every worktree of this repo -- that part was never
+# the problem. What isn't deduped is the *file/symlink tree structure* the
+# installer materializes into each worktree's node_modules (~82,000
+# filesystem entries per install with the isolated linker, measured via
+# `find web-app/node_modules | wc -l`), and that's what was driving btrfs
+# metadata-chunk/inode pressure across the dozens of concurrent git worktrees
+# this repo accumulates. See
 # docs/explanation/package-management-evaluation.md for the measurements
-# and the alternatives (Yarn PnP, Bazel, Bun) this was weighed against.
+# and docs/explanation/bun-migration-feasibility.md for the pnpm -> Bun move.
+# The tree is Bun's isolated layout (web-app/bunfig.toml): node_modules/.bun
+# holds the packages and top-level entries are *relative* symlinks into it,
+# so the whole tree stays valid after being moved or symlinked elsewhere.
 #
-# The shared directory is keyed by a hash of pnpm-lock.yaml PLUS the content
-# of any local `file:`-protocol dependency (e.g. web-app's in-repo
-# eslint-plugin-analytics / eslint-plugin-rpc-lifecycle). pnpm's lockfile
-# records those as `{directory: ..., type: directory}` with no content
-# digest, so keying on the lockfile alone would let a worktree that edited
+# The shared directory is keyed by a hash of bun.lock + bunfig.toml PLUS the
+# content of any local `file:`-protocol dependency (e.g. web-app's in-repo
+# eslint-plugin-analytics / eslint-plugin-rpc-lifecycle). bun.lock records
+# those as `name@file:<dir>` with no content digest, so keying on the lockfile alone would let a worktree that edited
 # one of those plugins silently keep serving another worktree's stale copy
 # through the shared tree -- folding their file content into the key
 # closes that gap (verified empirically: editing a rule file with the
 # lockfile untouched does change the computed hash).
 #
-# First worktree to need a given hash does a real `pnpm install` into the
+# First worktree to need a given hash does a real `bun install` into the
 # shared directory (guarded by flock so two worktrees racing on a brand-new
 # hash don't corrupt it -- verified empirically with two concurrent runs).
 # Every other worktree with the same hash just symlinks node_modules at it,
@@ -31,7 +34,7 @@
 # Backfill: a worktree whose node_modules predates this mechanism (a real
 # directory, not a symlink -- true of every worktree that installed before
 # this script existed, main checkout included) gets migrated automatically:
-# `pnpm install --frozen-lockfile` verifies/repairs it against the current
+# `bun install --frozen-lockfile` verifies/repairs it against the current
 # lockfile first (aborts with node_modules untouched if package.json and the
 # lockfile have genuinely diverged), then the now-trusted tree either seeds
 # the shared store (a `mv`, not a reinstall) or is discarded if another
@@ -48,17 +51,25 @@ SHARED_ROOT="${STAPLER_SQUAD_SHARED_NODE_MODULES_DIR:-$HOME/.stapler-squad/share
 
 cd "$WEBAPP_DIR"
 
+# Freshness marker the Makefile keys on (Bun leaves no equivalent of pnpm's
+# node_modules/.modules.yaml); touched on every successful run.
+STAMP=node_modules/.ssq-install-stamp
+
 if [ "${STAPLER_SQUAD_SHARED_NODE_MODULES:-1}" = "0" ]; then
-	echo "shared-node-modules: STAPLER_SQUAD_SHARED_NODE_MODULES=0, doing a plain local pnpm install"
+	echo "shared-node-modules: STAPLER_SQUAD_SHARED_NODE_MODULES=0, doing a plain local bun install"
 	if [ -L node_modules ]; then
 		rm node_modules
 	fi
-	exec pnpm install --frozen-lockfile
+	bun install --frozen-lockfile
+	touch "$STAMP"
+	exit 0
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
-	echo "shared-node-modules: jq not found, falling back to a plain local pnpm install" >&2
-	exec pnpm install --frozen-lockfile
+	echo "shared-node-modules: jq not found, falling back to a plain local bun install" >&2
+	bun install --frozen-lockfile
+	touch "$STAMP"
+	exit 0
 fi
 
 # Local file:-protocol deps declared in package.json (dependencies,
@@ -73,7 +84,8 @@ local_file_dep_dirs() {
 }
 
 compute_hash() {
-	sha256sum pnpm-lock.yaml
+	sha256sum bun.lock
+	[ ! -f bunfig.toml ] || sha256sum bunfig.toml
 	local_file_dep_dirs | while IFS= read -r d; do
 		[ -d "$d" ] || { echo "shared-node-modules: local file: dependency dir missing: $d" >&2; exit 1; }
 		find "$d" -type f -print0 | sort -z | xargs -0 sha256sum
@@ -84,12 +96,18 @@ compute_hash() {
 # mechanism. Verify/repair it against the current lockfile before trusting
 # it as a migration source -- see header comment. `set -euo pipefail` means
 # a genuine package.json/lockfile divergence aborts the whole script right
-# here, with node_modules exactly as it was (verified empirically: pnpm
+# here, with node_modules exactly as it was (verified empirically: bun
 # fails this check before mutating anything).
 MIGRATING_EXISTING=0
+# A pnpm-built tree (it has node_modules/.modules.yaml) is the wrong layout to
+# adopt; drop it and fall through to a fresh install.
+if [ -f node_modules/.modules.yaml ] && [ ! -L node_modules ]; then
+	echo "shared-node-modules: discarding legacy pnpm node_modules (pre-Bun layout)"
+	rm -rf node_modules
+fi
 if [ -e node_modules ] && [ ! -L node_modules ]; then
-	echo "shared-node-modules: node_modules exists as a real directory (pre-dates shared-node-modules); verifying it against pnpm-lock.yaml before migrating it into the shared store"
-	pnpm install --frozen-lockfile
+	echo "shared-node-modules: node_modules exists as a real directory (pre-dates shared-node-modules); verifying it against bun.lock before migrating it into the shared store"
+	bun install --frozen-lockfile
 	MIGRATING_EXISTING=1
 fi
 
@@ -98,6 +116,7 @@ SHARED="$SHARED_ROOT/$HASH"
 
 # Fast path: already linked at the right place, nothing to do.
 if [ -L node_modules ] && [ "$(readlink node_modules)" = "$SHARED/node_modules" ] && [ -f "$SHARED/.install-complete" ]; then
+	touch "$STAMP"
 	exit 0
 fi
 
@@ -107,7 +126,8 @@ fi
 seed_shared_manifest() {
 	rm -rf "$SHARED"
 	mkdir -p "$SHARED"
-	cp package.json pnpm-lock.yaml "$SHARED/"
+	cp package.json bun.lock "$SHARED/"
+		[ ! -f bunfig.toml ] || cp bunfig.toml "$SHARED/"
 	local_file_dep_dirs | while IFS= read -r d; do
 		mkdir -p "$SHARED/$(dirname "$d")"
 		rm -rf "${SHARED:?}/${d:?}"
@@ -127,7 +147,7 @@ if [ ! -f "$SHARED/.install-complete" ]; then
 	else
 		echo "shared-node-modules: no shared install for $HASH yet, installing into $SHARED"
 		seed_shared_manifest
-		( cd "$SHARED" && pnpm install --frozen-lockfile )
+		( cd "$SHARED" && bun install --frozen-lockfile )
 	fi
 	touch "$SHARED/.install-complete"
 else
@@ -148,4 +168,5 @@ elif [ -e node_modules ]; then
 fi
 
 ln -s "$SHARED/node_modules" node_modules
+touch "$STAMP"
 echo "shared-node-modules: linked node_modules -> $SHARED/node_modules"

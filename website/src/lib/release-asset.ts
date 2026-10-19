@@ -25,7 +25,7 @@ export async function findHtmlFiles(dir: string): Promise<string[]> {
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
 	} catch {
-		// Build output directory doesn't exist yet (e.g. pnpm run build hasn't
+		// Build output directory doesn't exist yet (e.g. bun run build hasn't
 		// run) -- nothing to scan.
 		return [];
 	}
