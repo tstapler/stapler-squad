@@ -148,8 +148,8 @@ func (b wakeBacklogState) ItemState(ctx context.Context, itemID string) (wakes.I
 	for _, s := range item.ItemSessions {
 		if s.ReviewVerdict != nil {
 			st.HasVerdict = true
-			break
 		}
+		st.SessionRoles = append(st.SessionRoles, s.Role)
 	}
 	return st, nil
 }

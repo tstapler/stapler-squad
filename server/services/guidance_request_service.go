@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -31,7 +32,11 @@ type GuidanceRequestService struct {
 	storage         *session.Storage
 	notifier        *EventBusNotifier
 	triageRespawner TriageRespawner
+	answerListener  atomic.Pointer[AnswerListener]
 }
+
+// SetAnswerListener registers fn to run after each successfully applied answer.
+func (s *GuidanceRequestService) SetAnswerListener(fn AnswerListener) { s.answerListener.Store(&fn) }
 
 // TriageRespawner is the narrow slice of *BacklogService's existing
 // AutoRespawnTriage (server/services/backlog_service_triage.go) that
@@ -113,6 +118,13 @@ func (s *GuidanceRequestService) resumeTriageIfHalted(data *session.GuidanceRequ
 			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: ResumeTriage item=%s: %v", itemID, err)
 		}
 	}()
+}
+
+func (s *GuidanceRequestService) notifyAnswerListener(ctx context.Context, id string) {
+	if fn := s.answerListener.Load(); fn != nil && *fn != nil {
+		// The answer is already durable; the wake must not die with the request.
+		(*fn)(context.WithoutCancel(ctx), id)
+	}
 }
 
 // maxNotificationFieldLen bounds how much of the question/answer text is
@@ -343,6 +355,7 @@ func (s *GuidanceRequestService) AnswerGuidanceRequest(
 	if applied {
 		s.notifyAnswered(data)
 		s.resumeTriageIfHalted(data)
+		s.notifyAnswerListener(ctx, data.ID)
 	}
 
 	return connect.NewResponse(&sessionv1.AnswerGuidanceRequestResponse{

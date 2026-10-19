@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -33,8 +34,13 @@ type Config struct {
 	// Events is the in-process bus; nil disables event-type triggers.
 	Events  EventSource
 	Backlog BacklogState
-	Leader  LeaderGuard
-	Metrics *Metrics
+	// Sessions, Guidance and PRs back the session_state, guidance_answered and
+	// pr_event/ci_event sources; a nil one makes its trigger type unavailable.
+	Sessions SessionStates
+	Guidance GuidanceState
+	PRs      PRSource
+	Leader   LeaderGuard
+	Metrics  *Metrics
 
 	// Limits are the operator-set values of the Wake limits table; zero values
 	// keep the defaults and everything is clamped to the compiled ceilings.
@@ -126,6 +132,9 @@ func NewDispatcher(cfg Config) *Dispatcher {
 		}),
 	)
 	d.registerBacklogSource()
+	d.registerSessionSource()
+	d.registerGuidanceSource()
+	d.registerPRSource()
 	return d
 }
 
@@ -206,6 +215,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	d.wg.Add(2)
 	go func() { defer d.wg.Done(); d.delivery.Run(loopCtx) }()
 	go func() { defer d.wg.Done(); d.loop(loopCtx, evCh) }()
+	d.startPRWatcher(loopCtx)
 	if err := d.timer.Start(loopCtx); err != nil {
 		d.shutdown()
 		return fmt.Errorf("wakes: start timer: %w", err)
@@ -278,12 +288,41 @@ func (d *Dispatcher) reindex(ctx context.Context) {
 func (d *Dispatcher) handleEvent(ctx context.Context, ev *events.Event) {
 	for _, m := range d.matchers {
 		for _, ref := range m(ev) {
-			for _, row := range d.index.lookup(ref.Type, ref.Key) {
-				if specKind(row.Spec) == ref.Kind {
-					d.fire(ctx, row)
-				}
-			}
+			d.fireCell(ctx, ref, "")
 		}
+	}
+}
+
+// fireCell fires the pending rows in ref's cell that the match satisfies; detail,
+// when set, is appended to the wake text (what the event was).
+func (d *Dispatcher) fireCell(ctx context.Context, ref EventMatch, detail string) {
+	for _, row := range d.index.lookup(ref.Type, ref.Key) {
+		if !d.cellRowMatches(ctx, row, ref) {
+			continue
+		}
+		fired := *row // the shared index row stays unmodified if this fire is deferred
+		withEventDetail(&fired, detail)
+		d.fire(ctx, &fired)
+	}
+}
+
+func (d *Dispatcher) cellRowMatches(ctx context.Context, row *session.WakeTriggerData, ref EventMatch) bool {
+	if !ref.Check {
+		return slices.Contains(ref.Kinds, specKind(row.Spec))
+	}
+	holds, err := d.conditionHolds(ctx, row)
+	if err != nil {
+		log.Warn("wake dispatcher: predicate failed", "trigger_id", row.ID, errKey, err)
+	}
+	return holds
+}
+
+// withEventDetail appends a one-line description of the firing event to the
+// in-memory row's payload; the stored payload is untouched, so a re-queue after
+// a restart delivers the plain text.
+func withEventDetail(row *session.WakeTriggerData, detail string) {
+	if detail != "" {
+		row.Action.Payload += "\n[event] " + detail
 	}
 }
 
@@ -315,6 +354,7 @@ func (d *Dispatcher) fire(ctx context.Context, row *session.WakeTriggerData) {
 		return
 	}
 	d.index.remove(row)
+	row = d.withGuidanceAnswer(ctx, row)
 	row.Status, row.ClaimedAt = domain.WakeStatusClaimed, &now
 	d.onClaimed(ctx, row)
 }

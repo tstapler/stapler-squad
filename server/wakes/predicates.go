@@ -3,7 +3,6 @@ package wakes
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
@@ -12,11 +11,14 @@ import (
 )
 
 // EventMatch names the triggers an event can fire: the (type, key) index cell
-// and, for kinds, the spec's kind string.
+// and the spec kinds the event satisfies. Check instead fires the cell's rows
+// whose persisted-state predicate holds now (the event is only a nudge to
+// look, as for session_state).
 type EventMatch struct {
-	Type domain.WakeTriggerType
-	Key  string
-	Kind string
+	Type  domain.WakeTriggerType
+	Key   string
+	Kinds []string
+	Check bool
 }
 
 // EventMatcher turns a bus event into the trigger cells it concerns.
@@ -41,7 +43,7 @@ func (d *Dispatcher) registerBacklogSource() {
 			return nil
 		}
 		p := ev.BacklogItemPayload
-		return []EventMatch{{Type: domain.WakeTriggerBacklogEvent, Key: p.Item.ID, Kind: string(p.Kind)}}
+		return []EventMatch{{Type: domain.WakeTriggerBacklogEvent, Key: p.Item.ID, Kinds: backlogEventKinds(p)}}
 	})
 	d.RegisterPredicate(domain.WakeTriggerBacklogEvent, func(ctx context.Context, spec domain.WakeSpec) (bool, error) {
 		s, ok := spec.(domain.BacklogEventSpec)
@@ -54,24 +56,6 @@ func (d *Dispatcher) registerBacklogSource() {
 		}
 		return backlogKindHolds(s.Kind, st), nil
 	})
-}
-
-const statusReachedPrefix = "status_reached:"
-
-// backlogKindHolds is the persisted-state predicate per supported kind
-// (Story 4.4's table); a kind with no predicate never holds.
-func backlogKindHolds(kind string, st ItemState) bool {
-	switch {
-	case kind == string(events.BacklogChangeVerdictRecorded):
-		return st.Exists && st.HasVerdict
-	case kind == string(events.BacklogChangeItemArchived):
-		return st.Exists && st.Archived
-	case kind == string(events.BacklogChangeItemRemoved):
-		return !st.Exists
-	case strings.HasPrefix(kind, statusReachedPrefix):
-		return st.Exists && st.Status == strings.TrimPrefix(kind, statusReachedPrefix)
-	}
-	return false
 }
 
 // conditionHolds evaluates the registered predicate for an event-type row.

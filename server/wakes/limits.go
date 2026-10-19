@@ -339,6 +339,33 @@ type ScheduleRequest struct {
 // table and inserts the trigger. The pending-cap check and the insert run
 // under capMu and one transaction; capMu is never held across a revive.
 func (d *Dispatcher) Schedule(ctx context.Context, req ScheduleRequest) (*session.WakeTriggerData, bool, error) {
+	row, created, err := d.schedule(ctx, req)
+	if err == nil && created && !row.Type.IsTimeBased() {
+		d.fireIfAlreadyHolds(ctx, row)
+	}
+	return row, created, err
+}
+
+// fireIfAlreadyHolds claims a new event-type row whose condition is already
+// true (a peer that is idle now, a PR already merged): no event will come.
+// Before the dispatcher is ready the startup reconcile does it instead.
+func (d *Dispatcher) fireIfAlreadyHolds(ctx context.Context, row *session.WakeTriggerData) {
+	select {
+	case <-d.ready:
+	default:
+		return
+	}
+	holds, err := d.conditionHolds(ctx, row)
+	if err != nil {
+		log.Warn("wake schedule: initial predicate failed", "trigger_id", row.ID, errKey, err)
+		return
+	}
+	if holds {
+		d.fire(ctx, row)
+	}
+}
+
+func (d *Dispatcher) schedule(ctx context.Context, req ScheduleRequest) (*session.WakeTriggerData, bool, error) {
 	now := d.cfg.Clock.Now()
 	in, err := d.buildCreateInput(req, now)
 	if err != nil {
@@ -374,6 +401,12 @@ func (d *Dispatcher) buildCreateInput(req ScheduleRequest, now time.Time) (sessi
 	typ := req.Spec.TriggerType()
 	if !typ.IsTimeBased() && d.cfg.Events == nil {
 		return session.CreateWakeTriggerInput{}, ErrEventStreamUnavailable
+	}
+	if err := ValidateSpec(req.Spec); err != nil {
+		return session.CreateWakeTriggerInput{}, err
+	}
+	if err := d.checkSource(req.Spec); err != nil {
+		return session.CreateWakeTriggerInput{}, err
 	}
 	next, timed, err := d.firstFire(req.Spec, now)
 	if err != nil {

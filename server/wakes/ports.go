@@ -124,9 +124,75 @@ type ItemState struct {
 	Archived   bool
 	HasVerdict bool
 	Status     string
+	// SessionRoles are the roles of the item's attached ItemSessions.
+	SessionRoles []string
 }
 
 // BacklogState reads the persisted item state used by the reconcile predicates.
 type BacklogState interface {
 	ItemState(ctx context.Context, itemID string) (ItemState, error)
+}
+
+// SessionFacts is a peer session's current state label. State is "idle" for a
+// live session ready for input, otherwise the lowercase lifecycle status.
+type SessionFacts struct {
+	Exists bool
+	State  string
+}
+
+// SessionStates reads a session's persisted-or-live state for session_state wakes.
+type SessionStates interface {
+	SessionState(ctx context.Context, sessionUUID string) (SessionFacts, error)
+}
+
+// GuidanceFacts is the persisted state of a guidance request.
+type GuidanceFacts struct {
+	Exists              bool
+	Answered            bool
+	Answer              string
+	AnswererKind        string
+	AnswererSessionUUID string
+}
+
+// GuidanceState reads a guidance request for guidance_answered wakes.
+type GuidanceState interface {
+	Guidance(ctx context.Context, id string) (GuidanceFacts, error)
+}
+
+// PRKey names a pull request as "owner/repo" and number.
+type PRKey struct {
+	Repo   string
+	Number int
+}
+
+// PRView is one open PR of a poll: its identity and combined check conclusion
+// ("success", "failure", "pending" or "").
+type PRView struct {
+	PRKey
+	CheckConclusion string
+}
+
+// PRFacts is the by-number lookup of a PR that left the open list.
+type PRFacts struct {
+	State           string // "open", "merged" or "closed"
+	CheckConclusion string
+}
+
+// PR states PRFacts.State reports.
+const (
+	PRStateOpen   = "open"
+	PRStateMerged = "merged"
+	PRStateClosed = "closed"
+)
+
+// PRSource is the server-side PR poller (github.UserPRCache, Spike S4): no
+// typed bus event exists for PR or CI changes, so the dispatcher diffs its
+// snapshots. Subscribe delivers the full open-PR list after each poll.
+type PRSource interface {
+	Subscribe(ctx context.Context) (<-chan []PRView, error)
+	// Open returns the poller's current view of the PR, or false when the
+	// poller does not hold it (not open, not the connected accounts' own, or past the first 100).
+	Open(key PRKey) (PRView, bool)
+	// Lookup reads a PR by number (the confirm step for one that vanished).
+	Lookup(ctx context.Context, key PRKey) (PRFacts, error)
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -29,6 +30,9 @@ type wakeWiring struct {
 	Notifier  wakes.Notifier
 	Events    wakes.EventSource
 	Backlog   wakes.BacklogState
+	Sessions  wakes.SessionStates
+	Guidance  wakes.GuidanceState
+	PRs       wakes.PRSource
 	Leader    wakes.LeaderGuard
 	Limits    wakes.LimitSettings
 }
@@ -38,7 +42,8 @@ type wakeWiring struct {
 func newWakeDispatcher(w wakeWiring, hook func(func())) *wakes.Dispatcher {
 	d := wakes.NewDispatcher(wakes.Config{
 		Store: w.Store, Steerer: w.Steerer, Owners: w.Owners, Admission: w.Admission,
-		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Leader: w.Leader, Limits: w.Limits,
+		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Sessions: w.Sessions, Guidance: w.Guidance, PRs: w.PRs,
+		Leader: w.Leader, Limits: w.Limits,
 	})
 	hook(d.ChangeHook())
 	return d
@@ -76,7 +81,7 @@ func wakeDispatcherEnabled(cfg *config.Config) bool {
 // startWakes starts the wake dispatcher when the flag matrix allows it and
 // registers its shutdown join. A non-leader process, or a disabled flag,
 // leaves it stopped.
-func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies) {
+func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guidance *services.GuidanceRequestService) {
 	cfg := config.LoadConfig()
 	if deps.Storage == nil || deps.SessionService == nil || !wakeDispatcherEnabled(cfg) {
 		return
@@ -89,6 +94,10 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies) {
 	if deps.EventBus != nil {
 		bus = deps.EventBus
 	}
+	var prs wakes.PRSource
+	if deps.UserPRCache != nil {
+		prs = wakePRSource{cache: deps.UserPRCache}
+	}
 	d := newWakeDispatcher(wakeWiring{
 		Store:     deps.Storage,
 		Steerer:   wakeSteerer{svc: deps.SessionService},
@@ -97,12 +106,18 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies) {
 		Notifier:  wakeNotifier{bus: deps.EventBus},
 		Events:    bus,
 		Backlog:   wakeBacklogState{storage: deps.Storage},
+		Sessions:  wakeSessionStates{svc: deps.SessionService, storage: deps.Storage},
+		Guidance:  wakeGuidance{storage: deps.Storage},
+		PRs:       prs,
 		Leader:    leader,
 		Limits:    wakeLimitSettings(cfg.WakeLimits),
 	}, deps.Storage.SetWakeChangeHook)
 	if err := d.Start(ctx); err != nil {
 		log.Warn("wake dispatcher not started", "error", err)
 		return
+	}
+	if guidance != nil {
+		guidance.SetAnswerListener(d.OnGuidanceAnswered)
 	}
 	reconcile := d.Reconcile
 	wakeReconcileFn.Store(&reconcile)
