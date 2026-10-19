@@ -15,6 +15,7 @@ import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { clearDraft, readDraft, writeDraft } from "@/lib/utils/sessionDrafts";
 import { COPY, HOLD_COPY, answeredElsewhere, UNDO_LABEL, cancelPrompt, holdCountdown, mergePrompt, rateLimited, type HoldKey } from "@/lib/copy/notificationCopy";
 import { useCommitDelay } from "@/lib/hooks/useCommitDelay";
+import { useInlineActionTelemetry } from "@/lib/hooks/useInlineActionTelemetry";
 import { PendingNotice, useActionsDisabledReason } from "../OfflineBanner";
 import { ActionButton } from "./ActionButton";
 import { ApprovalButtons, OtherButtons, type ButtonsUi } from "./ActionButtons";
@@ -167,10 +168,12 @@ export function ActionRow(props: ActionRowProps) {
   // Approve, Send back and Mark done wait behind Undo; leaving cancels and sends nothing.
   const holdMarker = `hold:${rowId}`;
   const [cancelledKey, setCancelledKey] = useState<HoldKey | null>(() => (readDraft(holdMarker) || null) as HoldKey | null);
+  const { trackUndo } = useInlineActionTelemetry();
   const delay = useCommitDelay<{ spec: ActionSpec; ctx: OutcomeContext; key: HoldKey }>({
     onCommit: (h) => void commit(h.spec, h.ctx),
     onCancel: (h, reason) => {
       announce(HOLD_COPY[h.key].undone, "polite", `hold-${rowId}`);
+      if (reason === "undo") trackUndo(h.spec.kind);
       if (reason === "leave") {
         writeDraft(holdMarker, h.key);
         setCancelledKey(h.key);

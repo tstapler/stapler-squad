@@ -1,10 +1,12 @@
 import { act, fireEvent, screen } from "@testing-library/react";
-import { ActionOutcome } from "@/gen/session/v1/notification_action_pb";
+import { ActionKind, ActionOutcome } from "@/gen/session/v1/notification_action_pb";
 import { setTimingForTests } from "@/lib/hooks/interactionTiming";
 import { makeApprovalDescriptors, makeDecisionDescriptors } from "../__fixtures__/notificationFixtures";
 import { invokeMock, renderRow, respondWith } from "../__fixtures__/actionRowHarness";
 
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
+const mockTrackUndo = jest.fn();
+jest.mock("@/lib/hooks/useInlineActionTelemetry", () => ({ useInlineActionTelemetry: () => ({ trackUndo: mockTrackUndo }) }));
 
 const advance = (ms: number) => act(() => void jest.advanceTimersByTime(ms));
 const click = (testId: string) => act(() => void fireEvent.click(screen.getByTestId(testId)));
@@ -12,6 +14,7 @@ const click = (testId: string) => act(() => void fireEvent.click(screen.getByTes
 beforeEach(() => {
   jest.useFakeTimers();
   invokeMock.mockReset();
+  mockTrackUndo.mockClear();
   respondWith(ActionOutcome.APPLIED);
   window.sessionStorage.clear();
 });
@@ -71,6 +74,8 @@ describe("Task 2.10c: commit delay with Undo (UX-AC63)", () => {
     expect(screen.getByTestId("action-approve")).toHaveTextContent("Approve");
     expect(screen.queryByTestId("hold-cancelled")).toBeNull();
     expect(announce.mock.calls.map(([t]) => t)).toEqual(["Approval pending", "Approval undone"]);
+    expect(mockTrackUndo).toHaveBeenCalledTimes(1);
+    expect(mockTrackUndo).toHaveBeenCalledWith(ActionKind.APPROVE);
   });
 
   it("sends exactly one call after 3 s with the row open, and counts down as plain text", async () => {
