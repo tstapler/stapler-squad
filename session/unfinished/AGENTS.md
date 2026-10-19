@@ -109,7 +109,27 @@ Hot files are split so each shared file has one editing story per wave
 | `gogit_vcs_reader_trees.go` | `resolveHeadTreeHashes` | 3.1.1b |
 | `gogit_vcs_reader_dirty.go` | `HasUncommitted`, `hasUncommittedGoGitPhase`, `trackedFile`, `getOrBuildUntrackedMatcher` | 4.2.2b -> 4.3.2b -> 4.2.4b -> 3.3.1b |
 | `gogit_vcs_reader_walkers.go` | untracked/tracked walkers | 0.1.2b -> 4.2.3b -> 4.4.1 rows |
-| `gogit_vcs_reader_mergebase.go` | `parentMemo`, `findMergeBase`, `countCommitsTo`, `reachableSet` | 2.1.3b -> 2.2.1b -> 2.2.2b -> 2.2.3b |
-| `aheadbehind.go` (planned) | ahead/behind extraction | 1.1.4a -> 2.1.2b -> 2.1.3b -> 2.2.1b -> 2.2.2b -> 2.2.3b |
+| `gogit_vcs_reader_mergebase.go` | `parentMemo`, plain-walk `findMergeBase` (paint-down-to-common), `countCommitsTo`, `reachableSet`; the shared walk lives in `repostate/walk.go` | 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
+| `aheadbehind.go` | ahead/behind extraction and the shared-memo/graph switch | 1.1.4a -> 2.1.2b -> 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
+| `flags.go` | `FlagSpec`/`Flags`, `FlagSpecs` (4 rollback units, `RemoveBy`), `EffectiveFlags` snapshot | not tracked in the plan table (added during implementation) |
+| `scanstate.go` | `RefSnapshot` per-Burst prelude, `fillCommittedState` signature reuse | not tracked in the plan table (added during implementation) |
+| `scanstate_reader.go` | reader side of the prelude: `ResolveRefSnapshot`, `AheadBehindResolved`, ref-resolve counters | not tracked in the plan table (added during implementation) |
+| `scanskip_state.go` | `statSig` and the racy-timestamp rule | not tracked in the plan table (added during implementation) |
+| `scanskip_decision.go` | per-worktree `DirtyGen` registry (`ArmDirty`, `Decide`) | not tracked in the plan table (added during implementation) |
+| `dirtygen.go` | `DirtyGen`, `FullWalkFallback`, arm epoch, full-walk reasons | not tracked in the plan table (added during implementation) |
+| `index_cache.go` | parsed-index cache keyed by `IndexStatSig` (`parsedIndex`, `trackedGen`) | not tracked in the plan table (added during implementation) |
+| `untracked_cache.go` | per-directory untracked verdict cache and `walkUntrackedSkip` | not tracked in the plan table (added during implementation) |
+| `hasuncommitted_skip.go` | `HasUncommitted` under `scan_skip` | not tracked in the plan table (added during implementation) |
+| `statpass.go`, `scanner_statpass.go` | single stat pass shared by `HasUncommitted` and `DiffShortstat` | not tracked in the plan table (added during implementation) |
+| `statsig_unix.go`, `statsig_other.go`, `statdir_unix.go`, `statdir_other.go`, `diffmemo_stat_unix.go`, `diffmemo_stat_other.go` | per-OS stat signatures | not tracked in the plan table (added during implementation) |
+| `diffmemo.go`, `diffread.go` | per-file diff memo (`FileDiffMemoKey`) and pooled small-file reads | not tracked in the plan table (added during implementation) |
+| `myers.go`, `myers_bytes.go` | Myers edit counter (`MyersEditCounts[Bytes]`), falls back to `lcsLength*` over its cap | not tracked in the plan table (added during implementation) |
+| `shadow_verify.go`, `shadow_oracle.go` | sampled parity check against a flags-off oracle reader (default 1/200) | not tracked in the plan table (added during implementation) |
+| `repostate_attach.go` | `RepoState` on the gogitstore extension slot, budget pruning | not tracked in the plan table (added during implementation) |
+| `reach_shared.go` | shared reach set / `CommitMessages` switch | not tracked in the plan table (added during implementation) |
+| `graph_source.go` | `ParentsSource` over the storer (lock chain, ADR-001/009) | not tracked in the plan table (added during implementation) |
+| `commit_parents.go`, `commit_parents_stock.go` | header-only commit parent reader | not tracked in the plan table (added during implementation) |
+| `metrics_repostate.go`, `metrics_duration.go` | `unfinished.repostate.*` series and slow-op histograms | not tracked in the plan table (added during implementation) |
 | `scanner.go` | scan/enqueue/`scanWorktree` | 4.2.4b -> 4.1.1 -> 4.1.2 -> 5.1.1b |
-| `scanner_gitwatch.go` | `watchRepo`/`unwatchRepo`, fsnotify loop, `classifyGitEvent`, debounce | 4.3.1 -> 4.3.2b (DirtyGen bump only) -> 4.3.3 |
+| `scanner_gitwatch.go` | `watchRepo`/`unwatchRepo`, fsnotify loop, `classifyGitEvent`, debounce, Tier A linked-gitdir watches | 4.3.1 -> 4.3.2b (DirtyGen bump only); 4.3.3 not built (Tier B skipped) |
+| `watcher.go` | event filter/debounce for `.git` fsnotify events (the scanner's miss-count lever) | pre-existing |

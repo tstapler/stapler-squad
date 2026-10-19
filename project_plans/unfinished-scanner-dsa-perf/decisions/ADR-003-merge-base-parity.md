@@ -1,18 +1,19 @@
-# ADR-003: Preserve lockstep first-common-ancestor semantics; the lockstep itself is a commit with a recorded divergence set; best-merge-base is a flagged behaviour change
+# ADR-003: Merge base is git-style paint-down-to-common, matching the `object.Commit.MergeBase` oracle; the lockstep walk is retained only as the `plainWalk` fallback
 
-**Status**: Accepted (plan phase; amended in repair iteration 1; `plainWalk`, the lockstep walk, is retained in production as the permanent fallback, Phase 4 patch); flip decision open (owner, plan Q3) · **Plan**: Stories 0.0.1, 0.1.3a, 2.1.3, 2.2.3
+**Status**: Accepted (plan phase; amended in repair iteration 1; `plainWalk`, the lockstep walk, is retained in production as the permanent fallback, Phase 4 patch); amended 2026-10-16 (owner Q3): paint-down is the only production walk, no flag · **Plan**: Stories 0.0.1, 0.1.3a, 2.1.3 (2.2.3 superseded)
 
 ## Context
 `findMergeBase` returns the first common ancestor met by a lockstep BFS capped at `mergeBaseBFSLimit`, which is not git's best merge base on criss-cross histories (research/architecture.md R1/R2). **VERIFIED: the lockstep + `parentMemo` version is an uncommitted working-tree edit; the committed (and deployed, `39fa33a11`) walk is the old stack-based mark-then-walk** (`git diff HEAD` shows the lockstep as additions; the old functions are at `39fa33a11:session/unfinished/gogit_vcs_reader.go:2194,2255`). `object.Commit.MergeBase` (`plumbing/object/merge_base.go:17`) returns the best set and is available as an oracle.
 
 ## Decision
-- Story 0.0.1 commits the lockstep walk alone and retains the **committed old walk** verbatim as a test-only oracle (`legacyStack*`). A seeded differential test (>= 500 DAGs plus criss-cross/octopus/shallow) records every divergence old-vs-lockstep as a golden file. Divergences on linear/single-merge DAGs fail; divergences elsewhere are listed here as the behaviour change the lockstep commit introduced and reported to the owner. Golden divergence set: `session/unfinished/testdata/mergebase_lockstep_divergences.golden` (see "Behaviour change introduced by the lockstep commit" below).
-- Moving the walk to interned ids (Story 2.1.3) must equal the **lockstep** exactly (queue order, parent order, cap semantics) and may add **no** divergence against the committed-old walk beyond the golden set.
-- Amended 2026-10-16 (owner Q3): the "preserve semantics" premise is replaced by "match the oracle". `findMergeBase` is paint-down-to-common (commit `fef7bb90f`), matching `object.Commit.MergeBase` on 100% of 600 cases. `MergeBaseMode`, the `best_merge_base` flag and Story 2.2.3 are dropped; there is one walk and no generation column.
-- BFS (not DFS) stays for the "within L per side" failure condition.
+- `findMergeBase` is git-style paint-down-to-common (commit `fef7bb90f`: newest-first heap, FIFO ties, stale propagation), matching `object.Commit.MergeBase` on 100% of 600 single-merge and general cases. It is not required to reproduce the old lockstep's first-common-ancestor result; the oracle is the best merge base, not the previous walk.
+- The id-graph walk (Story 2.1.3) and the plain `parentMemo` walk (`plainWalk`, the permanent fallback on a full arena, severe pressure or a failing storer) must agree with each other and with the oracle.
+- Story 0.0.1 still commits the lockstep walk and retains the committed old walk (`39fa33a11`) as a test-only oracle (`legacyStack*`); the recorded divergence set (`session/unfinished/testdata/mergebase_lockstep_divergences.golden`, below) documents how the old and lockstep walks differed and is historical.
+- `MergeBaseMode`, the `best_merge_base` flag, the generation column and Story 2.2.3 are dropped: there is one walk.
+- BFS (not DFS) bounds the "within L per side" failure condition.
 
 ## Consequences
-Two algorithms to maintain until the owner decides; counts stay `min(exact, L)` in both modes; the baseline can separate the lockstep's own gain from this project's.
+One algorithm in production, plus the plain fallback that returns the same answer. Ahead/behind can differ from the pre-lockstep deployed walk on merge-rich histories (the intended correction toward the best merge base); counts stay `min(exact, L)`.
 
 ## Behaviour change introduced by the lockstep commit
 Measured by `mergebase_legacy_test.go` (old committed walk `39fa33a11` vs lockstep, same `mergeBaseBFSLimit`). Contradicts the Story 0.0.1 AC (a) as written: the lockstep is **not** identical to the old walk on every single-merge DAG.

@@ -15,3 +15,7 @@ Machine load is 110-160, so wall-clock is meaningless. `benchmark.yml:120` runs 
 CI will not block on benchmark regressions; the hard gates are deterministic tests in `make ready`. Fewer, dependency-aware flags are testable; legacy code and flags are removed after the soak instead of lingering.
 
 **Status update 2026-10-16 (flips, no live watch).** Per-unit defaults flip in `config.DefaultUnfinishedCaches` after the manual A/B recorded in `baseline.md` "S2 A/B"; the config key stays the off-switch (absent keeps the default, explicit `false` disables). Flipped so far: `diff_counter`, `watch_worktree_gitdirs`, `shared_commit_state`, `scan_skip`. `scan_skip` was held off after round 1 (engagement index 0, signature 0.9%, dirs 2.7%: every staleness bound equalled the scan tick, ADR-006 addendum) and flipped after `baseline.md` "S2 A/B round 2" (101 oracle samples, 0 mismatches; engagement index 32 to 48%, signature 33 to 49%, dirs 47 to 50%). The 24 h live watch of Story 5.2.2 did not happen (owner answer Q4/Q11: no live deploy), so each flip commit states that and the live watch remains the Story 5.3.1 precondition.
+
+## Amendment: shadow-verify default
+
+`shadow_verify_rate` defaults to 1 scan in 200 (was 1 in 50): at 1/50 the oracle path was 43% of scanner allocations in the S2 A/B (`session/unfinished/shadow_verify.go`, `defaultShadowVerifyEvery`). Override with `STAPLER_SQUAD_SHADOW_VERIFY_EVERY`. The flip criterion counts sampled scans, so a lower rate lengthens the soak needed for the same sample size.
