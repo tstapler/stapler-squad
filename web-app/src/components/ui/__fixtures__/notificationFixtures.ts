@@ -57,3 +57,10 @@ export function makeHiddenState(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+/** `count` stopped hidden sessions `review:s0..`, the first `old` of them last active 30 h ago. */
+export function makeStoppedSessions(count: number, old = 0, now = Date.now()): HiddenSessionSummary[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeHiddenSession({ id: `review:s${i}`, updatedAtMs: i < old ? now - 30 * 3_600_000 - i : now - (3 + i) * 1000 }),
+  );
+}

@@ -847,6 +847,7 @@ export function NotificationPanel() {
               lastUpdatedAt={background.poll.lastUpdatedAt}
               onRefresh={background.poll.refresh}
               onOpenRow={openBackgroundRow}
+              onNewFailures={(n) => announce(`${n} background ${n === 1 ? "session needs" : "sessions need"} attention`, "polite", "background-failure")}
               onMergeNew={(n) => announce(`${n} new background ${n === 1 ? "session" : "sessions"}`, "polite", "background-new")}
               replyEnabled={replyEnabled}
               legacy={background.feedEnabled ? undefined : { hasHiddenSessions: background.hasHiddenSessions }}

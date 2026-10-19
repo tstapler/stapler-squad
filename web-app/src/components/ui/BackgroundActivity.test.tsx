@@ -3,7 +3,8 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { BackgroundActivity, type BackgroundActivityProps } from "./BackgroundActivity";
 import { buildActivityRows, buildRollup, type ActivityRow } from "@/lib/utils/backgroundActivity";
 import { formatClockTime } from "./OfflineBanner";
-import { makeBackgroundRow, makeElevenStopped, makeHiddenSession } from "./__fixtures__/notificationFixtures";
+import { resetReviewedMarksForTests } from "@/lib/hooks/useReviewedMarks";
+import { makeBackgroundRow, makeElevenStopped, makeHiddenSession, makeStoppedSessions } from "./__fixtures__/notificationFixtures";
 
 jest.mock("next/link", () => ({
   __esModule: true,
@@ -51,7 +52,17 @@ function setup(rows: ActivityRow[], over: Partial<BackgroundActivityProps> = {})
 
 const eleven = (outcome: "completed" | "unknown" = "completed") => buildActivityRows([], makeElevenStopped(outcome));
 
+const toggleOf = (row: HTMLElement) => row.querySelector("[data-row-toggle]") as HTMLElement;
+const rowIds = () => screen.getAllByTestId("background-row").map((r) => r.getAttribute("data-session-id"));
+const markButtonOf = (i: number) => within(screen.getAllByTestId("background-row")[i]).getByTestId("background-mark-reviewed");
+
 describe("BackgroundActivity", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetReviewedMarksForTests();
+  });
+  afterEach(() => jest.restoreAllMocks());
+
   it("background_section_should_render_loading_none_error_offline_states_without_a_spinner_on_empty", () => {
     const loading = setup([], { loading: true, lastUpdatedAt: null });
     expect(screen.getByTestId("background-loading")).toHaveAttribute("aria-busy", "true");
@@ -104,19 +115,61 @@ describe("BackgroundActivity", () => {
     expect(onMergeNew).toHaveBeenCalledWith(1);
     expect(screen.queryByTestId("background-new-pill")).toBeNull();
     expect(screen.getAllByTestId("background-row")).toHaveLength(12);
+    expect(document.activeElement).toBe(toggleOf(screen.getAllByTestId("background-row")[0]));
   });
 
-  it("BackgroundActivity_should_showNewExceptionImmediately_When_pollAddsFailure", () => {
-    const sessions = makeElevenStopped("completed");
+  it("BackgroundActivity_should_nameNewFailureInStickyStripAndNotMoveRows_When_cardEngaged", () => {
+    const sessions = [...makeStoppedSessions(3), makeHiddenSession({ id: "review:pr-1042" })];
+    const onNewFailures = jest.fn();
+    const { update } = setup(buildActivityRows([], sessions), { onNewFailures });
+    const before = rowIds();
+    act(() => toggleOf(screen.getAllByTestId("background-row")[1]).focus());
+    const engaged = document.activeElement;
+
+    const failed = sessions.map((s) => (s.id === "review:pr-1042" ? { ...s, backgroundOutcome: "failed" as const } : s));
+    update(buildActivityRows([], failed), { onNewFailures });
+    expect(screen.getByTestId("background-failure-strip")).toHaveTextContent("review:pr-1042 failed");
+    expect(rowIds()).toEqual(before);
+    expect(onNewFailures).toHaveBeenCalledTimes(1);
+    expect(onNewFailures).toHaveBeenCalledWith(1);
+    expect(document.activeElement).toBe(engaged);
+
+    update(buildActivityRows([], failed), { onNewFailures });
+    expect(onNewFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it("BackgroundActivity_should_showChipInPlace_When_existingRowBecomesFailure", () => {
+    const sessions = makeStoppedSessions(3);
+    const { update } = setup(buildActivityRows([], sessions));
+    update(buildActivityRows([], sessions.map((s, i) => (i === 2 ? { ...s, backgroundOutcome: "failed" as const } : s))));
+    const row = screen.getAllByTestId("background-row")[2];
+    expect(row).toHaveAttribute("data-session-id", "review:s2");
+    expect(within(row).getByTestId("background-state-chip")).toHaveTextContent("Failed");
+  });
+
+  it("BackgroundActivity_should_moveFocusToRowOnlyOnShow_And_pinRowToNeedsAttention", () => {
+    const sessions = makeStoppedSessions(3);
     const { update } = setup(buildActivityRows([], sessions));
     update(buildActivityRows([], [...sessions, makeHiddenSession({ id: "review:bad", backgroundOutcome: "failed" })]));
-    expect(screen.queryByTestId("background-new-pill")).toBeNull();
-    expect(screen.getAllByTestId("background-row")[0]).toHaveAttribute("data-session-id", "review:bad");
+    expect(screen.queryByText("Needs attention (1)")).toBeNull();
+    expect(rowIds()).not.toContain("review:bad");
+    fireEvent.click(within(screen.getByTestId("background-failure-strip")).getByRole("button", { name: "Show" }));
+    expect(rowIds()[0]).toBe("review:bad");
+    expect(document.activeElement).toBe(toggleOf(screen.getAllByTestId("background-row")[0]));
+    expect(screen.queryByTestId("background-failure-strip")).toBeNull();
+  });
+
+  it("BackgroundActivity_should_listAtMost3NamesThenCount_When_5FailuresArrive", () => {
+    const sessions = makeStoppedSessions(2);
+    const { update } = setup(buildActivityRows([], sessions));
+    const bad = Array.from({ length: 5 }, (_, i) => makeHiddenSession({ id: `review:bad${i}`, backgroundOutcome: "failed" }));
+    update(buildActivityRows([], [...sessions, ...bad]));
+    expect(screen.getAllByTestId("background-failure-strip-item")).toHaveLength(3);
+    expect(screen.getByText("2 more failures")).toBeInTheDocument();
   });
 
   it("BackgroundActivity_should_capAt100RowsWithShowAll_When_150Sessions", () => {
-    const sessions = Array.from({ length: 150 }, (_, i) => makeHiddenSession({ id: `review:s${i}`, updatedAtMs: 1000 + i }));
-    setup(buildActivityRows([], sessions));
+    setup(buildActivityRows([], makeStoppedSessions(150)));
     expect(screen.getAllByTestId("background-row")).toHaveLength(100);
     fireEvent.click(screen.getByRole("button", { name: "Show all (150)" }));
     expect(screen.getAllByTestId("background-row")).toHaveLength(150);
@@ -254,5 +307,97 @@ describe("BackgroundActivity", () => {
     off.unmount();
     setup([], { legacy: { hasHiddenSessions: false } });
     expect(screen.getByTestId("background-empty-none")).toHaveTextContent("No background sessions have run recently.");
+  });
+
+  it("ux_ac68_should_moveFocusToNextRowThenGroupHeading_When_markReviewed", () => {
+    setup(buildActivityRows([], makeStoppedSessions(3)));
+    act(() => markButtonOf(1).focus());
+    fireEvent.click(markButtonOf(1));
+    expect(rowIds()).toEqual(["review:s0", "review:s2"]);
+    expect(document.activeElement).toBe(toggleOf(screen.getAllByTestId("background-row")[1]));
+
+    fireEvent.click(markButtonOf(1));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: /No failures reported/ }));
+    expect(document.activeElement).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("BackgroundActivity_should_collapseAndPersistReviewed_When_markAllReviewed", () => {
+    const rows = eleven("unknown");
+    const first = setup(rows);
+    fireEvent.click(screen.getByTestId("background-mark-all-recent"));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: /No failures reported/ }));
+    expect(screen.getByTestId("background-rollup")).toHaveTextContent("no failures reported (11 reviewed)");
+    expect(screen.queryAllByTestId("background-row")).toHaveLength(0);
+    first.unmount();
+
+    resetReviewedMarksForTests();
+    setup(rows);
+    expect(screen.getByTestId("background-rollup")).toHaveTextContent("no failures reported (11 reviewed)");
+    fireEvent.click(screen.getByRole("button", { name: "Reviewed (11)" }));
+    expect(screen.getAllByTestId("background-row")).toHaveLength(11);
+  });
+
+  it("BackgroundActivity_should_applyMarksForSessionAndShowNote_When_localStorageThrows", () => {
+    jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("denied");
+    });
+    resetReviewedMarksForTests();
+    setup(eleven("unknown"));
+    expect(screen.getByText("Marks are not saved in this browser")).toBeInTheDocument();
+    expect(() => fireEvent.click(screen.getByTestId("background-mark-all-recent"))).not.toThrow();
+    expect(screen.getByTestId("background-rollup")).toHaveTextContent("(11 reviewed)");
+  });
+
+  it("ux_ac70_should_showFirstRunNoteOnceAndKeepFailuresInReviewedGroup", () => {
+    setup(eleven("unknown"));
+    expect(screen.getByTestId("background-first-run")).toHaveTextContent("not that everything succeeded");
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    expect(screen.queryByTestId("background-first-run")).toBeNull();
+  });
+
+  it("BackgroundActivity_should_commitAtMost120RowsAndCollapseOlder_When_500Sessions480Old", () => {
+    const rows = buildActivityRows([], makeStoppedSessions(500, 480));
+    const commits: number[] = [];
+    render(
+      <React.Profiler id="bg" onRender={(_id, _phase, actual) => commits.push(actual)}>
+        <BackgroundActivity {...propsFor(rows)} />
+      </React.Profiler>,
+    );
+    expect(commits).toHaveLength(1);
+    expect(screen.getAllByTestId("background-row").length).toBeLessThanOrEqual(120);
+    const older = screen.getByRole("button", { name: "Older (480)" });
+    expect(older).toHaveAttribute("aria-expanded", "false");
+    expect(commits[0]).toBeLessThan(process.env.CI ? 1000 : 100);
+    fireEvent.click(older);
+    expect(screen.getAllByTestId("background-row")).toHaveLength(120);
+    fireEvent.click(screen.getByRole("button", { name: "Show all (480)" }));
+    expect(screen.getAllByTestId("background-row")).toHaveLength(500);
+  });
+
+  it("BackgroundActivity_should_toggleDetailsOnRowTextClick_And_neverNavigate", () => {
+    const { props } = setup([exceptionRow()]);
+    const row = screen.getByTestId("background-row");
+    expect(row.closest("a")).toBeNull();
+    expect(toggleOf(row)).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(within(row).getByText("3 tests failing"));
+    expect(toggleOf(row)).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(within(row).getByTestId("background-mark-reviewed"));
+    expect(screen.getByText("Reviewed failures (1)")).toBeInTheDocument();
+    expect(toggleOf(screen.getByTestId("background-row"))).toHaveAttribute("aria-expanded", "false");
+    expect(props.onOpenRow).not.toHaveBeenCalled();
+  });
+
+  it("BackgroundActivity_should_notRenderControlsForSessionWithPendingQuestion_And_ShowLinkChip", () => {
+    const question = exceptionRow({ kind: "needs_human", statusLabel: "NEEDS INPUT", pendingQuestion: true });
+    setup([question], { replyEnabled: true, needsYou: new Map([["review:h1", 1]]) });
+    const row = screen.getByTestId("background-row");
+    expect(within(row).getByTestId("background-needs-you-chip")).toHaveTextContent("Needs you (1)");
+    expect(within(row).queryByTestId("notification-reply")).toBeNull();
+    const names = within(row).getAllByRole("button").map((b) => b.textContent);
+    expect(names).toEqual(expect.not.arrayContaining(["Reply", "Answer", "Approve", "Deny"]));
+    expect(within(row).getByTestId("background-mark-reviewed")).toBeInTheDocument();
   });
 });

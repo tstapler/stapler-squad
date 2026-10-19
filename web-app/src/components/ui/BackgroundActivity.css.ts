@@ -208,3 +208,57 @@ export const segment = style({
     "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "-2px" },
   },
 });
+
+// Sticky, in the section's normal flow: showing or hiding it never reorders a row.
+export const failureStrip = style({
+  position: "sticky",
+  top: 0,
+  listStyle: "none",
+  margin: 0,
+  padding: "8px 12px",
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space[2],
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "8px",
+  background: vars.color.cardBackground,
+});
+
+export const failureStripItem = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space[2],
+  flexWrap: "wrap",
+  fontSize: "0.875rem",
+});
+
+export const rowTitleButton = style({
+  background: "none",
+  border: "none",
+  padding: 0,
+  font: "inherit",
+  textAlign: "left",
+  cursor: "pointer",
+  minHeight: "24px",
+  selectors: { "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" } },
+});
+
+export const messageClamped = style({
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+});
+
+export const groupHead = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space[2],
+});
+
+export const noteLine = style({
+  margin: 0,
+  fontSize: "0.8125rem",
+  color: vars.color.textSecondary,
+});

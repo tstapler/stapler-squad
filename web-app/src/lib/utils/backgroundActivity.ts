@@ -189,6 +189,8 @@ export interface BackgroundRollup {
   /** Rows in an exception state; the only count the tab's accessible name carries. */
   exceptions: number;
   lastActivityMs: number | null;
+  /** Live rows the operator marked reviewed in this browser. */
+  reviewed?: number;
 }
 
 export function isExceptionState(state: ActivityState): boolean {
@@ -291,6 +293,6 @@ export function rollupCopy(rollup: BackgroundRollup, relativeTime: (ms: number) 
   const head =
     rollup.variant === "needs_attention"
       ? `${rollup.total} ${noun}, ${rollup.exceptions} ${rollup.exceptions === 1 ? "needs" : "need"} attention.`
-      : `${rollup.total} ${noun}, no failures reported.`;
+      : `${rollup.total} ${noun}, no failures reported${rollup.reviewed ? ` (${rollup.reviewed} reviewed)` : ""}.`;
   return rollup.lastActivityMs === null ? head : `${head} Last activity ${relativeTime(rollup.lastActivityMs)}.`;
 }
