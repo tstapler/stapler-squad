@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"syscall"
+	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
@@ -45,6 +46,7 @@ type analysisEntry struct {
 	waiters  int  // Await callers currently interested
 	detached bool // started by Start: cache-owned, survives zero waiters
 	cancel   context.CancelFunc
+	failedAt time.Time // set with FAILED; permission or missing-dir failures do not change the validator, so it expires
 	done     chan struct{}
 	elem     *list.Element
 }
@@ -63,7 +65,12 @@ type analysisCache struct {
 	ctx     context.Context
 	stop    context.CancelFunc
 	wg      sync.WaitGroup
+	now     func() time.Time
 }
+
+// analysisFailedTTL bounds how long a FAILED entry blocks a retry; chmod, ACL changes and a briefly
+// missing directory leave the (path, size, mtime, inode) validator unchanged.
+const analysisFailedTTL = 30 * time.Second
 
 func newAnalysisCache(maxEntries, parallel int) *analysisCache {
 	ctx, stop := context.WithCancel(context.Background())
@@ -75,6 +82,7 @@ func newAnalysisCache(maxEntries, parallel int) *analysisCache {
 		sem:     make(chan struct{}, max(1, parallel)),
 		ctx:     ctx,
 		stop:    stop,
+		now:     time.Now,
 	}
 }
 
@@ -89,6 +97,10 @@ func (c *analysisCache) State(key analysisKey) (sessionv1.FileAnalysisState, *An
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[key]
+	if ok && c.failedExpiredLocked(e) {
+		c.dropLocked(e)
+		ok = false
+	}
 	if !ok {
 		return analysisStateUnspecified, nil
 	}
@@ -133,9 +145,11 @@ func (c *analysisCache) Await(ctx context.Context, key analysisKey, run analysis
 }
 
 func (c *analysisCache) ensureLocked(key analysisKey, run analysisRunner) *analysisEntry {
-	if e, ok := c.entries[key]; ok {
+	if e, ok := c.entries[key]; ok && !c.failedExpiredLocked(e) {
 		c.lru.MoveToFront(e.elem)
 		return e
+	} else if ok {
+		c.dropLocked(e)
 	}
 	if old, ok := c.byPath[key.Path]; ok {
 		c.dropLocked(c.entries[old]) // validator changed: rebuild in full
@@ -186,7 +200,7 @@ func (c *analysisCache) runEntry(ctx context.Context, e *analysisEntry, run anal
 		if isTransientAnalysisError(err) {
 			c.dropLocked(e) // waiters holding e still read e.err; the next request starts fresh
 		}
-		e.state, e.err = analysisStateFailed, err
+		e.state, e.err, e.failedAt = analysisStateFailed, err, c.now()
 	default:
 		e.state, e.result = analysisStateReady, res
 	}
@@ -206,4 +220,8 @@ func isTransientAnalysisError(err error) bool {
 		}
 	}
 	return false
+}
+
+func (c *analysisCache) failedExpiredLocked(e *analysisEntry) bool {
+	return e.state == analysisStateFailed && c.now().Sub(e.failedAt) >= analysisFailedTTL
 }

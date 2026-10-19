@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -159,6 +160,35 @@ func TestAnalysisCache_ShouldCacheFailedState_When_PassFailsDeterministically(t 
 
 	c.Start(keyOf("/w/denied.log", 11), run) // the file changed: a fresh attempt
 	analysisEventually(t, func() bool { return runs.Load() == 2 })
+}
+
+func TestAnalysisCache_ShouldRetryFailedEntry_When_FailedTTLExpires(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	c := newAnalysisCache(analysisCacheEntries, 1)
+	defer c.Close()
+	clock := time.Now()
+	var mu sync.Mutex
+	c.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	k := keyOf("/w/chmod.log", 10)
+	var runs atomic.Int32
+	run := func(context.Context) (*Analysis, error) {
+		if runs.Add(1) == 1 {
+			return nil, &fs.PathError{Op: "open", Path: "chmod.log", Err: syscall.EACCES}
+		}
+		return &Analysis{LineCount: 9}, nil
+	}
+
+	c.Start(k, run)
+	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateFailed })
+	c.Start(k, run)
+	assert.Equal(t, int32(1), runs.Load(), "within the TTL the failure is not retried")
+
+	mu.Lock()
+	clock = clock.Add(analysisFailedTTL)
+	mu.Unlock()
+	c.Start(k, run) // permissions fixed meanwhile; the validator never changed
+	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateReady })
+	assert.Equal(t, int32(2), runs.Load())
 }
 
 func TestAnalysisCache_ShouldKeepPassRunning_When_StartedCacheOwnedAndWaiterLeaves(t *testing.T) {
