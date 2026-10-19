@@ -12,15 +12,15 @@ const STAT: FileStat = { token: "v1:1:9:fresh", size: 1, readOnly: "none", analy
 function setup() {
   const base = createFakeTransport({ files: FILES });
   let armed = false;
-  let settle: { resolve: (s: FileStat) => void; reject: (e: unknown) => void } | null = null;
+  let settleFn: { resolve: (s: FileStat) => void; reject: (e: unknown) => void } = { resolve: () => undefined, reject: () => undefined };
   const stat: FileTransportPort["stat"] = (ref, o, signal) => {
     if (!armed || ref.path !== "a.go") return base.stat(ref, o, signal);
-    return new Promise<FileStat>((resolve, reject) => { settle = { resolve, reject }; });
+    return new Promise<FileStat>((resolve, reject) => { settleFn = { resolve, reject }; });
   };
   const h = createFilesTestHarness({ sessionId: "s1", transport: { ...base, stat } });
   const view = renderHook(() => useFilesV2("s1", false, {}), { wrapper: h.wrapper });
   const loaded = (path: string) => waitFor(() => expect(view.result.current.buffers.active).toMatchObject({ path, status: "loaded" }));
-  return { ...view, loaded, arm: () => { armed = true; }, settle: () => settle! };
+  return { ...view, loaded, arm: () => { armed = true; }, settle: () => settleFn };
 }
 
 describe("useFilesV2 reloadFromDisk", () => {

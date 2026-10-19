@@ -1,5 +1,5 @@
 import React, { useReducer } from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
 import {
@@ -184,5 +184,27 @@ describe("OpenTabsBar", () => {
     await user.keyboard("{End}");
     expect(scroll).toHaveBeenCalled();
     expect(scroll.mock.instances.at(-1)).toBe(tab(/^f19\.go/));
+  });
+  it("openTabsBar_should_KeepMenuKeyboardPosition_When_ParentRerenders", () => {
+    mount(three());
+    fireEvent.contextMenu(tab(/^a\.go/));
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
+    expect(items[1]).toHaveFocus();
+
+    fireEvent.click(screen.getByText("open-z")); // state change: the bar re-renders with fresh inline handlers
+
+    expect(items[1]).toHaveFocus();
+  });
+
+  it("openTabsBar_should_DismissMenuOnOutsideMouseDown_When_ParentRerendered", () => {
+    mount(three());
+    fireEvent.contextMenu(tab(/^a\.go/));
+    fireEvent.click(screen.getByText("open-z"));
+
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
