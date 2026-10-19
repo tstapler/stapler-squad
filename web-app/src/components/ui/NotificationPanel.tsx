@@ -17,6 +17,7 @@ import { useFrozenList } from "@/lib/hooks/useFrozenList";
 import { useScrollSettle } from "@/lib/hooks/useScrollSettle";
 import { useCoarsePointer } from "@/lib/hooks/useCoarsePointer";
 import { useBackgroundActivity } from "@/lib/hooks/useBackgroundActivity";
+import { usePeerEscalationAnnouncement } from "@/lib/hooks/usePeerEscalationAnnouncement";
 import { usePaneOpenTiming } from "@/lib/hooks/usePaneOpenTiming";
 import { useTrayFocus } from "@/lib/hooks/useTrayFocus";
 import { useTrayBulkActions } from "@/lib/hooks/useTrayBulkActions";
@@ -37,6 +38,7 @@ import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
 import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";
 import { rulePrefillFor } from "./notification-actions/inlineActions";
 import { BackgroundActivity } from "./BackgroundActivity";
+import { ScheduledPromptsSection } from "./ScheduledPromptsSection";
 import {
   ActionsDisabledReasonContext,
   OfflineBanner,
@@ -356,6 +358,7 @@ export function NotificationPanel() {
   }, [notificationHistory]);
 
   const unreadCount = getUnreadCount();
+  usePeerEscalationAnnouncement(notificationHistory, announce);
 
   // Background activity (Story 5.4): polled only while its segment is showing; the segment
   // badge is the same join over history, so it adds nothing to the bell count.
@@ -915,6 +918,7 @@ export function NotificationPanel() {
             {filterBlock}
           </div>
           {traySegment === "background" ? (
+            <>
             <BackgroundActivity
               rows={background.rows}
               rollup={background.rollup}
@@ -930,6 +934,8 @@ export function NotificationPanel() {
               failureStripSlot={slotEl}
               legacy={background.feedEnabled ? undefined : { hasHiddenSessions: background.hasHiddenSessions }}
             />
+            <ScheduledPromptsSection active={isPanelOpen && !isOffline} />
+            </>
           ) : (
             renderBody()
           )}

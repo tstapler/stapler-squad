@@ -16,6 +16,8 @@ import {
 import { markKeyOf, useReviewedMarks } from "@/lib/hooks/useReviewedMarks";
 import { BackgroundChip } from "./BackgroundChip";
 import { BackgroundFailureStrip } from "./BackgroundFailureStrip";
+import { RemindMeMenu } from "./RemindMeMenu";
+import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
 import { OfflineBanner, formatClockTime } from "./OfflineBanner";
 import {
   action,
@@ -108,6 +110,7 @@ function RowView({
   focusId,
   onOpenRow,
   onMark,
+  remindMe,
 }: {
   row: ActivityRow;
   replyEnabled: boolean;
@@ -115,6 +118,8 @@ function RowView({
   focusId: string;
   onOpenRow: (row: ActivityRow) => void;
   onMark?: () => void;
+  /** Remind me is offered (flag on) and this row may show it. */
+  remindMe: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const ex = row.exception;
@@ -217,6 +222,9 @@ function RowView({
               Mark reviewed
             </button>
           )}
+          {remindMe && (row.state === "finished" || row.state === "stopped_unknown") && (
+            <RemindMeMenu sessionUuid={row.sessionId} label={`${row.sessionTitle} (${row.role}): ${STATE_TEXT[row.state].toLowerCase()}`} />
+          )}
         </div>
       )}
     </li>
@@ -308,6 +316,8 @@ export function BackgroundActivity({
   const announced = useRef(new Set<string>());
   const { known, pinned, pendingInfo, merge, mergeKeys } = useStableRows(rows, hasData);
   const marks = useReviewedMarks();
+  // Reminders are a notify_operator "at" trigger, so they follow that trigger type's flag.
+  const remindMe = useFeatureFlagValue("agent_wake_triggers", "trigger:at");
 
   const reviewedOf = (r: ActivityRow) => marks.isReviewed(markKeyOf(r));
   const newFailures = rows.filter((r) => isException(r) && !pinned.has(r.key) && !reviewedOf(r));
@@ -422,6 +432,7 @@ export function BackgroundActivity({
         needsYou={needsYou?.get(r.sessionId) ?? 0}
         focusId={`row:${r.key}`}
         onOpenRow={onOpenRow}
+        remindMe={remindMe}
         onMark={
           groupId && r.state !== "running" && r.state !== "departed" ? () => markRow(r, group, groupId) : undefined
         }
