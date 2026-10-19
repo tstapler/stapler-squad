@@ -122,6 +122,26 @@ test.describe("phone 390x844", () => {
     expect(h).toBe("500px");
   });
 
+  test("filesMobile_should_RideAboveKeyboardAndAvoidFocusZoom_When_GoToLineAndSearchOpenOnCoarse", async ({ page }) => {
+    const files = await FilesTabView.create(page, seedSearchFixture);
+    await stubVisualViewport(page);
+    await files.goto();
+    await files.treeFile("a.txt").click();
+    await files.overflowButton.click();
+    await page.getByRole("menuitem", { name: "Go to line" }).click();
+    const dialog = page.getByRole("dialog", { name: "Go to line" });
+    await expect(dialog).toBeVisible();
+    await setVisualViewportHeight(page, 500);
+    await expect.poll(async () => (await dialog.boundingBox())!.y + (await dialog.boundingBox())!.height).toBeLessThanOrEqual(500);
+    const px = (l: ReturnType<typeof page.locator>) => l.evaluate((el) => getComputedStyle(el).fontSize);
+    expect(await px(dialog.getByRole("textbox"))).toBe("16px");
+    await page.keyboard.press("Escape");
+    await setVisualViewportHeight(page, 844);
+
+    await files.bottomBarButton("Search").click();
+    expect(await px(files.searchQuery)).toBe("16px");
+  });
+
   test("codeEditor_should_NotFocusOrResizeViewport_When_TapInReadModeOnCoarse", async ({ page }) => {
     const files = await FilesTabView.create(page);
     await files.goto();

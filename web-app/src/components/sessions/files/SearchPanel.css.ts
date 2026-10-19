@@ -29,7 +29,8 @@ export const queryInput = style({
   color: vars.color.inputText,
   font: "inherit",
   fontSize: "13px",
-  "@media": { "(pointer: coarse)": { minHeight: "44px" } },
+  // 16px stops iOS Safari zooming the page on focus.
+  "@media": { "(pointer: coarse)": { minHeight: "44px", fontSize: "16px" } },
 });
 export const toggleRow = style({ display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" });
 export const toggle = style({

@@ -77,6 +77,7 @@ export const breadcrumbSegment = style({
   cursor: "pointer",
   padding: 0,
   font: "inherit",
+  "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px" } },
 });
 
 export const breadcrumbCurrent = style({
@@ -113,6 +114,7 @@ export const wrapToggleButton = style({
   border: `1px solid ${vars.color.borderColor}`,
   background: "transparent",
   cursor: "pointer",
+  "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px", justifyContent: "center" } },
   ":hover": {
     color: vars.color.textPrimary,
     backgroundColor: vars.color.hoverBackground,
@@ -161,6 +163,7 @@ export const downloadButton = style({
   color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderColor}`,
   marginLeft: "auto",
+  "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px", justifyContent: "center" } },
   ":hover": {
     color: vars.color.textPrimary,
     backgroundColor: vars.color.hoverBackground,

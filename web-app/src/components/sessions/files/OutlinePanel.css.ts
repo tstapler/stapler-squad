@@ -20,10 +20,10 @@ export const panel = style({
       position: "fixed",
       top: "auto",
       right: 0,
-      bottom: 0,
+      bottom: "var(--keyboard-height, 0px)",
       left: 0,
       width: "auto",
-      maxHeight: "70vh",
+      maxHeight: "calc(var(--viewport-height, 100dvh) * 0.7)",
       borderRadius: `${vars.radii.lg} ${vars.radii.lg} 0 0`,
     },
   },
@@ -39,7 +39,8 @@ export const filter = style({
   borderRadius: vars.radii.sm,
   background: vars.color.inputBackground,
   color: vars.color.inputText,
-  "@media": { "(pointer: coarse)": { minHeight: "44px" } },
+  // 16px stops iOS Safari zooming the page on focus.
+  "@media": { "(pointer: coarse)": { minHeight: "44px", fontSize: "16px" } },
 });
 export const list = style({ overflowY: "auto", margin: 0, padding: "0 4px 8px", listStyle: "none" });
 export const option = style({
