@@ -136,6 +136,10 @@ type SessionService struct {
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
 
+	// outcomeLookup overrides concStorage for the batched ItemSession lookup behind
+	// Session.background_outcome; tests inject a counting fake.
+	outcomeLookup itemSessionBatchLookup
+
 	// inFlightWorktreeSpawns claims a canonicalized worktree path (-> claiming session
 	// UUID) for the duration of startLocked's check-through-spawn window, closing the
 	// TOCTOU race between two concurrent CreateSession calls resolving the same
