@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -387,67 +386,6 @@ func (s *PendingQuestionStore) evictOldestGlobalLocked() bool {
 		return false
 	}
 	s.removeLocked(oldestID)
-	return true
-}
-
-// ---- payload shape ----
-
-// AskedQuestion is the parsed first question of an AskUserQuestion payload.
-type AskedQuestion struct {
-	Shape    QuestionShape
-	Question string
-	Header   string
-	Labels   []string
-}
-
-// ParseAskUserQuestion classifies tool_input. The real shape is
-// {"questions":[{question, header, options:[{label, description}], multiSelect}]}
-// (Spike 1.3g); any other payload is multi or unknown and not replyable. An
-// absent multiSelect is unknown, never single.
-func ParseAskUserQuestion(toolInput map[string]interface{}) AskedQuestion {
-	raw, ok := toolInput["questions"].([]interface{})
-	if !ok || len(raw) == 0 {
-		return AskedQuestion{Shape: QuestionShapeUnknown}
-	}
-	first, ok := raw[0].(map[string]interface{})
-	if !ok {
-		return AskedQuestion{Shape: QuestionShapeUnknown}
-	}
-	out := AskedQuestion{Shape: QuestionShapeUnknown}
-	out.Question, _ = first["question"].(string)
-	out.Header, _ = first["header"].(string)
-	opts, _ := first["options"].([]interface{})
-	for _, o := range opts {
-		if m, ok := o.(map[string]interface{}); ok {
-			label, _ := m["label"].(string)
-			out.Labels = append(out.Labels, label)
-		}
-	}
-	if len(raw) > 1 {
-		out.Shape = QuestionShapeMulti
-		return out
-	}
-	multi, present := first["multiSelect"].(bool)
-	switch {
-	case !present:
-		out.Shape = QuestionShapeUnknown
-	case multi:
-		out.Shape = QuestionShapeMulti
-	case replyableLabels(out.Labels) && strings.TrimSpace(out.Question) != "" && strings.TrimSpace(out.Header) != "":
-		out.Shape = QuestionShapeSingle
-	}
-	return out
-}
-
-func replyableLabels(labels []string) bool {
-	if len(labels) < 1 || len(labels) > pendingQuestionMaxOptions {
-		return false
-	}
-	for _, l := range labels {
-		if strings.TrimSpace(l) == "" || utf8.RuneCountInString(l) > pendingQuestionMaxLabelRunes {
-			return false
-		}
-	}
 	return true
 }
 
