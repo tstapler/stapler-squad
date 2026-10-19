@@ -18,9 +18,14 @@ import (
 	"time"
 )
 
-const installComplete = ".install-complete"
+const (
+	installComplete = ".install-complete"
+	// installStamp is the freshness marker the Makefile keys on (Bun leaves no equivalent of
+	// pnpm's node_modules/.modules.yaml); touched on every successful run.
+	installStamp = ".ssq-install-stamp"
+)
 
-// Options configures Run. Install runs `pnpm install --frozen-lockfile` in a directory;
+// Options configures Run. Install runs `bun install --frozen-lockfile` in a directory;
 // it is injectable so tests stay fast and offline.
 type Options struct {
 	WebAppDir  string
@@ -35,10 +40,11 @@ func (o Options) logf(format string, args ...any) {
 	fmt.Fprintf(o.Log, "shared-node-modules: "+format+"\n", args...)
 }
 
-// Run links <WebAppDir>/node_modules at a shared install keyed by the lockfile plus the
-// content of every local file: dependency (pnpm's lockfile records those with no content
+// Run links <WebAppDir>/node_modules at a shared install keyed by bun.lock, bunfig.toml and
+// the content of every local file: dependency (bun.lock records those with no content
 // digest, so the lockfile alone would let a worktree that edited one serve another's
-// stale copy).
+// stale copy). The Bun isolated tree uses relative symlinks, so it stays valid after being
+// moved or symlinked elsewhere.
 //
 // A pre-existing real node_modules (every worktree that installed before this tool
 // existed) is verified with a frozen-lockfile install, then moved into the shared store,
@@ -46,13 +52,16 @@ func (o Options) logf(format string, args ...any) {
 func Run(o Options) error {
 	nm := filepath.Join(o.WebAppDir, "node_modules")
 	if o.Disabled {
-		o.logf("STAPLER_SQUAD_SHARED_NODE_MODULES=0, doing a plain local pnpm install")
+		o.logf("STAPLER_SQUAD_SHARED_NODE_MODULES=0, doing a plain local bun install")
 		if isSymlink(nm) {
 			if err := os.Remove(nm); err != nil {
 				return err
 			}
 		}
-		return o.Install(o.WebAppDir)
+		if err := o.Install(o.WebAppDir); err != nil {
+			return err
+		}
+		return touchStamp(nm)
 	}
 
 	deps, err := localFileDeps(o.WebAppDir)
@@ -60,9 +69,17 @@ func Run(o Options) error {
 		return err
 	}
 
+	if exists(filepath.Join(nm, ".modules.yaml")) && !isSymlink(nm) {
+		// A pnpm-built tree is the wrong layout to adopt; drop it and install fresh.
+		o.logf("discarding legacy pnpm node_modules (pre-Bun layout)")
+		if err := os.RemoveAll(nm); err != nil {
+			return err
+		}
+	}
+
 	migrating := exists(nm) && !isSymlink(nm)
 	if migrating {
-		o.logf("node_modules exists as a real directory (pre-dates shared-node-modules); verifying it against pnpm-lock.yaml before migrating it into the shared store")
+		o.logf("node_modules exists as a real directory (pre-dates shared-node-modules); verifying it against bun.lock before migrating it into the shared store")
 		// A genuine package.json/lockfile divergence fails here, before anything is mutated.
 		if err := o.Install(o.WebAppDir); err != nil {
 			return fmt.Errorf("verifying existing node_modules: %w", err)
@@ -75,7 +92,7 @@ func Run(o Options) error {
 	}
 	shared := filepath.Join(o.SharedRoot, key)
 	if linkedAt(nm, shared) {
-		return nil
+		return touchStamp(nm)
 	}
 
 	if err := o.ensureSharedInstall(shared, key, deps, migrating); err != nil {
@@ -135,8 +152,22 @@ func linkNodeModules(o Options, nm, shared string) error {
 	if err := os.Symlink(target, nm); err != nil {
 		return err
 	}
+	if err := touchStamp(nm); err != nil {
+		return err
+	}
 	o.logf("linked node_modules -> %s", target)
 	return nil
+}
+
+// touchStamp refreshes the Makefile's freshness marker inside node_modules (through the
+// symlink when node_modules is one).
+func touchStamp(nm string) error {
+	stamp := filepath.Join(nm, installStamp)
+	if err := os.WriteFile(stamp, nil, 0o644); err != nil {
+		return err
+	}
+	now := time.Now()
+	return os.Chtimes(stamp, now, now)
 }
 
 // localFileDeps returns the file:-protocol dependency directories declared in
@@ -168,15 +199,17 @@ func localFileDeps(webAppDir string) ([]string, error) {
 	return dirs, nil
 }
 
-// contentKey hashes pnpm-lock.yaml plus every file under each local dependency directory.
+// contentKey hashes bun.lock, bunfig.toml (when present) plus every file under each local dependency directory.
 // Only file content and relative paths count, not modes or mtimes.
 func contentKey(webAppDir string, deps []string) (string, error) {
 	h := sha256.New()
-	lock, err := fileDigest(filepath.Join(webAppDir, "pnpm-lock.yaml"))
-	if err != nil {
-		return "", err
+	for _, name := range manifestFiles(webAppDir) {
+		sum, err := fileDigest(filepath.Join(webAppDir, name))
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "%s\x00%s\n", name, sum)
 	}
-	fmt.Fprintf(h, "pnpm-lock.yaml\x00%s\n", lock)
 	for _, dep := range deps {
 		root := filepath.Join(webAppDir, dep)
 		if info, err := os.Stat(root); err != nil || !info.IsDir() {
@@ -205,6 +238,16 @@ func contentKey(webAppDir string, deps []string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// manifestFiles lists the install-defining files that exist: bun.lock always, bunfig.toml
+// when present (it selects the isolated linker, so it changes the tree's layout).
+func manifestFiles(webAppDir string) []string {
+	files := []string{"bun.lock"}
+	if exists(filepath.Join(webAppDir, "bunfig.toml")) {
+		files = append(files, "bunfig.toml")
+	}
+	return files
+}
+
 func fileDigest(path string) (string, error) {
 	f, err := os.Open(path) // #nosec G304 -- paths come from the repo checkout being installed
 	if err != nil {
@@ -218,7 +261,7 @@ func fileDigest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// seedManifest clears shared and copies in package.json, pnpm-lock.yaml and the local
+// seedManifest clears shared and copies in package.json, bun.lock, bunfig.toml and the local
 // file: dependency directories (but not node_modules) for an install to build on.
 func seedManifest(webAppDir, shared string, deps []string) error {
 	if err := os.RemoveAll(shared); err != nil {
@@ -227,7 +270,7 @@ func seedManifest(webAppDir, shared string, deps []string) error {
 	if err := os.MkdirAll(shared, 0o755); err != nil {
 		return err
 	}
-	for _, name := range []string{"package.json", "pnpm-lock.yaml"} {
+	for _, name := range append([]string{"package.json"}, manifestFiles(webAppDir)...) {
 		if err := copyTree(filepath.Join(webAppDir, name), filepath.Join(shared, name)); err != nil {
 			return err
 		}
@@ -274,7 +317,7 @@ func copyTree(src, dst string) error {
 }
 
 // moveDir renames src to dst, falling back to mv(1) when they are on different
-// filesystems (a pnpm node_modules is a large symlink/hardlink tree; mv preserves it).
+// filesystems (a node_modules is a large symlink/hardlink tree; mv preserves it).
 func moveDir(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil

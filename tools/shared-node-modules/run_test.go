@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ func newHarness(t *testing.T) *harness {
 	return &harness{t: t, root: filepath.Join(t.TempDir(), "shared")}
 }
 
-// install stands in for pnpm: it records the call and fabricates a minimal node_modules.
+// install stands in for bun: it records the call and fabricates a minimal node_modules.
 // A FAIL_INSTALL marker simulates a frozen-lockfile divergence, failing before any mutation.
 func (h *harness) install(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "FAIL_INSTALL")); err == nil {
@@ -29,7 +30,7 @@ func (h *harness) install(dir string) error {
 	}
 	h.installs++
 	require.NoError(h.t, os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755))
-	return os.WriteFile(filepath.Join(dir, "node_modules", ".modules.yaml"), nil, 0o644)
+	return os.MkdirAll(filepath.Join(dir, "node_modules", ".bun"), 0o755)
 }
 
 func (h *harness) run(dir string, disabled bool) (string, error) {
@@ -42,7 +43,7 @@ func fixture(t *testing.T, lock, plugin string) string {
 	dir := filepath.Join(t.TempDir(), "web-app")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "my-plugin"), 0o755))
 	write(t, filepath.Join(dir, "package.json"), `{"name":"fixture","devDependencies":{"my-plugin":"file:./my-plugin"}}`)
-	write(t, filepath.Join(dir, "pnpm-lock.yaml"), lock)
+	write(t, filepath.Join(dir, "bun.lock"), lock)
 	write(t, filepath.Join(dir, "my-plugin", "index.js"), plugin)
 	return dir
 }
@@ -179,7 +180,7 @@ func TestConcurrentWorktreesInstallOnce(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(dir, "node_modules", ".modules.yaml"), nil, 0o644)
+		return os.MkdirAll(filepath.Join(dir, "node_modules", ".bun"), 0o755)
 	}
 	dirs := make([]string, 4)
 	for i := range dirs {
@@ -201,4 +202,49 @@ func TestConcurrentWorktreesInstallOnce(t *testing.T) {
 	for _, d := range dirs[1:] {
 		assert.Equal(t, linkTarget(t, dirs[0]), linkTarget(t, d))
 	}
+}
+
+func TestLegacyPnpmTreeIsDiscardedAndReinstalled(t *testing.T) {
+	h := newHarness(t)
+	j := fixture(t, "lock-scenario8", "rule 1")
+	require.NoError(t, os.MkdirAll(filepath.Join(j, "node_modules", ".pnpm"), 0o755))
+	write(t, filepath.Join(j, "node_modules", ".modules.yaml"), "")
+	write(t, filepath.Join(j, "node_modules", "PNPM_MARKER"), "pnpm-era")
+
+	_, err := h.run(j, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, h.installs, "one fresh install, no separate verify step")
+	assert.NoFileExists(t, filepath.Join(j, "node_modules", "PNPM_MARKER"), "pnpm-era tree must not be migrated")
+	assert.DirExists(t, filepath.Join(j, "node_modules", ".bun"))
+}
+
+func TestStampTouchedOnEveryOutcome(t *testing.T) {
+	h := newHarness(t)
+	a := fixture(t, "lock-stamp", "rule 1")
+	stamp := filepath.Join(a, "node_modules", installStamp)
+
+	_, err := h.run(a, false)
+	require.NoError(t, err)
+	assert.FileExists(t, stamp, "fresh link")
+
+	old := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(stamp, old, old))
+	_, err = h.run(a, false)
+	require.NoError(t, err)
+	info, err := os.Stat(stamp)
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().After(old.Add(30*time.Minute)), "fast path must refresh the stamp so make sees node_modules as fresh")
+}
+
+func TestBunfigChangesTheKey(t *testing.T) {
+	a, b := fixture(t, "lock", "rule"), fixture(t, "lock", "rule")
+	write(t, filepath.Join(b, "bunfig.toml"), "[install]\nlinker = \"isolated\"\n")
+
+	ka, err := contentKey(a, nil)
+	require.NoError(t, err)
+	kb, err := contentKey(b, nil)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, ka, kb, "linker settings change the tree layout, so they must change the key")
 }

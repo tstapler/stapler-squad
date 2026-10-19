@@ -1,7 +1,7 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "pnpm run preview -- --port 4321",
+      "startServerCommand": "bun run preview -- --port 4321",
       "startServerReadyPattern": "Preview server running",
       "url": [
         "http://localhost:4321/stapler-squad/",

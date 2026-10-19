@@ -9,7 +9,7 @@ export default getViteConfig({
 		include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
 		// Several integration-style tests (build.test.ts, not-found.test.ts,
 		// check-internal-links.integration.test.ts, check-asset-health's) each
-		// run a real `pnpm run build` into the one shared website/dist/ -- in
+		// run a real `bun run build` into the one shared website/dist/ -- in
 		// parallel test files that races on the same `dist/.prerender` temp
 		// output and corrupts the build. Serializing file execution trades some
 		// wall-clock time for a dist/ that's never written by two builds at once.

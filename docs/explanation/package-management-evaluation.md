@@ -106,7 +106,7 @@ discarded after):
 | `next lint` (ESLint, including the two local `file:` plugins loading through the symlinked tree) | PASS — zero errors (pre-existing warnings only) |
 | `stylelint` + `check-css-vars.mjs` | PASS |
 | Playwright (`npx playwright --version` resolves; browser binaries live in `~/.cache/ms-playwright`, independent of `node_modules` either way) | PASS |
-| `make build`, `make test` (Go suite), `make lint`, `make web-build`, `make test-shell` (new `shared-node-modules.test.sh`), `make lint-shell` — all run against this change's actual implementation, not just the prototype | PASS (all) |
+| `make build`, `make test` (Go suite), `make lint`, `make web-build`, `make test-shell` (`tools/shared-node-modules` Go tests), `make lint-shell` — all run against this change's actual implementation, not just the prototype | PASS (all) |
 
 **Known limitation, flagged rather than silently accepted**: once linked,
 `web-app/node_modules` for a given hash is the *same physical directory* for

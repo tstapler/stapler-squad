@@ -36,10 +36,10 @@ describe('built site reachability', () => {
 		}
 	}, 30_000);
 
-	// Story 1.1.1's own AC: a fresh `pnpm run build` produces dist/index.html
+	// Story 1.1.1's own AC: a fresh `bun run build` produces dist/index.html
 	// with no error. Reuses the same real build this file's beforeAll already
 	// ran, rather than spawning a second one.
-	it('astroBuild_should_ProduceDistIndexHtml_When_PnpmBuildRuns', async () => {
+	it('astroBuild_should_ProduceDistIndexHtml_When_BunBuildRuns', async () => {
 		await expect(access(join(REAL_DIST_DIR, 'index.html'))).resolves.toBeUndefined();
 	});
 });

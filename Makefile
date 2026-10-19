@@ -70,18 +70,19 @@ ifneq ($(wildcard .tool-versions),)
 	@if which asdf >/dev/null 2>&1; then \
 		echo "🔍 asdf detected, ensuring versions from .tool-versions are installed..."; \
 		asdf plugin add nodejs || true; \
+		asdf plugin add bun || true; \
 		asdf install; \
 	fi
 endif
-	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which pnpm >/dev/null 2>&1; then \
+	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which bun >/dev/null 2>&1; then \
 		touch $(ASDF_STAMP); \
 	else \
 		if which brew >/dev/null 2>&1; then \
 			echo "🔍 Missing tools, installing via Homebrew..."; \
 			brew install go buf nodejs; \
-			brew install pnpm; \
+			brew install bun; \
 		else \
-			echo "❌ Error: go/buf/pnpm not found. Install asdf or Homebrew."; \
+			echo "❌ Error: go/buf/bun not found. Install asdf or Homebrew."; \
 			exit 1; \
 		fi; \
 		touch $(ASDF_STAMP); \
@@ -135,7 +136,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 
 registry-generate-frontend: ## Generate frontend feature registry from React component markers
 	@echo "Installing frontend scanner dependencies..."
-	@cd tools/scanner/frontend && pnpm install --silent
+	@cd tools/scanner/frontend && bun install --silent
 	@echo "Scanning frontend features..."
 	@tools/scanner/frontend/node_modules/.bin/ts-node \
 		tools/scanner/frontend/src/main.ts \
@@ -159,10 +160,10 @@ registry-diff: ## Show what would change in registry without writing files (dry 
 docs-features: ## Generate per-feature Markdown docs from the typed catalog
 	@echo "Generating feature docs..."
 	@mkdir -p docs/api/features
-	@cd tools/docs-gen && npm install --silent && npx ts-node --project tsconfig.json generate.ts
+	@cd tools/docs-gen && bun install --silent && bunx ts-node --project tsconfig.json generate.ts
 
 changelog-since: ## Print features introduced since a version: make changelog-since VERSION=1.4.0
-	@cd tools/docs-gen && npx ts-node --project tsconfig.json changelog.ts $(VERSION)
+	@cd tools/docs-gen && bunx ts-node --project tsconfig.json changelog.ts $(VERSION)
 
 e2e-report: ## Generate Allure HTML report from last test run
 	@cd tests/e2e && npx allure generate allure-results --clean -o allure-report
@@ -191,7 +192,7 @@ else
 endif
 	@echo "✅ stapler-squad built successfully"
 
-# Install web-app pnpm dependencies when pnpm-lock.yaml changes. Delegates to
+# Install web-app Bun dependencies when bun.lock changes. Delegates to
 # tools/shared-node-modules, which symlinks node_modules into a dir shared
 # across every git worktree with the same lockfile (keyed by lockfile +
 # local file:-dependency content) instead of a full per-worktree install --
@@ -207,23 +208,23 @@ endif
 # against both states).
 NEEDS_NODE_MODULES_MIGRATION := $(shell [ -e web-app/node_modules ] && [ ! -L web-app/node_modules ] && echo force)
 
-web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
-	@echo "Installing web-app pnpm dependencies..."
+web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
+	@echo "Installing web-app Bun dependencies..."
 	@go run ./tools/shared-node-modules web-app
 
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
 # Build Next.js app to web-app/out
-web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
-	@# Guard: re-install if node_modules was wiped by external tools without touching pnpm-lock.yaml
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) web-app/next.config.ts
+	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/next || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
 		go run ./tools/shared-node-modules web-app; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
-	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
+	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -567,7 +568,7 @@ dev-stack: build ## Start an isolated backend+next-dev DevStack: make dev-stack 
 	$(DEV_STACK_TS_NODE) --compiler-options '$(DEV_STACK_TSC_OPTS)' scripts/dev-stack/launch.ts $(NAME)
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools web-app/node_modules/.modules.yaml ## Generate Go and TypeScript code from proto files
+proto-gen: ensure-tools web-app/node_modules/.ssq-install-stamp ## Generate Go and TypeScript code from proto files
 	@echo "Checking if proto files need regeneration..."
 	@if [ ! -f $(PROTO_STAMP) ] \
 	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
@@ -643,7 +644,7 @@ test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for pac
 	fi
 
 test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
-	cd web-app && BASE=$(or $(BASE),origin/main) pnpm run test:affected
+	cd web-app && BASE=$(or $(BASE),origin/main) bun run test:affected
 
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
@@ -1019,9 +1020,9 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # reachable origin/main; `git fetch origin main` first if it's stale.
 ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
-	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
+	cd web-app && bun run lint:css && bun run lint:css-vars
 	cd tools/scanner && go test ./...
-	cd tools/ci-gates && pnpm install --silent && pnpm test
+	cd tools/ci-gates && bun install --silent && bun run test
 	@echo "✅ ready: local approximation of PR checks complete"
 
 ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
@@ -1046,7 +1047,7 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 # 0.1% leaves a small buffer above that irreducible baseline while still failing on any
 # meaningfully-sized new duplication.
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
-	cd web-app && pnpm run lint:duplicates
+	cd web-app && bun run lint:duplicates
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
@@ -1112,7 +1113,7 @@ demo-gif: assets/demo.gif ## Alias for demo-post-process
 # Declaring it as a file target lets make skip the recording when the webm is
 # already newer than the stapler-squad binary and no source files changed.
 assets/demo.webm: stapler-squad tests/e2e/demo.spec.ts tests/demo/helpers.go
-	@cd tests/e2e && pnpm install --silent
+	@cd tests/e2e && bun install --silent
 	RECORD_DEMO=1 go test ./tests/demo/... -run TestRecordDemo -v -timeout 180s
 
 demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export GIF (assets/demo.webm + assets/demo.gif)
@@ -1121,7 +1122,7 @@ demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export
 validate-env: ensure-tools ## Validate development environment setup
 	@echo "Validating development environment..."
 	@go version
-	@pnpm --version
+	@bun --version
 	@buf --version
 	@which nilaway >/dev/null 2>&1 && echo "✅ nilaway installed" || echo "❌ nilaway missing (run 'make install-tools')"
 	@which staticcheck >/dev/null 2>&1 && echo "✅ staticcheck installed" || echo "❌ staticcheck missing (run 'make install-tools')"

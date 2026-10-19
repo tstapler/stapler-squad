@@ -1,11 +1,11 @@
 // Command shared-node-modules materializes web-app/node_modules as a symlink into a
 // content-addressed directory shared by every git worktree, instead of a full
-// per-worktree pnpm install.
+// per-worktree bun install.
 //
-// Why: pnpm's global store already dedupes package bytes across worktrees, but not the
+// Why: Bun's install cache already dedupes package bytes across worktrees, but not the
 // ~82,000-entry file/symlink tree it materializes into each node_modules, which drove
 // filesystem inode pressure across the many worktrees this repo accumulates. See
-// docs/explanation/package-management-evaluation.md.
+// docs/explanation/package-management-evaluation.md and bun-migration-feasibility.md.
 //
 // Usage:
 //
@@ -54,16 +54,16 @@ func optionsFromEnv(webAppDir string) (Options, error) {
 		WebAppDir:  webAppDir,
 		SharedRoot: root,
 		Disabled:   os.Getenv("STAPLER_SQUAD_SHARED_NODE_MODULES") == "0",
-		Install:    pnpmInstall,
+		Install:    bunInstall,
 		Log:        os.Stdout,
 		Warn:       os.Stderr,
 	}, nil
 }
 
-func pnpmInstall(dir string) error {
+func bunInstall(dir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "pnpm", "install", "--frozen-lockfile")
+	cmd := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile")
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
