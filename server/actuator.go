@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -141,6 +142,7 @@ func handleActuatorMetrics(w http.ResponseWriter, _ *http.Request) {
 			"total_failures":     fp.TotalFailures,
 			"total_zombies":      fp.TotalZombies,
 		},
+		"workflow_engine_bypass_total": session.EngineBypassSnapshot(),
 		"runtime": map[string]any{
 			"goroutines":    runtime.NumGoroutine(),
 			"heap_inuse_mb": float64(m.HeapInuse) / 1024 / 1024,

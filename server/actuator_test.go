@@ -88,10 +88,28 @@ func TestHandleActuatorMetrics_ReturnsExpectedShape(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"blob_cache", "fork_pressure", "runtime"} {
+	for _, key := range []string{"blob_cache", "fork_pressure", "runtime", "workflow_engine_bypass_total"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("missing top-level key %q in /actuator/metrics response", key)
 		}
+	}
+}
+
+func TestHandleActuatorMetrics_ShowsEngineBypassCounter(t *testing.T) {
+	const caller = session.TransitionCaller("actuator_test_caller")
+	session.RecordEngineBypass(caller)
+
+	rec := httptest.NewRecorder()
+	handleActuatorMetrics(rec, httptest.NewRequest(http.MethodGet, "/actuator/metrics", nil))
+
+	var body struct {
+		Bypass map[string]int64 `json:"workflow_engine_bypass_total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Bypass[string(caller)] < 1 {
+		t.Errorf("workflow_engine_bypass_total[%s] = %d, want >= 1", caller, body.Bypass[string(caller)])
 	}
 }
 
