@@ -142,7 +142,7 @@ describe("FilesTab", () => {
       await userEvent.click(await screen.findByTestId("pick"));
       expect(screen.queryByText("Opening pick.go...")).toBeNull();
       const region = await screen.findByText("Opening pick.go...");
-      expect(region.closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+      expect(region.closest("[role=status]")).not.toHaveAttribute("aria-busy"); // busy on a live region can hold its announcement
       act(() => release());
       await waitFor(() => expect(screen.queryByText("Opening pick.go...")).toBeNull());
     });
@@ -158,7 +158,7 @@ describe("FilesTab", () => {
       window.localStorage.setItem(storageKey(h.sessionId, "desktop"), JSON.stringify({ v: 1, active: 0, tabs }));
       render(<FilesTab sessionId={h.sessionId} baseUrl="http://x" />, { wrapper: h.wrapper });
       expect(screen.queryByText("Restoring 3 tabs")).toBeNull();
-      expect((await screen.findByText("Restoring 3 tabs")).closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+      expect((await screen.findByText("Restoring 3 tabs")).closest("[role=status]")).not.toHaveAttribute("aria-busy");
       act(() => release());
       await waitFor(() => expect(screen.queryByText("Restoring 3 tabs")).toBeNull());
     });

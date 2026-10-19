@@ -335,7 +335,7 @@ describe("FileTree – root wait states", () => {
       act(() => { jest.advanceTimersByTime(149); });
       expect(queryByText("Loading files...")).toBeNull();
       act(() => { jest.advanceTimersByTime(1); });
-      expect(queryByText("Loading files...")?.closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+      expect(queryByText("Loading files...")?.closest("[role=status]")).not.toHaveAttribute("aria-busy");
       await act(async () => { reject(new Error("boom /secret")); });
       expect(await findByText("Could not load files: network error")).toBeTruthy();
       mockFetchDirectoryFiles.mockResolvedValueOnce(makeFileResponse([{ path: "src", isDir: true }]));
