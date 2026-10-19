@@ -55,6 +55,7 @@ var reviewedConsumers = map[finding]string{
 	"consumer: " + svcPkgPath + ".watchBacklogItems":                       "backlog item stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".watchWorkflows":                          "workflow stream; ignores notifications",
 	"consumer: " + svcPkgPath + ".start":                                   "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
+	"consumer: " + svcPkgPath + ".Run":                                     "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call
