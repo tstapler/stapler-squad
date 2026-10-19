@@ -17,10 +17,16 @@ import { TrayErrorBoundary } from "./TrayErrorBoundary";
 import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { writeQuietMode } from "@/lib/utils/deckSettings";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
-import { makeHiddenState, makeNotification } from "./__fixtures__/notificationFixtures";
+import { AnnouncerContext } from "@/lib/hooks/useAnnounce";
+import { makeHiddenSession, makeHiddenState, makeNotification, makeStoppedSessions } from "./__fixtures__/notificationFixtures";
 
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlag: () => false,
+}));
+// The real hook settles a GetFeatureFlags promise after the test body and logs an act() warning per render.
+jest.mock("@/lib/hooks/useFeatureFlagValue", () => ({
+  ...jest.requireActual("@/lib/hooks/useFeatureFlagValue"),
+  useFeatureFlagValue: () => true,
 }));
 
 // jsdom has no layout, so the real virtualizer renders nothing. This stand-in
@@ -888,6 +894,35 @@ describe("tray Background segment (Story 5.4)", () => {
     renderTray();
     fireEvent.click(screen.getByTestId("tray-tab-background"));
     expect(screen.getByTestId("background-row")).toHaveTextContent("Session no longer available");
+  });
+
+  it("panel_should_announce_a_new_background_failure_once_and_a_merged_row_count_in_the_polite_region", () => {
+    const announce = jest.fn();
+    const tree = () => (
+      <AnnouncerContext.Provider value={{ announce, announceArrival: jest.fn() }}>
+        <DeckViewportContext.Provider value={{ isInnerScreen: true, isVirtualKeyboardOpen: false }}>
+          <NotificationPanel />
+        </DeckViewportContext.Provider>
+      </AnnouncerContext.Provider>
+    );
+    const sessions = makeStoppedSessions(3);
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions }));
+    mockHistory = [];
+    const view = render(tree());
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+
+    const failed = makeHiddenSession({ id: "review:pr-1042", backgroundOutcome: "failed" });
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions: [...sessions, failed], lastUpdatedAt: Date.now() + 1 }));
+    view.rerender(tree());
+    view.rerender(tree());
+    const failureCalls = announce.mock.calls.filter(([, , key]) => key === "background-failure");
+    expect(failureCalls).toEqual([["1 background session needs attention", "polite", "background-failure"]]);
+
+    const added = makeHiddenSession({ id: "review:new" });
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions: [...sessions, failed, added], lastUpdatedAt: Date.now() + 2 }));
+    view.rerender(tree());
+    fireEvent.click(screen.getByTestId("background-new-pill"));
+    expect(announce).toHaveBeenCalledWith("1 new background session", "polite", "background-new");
   });
 
 });
