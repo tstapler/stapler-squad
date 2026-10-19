@@ -97,6 +97,9 @@ func (r *EntRepository) SetDelivery(ctx context.Context, id uuid.UUID, route dom
 	if err != nil {
 		return false, fmt.Errorf("set delivery %s to %s: %w", id, state, err)
 	}
+	if n > 0 {
+		countGuidanceDelivery(ctx, route, state)
+	}
 	return n > 0, nil
 }
 

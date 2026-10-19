@@ -3,15 +3,36 @@ package services
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // human_activity.go is the signal behind the human_active guard (ADR-004
 // residual risk, Task 3.4f): was a person typing in this pane just now.
+
+// humanActiveRefusals mirrors human_active_refusal_total, the count of answers
+// refused because a person was typing in the pane.
+var (
+	humanActiveRefusals       atomic.Uint64
+	humanActiveRefusalCounter = sync.OnceValue(func() metric.Int64Counter {
+		c, err := telemetry.GetMeter().Int64Counter("human_active_refusal_total",
+			metric.WithDescription("Pane writes refused because a person was typing in the session"))
+		if err != nil {
+			return nil
+		}
+		return c
+	})
+)
+
+// HumanActiveRefusals is the in-process human_active_refusal_total.
+func HumanActiveRefusals() uint64 { return humanActiveRefusals.Load() }
 
 // humanActiveWindow is how recent input must be to refuse a pane write.
 const humanActiveWindow = 5 * time.Second
@@ -93,6 +114,17 @@ func NewHumanActiveGuard(activity *HumanActivity, clients tmuxClientLister) *Hum
 // always attached, so attachment alone says nothing). A list-clients failure
 // drops (b) only.
 func (g *HumanActiveGuard) Active(ctx context.Context, inst *session.Instance) bool {
+	active := g.active(ctx, inst)
+	if active {
+		humanActiveRefusals.Add(1)
+		if c := humanActiveRefusalCounter(); c != nil {
+			c.Add(ctx, 1)
+		}
+	}
+	return active
+}
+
+func (g *HumanActiveGuard) active(ctx context.Context, inst *session.Instance) bool {
 	name := inst.GetTmuxSessionName()
 	if g.activity.Within(name, humanActiveWindow) {
 		return true

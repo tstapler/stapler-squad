@@ -372,6 +372,9 @@ func (r *EntRepository) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID,
 	if err != nil {
 		return false, fmt.Errorf("answer guidance request %s: %w", id, err)
 	}
+	if n > 0 {
+		r.recordGuidanceAnswered(ctx, id)
+	}
 	return n > 0, nil
 }
 

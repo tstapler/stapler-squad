@@ -81,5 +81,8 @@ func (r *EntRepository) AnswerGuidanceRequestOnBehalf(ctx context.Context, id uu
 	if err != nil {
 		return false, fmt.Errorf("answer guidance request %s on behalf of its peer: %w", id, err)
 	}
+	if n > 0 {
+		r.recordGuidanceAnswered(ctx, id)
+	}
 	return n > 0, nil
 }

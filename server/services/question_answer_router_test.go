@@ -166,6 +166,7 @@ func TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFive
 	qid := e.hookRow(inst, colorDialog)
 	e.activity.Record("ssq_visible-typing")
 	e.clock.Advance(2 * time.Second)
+	refusalsBefore := HumanActiveRefusals()
 
 	res := e.answer(inst, qid, replyColorLabel)
 
@@ -173,6 +174,7 @@ func TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFive
 	assert.Equal(t, "human_active", res.Detail)
 	assert.Empty(t, pm.writes(), "zero bytes written")
 	assert.Empty(t, e.row(qid).DeliveryState, "a refusal before any attempt moves no state")
+	assert.Equal(t, refusalsBefore+1, HumanActiveRefusals(), "human_active_refusal_total counted the refusal once")
 
 	e.clock.Advance(4 * time.Second)
 	assert.Equal(t, outApplied, e.answer(inst, qid, replyColorLabel).Outcome, "6 s after the last input the answer proceeds")
