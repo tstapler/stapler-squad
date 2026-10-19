@@ -54,17 +54,20 @@ func optionsFromEnv(webAppDir string) (Options, error) {
 		WebAppDir:  webAppDir,
 		SharedRoot: root,
 		Disabled:   os.Getenv("STAPLER_SQUAD_SHARED_NODE_MODULES") == "0",
-		Install:    bunInstall,
+		Install:    func(dir string) error { return bunInstall(webAppDir, dir) },
 		Log:        os.Stdout,
 		Warn:       os.Stderr,
 	}, nil
 }
 
-func bunInstall(dir string) error {
+// bunInstall installs into target. It runs bun from webAppDir and passes --cwd because
+// version managers like asdf resolve the pinned Bun from the working directory's
+// .tool-versions, which the shared store directory does not have (the shim exits 126).
+func bunInstall(webAppDir, target string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile")
-	cmd.Dir = dir
+	cmd := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile", "--cwd", target)
+	cmd.Dir = webAppDir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
