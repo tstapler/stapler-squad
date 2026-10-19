@@ -18,18 +18,22 @@ const scheduleWakeupToken = "Schedule" + "Wakeup"
 
 // pollingReferences is the number of lines per Go file that mention the
 // client-side wake tool (counts verified 2026-10-17). Every one is a prompt
-// that forbids the tool or a test of that text. New polling loops would add a
+// that forbids the tool, a test of that text, or the receipt counter
+// (agent_schedule_wakeup_calls_total) that measures its use. New polling loops would add a
 // file or raise a count: add durable waits with schedule_wake instead, and
 // reach for this map only when a new prompt must forbid the tool.
 var pollingReferences = map[string]int{
-	"server/mcp/tools_backlog.go":                      6,
-	"server/mcp/tools_backlog_test.go":                 2,
-	"server/mcp/tools_backlog_wait_cap_test.go":        3,
-	"server/services/backlog_service_verdict_steer.go": 2,
-	"session/backlog_commands.go":                      1,
-	"session/backlog_context.go":                       1,
-	"session/backlog_post_review_prompt_test.go":       1,
-	"session/pipeline_mode_seed.go":                    2,
+	"server/mcp/tools_backlog.go":                          6,
+	"server/mcp/tools_backlog_test.go":                     2,
+	"server/mcp/tools_backlog_wait_cap_test.go":            3,
+	"server/services/backlog_service_verdict_steer.go":     2,
+	"server/services/guidance_ack_wiring.go":               4, // PostToolUse receipt counter, not a prompt
+	"server/services/notification_quality_metrics.go":      7, // agent_schedule_wakeup_calls_total
+	"server/services/notification_quality_metrics_test.go": 6,
+	"session/backlog_commands.go":                          1,
+	"session/backlog_context.go":                           1,
+	"session/backlog_post_review_prompt_test.go":           1,
+	"session/pipeline_mode_seed.go":                        2,
 }
 
 func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.T) {
