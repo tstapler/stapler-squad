@@ -1,6 +1,8 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"sync"
@@ -30,7 +32,17 @@ type HookReceiver struct {
 	// Defaults to git.BehindOriginMain; overridable via SetDriftCheckFn so tests can
 	// exercise HandlePostToolUseDriftCheck without a real git repo/network fetch.
 	driftCheckFn func(worktreePath, mainBranch string) (int, error)
+
+	// postToolUse, when set, hears every PostToolUse receipt with the tool name.
+	postToolUse PostToolUseObserver
 }
+
+// PostToolUseObserver is told which tool a session's PostToolUse hook ran for.
+// sessionID is the X-CS-Session-ID header value (the session title).
+type PostToolUseObserver func(ctx context.Context, sessionID, toolName string)
+
+// SetPostToolUseObserver installs the receipt observer; call it before serving.
+func (h *HookReceiver) SetPostToolUseObserver(o PostToolUseObserver) { h.postToolUse = o }
 
 // NewHookReceiver creates a HookReceiver.
 func NewHookReceiver() *HookReceiver {
@@ -70,8 +82,14 @@ func (h *HookReceiver) HandlePreToolUse(w http.ResponseWriter, r *http.Request) 
 func (h *HookReceiver) HandlePostToolUse(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(sessionIDHeader)
 	tool := r.Header.Get("X-CS-Tool-Name")
-	size := h.drainBody(r)
+	body, size := h.readBody(r)
+	if tool == "" {
+		tool = toolNameOf(body) // the generated hook command sets no header; the name is only in the body
+	}
 	log.Info("[hook/post-tool-use]", "session", sessionID, "tool", tool, "bytes", size)
+	if h.postToolUse != nil {
+		h.postToolUse(r.Context(), sessionID, tool)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -81,6 +99,27 @@ func (h *HookReceiver) HandlePromptSubmit(w http.ResponseWriter, r *http.Request
 	size := h.drainBody(r)
 	log.Info("[hook/prompt-submit]", "session", sessionID, "bytes", size)
 	w.WriteHeader(http.StatusOK)
+}
+
+// maxHookBody bounds how much of a hook payload is read.
+const maxHookBody = 64 * 1024
+
+// readBody returns the (bounded) body and its length. The body may hold
+// secrets, so callers extract fields and never log it.
+func (h *HookReceiver) readBody(r *http.Request) ([]byte, int64) {
+	b, _ := io.ReadAll(io.LimitReader(r.Body, maxHookBody))
+	return b, int64(len(b))
+}
+
+// toolNameOf extracts tool_name from a hook payload, or "".
+func toolNameOf(body []byte) string {
+	var p struct {
+		ToolName string `json:"tool_name"`
+	}
+	if json.Unmarshal(body, &p) != nil {
+		return ""
+	}
+	return p.ToolName
 }
 
 // drainBody discards the request body and returns the number of bytes read.

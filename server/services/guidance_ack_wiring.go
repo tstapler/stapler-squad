@@ -72,3 +72,14 @@ func answerRouterDeps(w NotificationActionWiring, acks *GuidanceAckDetector) Ans
 	}
 	return d
 }
+
+// ObservePostToolUse routes a PostToolUse receipt to the detector. sessionID is
+// the hook header value, a session title or UUID.
+func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, toolName string) {
+	if s.guidanceAcks == nil || toolName != askUserQuestion {
+		return
+	}
+	if inst := s.findInstance(sessionID); inst != nil {
+		s.guidanceAcks.Receipt(ctx, inst.GetStableID(), toolName)
+	}
+}

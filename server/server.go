@@ -992,6 +992,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
 	// into autonomous backlog work sessions by spawnSessionAfterGates)
 	hookReceiver := services.NewHookReceiver()
+	if deps.SessionService != nil {
+		hookReceiver.SetPostToolUseObserver(deps.SessionService.ObservePostToolUse)
+	}
 	hookReceiver.RegisterRoutes(srv.mux)
 	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
 
