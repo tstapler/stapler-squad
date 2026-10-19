@@ -156,20 +156,22 @@ export class BackgroundSegment {
   readonly tab: Locator;
   readonly notificationsTab: Locator;
   readonly rows: Locator;
-  readonly summary: Locator;
+  readonly rollup: Locator;
+  readonly stateChips: Locator;
+  readonly connectivity: Locator;
   readonly refresh: Locator;
   readonly error: Locator;
-  readonly stale: Locator;
   readonly emptyHealthy: Locator;
 
   constructor(page: Page) {
     this.tab = page.getByTestId('tray-tab-background');
     this.notificationsTab = page.getByTestId('tray-tab-notifications');
     this.rows = page.getByTestId('background-row');
-    this.summary = page.getByTestId('background-summary');
+    this.rollup = page.getByTestId('background-rollup');
+    this.stateChips = page.getByTestId('background-state-chip');
+    this.connectivity = page.getByTestId('background-connectivity');
     this.refresh = page.getByTestId('background-refresh');
     this.error = page.getByTestId('background-error');
-    this.stale = page.getByTestId('background-stale');
     this.emptyHealthy = page.getByTestId('background-empty-healthy');
   }
 }
