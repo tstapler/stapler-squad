@@ -52,7 +52,10 @@ export interface EngineModeView {
   lastCheckedAt: number | null;
   /** The running engine fell back to built-in rules (sticky until restart). */
   fallbackActive: boolean;
+  /** False when saved edits are not pushed to the running engine. */
   invalidatorWired: boolean;
+  /** False when the engine answered but has no gate: nothing is enforced whatever the flags say. */
+  gateWired: boolean;
   review: EngineReviewView | null;
   /** Feature-flag row for the first class not yet enforced (operators when all are). */
   flagRowId: string;
@@ -152,6 +155,7 @@ function viewFromStatus(resp: GetWorkflowEngineStatusResponse, stale: boolean, l
     lastCheckedAt,
     fallbackActive: resp.fallbackActive,
     invalidatorWired: resp.invalidatorWired,
+    gateWired: resp.gateWired,
     review: reviewFrom(resp),
     flagRowId: CLASS_FLAG_ROW[firstUnenforced],
   };
@@ -166,6 +170,7 @@ function emptyView(kind: "loading" | "unknown"): EngineModeView {
     lastCheckedAt: null,
     fallbackActive: false,
     invalidatorWired: true,
+    gateWired: true,
     review: null,
     flagRowId: CLASS_FLAG_ROW.operator,
   };
@@ -209,12 +214,24 @@ function fallbackAffectsClaim(v: EngineModeView): boolean {
   return v.fallbackActive && (v.kind === "enforced" || v.kind === "partial");
 }
 
+export const INVALIDATOR_NOTE = "Saved edits are not applied to the running engine until it restarts.";
+
+function invalidatorAffectsClaim(v: EngineModeView): boolean {
+  return !v.invalidatorWired && (v.kind === "enforced" || v.kind === "partial");
+}
+
+/** True when the banner may show the green "enforced" state. */
+export function isFullyConfirmedEnforced(v: EngineModeView): boolean {
+  return v.kind === "enforced" && !v.stale && !v.fallbackActive && v.invalidatorWired;
+}
+
 /** Mode sentence shown in the banner (without the Stale suffix). */
 export function bannerSentence(v: EngineModeView): string {
   switch (v.kind) {
     case "loading":
       return "Checking whether these settings are enforced...";
     case "unknown":
+      if (!v.gateWired) return "The workflow engine's gate is not wired, so nothing is enforced. Edits are saved but have no effect.";
       return "Couldn't determine whether these settings are enforced. Treat edits as not applied.";
     case "enforced":
       return "Enforced: edits here change which transitions and gates the backlog allows, for operators, agents and automation. Edges that automation relies on are fixed; their gates are editable.";
@@ -239,6 +256,7 @@ export function bannerText(v: EngineModeView): string {
     bannerSentence(v),
     ago && `Last checked ${ago}; couldn't refresh.`,
     fallbackAffectsClaim(v) && FALLBACK_NOTE,
+    invalidatorAffectsClaim(v) && INVALIDATOR_NOTE,
   ]
     .filter(Boolean)
     .join(" ");

@@ -21,6 +21,7 @@ function bnView(overrides: Partial<EngineModeView> = {}): EngineModeView {
     lastCheckedAt: Date.now(),
     fallbackActive: false,
     invalidatorWired: true,
+    gateWired: true,
     review: null,
     flagRowId: BN_OPERATOR_ROW,
     ...overrides,
@@ -101,6 +102,21 @@ describe("EngineModeBanner", () => {
     expect(screen.getByTestId("engine-mode-banner").textContent).not.toMatch(/Enforced:/);
     fireEvent.click(screen.getByTestId("engine-mode-banner-retry"));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("Unwired gate: says nothing is enforced and offers no Retry", () => {
+    render(<EngineModeBanner view={bnView({ kind: "unknown", gateWired: false })} onRetry={jest.fn()} />);
+    expect(screen.getByTestId("engine-mode-banner")).toHaveTextContent("gate is not wired, so nothing is enforced");
+    expect(screen.getByTestId("engine-mode-banner").textContent).not.toMatch(/Couldn't determine/);
+    expect(screen.queryByTestId("engine-mode-banner-retry")).not.toBeInTheDocument();
+  });
+
+  it("Enforced but invalidator not wired: warning state, not the green check", () => {
+    render(<EngineModeBanner view={{ ...BN_ENFORCED, invalidatorWired: false }} onRetry={jest.fn()} />);
+    const banner = screen.getByTestId("engine-mode-banner");
+    expect(banner).toHaveTextContent("not applied to the running engine");
+    expect(banner).toHaveTextContent("⚠");
+    expect(banner.textContent).not.toContain("✓");
   });
 
   it("Stale: keeps the last value, adds the last-checked note and Retry, never promotes to Enforced", () => {
