@@ -148,7 +148,9 @@ type scanTask struct {
 
 // Scanner is the central coordinator for the unfinished-work background scan.
 type Scanner struct {
-	reader       VCSReader
+	reader VCSReader
+	// flags is the restart-only rollback-unit snapshot, fixed at construction.
+	flags        Flags
 	scanQueue    chan scanTask
 	resultStore  sync.Map // map[string]ScanResult  (key = repoPath+"|"+branch)
 	repoSet      sync.Map // map[string]bool (tracked repo paths, from any source)
@@ -255,14 +257,21 @@ type Scanner struct {
 	mu deadlock.RWMutex
 }
 
+// ScannerOption configures NewScanner and NewScannerWithReader.
+type ScannerOption func(*Scanner)
+
+// WithFlags sets the rollback-unit flags. Without it every flag is off. A
+// *GoGitVCSReader that has no flags of its own adopts them.
+func WithFlags(f Flags) ScannerOption { return func(s *Scanner) { s.flags = f } }
+
 // NewScanner constructs a Scanner. Call Start(ctx) to begin background processing.
-func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
-	return NewScannerWithReader(eventBus, stateStore, &GoGitVCSReader{})
+func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore, opts ...ScannerOption) *Scanner {
+	return NewScannerWithReader(eventBus, stateStore, &GoGitVCSReader{}, opts...)
 }
 
 // NewScannerWithReader constructs a Scanner with an explicit VCSReader.
 // Used in tests to inject a fake or alternative implementation.
-func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader) *Scanner {
+func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader, opts ...ScannerOption) *Scanner {
 	// Register the real reader for debug introspection (see currentReader's
 	// doc comment) — a no-op for fake/test readers that don't match the type.
 	if gg, ok := reader.(*GoGitVCSReader); ok {
@@ -283,9 +292,14 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		maintenanceTickInterval: 1 * time.Minute,
 		fsDebounce:              fsnotifyDebounce,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if gg, ok := reader.(*GoGitVCSReader); ok && gg.scanSkip.flags == nil {
+		gg.setFlags(s.flags)
+	}
 	s.autoSpiderEnabled.Store(true)
-	currentScanner.Store(s)
-	s.gitwatch.watchWorktreeGitdirs = EffectiveFlags().WatchWorktreeGitdirs
+	s.gitwatch.watchWorktreeGitdirs = s.flags.WatchWorktreeGitdirs
 	return s
 }
 

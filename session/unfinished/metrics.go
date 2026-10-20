@@ -69,7 +69,7 @@ func DirtyFullWalkTotal(r FullWalkReason) int64 {
 // against it now start exporting retroactively once a real MeterProvider is
 // installed later (see telemetry.Initialize). Call once per process; calling
 // it more than once registers duplicate instruments.
-func RegisterMetrics() error {
+func RegisterMetrics(s *Scanner) error {
 	meter := telemetry.GetMeter()
 
 	hits, err := meter.Int64ObservableGauge("unfinished.blob_cache.hits",
@@ -143,5 +143,5 @@ func RegisterMetrics() error {
 	if err != nil {
 		return err
 	}
-	return registerRepostateMetrics(meter, collectRepostateInputs)
+	return registerRepostateMetrics(meter, func() repostateInputs { return collectRepostateInputs(s) })
 }

@@ -86,13 +86,17 @@ func (s *scanSkipState) now() time.Time {
 	return time.Now()
 }
 
-// effectiveFlags is this reader's flag view.
+// effectiveFlags is this reader's flag view; a reader nobody gave flags runs
+// with every rollback unit off.
 func (g *GoGitVCSReader) effectiveFlags() Flags {
 	if f := g.scanSkip.flags; f != nil {
 		return *f
 	}
-	return EffectiveFlags()
+	return Flags{}
 }
+
+// setFlags fixes the reader's flags. Call it before the reader is shared.
+func (g *GoGitVCSReader) setFlags(f Flags) { g.scanSkip.flags = &f }
 
 // ScanSkipStats returns the engagement counters.
 func (g *GoGitVCSReader) ScanSkipStats() ScanSkipStats {

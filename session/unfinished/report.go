@@ -48,11 +48,11 @@ type Report struct {
 	SignatureSkip        map[string]int64       `json:"signature_skip"`
 }
 
-// BuildReport snapshots every counter. With no reader or scanner registered
-// every number is 0 and the cache keys are still present.
-func BuildReport() Report {
-	in := collectRepostateInputs()
-	f := EffectiveFlags()
+// BuildReport snapshots every counter of s. A nil scanner reports every number
+// as 0 and still lists the cache keys.
+func BuildReport(s *Scanner) Report {
+	in := collectRepostateInputs(s)
+	f := s.flagsOrOff()
 	r := Report{
 		CommitParentsReader: commitParentsImpl,
 		Flags: map[string]bool{
@@ -109,7 +109,7 @@ func BuildReport() Report {
 		r.ParityMismatchTotal[field.String()] = in.parity.Mismatch[field]
 		r.ParityTransientTotal[field.String()] = in.parity.Transient[field]
 	}
-	if s := currentScanner.Load(); s != nil {
+	if s != nil {
 		r.ShadowVerifyEvery = s.shadowEvery()
 	}
 	return r
@@ -123,12 +123,12 @@ func cacheReport(c repostate.CacheStats) CacheReport {
 // LogStartup emits the single INFO line naming the parents reader, the
 // effective flags and the shadow-verify rate. Call it once at server startup;
 // never from the scan loop (hot-poll log rule).
-func LogStartup() { logStartup(log.Info) }
+func LogStartup(s *Scanner) { logStartup(s, log.Info) }
 
-func logStartup(info func(msg string, args ...any)) {
-	f := EffectiveFlags()
+func logStartup(s *Scanner, info func(msg string, args ...any)) {
+	f := s.flagsOrOff()
 	every := 0
-	if s := currentScanner.Load(); s != nil {
+	if s != nil {
 		every = s.shadowEvery()
 	}
 	info("unfinished scanner configured",

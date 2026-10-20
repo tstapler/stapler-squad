@@ -132,7 +132,7 @@ func (s *Scanner) readerFlags() Flags {
 	if v, ok := s.reader.(flagView); ok {
 		return v.effectiveFlags()
 	}
-	return EffectiveFlags()
+	return s.flags
 }
 
 // oracleReader is the optional VCSReader capability that runs the legacy

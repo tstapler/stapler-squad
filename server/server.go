@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/telemetry"
 
 	"github.com/google/uuid"
@@ -56,6 +57,7 @@ type Server struct {
 	addr                       atomic.Pointer[string]
 	httpServer                 *http.Server
 	mux                        *http.ServeMux
+	unfinishedScanner          *unfinished.Scanner             // serves /actuator/unfinished-scanner; nil without deps
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
 	requiresAuth               bool                            // explicit: a real validator is wired
@@ -198,6 +200,7 @@ const sessionHealthCheckInterval = 15 * time.Second
 // active streaming connections to close.
 func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context.Context) {
 	srv.hookIPC = newHookIPCState(deps)
+	srv.unfinishedScanner = deps.UnfinishedScanner
 	srv.shutdownHooks = append(srv.shutdownHooks, srv.hookIPC.Close)
 
 	// Start background components

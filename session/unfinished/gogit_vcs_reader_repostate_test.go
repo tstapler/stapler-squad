@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
@@ -35,16 +34,6 @@ func TestRepoKey_ShouldBeCanonical_WhenOpenedThroughReaderViaMainSymlinkAndLinke
 		assert.Equal(t, want, ws.CommonDirKey(), name)
 	}
 	assert.Len(t, g.gogitstoreRegistry().RefCounts(), 1, "one registry entry for all three routes")
-}
-
-// withSharedCommitState publishes shared_commit_state=on for one test and
-// restores the previous snapshot. Callers must not be parallel: the snapshot
-// is process-global.
-func withSharedCommitState(t *testing.T, on bool) {
-	t.Helper()
-	prev := flagsSnapshot.Load()
-	SetFlags(config.UnfinishedCaches{SharedCommitState: on})
-	t.Cleanup(func() { flagsSnapshot.Store(prev) })
 }
 
 // assertRefsBalanced fails the test at cleanup unless every registry ref count
@@ -102,9 +91,8 @@ func (p *stateProduct) Bytes() int64 { return p.bytes }
 func (p *stateProduct) Drop()        { *p.log = append(*p.log, p.name); p.bytes = 0 }
 
 func TestRepoState_ShouldSurviveSiblingEviction_WhenOneOfThreeCachedReposPruned(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := newWorktrees(t, 3)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 
 	states := make([]*repostate.RepoState, 0, len(paths))
@@ -134,9 +122,8 @@ func TestRepoState_ShouldSurviveSiblingEviction_WhenOneOfThreeCachedReposPruned(
 }
 
 func TestFlagOff_ShouldNeverTouchExtensionSlot_WhenSharedCommitStateFalse(t *testing.T) {
-	withSharedCommitState(t, false)
 	paths := newWorktrees(t, 2)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: false}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 	for _, p := range paths {
 		entry, err := g.openRepoEntry(p)
@@ -153,8 +140,7 @@ func TestFlagOff_ShouldNeverTouchExtensionSlot_WhenSharedCommitStateFalse(t *tes
 }
 
 func TestPruneToMemoryBudget_ShouldDropProductsThenGraphThenInterner_WhenOverBudget(t *testing.T) {
-	withSharedCommitState(t, true)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 	entry, err := g.openRepoEntry(newWorktrees(t, 1)[0])
 	require.NoError(t, err)
@@ -177,8 +163,7 @@ func TestPruneToMemoryBudget_ShouldDropProductsThenGraphThenInterner_WhenOverBud
 }
 
 func TestClearCache_ShouldDropAllRepoStateProducts(t *testing.T) {
-	withSharedCommitState(t, true)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 	entry, err := g.openRepoEntry(newWorktrees(t, 1)[0])
 	require.NoError(t, err)
@@ -190,9 +175,8 @@ func TestClearCache_ShouldDropAllRepoStateProducts(t *testing.T) {
 }
 
 func TestForgetWorktree_ShouldNotEvictSharedReach_WhenSiblingStillUsesIt(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := newWorktrees(t, 2)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 	entry, err := g.openRepoEntry(paths[0])
 	require.NoError(t, err)
@@ -211,17 +195,15 @@ func TestForgetWorktree_ShouldNotEvictSharedReach_WhenSiblingStillUsesIt(t *test
 }
 
 func TestRefsBalanced_ShouldReturnToZero_WhenRandomOpenEvictForgetClearInterleaved(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := newWorktrees(t, 6)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 	interleaveWorktrees(t, g, paths, 200, rand.New(rand.NewSource(42)))
 }
 
 func TestRefsBalanced_ShouldReturnToZero_When24WorktreesOpenedEvictedForgotten(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := newWorktrees(t, 24)
-	g := &GoGitVCSReader{}
+	g := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, g)
 	for _, p := range paths {
 		entry, err := g.openRepoEntry(p)

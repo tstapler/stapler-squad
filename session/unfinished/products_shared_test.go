@@ -7,9 +7,8 @@ import (
 )
 
 func TestAheadBehind_ShouldHitSharedMemoWithNoWalk_WhenSecondWorktreeSameHeadAndBase(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 2)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
@@ -34,9 +33,8 @@ func TestAheadBehind_ShouldHitSharedMemoWithNoWalk_WhenSecondWorktreeSameHeadAnd
 }
 
 func TestAheadBehind_ShouldWalkPerWorktree_WhenSharedCommitStateFlagOffControl(t *testing.T) {
-	withSharedCommitState(t, false)
 	paths := clockedWorktrees(t, 2)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: false})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
@@ -60,9 +58,8 @@ func TestAheadBehind_ShouldWalkPerWorktree_WhenSharedCommitStateFlagOffControl(t
 }
 
 func TestAheadBehind_ShouldOnlyRerunPhase1_WhenHashesUnchangedAfterTTL(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 1)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	r.Track(t, paths[0])
 	if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
 		t.Fatal(err)
@@ -89,7 +86,6 @@ func TestAheadBehind_ShouldOnlyRerunPhase1_WhenHashesUnchangedAfterTTL(t *testin
 }
 
 func TestCommitMessages_ShouldDecodeEachAheadCommitOnce_WhenThreeWorktreesShareMemos(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 3)
 	r, shared, _ := coldCommitMessages(t, paths)
 	entry, err := r.openRepoEntry(paths[0])

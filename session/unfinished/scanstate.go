@@ -333,7 +333,7 @@ func (s *Scanner) preludeEnabled() bool {
 	if v, ok := s.reader.(flagView); ok {
 		return v.effectiveFlags().ScanSkipPrelude
 	}
-	return EffectiveFlags().ScanSkipPrelude
+	return s.flags.ScanSkipPrelude
 }
 
 type pressureReader interface{ UnderSeverePressure() bool }
@@ -425,10 +425,6 @@ func worktreePaths(wts []WorktreeInfo) []string {
 	return paths
 }
 
-// currentScanner is the process's most recently constructed Scanner, read by
-// the metrics callback (the production process has exactly one).
-var currentScanner atomic.Pointer[Scanner]
-
 // logScanCycle starts the per-Burst debug line and returns the function that
 // emits it: repo, worktrees, duration, decodes and graph rows filled. Disabled
 // (the default level) it costs one level check and no counter reads.
@@ -437,9 +433,9 @@ func (s *Scanner) logScanCycle(repoPath string, worktrees int) func() {
 		return func() {}
 	}
 	started := s.now()
-	decodes0, rows0 := cycleCounters()
+	decodes0, rows0 := s.cycleCounters()
 	return func() {
-		decodes1, rows1 := cycleCounters()
+		decodes1, rows1 := s.cycleCounters()
 		s.logDebug("scan cycle",
 			"repo", repoPath, "worktrees", worktrees,
 			"duration", s.now().Sub(started),

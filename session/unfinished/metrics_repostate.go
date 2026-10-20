@@ -59,11 +59,29 @@ type (
 	graphEpocher      interface{ Load() *repostate.Generation }
 )
 
-// collectRepostateInputs reads the live reader and scanner; with neither (or
+// goGitReader is the scanner's reader when it is the go-git one, else nil.
+// Safe on a nil Scanner.
+func (s *Scanner) goGitReader() *GoGitVCSReader {
+	if s == nil {
+		return nil
+	}
+	r, _ := s.reader.(*GoGitVCSReader)
+	return r
+}
+
+// flagsOrOff is the scanner's flags, all off for a nil Scanner.
+func (s *Scanner) flagsOrOff() Flags {
+	if s == nil {
+		return Flags{}
+	}
+	return s.flags
+}
+
+// collectRepostateInputs reads s's reader and s itself; with no scanner (or
 // with shared_commit_state off) the result is all zero.
-func collectRepostateInputs() repostateInputs {
+func collectRepostateInputs(s *Scanner) repostateInputs {
 	in := newRepostateInputs()
-	if r := currentReader.Load(); r != nil {
+	if r := s.goGitReader(); r != nil {
 		in.repoStates, in.repoBytes = r.repoStateTotals()
 		r.forEachRepoState(func(rs *repostate.RepoState) {
 			in.addGraph(rs)
@@ -80,7 +98,7 @@ func collectRepostateInputs() repostateInputs {
 		redundancyBound:      mergeBaseRedundancyTotal[redundancyBound].Load() + int64(in.graph.RedundancyBound),           //nolint:gosec // counters never approach int64
 		redundancyPrunedMiss: mergeBaseRedundancyTotal[redundancyPrunedMiss].Load() + int64(in.graph.RedundancyPrunedMiss), //nolint:gosec // counters never approach int64
 	}
-	if s := currentScanner.Load(); s != nil {
+	if s != nil {
 		in.scan = s.ScanStateStats()
 		in.parity = s.ParityStats()
 	}
@@ -178,9 +196,9 @@ func DecodedCommitsTotal() int64 { return decodedCommitsTotal.Load() }
 
 // cycleCounters are the two process-wide counters the scan-cycle debug line
 // reports as per-Burst deltas.
-func cycleCounters() (decodes, graphRows int64) {
+func (s *Scanner) cycleCounters() (decodes, graphRows int64) {
 	decodes = DecodedCommitsTotal()
-	if r := currentReader.Load(); r != nil {
+	if r := s.goGitReader(); r != nil {
 		in := newRepostateInputs()
 		r.forEachRepoState(func(rs *repostate.RepoState) { in.addGraph(rs) })
 		graphRows = in.caches["graph"].Misses

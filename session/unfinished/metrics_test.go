@@ -22,7 +22,7 @@ import (
 // observable gauge were registered with a description/unit OTel rejects.
 func TestRegisterMetrics_NoError(t *testing.T) {
 	t.Parallel()
-	if err := RegisterMetrics(); err != nil {
+	if err := RegisterMetrics(nil); err != nil {
 		t.Fatalf("RegisterMetrics: %v", err)
 	}
 }

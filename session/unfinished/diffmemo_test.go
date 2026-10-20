@@ -10,18 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
-	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
-
-// useDiffCounter turns diff_counter on or off for the test and restores the
-// previous snapshot afterwards. Tests using it must not run in parallel.
-func useDiffCounter(t *testing.T, on bool) {
-	t.Helper()
-	prev := flagsSnapshot.Load()
-	t.Cleanup(func() { flagsSnapshot.Store(prev) })
-	SetFlags(config.UnfinishedCaches{DiffCounter: on})
-}
 
 // useDiffMemo installs a fresh process-wide memo whose clock reads `ahead`
 // past the real now. A backdated mtime (testrepo.Age) cannot change ctime, so
@@ -66,10 +56,9 @@ func writeAged(t *testing.T, path, content string) {
 }
 
 func TestFileDiffMemo_ShouldDoZeroBlobReadsAndDiffs_WhenFileUnchanged(t *testing.T) {
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	dir, _ := dirtyRepo(t)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{DiffCounter: true})
 	r.Track(t, dir)
 
 	first, err := r.diffShortstatUncached(dir)
@@ -104,10 +93,9 @@ func TestFileDiffMemo_ShouldDoZeroBlobReadsAndDiffs_WhenFileUnchanged(t *testing
 }
 
 func TestFileDiffMemo_ShouldNotEngage_WhenDiffCounterOff(t *testing.T) {
-	useDiffCounter(t, false)
 	memo := useDiffMemo(t, 0, time.Hour)
 	dir, _ := dirtyRepo(t)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: false}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)
@@ -151,22 +139,20 @@ func TestFileDiffMemo_ShouldMatchLegacyCounts_WhenDiffCounterOn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	useDiffCounter(t, false)
-	want, err := (&GoGitVCSReader{}).diffShortstatUncached(dir)
+	want, err := (readerWithFlags(Flags{DiffCounter: false}, &GoGitVCSReader{})).diffShortstatUncached(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"f0.txt", "f2.txt", "f3.txt", "staged.txt"} {
 		testrepo.Age(t, filepath.Join(dir, name), time.Hour) // keep the 2 s racy guard from bypassing the memo
 	}
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	defer func() {
 		if memo.counters().Hits == 0 {
 			t.Error("memo never hit: the second pass did not exercise it")
 		}
 	}()
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for pass := range 2 { // second pass exercises memo hits
 		got, err := r.diffShortstatUncached(dir)
 		if err != nil {
@@ -214,10 +200,9 @@ func TestFileDiffMemo_ShouldMiss_WhenSizeMtimeCtimeOrInodeChanges(t *testing.T) 
 }
 
 func TestFileDiffMemo_ShouldMiss_WhenEqualLengthEditRestoresMtime(t *testing.T) {
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	dir, path := dirtyRepo(t)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	first, err := r.diffShortstatUncached(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +240,6 @@ func TestFileDiffMemo_ShouldMiss_WhenEqualLengthEditRestoresMtime(t *testing.T) 
 }
 
 func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
-	useDiffCounter(t, true)
 	dir, path := dirtyRepo(t)
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -265,7 +249,7 @@ func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
 	storeTime := fi.ModTime().Add(time.Second)
 	memo := useDiffMemo(t, 0, 0)
 	memo.now = func() time.Time { return storeTime }
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)
@@ -278,11 +262,10 @@ func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
 }
 
 func TestFileDiffMemo_ShouldBeDisabled_WhenCtimeUnavailable(t *testing.T) {
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	memo.stat = func(string) (fileStamp, bool) { return fileStamp{}, false } // the !unix build's behaviour
 	dir, _ := dirtyRepo(t)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)

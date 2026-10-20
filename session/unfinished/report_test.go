@@ -12,9 +12,9 @@ import (
 )
 
 func TestStartupLog_ShouldEmitOneInfoWithParentsReaderAndFlagValues(t *testing.T) {
-	// Not parallel: reads the process-global flag snapshot.
+	t.Parallel()
 	var lines [][]any
-	logStartup(func(msg string, args ...any) { lines = append(lines, append([]any{msg}, args...)) })
+	logStartup(nil, func(msg string, args ...any) { lines = append(lines, append([]any{msg}, args...)) })
 
 	require.Len(t, lines, 1, "exactly one INFO at startup")
 	fields := map[string]any{}
@@ -58,7 +58,7 @@ func TestMetrics_ShouldExposeReachAndProductCaches_WhenRepoStateHasThem(t *testi
 
 func TestBuildReport_ShouldMarshalEveryCacheKey_WhenNothingRegistered(t *testing.T) {
 	t.Parallel()
-	r := BuildReport()
+	r := BuildReport(nil)
 	b, err := json.Marshal(r)
 	require.NoError(t, err)
 
