@@ -297,6 +297,7 @@ export function formReminder(v: EngineModeView): string {
     case "loading":
       return "Mode: checking...";
     case "unknown":
+      if (!v.gateWired) return "Mode: gate not wired. Nothing is enforced; saved edits have no effect.";
       return "Mode: couldn't be determined. Treat saved edits as not applied.";
     case "enforced":
       return fallbackAffectsClaim(v) ? `Mode: Enforced. ${FALLBACK_NOTE}` : "Mode: Enforced.";
@@ -312,7 +313,9 @@ export function formReminder(v: EngineModeView): string {
 /** Confirmation after a successful stage save; never claims enforcement for a class that is not enforced. */
 export function saveConfirmation(v: EngineModeView): string {
   let text: string;
-  if (v.stale || v.kind === "loading" || v.kind === "unknown") {
+  if (v.kind === "unknown" && !v.gateWired && !v.stale) {
+    text = "Saved. Not enforced: the engine's gate is not wired.";
+  } else if (v.stale || v.kind === "loading" || v.kind === "unknown") {
     text = "Saved. Couldn't confirm whether it is enforced.";
   } else if (v.kind === "enforced") {
     text = "Saved and enforced";

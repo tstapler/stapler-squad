@@ -219,6 +219,12 @@ describe("formReminder and saveConfirmation (UX-41, UX-52)", () => {
     );
   });
 
+  it("names an unwired gate in the reminder and the save confirmation", () => {
+    const v = bnView({ kind: "unknown", gateWired: false });
+    expect(formReminder(v)).toContain("gate not wired");
+    expect(saveConfirmation(v)).toContain("gate is not wired");
+  });
+
   it("never renders an empty reminder for any kind", () => {
     for (const [, view] of cases) expect(formReminder(view).length).toBeGreaterThan(0);
   });
