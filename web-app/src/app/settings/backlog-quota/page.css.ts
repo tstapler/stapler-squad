@@ -151,7 +151,7 @@ export const primaryButton = style([
   {
     background: vars.color.primary,
     borderColor: vars.color.primary,
-    color: vars.color.textInverse,
+    color: vars.color.primaryText,
     fontWeight: 500,
   },
 ]);
