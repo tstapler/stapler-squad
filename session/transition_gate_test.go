@@ -825,3 +825,23 @@ func TestCreateBacklogItemForDebug_CreatesAtAnyStatus_AndCountsDebugCreate(t *te
 	require.Equal(t, string(BacklogStatusReview), h.status(t, item.ID))
 	require.Equal(t, before+1, EngineBypassCount(CallerDebugCreate))
 }
+
+func TestGatedUnarchive_StaleObservedLosesCAS_AndNeverArchivedIsRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeOff)
+	item := h.newItem(t, BacklogStatusReady)
+	_, err := h.storage.GatedArchive(ctx, TransitionRequest{Caller: CallerOperatorArchiveRPC, ItemID: item.ID})
+	require.NoError(t, err)
+	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	h.moveRaw(t, item.ID, BacklogStatusInProgress)
+	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID, Observed: observed})
+	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID), "a stale unarchive must not reset a live item")
+
+	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID})
+	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
+}

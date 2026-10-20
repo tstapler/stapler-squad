@@ -486,7 +486,8 @@ func (s *Storage) resolveLiftedDenial(ctx context.Context, itemID string) {
 // and the caller's own guard input is not reproducible here. The verdict's
 // reason is returned so a changed reason can be reported. It reports not
 // denied when the denial can no longer bind: no gate wired, an unregistered
-// caller, or the caller's class not enforced.
+// caller, or the caller's class not enforced. It decides quietly: the denial
+// was counted when it was recorded, so a probe adds nothing to the soak signal.
 func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (gateVerdict, bool) {
 	g := s.gate.Load()
 	spec, known := LookupTransitionCaller(TransitionCaller(d.Caller))
@@ -497,7 +498,7 @@ func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d do
 	if err != nil {
 		return gateVerdict{}, true // unknown: keep holding, retry next tick
 	}
-	v := decideTransition(g.engine.ForClass(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
+	v := decideTransition(g.engine.ForClassQuiet(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
 	return v, v.Err != nil
 }
 

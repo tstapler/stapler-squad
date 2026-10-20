@@ -86,6 +86,8 @@ The service holds these values as constants (`session/workflow_engine_soak.go`),
 | Floor, per class | 100 `path=transition` calls |
 | Review date | 14 days after the earliest binary start |
 
+The floor (100) and N (20) count engine calls, not transitions. A gated transition records two `path=transition` samples (`CanTransition` and `ValidateGates`), so they correspond to about 50 and 10 real transitions (fewer when a graph denial stops the call before `ValidateGates`).
+
 The verdict for a class is READY only when all of these hold:
 
 1. The class has evidence. Zero recorded calls is NOT READY (check that shadow is on).

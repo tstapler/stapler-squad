@@ -1107,7 +1107,7 @@ func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondi
 
 // RawUnarchiveBacklogItem clears archived_at and restores the item to "idea".
 func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.rawUnarchiveBacklogItem(ctx, id)
+	return s.repo.rawUnarchiveBacklogItem(ctx, id, "")
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.

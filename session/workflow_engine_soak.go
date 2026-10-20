@@ -275,20 +275,32 @@ var alarmClasses = map[string]bool{
 // checkAlarms applies rules (a) and (b): seeded windows alarm on any
 // divergence on either path; edited windows need every divergent edge acked.
 func (e *soakEvaluation) checkAlarms() {
-	counts := map[string]int64{}
+	counts, seeded := map[string]int64{}, map[string]int64{}
 	for key, n := range e.cl.Divergence {
 		parts := strings.Split(key, "|") // Method|class|config|path
-		if len(parts) == 4 && alarmClasses[parts[1]] {
-			counts[parts[1]] += n
+		if len(parts) != 4 || !alarmClasses[parts[1]] {
+			continue
+		}
+		counts[parts[1]] += n
+		if parts[2] == ConfigSeeded {
+			seeded[parts[1]] += n
 		}
 	}
 	if len(counts) == 0 {
 		return
 	}
 	e.v.Alarms = counts
-	if e.v.ConfigWindow == ConfigSeeded {
-		e.notReady = append(e.notReady, fmt.Sprintf("divergence under the seeded config %s; repro records: %s", formatCounts(counts), e.reproPath()))
-		return
+	// A divergence recorded under the seeded config is a bug whatever the window
+	// label says; only edited-config divergence can be acknowledged.
+	if e.v.ConfigWindow == ConfigSeeded || len(seeded) > 0 {
+		shown := counts
+		if e.v.ConfigWindow != ConfigSeeded {
+			shown = seeded
+		}
+		e.notReady = append(e.notReady, fmt.Sprintf("divergence under the seeded config %s; repro records: %s", formatCounts(shown), e.reproPath()))
+		if e.v.ConfigWindow == ConfigSeeded {
+			return
+		}
 	}
 	acked := toSet(e.p.Acks.DivergentEdges)
 	for _, k := range sortedKeys(e.cl.Edges) {

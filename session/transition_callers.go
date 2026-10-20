@@ -249,7 +249,7 @@ var transitionCallers = []TransitionCallerSpec{
 		site(fileSync, "BacklogService.AttachSessionToItem", 1)),
 	withOrigin(specSys(CallerSyncLoopBackward, LegacyEngine, GuardsBuiltIn,
 		[]SystemEdge{edge(stIdea, stArchived), edge(stRefining, stArchived), edge(stReady, stArchived), edge(stQueued, stArchived)},
-		site(fileSessSync, "SyncLoop.transitionBackward", 1)), fileSessSync, "SyncLoop.SyncOne"),
+		site(fileSessSync, "SyncLoop.transitionBackward", 1)), fileSessSync, "SyncLoop.backwardPrecheckAllows"),
 
 	// System: storage-direct today. toStatus is assigned once (stIdea->stReady).
 	specUnchecked(CallerAutonomousComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileAutonomous, "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1)),
