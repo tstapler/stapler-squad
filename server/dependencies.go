@@ -1461,6 +1461,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for range ticker.C {
 			recoverAndLog("backlog reconcile ticker", func() { backlogLifecycleListener.ReconcileStuck(ctx) })
 			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
+			recoverAndLog("wake reconcile ticker", func() { runWakeReconcile(ctx) })
 		}
 	}()
 

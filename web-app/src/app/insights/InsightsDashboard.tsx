@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, Suspense } from "react";
-import dynamic from "next/dynamic";
+import { lazyComponent } from "@/lib/lazy";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
 import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
@@ -43,21 +43,21 @@ import {
 } from "./InsightsDashboard.css";
 
 // Lazy-load recharts and its D3 dependencies (~1.2MB) only when the insights page is visited.
-const DailySpendChart = dynamic(
-  () => import("./DailySpendChart").then((m) => m.DailySpendChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const DailySpendChart = lazyComponent(
+  () => import("./DailySpendChart").then((m) => ({ default: m.DailySpendChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
-const ModelBreakdownChart = dynamic(
-  () => import("./ModelBreakdownChart").then((m) => m.ModelBreakdownChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const ModelBreakdownChart = lazyComponent(
+  () => import("./ModelBreakdownChart").then((m) => ({ default: m.ModelBreakdownChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
-const ModelOverTimeChart = dynamic(
-  () => import("./ModelOverTimeChart").then((m) => m.ModelOverTimeChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const ModelOverTimeChart = lazyComponent(
+  () => import("./ModelOverTimeChart").then((m) => ({ default: m.ModelOverTimeChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
-const StageCostChart = dynamic(
-  () => import("./StageCostChart").then((m) => m.StageCostChart),
-  { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
+const StageCostChart = lazyComponent(
+  () => import("./StageCostChart").then((m) => ({ default: m.StageCostChart })),
+  { loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
 
 function friendlyError(err: string): string {

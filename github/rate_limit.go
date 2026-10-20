@@ -288,6 +288,19 @@ func (r *RateLimiter) AdmitOrigin(origin CallOrigin, resource string) (bool, str
 	if !ok {
 		return true, ""
 	}
+	// A reading past its own reset window is stale: GitHub has already
+	// replenished this resource's bucket server-side, but nothing refreshes
+	// our copy of it until some request for resource actually reaches
+	// GitHub. A rejected background call never dispatches (this check runs
+	// before the request is sent), so it can never be the thing that
+	// refreshes the very reading that's rejecting it — background traffic
+	// for a resource whose reset has passed would otherwise stay rejected
+	// forever, waiting on an OriginInteractive call for that same resource
+	// that may never come. Treat an expired reading as "no data," the same
+	// as the ok == false case above, rather than "exhausted."
+	if !quota.ResetAt.IsZero() && !time.Now().Before(quota.ResetAt) {
+		return true, ""
+	}
 	if quota.Remaining < quota.Limit*backgroundHeadroomPercent/100 {
 		return false, fmt.Sprintf("background headroom reserved for resource %s", resource)
 	}

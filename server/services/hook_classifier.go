@@ -17,7 +17,16 @@ type HookClassifier struct {
 	analytics    *AnalyticsStore
 	contextCache *HookContextCache
 	deduper      *HookDeduper
+	replier      HookReplier
 }
+
+// SetHookReplier lets the classifier answer AskUserQuestion hooks from stored
+// answers (ADR-005 rung 1). Call it before serving.
+func (h *HookClassifier) SetHookReplier(r HookReplier) { h.replier = r }
+
+// SessionUUIDEnv is the variable a hook sends to name the Stapler Squad session
+// it runs in; it is the only context an AskUserQuestion hook needs.
+const SessionUUIDEnv = "STAPLER_SESSION_UUID"
 
 func NewHookClassifier(policy classifier.Classifier, analytics *AnalyticsStore) *HookClassifier {
 	service := &HookClassifier{
@@ -47,6 +56,12 @@ func (h *HookClassifier) classify(request hookipc.ClassificationEnvelope) (hooki
 		InstanceFingerprint: request.InstanceFingerprint,
 		RequestID:           request.RequestID,
 		Source:              hookipc.DecisionSourcePrimary,
+	}
+	if h != nil && strings.EqualFold(request.Payload.ToolName, "AskUserQuestion") && h.replier != nil {
+		if out := h.replier.Reply(context.Background(), request.Context.Env[SessionUUIDEnv], request.Payload.ToolInput); out != nil {
+			reply.Output, reply.Source = out, hookipc.DecisionSourcePrimary
+			return reply, nil
+		}
 	}
 	if h == nil || h.policy == nil || strings.EqualFold(request.Payload.ToolName, "AskUserQuestion") {
 		reply.Source = hookipc.DecisionSourceDefer

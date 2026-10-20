@@ -40,9 +40,12 @@ const (
 	auditKindGuardBypass  = "guard_bypass"
 	// auditKindPrune is an operator-triggered history prune apply (plan Story
 	// 2.7): a `requested` line before any row is deleted, a `result` line after.
-	auditKindPrune    = "prune"
-	auditPhaseRequest = "requested"
-	auditPhaseResult  = "result"
+	auditKindPrune = "prune"
+	// auditKindNotificationAction is one InvokeNotificationAction call (Story 2.3):
+	// a `requested` line (Tier B only, before any byte) and a `result` line.
+	auditKindNotificationAction = "notification_action"
+	auditPhaseRequest           = "requested"
+	auditPhaseResult            = "result"
 )
 
 // Degraded-mode label values of hidden_session_audit_degraded_total.
@@ -109,6 +112,14 @@ type AuditLine struct {
 	OptionLabel   string `json:"option_label,omitempty"`
 	QuestionToken string `json:"question_token,omitempty"`
 	Stage         string `json:"stage,omitempty"`
+
+	// Inline action lines (kind notification_action). Channel and CallerKind make
+	// an action with no UI behind it queryable; the answer text is never recorded.
+	Channel    string `json:"channel,omitempty"`
+	CallerKind string `json:"caller_kind,omitempty"`
+	ActionKind string `json:"action_kind,omitempty"`
+	TargetKey  string `json:"target_key,omitempty"`
+	Detail     string `json:"detail,omitempty"`
 
 	// Prune lines (kind prune): counts only, never row content, a title or a
 	// session id.

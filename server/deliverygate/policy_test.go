@@ -149,3 +149,35 @@ func TestDecision_ShouldUseClosedReasonSet_WhenAnyOutcomeProduced(t *testing.T) 
 		}
 	}
 }
+
+// newEmissions lists every notification emission added by the
+// notification-actions-and-agent-messaging project (plan Task 2.2c). A producer
+// that adds an emission adds its row here; a row the gate would not deliver for
+// a hidden session fails the test.
+var newEmissions = []struct {
+	name       string
+	facts      Facts
+	visibility Visibility
+	wantClass  DeliveryClass
+}{
+	{"INPUT_REQUIRED question", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED}, VisibilityHidden, ClassNeedsHuman},
+	{"CONFIRMATION_NEEDED backlog decision", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_CONFIRMATION_NEEDED}, VisibilityHidden, ClassNeedsHuman},
+	{"peer-help escalation as INPUT_REQUIRED", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED}, VisibilityHidden, ClassNeedsHuman},
+	{"wake missed as failure class", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING, Hint: HintFailure}, VisibilityHidden, ClassFailure},
+	{"wake skipped as failure class", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING, Hint: HintFailure}, VisibilityHidden, ClassFailure},
+	{"wake rate-limited as failure class", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING, Hint: HintFailure}, VisibilityHidden, ClassFailure},
+	{"notify_operator reminder (no session binding)", Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_INFO}, VisibilityNotASession, ClassRoutine},
+}
+
+func TestShouldDeliver_ShouldDeliverEveryNewEmission_WhenSessionHiddenOrNotASession(t *testing.T) {
+	t.Parallel()
+	for _, e := range newEmissions {
+		d := ShouldDeliver(e.visibility, e.facts)
+		if d.Outcome != OutcomeDeliver {
+			t.Errorf("%s: outcome %v, want deliver (%+v)", e.name, d.Outcome, d)
+		}
+		if d.Class != e.wantClass {
+			t.Errorf("%s: class %v, want %v", e.name, d.Class, e.wantClass)
+		}
+	}
+}

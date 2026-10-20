@@ -155,7 +155,7 @@ type opencodeLaunchBuilder struct{}
 func (b *opencodeLaunchBuilder) Matches(program string) bool { return isOpencode(program) }
 
 func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
-	parts := []string{base}
+	parts := []string{i.opencodeMCPEnvPrefix() + base}
 	if resumeSessionID != "" {
 		parts = append(parts, "--session", shellQuote(resumeSessionID))
 	}
@@ -652,31 +652,10 @@ func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
 	return i.claudeMCPConfigArgsWithToken(mcpURL, dir, token)
 }
 
+// claudeMCPConfigArgsWithToken adds the session's MCP proof (when a provider is
+// wired) to the credentials; see claudeMCPConfigArgsWithCredentials.
 func (i *Instance) claudeMCPConfigArgsWithToken(mcpURL, configDir, token string) (string, string) {
-	headers := map[string]string{"X-Stapler-Session-UUID": i.UUID}
-	if token != "" {
-		headers["Authorization"] = "Bearer " + token
-	}
-	cfg, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"stapler-squad": map[string]any{
-		"type": "http", "url": mcpURL, "headers": headers,
-	}}})
-	if err != nil { // unreachable: only strings
-		return "--mcp-config", shellQuote("{}")
-	}
-	if token == "" || configDir == "" {
-		return "--mcp-config", shellQuote(string(cfg))
-	}
-	dir := filepath.Join(configDir, "mcp")
-	path := filepath.Join(dir, i.UUID+".json")
-	if err := os.MkdirAll(dir, 0700); err == nil {
-		if err = os.WriteFile(path, cfg, 0600); err == nil {
-			return "--mcp-config", shellQuote(path)
-		}
-	}
-	log.Warn("mcp config: could not write token-bearing config file; launching without Authorization", "path", path)
-	delete(headers, "Authorization")
-	cfg, _ = json.Marshal(map[string]any{"mcpServers": map[string]any{"stapler-squad": map[string]any{"type": "http", "url": mcpURL, "headers": headers}}})
-	return "--mcp-config", shellQuote(string(cfg))
+	return i.claudeMCPConfigArgsWithCredentials(mcpURL, configDir, mcpCredentials{Token: token, Proof: i.mcpProofHeaderValue()})
 }
 
 // resolveMCPServerURLFrom returns the MCP server URL to pass to claude for

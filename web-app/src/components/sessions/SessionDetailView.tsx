@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
 import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package, FileText } from "lucide-react";
-import dynamic from "next/dynamic";
+import { lazyComponent } from "@/lib/lazy";
 import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
 import { VcsPanel } from "./VcsPanel";
@@ -286,10 +286,9 @@ export function useResyncStaggerQueue(
 }
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
-const TerminalOutput = dynamic(
-  () => import("./TerminalOutput").then((mod) => mod.TerminalOutput),
+const TerminalOutput = lazyComponent(
+  () => import("./TerminalOutput").then((mod) => ({ default: mod.TerminalOutput })),
   {
-    ssr: false,
     loading: () => (
       <div style={{ padding: "20px", textAlign: "center" }}>
         Loading terminal...

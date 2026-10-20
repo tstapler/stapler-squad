@@ -298,3 +298,31 @@ func TestAnswerGuidanceRequest_should_RespawnTriage_When_BacklogItemScopeAnswere
 	require.Len(t, notes, 1)
 	assert.Contains(t, notes[0].Message, "yes")
 }
+
+func TestAnswerGuidanceRequest_should_CallAnswerListenerOnce_When_AnswerApplied(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewGuidanceRequestService(storage, nil, nil)
+	var mu sync.Mutex
+	var heard []string
+	svc.SetAnswerListener(func(_ context.Context, id string) {
+		mu.Lock()
+		defer mu.Unlock()
+		heard = append(heard, id)
+	})
+	ctx := context.Background()
+	created, err := svc.CreateGuidanceRequest(ctx, connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
+		Scope: "standalone", QuestionText: "ok?", QuestionType: "short-answer",
+	}))
+	require.NoError(t, err)
+	id := created.Msg.GetRequest().GetId()
+
+	for range 2 {
+		_, err = svc.AnswerGuidanceRequest(ctx, connect.NewRequest(&sessionv1.AnswerGuidanceRequestRequest{Id: id, Answer: "yes"}))
+		require.NoError(t, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{id}, heard, "only the applied answer calls the listener")
+}

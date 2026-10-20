@@ -12,13 +12,21 @@ import { GESTURE_IGNORE_SELECTOR } from "@/lib/hooks/useTerminalGestures";
 import React from "react";
 import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { NotificationPanel } from "./NotificationPanel";
+import { formatClockTime } from "./OfflineBanner";
 import { TrayErrorBoundary } from "./TrayErrorBoundary";
 import { DeckViewportContext } from "@/lib/contexts/deckViewportContext";
 import { writeQuietMode } from "@/lib/utils/deckSettings";
 import type { NotificationHistoryItem } from "@/lib/types/notification";
+import { AnnouncerContext } from "@/lib/hooks/useAnnounce";
+import { makeHiddenSession, makeHiddenState, makeNotification, makeStoppedSessions } from "./__fixtures__/notificationFixtures";
 
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlag: () => false,
+}));
+// The real hook settles a GetFeatureFlags promise after the test body and logs an act() warning per render.
+jest.mock("@/lib/hooks/useFeatureFlagValue", () => ({
+  ...jest.requireActual("@/lib/hooks/useFeatureFlagValue"),
+  useFeatureFlagValue: () => true,
 }));
 
 // jsdom has no layout, so the real virtualizer renders nothing. This stand-in
@@ -70,19 +78,6 @@ jest.mock("@/lib/hooks/useAuditLog", () => ({
     logNotificationPanelClosed: jest.fn(),
   }),
 }));
-
-function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
-  return {
-    id: overrides.id ?? "notif-1",
-    sessionId: "sess-1",
-    sessionName: "my-session",
-    message: "Something happened",
-    timestamp: Date.now(),
-    isRead: false,
-    notificationType: "info",
-    ...overrides,
-  };
-}
 
 let mockHistory: NotificationHistoryItem[] = [];
 let mockIsPanelOpen = true;
@@ -432,7 +427,7 @@ describe("tray", () => {
       expect(screen.queryByTestId("tray-undo-bar")).toBeNull();
 
       const row = screen.getAllByTestId("tray-row")[0];
-      row.focus();
+      act(() => row.focus());
       fireEvent.keyDown(row, { key: "x" });
       expect(screen.getByTestId("tray-undo-bar")).toHaveTextContent("Dismissed 1 notification");
     });
@@ -589,7 +584,7 @@ describe("tray", () => {
       mockConnectivity = { state: "disconnected", isOffline: true };
       mockHistory = [pending("p1"), info("a")];
       renderTray();
-      expect(screen.getByTestId("tray-banner-offline")).toHaveTextContent("Offline - showing cached");
+      expect(screen.getByTestId("tray-banner-offline")).toHaveTextContent("Offline. Showing last known state.");
       expect(screen.getByRole("button", { name: "Mark activity read" })).toHaveAttribute("aria-disabled", "true");
       const approve = screen.getAllByRole("button", { name: /Approve/ })[0];
       expect(approve).toBeDisabled();
@@ -614,7 +609,7 @@ describe("tray", () => {
       mockHistoryError = new Error("x");
       mockHistory = [info("a")];
       renderTray();
-      expect(screen.getByTestId("tray-banner-load-error")).toHaveTextContent("Could not load notifications.");
+      expect(screen.getByTestId("tray-banner-load-error")).toHaveTextContent("Couldn't load notifications. Showing data from");
       expect(screen.queryByTestId("tray-banner-offline")).toBeNull();
       fireEvent.click(within(screen.getByTestId("tray-banner-load-error")).getByRole("button", { name: "Retry" }));
       expect(mockRefresh).toHaveBeenCalled();
@@ -630,7 +625,8 @@ describe("tray", () => {
       mockHistoryLoading = false;
       mockLastUpdatedAt = 1;
       const second = renderTray();
-      expect(screen.getByText("All caught up")).toBeInTheDocument();
+      expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+      expect(screen.getByText("No recent activity.")).toBeInTheDocument();
       second.unmount();
 
       mockHistory = [info("a")];
@@ -656,6 +652,8 @@ describe("tray", () => {
       expect(tray).toHaveAttribute("data-sheet", "expanded");
       expect(tray).not.toHaveAttribute("aria-modal");
       expect(screen.queryByTestId("tray-scrim")).toBeNull();
+      // Presentation rule (ux.md): on a touch phone nothing is a dialog or modal.
+      expect(document.querySelectorAll("[role=dialog],[aria-modal=true]")).toHaveLength(0);
       window.matchMedia = original;
     });
 
@@ -808,15 +806,7 @@ describe("tray", () => {
 
 describe("tray Background segment (Story 5.4)", () => {
   const refresh = jest.fn();
-  const hiddenState = (over: Record<string, unknown> = {}) => ({
-    sessions: [{ id: "review:h1", title: "review:h1", state: "running", updatedAtMs: Date.now() }],
-    departed: [],
-    loading: false,
-    failed: false,
-    lastUpdatedAt: Date.now(),
-    refresh,
-    ...over,
-  });
+  const hiddenState = (over: Record<string, unknown> = {}) => makeHiddenState({ refresh, ...over });
 
   beforeEach(() => {
       mockIsPanelOpen = true;
@@ -865,6 +855,42 @@ describe("tray Background segment (Story 5.4)", () => {
     expect(screen.getByTestId("tray-earlier-count")).toHaveTextContent("2 unread");
   });
 
+  it("needs_you_chip_should_show_for_a_hidden_session_and_move_focus_to_its_needs_you_item", () => {
+    mockHistory = [...mockHistory, pending("p1", "review:h1")];
+    renderTray();
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+    const chip = screen.getByTestId("background-needs-you-chip");
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip).toHaveTextContent("Needs you (1)");
+    fireEvent.click(chip);
+    expect(screen.getByTestId("tray-tab-notifications")).toHaveAttribute("aria-selected", "true");
+    expect(document.activeElement).toBe(document.querySelector('[data-tray-row="p1"]'));
+  });
+
+  it("tablist_should_move_focus_with_arrows_and_name_the_background_tab_by_exception_count_only", () => {
+    const sessions = Array.from({ length: 11 }, (_, i) => ({ id: `review:s${i}`, title: `review:s${i}`, state: "stopped", updatedAtMs: Date.now() - i * 1000 }));
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions }));
+    mockHistory = [makeNotification({ id: "f1", sessionId: "review:s0", sessionName: "review:s0", notificationType: "error" })];
+    renderTray();
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    const notificationsTab = screen.getByRole("tab", { name: "Notifications" });
+    expect(notificationsTab).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("tray-tab-background")).toHaveAttribute("tabindex", "-1");
+    notificationsTab.focus();
+    fireEvent.keyDown(notificationsTab, { key: "ArrowRight" });
+    const bg = screen.getByRole("tab", { name: "Background, 1 needs attention" });
+    expect(bg).toHaveAttribute("aria-selected", "true");
+    expect(bg).toHaveFocus();
+
+    // acknowledged failure and a 12th session: the name stays plain "Background"
+    mockHistory = [makeNotification({ id: "f1", sessionId: "review:s0", sessionName: "review:s0", notificationType: "error", isRead: true })];
+    mockUseBackgroundSessions.mockReturnValue(
+      hiddenState({ sessions: [...sessions, { id: "review:s11", title: "review:s11", state: "stopped", updatedAtMs: Date.now() }] }),
+    );
+    fireEvent.click(screen.getByTestId("tray-tab-notifications"));
+    expect(screen.getByTestId("tray-tab-background")).toHaveAccessibleName("Background");
+  });
+
   it("opening_a_row_should_mark_its_records_read_and_close_the_tray", () => {
     renderTray();
     fireEvent.click(screen.getByTestId("tray-tab-background"));
@@ -880,6 +906,35 @@ describe("tray Background segment (Story 5.4)", () => {
     renderTray();
     fireEvent.click(screen.getByTestId("tray-tab-background"));
     expect(screen.getByTestId("background-row")).toHaveTextContent("Session no longer available");
+  });
+
+  it("panel_should_announce_a_new_background_failure_once_and_a_merged_row_count_in_the_polite_region", () => {
+    const announce = jest.fn();
+    const tree = () => (
+      <AnnouncerContext.Provider value={{ announce, announceArrival: jest.fn() }}>
+        <DeckViewportContext.Provider value={{ isInnerScreen: true, isVirtualKeyboardOpen: false }}>
+          <NotificationPanel />
+        </DeckViewportContext.Provider>
+      </AnnouncerContext.Provider>
+    );
+    const sessions = makeStoppedSessions(3);
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions }));
+    mockHistory = [];
+    const view = render(tree());
+    fireEvent.click(screen.getByTestId("tray-tab-background"));
+
+    const failed = makeHiddenSession({ id: "review:pr-1042", backgroundOutcome: "failed" });
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions: [...sessions, failed], lastUpdatedAt: Date.now() + 1 }));
+    view.rerender(tree());
+    view.rerender(tree());
+    const failureCalls = announce.mock.calls.filter(([, , key]) => key === "background-failure");
+    expect(failureCalls).toEqual([["1 background session needs attention", "polite", "background-failure"]]);
+
+    const added = makeHiddenSession({ id: "review:new" });
+    mockUseBackgroundSessions.mockReturnValue(hiddenState({ sessions: [...sessions, failed, added], lastUpdatedAt: Date.now() + 2 }));
+    view.rerender(tree());
+    fireEvent.click(screen.getByTestId("background-new-pill"));
+    expect(announce).toHaveBeenCalledWith("1 new background session", "polite", "background-new");
   });
 
 });
@@ -1127,7 +1182,7 @@ describe("tray spec gaps (Phase 5)", () => {
     mockClearByIds.mockResolvedValue({ deleted: 1, kept: [] });
     render(tree());
     const headerRow = document.querySelector('[data-tray-row="s1"]') as HTMLElement;
-    headerRow.focus();
+    act(() => headerRow.focus());
 
     fireEvent.keyDown(headerRow, { key: "Enter" });
     expect(screen.getByRole("button", { name: /alpha \(1\)/ })).toHaveAttribute("aria-expanded", "false");
@@ -1135,7 +1190,7 @@ describe("tray spec gaps (Phase 5)", () => {
     expect(screen.getByRole("button", { name: /alpha \(1\)/ })).toHaveAttribute("aria-expanded", "true");
 
     const groupRow = screen.getAllByTestId("tray-row")[0];
-    groupRow.focus();
+    act(() => groupRow.focus());
     fireEvent.keyDown(groupRow, { key: "Enter" });
     expect(mockMarkAsRead).toHaveBeenCalledWith(["a"]);
 
@@ -1162,7 +1217,7 @@ describe("tray spec gaps (Phase 5)", () => {
     const keyOf = () => (document.activeElement as HTMLElement).getAttribute("data-tray-row");
 
     const first = document.querySelector('[data-tray-row="s1"]') as HTMLElement;
-    first.focus();
+    act(() => first.focus());
     fireEvent.keyDown(first, { key: "j" });
     expect(keyOf()).not.toBe("s1");
     const moved = keyOf();
@@ -1246,6 +1301,10 @@ describe("tray spec gaps (Phase 5)", () => {
     mockConnectivity = { state: "connected", isOffline: false };
     view.rerender(tree());
     expect(screen.queryByTestId("tray-banner-offline")).toBeNull();
+    // Back online but not yet refreshed: controls wait with the reason "Updating...".
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("title", "Updating...");
+    mockLastUpdatedAt = (mockLastUpdatedAt ?? 0) + 1;
+    view.rerender(tree());
     expect(screen.getByLabelText("Remove notification")).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "Mark activity read" })).not.toHaveAttribute("aria-disabled");
     swipe(screen.getByTestId("tray-swipe-row"), 90);
@@ -1313,14 +1372,7 @@ describe("tray spec gaps (Phase 5)", () => {
   });
 
   it("xa15_tray_and_background_segment_should_own_no_live_region_of_their_own", () => {
-    mockUseBackgroundSessions.mockReturnValue({
-      sessions: [{ id: "review:h1", title: "review:h1", state: "running", updatedAtMs: Date.now() }],
-      departed: [],
-      loading: false,
-      failed: false,
-      lastUpdatedAt: Date.now(),
-      refresh: jest.fn(),
-    });
+    mockUseBackgroundSessions.mockReturnValue(makeHiddenState({ refresh: jest.fn() }));
     mockHistory = [
       pending("p1"),
       makeNotification({ id: "f1", sessionId: "review:h1", sessionName: "review:h1", notificationType: "error" }),
@@ -1395,5 +1447,66 @@ describe("tray spec gaps (Phase 5)", () => {
     const handle = screen.getByTestId("tray-handle");
     expect(handle).toBeEnabled();
     expect(handle).toHaveAttribute("aria-controls", "notification-tray");
+  });
+});
+
+describe("tray recovery and tier copy (Story 1.6e)", () => {
+  beforeEach(resetTrayState);
+
+  it("Recovery_should_keepControlsDisabledUpdatingUntilFirstRefresh_And_showAsOf", () => {
+    mockHistory = [info("a", "s1")];
+    mockConnectivity = { state: "disconnected", isOffline: true };
+    const view = renderTray();
+    const rerender = () =>
+      view.rerender(
+        <DeckViewportContext.Provider value={{ isInnerScreen: true, isVirtualKeyboardOpen: false }}>
+          <NotificationPanel />
+        </DeckViewportContext.Provider>,
+      );
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("title", "Offline");
+
+    mockConnectivity = { state: "connected", isOffline: false };
+    rerender();
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByLabelText("Remove notification")).toHaveAttribute("title", "Updating...");
+    expect(screen.getByTestId("tray-as-of")).toHaveTextContent(`As of ${formatClockTime(1)}`);
+
+    mockLastUpdatedAt = 60_000;
+    rerender();
+    expect(screen.getByLabelText("Remove notification")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("tray-as-of")).toHaveTextContent(`As of ${formatClockTime(60_000)}`);
+  });
+
+  it("Tiers_should_showEmptyLoadingAndFetchFailedCopy", () => {
+    jest.useFakeTimers();
+    mockHistoryLoading = true;
+    mockLastUpdatedAt = null;
+    const loading = renderTray();
+    const skeleton = screen.getByTestId("tray-skeleton");
+    expect(skeleton).not.toHaveTextContent("Loading...");
+    act(() => void jest.advanceTimersByTime(151));
+    expect(skeleton).toHaveTextContent("Loading...");
+    act(() => void jest.advanceTimersByTime(8_000));
+    expect(skeleton).toHaveTextContent("Still loading.");
+    fireEvent.click(within(skeleton).getByRole("button", { name: "Retry" }));
+    expect(mockRefresh).toHaveBeenCalled();
+    loading.unmount();
+    jest.useRealTimers();
+
+    mockHistoryLoading = false;
+    mockLastUpdatedAt = 1;
+    mockHistory = [];
+    const empty = renderTray();
+    expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+    expect(screen.getByText("No recent activity.")).toBeInTheDocument();
+    empty.unmount();
+
+    mockHistory = [info("a")];
+    mockHistoryError = new Error("x");
+    renderTray();
+    expect(screen.getByTestId("tray-banner-load-error")).toHaveTextContent(
+      `Couldn't load notifications. Showing data from ${formatClockTime(1)}.`,
+    );
+    expect(screen.getAllByTestId("tray-row")).toHaveLength(1);
   });
 });

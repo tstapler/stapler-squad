@@ -176,8 +176,9 @@ func (d *discoveryHandlers) getSession(ctx context.Context, req mcpgo.CallToolRe
 		if inst.MatchesID(sessionID) {
 			detail := instanceToDetail(inst)
 			return okResult(GetSessionResult{
-				MCPResult: MCPResult{Success: true},
-				Session:   &detail,
+				MCPResult:    MCPResult{Success: true},
+				Session:      &detail,
+				ProofPresent: sessionHasMCPProof(inst.UUID),
 			}), nil
 		}
 	}

@@ -599,6 +599,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// TymuxRolloutService's registration). Storage-backed, so it's threaded
 	// through deps.Storage rather than constructed with zero args like the
 	// config-only rollout services above.
+	var guidanceRequestSvc *services.GuidanceRequestService
+	var wakeTriggerSvc *services.WakeTriggerService
 	if deps.Storage != nil {
 		// deps.BacklogService is passed only when non-nil: a nil *BacklogService
 		// boxed into the TriageRespawner interface would be a non-nil interface
@@ -608,7 +610,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if deps.BacklogService != nil {
 			triageRespawner = deps.BacklogService
 		}
-		guidanceRequestSvc := services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
+		if deps.SessionService != nil {
+			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
+				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService, Cancels: wakeTriggerSvc,
+			})
+		}
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
 		guidanceRequestAPIPath := "/api" + guidanceRequestPath
 		srv.RegisterConnectHandler(guidanceRequestAPIPath, http.StripPrefix("/api", guidanceRequestHandler))
@@ -758,6 +766,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.shutdownHooks = append(srv.shutdownHooks, deps.WorkflowScheduler.Stop)
 		log.Info("WorkflowScheduler started")
 	}
+	startWakes(serverCtx, srv, deps, guidanceRequestSvc, wakeTriggerSvc) // ADR-006 wake timer; server/wakes_module.go
 
 	// Register BacklogService shutdown so in-flight triage goroutines are signalled
 	// to stop acquiring new semaphore slots and existing calls can complete cleanly.
@@ -873,7 +882,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetAutoApprovedGate(gate)
 	}
 	// Reply: hook sender proofs (best-effort provenance) and the pending-question registry.
-	wireHookProofsAndQuestions(approvalHandler, deps, srv.goBackground)
+	wireHookProofsAndQuestions(approvalHandler, deps, srv.goBackground, serverCtx)
+	wireMCPProofs(serverCtx, deps, srv.goBackground) // per-session MCP credential (ADR-007 rule 0)
 	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
 	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
 	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
@@ -990,6 +1000,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
 	// into autonomous backlog work sessions by spawnSessionAfterGates)
 	hookReceiver := services.NewHookReceiver()
+	if deps.SessionService != nil {
+		hookReceiver.SetPostToolUseObserver(deps.SessionService.ObservePostToolUse)
+	}
 	hookReceiver.RegisterRoutes(srv.mux)
 	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
 
@@ -1115,12 +1128,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
-	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
-			r = r.WithContext(servermcp.WithSessionUUID(r.Context(), uuid))
-		}
-		mcpHTTPHandler.ServeHTTP(w, r)
-	})
+	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)
 	srv.mux.Handle("/mcp/", mcpWithUUID)
 	deps.SessionService.SetMCPServerURL(func() string { return "http://" + srv.GetAddr() + "/mcp" })
@@ -1190,6 +1198,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		backlogMutateHandler := services.NewBacklogDebugMutateHandler(deps.Storage)
 		backlogMutateHandler.RegisterRoutes(srv.mux)
 		log.Info("Registered backlog debug mutate handlers at /api/debug/backlog/mutate-* (e2e-local only)")
+
+		if deps.SessionService != nil {
+			services.NewGuidanceDebugSeedHandler(deps.SessionService, deps.Storage).RegisterRoutes(srv.mux)
+			log.Info("Registered guidance debug seed handler at /api/debug/guidance/seed-question (e2e-local only)")
+		}
 	}
 
 	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.
@@ -1251,7 +1264,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).
-	analyticsHandler := handlers.NewAnalyticsHandlerWithClient(analyticsProvider, deps.AnalyticsEntClient)
+	analyticsHandler := handlers.NewAnalyticsHandlerWithClient(analytics.WithQualityMetrics(analyticsProvider), deps.AnalyticsEntClient)
 	analyticsHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered analytics handler at POST /api/analytics and GET /api/analytics/summary")
 

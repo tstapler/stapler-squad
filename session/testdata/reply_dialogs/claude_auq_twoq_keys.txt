@@ -1,0 +1,12 @@
+# Claude Code v2.1.303, haiku, tmux 200x50, auto mode. tmux send-keys names, one per step.
+# Dialog: Q1 single-select (Redis/Memcached/None), Q2 multiSelect (A/B/C); replayed identically in a fresh process (Q1 A/B/C -> A; Q2 -> A, B). Measured 2026-10-18.
+# Result: "User answered Claude's questions: Which cache? -> Redis; Which letters? -> A, B"
+Enter    # Q1: select focused option 1 (Redis); auto-advances to Q2 tab
+Enter    # Q2: toggle A ([ ] -> [✔]); focus stays on A
+Down     # focus B
+Enter    # toggle B
+Down     # focus C
+Down     # focus "Type something"
+Down     # focus Submit (row under item 4)
+Enter    # -> "Review your answers" screen (claude_auq_twoq_review_submit.txt)
+Enter    # "1. Submit answers" is focused by default -> tool result returned
