@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -333,6 +334,52 @@ var knownFeatureFlags = []struct {
 		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
 		defaultValue: true,
 	},
+	{
+		name:         config.WorkflowEngineShadowFeatureFlag,
+		description:  "Workflow engine shadow: compare the configured stage graph and gates against today's answer on every status transition and count the differences (see /actuator/workflow-engine). Changes nothing about what is allowed. Applies within about a second. Default: on.",
+		defaultValue: config.WorkflowEngineShadowDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceFeatureFlag,
+		description:  "Workflow engine enforce (operator class): the configured stage graph and operator gates decide status transitions instead of the built-in rules. Turn on only after make workflow-engine-soak-status reads READY. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceDefault,
+	},
+}
+
+// workflowEngineModeTTL is how long a resolved engine mode is reused, so the
+// transition hot path never reads config per call.
+const workflowEngineModeTTL = time.Second
+
+// WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
+// flags with their registered defaults (never the plain GetFeatureFlag, which
+// returns false for an unset flag and would silently turn shadow off).
+func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
+	return session.ModeFromFlags(
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+	)
+}
+
+// NewWorkflowEngineModeSource is the production mode reader: live config,
+// cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
+	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+}
+
+// WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the
+// shadow flag's status line, counted from the ledger's repro ring (the last 200
+// divergences), so a busy day can read as a floor rather than an exact count.
+func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now func() time.Time) func() string {
+	return func() string {
+		cutoff := now().Add(-24 * time.Hour)
+		n := 0
+		for _, r := range snapshot().Repro {
+			if r.At.After(cutoff) {
+				n++
+			}
+		}
+		return fmt.Sprintf("Shadow: %d divergences/24h", n)
+	}
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
@@ -438,13 +485,39 @@ func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string) string {
-	var parts []string
+	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(); d != "" {
 			parts = append(parts, d)
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
+// On does nothing ("inactive: requires <flag>", parsed by the Features page) and
+// whether its value is the registry default or was set explicitly.
+func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
+		return nil
+	}
+	var parts []string
+	if name == config.AutonomousStallNudgeFeatureFlag &&
+		config.EffectiveAutonomousStallNudgeEnabled(cfg) && !config.EffectiveDiagnoseNudgeEnabled(cfg) {
+		parts = append(parts, "inactive: requires "+config.DiagnoseNudgeFeatureFlag)
+	}
+	onOff := func(b bool) string {
+		if b {
+			return "On"
+		}
+		return "Off"
+	}
+	if value, explicit := cfg.FeatureFlags[name]; explicit {
+		parts = append(parts, "Set explicitly: "+onOff(value))
+	} else {
+		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+	}
+	return parts
 }
 
 // SetEnableGuard installs a precondition for enabling name. It is checked only
@@ -601,20 +674,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 // flip as an explicit false.
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
-	cfg := config.LoadConfig()
-	previous, hadKey := cfg.GetFeatureFlagOverride(name)
-	if !hadKey {
-		previous = featureFlagDefault(name)
-	}
+	var previous, hadKey bool
+	err := config.UpdateConfig(func(cfg *config.Config) error {
+		previous, hadKey = cfg.GetFeatureFlagOverride(name)
+		if !hadKey {
+			previous = featureFlagDefault(name)
+		}
+		if op.isSet() {
+			return cfg.SetFeatureFlag(name, enabled)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
-	}
-	var err error
-	if op.isSet() {
-		err = cfg.SetFeatureFlag(name, enabled)
-	} else {
-		err = cfg.DeleteFeatureFlag(name)
 	}
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
@@ -639,7 +712,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	}
 	log.Error("feature controller toggle failed, rolling back persisted flag",
 		"feature", name, "enabled", enabled, "err", ctrlErr)
-	if rollbackErr := rollbackFlag(cfg, name, previous, hadKey); rollbackErr != nil {
+	if rollbackErr := rollbackFlag(name, previous, hadKey); rollbackErr != nil {
 		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
 		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed
@@ -655,11 +728,13 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
 }
 
-func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error {
-	if hadKey {
-		return cfg.SetFeatureFlag(name, previous)
-	}
-	return cfg.DeleteFeatureFlag(name)
+func rollbackFlag(name string, previous, hadKey bool) error {
+	return config.UpdateConfig(func(cfg *config.Config) error {
+		if hadKey {
+			return cfg.SetFeatureFlag(name, previous)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 }
 
 // finishApplied records the applied outcome and tells the observer which scope

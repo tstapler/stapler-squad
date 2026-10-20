@@ -4,6 +4,15 @@ import {
   NAV_GROUP_LABELS,
   type NavGroup,
 } from "@/lib/nav-pages";
+import { routes } from "@/lib/routes";
+
+describe("NAV_PAGES", () => {
+  it("registers Backlog Quota in the settings group beside Feature Flags", () => {
+    const settings = NAV_PAGES.filter((p) => p.group === "settings").map((p) => p.href);
+    expect(settings).toContain(routes.settingsBacklogQuota);
+    expect(settings.indexOf(routes.settingsBacklogQuota)).toBe(settings.indexOf(routes.settingsFeatures) + 1);
+  });
+});
 
 describe("groupNavPages", () => {
   it("groupNavPages_should_placeItemsInCorrectBucket_When_givenFullNavPages", () => {
