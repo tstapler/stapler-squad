@@ -1001,7 +1001,13 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 	if e, ok := g.aheadBehindCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
 		return e.ahead, e.behind, nil
 	}
+	return g.aheadBehindFlight(cacheKey)
+}
 
+// aheadBehindFlight is AheadBehind past its TTL cache check: it re-resolves
+// refs and computes, coalescing concurrent callers.
+func (g *GoGitVCSReader) aheadBehindFlight(cacheKey aheadBehindKey) (int, int, error) {
+	worktreePath, base := cacheKey.worktree, cacheKey.base
 	type abResult struct{ ahead, behind int }
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()

@@ -109,7 +109,9 @@ func (g *GoGitVCSReader) AheadBehindResolved(worktreePath, base string, head, ba
 		return 0, 0, fmt.Errorf("open repo %s: %w", worktreePath, err)
 	}
 	if g.repoState(entry) != nil {
-		return g.AheadBehind(worktreePath, base)
+		// Not AheadBehind: its TTL-only cache hit would serve the stale result
+		// the hash check above just rejected.
+		return g.aheadBehindFlight(key)
 	}
 
 	type abResult struct{ ahead, behind int }
