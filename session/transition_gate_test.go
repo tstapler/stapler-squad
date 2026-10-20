@@ -134,7 +134,7 @@ func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionF
 }
 
 func TestGatedTransition_CallerExpectedStatusMismatch_FailsWithoutEngineCall(t *testing.T) {
-	t.Parallel()
+	// Not parallel: GateCallsTotal is process-wide, so a parallel test using the same caller would bump it between the two reads.
 	h := newGateHarness(t, ModeEnforce)
 	item := h.newItem(t, BacklogStatusReady)
 
