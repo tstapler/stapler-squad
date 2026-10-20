@@ -173,7 +173,7 @@ func (s *RepoState) reachMiss(ctx context.Context, rc *ReachCache, src ParentsSo
 	// A set built on a generation Drop already replaced pins that whole arena
 	// and can never be hit again (its key carries the old epoch): don't store it.
 	current := func() bool { return s.Graph().Load() == w.gen }
-	return rc.cache.computeMissKeep(key, func() (*ReachBitset, error) { return rc.build(&w, key, current) }, current)
+	return rc.cache.computeMissKeep(ctx, key, func() (*ReachBitset, error) { return rc.build(&w, key, current) }, current)
 }
 
 func (c *ReachCache) build(w *Walk, key ReachKey, current func() bool) (*ReachBitset, error) {

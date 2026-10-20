@@ -1,6 +1,7 @@
 package repostate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -168,51 +169,73 @@ func (c *RepoCache[K, V]) GetOrCompute(key K, fn func() (V, error)) (V, error) {
 	if v, ok := c.Get(key); ok {
 		return v, nil
 	}
-	return c.computeMiss(key, fn)
+	return c.computeMiss(context.Background(), key, fn)
 }
 
 // computeMiss is GetOrCompute for a caller that already saw a miss from Get
 // (so the miss is not counted twice and the hit path stays closure-free).
-func (c *RepoCache[K, V]) computeMiss(key K, fn func() (V, error)) (V, error) {
-	return c.computeMissKeep(key, fn, nil)
+func (c *RepoCache[K, V]) computeMiss(ctx context.Context, key K, fn func() (V, error)) (V, error) {
+	return c.computeMissKeep(ctx, key, fn, nil)
 }
 
 // computeMissKeep is computeMiss that skips the Put when keep (if non-nil)
 // reports false after fn ran, e.g. the value is pinned to a dropped generation.
-func (c *RepoCache[K, V]) computeMissKeep(key K, fn func() (V, error), keep func() bool) (V, error) {
-	var led bool // written by the flight goroutine, read after <-ch
-	ch := c.sf.DoChan(fmt.Sprint(key), func() (out any, doErr error) {
-		defer func() {
-			if r := recover(); r != nil {
-				doErr = fmt.Errorf("repostate compute panic: %v", r)
+//
+// fn is the caller's own closure and runs under the flight leader's ctx, so a
+// cancelled leader fails with a context error that belongs to the leader, not
+// to the callers sharing its flight. A follower whose own ctx is still live
+// therefore retries (becoming leader itself) instead of inheriting that error,
+// and every waiter stops waiting when its own ctx ends. A cancelled flight never
+// reaches Put, so nothing poisoned is cached.
+func (c *RepoCache[K, V]) computeMissKeep(ctx context.Context, key K, fn func() (V, error), keep func() bool) (V, error) {
+	for {
+		var led bool // written by the flight goroutine, read after <-ch
+		ch := c.sf.DoChan(fmt.Sprint(key), func() (out any, doErr error) {
+			defer func() {
+				if r := recover(); r != nil {
+					doErr = fmt.Errorf("repostate compute panic: %v", r)
+				}
+			}()
+			// A caller can miss in Get, then reach DoChan after the previous flight
+			// already published: without this re-check it would build a second time.
+			if v, ok := c.peek(key); ok {
+				return v, nil
 			}
-		}()
-		// A caller can miss in Get, then reach DoChan after the previous flight
-		// already published: without this re-check it would build a second time.
-		if v, ok := c.peek(key); ok {
+			led = true
+			v, fnErr := fn()
+			if fnErr != nil {
+				return nil, fnErr
+			}
+			if keep == nil || keep() {
+				c.Put(key, v)
+			}
 			return v, nil
+		})
+		// DoChan has registered this caller in the flight by now.
+		c.joined.Add(1)
+		var r singleflight.Result
+		select {
+		case r = <-ch:
+		case <-ctx.Done():
+			var zero V
+			return zero, ctx.Err()
 		}
-		led = true
-		v, fnErr := fn()
-		if fnErr != nil {
-			return nil, fnErr
+		if r.Err != nil && !led && ctx.Err() == nil && isContextErr(r.Err) {
+			continue // the leader was cancelled, this caller was not
 		}
-		if keep == nil || keep() {
-			c.Put(key, v)
+		if !led {
+			c.coalesced.Add(1)
 		}
-		return v, nil
-	})
-	// DoChan has registered this caller in the flight by now.
-	c.joined.Add(1)
-	r := <-ch
-	if !led {
-		c.coalesced.Add(1)
+		if r.Err != nil {
+			var zero V
+			return zero, r.Err
+		}
+		return r.Val.(V), nil
 	}
-	if r.Err != nil {
-		var zero V
-		return zero, r.Err
-	}
-	return r.Val.(V), nil
+}
+
+func isContextErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // Stats returns a snapshot of the counters.

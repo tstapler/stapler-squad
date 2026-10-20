@@ -1,6 +1,7 @@
 package repostate
 
 import (
+	"context"
 	"errors"
 	"runtime"
 	"sync"
@@ -153,7 +154,7 @@ func TestComputeMiss_ShouldNotRecompute_WhenPreviousFlightAlreadyPublished(t *te
 	c := NewRepoCache[string, []byte](1<<20, 0, sizeOfLen, Options{})
 	c.Put("k", []byte("old")) // the previous flight finished between this caller's Get miss and its DoChan
 	calls := 0
-	v, err := c.computeMissKeep("k", func() ([]byte, error) { calls++; return []byte("new"), nil }, nil)
+	v, err := c.computeMissKeep(context.Background(), "k", func() ([]byte, error) { calls++; return []byte("new"), nil }, nil)
 	if err != nil || string(v) != "old" || calls != 0 {
 		t.Fatalf("got v=%q err=%v calls=%d, want old nil 0", v, err, calls)
 	}

@@ -167,7 +167,12 @@ type Walk struct {
 	s        *Scratch
 	hits     uint64
 	misses   uint64
+	reads    uint32 // visit count, only used to sample ctx
 }
+
+// ctxCheckEvery is how many row reads pass between ctx checks: a cancelled walk
+// stops within that many visits, and a hot walk pays one mask test per read.
+const ctxCheckEvery = 64
 
 // NewWalk starts a walk over the current generation under stamp ordinal ord.
 // limit is the per-side visit cap (the plain walk's mergeBaseBFSLimit).
@@ -207,6 +212,13 @@ func (w *Walk) Generation() *Generation { return w.gen }
 // errors.Is(err, plumbing.ErrObjectNotFound). Any other error is a fallback
 // error.
 func (w *Walk) read(id uint32, dst []uint32, wantParents bool) (out []uint32, when int64, missing bool, err error) {
+	if w.reads++; w.reads%ctxCheckEvery == 0 {
+		// The bare ctx error, never ErrFallback: a fallback reruns the walk on the
+		// legacy path, which is exactly what a cancelled caller does not want.
+		if cerr := w.ctx.Err(); cerr != nil {
+			return dst, 0, false, cerr
+		}
+	}
 	switch w.gen.Row(id, w.ord) {
 	case Filled:
 		w.hits++
@@ -227,6 +239,9 @@ func (w *Walk) read(id uint32, dst []uint32, wantParents bool) (out []uint32, wh
 	case errors.Is(err, plumbing.ErrObjectNotFound):
 		return dst, 0, true, nil
 	case err != nil:
+		if cerr := w.ctx.Err(); cerr != nil {
+			return dst, 0, false, cerr
+		}
 		return dst, 0, false, fallback(err)
 	case st == Truncated:
 		return dst, 0, true, nil
