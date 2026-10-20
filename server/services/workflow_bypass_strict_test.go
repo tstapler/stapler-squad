@@ -213,6 +213,7 @@ var clsDynamicCallers = map[string]string{
 	"server/services/backlog_service_lifecycle.go BacklogService.TransitionBacklogItemStatus": "resolveTransitionCaller(ctx), bounded by TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers",
 	"server/services/backlog_service_triage.go BacklogService.transitionWithGuard":            "guardedTransitionCaller(to, actor), bounded by TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers",
 	"session/backlog_remediation.go Storage.redriveOne":                                       "the recorded denial's caller, re-checked by LookupTransitionCaller in transitionStillDenied and limited to redriveByWrite",
+	"session/workflow_engine_replay.go replayAnswer":                                          "a decision only (no write): spec.Name comes from iterating the registry",
 	"session/backlog_remediation.go Storage.transitionStillDenied":                            "a decision only (no write): spec.Name is a LookupTransitionCaller result",
 }
 
