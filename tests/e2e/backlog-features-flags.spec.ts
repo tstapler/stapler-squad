@@ -357,7 +357,9 @@ for (const vp of VIEWPORTS) {
         await expect(features.evidence, label).toContainText(expected);
         await expect(features.evidence, label).toContainText("Not clean");
         await expect(features.dialogConfirm, label).toHaveAttribute("aria-disabled", "true");
-        await features.dialogConfirm.click({ force: true }); // aria-disabled, so Playwright would wait forever
+        // aria-disabled stays focusable: pressing it by keyboard must do nothing.
+        await features.dialogConfirm.focus();
+        await page.keyboard.press("Enter");
         await expect(features.dialog, `${label}: a disabled Enforce does nothing`).toBeVisible();
         await features.ack.check();
         await expect(features.dialogConfirm, label).not.toHaveAttribute("aria-disabled", "true");
@@ -405,7 +407,8 @@ for (const vp of VIEWPORTS) {
       expect(hintId).toBeTruthy();
       await expect(features.hint).toHaveText("Tick the acknowledgement above to enable Enforce.");
       expect(await features.hint.getAttribute("id")).toBe(hintId);
-      await features.dialogConfirm.click({ force: true });
+      await features.dialogConfirm.focus();
+      await page.keyboard.press("Enter");
       await expect(features.dialog).toBeVisible();
       expect(store.update.calls).toBe(0);
       await page.keyboard.press("Escape");
@@ -587,7 +590,8 @@ for (const vp of VIEWPORTS) {
       await revert.click();
       await expect(features.rowStatus("operator")).toHaveText("Saving Enforce for operators (this UI)...");
       await expect(revert).toHaveAttribute("aria-disabled", "true");
-      await revert.click({ force: true });
+      await revert.focus();
+      await page.keyboard.press("Enter");
       await expect.poll(() => store.update.calls).toBe(callsBefore + 1);
       store.set(OPERATOR_ENFORCE, false);
       heldRevert.resolve(ok({ flag: store.get(OPERATOR_ENFORCE) }));
