@@ -108,6 +108,20 @@ describe("useEnforceReadiness", () => {
     expect(result.current.retrying).toBe(false);
   });
 
+  it("clears an acknowledgement ticked on a failed load when the retry loads evidence that is not clean", async () => {
+    mockGetStatus.mockRejectedValueOnce(new Error("down"));
+    const { result } = renderHook(() => useEnforceReadiness("operator"));
+    await waitFor(() => expect(result.current.evidence.phase).toBe("failed"));
+    act(() => result.current.setAcknowledged(true));
+
+    mockGetStatus.mockResolvedValue(status(4n, V.NOT_READY));
+    await act(async () => {
+      await result.current.retryEvidence();
+    });
+    expect(result.current.acknowledged).toBe(false);
+    expect(result.current.canEnforce).toBe(false);
+  });
+
   it("allows the write when the re-check is unchanged, with exactly one more RPC", async () => {
     mockGetStatus.mockResolvedValue(CLEAN);
     const { result } = renderHook(() => useEnforceReadiness("operator"));

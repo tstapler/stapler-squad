@@ -138,6 +138,8 @@ export function useEnforceReadiness(cls: CallerClass): UseEnforceReadiness {
 
   const retryEvidence = useCallback(async () => {
     setRetrying(true);
+    // An ack given for "no evidence" must not carry over to evidence the operator has not seen.
+    setAcknowledged(false);
     const ok = await load();
     if (mounted.current) setRetrying(false);
     return ok;
