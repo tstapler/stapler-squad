@@ -154,6 +154,7 @@
     "eslint-plugin-analytics": "file:./eslint-plugin-analytics",
     "eslint-plugin-boundaries": "^6.0.2",
     "eslint-plugin-rpc-lifecycle": "file:./eslint-plugin-rpc-lifecycle",
+    "fast-check": "^4.10.2",
     "glob": "^13.0.6",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.2.0",

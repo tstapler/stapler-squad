@@ -379,3 +379,34 @@ func TestAnswerRouter_ShouldRefuseTheDurableRoute_WhenStageIsOff(t *testing.T) {
 	assert.Equal(t, outFlagOff, res.Outcome)
 	assert.Nil(t, e.row(qid).AnsweredAt)
 }
+
+func TestAnswerRouter_ShouldRefuseAnAnswerOutsideTheOptions_WhenSessionIsStopped(t *testing.T) {
+	e := newRouterEnv(t)
+	inst, _ := e.addVisible("stopped-bad-option", func(i *session.Instance) { i.Status = session.Stopped })
+	qid := e.agentRow(inst)
+
+	res := e.answer(inst, qid, "Hazelcast")
+
+	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, res.Outcome)
+	row := e.row(qid)
+	assert.Empty(t, row.Answer)
+	assert.Nil(t, row.AnsweredAt, "the row stays open for a valid answer")
+}
+
+func TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterTheTierGate(t *testing.T) {
+	e := newRouterEnv(t)
+	inst, pm := e.addVisible("route-flip")
+	d := session.QuestionDialog{Question: "Pick a colour", Labels: []string{"Red", replyColorLabel, "Blue"}}
+	qid := e.hookRow(inst, d)
+	gated := routeDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
+
+	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
+		SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-flip", ExpectedRoute: &gated,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, res.Outcome)
+	assert.Equal(t, "route_changed", res.StaleReason)
+	assert.Empty(t, pm.writes(), "no keystroke reached the pane")
+	assert.Empty(t, e.row(qid).Answer)
+}

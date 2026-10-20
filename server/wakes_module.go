@@ -41,6 +41,8 @@ type wakeWiring struct {
 	Limits wakes.LimitSettings
 	// TypeEnabled is the per-type flag scope; nil means every type is on.
 	TypeEnabled func(domain.WakeTriggerType) bool
+	// Metrics is shared with the expiry sweep; nil gives the dispatcher its own.
+	Metrics *wakes.Metrics
 }
 
 // newWakeDispatcher builds the dispatcher and registers its change hook so a
@@ -49,7 +51,7 @@ func newWakeDispatcher(w wakeWiring, hook func(func())) *wakes.Dispatcher {
 	d := wakes.NewDispatcher(wakes.Config{
 		Store: w.Store, Steerer: w.Steerer, Owners: w.Owners, Admission: w.Admission,
 		Notifier: w.Notifier, Events: w.Events, Backlog: w.Backlog, Sessions: w.Sessions, Guidance: w.Guidance, PRs: w.PRs, Peers: w.Peers, Clock: w.Clock,
-		Leader: w.Leader, Limits: w.Limits, TypeEnabled: w.TypeEnabled,
+		Leader: w.Leader, Limits: w.Limits, TypeEnabled: w.TypeEnabled, Metrics: w.Metrics,
 	})
 	d.RegisterMatcher(d.Metrics().SessionEndObserver())
 	hook(d.ChangeHook())
@@ -210,6 +212,7 @@ func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance 
 		Leader:      leader,
 		Limits:      wakeLimitSettings(cfg.WakeLimits),
 		TypeEnabled: wakeTypeEnabled,
+		Metrics:     deps.WakeMetrics,
 	}, deps.Storage.SetWakeChangeHook)
 	if err := d.Start(ctx); err != nil {
 		deps.Storage.SetWakeChangeHook(nil)

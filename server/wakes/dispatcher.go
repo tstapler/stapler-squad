@@ -89,11 +89,13 @@ type Dispatcher struct {
 	digest        *digest
 	lastDigest    map[string]time.Time
 	reviveAlerted map[string]struct{}
+	reviveRunning map[string]struct{} // needs_revive rows with a revive in flight
+	started       bool                // Start ran once; a Dispatcher is single-use
 	matchers      []EventMatcher
 	predicates    map[domain.WakeTriggerType]Predicate
 
 	wg sync.WaitGroup // long-running loops
-	bg sync.WaitGroup // spawned one-shot work (revives)
+	bg idleGroup      // spawned one-shot work (revives)
 
 	// testBeforeRead runs between the bus subscription and the first state read.
 	testBeforeRead func()
@@ -133,7 +135,7 @@ func NewDispatcher(cfg Config) *Dispatcher {
 		BusyHold:      limits.BusyHold,
 		OnEnded:       d.ended,
 		OnNeedsRevive: func(ctx context.Context, row *session.WakeTriggerData) {
-			d.spawn(func() { d.processNeedsRevive(ctx, row) })
+			d.spawnRevive(ctx, row)
 		},
 	})
 	d.timer = NewTimekeeper(cfg.Store, cfg.Clock, d.onClaimed,
@@ -189,14 +191,78 @@ func (d *Dispatcher) allowClaim(ctx context.Context, row *session.WakeTriggerDat
 	return d.admit == nil || d.admit(ctx, row, now)
 }
 
+// idleGroup counts running work and lets callers wait for zero. Unlike
+// sync.WaitGroup, Add may race with Wait: the event loop spawns revives while
+// WaitIdle callers (tests, Stop) wait, which the WaitGroup contract forbids and
+// the race detector reports.
+type idleGroup struct {
+	mu      sync.Mutex
+	n       int
+	waiters []chan struct{}
+}
+
+func (g *idleGroup) Add() {
+	g.mu.Lock()
+	g.n++
+	g.mu.Unlock()
+}
+
+func (g *idleGroup) Done() {
+	g.mu.Lock()
+	g.n--
+	if g.n == 0 {
+		for _, w := range g.waiters {
+			close(w)
+		}
+		g.waiters = nil
+	}
+	g.mu.Unlock()
+}
+
+// Wait returns once no work is running.
+func (g *idleGroup) Wait() {
+	g.mu.Lock()
+	if g.n == 0 {
+		g.mu.Unlock()
+		return
+	}
+	w := make(chan struct{})
+	g.waiters = append(g.waiters, w)
+	g.mu.Unlock()
+	<-w
+}
+
 // spawn runs fn on a goroutine joined by Stop (revives block up to the revive
 // lock budget, which must not stall the timer or event loop).
 func (d *Dispatcher) spawn(fn func()) {
-	d.bg.Add(1)
+	d.bg.Add()
 	go func() {
 		defer d.bg.Done()
 		fn()
 	}()
+}
+
+// spawnRevive runs processNeedsRevive for row unless one is already in flight
+// for it, so a slow revive does not collect a goroutine per reconcile tick.
+func (d *Dispatcher) spawnRevive(ctx context.Context, row *session.WakeTriggerData) {
+	d.mu.Lock()
+	if _, busy := d.reviveRunning[row.ID]; busy {
+		d.mu.Unlock()
+		return
+	}
+	if d.reviveRunning == nil {
+		d.reviveRunning = map[string]struct{}{}
+	}
+	d.reviveRunning[row.ID] = struct{}{}
+	d.mu.Unlock()
+	d.spawn(func() {
+		defer func() {
+			d.mu.Lock()
+			delete(d.reviveRunning, row.ID)
+			d.mu.Unlock()
+		}()
+		d.processNeedsRevive(ctx, row)
+	})
 }
 
 // WaitIdle blocks until the spawned background work (revives) has finished.
@@ -213,6 +279,10 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		d.mu.Unlock()
 		return errors.New("wakes: dispatcher already running")
 	}
+	if d.started {
+		d.mu.Unlock()
+		return ErrDispatcherReused
+	}
 	release, ok, err := d.cfg.Leader.TryAcquire()
 	if err != nil {
 		d.mu.Unlock()
@@ -223,7 +293,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		return ErrNotLeader
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
-	d.running, d.cancel, d.release = true, cancel, release
+	d.running, d.started, d.cancel, d.release = true, true, cancel, release
 	d.startedAt = d.cfg.Clock.Now()
 	d.mu.Unlock()
 

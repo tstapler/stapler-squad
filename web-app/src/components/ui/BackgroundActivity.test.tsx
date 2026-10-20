@@ -1,4 +1,6 @@
 import React from "react";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { BackgroundActivity, type BackgroundActivityProps } from "./BackgroundActivity";
 import { buildActivityRows, buildRollup, type ActivityRow } from "@/lib/utils/backgroundActivity";
@@ -438,5 +440,14 @@ describe("BackgroundActivity", () => {
     const names = within(row).getAllByRole("button").map((b) => b.textContent);
     expect(names).toEqual(expect.not.arrayContaining(["Reply", "Answer", "Approve", "Deny"]));
     expect(within(row).getByTestId("background-mark-reviewed")).toBeInTheDocument();
+  });
+});
+
+describe("BackgroundActivity row title toggle target size", () => {
+  it("rowTitleButton_should_be44pxTall_When_PointerIsCoarse", () => {
+    // Style modules are mocked in jest; the css source is the 44px contract.
+    const src = readFileSync(join(__dirname, "BackgroundActivity.css.ts"), "utf8");
+    const block = src.slice(src.indexOf("export const rowTitleButton"));
+    expect(block.slice(0, block.indexOf("});"))).toMatch(/"\(pointer: coarse\)": \{ minHeight: "44px" \}/);
   });
 });

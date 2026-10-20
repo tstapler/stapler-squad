@@ -1054,6 +1054,61 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
 
+# --- files-viewer-revamp gates (project_plans/files-viewer-revamp, Story 0.2.4) ---
+# Package elapsed (go test -json, compile excluded) of `go test -race -short ./server/services` on origin/main at the
+# branch merge base 51132ee23, measured 2026-10-16 on a loaded 127%-CPU machine: 270.229s, 2813 tests, all pass.
+# Refresh these two values only by re-measuring on a clean checkout, never to make a gate pass.
+FILES_VIEWER_RACE_BASELINE_SECONDS ?= 270
+FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
+FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
+FILES_VIEWER_JSCPD_MIN_HEADROOM ?= 0.02
+# Fixed list of test-name prefixes owned by the files viewer; extend as stories land.
+FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities)
+
+.PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
+
+files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services
+
+files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
+	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services
+
+# Probe for Task 0.2.4f: does revive(file-length-limit) report an edit to server/server.go?
+files-viewer-server-length-probe: ensure-tools
+	@echo "server/server.go non-blank, non-comment lines: $$(grep -vE '^[[:space:]]*(//|$$)' server/server.go | wc -l)"
+	@mkdir -p .cache && cp server/server.go .cache/server.go.bak && echo "// files-viewer-gates probe" >> server/server.go; \
+	out=$$(golangci-lint run --enable revive --new-from-rev=origin/main ./server/ 2>&1); \
+	cp .cache/server.go.bak server/server.go && rm -f .cache/server.go.bak; \
+	if echo "$$out" | grep -q 'file-length-limit'; then echo "revive file-length-limit: REPORTED -> run Task 0.2.4f before Wave 5"; else echo "revive file-length-limit: not reported"; fi
+
+# Set WAVE=4 to include the server.go length probe; FILES_VIEWER_SKIP_RACE=1 skips the (minutes-long) race timing.
+files-viewer-gates: ensure-tools proto-gen ## End-of-wave gates: jscpd + headroom, complexity/dupl, 350-line budget, race wall-clock delta
+	@set -e; rm -rf .cache/jscpd-files; mkdir -p .cache; \
+	echo "== jscpd =="; \
+	(cd web-app && bun run lint:duplicates --reporters json --output ../.cache/jscpd-files >/dev/null) && jscpd_rc=0 || jscpd_rc=$$?; \
+	jq -r --argjson thr $(FILES_VIEWER_JSCPD_THRESHOLD) --argjson min $(FILES_VIEWER_JSCPD_MIN_HEADROOM) \
+	  '.statistics.total | (.duplicatedLines / .lines * 100) as $$p | "jscpd: \($$p * 1000 | round / 1000)% (threshold \($$thr)%), headroom \(($$thr - $$p) * 1000 | round / 1000) pp" + (if ($$thr - $$p) < $$min then "  FLAG: headroom < \($$min) pp, next wave starts with a fixture extraction" else "" end)' \
+	  .cache/jscpd-files/jscpd-report.json; \
+	echo "jscpd gate exit: $$jscpd_rc"; \
+	echo "== complexity/dupl (new code vs origin/main) =="; \
+	$(MAKE) --no-print-directory ready-complexity-gate && echo "complexity gate: PASS" ; \
+	echo "== 350-line budget =="; \
+	if [ -f web-app/src/components/sessions/__tests__/FilesTabLineBudget.test.ts ]; then \
+	  (cd web-app && bunx jest --testPathPatterns=FilesTabLineBudget --no-coverage) && echo "line budget: PASS"; \
+	else echo "line budget: SKIPPED (FilesTabLineBudget.test.ts not created yet, Task 1.2.2d)"; fi; \
+	echo "== server/server.go length =="; \
+	echo "server/server.go non-blank, non-comment lines: $$(grep -vE '^[[:space:]]*(//|$$)' server/server.go | wc -l)"; \
+	if [ "$(WAVE)" = "4" ]; then $(MAKE) --no-print-directory files-viewer-server-length-probe; fi; \
+	echo "== server/services race wall-clock =="; \
+	if [ -n "$(FILES_VIEWER_SKIP_RACE)" ]; then echo "race timing: SKIPPED (FILES_VIEWER_SKIP_RACE set)"; else \
+	  go test -race -short -timeout=22m -json ./server/services > .cache/files-race.json && rc=0 || rc=$$?; \
+	  secs=$$(jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Elapsed' .cache/files-race.json | tail -1); \
+	  base=$(FILES_VIEWER_RACE_BASELINE_SECONDS); \
+	  delta=$$(awk -v s=$$secs -v b=$$base 'BEGIN{printf "%.1f", (s-b)/b*100}'); \
+	  echo "server/services -race -short package elapsed: $${secs}s (baseline $${base}s, delta $${delta}%, test exit $$rc)"; \
+	  awk -v d=$$delta -v m=$(FILES_VIEWER_RACE_BUDGET_PERCENT) 'BEGIN{ if (d > m) print "FLAG: delta over " m "% budget, consider Task 0.2.4d" }'; fi; \
+	exit $$jscpd_rc
+
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
 	@echo "✅ Quick validation complete"

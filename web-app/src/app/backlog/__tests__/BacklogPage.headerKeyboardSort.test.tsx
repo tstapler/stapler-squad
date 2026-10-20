@@ -1,23 +1,8 @@
+import "./backlogPageBaseMocks";
 import React from "react";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import BacklogPage from "../page";
 import { itemFixture, mockUseWatchBacklogItems } from "./backlogPageTestFixtures";
-
-jest.mock("@/lib/nav", () => require("./backlogPageTestFixtures").nextNavigationMock());
-jest.mock("@/lib/analytics", () => require("./backlogPageTestFixtures").analyticsMock());
-jest.mock("@/lib/analytics/usePageView", () => require("./backlogPageTestFixtures").usePageViewMock());
-jest.mock("@/components/backlog/BacklogItemDetail", () => require("./backlogPageTestFixtures").backlogItemDetailMock());
-jest.mock("@/components/backlog/BacklogItemForm", () => require("./backlogPageTestFixtures").backlogItemFormMock());
-jest.mock("@/components/backlog/BacklogEmptyState", () => require("./backlogPageTestFixtures").backlogEmptyStateMock());
-jest.mock("@/components/backlog/VaguenessPromptModal", () => require("./backlogPageTestFixtures").vaguenessPromptModalMock());
-jest.mock("@/components/backlog/BacklogTourModal", () => require("./backlogPageTestFixtures").backlogTourModalMock());
-jest.mock("@/components/backlog/GitHubIssuePicker", () => require("./backlogPageTestFixtures").gitHubIssuePickerMock());
-jest.mock("@connectrpc/connect", () => require("./backlogPageTestFixtures").connectMock());
-jest.mock("@connectrpc/connect-web", () => require("./backlogPageTestFixtures").connectWebMock());
-jest.mock("@/lib/config", () => require("./backlogPageTestFixtures").configMock());
-jest.mock("@/lib/store", () => require("./backlogPageTestFixtures").storeMock());
-jest.mock("@/lib/hooks/useBacklogService", () => require("./backlogPageTestFixtures").useBacklogServiceMockFactory());
-jest.mock("@/lib/hooks/useWatchBacklogItems", () => require("./backlogPageTestFixtures").useWatchBacklogItemsMock());
 
 describe("BacklogPage sortable header keyboard accessibility", () => {
   beforeEach(() => {

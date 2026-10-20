@@ -13,6 +13,7 @@
  *       omits remoteName entirely, byte-identical to pre-change local behavior.
  */
 
+import "./omnibarBaseMocks";
 import { screen, fireEvent, act } from "@testing-library/react";
 import {
   mockUsePathCompletions,
@@ -28,39 +29,7 @@ import {
 // Mocks (copied verbatim from Omnibar.submitReset.test.tsx's baseline block)
 // ---------------------------------------------------------------------------
 
-jest.mock("@/lib/nav", () => require("./omnibarTestFixtures").mockNextNavigationModule());
-
-jest.mock("@/lib/contexts/ThemeContext", () => require("./omnibarTestFixtures").mockThemeContextModule());
-
-jest.mock("@/lib/config", () => require("./omnibarTestFixtures").mockConfigModule());
-
-jest.mock("@/lib/hooks/usePathCompletions", () => require("./omnibarTestFixtures").mockUsePathCompletionsModule());
-
-jest.mock("@/lib/hooks/usePathHistory", () => require("./omnibarTestFixtures").mockUsePathHistoryModule());
-
-jest.mock("@/lib/hooks/useSessionSearch", () => require("./omnibarTestFixtures").mockUseSessionSearchModule());
-
-jest.mock("@/lib/hooks/useWorktreeSuggestions", () => require("./omnibarTestFixtures").mockUseWorktreeSuggestionsModule());
-
-jest.mock("@/lib/hooks/useAliases", () => require("./omnibarTestFixtures").mockUseAliasesModule());
-
 jest.mock("@/lib/hooks/useAliasSuggestions", () => require("./omnibarTestFixtures").mockUseAliasSuggestionsModule());
-
-jest.mock("@/lib/hooks/useAtCommandSuggestions", () => require("./omnibarTestFixtures").mockUseAtCommandSuggestionsModule());
-
-jest.mock("@/lib/hooks/useAvailablePrograms", () => require("./omnibarTestFixtures").mockUseAvailableProgramsModule());
-
-jest.mock("@/lib/hooks/useSlashCommands", () => require("./omnibarTestFixtures").mockUseSlashCommandsModule());
-
-jest.mock("@/lib/hooks/useSlashCommandSuggestions", () => require("./omnibarTestFixtures").mockUseSlashCommandSuggestionsModule());
-
-jest.mock("@/lib/store", () => require("./omnibarTestFixtures").mockStoreModule());
-
-jest.mock("@/lib/store/sessionsSlice", () => require("./omnibarTestFixtures").mockSessionsSliceModule());
-
-jest.mock("@/components/sessions/OmnibarResultList", () => require("./omnibarTestFixtures").mockOmnibarResultListModule());
-
-jest.mock("@/lib/api/transport", () => require("./omnibarTestFixtures").mockApiTransportModule());
 
 // ---------------------------------------------------------------------------
 // Fixtures

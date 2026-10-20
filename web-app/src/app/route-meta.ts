@@ -58,6 +58,8 @@ export const ROUTE_META: Record<string, RouteMetaEntry> = {
   "/settings/remotes": { title: SETTINGS_TITLE },
   "/settings/tagging-classifier": { title: "Tag Classification - Settings - Stapler Squad" },
   "/settings/unfinished": { title: "Unfinished Sources - Settings - Stapler Squad" },
+  "/spike-files": { title: ROOT_TITLE },
+  "/spike-lazydoc": { title: ROOT_TITLE },
   "/test/escape-codes": { title: ROOT_TITLE },
   "/test/layout-overlap": { title: ROOT_TITLE },
   "/test/terminal-stress": { title: ROOT_TITLE },

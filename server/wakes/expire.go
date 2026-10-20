@@ -20,8 +20,8 @@ type overdueStore interface {
 // raises one failure notification per row it ended. It is the sweep for a
 // stopped dispatcher; when none runs, the startup reconcile is the backstop.
 // MarkWakeMissed is a compare-and-set, so a running dispatcher and this sweep
-// never both report one row.
-func ExpireOverdue(ctx context.Context, store overdueStore, notifier Notifier, now time.Time) (int, error) {
+// never both report one row. metrics may be nil.
+func ExpireOverdue(ctx context.Context, store overdueStore, notifier Notifier, metrics *Metrics, now time.Time) (int, error) {
 	rows, err := store.ListPendingWakeTriggers(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("wakes: list pending for expiry: %w", err)
@@ -43,6 +43,7 @@ func ExpireOverdue(ctx context.Context, store overdueStore, notifier Notifier, n
 			continue
 		}
 		ended++
+		metrics.Inc(MetricTrigger, string(row.Type), string(domain.WakeStatusMissed))
 		if notifier != nil {
 			notifier.Notify(failureNotification(row, domain.WakeStatusMissed, domain.WakeReasonExpired))
 		}

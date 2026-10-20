@@ -14,6 +14,7 @@ go 1.26.6
 godebug netdns=go
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/otelconnect v0.8.0
 	entgo.io/ent v0.14.5
