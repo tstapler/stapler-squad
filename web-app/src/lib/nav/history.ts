@@ -14,8 +14,12 @@ export function replaceHashInHistory(hash: string): void {
   window.history.replaceState(window.history.state, "", url);
 }
 
-export function pushTrayEntryInHistory(replace = false): void {
-  const state = { ...(window.history.state ?? {}), [TRAY_MARKER]: true };
+export function pushHistoryMarkerInHistory(key: string, value: unknown, replace = false): void {
+  const state = { ...(window.history.state ?? {}), [key]: value };
   if (replace) window.history.replaceState(state, "");
   else window.history.pushState(state, "");
+}
+
+export function pushTrayEntryInHistory(replace = false): void {
+  pushHistoryMarkerInHistory(TRAY_MARKER, true, replace);
 }

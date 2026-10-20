@@ -1,6 +1,7 @@
 // `@/lib/nav/impl` is aliased per build (next.config.ts, tsconfig paths, jest moduleNameMapper); everything outside this directory imports from here.
 export {
   Link,
+  pushHistoryMarker,
   pushTrayEntry,
   Redirect,
   replaceHash,

@@ -14,22 +14,23 @@ async function messages(code, file) {
 }
 
 const banned = (msgs) => msgs.filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports");
-const rawHistory = (msgs) => msgs.filter((m) => m.ruleId === "no-restricted-syntax" && m.message.startsWith("Raw History"));
+const rawHistory = (msgs) => msgs.filter((m) => m.ruleId === "no-restricted-properties" && m.message.includes("Raw History"));
 const LINK_IMPORT = 'import Link from "next/link";\nexport const x = Link;\n';
 
 describe("navigation facade lint ban", () => {
-  it("warns (severity 1, not error) on next/link and points at the facade and the codemod", async () => {
+  it("errors (severity 2) on next/link and points at the facade and the codemod", async () => {
     const found = banned(await messages(LINK_IMPORT, "src/components/Example.tsx"));
     assert.equal(found.length, 1);
-    assert.equal(found[0].severity, 1);
+    assert.equal(found[0].severity, 2);
     assert.match(found[0].message, /@\/lib\/nav/);
     assert.match(found[0].message, /next-nav-to-facade\.mjs/);
   });
 
   for (const module of ["next/navigation", "next/dynamic", "next/dist/client/web-vitals", "react-router-dom"]) {
-    it(`warns on ${module}`, async () => {
+    it(`errors on ${module}`, async () => {
       const found = banned(await messages(`import * as m from "${module}";\nexport const x = m;\n`, "src/lib/example.ts"));
       assert.equal(found.length, 1);
+      assert.equal(found[0].severity, 2);
     });
   }
 
@@ -48,6 +49,7 @@ describe("navigation facade lint ban", () => {
     const source = 'export const go = () => { window.history.replaceState(null, "", "?a=b"); window.history.pushState({}, ""); };\n';
     assert.equal(rawHistory(await messages(source, "src/lib/hooks/example.ts")).length, 2);
     assert.equal(rawHistory(await messages(source, "src/components/Example.tsx")).length, 2);
+    assert.ok(rawHistory(await messages(source, "src/components/Example.tsx")).every((m) => m.severity === 2));
     assert.equal(rawHistory(await messages(source, "src/lib/nav/history.ts")).length, 0);
     assert.equal(rawHistory(await messages(source, "src/lib/hooks/__tests__/example.test.ts")).length, 0);
   });

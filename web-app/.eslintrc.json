@@ -175,10 +175,6 @@
           {
             "selector": "TSInterfaceDeclaration[id.name=/Props$/] > TSInterfaceBody > TSPropertySignature:nth-child(13) ~ TSPropertySignature",
             "message": "Component props interface has >12 props. Consider splitting the component or grouping props into a sub-interface."
-          },
-          {
-            "selector": "CallExpression[callee.property.name=/^(replaceState|pushState)$/][callee.object.property.name=\"history\"]",
-            "message": "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav."
           }
         ]
       }
@@ -192,11 +188,18 @@
           {
             "selector": "Literal[value=/^(Executing|Processing|Needs Approval|Input Required|Idle|Unknown|Success|Error|Tests Failing|Rate Limited|Waiting for Agent)$/]",
             "message": "Use DetectedStatus enum from @/gen/session/v1/types_pb instead of raw strings for detected status values."
-          },
-          {
-            "selector": "CallExpression[callee.property.name=/^(replaceState|pushState)$/][callee.object.property.name=\"history\"]",
-            "message": "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav."
           }
+        ]
+      }
+    },
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "excludedFiles": ["src/lib/nav/**", "**/*.test.*", "**/*.spec.*", "**/__tests__/**"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          { "property": "pushState", "message": "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav." },
+          { "property": "replaceState", "message": "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav." }
         ]
       }
     },
@@ -205,7 +208,7 @@
       "excludedFiles": ["src/lib/nav/**", "src/lib/lazy/**", "**/*.test.*", "**/*.spec.*", "**/__tests__/**"],
       "rules": {
         "@typescript-eslint/no-restricted-imports": [
-          "warn",
+          "error",
           {
             "patterns": [
               {
