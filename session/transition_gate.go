@@ -126,7 +126,7 @@ type gateVerdict struct {
 func decideTransition(view WorkflowEngine, item *BacklogItemData, req TransitionRequest) gateVerdict {
 	from := BacklogStatus(item.Status)
 	snap := BuildStageConfigSnapshotFallback(item)
-	if !view.CanTransition(from, req.To, snap) {
+	if !view.CanTransition(from, req.To, snap) && !operatorGraphOverride(view, guardInputFor(req, item, from).OverrideReason, req.To) {
 		return gateVerdict{
 			Err:    fmt.Errorf("invalid transition from %q to %q: %w", from, req.To, ErrTransitionNotAllowed),
 			Reason: DeniedConfigGraph,
@@ -136,6 +136,17 @@ func decideTransition(view WorkflowEngine, item *BacklogItemData, req Transition
 		return gateVerdict{Err: err, Reason: classifyGateDenial(err)}
 	}
 	return gateVerdict{}
+}
+
+// graphOverrider is implemented by a class-aware view that lets an operator's
+// override_reason bypass the graph (ADR-001, ADR-007 D3).
+type graphOverrider interface {
+	OverridesGraph(overrideReason string, to BacklogStatus) bool
+}
+
+func operatorGraphOverride(view WorkflowEngine, overrideReason string, to BacklogStatus) bool {
+	o, ok := view.(graphOverrider)
+	return ok && o.OverridesGraph(overrideReason, to)
 }
 
 func guardInputFor(req TransitionRequest, item *BacklogItemData, from BacklogStatus) BacklogItemTransitionInput {

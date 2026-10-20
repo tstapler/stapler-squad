@@ -379,6 +379,19 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnaps
 	}
 }
 
+// OverridesGraph reports whether an operator's override_reason frees a graph
+// denial. It is true only in Enforce, where the Configured graph is the
+// authority; Off and Shadow keep the legacy answer. Only the operator
+// transition RPC qualifies: other operator writers (OverrideVerdict) always
+// carry a reason for a different purpose and must still honor a disabled edge.
+func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool {
+	if v.caller != CallerOperatorTransitionRPC || v.mode() != ModeEnforce || !v.s.enf.bypassesGraph(v.pol, overrideReason, to) {
+		return false
+	}
+	v.s.infof("[SwitchableWorkflowEngine] operator override bypassed the graph to=%s", to)
+	return true
+}
+
 // AllowedTransitions implements WorkflowEngine. It is a read: Default answers
 // in Off and Shadow whatever the caller's legacy policy.
 func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) []BacklogStatus {

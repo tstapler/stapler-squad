@@ -34,12 +34,28 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAnswer",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"proto.UpdateStageTransitionRequest.id": {
+		testName:   "TestConfigSurfaceProof_UpdateStageTransition_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.UpdateStageTransition",
+	},
+	"proto.UpdateStageTransitionRequest.enabled": {
+		testName:   "TestConfigSurfaceProof_UpdateStageTransition_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.UpdateStageTransition",
+	},
+	"proto.CreateTransitionGateRequest.transition_id": {
+		testName:   "TestConfigSurfaceProof_CreateTransitionGate_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateTransitionGate",
+	},
+	"proto.CreateTransitionGateRequest.enabled": {
+		testName:   "TestConfigSurfaceProof_CreateTransitionGate_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateTransitionGate",
+	},
 }
 
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 74
+const pendingCeiling = 70
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -81,12 +97,11 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 		"proto.CreateStageRequest.name", "proto.CreateStageRequest.slug",
 		"proto.CreateStageTransitionRequest.enabled", "proto.CreateStageTransitionRequest.from_stage_slug",
 		"proto.CreateStageTransitionRequest.to_stage_slug", "proto.CreateTransitionGateRequest.config",
-		"proto.CreateTransitionGateRequest.enabled", "proto.CreateTransitionGateRequest.kind",
+		"proto.CreateTransitionGateRequest.kind",
 		"proto.CreateTransitionGateRequest.order_index", "proto.CreateTransitionGateRequest.stateful",
-		"proto.CreateTransitionGateRequest.transition_id", "proto.UpdateStageRequest.description",
+		"proto.UpdateStageRequest.description",
 		"proto.UpdateStageRequest.enabled", "proto.UpdateStageRequest.id", "proto.UpdateStageRequest.is_entry",
 		"proto.UpdateStageRequest.is_terminal", "proto.UpdateStageRequest.name",
-		"proto.UpdateStageTransitionRequest.enabled", "proto.UpdateStageTransitionRequest.id",
 		"proto.UpdateTransitionGateRequest.config", "proto.UpdateTransitionGateRequest.enabled",
 		"proto.UpdateTransitionGateRequest.id", "proto.UpdateTransitionGateRequest.kind",
 		"proto.UpdateTransitionGateRequest.order_index", "proto.UpdateTransitionGateRequest.stateful")

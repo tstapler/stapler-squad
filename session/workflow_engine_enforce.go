@@ -35,8 +35,9 @@ const (
 //   - graph: Configured graph UNION SystemRequiredEdges(); when Configured is
 //     unusable, Default graph UNION SystemRequiredEdges();
 //   - guards: Default TransitionGuard on the input unchanged, AND Configured
-//     operator gates, except a non-empty OverrideReason skips the Configured
-//     gates (never the graph, never a Default guard).
+//     operator gates, except a non-empty OverrideReason on an operator call
+//     skips the Configured gates and the Configured graph (never a Default
+//     guard, never a system-required edge's protection in the CRUD RPC).
 //
 // The *For methods apply a callPolicy (ADR-007 D3); allowedTransitions is the
 // operator-policy read the seed preview uses.
@@ -49,7 +50,8 @@ type enforceAnswer struct {
 // value fails closed to the agent semantics.
 //
 //	operator: Default guards see the input unchanged; a non-empty OverrideReason
-//	          also bypasses Configured operator gates (never the graph).
+//	          also bypasses Configured operator gates and the graph, provided the
+//	          target is a known stage (owner decision 2026-10-18, option B).
 //	agent:    Default guards see the input unchanged, so OverrideReason frees only
 //	          the exemptions the Default guard itself grants; it never bypasses a
 //	          Configured gate, the graph, or an AC/plan/blocker denial.
@@ -79,6 +81,24 @@ func (p callPolicy) defaultGuardInput(item BacklogItemTransitionInput) BacklogIt
 // bypassesOperatorGates reports whether item's override frees Configured gates.
 func (p callPolicy) bypassesOperatorGates(item BacklogItemTransitionInput) bool {
 	return p.Class == ClassOperator && item.OverrideReason != ""
+}
+
+// bypassesGraph reports whether an override frees the graph check: operator
+// class only, non-empty reason, and only toward a known stage so an override
+// cannot write a status that exists nowhere.
+func (a enforceAnswer) bypassesGraph(pol callPolicy, overrideReason string, to BacklogStatus) bool {
+	return pol.Class == ClassOperator && overrideReason != "" && a.knownStage(to)
+}
+
+func (a enforceAnswer) knownStage(s BacklogStatus) bool {
+	if cfg, _ := a.usableConfigured(); cfg != nil {
+		return cfg.cache.HasStage(s)
+	}
+	if def, ok := a.def.(*DefaultWorkflowEngine); ok {
+		_, known := def.transitions[s]
+		return known
+	}
+	return false
 }
 
 // usableConfigured returns cfg when it can answer the graph, else the reason
