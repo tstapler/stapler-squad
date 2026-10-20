@@ -27,16 +27,37 @@ var systemRequiredCore = []SystemEdge{
 	{BacklogStatusPRPending, BacklogStatusInProgress},
 	{BacklogStatusInProgress, BacklogStatusReady},
 	{BacklogStatusIdea, BacklogStatusReady},
+	// request_review re-requests from pr_pending (Task 1.5.1b audit).
+	{BacklogStatusPRPending, BacklogStatusReview},
+	// report_blocked from review.
+	{BacklogStatusReview, BacklogStatusReady},
+	// respawnTriage resets a queued item before retriage.
+	{BacklogStatusQueued, BacklogStatusIdea},
+}
+
+// systemRequiredOffGraph lists registered edges that validTransitions lacks
+// but real callers write (Task 1.5.1b audit, ADR-007 D7): SkipReviewGate
+// completion, the pushAndCreatePR fallback, and drift recovery to pr_pending.
+// Like the archive group they never reach the UI-facing allowed list.
+var systemRequiredOffGraph = []SystemEdge{
+	{BacklogStatusInProgress, BacklogStatusDone},
+	{BacklogStatusReady, BacklogStatusDone},
+	{BacklogStatusIdea, BacklogStatusPRPending},
+	{BacklogStatusRefining, BacklogStatusPRPending},
+	{BacklogStatusReady, BacklogStatusPRPending},
+	{BacklogStatusQueued, BacklogStatusPRPending},
+	{BacklogStatusInProgress, BacklogStatusPRPending},
 }
 
 // SystemRequiredEdges returns the enumerable system-required set: the core
-// edges plus the archive group (X->archived for every built-in status X, and
-// archived->archived). It does not list custom-stage archive edges; use
-// IsSystemRequired for those. validTransitions is deliberately unchanged, so
-// Off and Shadow keep answering exactly as before.
+// edges, the archive group (X->archived for every built-in status X, and
+// archived->archived) and the off-graph recovery edges. It does not list
+// custom-stage archive edges; use IsSystemRequired for those. validTransitions
+// is deliberately unchanged, so Off and Shadow keep answering exactly as before.
 func SystemRequiredEdges() []SystemEdge {
-	edges := make([]SystemEdge, 0, len(systemRequiredCore)+len(builtInStageOrder))
+	edges := make([]SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(builtInStageOrder))
 	edges = append(edges, systemRequiredCore...)
+	edges = append(edges, systemRequiredOffGraph...)
 	for _, from := range builtInStageOrder {
 		edges = append(edges, SystemEdge{from, BacklogStatusArchived})
 	}
@@ -56,9 +77,11 @@ func IsSystemRequired(from, to BacklogStatus) bool {
 	if to == BacklogStatusArchived {
 		return true
 	}
-	for _, e := range systemRequiredCore {
-		if e.From == from && e.To == to {
-			return true
+	for _, group := range [][]SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
+		for _, e := range group {
+			if e.From == from && e.To == to {
+				return true
+			}
 		}
 	}
 	return false

@@ -17,6 +17,9 @@ func TestSystemRequiredEdges_IsSubsetOfValidTransitionsPlusArchiveEdges_AndConta
 	for _, s := range builtInStageOrder {
 		archiveGroup[edgeKey(s, BacklogStatusArchived)] = true
 	}
+	for _, e := range systemRequiredOffGraph {
+		archiveGroup[edgeKey(e.From, e.To)] = true
+	}
 
 	got := map[string]bool{}
 	for _, e := range SystemRequiredEdges() {
