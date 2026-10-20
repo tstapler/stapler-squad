@@ -814,3 +814,14 @@ func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenId
 	require.Zero(t, moved)
 	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
 }
+
+func TestCreateBacklogItemForDebug_CreatesAtAnyStatus_AndCountsDebugCreate(t *testing.T) {
+	t.Parallel()
+	h := newGateHarness(t, ModeEnforce)
+	before := EngineBypassCount(CallerDebugCreate)
+
+	item, err := h.storage.CreateBacklogItemForDebug(context.Background(), BacklogItemData{Title: "seeded", Status: string(BacklogStatusReview)})
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReview), h.status(t, item.ID))
+	require.Equal(t, before+1, EngineBypassCount(CallerDebugCreate))
+}

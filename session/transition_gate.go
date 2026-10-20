@@ -28,6 +28,9 @@ import (
 const (
 	CallerRollback TransitionCaller = "rollback"
 	CallerDebug    TransitionCaller = "debug"
+	// CallerDebugCreate labels Storage.CreateBacklogItemForDebug: creation has no
+	// "from" status, so it is exempt but counted.
+	CallerDebugCreate TransitionCaller = "debug_create"
 )
 
 // Denial reasons recorded on a transition_denied row (denied_reason).

@@ -1011,6 +1011,19 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 	return created, nil
 }
 
+// CreateBacklogItemForDebug is CreateBacklogItem for the operator-only debug
+// seed and mutate endpoints, which may create an item at any status. It is
+// counted as workflow_engine_bypass_total{caller=debug_create}; every other
+// creator is held to idea (or no status) by the bypass inventory test
+// (ADR-007 D1), which is why CreateBacklogItem itself rejects nothing.
+func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data BacklogItemData) (*BacklogItemData, error) {
+	created, err := s.CreateBacklogItem(ctx, data)
+	if err == nil {
+		RecordEngineBypass(CallerDebugCreate)
+	}
+	return created, err
+}
+
 // recordClaim is the single choke point (ADR-002 of
 // project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
 // claim for every newly created item that has an ExternalURL. Best-effort: a

@@ -112,7 +112,7 @@ func (h *BacklogDebugMutateHandler) handleCreate(w http.ResponseWriter, r *http.
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
 		Title:              req.Title,
 		Description:        req.Description,
 		Status:             status,
