@@ -310,14 +310,15 @@ func wakeProvenance(t domain.WakeTriggerType) string {
 var wakeEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
 
 // escapeWakePayload neutralises angle brackets (so a payload cannot close the
-// wake tag or forge another) and drops control bytes other than newline and tab.
+// wake tag or forge another) and drops C0 and C1 control characters other than
+// newline and tab (C1 includes the 8-bit CSI, U+009B).
 func escapeWakePayload(s string) string {
 	s = wakeEscaper.Replace(s)
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
 			return r
 		}
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
 		}
 		return r
