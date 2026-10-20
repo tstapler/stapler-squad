@@ -330,11 +330,8 @@ for (const vp of VIEWPORTS) {
       expect(consoleErrors).toEqual([]);
     });
 
-    // UX-47 says Retry after a failed list focuses the hash row. It does not today: useHashRowFocus
-    // counts the click (or Enter) on Retry as "the user already moved", so the mount-time hash attempt
-    // never focuses. test.fail() keeps CI green while the defect stands and goes red the day it is fixed.
+    // UX-47: Retry after a failed list focuses the hash row (the Retry press is not "the user already moved").
     test("hash_focus_should_focus_the_row_once_When_the_list_failed_then_Retry_succeeds", async ({ page }) => {
-      test.fail(true, "UX-47 defect: a Retry click is treated as user interaction, so the hash row is never focused");
       const store = await FlagStore.install(page);
       const features = new FeaturesSettingsPage(page);
       // Answered by state, not by call count: the app shell also reads the list.

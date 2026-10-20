@@ -79,6 +79,13 @@ export function useHashRowFocus(listState: ListState): void {
     return () => clearTimeout(timer);
   }, [attempt]);
 
+  // The press that leaves "failed" is the Retry that triggered this load, not the user choosing another target.
+  const previousState = useRef(listState);
+  useEffect(() => {
+    if (previousState.current === "failed" && listState !== "failed") interacted.current = false;
+    previousState.current = listState;
+  }, [listState]);
+
   useEffect(() => {
     if (!attempt || handled.current === attempt.id) return;
     // "failed" waits: a successful Retry moves the list to "loaded" and the attempt runs then.
