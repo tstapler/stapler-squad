@@ -449,3 +449,45 @@ func TestActuatorWorkflowEngineAndNudgeEndpoints_Return401OnRemoteChain_AndHostG
 		}
 	}
 }
+
+func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNewPerClass(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	rec := session.NewShadowLedgerRecorder(dir, session.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
+	rec.RecordShadowCallFor(session.ClassAgent, session.MethodValidateGates, session.PathTransition)
+	rec.RecordDivergenceFor(session.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
+	rec.RecordObservation(session.ShadowObservation{
+		Method: session.MethodValidateGates, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusInProgress,
+		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: session.ClassAgent, Caller: session.CallerMCPResumeWork,
+	})
+	if err := rec.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	src := &WorkflowEngineSoakSource{
+		Ledger: func() (session.ShadowLedger, error) {
+			return session.ReadShadowLedgerFile(session.ShadowLedgerPath(dir))
+		},
+		Now: func() time.Time { return soakTestNow },
+	}
+
+	agent := getSoak(t, src, "format=text&class=agent").Body.String()
+	if strings.Contains(agent, "no evidence") || !strings.Contains(agent, "class=agent") {
+		t.Errorf("the agent class must be scored from its own section:\n%s", agent)
+	}
+	operator := getSoak(t, src, "format=text&class=operator").Body.String()
+	if !strings.Contains(operator, "no evidence") {
+		t.Errorf("the operator class has no samples and must say so:\n%s", operator)
+	}
+
+	var report workflowEngineReport
+	if err := json.Unmarshal(getSoak(t, src, "").Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range report.DivergenceTotal {
+		found = found || (s.Class == "agent" && s.Divergence == "guard_new" && s.Value == 1)
+	}
+	if !found {
+		t.Errorf("divergence_total must carry agent guard_new=1, got %+v", report.DivergenceTotal)
+	}
+}
