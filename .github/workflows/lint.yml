@@ -101,11 +101,14 @@ jobs:
   proto-breaking:
     name: Proto breaking changes
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      # Full-history fetch (fetch-depth: 0) pulls every backlog/* branch and
+      # intermittently ate the whole job budget; buf only needs the tip of main.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      - name: Fetch origin/main (tip only)
+        run: git fetch --depth=1 origin '+refs/heads/main:refs/remotes/origin/main'
 
       - name: Set up buf
         uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
