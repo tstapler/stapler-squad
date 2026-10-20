@@ -40,6 +40,8 @@ const nextConfig: NextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       '@/lib/lazy/impl': path.resolve(__dirname, 'src/lib/lazy/impl.next.tsx'),
+      // Navigation seam: the Next build uses next/navigation through impl.next.tsx.
+      '@/lib/nav/impl': path.resolve(__dirname, 'src/lib/nav/impl.next.tsx'),
     };
 
     // Disable minification for development builds (better error messages)
