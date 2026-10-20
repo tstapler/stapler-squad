@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 	"errors"
-	"os/exec"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -330,7 +330,7 @@ func newPreflightFixture(t *testing.T, storage *Storage) (*BacklogItemData, Item
 		{"init", "-q"},
 		{"remote", "add", "origin", "https://github.com/tstapler/stapler-squad.git"},
 	} {
-		cmd := exec.Command("git", args...)
+		cmd := safeexec.CommandContext(ctx, "git", args...)
 		cmd.Dir = repoDir
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))
