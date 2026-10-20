@@ -402,6 +402,30 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 	return itemSessionToSummary(is), nil
 }
 
+// ListItemSessionsBySessionUUIDs returns the most recent ItemSession for each
+// of the given session UUIDs in a single query (UUIDs with no row are absent
+// from the map). The ReviewVerdict edge is loaded; the BacklogItem edge is not.
+func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]ItemSessionSummary, error) {
+	if len(sessionUUIDs) == 0 {
+		return map[string]ItemSessionSummary{}, nil
+	}
+	rows, err := r.client.ItemSession.Query().
+		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
+		WithReviewVerdict().
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list item sessions by session uuids: %w", err)
+	}
+	result := make(map[string]ItemSessionSummary, len(rows))
+	for _, row := range rows {
+		if _, seen := result[row.SessionUUID]; !seen { // newest first
+			result[row.SessionUUID] = itemSessionToSummary(row)
+		}
+	}
+	return result, nil
+}
+
 // ClaimDiagnoseNudgeAttempt atomically marks the diagnose-role ItemSession
 // identified by sessionUUID as having attempted its one nudge write —
 // a single UPDATE ... WHERE diagnose_nudge_attempted_at IS NULL statement, so

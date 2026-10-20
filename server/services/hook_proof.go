@@ -88,10 +88,16 @@ func (p *HookProofs) rotateTo(secretPath string) error {
 }
 
 func (p *HookProofs) mac(sessionUUID string) string {
+	return p.macForDomain(hookProofDomain, sessionUUID)
+}
+
+// macForDomain is the shared HMAC-SHA256(secret, domain || uuid); a distinct
+// domain makes proofs of different purposes non-interchangeable (McpProofs).
+func (p *HookProofs) macForDomain(domain, sessionUUID string) string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	m := hmac.New(sha256.New, p.secret)
-	m.Write([]byte(hookProofDomain))
+	m.Write([]byte(domain))
 	m.Write([]byte(sessionUUID))
 	return hex.EncodeToString(m.Sum(nil))
 }

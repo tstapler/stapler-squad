@@ -15,7 +15,7 @@ otel.instrumentation.go
 otelc.runtime.go
 claude-squad
 claude-mux
-ssq-hooks
+/ssq-hooks
 _CodeSignature/
 **.DS_Store
 cs

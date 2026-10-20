@@ -715,14 +715,18 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// operator must merge it manually, so this needs a notification, not just a log line
 	// (same silent-failure pattern found and fixed elsewhere in this codebase — see
 	// docs/tasks/backlog-feature-improvement.md).
+	preflightSent := l.autoMergePreflight(wt.RepoPath, item.ID)
 	if autoErr := g.EnablePRAutoMerge(ctx, prNumber); autoErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR auto-merge item=%s pr=%d: %v", item.ID, prNumber, autoErr)
-		l.notify(item.ID,
-			"Auto-merge not enabled",
-			fmt.Sprintf("%s — PR #%d could not be set to auto-merge (%v). It will need to be merged manually once checks pass.", item.Title, prNumber, autoErr),
-			8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-			false, true, // urgent, important — needs eventual manual merge, but only once checks pass
-		)
+		// A preflight sent for this PR already covers it: one message per PR.
+		if !preflightSent {
+			l.notify(item.ID,
+				"Auto-merge not enabled",
+				fmt.Sprintf("%s — PR #%d could not be set to auto-merge (%v). It will need to be merged manually once checks pass.", item.Title, prNumber, autoErr),
+				8,           // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+				false, true, // urgent, important — needs eventual manual merge, but only once checks pass
+			)
+		}
 	} else {
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d auto-merge enabled", item.ID, prNumber)
 	}
@@ -749,6 +753,94 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		return
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
+}
+
+const (
+	autoMergePreflightWindow = 24 * time.Hour
+	autoMergePreflightType   = 10 // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
+)
+
+// autoMergePreflight warns once per repo per 24h that the repo disallows
+// auto-merge. It reads the repo-settings cache only: a cold cache starts a
+// background warm-up and sends nothing, so PR creation never waits on GitHub.
+// Reports whether a notification was sent.
+func (l *BacklogLifecycleListener) autoMergePreflight(repoPath, itemID string) bool {
+	l.repoSettingsMu.Lock()
+	seam := l.repoSettings
+	l.repoSettingsMu.Unlock()
+	if seam.Cached == nil || seam.Fetch == nil {
+		return false
+	}
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, enterpriseHostsForRemoteParsing())
+	if err != nil || !ref.IsValid() {
+		return false
+	}
+	res, ok := seam.Cached(ref)
+	if !ok {
+		l.warmRepoSettings(seam, ref)
+		return false
+	}
+	if allowed, known := res.AutoMerge(); !known || allowed {
+		return false
+	}
+	key := fmt.Sprintf("automerge-off:%s/%s", github.NormalizeHost(ref.Host()), ref)
+	if !l.claimPreflight(key) {
+		return false
+	}
+	l.notify(itemID,
+		"Auto-merge unavailable",
+		fmt.Sprintf("Repo %s does not allow auto-merge. PR will still be created.", ref),
+		autoMergePreflightType,
+		false, false,
+	)
+	return true
+}
+
+// claimPreflight records key as sent unless it was sent within the window.
+func (l *BacklogLifecycleListener) claimPreflight(key string) bool {
+	l.repoSettingsMu.Lock()
+	defer l.repoSettingsMu.Unlock()
+	now := time.Now
+	if l.preflightNowFn != nil {
+		now = l.preflightNowFn
+	}
+	t := now()
+	if last, seen := l.preflightSentAt[key]; seen && t.Sub(last) < autoMergePreflightWindow {
+		return false
+	}
+	if l.preflightSentAt == nil {
+		l.preflightSentAt = map[string]time.Time{}
+	}
+	l.preflightSentAt[key] = t
+	return true
+}
+
+// warmRepoSettings fetches settings in the background (singleflight and the
+// 2s timeout live in the github cache) so a later PR can warn. A failed fetch
+// sends nothing.
+func (l *BacklogLifecycleListener) warmRepoSettings(seam RepoSettingsSeam, ref github.RepoRef) {
+	key := ref.String() + "@" + ref.Host()
+	l.repoSettingsMu.Lock()
+	if l.preflightInflight[key] {
+		l.repoSettingsMu.Unlock()
+		return
+	}
+	if l.preflightInflight == nil {
+		l.preflightInflight = map[string]bool{}
+	}
+	l.preflightInflight[key] = true
+	l.preflightWarmWG.Add(1)
+	l.repoSettingsMu.Unlock()
+	go func() {
+		defer l.preflightWarmWG.Done()
+		defer func() {
+			l.repoSettingsMu.Lock()
+			delete(l.preflightInflight, key)
+			l.repoSettingsMu.Unlock()
+		}()
+		ctx := github.WithGitHubCallOrigin(l.shutdownCtx, github.OriginBacklogSync)
+		seam.Fetch(ctx, ref)
+	}()
 }
 
 // stayInReviewAndNotify handles push/PR-creation failures for both

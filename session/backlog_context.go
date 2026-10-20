@@ -303,7 +303,7 @@ func buildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 			item.PlanArtifactsPath)
 	}
 
-	sb.WriteString(taskProtocolBlock)
+	sb.WriteString(taskProtocol())
 	sb.WriteString("\n")
 
 	return sb.String()

@@ -568,7 +568,7 @@ func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowed
 	if !sentInitial {
 		// Exited before we even sent the first prompt — likely a startup crash.
 		// One-shot sessions (backlog:triage/backlog:review) are never retried.
-		if isOneShot(inst) {
+		if IsOneShot(inst) {
 			return false, true
 		}
 		log.Warn("SessionDriver: session exited before initial prompt sent",
@@ -580,7 +580,7 @@ func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowed
 	if inst.OneShot {
 		tryExtractClaudeSessionID(ctx, inst)
 	}
-	if isOneShot(inst) {
+	if IsOneShot(inst) {
 		// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
 		return false, true
 	}
@@ -1165,10 +1165,10 @@ func buildContinuationPrompt(inst *Instance) string {
 		"Do not re-introduce yourself or repeat completed work."
 }
 
-// isOneShot returns true for sessions that should NOT be auto-retried.
+// IsOneShot returns true for sessions that should NOT be auto-retried.
 // Triage and review sessions run exactly once; retrying them could corrupt
 // backlog state by re-triggering lifecycle transitions.
-func isOneShot(inst *Instance) bool {
+func IsOneShot(inst *Instance) bool {
 	return inst.HasTag("backlog:triage") || inst.HasTag("backlog:review")
 }
 

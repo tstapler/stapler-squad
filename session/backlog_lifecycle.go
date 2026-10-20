@@ -126,6 +126,15 @@ type BacklogLifecycleListener struct {
 	// guarded by dashboardBaseURLFnMu. Nil means the footer carries no host.
 	hostRefFn func() (HostID, string)
 
+	// repoSettingsMu guards the pre-PR repo-settings seam (see
+	// SetRepoSettingsSeam) and the per-repo preflight dedupe state.
+	repoSettingsMu    sync.Mutex
+	repoSettings      RepoSettingsSeam
+	preflightSentAt   map[string]time.Time
+	preflightNowFn    func() time.Time
+	preflightWarmWG   sync.WaitGroup
+	preflightInflight map[string]bool
+
 	// noopThresholdMu guards noopThresholdFn (see SetNoopDispatchThresholdFn).
 	noopThresholdMu sync.RWMutex
 	noopThresholdFn func() int
@@ -369,6 +378,22 @@ func (l *BacklogLifecycleListener) SetDashboardBaseURLFn(fn func() string) {
 	l.dashboardBaseURLFnMu.Lock()
 	defer l.dashboardBaseURLFnMu.Unlock()
 	l.dashboardBaseURLFn = fn
+}
+
+// RepoSettingsSeam gives the PR-create path a non-blocking view of GitHub repo
+// settings: Cached reads the cache only, Fetch warms it. Both nil disables the
+// pre-PR warning.
+type RepoSettingsSeam struct {
+	Cached func(ref github.RepoRef) (github.RepoSettingsResult, bool)
+	Fetch  func(ctx context.Context, ref github.RepoRef) github.RepoSettingsResult
+}
+
+// SetRepoSettingsSeam wires the repo-settings lookups used by the pre-PR
+// auto-merge warning.
+func (l *BacklogLifecycleListener) SetRepoSettingsSeam(s RepoSettingsSeam) {
+	l.repoSettingsMu.Lock()
+	defer l.repoSettingsMu.Unlock()
+	l.repoSettings = s
 }
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for

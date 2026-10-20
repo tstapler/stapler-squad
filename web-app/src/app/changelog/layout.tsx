@@ -1,7 +1,5 @@
-"use client";
-
-import { RequireFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { FeatureGuard } from "../FeatureGuard";
 
 export default function ChangelogLayout({ children }: { children: React.ReactNode }) {
-  return <RequireFeatureFlag flag="changelog">{children}</RequireFeatureFlag>;
+  return <FeatureGuard flag="changelog">{children}</FeatureGuard>;
 }

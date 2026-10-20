@@ -1474,6 +1474,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for range ticker.C {
 			recoverAndLog("backlog reconcile ticker", func() { backlogLifecycleListener.ReconcileStuck(ctx) })
 			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
+			recoverAndLog("wake reconcile ticker", func() { runWakeReconcile(ctx) })
 		}
 	}()
 
@@ -1496,6 +1497,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
+	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
 	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)

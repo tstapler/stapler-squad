@@ -191,6 +191,8 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 3. Update protobuf definitions in `proto/session/v1/` if needed → `make proto-gen`
 4. Test with `make install-service`
 
+**New page:** also add a row to `web-app/src/app/route-meta.ts` (title and optional feature-flag `guard`); `route-meta.test.ts` fails with the fix instruction if it is missing or differs from the page's `metadata`. Gate a subtree with `<FeatureGuard>` in its layout. See `.claude/rules/nav-facade.md`.
+
 ### New Omnibar Capabilities
 Two registries must stay in sync — see `docs/reference/feature-testing-registry.md`:
 - **OmnibarAction union** (`types.ts` + `dispatch.ts` + `dispatch.test.ts`) for user-triggerable actions
@@ -369,3 +371,10 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
 | Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
+| Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
+| Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
+| Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
+| Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |
+| Verify the notification-actions rollout on an isolated instance, per flag | `docs/how-to/verify-notification-actions-rollout.md` |
+| Flag-default flip PR checklist for the four notification-actions flags | `docs/how-to/flag-default-flip-pr-template.md` |
+| Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |

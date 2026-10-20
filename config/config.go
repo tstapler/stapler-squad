@@ -338,6 +338,11 @@ type Config struct {
 	// MaxConcurrentTriage caps simultaneous headless triage calls; extra runs queue.
 	// 0 = default (8), clamped to [1, MaxConcurrentTriageCeiling].
 	MaxConcurrentTriage int `json:"max_concurrent_triage,omitempty"`
+
+	// WakeLimits overrides the defaults of the plan's "Wake limits" table for
+	// agent wake triggers; zero values keep the defaults and every value is
+	// clamped to the ceilings compiled into server/wakes.
+	WakeLimits WakeLimitsConfig `json:"wake_limits,omitempty"`
 	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
 	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
 	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
@@ -1095,6 +1100,24 @@ const (
 	// HeadlessTriageModelAccountDefault opts out of the model pin.
 	HeadlessTriageModelAccountDefault = "none"
 )
+
+// WakeLimitsConfig is the operator-settable half of the Wake limits table.
+// Zero means "use the default"; server/wakes clamps each value to its hard
+// ceiling, so config can lower a limit or raise it only up to that ceiling.
+type WakeLimitsConfig struct {
+	MinCronIntervalMinutes int `json:"min_cron_interval_minutes,omitempty"`
+	PendingPerOwner        int `json:"pending_per_owner,omitempty"`
+	MaxFiresCron           int `json:"max_fires_cron,omitempty"`
+	ExpiresHorizonHours    int `json:"expires_horizon_hours,omitempty"`
+	Generation             int `json:"generation,omitempty"`
+	FiresPerOwnerHour      int `json:"fires_per_owner_hour,omitempty"`
+	FiresGlobalHour        int `json:"fires_global_hour,omitempty"`
+	PeerOpenPerAsker       int `json:"peer_open_per_asker,omitempty"`
+	PayloadChars           int `json:"payload_chars,omitempty"`
+	DebounceSeconds        int `json:"debounce_seconds,omitempty"`
+	BusyHoldMinutes        int `json:"busy_hold_minutes,omitempty"`
+	ReviveLockSeconds      int `json:"revive_lock_seconds,omitempty"`
+}
 
 // MaxConcurrentTriageOrDefault returns the triage concurrency cap, nil-safe.
 func (c *Config) MaxConcurrentTriageOrDefault() int {

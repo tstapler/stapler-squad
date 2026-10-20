@@ -230,7 +230,7 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 	}
 
 	// review.md
-	files["review.md"] = fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
+	files["review.md"] = withWakeGuidance(fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
 		"Then end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to "+
 		"wait: every wake re-reads your whole context. The app sends you a message with the verdict as soon as it "+
 		"is recorded.\n\n"+
@@ -241,7 +241,7 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 		"call reports which attempt number you're on out of %d allowed in this session — the count is tracked "+
 		"server-side, so trust what it reports rather than counting your own calls. Once it says you've hit the "+
 		"cap, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, "+
-		"rather than retrying /backlog/review again.\n", itemID, MaxSameSessionReviewAttempts)
+		"rather than retrying /backlog/review again.\n", itemID, MaxSameSessionReviewAttempts))
 
 	// ship.md
 	files["ship.md"] = fmt.Sprintf("You are ready to ship your work as a pull request — either because /backlog/review just "+

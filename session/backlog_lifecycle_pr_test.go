@@ -2,13 +2,18 @@ package session
 
 import (
 	"context"
+	"errors"
+	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -313,4 +318,155 @@ func TestPRNeedsAttention_ShouldHaveUnstampedEscalation_WhenAutomationFails(t *t
 	require.Equal(t, []string{"Auto-rework paused"}, n.titles(), "the dead-end escalation goes through plain Notify")
 	assert.True(t, n.calls[0].Urgent, "the escalation is urgent")
 	assert.EqualValues(t, 8, n.calls[0].NotificationType)
+}
+
+// newPreflightFixture is newPushAndCreatePRTestFixture with a real git repo
+// whose origin remote resolves to tstapler/stapler-squad.
+func newPreflightFixture(t *testing.T, storage *Storage) (*BacklogItemData, ItemSessionSummary) {
+	t.Helper()
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", "https://github.com/tstapler/stapler-squad.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "Preflight item", AcceptanceCriteria: `[]`, Priority: 1,
+		Status: string(BacklogStatusReview), RepoPath: repoDir,
+	})
+	require.NoError(t, err)
+	sessionUUID := uuid.New().String()
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+	inst := newTestInstance("preflight-" + sessionUUID[:8])
+	inst.UUID = sessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir+"/../wt", "preflight-test", "backlog/preflight-test", "abc123")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	return item, ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
+}
+
+type preflightHarness struct {
+	listener *BacklogLifecycleListener
+	notifier *fakeNotifier
+	creator  *fakePRCreator
+	now      time.Time
+	fetches  int32
+}
+
+func newPreflightHarness(storage *Storage, cached func() (github.RepoSettingsResult, bool)) *preflightHarness {
+	h := &preflightHarness{
+		listener: NewBacklogLifecycleListener(storage),
+		notifier: &fakeNotifier{},
+		creator:  &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/1", createNumber: 1},
+		now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	h.listener.SetNotifier(h.notifier)
+	h.listener.SetPRCreatorFactory(func(_, _, _, _, _ string) prCreator { return h.creator })
+	h.listener.preflightNowFn = func() time.Time { return h.now }
+	h.listener.SetRepoSettingsSeam(RepoSettingsSeam{
+		Cached: func(github.RepoRef) (github.RepoSettingsResult, bool) { return cached() },
+		Fetch: func(ctx context.Context, _ github.RepoRef) github.RepoSettingsResult {
+			if github.GitHubCallOriginFrom(ctx) == github.OriginBacklogSync {
+				atomic.AddInt32(&h.fetches, 1)
+			}
+			return github.RepoSettingsResult{}
+		},
+	})
+	return h
+}
+
+func (h *preflightHarness) infoCalls() []fakeNotifierCall {
+	var out []fakeNotifierCall
+	for _, c := range h.notifier.calls {
+		if c.NotificationType == autoMergePreflightType {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// autoMergeOff is a cached OK result whose allow_auto_merge is false.
+var autoMergeOff = github.RepoSettingsResult{Status: github.RepoSettingsOK}
+
+func TestPushAndCreatePR_Preflight_OncePerRepoPer24h(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	h := newPreflightHarness(storage, func() (github.RepoSettingsResult, bool) { return autoMergeOff, true })
+
+	var firstItemID string
+	for i := 0; i < 5; i++ {
+		item, is := newPreflightFixture(t, storage)
+		if i == 0 {
+			firstItemID = item.ID
+		}
+		h.creator.createCalled = false
+		h.listener.pushAndCreatePR(context.Background(), item, is)
+		require.True(t, h.creator.createCalled, "PR creation is never blocked")
+	}
+	info := h.infoCalls()
+	require.Len(t, info, 1, "exactly one preflight in 24h")
+	c := info[0]
+	assert.False(t, c.Urgent)
+	assert.False(t, c.Important)
+	assert.Equal(t, firstItemID, c.RecipientID)
+	assert.Contains(t, c.Message, "tstapler/stapler-squad")
+	assert.Contains(t, c.Message, "PR will still be created")
+	assert.NotContains(t, strings.ToLower(c.Message), "unknown")
+	assert.NotContains(t, c.Message, "allow_auto_merge")
+
+	key := "automerge-off:github.com/tstapler/stapler-squad"
+	assert.False(t, h.listener.claimPreflight(key), "still inside the window")
+	h.now = h.now.Add(25 * time.Hour)
+	assert.True(t, h.listener.claimPreflight(key), "claim reopens after 24h")
+}
+
+func TestPushAndCreatePR_Preflight_SuppressesAutoMergeFailureNoticeForThatPR(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	h := newPreflightHarness(storage, func() (github.RepoSettingsResult, bool) { return autoMergeOff, true })
+	h.creator.autoMergeErr = errors.New("auto-merge is not enabled")
+
+	item, is := newPreflightFixture(t, storage)
+	h.listener.pushAndCreatePR(context.Background(), item, is)
+	assert.Len(t, h.infoCalls(), 1)
+	assert.NotContains(t, h.notifier.titles(), "Auto-merge not enabled", "one message for this PR")
+
+	item2, is2 := newPreflightFixture(t, storage)
+	h.listener.pushAndCreatePR(context.Background(), item2, is2)
+	assert.Len(t, h.infoCalls(), 1, "preflight deduped for the repo")
+	assert.Contains(t, h.notifier.titles(), "Auto-merge not enabled", "existing notice is the single message for the second PR")
+}
+
+func TestPushAndCreatePR_Preflight_ColdCacheWarmsInBackgroundAndSendsNothing(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	h := newPreflightHarness(storage, func() (github.RepoSettingsResult, bool) { return github.RepoSettingsResult{}, false })
+
+	item, is := newPreflightFixture(t, storage)
+	h.listener.pushAndCreatePR(context.Background(), item, is)
+	h.listener.preflightWarmWG.Wait()
+	assert.EqualValues(t, 1, atomic.LoadInt32(&h.fetches), "one warm-up carrying the background call origin")
+	assert.True(t, h.creator.createCalled)
+	assert.Empty(t, h.infoCalls())
+}
+
+func TestPushAndCreatePR_Preflight_SilentWhenUndetermined(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	h := newPreflightHarness(storage, func() (github.RepoSettingsResult, bool) {
+		return github.RepoSettingsResult{Status: github.RepoSettingsError, Reason: "timeout"}, true
+	})
+	item, is := newPreflightFixture(t, storage)
+	h.listener.pushAndCreatePR(context.Background(), item, is)
+	assert.Empty(t, h.infoCalls(), "failure to determine the setting sends nothing")
 }

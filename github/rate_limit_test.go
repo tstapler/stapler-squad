@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// Resource names and the standard GitHub rate-limit ceiling, named so the
+// many repeated literals below read as "the core resource" rather than an
+// unexplained "core" string kibitzer would otherwise flag at every site.
+const (
+	resourceCore    = "core"
+	resourceSearch  = "search"
+	resourceGraphQL = "graphql"
+	standardLimit   = 5000
+)
+
+const wantEmptyReasonForAdmitted = "reason = %q, want empty for an admitted call"
+
 // fakeRateLimitResponse builds an *http.Response carrying the given status
 // and headers, matching the shape RateLimiter.Update reads.
 func fakeRateLimitResponse(status int, headers map[string]string) *http.Response {
@@ -24,7 +36,8 @@ func rateLimitHeaders(resource string, quota ResourceQuota) map[string]string {
 		"X-RateLimit-Resource":  resource,
 		"X-RateLimit-Remaining": strconv.Itoa(quota.Remaining),
 		"X-RateLimit-Limit":     strconv.Itoa(quota.Limit),
-		"X-RateLimit-Reset":     strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10),
+		// kibitzer:ignore replace-magic-literal -- base-10 arg to FormatInt, not a business value; shares the "10" literal with unrelated per-test Remaining fixtures below
+		"X-RateLimit-Reset": strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10),
 	}
 }
 
@@ -32,10 +45,10 @@ func rateLimitHeaders(resource string, quota ResourceQuota) map[string]string {
 // call publishes the response's resource under Snapshot().Resources.
 func TestUpdate_PublishesResourceQuota(t *testing.T) {
 	r := &RateLimiter{}
-	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 1234, Limit: 5000})))
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, ResourceQuota{Remaining: 1234, Limit: standardLimit})))
 
-	got := r.Snapshot().Resources["core"]
-	if got.Remaining != 1234 || got.Limit != 5000 {
+	got := r.Snapshot().Resources[resourceCore]
+	if got.Remaining != 1234 || got.Limit != standardLimit {
 		t.Fatalf("Snapshot().Resources[\"core\"] = %+v, want Remaining=1234 Limit=5000", got)
 	}
 }
@@ -44,31 +57,33 @@ func TestUpdate_PublishesResourceQuota(t *testing.T) {
 // for pre-mortem P1 #2: a low-limit search response followed by a healthy
 // core response must leave both resources' entries intact, in either order.
 func TestUpdate_DoesNotClobberOtherResources(t *testing.T) {
+	// kibitzer:ignore replace-magic-literal -- distinct per-resource test fixtures (search near-exhausted, core healthy), reused verbatim across this file's AdmitOrigin tests for cross-test consistency; a named constant would just rename the number, not explain it
 	search := ResourceQuota{Remaining: 2, Limit: 30}
-	core := ResourceQuota{Remaining: 4800, Limit: 5000}
+	// kibitzer:ignore replace-magic-literal -- same rationale as the search fixture above
+	core := ResourceQuota{Remaining: 4800, Limit: standardLimit}
 
 	assertBothIntact := func(t *testing.T, r *RateLimiter) {
 		t.Helper()
 		snap := r.Snapshot()
-		if got := snap.Resources["search"]; got.Remaining != search.Remaining || got.Limit != search.Limit {
+		if got := snap.Resources[resourceSearch]; got.Remaining != search.Remaining || got.Limit != search.Limit {
 			t.Errorf("Resources[\"search\"] = %+v, want %+v", got, search)
 		}
-		if got := snap.Resources["core"]; got.Remaining != core.Remaining || got.Limit != core.Limit {
+		if got := snap.Resources[resourceCore]; got.Remaining != core.Remaining || got.Limit != core.Limit {
 			t.Errorf("Resources[\"core\"] = %+v, want %+v", got, core)
 		}
 	}
 
 	t.Run("search then core", func(t *testing.T) {
 		r := &RateLimiter{}
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceSearch, search)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, core)))
 		assertBothIntact(t, r)
 	})
 
 	t.Run("core then search", func(t *testing.T) {
 		r := &RateLimiter{}
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, core)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceSearch, search)))
 		assertBothIntact(t, r)
 	})
 }
@@ -79,12 +94,12 @@ func TestUpdate_DoesNotClobberOtherResources(t *testing.T) {
 // returns early via a bare `return` after calling setLimitedUntil.
 func TestUpdate_PublishesOnEarlyReturnPath(t *testing.T) {
 	r := &RateLimiter{}
-	headers := rateLimitHeaders("core", ResourceQuota{Remaining: 10, Limit: 5000})
+	headers := rateLimitHeaders(resourceCore, ResourceQuota{Remaining: 10, Limit: standardLimit})
 	headers["Retry-After"] = "30"
 	r.Update(fakeRateLimitResponse(http.StatusTooManyRequests, headers))
 
-	got := r.Snapshot().Resources["core"]
-	if got.Remaining != 10 || got.Limit != 5000 {
+	got := r.Snapshot().Resources[resourceCore]
+	if got.Remaining != 10 || got.Limit != standardLimit {
 		t.Fatalf("Snapshot().Resources[\"core\"] = %+v, want Remaining=10 Limit=5000 (published even on the early-return secondary-rate-limit branch)", got)
 	}
 
@@ -103,7 +118,7 @@ func TestUpdate_PublishesOnEarlyReturnPath(t *testing.T) {
 // the shared snapshot map/gauge.
 func TestUpdate_SkipsPublishWhenResourceHeaderEmpty(t *testing.T) {
 	r := &RateLimiter{}
-	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("", ResourceQuota{Remaining: 10, Limit: 5000})))
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("", ResourceQuota{Remaining: 10, Limit: standardLimit})))
 
 	snap := r.Snapshot()
 	if _, ok := snap.Resources[""]; ok {
@@ -124,7 +139,7 @@ func TestSnapshot_ZeroValueWhenNeverPublished(t *testing.T) {
 	if snap.Resources != nil {
 		t.Fatalf("Resources = %+v, want nil", snap.Resources)
 	}
-	if got := snap.Resources["core"]; got != (ResourceQuota{}) {
+	if got := snap.Resources[resourceCore]; got != (ResourceQuota{}) {
 		t.Fatalf("Resources[\"core\"] = %+v, want zero value", got)
 	}
 }
@@ -134,14 +149,15 @@ func TestSnapshot_ZeroValueWhenNeverPublished(t *testing.T) {
 // through Snapshot().Resources rather than always returning an empty map.
 func TestCurrentResourceQuotas_DelegatesToSnapshot(t *testing.T) {
 	r := &RateLimiter{}
-	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("graphql", ResourceQuota{Remaining: 4999, Limit: 5000})))
+	// kibitzer:ignore replace-magic-literal -- distinct graphql near-exhausted fixture, reused verbatim in concurrentQuotas below for cross-test consistency
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceGraphQL, ResourceQuota{Remaining: 4999, Limit: standardLimit})))
 
 	quotas := r.currentResourceQuotas()
-	got, ok := quotas["graphql"]
+	got, ok := quotas[resourceGraphQL]
 	if !ok {
 		t.Fatalf("currentResourceQuotas()[\"graphql\"] missing, got %+v", quotas)
 	}
-	if got.Remaining != 4999 || got.Limit != 5000 {
+	if got.Remaining != 4999 || got.Limit != standardLimit {
 		t.Fatalf("currentResourceQuotas()[\"graphql\"] = %+v, want Remaining=4999 Limit=5000", got)
 	}
 }
@@ -150,9 +166,9 @@ func TestCurrentResourceQuotas_DelegatesToSnapshot(t *testing.T) {
 // a torn read across the two fields (e.g. core's remaining paired with
 // search's limit) is detectable rather than silently plausible.
 var concurrentQuotas = map[string]ResourceQuota{
-	"core":    {Remaining: 4800, Limit: 5000},
-	"search":  {Remaining: 2, Limit: 30},
-	"graphql": {Remaining: 4999, Limit: 5000},
+	resourceCore:    {Remaining: 4800, Limit: standardLimit},
+	resourceSearch:  {Remaining: 2, Limit: 30},
+	resourceGraphQL: {Remaining: 4999, Limit: standardLimit},
 }
 
 // runConcurrentUpdater repeatedly calls r.Update with a randomly chosen
@@ -203,14 +219,14 @@ func runConcurrentReader(t *testing.T, r *RateLimiter, stop <-chan struct{}) {
 // headroom, as long as the resource has been observed at all.
 func TestAdmitOrigin_should_AdmitInteractive_When_RemainingBelowBackgroundHeadroom(t *testing.T) {
 	r := &RateLimiter{}
-	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 400, Limit: 5000})))
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, ResourceQuota{Remaining: 400, Limit: standardLimit})))
 
-	admitted, reason := r.AdmitOrigin(OriginInteractive, "core")
+	admitted, reason := r.AdmitOrigin(OriginInteractive, resourceCore)
 	if !admitted {
 		t.Fatalf("AdmitOrigin(OriginInteractive, \"core\") = (%v, %q), want (true, \"\")", admitted, reason)
 	}
 	if reason != "" {
-		t.Errorf("reason = %q, want empty for an admitted call", reason)
+		t.Errorf(wantEmptyReasonForAdmitted, reason)
 	}
 }
 
@@ -221,9 +237,9 @@ func TestAdmitOrigin_should_AdmitInteractive_When_RemainingBelowBackgroundHeadro
 func TestAdmitOrigin_should_RejectBackgroundOrigin_When_RemainingBelowBackgroundHeadroomPercent(t *testing.T) {
 	r := &RateLimiter{}
 	// 400/5000 = 8%, below the 10% backgroundHeadroomPercent threshold.
-	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 400, Limit: 5000})))
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, ResourceQuota{Remaining: 400, Limit: standardLimit})))
 
-	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, resourceCore)
 	if admitted {
 		t.Fatalf("AdmitOrigin(OriginPRStatusPoller, \"core\") admitted = true, want false (below headroom)")
 	}
@@ -238,14 +254,14 @@ func TestAdmitOrigin_should_RejectBackgroundOrigin_When_RemainingBelowBackground
 // Remaining stays at/above the headroom threshold.
 func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_HeadroomHealthy(t *testing.T) {
 	r := &RateLimiter{}
-	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", ResourceQuota{Remaining: 4800, Limit: 5000})))
+	r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, ResourceQuota{Remaining: 4800, Limit: standardLimit})))
 
-	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, resourceCore)
 	if !admitted {
 		t.Fatalf("AdmitOrigin(OriginPRStatusPoller, \"core\") = (%v, %q), want (true, \"\")", admitted, reason)
 	}
 	if reason != "" {
-		t.Errorf("reason = %q, want empty for an admitted call", reason)
+		t.Errorf(wantEmptyReasonForAdmitted, reason)
 	}
 }
 
@@ -257,7 +273,7 @@ func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_HeadroomHealthy(t *testin
 func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_SnapshotNeverPublished(t *testing.T) {
 	r := &RateLimiter{}
 
-	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, resourceCore)
 	if !admitted {
 		t.Fatalf("AdmitOrigin on a never-updated RateLimiter admitted = false, want true (fail-open on no data)")
 	}
@@ -272,15 +288,15 @@ func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_SnapshotNeverPublished(t 
 // orderings, must never let one resource's numbers leak into the other
 // resource's AdmitOrigin decision.
 func TestAdmitOrigin_should_RejectInInterleavedOrdering_WithoutCrossResourceLeak(t *testing.T) {
-	search := ResourceQuota{Remaining: 2, Limit: 30}    // 6.7%, below headroom
-	core := ResourceQuota{Remaining: 4800, Limit: 5000} // 96%, healthy
+	search := ResourceQuota{Remaining: 2, Limit: 30}             // 6.7%, below headroom
+	core := ResourceQuota{Remaining: 4800, Limit: standardLimit} // 96%, healthy
 
 	assertBothDecisions := func(t *testing.T, r *RateLimiter) {
 		t.Helper()
-		if admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core"); !admitted {
+		if admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, resourceCore); !admitted {
 			t.Errorf("AdmitOrigin(OriginPRStatusPoller, \"core\") admitted = false (reason %q), want true — unhealthy search bucket must not leak into a core-scoped decision", reason)
 		}
-		admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "search")
+		admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, resourceSearch)
 		if admitted {
 			t.Errorf("AdmitOrigin(OriginPRStatusPoller, \"search\") admitted = true, want false — healthy core bucket must not mask an exhausted search decision")
 		}
@@ -292,15 +308,15 @@ func TestAdmitOrigin_should_RejectInInterleavedOrdering_WithoutCrossResourceLeak
 
 	t.Run("search then core", func(t *testing.T) {
 		r := &RateLimiter{}
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceSearch, search)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, core)))
 		assertBothDecisions(t, r)
 	})
 
 	t.Run("core then search", func(t *testing.T) {
 		r := &RateLimiter{}
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
-		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, core)))
+		r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceSearch, search)))
 		assertBothDecisions(t, r)
 	})
 }
@@ -316,18 +332,18 @@ func TestAdmitOrigin_should_RejectInInterleavedOrdering_WithoutCrossResourceLeak
 func TestAdmitOrigin_should_AdmitBackgroundOrigin_When_ExhaustedReadingHasExpired(t *testing.T) {
 	r := &RateLimiter{}
 	r.Update(fakeRateLimitResponse(http.StatusOK, map[string]string{
-		"X-RateLimit-Resource":  "core",
+		"X-RateLimit-Resource":  resourceCore,
 		"X-RateLimit-Remaining": "90", // 1.8% of 5000, well below the 10% headroom
-		"X-RateLimit-Limit":     "5000",
+		"X-RateLimit-Limit":     strconv.Itoa(standardLimit),
 		"X-RateLimit-Reset":     strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10), // already past
 	}))
 
-	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, "core")
+	admitted, reason := r.AdmitOrigin(OriginPRStatusPoller, resourceCore)
 	if !admitted {
 		t.Fatalf("AdmitOrigin(OriginPRStatusPoller, \"core\") admitted = false (reason %q), want true — the reading's reset window has already passed", reason)
 	}
 	if reason != "" {
-		t.Errorf("reason = %q, want empty for an admitted call", reason)
+		t.Errorf(wantEmptyReasonForAdmitted, reason)
 	}
 }
 
@@ -340,11 +356,11 @@ func TestResourceForRequest(t *testing.T) {
 		path string
 		want string
 	}{
-		{"search repositories", "/search/repositories", "search"},
-		{"search issues", "/search/issues", "search"},
-		{"graphql", "/graphql", "graphql"},
-		{"repo pull request (core)", "/repos/tstapler/stapler-squad/pulls/704", "core"},
-		{"repo issue comments (core)", "/repos/tstapler/stapler-squad/issues/1/comments", "core"},
+		{"search repositories", "/search/repositories", resourceSearch},
+		{"search issues", "/search/issues", resourceSearch},
+		{"graphql", "/graphql", resourceGraphQL},
+		{"repo pull request (core)", "/repos/tstapler/stapler-squad/pulls/704", resourceCore},
+		{"repo issue comments (core)", "/repos/tstapler/stapler-squad/issues/1/comments", resourceCore},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -406,7 +422,7 @@ func TestRateLimiterSnapshot_NoLostUpdate_ConcurrentDifferentResources(t *testin
 	r := &RateLimiter{}
 
 	for round := 0; round < rounds; round++ {
-		core := ResourceQuota{Remaining: round, Limit: 5000}
+		core := ResourceQuota{Remaining: round, Limit: standardLimit}
 		search := ResourceQuota{Remaining: 1000 + round, Limit: 30}
 
 		start := make(chan struct{})
@@ -415,21 +431,21 @@ func TestRateLimiterSnapshot_NoLostUpdate_ConcurrentDifferentResources(t *testin
 		go func() {
 			defer wg.Done()
 			<-start
-			r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("core", core)))
+			r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceCore, core)))
 		}()
 		go func() {
 			defer wg.Done()
 			<-start
-			r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders("search", search)))
+			r.Update(fakeRateLimitResponse(http.StatusOK, rateLimitHeaders(resourceSearch, search)))
 		}()
 		close(start)
 		wg.Wait()
 
 		snap := r.Snapshot()
-		if got := snap.Resources["core"]; got.Remaining != core.Remaining {
+		if got := snap.Resources[resourceCore]; got.Remaining != core.Remaining {
 			t.Fatalf("round %d: Resources[\"core\"].Remaining = %d, want %d (lost update — concurrent search publish overwrote it)", round, got.Remaining, core.Remaining)
 		}
-		if got := snap.Resources["search"]; got.Remaining != search.Remaining {
+		if got := snap.Resources[resourceSearch]; got.Remaining != search.Remaining {
 			t.Fatalf("round %d: Resources[\"search\"].Remaining = %d, want %d (lost update — concurrent core publish overwrote it)", round, got.Remaining, search.Remaining)
 		}
 	}

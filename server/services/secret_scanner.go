@@ -74,3 +74,21 @@ func FormatSecretDenyMessage(patternName string) string {
 		patternName,
 	)
 }
+
+// redactedPlaceholder replaces a matched secret span.
+const redactedPlaceholder = "[redacted]"
+
+// RedactSecrets replaces every span of text matching a known secret pattern
+// with [redacted] and reports whether anything was replaced. Unlike
+// ScanForSecrets it scans the whole string: it protects stored text, not a
+// hot path.
+func RedactSecrets(text string) (string, bool) {
+	changed := false
+	for _, p := range secretPatterns {
+		if p.Pattern.MatchString(text) {
+			text = p.Pattern.ReplaceAllString(text, redactedPlaceholder)
+			changed = true
+		}
+	}
+	return text, changed
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -30,8 +31,14 @@ type GuidanceRequestResult struct {
 	QuestionText string   `json:"question_text"`
 	QuestionType string   `json:"question_type"`
 	Options      []string `json:"options,omitempty"`
-	Answer       string   `json:"answer,omitempty"`
-	Status       string   `json:"status"`
+	// Questions is set when the request carries a structured payload (1-4 questions).
+	Questions []domain.Question `json:"questions,omitempty"`
+	Answer    string            `json:"answer,omitempty"`
+	Status    string            `json:"status"`
+	// AnsweredAt (RFC 3339) and DeliveryState let a respawned agent see that a stored
+	// answer is waiting even though nothing was pushed to its pane.
+	AnsweredAt    string `json:"answered_at,omitempty"`
+	DeliveryState string `json:"delivery_state,omitempty"`
 }
 
 // guidanceRequestToResult converts the repository's plain data view into the
@@ -46,6 +53,11 @@ func guidanceRequestToResult(d *session.GuidanceRequestData) GuidanceRequestResu
 		QuestionType: string(d.QuestionType),
 		Answer:       d.Answer,
 		Status:       string(d.Status()),
+
+		DeliveryState: string(d.DeliveryState),
+	}
+	if d.AnsweredAt != nil {
+		res.AnsweredAt = d.AnsweredAt.UTC().Format(time.RFC3339)
 	}
 	if d.ItemID != nil {
 		res.ItemID = d.ItemID.String()
@@ -54,6 +66,11 @@ func guidanceRequestToResult(d *session.GuidanceRequestData) GuidanceRequestResu
 		var opts []string
 		if err := json.Unmarshal([]byte(d.Options), &opts); err == nil {
 			res.Options = opts
+		}
+	}
+	if d.QuestionsJSON != "" {
+		if payload, err := domain.ParseQuestionPayload([]byte(d.QuestionsJSON)); err == nil {
+			res.Questions = payload.Questions()
 		}
 	}
 	return res
@@ -134,11 +151,18 @@ func (h *backlogHandlers) createGuidanceRequest(ctx context.Context, req mcpgo.C
 	if !scope.IsValid() {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid scope %q", args["scope"]), "scope must be one of: backlog-item, session, standalone"), nil
 	}
+	payload, errRes := parseGuidanceQuestionsArg(args)
+	if errRes != nil {
+		return errRes, nil
+	}
 	questionText, _ := args["question_text"].(string)
-	if questionText == "" {
-		return errResult(ErrInvalidArgument, "question_text is required", ""), nil
+	if questionText == "" && payload.IsZero() {
+		return errResult(ErrInvalidArgument, "question_text is required (or pass questions)", ""), nil
 	}
 	questionType := domain.QuestionType(fmt.Sprint(args["question_type"]))
+	if _, given := args["question_type"]; !given && !payload.IsZero() {
+		questionType = domain.QuestionTypeMultipleChoice
+	}
 	if !questionType.IsValid() {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid question_type %q", args["question_type"]), "question_type must be one of: yes-no, multiple-choice, short-answer"), nil
 	}
@@ -155,7 +179,12 @@ func (h *backlogHandlers) createGuidanceRequest(ctx context.Context, req mcpgo.C
 		return errRes, nil
 	}
 
-	data, err := h.storage.CreateGuidanceRequest(ctx, in)
+	var data *session.GuidanceRequestData
+	if payload.IsZero() {
+		data, err = h.storage.CreateGuidanceRequest(ctx, in)
+	} else {
+		data, err = h.createStructuredGuidanceRequest(ctx, in, payload)
+	}
 	if err != nil {
 		if errors.Is(err, session.ErrPendingCapExceeded) {
 			return errResult(ErrPendingCapExceeded, err.Error(),
@@ -164,6 +193,23 @@ func (h *backlogHandlers) createGuidanceRequest(ctx context.Context, req mcpgo.C
 		return errResult(ErrInternalError, fmt.Sprintf("create guidance request: %v", err), ""), nil
 	}
 	return okResult(guidanceRequestToResult(data)), nil
+}
+
+// createStructuredGuidanceRequest stores in with its validated payload through
+// the domain constructor, so the cross-field rules apply to agent questions too.
+func (h *backlogHandlers) createStructuredGuidanceRequest(ctx context.Context, in session.CreateGuidanceRequestInput, payload domain.QuestionPayload) (*session.GuidanceRequestData, error) {
+	params := domain.GuidanceRequestParams{
+		Scope: in.Scope, SessionUUID: in.SessionUUID, QuestionText: in.QuestionText,
+		QuestionType: in.QuestionType, Options: in.Options, Payload: payload,
+	}
+	if in.ItemID != nil {
+		params.ItemID = in.ItemID.String()
+	}
+	req, err := domain.NewGuidanceRequest(params)
+	if err != nil {
+		return nil, err
+	}
+	return h.storage.CreateMirroredGuidanceRequest(ctx, req, in.Cap)
 }
 
 // getGuidanceRequest implements the get_guidance_request tool: reads a
@@ -208,11 +254,15 @@ func registerGuidanceTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Description("UUID of the backlog item; required when scope=backlog-item, and this session must already be linked to it."),
 			),
 			mcpgo.WithString("question_text",
-				mcpgo.Required(),
+				mcpgo.Description("The question. Required unless questions is given, in which case it defaults to the first question's text."),
 			),
 			mcpgo.WithString("question_type",
-				mcpgo.Required(),
+				mcpgo.Description("Required unless questions is given (then multiple-choice)."),
 				mcpgo.Enum("yes-no", "multiple-choice", "short-answer"),
+			),
+			mcpgo.WithArray("questions",
+				mcpgo.Description("Optional structured questions (1-4), each {text, header?, options:[{label, description?}], multi_select?}. Omit for a single plain question."),
+				mcpgo.Items(map[string]any{"type": "object"}),
 			),
 			mcpgo.WithArray("options",
 				mcpgo.Description("Choice strings; only meaningful when question_type=multiple-choice."),

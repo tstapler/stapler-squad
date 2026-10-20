@@ -114,6 +114,17 @@ type SessionService struct {
 	// session (the O7 steer exemption).
 	backlogLinks BacklogLinkResolver
 
+	// actionDispatcher serves InvokeNotificationAction; nil reports FLAG_OFF.
+	actionDispatcher *NotificationActionDispatcher
+	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
+	guidanceAcks *GuidanceAckDetector
+	hookReply    atomic.Pointer[hookReplyResolver]
+	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
+	dialogCanary   atomic.Pointer[DialogMatchCanary]
+	guidanceMirror atomic.Pointer[GuidanceHookMirror]
+	ackCancel      context.CancelFunc
+	ackDone        chan struct{}
+
 	// deliveryGate is the hidden-session delivery gate installed as the event bus
 	// publish filter at construction (nil when built through NewSessionService).
 	deliveryGate *deliverygate.Gate
@@ -135,6 +146,10 @@ type SessionService struct {
 	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
+
+	// outcomeLookup overrides concStorage for the batched ItemSession lookup behind
+	// Session.background_outcome; tests inject a counting fake.
+	outcomeLookup itemSessionBatchLookup
 
 	// inFlightWorktreeSpawns claims a canonicalized worktree path (-> claiming session
 	// UUID) for the duration of startLocked's check-through-spawn window, closing the
@@ -1094,6 +1109,7 @@ func newGatedSessionService(storage session.InstanceStore) *SessionService {
 	svc.wireLeaseFlag()
 	svc.wireGuardsFlag()
 	svc.wireReplyFlag()
+	wireNotificationActionFlags(svc.featureFlagSvc)
 	return svc
 }
 
@@ -1130,6 +1146,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
 		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
+	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built

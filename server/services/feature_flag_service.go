@@ -310,6 +310,26 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:         backgroundActivityFeedFlagName,
+		description:  "Background tab activity feed: show what each background session actually did (finished, stopped, waiting) instead of the history-only selector. Turn off to restore the legacy selector with no data impact. Turning it back on after an explicit off is audit-fsynced and refused while the audit sink is down. Applies at once; global only. Default: on.",
+		defaultValue: backgroundActivityFeedDefault,
+	},
+	{
+		name:        notificationInlineActionsFlagName,
+		description: "Inline notification actions: approve, deny, answer and decide from the notification row. Server-checked on every invocation; off reduces actions to Open session and keeps the legacy approve/deny path. Scopes: channel:remote, channel:remote:tierB, action:<kind>. Applies at once. Default: off.",
+		scopes:      notificationInlineActionScopes(),
+	},
+	{
+		name:        askUserQuestionStructuredFlagName,
+		description: "Structured AskUserQuestion: render, answer and hook-reply stages for durable question rows. A stage's new writes are refused when it resolves off; existing rows stay visible. Scopes: stage:render, stage:answer, stage:hook_reply (each also needs the stage before it). Applies at once. Default: off.",
+		scopes:      askUserQuestionStructuredScopes(),
+	},
+	{
+		name:        agentWakeTriggersFlagName,
+		description: "Agent wake triggers: the dispatcher and the schedule_wake, list_wakes, cancel_wake and request_help tools. Off stops the dispatcher and the tools return flag_off; rows are kept. Scopes: trigger:<type>, tool:<name>; a scoped true runs the dispatcher for that type only. Applies at once. Default: off.",
+		scopes:      agentWakeTriggerScopes(),
+	},
+	{
 		name:         hiddenSessionReadonlyGuardsFlagName,
 		description:  "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
 		defaultValue: true,
@@ -515,6 +535,16 @@ func (f *FeatureFlagService) SetFlagObserver(o deliverygate.FlagObserver) { f.ob
 // SetAudit wires the audit sink and the per-flag audit policy.
 func (f *FeatureFlagService) SetAudit(sink *AuditSink, policies map[string]FlagAuditPolicy) {
 	f.audit, f.auditPolicies = sink, policies
+}
+
+// MergeAuditPolicies adds per-flag audit policies to those SetAudit installed.
+func (f *FeatureFlagService) MergeAuditPolicies(policies map[string]FlagAuditPolicy) {
+	if f.auditPolicies == nil {
+		f.auditPolicies = make(map[string]FlagAuditPolicy, len(policies))
+	}
+	for k, v := range policies {
+		f.auditPolicies[k] = v
+	}
 }
 
 // +api: feature-flags:list

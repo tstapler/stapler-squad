@@ -49,6 +49,12 @@ describe("createNotificationSyncChannel", () => {
     });
   });
 
+  it("posts the action-resolved id set as one BroadcastChannel message", () => {
+    const message: NotificationSyncMessage = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1", "q2"], summary: "Redis" };
+    createNotificationSyncChannel().broadcast(message);
+    expect(mockChannel.postMessage).toHaveBeenCalledWith(message);
+  });
+
   // UT-TS-09b — subscribe calls the handler when a MessageEvent is received
   describe("subscribe", () => {
     it("calls the handler when a message event fires", () => {
@@ -147,6 +153,14 @@ describe("createNotificationSyncChannel without BroadcastChannel", () => {
       }),
     );
 
+    expect(handler).toHaveBeenCalledWith(message);
+  });
+
+  it("delivers an action-resolved id set through the storage fallback when BroadcastChannel is unavailable", () => {
+    const handler = jest.fn();
+    const message: NotificationSyncMessage = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1"], summary: "Redis" };
+    createNotificationSyncChannel().subscribe(handler);
+    window.dispatchEvent(new StorageEvent("storage", { key: "stapler-squad:notification-sync", newValue: JSON.stringify({ nonce: 2, message }) }));
     expect(handler).toHaveBeenCalledWith(message);
   });
 

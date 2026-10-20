@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -31,7 +32,65 @@ type GuidanceRequestService struct {
 	storage         *session.Storage
 	notifier        *EventBusNotifier
 	triageRespawner TriageRespawner
+	answerListener  atomic.Pointer[AnswerListener]
+	probes          atomic.Pointer[DeliveryProbes]
 }
+
+// DeliveryProbes answer the questions the delivery-state line needs that no
+// column stores. Any may be nil.
+type DeliveryProbes struct {
+	// Unconfirmed reports a sent answer the agent has not confirmed.
+	Unconfirmed func(rowID string) bool
+	// SessionEnded reports a session that is gone, archived or stopped.
+	SessionEnded func(sessionUUID string) bool
+	// SessionArchived reports a session that was deliberately archived.
+	SessionArchived func(sessionUUID string) bool
+}
+
+// SetDeliveryProbes installs the probes behind unacknowledged, session_ended and session_archived.
+func (s *GuidanceRequestService) SetDeliveryProbes(p DeliveryProbes) { s.probes.Store(&p) }
+
+// toProto is guidanceRequestToProto plus the derived delivery fields.
+func (s *GuidanceRequestService) toProto(d *session.GuidanceRequestData) *sessionv1.GuidanceRequest {
+	out := guidanceRequestToProto(d)
+	out.CancelReason = d.CancelReason.String()
+	p := s.probes.Load()
+	if p == nil || d.Source != domain.QuestionSourceHook && d.Source != domain.QuestionSourceAgentMCP {
+		return out
+	}
+	if d.Status() != session.GuidanceRequestStatusCancelled {
+		out.SessionArchived = p.archived(askerSessionOf(d))
+	}
+	switch d.DeliveryState {
+	case domain.DeliveryStateSent:
+		out.Unacknowledged = p.Unconfirmed != nil && p.Unconfirmed(d.ID)
+		fallthrough
+	case domain.DeliveryStateFailed:
+		out.SessionEnded = p.ended(askerSessionOf(d))
+	default:
+	}
+	return out
+}
+
+// askerSessionOf is the session a row's dialog or question lives in: the asker
+// of a hook row, else the session a session-scope request is about.
+func askerSessionOf(d *session.GuidanceRequestData) string {
+	if d.AskerSessionUUID != "" {
+		return d.AskerSessionUUID
+	}
+	return d.SessionUUID
+}
+
+func (p *DeliveryProbes) ended(sessionUUID string) bool {
+	return sessionUUID != "" && p.SessionEnded != nil && p.SessionEnded(sessionUUID)
+}
+
+func (p *DeliveryProbes) archived(sessionUUID string) bool {
+	return sessionUUID != "" && p.SessionArchived != nil && p.SessionArchived(sessionUUID)
+}
+
+// SetAnswerListener registers fn to run after each successfully applied answer.
+func (s *GuidanceRequestService) SetAnswerListener(fn AnswerListener) { s.answerListener.Store(&fn) }
 
 // TriageRespawner is the narrow slice of *BacklogService's existing
 // AutoRespawnTriage (server/services/backlog_service_triage.go) that
@@ -66,6 +125,11 @@ func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, t
 // time: NotificationHistoryStore.List/GetByID reads the persisted record back
 // later regardless of whether anything was listening when it was published.
 func (s *GuidanceRequestService) notifyAnswered(data *session.GuidanceRequestData) {
+	// The operator already acted on the pane card; a second toast would duplicate it (ADR-003 rule 3a).
+	// A peer answer reaches the asker through its guidance_answered wake instead.
+	if data.Source == domain.QuestionSourceHook || data.Source == domain.QuestionSourcePeer {
+		return
+	}
 	title := "Your guidance request was answered"
 	message := truncateForNotification(data.QuestionText) + " → " + truncateForNotification(data.Answer)
 	const notifyTypeInputRequired = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED)
@@ -109,6 +173,13 @@ func (s *GuidanceRequestService) resumeTriageIfHalted(data *session.GuidanceRequ
 			log.WarningLog().Printf("[GuidanceRequestService] resumeTriageIfHalted: ResumeTriage item=%s: %v", itemID, err)
 		}
 	}()
+}
+
+func (s *GuidanceRequestService) notifyAnswerListener(ctx context.Context, id string) {
+	if fn := s.answerListener.Load(); fn != nil && *fn != nil {
+		// The answer is already durable; the wake must not die with the request.
+		(*fn)(context.WithoutCancel(ctx), id)
+	}
 }
 
 // maxNotificationFieldLen bounds how much of the question/answer text is
@@ -202,6 +273,7 @@ func guidanceRequestToProto(d *session.GuidanceRequestData) *sessionv1.GuidanceR
 	if d.CancelledAt != nil {
 		out.CancelledAt = timestamppb.New(*d.CancelledAt)
 	}
+	setGuidanceMirrorFields(out, d)
 	return out
 }
 
@@ -299,7 +371,7 @@ func (s *GuidanceRequestService) CreateGuidanceRequest(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(&sessionv1.CreateGuidanceRequestResponse{Request: guidanceRequestToProto(data)}), nil
+	return connect.NewResponse(&sessionv1.CreateGuidanceRequestResponse{Request: s.toProto(data)}), nil
 }
 
 // AnswerGuidanceRequest records a human's answer. No ownership check — this
@@ -323,25 +395,16 @@ func (s *GuidanceRequestService) AnswerGuidanceRequest(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid id: %w", err))
 	}
 
-	applied, err := s.storage.AnswerGuidanceRequest(ctx, id, req.Msg.GetAnswer())
+	data, applied, err := s.AnswerAs(ctx, id.String(), req.Msg.GetAnswer(), HumanAnswerer())
+	if errors.Is(err, session.ErrNotFound) {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	data, err := s.storage.GetGuidanceRequest(ctx, id)
-	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
-			return nil, connect.NewError(connect.CodeNotFound, err)
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	if applied {
-		s.notifyAnswered(data)
-		s.resumeTriageIfHalted(data)
 	}
 
 	return connect.NewResponse(&sessionv1.AnswerGuidanceRequestResponse{
-		Request: guidanceRequestToProto(data),
+		Request: s.toProto(data),
 		Applied: applied,
 	}), nil
 }
@@ -365,7 +428,7 @@ func (s *GuidanceRequestService) GetGuidanceRequest(
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	return connect.NewResponse(&sessionv1.GetGuidanceRequestResponse{Request: guidanceRequestToProto(data)}), nil
+	return connect.NewResponse(&sessionv1.GetGuidanceRequestResponse{Request: s.toProto(data)}), nil
 }
 
 // ListGuidanceRequests lists open GuidanceRequests for one (scope, scope_key)
@@ -392,7 +455,7 @@ func (s *GuidanceRequestService) ListGuidanceRequests(
 	}
 	protoRows := make([]*sessionv1.GuidanceRequest, 0, len(rows))
 	for _, r := range rows {
-		protoRows = append(protoRows, guidanceRequestToProto(r))
+		protoRows = append(protoRows, s.toProto(r))
 	}
 	return connect.NewResponse(&sessionv1.ListGuidanceRequestsResponse{
 		Requests:     protoRows,
@@ -414,7 +477,28 @@ func (s *GuidanceRequestService) ListAllPendingGuidanceRequests(
 	}
 	protoRows := make([]*sessionv1.GuidanceRequest, 0, len(rows))
 	for _, r := range rows {
-		protoRows = append(protoRows, guidanceRequestToProto(r))
+		protoRows = append(protoRows, s.toProto(r))
 	}
 	return connect.NewResponse(&sessionv1.ListAllPendingGuidanceRequestsResponse{Requests: protoRows}), nil
+}
+
+// ListSavedGuidanceAnswers lists the answers stored for stopped or archived
+// sessions. Hook and peer rows are never saved for later (their context dies
+// with the session), so only agent-created requests are returned.
+// +api: guidance-request:list-saved
+func (s *GuidanceRequestService) ListSavedGuidanceAnswers(
+	ctx context.Context,
+	_ *connect.Request[sessionv1.ListSavedGuidanceAnswersRequest],
+) (*connect.Response[sessionv1.ListSavedGuidanceAnswersResponse], error) {
+	rows, err := s.storage.ListGuidanceByDelivery(ctx, "", domain.DeliveryStateSavedForLater)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	out := make([]*sessionv1.GuidanceRequest, 0, len(rows))
+	for _, r := range rows {
+		if r.Source == domain.QuestionSourceAgentMCP {
+			out = append(out, s.toProto(r))
+		}
+	}
+	return connect.NewResponse(&sessionv1.ListSavedGuidanceAnswersResponse{Requests: out}), nil
 }

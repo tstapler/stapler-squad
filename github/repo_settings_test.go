@@ -382,3 +382,27 @@ func TestRepoSettings_PackageEntryPointUsesSharedClient(t *testing.T) {
 	assert.EqualValues(t, 1, atomic.LoadInt32(&hits))
 	assert.Equal(t, before+1, RepoSettingsLookupCount(outcomeSuccess))
 }
+
+func TestRepoSettings_PeekNeverFetchesAndReflectsCache(t *testing.T) {
+	l, _, hits := newRepoSettingsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		jsonOK(w, `{"allow_auto_merge":false,"allow_squash_merge":true}`)
+	})
+	ref := repoSettingsRef(t, "acme", "web", "")
+
+	_, ok := l.peek(ref)
+	assert.False(t, ok, "cold cache must miss")
+	assert.EqualValues(t, 0, atomic.LoadInt32(hits), "peek must not fetch")
+	assert.EqualValues(t, 0, l.outcomeCount(outcomeCached))
+
+	l.lookup(context.Background(), ref)
+	res, ok := l.peek(ref)
+	require.True(t, ok)
+	allowed, known := res.AutoMerge()
+	assert.True(t, known)
+	assert.False(t, allowed)
+	assert.EqualValues(t, 1, atomic.LoadInt32(hits))
+	assert.EqualValues(t, 0, l.outcomeCount(outcomeCached), "peek records no outcome")
+
+	_, ok = l.peek(RepoRef{})
+	assert.False(t, ok)
+}

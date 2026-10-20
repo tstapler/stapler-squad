@@ -21,6 +21,48 @@ func hiddenVisibleInList(hidden bool, req *sessionv1.ListSessionsRequest) bool {
 	return !hidden || req.IncludeHidden
 }
 
+// itemSessionBatchLookup is the one storage call background_outcome needs.
+type itemSessionBatchLookup interface {
+	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]session.ItemSessionSummary, error)
+}
+
+type hiddenOutcomeEntry struct {
+	proto  *sessionv1.Session
+	uuid   string
+	status session.Status
+}
+
+// populateBackgroundOutcomes sets Session.background_outcome for hidden_only
+// responses using one batched ItemSession query. On lookup failure it degrades
+// to status-only outcomes rather than failing the list.
+func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries []hiddenOutcomeEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	lookup := s.outcomeLookup
+	if lookup == nil && s.concStorage != nil {
+		lookup = s.concStorage
+	}
+	var byUUID map[string]session.ItemSessionSummary
+	if lookup != nil {
+		uuids := make([]string, 0, len(entries))
+		for _, e := range entries {
+			uuids = append(uuids, e.uuid)
+		}
+		var err error
+		if byUUID, err = lookup.ListItemSessionsBySessionUUIDs(ctx, uuids); err != nil {
+			log.Warn("ListSessions: background outcome lookup failed", "err", err)
+		}
+	}
+	for _, e := range entries {
+		var is *session.ItemSessionSummary
+		if row, ok := byUUID[e.uuid]; ok {
+			is = &row
+		}
+		e.proto.BackgroundOutcome = string(session.ComputeBackgroundOutcome(e.status, is))
+	}
+}
+
 // ListSessions returns all sessions with optional filtering.
 // This includes both managed sessions and external mux-enabled sessions.
 // +api: session:list
@@ -43,6 +85,7 @@ func (s *SessionService) ListSessions(
 
 	// Convert instances to proto messages
 	sessions := make([]*sessionv1.Session, 0, len(instances))
+	var hiddenManaged []hiddenOutcomeEntry
 	for _, inst := range instances {
 		// Apply optional status filter. Read the status directly off the instance
 		// instead of building the full proto just to inspect one field — building it
@@ -89,7 +132,11 @@ func (s *SessionService) ListSessions(
 			protoSess.EstimatedSavingsMb = rss
 		}
 		sessions = append(sessions, protoSess)
+		if req.Msg.HiddenOnly {
+			hiddenManaged = append(hiddenManaged, hiddenOutcomeEntry{proto: protoSess, uuid: inst.Snapshot().UUID, status: inst.GetEffectiveStatus()})
+		}
 	}
+	s.populateBackgroundOutcomes(ctx, hiddenManaged)
 
 	// Include external sessions from mux discovery if available
 	if s.externalDiscovery != nil {
