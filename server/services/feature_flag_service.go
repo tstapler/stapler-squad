@@ -344,6 +344,11 @@ var knownFeatureFlags = []struct {
 		description:  "Workflow engine enforce (operator class): the configured stage graph and operator gates decide status transitions instead of the built-in rules. Turn on only after make workflow-engine-soak-status reads READY. Applies within about a second; global only. Default: off.",
 		defaultValue: config.WorkflowEngineEnforceDefault,
 	},
+	{
+		name:         config.WorkflowEngineEnforceAgentFeatureFlag,
+		description:  "Workflow engine enforce (agent class): the configured stage graph and operator gates decide status transitions requested by agent tools (request_review, report_blocked, resume_work, report_duplicate, report_pr_created, and the generic transition tool) instead of today's checks. A denial is reported as a transition_denied stuck item. Turn on only after the agent class reads READY in make workflow-engine-soak-status. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceAgentDefault,
+	},
 }
 
 // workflowEngineModeTTL is how long a resolved engine mode is reused, so the
@@ -364,6 +369,13 @@ func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
 // cached for workflowEngineModeTTL. A nil clock uses real time.
 func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
 	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+}
+
+// NewWorkflowEngineClassModeSource is the production per-class mode reader:
+// each class resolves its own enforce flag and the shared shadow flag from live
+// config, cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineClassModeSource(load func() *config.Config, clock session.Clock) *session.FlagClassModeSource {
+	return session.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
 }
 
 // WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the

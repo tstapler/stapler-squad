@@ -510,10 +510,11 @@ func TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer(t *tes
 
 // TestModeFor_ComposesFourFlagsPerClass_AndDefaultsToShadow lands in full with
 // Task 1.5.8g; until then each task that registers a class's enforce flag adds
-// that class's rows here. Only the operator flag exists at Story 1.5.2.
+// that class's rows here. The operator flag exists since Story 1.5.2, the agent
+// flag since Task 1.5.3c.
 func TestModeFor_ComposesFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
 	t.Parallel()
-	shadow, enforce := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag
+	shadow, enforce, enforceAgent := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag, config.WorkflowEngineEnforceAgentFeatureFlag
 	set := func(flags map[string]bool) *config.Config { return &config.Config{FeatureFlags: flags} }
 
 	cases := []struct {
@@ -528,11 +529,17 @@ func TestModeFor_ComposesFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
 		{"operator, enforce wins over shadow on", session.ClassOperator, set(map[string]bool{shadow: true, enforce: true}), session.ModeEnforce},
 		{"operator, enforce wins over shadow off", session.ClassOperator, set(map[string]bool{shadow: false, enforce: true}), session.ModeEnforce},
 		{"operator, shadow on enforce off", session.ClassOperator, set(map[string]bool{shadow: true, enforce: false}), session.ModeShadow},
-		// A class with no registered enforce flag resolves from the shadow flag alone,
-		// so the operator enforce flag must not leak into it.
 		{"agent, empty config", session.ClassAgent, set(nil), session.ModeShadow},
+		{"agent, nil config", session.ClassAgent, nil, session.ModeShadow},
+		{"agent, shadow off", session.ClassAgent, set(map[string]bool{shadow: false}), session.ModeOff},
+		{"agent, enforce wins over shadow on", session.ClassAgent, set(map[string]bool{shadow: true, enforceAgent: true}), session.ModeEnforce},
+		{"agent, enforce wins over shadow off", session.ClassAgent, set(map[string]bool{shadow: false, enforceAgent: true}), session.ModeEnforce},
+		{"agent, shadow on enforce off", session.ClassAgent, set(map[string]bool{shadow: true, enforceAgent: false}), session.ModeShadow},
+		// The operator flag must not leak into the agent class, nor the agent flag into the operator.
 		{"agent, operator enforce on", session.ClassAgent, set(map[string]bool{enforce: true}), session.ModeShadow},
-		{"agent, shadow off", session.ClassAgent, set(map[string]bool{shadow: false, enforce: true}), session.ModeOff},
+		{"operator, agent enforce on", session.ClassOperator, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
+		// A class with no registered enforce flag resolves from the shadow flag alone.
+		{"system, agent enforce on", session.ClassSystem, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
 		{"system, empty config", session.ClassSystem, set(nil), session.ModeShadow},
 		{"system, operator enforce on", session.ClassSystem, set(map[string]bool{enforce: true}), session.ModeShadow},
 		{"system, shadow off", session.ClassSystem, set(map[string]bool{shadow: false}), session.ModeOff},
@@ -573,7 +580,7 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 	for _, class := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
 		name, _, ok := session.ClassEnforceFlag(class)
 		if !ok {
-			continue // not registered yet: Tasks 1.5.3c (agent) and 1.5.8g (system)
+			continue // not registered yet: Task 1.5.8g (system)
 		}
 		registered := false
 		for _, kf := range knownFeatureFlags {
@@ -581,8 +588,11 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 		}
 		require.Truef(t, registered, "class %s row names %q, which must be in knownFeatureFlags", class, name)
 	}
-	_, _, ok = session.ClassEnforceFlag(session.ClassAgent)
-	require.False(t, ok, "the agent flag is registered in Task 1.5.3c, not here")
+	agentName, agentDef, ok := session.ClassEnforceFlag(session.ClassAgent)
+	require.True(t, ok, "the agent flag is registered in Task 1.5.3c")
+	require.Equal(t, config.WorkflowEngineEnforceAgentFeatureFlag, agentName)
+	require.Equal(t, featureFlagDefault(agentName), agentDef, "table default equals the registry default")
+	require.False(t, agentDef, "the agent flag ships off")
 	_, _, ok = session.ClassEnforceFlag(session.ClassSystem)
 	require.False(t, ok, "the system flag is registered in Task 1.5.8g, not here")
 }
@@ -603,6 +613,27 @@ func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
 	require.Equal(t, session.ModeEnforce, src.Mode(), "Mode() is the operator class")
 	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassAgent), "the operator flag does not enforce another class")
 	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassSystem))
+
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, true))
+	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassAgent))
+	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassSystem), "the agent flag does not enforce the system class")
+}
+
+func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAnswer(t *testing.T) {
+	withIsolatedStateDir(t)
+	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork) // agent, unchecked today
+	require.True(t, ok)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
+		svc := NewFeatureFlagService()
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, setting.(bool)))
+		sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
+		// idea->done has no edge: an unchecked agent write is allowed until its class enforces.
+		return sel.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil)
+	}, true, false)
 }
 
 func TestSelectorModeFor_UsesTheClassAwareSource(t *testing.T) {
