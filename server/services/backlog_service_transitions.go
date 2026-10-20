@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -116,11 +117,95 @@ func mapTransitionGraphError(err error) error {
 	case errors.Is(err, session.ErrStageDeadEnd),
 		errors.Is(err, session.ErrStageUnreachable):
 		return connect.NewError(connect.CodeInvalidArgument, err)
-	case errors.Is(err, session.ErrDisableWouldStrandLiveItems):
+	case errors.Is(err, session.ErrDisableWouldStrandLiveItems),
+		errors.Is(err, session.ErrDisableSystemRequiredEdge):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	default:
 		return connect.NewError(connect.CodeInternal, err)
 	}
+}
+
+// strandedItemIDSampleSize caps the item ids named in a stranding rejection.
+const strandedItemIDSampleSize = 5
+
+// rejectStrandedStatuses fails with ErrDisableWouldStrandLiveItems when
+// candidateEdges leave a populated status with no outgoing edge under the
+// enforced graph (Configured edges UNION system-required edges). The live
+// counts come from tx; the sample of item ids is a best-effort read outside
+// it, only to make the message actionable.
+func (s *BacklogService) rejectStrandedStatuses(ctx context.Context, tx session.TransitionTxRepository, candidateEdges []session.TransitionDefinition) error {
+	stages, _, err := tx.ListGraphForValidation(ctx)
+	if err != nil {
+		return fmt.Errorf("load graph for stranded-item check: %w", err)
+	}
+	counts := make(map[string]int)
+	for _, slug := range candidateStatusSlugs(stages) {
+		n, err := tx.LiveItemCountForStage(ctx, slug)
+		if err != nil {
+			return fmt.Errorf("count live items for stage %q: %w", slug, err)
+		}
+		counts[slug] = n
+	}
+	stranded := session.StrandedStatuses(candidateEdges, counts)
+	if len(stranded) == 0 {
+		return nil
+	}
+	return &strandedStatusError{status: stranded[0], count: counts[stranded[0]]}
+}
+
+// strandedStatusError is raised inside the transaction; the item-id sample is
+// added by withStrandedItemIDs after it ends, because a second storage read
+// inside an open SQLite transaction would wait on the same connection.
+type strandedStatusError struct {
+	status string
+	count  int
+	ids    []string
+}
+
+func (e *strandedStatusError) Unwrap() error { return session.ErrDisableWouldStrandLiveItems }
+
+func (e *strandedStatusError) Error() string {
+	msg := fmt.Sprintf("%v: status %q has %d live item(s) with no allowed outgoing transition",
+		session.ErrDisableWouldStrandLiveItems, e.status, e.count)
+	if len(e.ids) > 0 {
+		msg += " (e.g. " + strings.Join(e.ids, ", ") + "); override_reason is the only exit"
+	}
+	return msg
+}
+
+// candidateStatusSlugs is every status that can hold items: the built-in
+// statuses plus the configured stage slugs.
+func candidateStatusSlugs(stages []session.StageDefinition) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, st := range session.BuiltInStatuses() {
+		seen[string(st)] = true
+		out = append(out, string(st))
+	}
+	for _, st := range stages {
+		if !seen[st.Slug] {
+			seen[st.Slug] = true
+			out = append(out, st.Slug)
+		}
+	}
+	return out
+}
+
+// withStrandedItemIDs adds a sample of affected item ids to a stranding
+// rejection; any other error passes through unchanged.
+func (s *BacklogService) withStrandedItemIDs(ctx context.Context, err error) error {
+	var se *strandedStatusError
+	if !errors.As(err, &se) || s.storage == nil {
+		return err
+	}
+	items, listErr := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{Statuses: []string{se.status}})
+	if listErr != nil {
+		return err
+	}
+	for i := 0; i < len(items) && i < strandedItemIDSampleSize; i++ {
+		se.ids = append(se.ids, items[i].ID)
+	}
+	return se
 }
 
 // CreateStageTransition adds a new (from_stage, to_stage) edge. Task 2.7.2h1:
@@ -207,6 +292,9 @@ func (s *BacklogService) UpdateStageTransition(
 	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
 		isDisabling := req.Msg.Enabled != nil && !*req.Msg.Enabled && existing.Enabled
 		if isDisabling {
+			if err := session.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
+				return err
+			}
 			_, transitions, err := tx.ListGraphForValidation(ctx)
 			if err != nil {
 				return fmt.Errorf("load graph for validation: %w", err)
@@ -225,6 +313,9 @@ func (s *BacklogService) UpdateStageTransition(
 			liveCount, err := tx.LiveItemCountForStage(ctx, existing.FromStageSlug)
 			if err != nil {
 				return fmt.Errorf("count live items for stage %q: %w", existing.FromStageSlug, err)
+			}
+			if err := s.rejectStrandedStatuses(ctx, tx, candidateEdges); err != nil {
+				return err
 			}
 			if err := session.ValidateDisableTransition(
 				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
@@ -253,7 +344,7 @@ func (s *BacklogService) UpdateStageTransition(
 		return nil
 	})
 	if txErr != nil {
-		return nil, mapTransitionGraphError(fmt.Errorf("update stage transition: %w", txErr))
+		return nil, mapTransitionGraphError(fmt.Errorf("update stage transition: %w", s.withStrandedItemIDs(ctx, txErr)))
 	}
 
 	s.invalidateStageConfigCache(ctx, req.Msg.Id)
@@ -292,6 +383,9 @@ func (s *BacklogService) DeleteStageTransition(
 
 	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
 		if existing.Enabled {
+			if err := session.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
+				return err
+			}
 			_, transitions, err := tx.ListGraphForValidation(ctx)
 			if err != nil {
 				return fmt.Errorf("load graph for validation: %w", err)
@@ -311,6 +405,9 @@ func (s *BacklogService) DeleteStageTransition(
 			if err != nil {
 				return fmt.Errorf("count live items for stage %q: %w", existing.FromStageSlug, err)
 			}
+			if err := s.rejectStrandedStatuses(ctx, tx, candidateEdges); err != nil {
+				return err
+			}
 			if err := session.ValidateDisableTransition(
 				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
 			); err != nil {
@@ -320,7 +417,7 @@ func (s *BacklogService) DeleteStageTransition(
 		return tx.DeleteTransition(ctx, id)
 	})
 	if txErr != nil {
-		return nil, mapTransitionGraphError(fmt.Errorf("delete stage transition: %w", txErr))
+		return nil, mapTransitionGraphError(fmt.Errorf("delete stage transition: %w", s.withStrandedItemIDs(ctx, txErr)))
 	}
 
 	s.invalidateStageConfigCache(ctx, req.Msg.Id)

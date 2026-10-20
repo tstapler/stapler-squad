@@ -106,6 +106,11 @@ function SettingsPageInner() {
               </Link>
             </section>
             <section className={styles.section}>
+              <Link href={routes.settingsBacklogQuota} className={styles.helpLink} data-testid="settings-backlog-quota-link">
+                Backlog Quota (pause backlog automation near the session limit) →
+              </Link>
+            </section>
+            <section className={styles.section}>
               <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
                 Remotes (SSH hosts) →
               </Link>

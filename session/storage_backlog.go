@@ -22,6 +22,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 )
 
+// ErrTransitionNotAllowed re-exports the domain sentinel next to the other
+// session.Err* transition errors so callers can errors.Is against it.
+var ErrTransitionNotAllowed = domain.ErrTransitionNotAllowed
+
 // resolveBacklogItemLookup resolves a caller-supplied BacklogItem identifier
 // — either a legacy raw UUID string or a bl_-prefixed public id
 // (BacklogItemID, see session/backlog_item_id.go) — to the row's underlying

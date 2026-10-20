@@ -87,6 +87,12 @@ func (s *BacklogService) UpdateStage(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid stage id: %w", err))
 	}
 
+	if req.Msg.Enabled != nil && !*req.Msg.Enabled {
+		if err := s.rejectStageRemovalStranding(ctx, id); err != nil {
+			return nil, mapStageStrandingError(ctx, s, err)
+		}
+	}
+
 	stage, err := s.stageCRUDRepo.UpdateStage(ctx, id, session.StageUpdateInput{
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
@@ -142,9 +148,15 @@ func (s *BacklogService) DeleteStage(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("count live items for stage %q: %w", stage.Slug, err))
 		}
 		if liveCount > 0 {
+			hint := "disable it instead, or pass force=true to delete anyway"
+			if s.stageHostsSystemRequiredEdge(ctx, stage.Slug) {
+				hint = "its transitions are system-required, so it cannot be removed while items are on it"
+			}
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("stage %q has %d live item(s); disable it instead, or pass force=true to delete anyway", stage.Slug, liveCount))
+				fmt.Errorf("stage %q has %d live item(s); %s", stage.Slug, liveCount, hint))
 		}
+	} else if err := s.rejectStageRemovalStranding(ctx, id); err != nil {
+		return nil, mapStageStrandingError(ctx, s, err)
 	}
 
 	if err := s.stageCRUDRepo.DeleteStage(ctx, id); err != nil {
@@ -157,6 +169,59 @@ func (s *BacklogService) DeleteStage(
 	s.invalidateStageConfigCache(ctx, req.Msg.Id)
 
 	return connect.NewResponse(&sessionv1.DeleteStageResponse{}), nil
+}
+
+// rejectStageRemovalStranding fails with ErrDisableWouldStrandLiveItems when
+// disabling or deleting the stage would leave a populated status with no
+// outgoing edge. It only reads (inside a transaction, for a consistent view);
+// the caller persists afterwards.
+func (s *BacklogService) rejectStageRemovalStranding(ctx context.Context, id uuid.UUID) error {
+	stage, err := s.stageCRUDRepo.GetStageByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get stage: %w", err)
+	}
+	return s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
+		_, transitions, err := tx.ListGraphForValidation(ctx)
+		if err != nil {
+			return fmt.Errorf("load graph for validation: %w", err)
+		}
+		candidate := make([]session.TransitionDefinition, 0, len(transitions))
+		for _, t := range transitions {
+			if t.FromSlug != stage.Slug && t.ToSlug != stage.Slug {
+				candidate = append(candidate, t)
+			}
+		}
+		return s.rejectStrandedStatuses(ctx, tx, candidate)
+	})
+}
+
+// mapStageStrandingError adds the affected item ids (read after the
+// transaction ended) and maps the error to a connect code.
+func mapStageStrandingError(ctx context.Context, s *BacklogService, err error) error {
+	switch {
+	case errors.Is(err, session.ErrNotFound):
+		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, session.ErrDisableWouldStrandLiveItems):
+		return connect.NewError(connect.CodeFailedPrecondition, s.withStrandedItemIDs(ctx, err))
+	default:
+		return connect.NewError(connect.CodeInternal, err)
+	}
+}
+
+// stageHostsSystemRequiredEdge reports whether any transition into or out of
+// slug is system-required. A lookup failure answers false (keeps today's hint).
+func (s *BacklogService) stageHostsSystemRequiredEdge(ctx context.Context, slug string) bool {
+	all, err := s.stageCRUDRepo.ListAllTransitions(ctx, "")
+	if err != nil {
+		return false
+	}
+	for _, t := range all {
+		if (t.FromStageSlug == slug || t.ToStageSlug == slug) &&
+			session.IsSystemRequired(session.BacklogStatus(t.FromStageSlug), session.BacklogStatus(t.ToStageSlug)) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetStage retrieves a single stage by slug.

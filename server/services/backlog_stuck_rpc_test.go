@@ -7,6 +7,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -176,8 +179,10 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 	assert.Equal(t, "PR #148 green & mergeable 3d", got.Context)
 	require.NotNil(t, got.FirstDetectedAt)
 	assert.WithinDuration(t, threeDaysAgo, got.FirstDetectedAt.AsTime(), 5*time.Second)
-	// allow_auto_merge is a Phase 4 concern — this handler must leave it unset.
+	// No lookup is wired in this service, so the auto-merge fields stay unset.
 	assert.Nil(t, got.AllowAutoMerge)
+	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED, got.AutoMergeLookupStatus)
+	assert.Nil(t, got.AutoMergeCheckedAt)
 }
 
 // TestListStuckBacklogItems_should_PopulatePlanArtifactsPath verifies
@@ -842,6 +847,9 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// safe to do that a later bounce cycle's fresh verdict wouldn't already do
 	// on its own.
 	domain.StuckReasonVerdictUndelivered: true,
+	// StuckReasonTransitionDenied: the dequeue sweep itself is the retry (every
+	// tick re-attempts the claim and self-clears the row on success).
+	domain.StuckReasonTransitionDenied: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
@@ -865,5 +873,85 @@ func TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewR
 		explicitlyUnwired := reasonsWithoutAutomatedRemediation[reason]
 		assert.True(t, wired != explicitlyUnwired,
 			"StuckReason %q must be either wired in remediationActionByReason or listed in reasonsWithoutAutomatedRemediation, not both or neither", reason)
+	}
+}
+
+func stuckAutoMergeSvc(t *testing.T, lookup RepoSettingsLookup, prURLs ...string) []*sessionv1.StuckBacklogItem {
+	t.Helper()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetRepoSettingsLookup(lookup)
+	ctx := t.Context()
+	for i, u := range prURLs {
+		u := u
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+			Title: fmt.Sprintf("item %d", i), Status: string(session.BacklogStatusPRPending),
+		})
+		require.NoError(t, err)
+		_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &u}, nil)
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now().Add(-time.Hour), "ctx")
+	}
+	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	return resp.Msg.Items
+}
+
+func TestListStuckBacklogItems_should_PopulateAutoMerge_OncePerRepo(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	checked := time.Now().Add(-time.Minute)
+	var urls []string
+	for i := 1; i <= 12; i++ {
+		urls = append(urls, fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", i))
+	}
+	items := stuckAutoMergeSvc(t, func(_ context.Context, ref githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		calls.Add(1)
+		assert.Equal(t, "tstapler/stapler-squad", ref.String())
+		return githubpkg.RepoSettingsResult{Status: githubpkg.RepoSettingsOK, CheckedAt: checked}
+	}, urls...)
+	require.Len(t, items, 12)
+	assert.Equal(t, int32(1), calls.Load())
+	for _, it := range items {
+		assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK, it.AutoMergeLookupStatus)
+		require.NotNil(t, it.AllowAutoMerge)
+		assert.False(t, *it.AllowAutoMerge)
+		require.NotNil(t, it.AutoMergeCheckedAt)
+		assert.WithinDuration(t, checked, it.AutoMergeCheckedAt.AsTime(), time.Second)
+	}
+}
+
+func TestListStuckBacklogItems_should_SkipLookup_When_NoGitHubRepo(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	items := stuckAutoMergeSvc(t, func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		calls.Add(1)
+		return githubpkg.RepoSettingsResult{}
+	}, "not a github url")
+	require.Len(t, items, 1)
+	assert.Equal(t, int32(0), calls.Load())
+	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED, items[0].AutoMergeLookupStatus)
+	assert.Nil(t, items[0].AllowAutoMerge)
+	assert.Nil(t, items[0].AutoMergeCheckedAt)
+}
+
+func TestListStuckBacklogItems_should_LeaveAllowAutoMergeNil_When_LookupNotOK(t *testing.T) {
+	t.Parallel()
+	for _, st := range []githubpkg.RepoSettingsStatus{
+		githubpkg.RepoSettingsRateLimited, githubpkg.RepoSettingsNoPermission,
+		githubpkg.RepoSettingsNotFound, githubpkg.RepoSettingsError,
+	} {
+		t.Run(st.String(), func(t *testing.T) {
+			t.Parallel()
+			attempt := time.Now().Add(-2 * time.Minute)
+			items := stuckAutoMergeSvc(t, func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+				return githubpkg.RepoSettingsResult{Status: st, CheckedAt: attempt}
+			}, "https://github.com/tstapler/stapler-squad/pull/1")
+			require.Len(t, items, 1)
+			assert.Nil(t, items[0].AllowAutoMerge)
+			assert.Equal(t, toProtoAutoMergeStatus(st), items[0].AutoMergeLookupStatus)
+			require.NotNil(t, items[0].AutoMergeCheckedAt)
+			assert.WithinDuration(t, attempt, items[0].AutoMergeCheckedAt.AsTime(), time.Second)
+		})
 	}
 }

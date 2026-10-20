@@ -267,12 +267,15 @@ type BacklogLifecycleListener struct {
 	// workflowEngine is consulted by transitionHasAutomatedReviewGate (Epic
 	// 2.4, Story 2.4.3) to detect a custom transition's attached
 	// GateKindAutomatedReview gate, generalizing the review-gate spawn
-	// condition beyond the built-in review status literal. nil (the default —
-	// server/dependencies.go does not wire a ConfiguredWorkflowEngine in here
-	// yet) makes transitionHasAutomatedReviewGate degrade to that literal
-	// comparison only, unchanged from pre-Epic-2.4 behavior. Wired via
-	// SetWorkflowEngine.
+	// condition beyond the built-in review status literal. nil makes
+	// transitionHasAutomatedReviewGate degrade to that literal comparison only.
+	// server/dependencies.go wires the concrete *ConfiguredWorkflowEngine here,
+	// never the SwitchableWorkflowEngine selector: the .(*ConfiguredWorkflowEngine)
+	// assertions below would fail and silently disable gate-context resolution.
+	// Wired via SetWorkflowEngine.
 	workflowEngine WorkflowEngine
+	// wrongEngineWarn limits the "not a ConfiguredWorkflowEngine" WARN to once.
+	wrongEngineWarn sync.Once
 
 	enabled atomic.Bool
 }
@@ -285,6 +288,25 @@ func (l *BacklogLifecycleListener) SetWorkflowEngine(engine WorkflowEngine) {
 	defer l.workflowEngineMu.Unlock()
 	l.workflowEngine = engine
 }
+
+// configuredWorkflowEngine returns the wired engine as a *ConfiguredWorkflowEngine.
+// Any other non-nil engine (notably the SwitchableWorkflowEngine selector)
+// silently disables gate-context resolution, so that is logged once.
+func (l *BacklogLifecycleListener) configuredWorkflowEngine() (*ConfiguredWorkflowEngine, bool) {
+	eng := l.getWorkflowEngine()
+	cwe, ok := eng.(*ConfiguredWorkflowEngine)
+	if !ok && eng != nil {
+		l.wrongEngineWarn.Do(func() {
+			log.Warn("backlog lifecycle listener: workflow engine is not a *ConfiguredWorkflowEngine; automated-review and custom-check gate contexts will not resolve",
+				"engine_type", fmt.Sprintf("%T", eng))
+		})
+	}
+	return cwe, ok
+}
+
+// WorkflowEngine returns the wired engine (nil if none); exported for the
+// production-wiring test in server/.
+func (l *BacklogLifecycleListener) WorkflowEngine() WorkflowEngine { return l.getWorkflowEngine() }
 
 // getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
 func (l *BacklogLifecycleListener) getWorkflowEngine() WorkflowEngine {
@@ -1081,15 +1103,14 @@ var builtInReviewGateContext = GateContext{
 // wired *ConfiguredWorkflowEngine with a matching GateKindAutomatedReview gate
 // resolves to that gate's own GateID/RequiresDiff/PipelineMode. ok is false
 // when no automated-review gate applies at all — the caller must not spawn a
-// review gate in that case. l.workflowEngine is nil in production until
-// SetWorkflowEngine is called (server/dependencies.go), so today this
-// degrades to the `to == BacklogStatusReview` case only, same as before this
-// generalization.
+// review gate in that case. server/dependencies.go wires the concrete engine
+// via SetWorkflowEngine; with none (or a non-concrete one) this degrades to
+// the `to == BacklogStatusReview` case only.
 func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to BacklogStatus) (GateContext, bool) {
 	if to == BacklogStatusReview {
 		return builtInReviewGateContext, true
 	}
-	cwe, ok := l.getWorkflowEngine().(*ConfiguredWorkflowEngine)
+	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
 		return GateContext{}, false
 	}
@@ -1113,7 +1134,7 @@ func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to BacklogStat
 // false when no WorkflowEngine is wired, it isn't a *ConfiguredWorkflowEngine,
 // or the edge carries no custom-check gate.
 func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to BacklogStatus) (uuid.UUID, CustomCheckConfig, bool) {
-	cwe, ok := l.getWorkflowEngine().(*ConfiguredWorkflowEngine)
+	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
 		return uuid.Nil, CustomCheckConfig{}, false
 	}
