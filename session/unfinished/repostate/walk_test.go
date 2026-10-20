@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -136,5 +137,59 @@ func TestWalk_ShouldKeepVisitCap_WhenLimitBelowDistance(t *testing.T) {
 	}
 	if n, err := w.CountCommitsTo(base, testHash(1, 0)); err != nil || n != 4 {
 		t.Errorf("capped count = %d, %v; want 4", n, err)
+	}
+}
+
+// A full arena used to stay full until something called Drop, so every later
+// fill fell back to the plain walk. A refusal on a generation older than
+// GraphRebuildInterval now swaps in a fresh one (once), keeping in-flight walks
+// on the generation they loaded.
+func TestWalk_ShouldRebuildFullGraphOnce_WhenIntervalElapsed(t *testing.T) {
+	d, head, base := chain(50, 44, 3)
+	src := &mapSource{d: d}
+	now := time.Unix(1_000, 0)
+	rs := newWalkState(Options{MaxGraphCommits: 5, Clock: func() time.Time { return now }, GraphRebuildInterval: time.Minute})
+	g := rs.Graph()
+	startEpoch := g.Load().Epoch()
+
+	inFlight := rs.NewWalk(context.Background(), src, 0, 2000) // holds the generation across the rebuild
+	defer inFlight.Close()
+	if _, err := inFlight.FindMergeBase(head, base); !errors.Is(err, ErrGraphFull) {
+		t.Fatalf("err = %v, want ErrGraphFull filling the arena", err)
+	}
+	small := func() error {
+		w := rs.NewWalk(context.Background(), src, 0, 2000)
+		defer w.Close()
+		_, err := w.CountCommitsTo(testHash(1, 3), testHash(1, 0))
+		return err
+	}
+
+	now = now.Add(30 * time.Second)
+	if err := small(); !errors.Is(err, ErrGraphFull) {
+		t.Fatalf("before the interval: err = %v, want ErrGraphFull", err)
+	}
+	if g.Load().Epoch() != startEpoch || g.Stats().FullRebuild != 0 {
+		t.Fatalf("rebuilt too early: epoch %d, rebuilds %d", g.Load().Epoch(), g.Stats().FullRebuild)
+	}
+
+	now = now.Add(time.Minute)
+	if err := small(); !errors.Is(err, ErrGraphFull) { // the refusal that triggers the swap
+		t.Fatalf("triggering walk: err = %v, want ErrGraphFull", err)
+	}
+	if err := small(); err != nil {
+		t.Fatalf("after the rebuild the graph must serve walks again, got %v", err)
+	}
+	if got := g.Load().Epoch(); got != startEpoch+1 {
+		t.Errorf("epoch = %d, want exactly one rebuild (%d)", got, startEpoch+1)
+	}
+	if got := g.Stats().FullRebuild; got != 1 {
+		t.Errorf("FullRebuild = %d, want 1", got)
+	}
+	// The in-flight walk keeps its generation and is still refused consistently.
+	if _, err := inFlight.CountCommitsTo(testHash(1, 3), testHash(1, 0)); !errors.Is(err, ErrGraphFull) {
+		t.Errorf("in-flight walk err = %v, want ErrGraphFull on its own generation", err)
+	}
+	if got := g.Stats().FullRebuild; got != 1 {
+		t.Errorf("in-flight refusal rebuilt again: FullRebuild = %d", got)
 	}
 }

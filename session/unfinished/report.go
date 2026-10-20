@@ -37,6 +37,7 @@ type Report struct {
 	ReachBuilds          map[string]uint64      `json:"reach_builds"`
 	CASRetriesTotal      int64                  `json:"cas_retries_total"`
 	GraphFullFallbacks   uint64                 `json:"graph_full_fallbacks_total"`
+	GraphFullRebuilds    uint64                 `json:"graph_full_rebuilds_total"`
 	GraphExtension       map[string]any         `json:"graph_extension"`
 	DirtyFullWalkTotal   map[string]int64       `json:"dirty_full_walk_total"`
 	ParityMismatchTotal  map[string]int64       `json:"parity_mismatch_total"`
@@ -71,6 +72,7 @@ func BuildReport() Report {
 		ReachBuilds:         map[string]uint64{"scratch": in.reachBuilds.Scratch, "incremental": in.reachBuilds.Incremental},
 		CASRetriesTotal:     in.casRetries(),
 		GraphFullFallbacks:  in.graph.GraphFull,
+		GraphFullRebuilds:   in.graph.FullRebuild,
 		GraphExtension: map[string]any{
 			"count": in.graphExt.Count, "over_100ms": in.graphExt.SlowOver100ms,
 			"seconds_sum": in.graphExt.Total.Seconds(),

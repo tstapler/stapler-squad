@@ -45,6 +45,7 @@ type graphStats struct {
 	rollback       padded[atomic.Uint64]
 	casRetries     padded[atomic.Uint64]
 	graphFull      padded[atomic.Uint64]
+	fullRebuild    padded[atomic.Uint64] // generations replaced because the arena stayed full
 	rowHits        padded[atomic.Uint64] // walk reads served from a Filled/Truncated row
 	rowMisses      padded[atomic.Uint64] // walk reads that had to Fill a row
 }
@@ -52,7 +53,7 @@ type graphStats struct {
 // GraphStats is a point-in-time copy of the contention counters, cumulative
 // across generations (the plan's *_total metrics).
 type GraphStats struct {
-	FillLostCAS, FillLostDecode, Reprobe, Rollback, CASRetries, GraphFull uint64
+	FillLostCAS, FillLostDecode, Reprobe, Rollback, CASRetries, GraphFull, FullRebuild uint64
 }
 
 // Generation is one immutable-shape assignment of ids: a fixed segment
@@ -61,10 +62,12 @@ type GraphStats struct {
 // assignments are never mixed. A replaced Generation is never mutated again;
 // the GC reclaims it once the last reader lets go (ADR-009 item 8).
 type Generation struct {
-	epoch GraphEpoch
-	cap   uint64
-	hooks graphHooks
-	stats *graphStats
+	epoch  GraphEpoch
+	born   int64 // creation time (unix ns); gates the rate-limited full-arena rebuild
+	onFull func(*Generation)
+	cap    uint64
+	hooks  graphHooks
+	stats  *graphStats
 
 	dir     []atomic.Pointer[segment]
 	side    []atomic.Pointer[sideChunk]
@@ -83,7 +86,7 @@ type Generation struct {
 	stampOrd padded[atomic.Uint32] // holds a StampOrd
 }
 
-func newGeneration(epoch GraphEpoch, maxRows uint64, hooks graphHooks, stats *graphStats) *Generation {
+func newGeneration(epoch GraphEpoch, maxRows uint64, hooks graphHooks, stats *graphStats, bornNs int64) *Generation {
 	// Octopus merges are rare; four words per row is generous and only touched chunks cost memory.
 	sideCap := maxRows * sideWordsPerRow
 	if sideCap < sideChunkWords {
@@ -91,6 +94,7 @@ func newGeneration(epoch GraphEpoch, maxRows uint64, hooks graphHooks, stats *gr
 	}
 	return &Generation{
 		epoch:   epoch,
+		born:    bornNs,
 		cap:     maxRows,
 		hooks:   hooks,
 		stats:   stats,
@@ -177,10 +181,19 @@ func (g *Generation) Intern(h plumbing.Hash) (uint32, error) {
 		return uint32(n), false
 	})
 	if full {
-		g.stats.graphFull.V.Add(1)
+		g.noteFull()
 		return 0, ErrGraphFull
 	}
 	return id, nil
+}
+
+// noteFull counts a full-arena refusal and lets the owning Graph replace this
+// generation if it is old enough.
+func (g *Generation) noteFull() {
+	g.stats.graphFull.V.Add(1)
+	if g.onFull != nil {
+		g.onFull(g)
+	}
 }
 
 // allocRow is a bounded CAS increment: the cap is checked first, so next never
@@ -330,6 +343,10 @@ type Graph struct {
 	hooks   graphHooks
 	stats   *graphStats
 	gen     atomic.Pointer[Generation]
+	now     func() time.Time
+	// rebuildEvery is the minimum age of a generation before a full arena may
+	// replace it; negative disables the rebuild.
+	rebuildEvery time.Duration
 }
 
 var _ Product = (*Graph)(nil)
@@ -350,9 +367,42 @@ func newGraph(opts Options, hooks graphHooks) *Graph {
 	if hooks.ClaimWait <= 0 {
 		hooks.ClaimWait = defaultClaimWait
 	}
-	g := &Graph{maxRows: n, hooks: hooks, stats: &graphStats{}}
-	g.gen.Store(newGeneration(1, n, hooks, g.stats))
+	g := &Graph{maxRows: n, hooks: hooks, stats: &graphStats{}, now: opts.now, rebuildEvery: opts.GraphRebuildInterval}
+	if g.rebuildEvery == 0 {
+		g.rebuildEvery = defaultGraphRebuildInterval
+	}
+	g.gen.Store(g.newGen(1))
 	return g
+}
+
+// newGen builds a generation wired to this graph's clock and full-arena hook.
+func (g *Graph) newGen(epoch GraphEpoch) *Generation {
+	gen := newGeneration(epoch, g.maxRows, g.hooks, g.stats, g.now().UnixNano())
+	gen.onFull = g.rebuildIfDue
+	return gen
+}
+
+// successor is the generation that replaces old. Ordinals stay monotonic across
+// generations so a Truncated row written under a stale ordinal can never match
+// a later one.
+func (g *Graph) successor(old *Generation) *Generation {
+	next := g.newGen(old.epoch + 1)
+	next.stampOrd.V.Store(old.stampOrd.V.Load())
+	return next
+}
+
+// rebuildIfDue replaces a full generation that is at least rebuildEvery old, so
+// the arena does not stay full (every walk falling back) until something else
+// calls Drop. The CAS from the exact full generation makes it once-only: a
+// racing Drop or rebuild wins and this one does nothing. In-flight walks keep
+// the generation they loaded.
+func (g *Graph) rebuildIfDue(full *Generation) {
+	if g.rebuildEvery < 0 || g.now().UnixNano()-full.born < int64(g.rebuildEvery) {
+		return
+	}
+	if g.gen.CompareAndSwap(full, g.successor(full)) {
+		g.stats.fullRebuild.V.Add(1)
+	}
 }
 
 // Load returns the current generation; hold it for the whole operation.
@@ -367,11 +417,7 @@ func (g *Graph) Bytes() int64 { return g.Load().Bytes() }
 func (g *Graph) Drop() {
 	for {
 		old := g.gen.Load()
-		next := newGeneration(old.epoch+1, g.maxRows, g.hooks, g.stats)
-		// Ordinals stay monotonic across generations so a Truncated row written
-		// under a stale ordinal can never match a later one.
-		next.stampOrd.V.Store(old.stampOrd.V.Load())
-		if g.gen.CompareAndSwap(old, next) {
+		if g.gen.CompareAndSwap(old, g.successor(old)) {
 			return
 		}
 	}
@@ -400,5 +446,6 @@ func (g *Graph) Stats() GraphStats {
 		Rollback:       s.rollback.V.Load(),
 		CASRetries:     s.casRetries.V.Load(),
 		GraphFull:      s.graphFull.V.Load(),
+		FullRebuild:    s.fullRebuild.V.Load(),
 	}
 }

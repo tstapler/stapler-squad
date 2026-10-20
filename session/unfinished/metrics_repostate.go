@@ -97,6 +97,7 @@ func (in *repostateInputs) addGraph(rs *repostate.RepoState) {
 	in.graph.Rollback += st.Rollback
 	in.graph.CASRetries += st.CASRetries
 	in.graph.GraphFull += st.GraphFull
+	in.graph.FullRebuild += st.FullRebuild
 	if cs, ok := any(g).(graphCacheStatser); ok {
 		c := cs.CacheStats()
 		cur := in.caches["graph"]
@@ -226,6 +227,7 @@ var repostateCatalog = []seriesSpec{
 	{"cache_bytes", "Bytes held per repostate cache", "cache", kindGauge},
 	{"cache_entries", "Entries held per repostate cache", "cache", kindGauge},
 	{"graph_full_fallbacks_total", "Walks that fell back to the plain walk because the graph arena was full", "", kindCounter},
+	{"graph_full_rebuilds_total", "Full graph arenas replaced by a fresh generation (rate-limited)", "", kindCounter},
 	{"fill_lost_cas_total", "Graph row fills that lost the CAS race", "", kindCounter},
 	{"fill_lost_decode_total", "Graph row fills whose decode was discarded after losing", "", kindCounter},
 	{"reprobe_total", "Truncated graph rows re-probed after a ShallowStamp change", "", kindCounter},
@@ -278,6 +280,7 @@ func (in repostateInputs) points() []seriesPoint {
 	}
 	g := in.graph
 	add("graph_full_fallbacks_total", "", int64(g.GraphFull))  //nolint:gosec // counters never approach int64
+	add("graph_full_rebuilds_total", "", int64(g.FullRebuild)) //nolint:gosec // counters never approach int64
 	add("fill_lost_cas_total", "", int64(g.FillLostCAS))       //nolint:gosec // counters never approach int64
 	add("fill_lost_decode_total", "", int64(g.FillLostDecode)) //nolint:gosec // counters never approach int64
 	add("reprobe_total", "", int64(g.Reprobe))                 //nolint:gosec // counters never approach int64

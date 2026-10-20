@@ -148,7 +148,7 @@ func TestMetrics_ShouldExportAllRepostateSeriesAsZero_WhenFlagOffOrRepoStateUnal
 func TestMetrics_ShouldExposeFillLostCasDecodeReprobeRollbackAndCasRetries(t *testing.T) {
 	t.Parallel()
 	in := newRepostateInputs()
-	in.graph = repostate.GraphStats{FillLostCAS: 1, FillLostDecode: 2, Reprobe: 3, Rollback: 4, CASRetries: 5, GraphFull: 6}
+	in.graph = repostate.GraphStats{FillLostCAS: 1, FillLostDecode: 2, Reprobe: 3, Rollback: 4, CASRetries: 5, GraphFull: 6, FullRebuild: 14}
 	in.caches["graph"] = repostate.CacheStats{Hits: 7, Misses: 8, Evictions: 9, Coalesced: 10, Entries: 11, Bytes: 12}
 	in.parity.Mismatch[parityShortstat] = 13
 
@@ -161,6 +161,7 @@ func TestMetrics_ShouldExposeFillLostCasDecodeReprobeRollbackAndCasRetries(t *te
 		"fill_rollback_total":              4,
 		"cas_retries_total":                5,
 		"graph_full_fallbacks_total":       6,
+		"graph_full_rebuilds_total":        14,
 		"cache_hits_total{graph}":          7,
 		"cache_misses_total{graph}":        8,
 		"cache_evictions_total{graph}":     9,
