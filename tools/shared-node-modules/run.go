@@ -10,12 +10,13 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 const (
@@ -324,7 +325,7 @@ func moveDir(src, dst string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if out, err := exec.CommandContext(ctx, "mv", src, dst).CombinedOutput(); err != nil {
+	if out, err := safeexec.CommandContext(ctx, "mv", src, dst).CombinedOutput(); err != nil {
 		return fmt.Errorf("mv %s %s: %w: %s", src, dst, err, out)
 	}
 	return nil

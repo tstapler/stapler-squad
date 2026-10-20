@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 func main() {
@@ -73,7 +75,7 @@ func bunInstall(webAppDir, target string) error {
 }
 
 func bunInstallCmd(ctx context.Context, webAppDir, target string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile", "--cwd", target)
+	cmd := safeexec.CommandContext(ctx, "bun", "install", "--frozen-lockfile", "--cwd", target)
 	cmd.Dir = webAppDir
 	cmd.Env = envWithout(os.Environ(), "npm_config_user_agent")
 	return cmd
