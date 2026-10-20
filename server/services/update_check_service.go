@@ -24,12 +24,12 @@ const (
 
 // ChangelogEnabled reports the changelog flag (default on) from cfg.
 func ChangelogEnabled(cfg *config.Config) bool {
-	return cfg.GetFeatureFlagWithDefault(ChangelogFlagName, true)
+	return cfg.GetFeatureFlagWithDefault(ChangelogFlagName, featureFlagDefault(ChangelogFlagName))
 }
 
 // UpdateCheckFlagEnabled reports the opt-in update-check flag (default off) from cfg.
 func UpdateCheckFlagEnabled(cfg *config.Config) bool {
-	return cfg.GetFeatureFlagWithDefault(UpdateCheckFlagName, false)
+	return cfg.GetFeatureFlagWithDefault(UpdateCheckFlagName, featureFlagDefault(UpdateCheckFlagName))
 }
 
 // UpdateCheckResult is the JSON served by GET /api/update-check.
