@@ -971,7 +971,7 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 	})
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
+	err = storage.RawSetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
 	require.NoError(t, err)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -999,7 +999,7 @@ func TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR(t
 	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, updated, prURL, prNum, "Implemented the feature.", nil)
+	err = storage.RawSetBacklogItemPRAndTransition(ctx, updated, prURL, prNum, "Implemented the feature.", nil)
 	require.NoError(t, err, "repeating the same PR on an already-pr_pending item must be a no-op success, not an error — the idempotency short-circuit must run before the reassignment-guard check, so a nil guard here is fine")
 }
 
@@ -1029,7 +1029,7 @@ func TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
 
 	require.NoError(t, repo.Close())
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
+	err = storage.RawSetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
 	require.Error(t, err, "a storage write failure must be returned to the caller, not silently swallowed")
 }
 
@@ -1048,7 +1048,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedSt
 	})
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Too early.", nil)
+	err = storage.RawSetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Too early.", nil)
 	require.ErrorIs(t, err, ErrPreconditionFailed)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -1082,7 +1082,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
 	require.NoError(t, err)
 
-	err = storage.SetBacklogItemPRAndTransition(ctx, item /* stale */, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
+	err = storage.RawSetBacklogItemPRAndTransition(ctx, item /* stale */, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
 	require.ErrorIs(t, err, ErrPreconditionFailed)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)

@@ -771,7 +771,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 
 	// Simulate a manual revert to a pre-work status (e.g. the in-progress
 	// session was abandoned) — no GitHub-side change accompanies this.
-	_, err = storage.TransitionBacklogItemStatus(ctx, created.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, created.ID, BacklogStatusReady, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Tick 2: same closed issue, same IssueUpdatedAt. If the watermark had

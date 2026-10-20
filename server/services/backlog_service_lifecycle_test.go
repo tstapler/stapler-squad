@@ -1330,7 +1330,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 	go func() {
 		defer wg.Done()
 		startBarrier.Wait()
-		_, automatedErr = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusPRPending, &session.BacklogItemPrecondition{
+		_, automatedErr = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusPRPending, &session.BacklogItemPrecondition{
 			ExpectedStatus: string(session.BacklogStatusReview),
 		}, session.TriggeredBySystem)
 	}()

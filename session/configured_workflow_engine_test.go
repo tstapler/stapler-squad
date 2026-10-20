@@ -664,7 +664,7 @@ func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine,
 	})
 	require.NoError(t, err)
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus(fromStage.Slug), nil, TriggeredByUser)
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus(fromStage.Slug), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	require.NoError(t, client.BacklogStage.DeleteOneID(fromStage.ID).Exec(ctx))

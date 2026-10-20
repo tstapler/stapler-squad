@@ -88,7 +88,7 @@ func (h *gateHarness) status(t *testing.T, id string) string {
 // moveRaw changes the stored status behind the gate's back (a concurrent mover).
 func (h *gateHarness) moveRaw(t *testing.T, id string, to BacklogStatus) {
 	t.Helper()
-	_, err := h.repo.TransitionBacklogItemStatus(context.Background(), id, to, nil, TriggeredBySystem)
+	_, err := h.repo.rawTransitionBacklogItemStatus(context.Background(), id, to, nil, TriggeredBySystem)
 	require.NoError(t, err)
 }
 

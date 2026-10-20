@@ -175,14 +175,14 @@ func (f *fakeJulesPollerStorage) AppendProgressNote(_ context.Context, itemID st
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) SetBacklogItemPRAndTransition(_ context.Context, observed *BacklogItemData, prURL string, prNumber int, _ string, _ *PRReassignmentGuard) error {
+func (f *fakeJulesPollerStorage) RawSetBacklogItemPRAndTransition(_ context.Context, observed *BacklogItemData, prURL string, prNumber int, _ string, _ *PRReassignmentGuard) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prRecorded = append(f.prRecorded, fakePRRecord{observed.ID, prURL, prNumber})
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) TransitionBacklogItemStatus(_ context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, _ string) (*BacklogItemData, error) {
+func (f *fakeJulesPollerStorage) RawTransitionBacklogItemStatus(_ context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, _ string) (*BacklogItemData, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	expected := ""

@@ -28,12 +28,17 @@ import (
 )
 
 // bypassPrimitives are the six status writers (ADR-007 D1); a call is matched
-// by selector name on any receiver. The Raw/raw forms are the post-1.5.4 names.
+// by selector name on any receiver. The Raw/raw forms are the post-1.5.4 names;
+// "TransitionBacklogItemStatusWithNote" is the raw writer behind GatedReconcileStuck.
 var bypassPrimitives = func() map[string]bool {
 	m := map[string]bool{}
 	for _, n := range []string{
 		"TransitionBacklogItemStatus", "ArchiveBacklogItem", "UnarchiveBacklogItem",
 		"SetBacklogItemPRAndTransition", "ReconcileStuckItems", "TransitionBacklogItemStatusWithPRFields",
+		"TransitionBacklogItemStatusWithNote",
+		// ReconcileStuckItems has no Storage wrapper; GatedReconcileStuck is its only
+		// form and stays counted until Story 1.5.7a registers the caller.
+		"GatedReconcileStuck",
 	} {
 		m[n] = true
 		m["Raw"+n] = true
@@ -82,11 +87,15 @@ func exempt(file, fn string, calls int, why string) bypassSite {
 // (recounted by git grep at the Story 1.2.3 HEAD).
 var bypassInventory = []bypassSite{
 	// Exempt: wrappers and the MCP delegate.
-	exempt("session/storage.go", "Storage.TransitionBacklogItemStatus", 1, wrapperReason),
-	exempt("session/storage.go", "Storage.ArchiveBacklogItem", 1, wrapperReason),
-	exempt("session/storage.go", "Storage.UnarchiveBacklogItem", 1, wrapperReason),
-	exempt("session/storage.go", "Storage.SetBacklogItemPRAndTransition", 1, wrapperReason+"; its call is TransitionBacklogItemStatusWithPRFields"),
+	exempt("session/storage.go", "Storage.RawTransitionBacklogItemStatus", 1, wrapperReason),
+	exempt("session/storage.go", "Storage.RawArchiveBacklogItem", 1, wrapperReason),
+	exempt("session/storage.go", "Storage.RawUnarchiveBacklogItem", 1, wrapperReason),
+	exempt("session/storage.go", "Storage.setPRAndTransition", 1, "single-UPDATE PR write shared by RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; its call is rawTransitionBacklogItemStatusWithPRFields"),
 	exempt("session/transition_gate.go", "Storage.writeGated", 1, gateReason+": the write after the engine allowed"),
+	exempt("session/ent_repository_backlog.go", "EntRepository.rawTransitionBacklogItemStatus", 1, "the raw writer delegating to its note-appending variant; both are unexported and reachable only through the gate and the Raw* wrappers"),
+	exempt("session/transition_gate.go", "Storage.writeGatedArchive", 1, gateReason+": the archive write after the engine allowed"),
+	exempt("session/transition_gate.go", "Storage.writeGatedUnarchive", 1, gateReason+": the unarchive write after the engine allowed"),
+	exempt("session/transition_gate.go", "Storage.writeGatedReconcile", 1, gateReason+": the reconcile write after the engine allowed, appending the [auto] note in the same UPDATE"),
 	exempt("session/transition_gate.go", "Storage.Rollback", 1, gateReason+": exempt entry point, counted"),
 	exempt("session/transition_gate.go", "Storage.DebugForce", 2, gateReason+": exempt entry point, counted (transition and archive)"),
 	exempt("server/mcp/tools_backlog_dependencies.go", "backlogHandlers.transitionBacklogItemStatus", 1, delegateReason),
