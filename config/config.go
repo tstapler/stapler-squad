@@ -1667,7 +1667,15 @@ func UpdateConfig(fn func(*Config) error) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	cfg := LoadConfig()
+	// Only a missing file starts from defaults; an unreadable or half-written one
+	// must not be overwritten with defaults plus this one change.
+	cfg, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("refusing to update unreadable config %s: %w", configPath, err)
+		}
+		cfg = DefaultConfig()
+	}
 	if err := fn(cfg); err != nil {
 		return err
 	}
