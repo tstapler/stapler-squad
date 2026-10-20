@@ -26,6 +26,14 @@ export interface TestServerConfig {
   buildPath: string;
   seedSessions: number;
   liveSeedSessions: number;
+  /**
+   * Also start the remote-access HTTPS listener (--remote-access). Passkey auth is attached only to
+   * that listener, so unauthenticated-login behaviour is observed at getRemoteBaseUrl() with TLS
+   * errors ignored (the listener uses a private CA).
+   */
+  remoteAuth: boolean;
+  /** 0 means "pick a free port at start() time"; only used when remoteAuth is set. */
+  remotePort: number;
 }
 
 export class TestServer {
@@ -49,6 +57,8 @@ export class TestServer {
       buildPath: config.buildPath || process.env.TEST_SERVER_BINARY || path.join(__dirname, '../../../stapler-squad'),
       seedSessions: config.seedSessions ?? 6,
       liveSeedSessions: config.liveSeedSessions ?? 3,
+      remoteAuth: config.remoteAuth ?? false,
+      remotePort: config.remotePort ?? 0,
     };
   }
 
@@ -67,10 +77,16 @@ export class TestServer {
     await this.seedDemoData();
     await this.seedHiddenSession();
 
+    if (this.config.remoteAuth && this.config.remotePort === 0) {
+      this.config.remotePort = await findFreePort();
+    }
+    const remoteArgs = this.config.remoteAuth ? ['--remote-access', '--remote-port', String(this.config.remotePort)] : [];
+
     this.process = spawn(this.config.buildPath, [
       '--test-mode',
       '--test-dir', this.config.testDir,
       '--tmux-keep-server',
+      ...remoteArgs,
     ], {
       env: {
         ...process.env,
@@ -82,11 +98,14 @@ export class TestServer {
         // config.GetConfigDirForDir), so this only affects the debug-handler
         // gate and log prefix, not data isolation.
         STAPLER_SQUAD_INSTANCE: 'e2e-local',
+        // A remote-auth server runs beside the global one, so it gets its own tmux server too.
+        ...(this.config.remoteAuth ? { STAPLER_SQUAD_TMUX_SOCKET: `ssq-e2e-remote-${process.pid}` } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     await this.waitForServer();
+    if (this.config.remoteAuth) await this.waitForPort(this.config.remotePort);
     await this.seedLiveSessions();
 
     console.log(`✅ Test server started on http://localhost:${this.config.port}`);
@@ -126,6 +145,11 @@ export class TestServer {
     return `http://localhost:${this.config.port}`;
   }
 
+  /** HTTPS origin of the remote-access listener; only meaningful when remoteAuth is set. */
+  getRemoteBaseUrl(): string {
+    return `https://localhost:${this.config.remotePort}`;
+  }
+
   getTestDir(): string {
     return this.config.testDir;
   }
@@ -149,6 +173,20 @@ export class TestServer {
     }
 
     throw new Error(`Server failed to start after ${maxAttempts} seconds`);
+  }
+
+  /** The remote listener comes up after the local one; wait until its port accepts connections. */
+  private async waitForPort(port: number, maxAttempts = 60): Promise<void> {
+    for (let i = 0; i < maxAttempts; i++) {
+      const open = await new Promise<boolean>((resolve) => {
+        const socket = net.connect(port, '127.0.0.1');
+        socket.once('connect', () => { socket.destroy(); resolve(true); });
+        socket.once('error', () => resolve(false));
+      });
+      if (open) return;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(`Remote listener on port ${port} did not open after ${maxAttempts} seconds`);
   }
 
   private async ensureBinary(): Promise<void> {

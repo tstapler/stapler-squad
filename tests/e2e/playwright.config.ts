@@ -1,4 +1,24 @@
-import { defineConfig, devices } from '@playwright/test';
+import * as fs from 'fs';
+import { defineConfig, devices, webkit } from '@playwright/test';
+
+/**
+ * WebKit (iPhone) project for mobile-webkit.spec.ts. Report-only by construction: when the
+ * browser build is not installed (npx playwright install webkit) the project is left out and the
+ * reason is printed, so a missing WebKit never fails the suite (plan Story 7.8b).
+ */
+function webkitMobileProjects() {
+  let installed = false;
+  try {
+    installed = fs.existsSync(webkit.executablePath());
+  } catch {
+    installed = false;
+  }
+  if (!installed) {
+    console.warn('[playwright.config] webkit-mobile skipped: WebKit is not installed (npx playwright install webkit)');
+    return [];
+  }
+  return [{ name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: '**/mobile-webkit.spec.ts' }];
+}
 
 /**
  * Playwright configuration for terminal flickering tests
@@ -103,6 +123,7 @@ export default defineConfig({
     },
     {
       name: 'chromium',
+      testIgnore: '**/mobile-webkit.spec.ts',
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -123,6 +144,7 @@ export default defineConfig({
       //   if (typeof WebGL2RenderingContext !== 'undefined')
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
+      testIgnore: '**/mobile-webkit.spec.ts',
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -130,5 +152,6 @@ export default defineConfig({
         },
       },
     },
+    ...webkitMobileProjects(),
   ],
 });
