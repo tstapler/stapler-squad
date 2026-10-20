@@ -337,6 +337,20 @@ func Free(x interface{ ReconcileStuckItems() }) { x.ReconcileStuckItems() }
 	assert.Equal(t, map[string]int{"x.go a.M": 3, "x.go Free": 1}, got)
 }
 
+func TestWorkflowBypassInventory_ScannerCountsGateEntryPointsButNotTransactionRollback(t *testing.T) {
+	dir := t.TempDir()
+	src := `package x
+func Migrated(s interface{}, tx interface{}) {
+	s.GatedTransition(ctx, req)
+	s.Rollback(ctx, id, to, pre, by)
+	s.DebugForce(ctx, id, to, by)
+	defer tx.Rollback()
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "x.go"), []byte(src), 0o600))
+	assert.Equal(t, map[string]int{"x.go Migrated": 3}, scanBypassCalls(t, dir))
+}
+
 const delegateFile = "server/mcp/tools_backlog_dependencies.go"
 
 // registryCallCounts sums the primitive calls the caller registry accounts for,
