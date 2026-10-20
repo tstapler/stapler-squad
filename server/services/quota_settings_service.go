@@ -143,22 +143,33 @@ func validateQuotaPercentages(q config.QuotaConfig) error {
 	return nil
 }
 
+// Upper bounds keep time.Duration(n)*unit far from int64 overflow.
+const (
+	maxQuotaTicks   = 1000
+	maxQuotaMinutes = 7 * 24 * 60
+	maxQuotaSeconds = 24 * 60 * 60
+)
+
 func validateQuotaCounts(q config.QuotaConfig) error {
 	ints := []struct {
 		name         string
 		value        int
 		defaultValue int
+		max          int
 	}{
-		{"consecutive_ticks_to_pause", q.ConsecutiveTicksToPause, 2},
-		{"consecutive_ticks_to_resume", q.ConsecutiveTicksToResume, 3},
-		{"rate_limit_window_minutes", q.RateLimitWindowMinutes, 30},
-		{"manual_override_grace_minutes", q.ManualOverrideGraceMinutes, 10},
-		{"foreground_throttle_delay_seconds", q.ForegroundThrottleDelaySeconds, 300},
+		{"consecutive_ticks_to_pause", q.ConsecutiveTicksToPause, 2, maxQuotaTicks},
+		{"consecutive_ticks_to_resume", q.ConsecutiveTicksToResume, 3, maxQuotaTicks},
+		{"rate_limit_window_minutes", q.RateLimitWindowMinutes, 30, maxQuotaMinutes},
+		{"manual_override_grace_minutes", q.ManualOverrideGraceMinutes, 10, maxQuotaMinutes},
+		{"foreground_throttle_delay_seconds", q.ForegroundThrottleDelaySeconds, 300, maxQuotaSeconds},
 	}
 	for _, i := range ints {
 		if i.value <= 0 {
 			return fmt.Errorf("%s must be greater than zero (got %d); zero would be silently replaced by the default %d",
 				i.name, i.value, i.defaultValue)
+		}
+		if i.value > i.max {
+			return fmt.Errorf("%s must be at most %d (got %d)", i.name, i.max, i.value)
 		}
 	}
 	return nil
