@@ -108,7 +108,11 @@ function AutoMergeLine({ item, onRefresh }: AutoMergeLineProps) {
   const current = fresh ?? item;
   const status = current.autoMergeLookupStatus;
   const failed = status in FAILURE_REASON;
-  const showRetry = !!onRefresh && (failed || checking);
+  const checkedMs = current.autoMergeCheckedAt ? timestampMs(current.autoMergeCheckedAt) : null;
+  const ago = checkedMs === null ? null : formatAgo(current.autoMergeCheckedAt, now);
+  const stale =
+    status === AutoMergeLookupStatus.OK && checkedMs !== null && now - checkedMs > AUTO_MERGE_TTL_MS;
+  const showRetry = !!onRefresh && (failed || stale || checking);
 
   // Success unmounts Retry; hand focus to the line container so it never falls to body.
   useEffect(() => {
@@ -129,7 +133,13 @@ function AutoMergeLine({ item, onRefresh }: AutoMergeLineProps) {
       const ok = next?.autoMergeLookupStatus === AutoMergeLookupStatus.OK;
       focusContainerNext.current = ok;
       if (next) setFresh(next);
-      setAnnounce(ok ? "Repo auto-merge check succeeded" : "Repo auto-merge check failed again");
+      setAnnounce(
+        !next
+          ? "Repo auto-merge check skipped: item no longer listed"
+          : ok
+            ? "Repo auto-merge check succeeded"
+            : "Repo auto-merge check failed again",
+      );
     } catch {
       setAnnounce("Repo auto-merge check failed again");
     } finally {
@@ -137,10 +147,6 @@ function AutoMergeLine({ item, onRefresh }: AutoMergeLineProps) {
     }
   }
 
-  const checkedMs = current.autoMergeCheckedAt ? timestampMs(current.autoMergeCheckedAt) : null;
-  const ago = checkedMs === null ? null : formatAgo(current.autoMergeCheckedAt, now);
-  const stale =
-    status === AutoMergeLookupStatus.OK && checkedMs !== null && now - checkedMs > AUTO_MERGE_TTL_MS;
   const settingsUrl = repoSettingsUrl(item.prUrl);
 
   let line: string;
