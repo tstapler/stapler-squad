@@ -150,6 +150,10 @@ export function isSustainedMismatch(
   return Math.abs(actualPxPerCol - expectedPxPerCol) > tolerance;
 }
 
+// A whole onData chunk that is one SGR (\x1b[<b;x;yM/m) or X10 (\x1b[M + 3 bytes) mouse report.
+const MOUSE_REPORT_RE = /^\x1b\[(?:<\d+;\d+;\d+[Mm]|M[\s\S]{3})$/;
+export const isMouseReport = (data: string): boolean => MOUSE_REPORT_RE.test(data);
+
 /** Settings that reach `useTerminalGestures` from TerminalOutput; changes apply on the next frame, no remount. */
 export interface ScrollGestureProps {
   scrollOverride?: ScrollOverride;
@@ -170,6 +174,8 @@ export interface ScrollGestureProps {
    * so the host can tell them apart from user keystrokes. Falls back to `onData` when absent.
    */
   onProgrammaticData?: (data: string) => void;
+  /** User's Mouse toggle: 'none' blocks tap click forwarding and xterm's native mouse reports. */
+  mouseModeOverride?: GestureOptions["mouseModeOverride"];
 }
 
 const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
@@ -332,6 +338,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const onResizeRef = useRef(onResize);
 
   const onScrollModeChangeRef = useRef(onScrollModeChange);
+  const mouseModeOverrideRef = useRef(scrollGesture?.mouseModeOverride);
+  mouseModeOverrideRef.current = scrollGesture?.mouseModeOverride;
   const onProgrammaticDataRef = useRef(scrollGesture?.onProgrammaticData);
   const onProgrammaticData = scrollGesture?.onProgrammaticData;
 
@@ -365,6 +373,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     onPageKeysSent: scrollGesture?.onPageKeysSent,
     onGestureActiveChange: scrollGesture?.onGestureActiveChange,
     isInputBusy: scrollGesture?.isInputBusy,
+    mouseModeOverride: scrollGesture?.mouseModeOverride,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
@@ -889,6 +898,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // Setup event handlers using refs to avoid recreating terminal
       const dataDisposable = terminal.onData((data) => {
+        if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
       });
 

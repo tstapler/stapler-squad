@@ -103,6 +103,11 @@ export interface GestureOptions {
    * never reach it, so the two scroll mechanisms cannot both fire for one drag.
    */
   onAltScreenScrollUp?: (lines: number) => void;
+  /**
+   * User's "Mouse" toolbar toggle. 'none' stops handleTap() forwarding click bytes even when the
+   * terminal reports mouse tracking (often stale from a program that never reset it). Default 'any'.
+   */
+  mouseModeOverride?: 'none' | 'any';
 }
 
 /**
@@ -627,7 +632,9 @@ export function useTerminalGestures(options: GestureOptions): void {
         }));
       } else if (t) {
         // Normal tap handling
-        if (!isMouseTracking()) {
+        // Read via optionsRef: the gesture effect doesn't re-run when the toggle changes.
+        const forwardMouseClicks = isMouseTracking() && optionsRef.current.mouseModeOverride !== 'none';
+        if (!forwardMouseClicks) {
           t.focus();
         } else if (t.element) {
           const { cellH, cellW } = getCellDimensions(t);
@@ -635,6 +642,8 @@ export function useTerminalGestures(options: GestureOptions): void {
           const col = Math.floor((tapX - canvasRect.left) / cellW) + 1; // 1-based
           const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
           // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
+          // Known limitation: apps that enabled SGR (?1006h) still get X10; xterm's public
+          // modes surface doesn't expose that flag.
           // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
           const clampedCol = Math.max(1, Math.min(col, 223));
           const clampedRow = Math.max(1, Math.min(row, 223));

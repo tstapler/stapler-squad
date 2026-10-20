@@ -227,6 +227,54 @@ describe('useTerminalGestures', () => {
       expect(arg.length).toBe(12); // 2 × "\x1b[M" + 3 chars
     });
 
+    describe('mouseModeOverride gate', () => {
+      function mountWithOverride(initial: 'none' | 'any' | undefined) {
+        const terminalRef = makeTerminalRef('vt200');
+        const { rerender } = renderHook(
+          ({ o }: { o: 'none' | 'any' | undefined }) =>
+            useTerminalGestures({ containerRef, terminalRef: terminalRef as any, onSendData, mouseModeOverride: o }),
+          { initialProps: { o: initial } },
+        );
+        return { terminalRef, setOverride: (o: 'none' | 'any') => rerender({ o }) };
+      }
+      const tap = () => {
+        fireTouchStart(50, 60);
+        jest.advanceTimersByTime(100);
+        fireTouchEnd(50, 60);
+      };
+
+      it('handleTap_should_callFocusOnly_When_overrideIsNoneAndTrackingOn', () => {
+        const { terminalRef } = mountWithOverride('none');
+        tap();
+        expect(onSendData).not.toHaveBeenCalled();
+        expect(terminalRef.current!.focus).toHaveBeenCalledTimes(1);
+      });
+
+      it('handleTap_should_sendMouseBytes_When_overrideIsAnyAndTrackingOn', () => {
+        mountWithOverride('any');
+        tap();
+        expect(onSendData).toHaveBeenCalledTimes(1);
+      });
+
+      it('handleTap_should_sendMouseBytes_When_overrideUndefined', () => {
+        mountWithOverride(undefined);
+        tap();
+        expect(onSendData).toHaveBeenCalledTimes(1);
+      });
+
+      it('handleTap_should_reflectLatestOverride_When_toggledMidSession', () => {
+        const { setOverride } = mountWithOverride('none');
+        tap();
+        expect(onSendData).not.toHaveBeenCalled();
+        setOverride('any');
+        tap();
+        expect(onSendData).toHaveBeenCalledTimes(1);
+        setOverride('none');
+        tap();
+        expect(onSendData).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('should NOT call onSendData on quick tap when tracking mode is none', () => {
       mount('none');
 
