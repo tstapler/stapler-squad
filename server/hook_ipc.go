@@ -21,10 +21,9 @@ func newHookIPCState(deps *ServerDependencies) *hookIPCState {
 	if deps == nil || deps.SessionService == nil {
 		return nil
 	}
-	return &hookIPCState{classifier: services.NewHookClassifier(
-		deps.SessionService.GetClassifier(),
-		deps.SessionService.GetAnalyticsStore(),
-	)}
+	c := services.NewHookClassifier(deps.SessionService.GetClassifier(), deps.SessionService.GetAnalyticsStore())
+	c.SetHookReplier(deps.SessionService.HookReplier())
+	return &hookIPCState{classifier: c}
 }
 
 func (s *hookIPCState) Start() error {

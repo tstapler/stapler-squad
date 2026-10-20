@@ -56,7 +56,7 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
 jest.mock("@/lib/contexts/OmnibarContext", () => ({
   useOmnibar: () => ({ openInCreationMode: jest.fn(), openOmnibar: jest.fn() }),
 }));
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockSearchParams,
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));

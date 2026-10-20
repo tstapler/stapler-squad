@@ -16,6 +16,7 @@ export function recordToHistoryItem(record: NotificationHistoryRecord): Notifica
     isRead: record.isRead,
     isPendingDecision: record.isPendingDecision,
     occurrenceCount: record.occurrenceCount,
+    actions: record.actions,
   };
 }
 

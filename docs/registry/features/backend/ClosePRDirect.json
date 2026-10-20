@@ -1,0 +1,15 @@
+{
+  "id": "ClosePRDirect",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "ClosePRDirect",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_actions.go",
+  "tested": true,
+  "testIds": [
+    "TestClosePRDirect_should_DelegateAndRefresh_When_Succeeds",
+    "TestPRActions_should_ReturnFailedPrecondition_When_AccountNotConnected"
+  ],
+  "lastModified": "2026-10-19T02:43:14.356791114-07:00"
+}

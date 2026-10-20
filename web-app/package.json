@@ -2,24 +2,24 @@
   "name": "web-app",
   "version": "1.0.0",
   "private": true,
-  "packageManager": "pnpm@10.27.0",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@swc/core",
-      "esbuild",
-      "@vanilla-extract/css"
-    ]
-  },
+  "packageManager": "bun@1.4.3",
+  "trustedDependencies": [
+    "@swc/core",
+    "esbuild",
+    "@vanilla-extract/css",
+    "@ast-grep/cli"
+  ],
   "scripts": {
-    "preinstall": "npx only-allow pnpm",
+    "preinstall": "node -e \"if(!(process.env.npm_config_user_agent||'').startsWith('bun/')){console.error('Use bun install (bun@1.4.3); npm, yarn and pnpm are not supported in web-app/. See docs/how-to/use-bun-in-web-app.md');process.exit(1)}\"",
     "dev": "next dev --port ${PORT:-3001} --hostname localhost",
     "build": "next build",
     "start": "next start --port ${PORT:-3001}",
-    "lint": "next lint && pnpm run lint:css && pnpm run lint:css-vars",
+    "lint": "next lint && bun run lint:css && bun run lint:css-vars",
     "lint:affected": "bash scripts/lint-affected.sh",
     "lint:css": "stylelint 'src/**/*.css' --allow-empty-input",
     "lint:css-vars": "node scripts/check-css-vars.mjs",
     "test": "jest",
+    "test:codemods": "node --test \"scripts/__tests__/*.test.mjs\"",
     "test:watch": "jest --watch",
     "test:affected": "jest --changedSince=${BASE:-origin/main}",
     "test:e2e": "playwright test",
@@ -103,7 +103,8 @@
     "react-redux": "^9.2.0",
     "react-virtuoso": "^4.18.7",
     "recharts": "^3.8.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "web-vitals": "6.2.3"
   },
   "size-limit": [
     {
@@ -126,6 +127,7 @@
     }
   ],
   "devDependencies": {
+    "@ast-grep/cli": "0.51.0",
     "@bufbuild/protoc-gen-es": "^2.11.0",
     "@chromatic-com/storybook": "^3.2.7",
     "@playwright/test": "^1.57.0",
@@ -146,11 +148,13 @@
     "@types/react-dom": "^19",
     "@vanilla-extract/css": "^1.20.1",
     "@vanilla-extract/next-plugin": "^2.5.1",
+    "axe-core": "4.10.3",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
     "eslint-plugin-analytics": "file:./eslint-plugin-analytics",
     "eslint-plugin-boundaries": "^6.0.2",
     "eslint-plugin-rpc-lifecycle": "file:./eslint-plugin-rpc-lifecycle",
+    "fast-check": "^4.10.2",
     "glob": "^13.0.6",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.2.0",

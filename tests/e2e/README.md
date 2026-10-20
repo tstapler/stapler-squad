@@ -15,22 +15,22 @@ End-to-end tests for stapler-squad web UI with **isolated test mode** to prevent
 ```bash
 # Install dependencies
 cd tests/e2e
-npm install
+bun install
 
 # Install Playwright browsers (first time only)
 npx playwright install chromium
 
 # Run tests (headless) - server starts automatically in test mode
-npm test
+bun run test
 
 # Run tests with browser UI
-npm run test:headed
+bun run test:headed
 
 # Run tests in debug mode
-npm run test:debug
+bun run test:debug
 
 # Run tests with interactive UI
-npm run test:ui
+bun run test:ui
 
 # Run specific test file
 npx playwright test smoke.spec.ts
@@ -171,13 +171,13 @@ The tests expect the following attributes in the web UI:
 ### Visual Debugging
 ```bash
 # See browser during test execution
-npm run test:headed
+bun run test:headed
 
 # Step through tests interactively
-npm run test:debug
+bun run test:debug
 
 # Use Playwright UI mode
-npm run test:ui
+bun run test:ui
 ```
 
 ### Screenshots and Videos
@@ -192,7 +192,7 @@ Find them in: `test-results/`
 The test server logs are available:
 ```bash
 # Watch test server output during development
-PLAYWRIGHT_DEBUG=1 npm test
+PLAYWRIGHT_DEBUG=1 bun run test
 ```
 
 ### Console Logs
@@ -265,13 +265,13 @@ jobs:
           go-version: '1.21'
 
       - name: Install test dependencies
-        run: cd tests/e2e && npm install
+        run: cd tests/e2e && bun install
 
       - name: Install Playwright browsers
         run: cd tests/e2e && npx playwright install --with-deps chromium
 
       - name: Run E2E tests
-        run: cd tests/e2e && npm test
+        run: cd tests/e2e && bun run test
 
       - name: Upload test results
         if: always()
@@ -313,6 +313,18 @@ Config directory resolution priority:
 5. Global shared state (fallback)
 
 This ensures test data never interferes with production data.
+
+## Next-baseline specs and fixtures (web-app-bun-build Phase 7)
+
+Specs such as `route-titles`, `route-focus-and-announce`, `history-behaviour`, `deep-link-trailing-slash`,
+`theme-fouc`, `viewport-meta`, `not-found`, `scroll-policy`, `login-static-assets` and `route-smoke` pin
+the behaviour of the Next build so a router swap can be compared against it. Their expected values live in
+`fixtures/route-titles.json` and `fixtures/next-baseline.json`; regenerate them, against the Next build
+only, with `CAPTURE_NEXT_FIXTURES=1 npx playwright test tools/capture-next-fixtures.spec.ts --project=chromium`.
+`tools/parity-diff.ts` compares computed styles between two running builds
+(`node --no-warnings tools/parity-diff.ts --a <url> --b <url>`); its allow-list, `tools/parity-allow.json`,
+needs a URL or quoted CSS rule as the `reason` for every entry. `baseline/build-coupled-specs.json` lists the
+specs that depend on a Next build property and how each was made build-neutral.
 
 ## Additional Resources
 

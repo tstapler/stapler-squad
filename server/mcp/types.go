@@ -82,6 +82,9 @@ type ListSessionsResult struct {
 type GetSessionResult struct {
 	MCPResult
 	Session *SessionDetail `json:"session,omitempty"`
+	// ProofPresent reports whether the session has an MCP proof file (never
+	// the value), so "the identity-gated tools refuse me" is diagnosable.
+	ProofPresent bool `json:"proof_present"`
 }
 
 // SearchSessionsResult is returned by search_sessions.

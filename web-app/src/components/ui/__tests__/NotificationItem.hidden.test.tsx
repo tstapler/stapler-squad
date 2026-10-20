@@ -10,14 +10,18 @@ let mockReplyFlag = true;
 jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
   useFeatureFlag: (name: string) => (name === "hidden_session_reply" ? mockReplyFlag : false),
 }));
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 
 function group(over: Partial<NotificationHistoryItem> = {}): GroupedNotification {
   const notification: NotificationHistoryItem = {

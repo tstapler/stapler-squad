@@ -32,6 +32,10 @@ module.exports = {
         // suites don't set up — map globally instead of per-suite jest.mock calls. A
         // suite wanting realistic data can still override with its own jest.mock.
         "^@/lib/api/guidanceApi$": "<rootDir>/src/__mocks__/guidanceApiMock.js",
+        // Lazy-loading seam: jest uses the Next impl (suites mock next/dynamic); stale-chunk tests import impl.bun directly.
+        "^@/lib/lazy/impl$": "<rootDir>/src/lib/lazy/impl.next.tsx",
+        // Navigation seam: only reached by suites that load the real facade; most mock "@/lib/nav" (jest.setup.js).
+        "^@/lib/nav/impl$": "<rootDir>/src/lib/nav/impl.next.tsx",
         // Path alias
         "^@/(.*)$": "<rootDir>/src/$1",
       },
@@ -52,7 +56,7 @@ module.exports = {
       // react-markdown pulls in a deep tree of ESM-only unified/remark/rehype/
       // mdast/hast transitive deps (new one surfaces every level down). Rather
       // than hand-maintain an ever-growing allowlist of name prefixes against
-      // pnpm's ".pnpm/<pkg>@<version>/node_modules/<pkg>" store layout, just
+      // the isolated linker's "node_modules/.bun/<pkg>@<version>/node_modules/<pkg>" store layout, just
       // transform all of node_modules — ts-jest handles CJS and ESM alike.
       transformIgnorePatterns: [],
     },

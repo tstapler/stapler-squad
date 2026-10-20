@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	billy "github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
@@ -118,10 +119,20 @@ func resolveGitFilesystems(worktreePath string) (dotFs, commonFs, wtFs billy.Fil
 func canonicalizeDir(path string) string {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
+		canonicalizeFallbacks.Add(1)
 		return filepath.Clean(path)
 	}
 	return resolved
 }
+
+// canonicalizeFallbacks counts canonicalizeDir calls that fell back to a
+// lexical filepath.Clean because EvalSymlinks failed (e.g. a dangling
+// worktree pointer); such keys can split one repo into two registry entries.
+var canonicalizeFallbacks atomic.Int64
+
+// CanonicalizeFallbackCount returns how many repo-key canonicalizations fell
+// back to a lexical clean since process start.
+func CanonicalizeFallbackCount() int64 { return canonicalizeFallbacks.Load() }
 
 // readGitdirFile reads worktreePath/.git (a "gitdir: <path>" pointer file,
 // as `git worktree add` writes for linked worktrees) and returns the

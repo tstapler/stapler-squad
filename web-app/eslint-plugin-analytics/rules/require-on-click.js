@@ -29,6 +29,7 @@ module.exports = {
     /**
      * Walk all nodes in a subtree looking for a call expression where
      * callee.property.name === "track" (handles analytics.track(...), obj.track(...), etc.)
+     * or "emit" (useFilesAnalytics().emit, ADR-035)
      * or callee.name === "track".
      */
     function containsTrackCall(node) {
@@ -36,7 +37,7 @@ module.exports = {
       if (
         node.type === "CallExpression" &&
         ((node.callee.type === "MemberExpression" &&
-          node.callee.property.name === "track") ||
+          (node.callee.property.name === "track" || node.callee.property.name === "emit")) ||
           (node.callee.type === "Identifier" && node.callee.name === "track"))
       ) {
         return true;

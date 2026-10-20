@@ -17,6 +17,7 @@ import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 import { QuickOpenPalette } from "../QuickOpenPalette";
 import { searchFiles } from "@/lib/hooks/useFileService";
 import type { FileNode } from "@/gen/session/v1/types_pb";
+import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
 
 jest.mock("@/lib/hooks/useFileService");
 jest.mock("@/lib/utils/fileIcons", () => ({
@@ -82,7 +83,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
     expect(input).toBeInTheDocument();
     expect(input).toHaveAttribute("placeholder", "Go to file…");
     expect(input).toHaveFocus();
@@ -99,7 +100,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
     fireEvent.keyDown(input, { key: "Escape" });
 
     expect(mockOnClose).toHaveBeenCalledTimes(1);
@@ -136,7 +137,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "Button" } });
@@ -176,7 +177,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "Button" } });
@@ -206,7 +207,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "file" } });
@@ -254,7 +255,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "Button" } });
@@ -290,7 +291,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "file" } });
@@ -337,7 +338,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "Button" } });
@@ -366,7 +367,7 @@ describe("QuickOpenPalette", () => {
     );
 
     // Verify that the input is rendered (card is properly set up)
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
     expect(input).toBeInTheDocument();
 
     // The component properly uses stopPropagation on the card
@@ -402,7 +403,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "nonexistent" } });
@@ -434,7 +435,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "test" } });
@@ -459,7 +460,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "first" } });
@@ -505,7 +506,7 @@ describe("QuickOpenPalette", () => {
       />
     );
 
-    const input = screen.getByRole("textbox", { name: /Quick open file/i });
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
 
     act(() => {
       fireEvent.change(input, { target: { value: "file" } });
@@ -526,5 +527,99 @@ describe("QuickOpenPalette", () => {
     });
 
     expect(options[0]).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("QuickOpenPalette command mode", () => {
+  const commands = (run = jest.fn()) => [
+    { id: "goto_line" as const, label: "Go to line", shortcut: "Ctrl+G", run },
+    { id: "reload" as const, label: "Reload from disk", run: jest.fn() },
+    { id: "save" as const, label: "Save", disabledReason: "no changes", run: jest.fn() },
+  ];
+
+  function mount(cmds = commands(), extra: Partial<React.ComponentProps<typeof QuickOpenPalette>> = {}) {
+    const h = createFilesTestHarness();
+    const onClose = jest.fn();
+    const onSelect = jest.fn();
+    render(
+      <QuickOpenPalette sessionId="s" baseUrl="http://x" recentPaths={["a.go"]} onSelect={onSelect} onClose={onClose} commands={cmds} {...extra} />,
+      { wrapper: h.wrapper },
+    );
+    return { h, onClose, onSelect, input: screen.getByRole("combobox", { name: /Quick open file/i }) };
+  }
+  const palette = (h: ReturnType<typeof createFilesTestHarness>) => h.analytics.events.filter((e) => e.name === "files.nav.palette");
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it("quickOpenPalette_should_RunGoToLine_When_GreaterThanCommandModeEnter", () => {
+    const run = jest.fn();
+    const { h, input, onClose } = mount(commands(run));
+    fireEvent.change(input, { target: { value: ">go to line" } });
+    const option = screen.getByRole("option", { name: /Go to line/ });
+    expect(option).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", option.id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(palette(h)).toHaveLength(1);
+    expect(palette(h)[0].labels).toMatchObject({ mode: "command", outcome: "run", command: "goto_line" });
+  });
+
+  it("palette_should_UseComboboxListboxActiveDescendantAndRestoreFocus", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const h = createFilesTestHarness();
+    const view = render(
+      <QuickOpenPalette sessionId="s" baseUrl="http://x" recentPaths={["a.go", "b.go"]} onSelect={jest.fn()} onClose={jest.fn()} commands={commands()} />,
+      { wrapper: h.wrapper },
+    );
+    const input = screen.getByRole("combobox", { name: /Quick open file/i });
+    const list = screen.getByRole("listbox");
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).toHaveAttribute("aria-controls", list.id);
+    expect(input).toHaveAttribute("aria-activedescendant", screen.getAllByRole("option")[0].id);
+    expect(screen.getByTestId("palette-count")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByTestId("palette-count")).toHaveTextContent("2 results");
+    fireEvent.change(input, { target: { value: ">" } });
+    expect(screen.getByTestId("palette-count")).toHaveTextContent("3 commands");
+    view.unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
+
+  it("palette_should_ListDisabledWithReasonAndAnnounce_When_EnterOnUnavailableCommand", () => {
+    const { h, input, onClose } = mount();
+    fireEvent.change(input, { target: { value: ">save" } });
+    const option = screen.getByRole("option", { name: /Save \(no changes\)/ });
+    expect(option).toHaveAttribute("aria-disabled", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("palette-count")).toHaveTextContent("Save is unavailable: no changes");
+    expect(palette(h)).toHaveLength(0);
+  });
+
+  it("palette_should_SayNoCommandsMatch_And_EmitEmptyOnEnter_When_NothingMatches", () => {
+    const { h, input } = mount();
+    fireEvent.change(input, { target: { value: ">zzz" } });
+    expect(screen.getByText("No commands match")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(palette(h)[0].labels).toMatchObject({ mode: "command", outcome: "empty", command: "none" });
+  });
+
+  it("palette_should_EmitCancelWithoutTypedText_When_EscapePressed", () => {
+    const { h, input, onClose } = mount();
+    fireEvent.change(input, { target: { value: ">secret-query" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(palette(h)[0].labels).toMatchObject({ mode: "command", outcome: "cancel", command: "none" });
+    expect(JSON.stringify(h.analytics.events)).not.toContain("secret-query");
+  });
+
+  it("palette_should_EmitFileRun_When_AFileIsPicked", () => {
+    const { h, onSelect, input } = mount();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith("a.go");
+    expect(palette(h)[0].labels).toMatchObject({ mode: "file", outcome: "run", command: "none" });
   });
 });

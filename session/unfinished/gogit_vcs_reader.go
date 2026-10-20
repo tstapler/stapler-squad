@@ -1,13 +1,10 @@
 package unfinished
 
 import (
-	"bytes"
 	"cmp"
 	"container/list"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,16 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
 	"golang.org/x/sync/singleflight"
 )
@@ -184,12 +176,17 @@ type hasUncommittedEntry struct {
 	expiry time.Time
 }
 
-// trackedFile holds the index metadata for a single tracked file needed by the
-// OS stat phase of HasUncommitted.
-type trackedFile struct {
-	name       string
-	size       uint32
-	modifiedAt time.Time
+// aheadBehindKey and commitMessagesKey are comparable struct keys: building one
+// for a cache probe allocates nothing, unlike the fmt.Sprintf keys they replace.
+type aheadBehindKey struct {
+	worktree string
+	base     string
+}
+
+type commitMessagesKey struct {
+	worktree string
+	base     string
+	max      int
 }
 
 type aheadBehindEntry struct {
@@ -347,16 +344,16 @@ type cachedRepo struct {
 
 	// untrackedMatcherBuilt/untrackedMatcher cache the compiled gitignore
 	// matcher used by the untracked-file walk in diffShortstatUncached.
-	// Rebuilt only when HEAD moves AND a .gitignore file actually changed
+	// Rebuilt when HEAD moves AND a .gitignore file actually changed
 	// (resolveHeadTreeHashes clears untrackedMatcherBuilt in that case,
-	// checked via gitignoreEntriesChanged) — most commits don't touch
-	// .gitignore, so this avoids paying gitignore.ReadPatterns' recursive
-	// filesystem walk on every commit. A .gitignore edit made between HEAD
-	// moves can still be stale for up to one poll cycle, an acceptable
-	// trade-off matching this file's other TTL-based staleness tolerances
-	// (e.g. diffStatCacheTTL). Guarded by mu, same as the fields above.
+	// checked via gitignoreEntriesChanged), or when the root .gitignore's stat
+	// signature differs (an uncommitted edit). Nested .gitignore edits between
+	// HEAD moves stay stale. Guarded by mu, same as the fields above.
 	untrackedMatcherBuilt bool
 	untrackedMatcher      gitignore.Matcher
+	// untrackedMatcherSig is the root .gitignore signature untrackedMatcher was
+	// built from, so an uncommitted edit also forces a rebuild.
+	untrackedMatcherSig ignoreSig
 }
 
 // gogitstoreCloser is implemented by storage.Storer values that hold a
@@ -458,6 +455,8 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 // ClearCache remains available as a rarely-used emergency escape valve.
 func (g *GoGitVCSReader) PruneToMemoryBudget() {
 	g.pruneRepoCache()
+	g.pruneRepoStates()
+	g.pruneScanSkip(g.UnderSeverePressure())
 }
 
 // ClearCache evicts ALL cached *git.Repository entries, allowing their
@@ -480,6 +479,8 @@ func (g *GoGitVCSReader) ClearCache() {
 		releaseGogitstoreRef(v.(*cachedRepo))
 		return true
 	})
+	g.dropAllRepoStates()
+	g.pruneScanSkip(true)
 }
 
 // GoGitVCSReader implements VCSReader using the go-git library.
@@ -516,13 +517,14 @@ type GoGitVCSReader struct {
 	// Races on a cache miss are benign: last writer wins; both compute the same value.
 	diffStatCache sync.Map // map[string]diffStatEntry
 
-	// aheadBehindCache caches AheadBehind results keyed by worktreePath+"\x00"+base.
+	// aheadBehindCache caches AheadBehind results keyed by (worktreePath, base).
 	// Eliminates packfile-reader lock contention on repeated calls within TTL.
-	aheadBehindCache sync.Map // map[string]aheadBehindEntry
+	// Struct keys keep a hit allocation-free.
+	aheadBehindCache lazyMap[aheadBehindKey, aheadBehindEntry]
 
-	// commitMessagesCache caches CommitMessages results keyed by worktreePath+"\x00"+base.
+	// commitMessagesCache caches CommitMessages results keyed by (worktreePath, base, max).
 	// Eliminates packfile-reader lock contention on repeated commit log walks.
-	commitMessagesCache sync.Map // map[string]commitMessagesEntry
+	commitMessagesCache lazyMap[commitMessagesKey, commitMessagesEntry]
 
 	// reachableSetCache caches reachableSet results, one entry per worktreePath,
 	// validated by the entry's baseHash. Per-worktree scoping prevents a shallow
@@ -550,6 +552,11 @@ type GoGitVCSReader struct {
 	hasUncommittedSF singleflight.Group //nolint:exhaustruct
 	// commitMessagesSF deduplicates concurrent CommitMessages calls for the same key.
 	commitMessagesSF singleflight.Group //nolint:exhaustruct
+	// reachableSetSF coalesces concurrent cold reachable-set walks for one (worktree, base).
+	reachableSetSF singleflight.Group //nolint:exhaustruct
+	// reachableSetJoined counts callers registered in a reachableSetSF flight;
+	// tests wait on it instead of sleeping.
+	reachableSetJoined atomic.Int64
 
 	// gogitstoreReg shares both the decoded-object cache AND the parsed
 	// pack-index across every worktree of the same repo (keyed by resolved
@@ -599,13 +606,43 @@ type GoGitVCSReader struct {
 	// against the entry's headTreeHash so a real HEAD move (which can change
 	// .gitignore) still forces a rebuild. Values are *matcherCacheEntry.
 	matcherCache sync.Map
+
+	// statFn, when non-nil, is called with the index-relative path before every
+	// per-file lstat of the tracked-file stat passes (HasUncommitted and
+	// DiffShortstat). Observer-only test seam for StatCount; nil in production.
+	statFn func(rel string)
+
+	// statCalls counts every file stat the scan loop issues (statFn's sites),
+	// feeding stat_calls_per_scan; atomic, so it is safe on the hot path.
+	statCalls atomic.Int64
+
+	// scanSkip holds the scan_skip rollback unit's caches (index, untracked
+	// dirs, DirtyGen) and its clock/flag test seams; see scanskip_state.go.
+	scanSkip scanSkipState
+
+	// repoStateMaxGraphCommits bounds each RepoState's commit graph; zero keeps
+	// the default. Test seam for the ErrGraphFull fallback; nil-op in production.
+	repoStateMaxGraphCommits int
 }
 
 // matcherCacheEntry is the value type stored in GoGitVCSReader.matcherCache.
 type matcherCacheEntry struct {
 	matcher      gitignore.Matcher
 	headTreeHash plumbing.Hash
+	ignoreSig    ignoreSig
 	accessedAtNs int64
+}
+
+// ignoreSig is the stat signature of the worktree's root .gitignore; present is
+// false when the file is absent.
+type ignoreSig struct {
+	sig     statSig
+	present bool
+}
+
+func rootGitignoreSig(worktreePath string) ignoreSig {
+	sig, ok := statPathSig(filepath.Join(worktreePath, ".gitignore"))
+	return ignoreSig{sig: sig, present: ok}
 }
 
 // matcherCacheTTL controls how long an unused matcherCache entry survives.
@@ -695,13 +732,20 @@ type RepoCacheStats struct {
 	CurrentSize int64
 	ColdOpens   int64
 	Evictions   int64
+	// RepoStates and RepoStateBytes count live shared RepoState extensions and
+	// their summed Bytes(); both are 0 while shared_commit_state is off.
+	RepoStates     int64
+	RepoStateBytes int64
 }
 
 func (g *GoGitVCSReader) RepoCacheStats() RepoCacheStats {
+	states, stateBytes := g.repoStateTotals()
 	return RepoCacheStats{
-		CurrentSize: atomic.LoadInt64(&g.repoCacheSize),
-		ColdOpens:   atomic.LoadInt64(&g.repoCacheColdOpens),
-		Evictions:   atomic.LoadInt64(&g.repoCacheEvictions),
+		CurrentSize:    atomic.LoadInt64(&g.repoCacheSize),
+		ColdOpens:      atomic.LoadInt64(&g.repoCacheColdOpens),
+		Evictions:      atomic.LoadInt64(&g.repoCacheEvictions),
+		RepoStates:     states,
+		RepoStateBytes: stateBytes,
 	}
 }
 
@@ -778,6 +822,27 @@ func sfDo[T any](sf *singleflight.Group, key string, fn func() (T, error)) (T, e
 		return zero, err
 	}
 	return val.(T), nil
+}
+
+// sfDoJoined is sfDo with a flight-registration counter: joined is incremented
+// once the caller is registered in the flight, so tests can wait for every
+// caller to join before releasing a blocked computation.
+func sfDoJoined[T any](sf *singleflight.Group, key string, joined *atomic.Int64, fn func() (T, error)) (T, error) {
+	ch := sf.DoChan(key, func() (v any, doErr error) {
+		defer func() {
+			if r := recover(); r != nil {
+				doErr = fmt.Errorf("go-git panic: %v", r)
+			}
+		}()
+		return fn()
+	})
+	joined.Add(1)
+	res := <-ch
+	if res.Err != nil {
+		var zero T
+		return zero, res.Err
+	}
+	return res.Val.(T), nil
 }
 
 func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
@@ -881,87 +946,6 @@ func (g *GoGitVCSReader) ResolveDefaultBranch(repoPath string) string {
 	return ""
 }
 
-// resolveHeadTreeHashes returns the name->blob-hash map for repo's current HEAD
-// tree, using entry.headTreeCache when it's still valid for the current HEAD.
-// Both hasUncommittedGoGitPhase and diffShortstatUncached need the identical
-// map for the same HEAD commit, and HEAD moves far less often than either is
-// called, so the two callers share this cache instead of each walking the
-// HEAD tree on every invocation.
-//
-// Callers must already hold entry.mu. Returns (nil, nil) if there is no HEAD
-// yet (unborn branch / empty repo) — callers should treat that the same as
-// an empty tree, not as an error.
-func resolveHeadTreeHashes(g *GoGitVCSReader, entry *cachedRepo, repo *git.Repository) (map[string]plumbing.Hash, error) {
-	headRef, headErr := repo.Head()
-	if headErr != nil {
-		if errors.Is(headErr, plumbing.ErrReferenceNotFound) {
-			return nil, nil //nolint:nilnil // documented sentinel: no HEAD yet (unborn branch) is a valid, non-error "empty tree" result — see the doc comment above.
-		}
-		return nil, fmt.Errorf("head: %w", headErr)
-	}
-	headHash := headRef.Hash()
-	if entry.headTreeHash == headHash && entry.headTreeCache != nil {
-		return entry.headTreeCache, nil
-	}
-	headCommit, cerr := repo.CommitObject(headHash)
-	if cerr != nil {
-		return nil, fmt.Errorf("head commit: %w", cerr)
-	}
-	headTree, terr := headCommit.Tree()
-	if terr != nil {
-		return nil, fmt.Errorf("head tree: %w", terr)
-	}
-
-	// Walk the tree without loading blob content — only tree-entry hashes are needed.
-	// object.FileIter.Next() calls GetBlob() per entry (loads full content); TreeWalker
-	// loads only tree objects, which are orders of magnitude smaller.
-	headHashes := make(map[string]plumbing.Hash, len(headTree.Entries))
-	tw := object.NewTreeWalker(headTree, true, nil)
-	defer tw.Close()
-	for {
-		name, te, twErr := tw.Next()
-		if errors.Is(twErr, io.EOF) {
-			break
-		}
-		if twErr != nil {
-			return nil, fmt.Errorf("walk head tree: %w", twErr)
-		}
-		if te.Mode == filemode.Dir {
-			continue
-		}
-		headHashes[name] = te.Hash
-	}
-	if entry.headTreeHash != headHash {
-		// HEAD moved (or this is the first population): the name->hash
-		// mapping above is stale, but blobCache is keyed by content hash, not
-		// by name/HEAD, so it stays valid and is intentionally left alone
-		// (see the blobCache field comment — PerfFix-1).
-		//
-		// The gitignore matcher only needs rebuilding if a .gitignore file's
-		// content actually changed -- most commits don't touch one, but
-		// unconditionally invalidating on every HEAD move forced a full
-		// gitignore.ReadPatterns recursive filesystem walk per commit
-		// regardless (profiled at 55-82% of a CPU core on a machine with
-		// frequent commit activity across many worktrees). headTreeCache
-		// (old) and headHashes (new) already have every tracked file's path
-		// and blob hash from the walk above, so checking just the
-		// .gitignore-named entries for a real change is free by comparison.
-		if entry.headTreeCache == nil || gitignoreEntriesChanged(entry.headTreeCache, headHashes) {
-			entry.untrackedMatcherBuilt = false // F6: force a gitignore matcher rebuild too.
-			if entry.headTreeCache != nil {
-				// Only count an invalidation once the matcher has actually been
-				// built at least once (headTreeCache != nil implies a prior
-				// populate) — the first-ever build below isn't "invalidated by
-				// a HEAD move," it's just startup.
-				atomic.AddInt64(&g.gitignoreMatcherInvalidations, 1)
-			}
-		}
-	}
-	entry.headTreeHash = headHash
-	entry.headTreeCache = headHashes
-	return headHashes, nil
-}
-
 // gitignoreEntriesChanged reports whether any ".gitignore" blob (at any
 // directory depth) was added, removed, or modified between old and new
 // head-tree snapshots. Both maps come from resolveHeadTreeHashes's tree walk,
@@ -990,99 +974,6 @@ func gitignoreEntriesChanged(old, newer map[string]plumbing.Hash) bool {
 	return false
 }
 
-// getOrBuildUntrackedMatcher returns the cached gitignore matcher for entry,
-// rebuilding it if resolveHeadTreeHashes invalidated it since the last build.
-// MUST be called with entry.mu already held (mirrors the caching contract of
-// entry.headTreeCache above — both are entry-scoped fields protected by entry.mu).
-func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreePath string) gitignore.Matcher {
-	if entry.untrackedMatcherBuilt {
-		return entry.untrackedMatcher
-	}
-
-	// Check the decoupled cache before paying for a rebuild: entry may be a
-	// freshly (re)opened cachedRepo whose predecessor was evicted from
-	// repoCache purely for memory pressure, with HEAD never having moved.
-	if cached, ok := g.matcherCache.Load(worktreePath); ok {
-		mc, _ := cached.(*matcherCacheEntry)
-		if mc != nil && mc.headTreeHash == entry.headTreeHash {
-			atomic.StoreInt64(&mc.accessedAtNs, time.Now().UnixNano())
-			entry.untrackedMatcher = mc.matcher
-			entry.untrackedMatcherBuilt = true
-			return entry.untrackedMatcher
-		}
-	}
-
-	atomic.AddInt64(&g.gitignoreMatcherRebuilds, 1)
-	var m gitignore.Matcher
-	if patterns, ignErr := gitignore.ReadPatterns(osfs.New(worktreePath), nil); ignErr == nil {
-		m = gitignore.NewMatcher(patterns)
-	}
-	entry.untrackedMatcher = m
-	entry.untrackedMatcherBuilt = true
-	g.matcherCache.Store(worktreePath, &matcherCacheEntry{
-		matcher:      m,
-		headTreeHash: entry.headTreeHash,
-		accessedAtNs: time.Now().UnixNano(),
-	})
-	return m
-}
-
-// hasUncommittedGoGitPhase runs the go-git index phase of HasUncommitted.
-// Acquires and releases entry.mu via defer. Returns tracked file slice + dirty flag.
-// MUST NOT be called with entry.mu already held — Go mutexes are not reentrant.
-//
-// Returns:
-//   - tracked: slice of index entries needed for the OS stat phase (lock released before caller uses these)
-//   - dirty: true if dirty was determined from go-git alone
-//   - dirtyKnown: true if dirty result is definitive (caller should skip OS phase)
-//   - matcher: cached gitignore matcher, built under entry.mu here since Phase 3
-//     (the untracked-files walk) runs without the lock held
-//   - err: any error encountered
-func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePath string) (tracked []trackedFile, dirty bool, dirtyKnown bool, matcher gitignore.Matcher, err error) {
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-
-	repo := entry.repo
-
-	idx, idxErr := repo.Storer.Index()
-	if idxErr != nil {
-		return nil, false, false, nil, fmt.Errorf("read index: %w", idxErr)
-	}
-
-	// --- staged changes: index vs HEAD (go-git, needs lock) ---
-	headHashes, headErr := resolveHeadTreeHashes(g, entry, repo)
-	if headErr != nil {
-		return nil, false, false, nil, headErr
-	}
-	matcher = g.getOrBuildUntrackedMatcher(entry, worktreePath)
-	if headHashes != nil { // nil means no HEAD yet (unborn branch) — nothing staged to compare
-		indexNames := make(map[string]bool, len(idx.Entries))
-		for _, idxEntry := range idx.Entries {
-			if idxEntry.Stage != 0 { // merge conflict stage → dirty
-				return nil, true, true, matcher, nil
-			}
-			indexNames[idxEntry.Name] = true
-			if h, ok := headHashes[idxEntry.Name]; !ok || h != idxEntry.Hash {
-				return nil, true, true, matcher, nil // new or modified staged file
-			}
-		}
-		for name := range headHashes {
-			if !indexNames[name] {
-				return nil, true, true, matcher, nil // staged deletion
-			}
-		}
-	}
-
-	// Capture index entries needed for the OS phase as plain value types.
-	// entry.mu is released by defer when this function returns — OS stat work
-	// must happen in the caller after this function returns.
-	result := make([]trackedFile, len(idx.Entries))
-	for i, idxEntry := range idx.Entries {
-		result[i] = trackedFile{idxEntry.Name, idxEntry.Size, idxEntry.ModifiedAt}
-	}
-	return result, false, false, matcher, nil
-}
-
 // HasUncommitted reports whether the worktree has any staged or unstaged changes.
 //
 // Strategy (no subprocess, low allocations):
@@ -1094,149 +985,6 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 // This avoids the 1.85 GB allocation caused by wt.Status(), which hashes every
 // modified file in full.
 
-func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
-	if v, ok := g.hasUncommittedCache.Load(worktreePath); ok {
-		if e := v.(hasUncommittedEntry); time.Now().Before(e.expiry) {
-			return e.result, nil
-		}
-	}
-
-	// After the cache check: the guard allocates, and a hit must stay alloc-free.
-	defer g.guardInvalidation(worktreePath)()
-	result, sfErr := sfDo(&g.hasUncommittedSF, worktreePath, func() (bool, error) {
-		entry, err := g.openRepoEntry(worktreePath)
-		if err != nil {
-			return false, fmt.Errorf("open repo %s: %w", worktreePath, err)
-		}
-
-		// Phase 1: go-git index phase — entry.mu is held only inside this call.
-		// The gitignore matcher is also built/cached here (under entry.mu) so
-		// Phase 3 below can consume it without needing the lock itself.
-		tracked, dirty, dirtyKnown, matcher, err := g.hasUncommittedGoGitPhase(entry, worktreePath)
-		if err != nil {
-			return false, err
-		}
-		if dirtyKnown {
-			g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
-				result: dirty, expiry: time.Now().Add(diffStatCacheTTL),
-			})
-			return dirty, nil
-		}
-
-		// Phase 2: OS stat walk — entry.mu is NOT held here (released by hasUncommittedGoGitPhase).
-		indexedMap := make(map[string]struct{}, len(tracked))
-		stat := newDirStatter(worktreePath)
-		defer stat.close()
-		for _, tf := range tracked {
-			indexedMap[tf.name] = struct{}{}
-			size, mtime, serr := stat.lstat(tf.name)
-			if serr != nil {
-				if errors.Is(serr, fs.ErrNotExist) {
-					r := true // tracked file deleted
-					g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
-						result: r, expiry: time.Now().Add(diffStatCacheTTL),
-					})
-					return r, nil
-				}
-				continue
-			}
-			if size != int64(tf.size) || !mtime.Equal(tf.modifiedAt) {
-				r := true
-				g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
-					result: r, expiry: time.Now().Add(diffStatCacheTTL),
-				})
-				return r, nil
-			}
-		}
-
-		// Phase 3: untracked files walk — no lock held. matcher was built under
-		// entry.mu in Phase 1 above and is safe to read here (a plain local copy).
-		r, err := hasUntrackedFiles(worktreePath, indexedMap, matcher)
-		if err != nil {
-			return false, err
-		}
-		g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
-			result: r, expiry: time.Now().Add(diffStatCacheTTL),
-		})
-		return r, nil
-	})
-	if sfErr != nil {
-		return false, sfErr
-	}
-	return result, nil
-}
-
-// hasUntrackedFiles reports whether any file under root is absent from the indexed set.
-// It skips the .git directory and, when matcher is non-nil, skips gitignored files and
-// whole subtrees (matcher is built from the worktree's .gitignore files by
-// getOrBuildUntrackedMatcher — pass nil to disable gitignore filtering).
-// For the mtime-stat approach this is a best-effort check sufficient for typical use.
-func hasUntrackedFiles(root string, indexed map[string]struct{}, matcher gitignore.Matcher) (bool, error) {
-	w := untrackedWalker{indexed: indexed, matcher: matcher, buf: make([]byte, 0, 256)}
-	return w.hasUntracked(root)
-}
-
-// untrackedWalker threads one path-parts slice and one byte buffer through the walk
-// instead of allocating a relative path (filepath.Rel + strings.Split + a joined
-// string) per entry: the matcher takes the parts, and the indexed-set lookup uses
-// string(buf), which Go does not allocate for a map index. Single-goroutine,
-// depth-first: a child's append/truncate completes before its sibling reuses the slot.
-type untrackedWalker struct {
-	indexed map[string]struct{}
-	matcher gitignore.Matcher
-	parts   []string
-	buf     []byte
-}
-
-// enter pushes name onto the relative-path state and returns a func-free undo token.
-func (w *untrackedWalker) enter(name string) (prevBuf int) {
-	w.parts = append(w.parts, name)
-	prevBuf = len(w.buf)
-	if prevBuf > 0 {
-		w.buf = append(w.buf, '/')
-	}
-	w.buf = append(w.buf, name...)
-	return prevBuf
-}
-
-func (w *untrackedWalker) leave(prevBuf int) {
-	w.parts = w.parts[:len(w.parts)-1]
-	w.buf = w.buf[:prevBuf]
-}
-
-func (w *untrackedWalker) hasUntracked(dir string) (bool, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false, err
-	}
-	for _, de := range entries {
-		name := de.Name()
-		if name == ".git" {
-			continue
-		}
-		prev := w.enter(name)
-		isDir := de.IsDir()
-		found, err := false, error(nil)
-		switch {
-		case w.matcher != nil && w.matcher.Match(w.parts, isDir):
-			// gitignored — for a dir this skips the whole subtree
-		case isDir:
-			found, err = w.hasUntracked(filepath.Join(dir, name))
-		default:
-			_, tracked := w.indexed[string(w.buf)]
-			found = !tracked
-		}
-		w.leave(prev)
-		if err != nil {
-			return false, err
-		}
-		if found {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // AheadBehind returns the number of commits by which worktreePath's HEAD is
 // ahead of and behind the given base ref.
 //
@@ -1244,64 +992,22 @@ func (w *untrackedWalker) hasUntracked(dir string) (bool, error) {
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
 func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
-	cacheKey := worktreePath + "\x00" + base
-	if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
-		if e := v.(aheadBehindEntry); time.Now().Before(e.expiry) {
-			return e.ahead, e.behind, nil
-		}
+	cacheKey := aheadBehindKey{worktree: worktreePath, base: base}
+	if e, ok := g.aheadBehindCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
+		return e.ahead, e.behind, nil
 	}
 
 	type abResult struct{ ahead, behind int }
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
-	result, err := sfDo(&g.aheadBehindSF, cacheKey, func() (abResult, error) {
+	result, err := sfDo(&g.aheadBehindSF, worktreePath+"\x00"+base, func() (abResult, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
 		}
 
-		entry.mu.Lock()
-		defer entry.mu.Unlock() // REQUIRED: defer, never explicit unlocks — ensures mutex releases on panic
-
-		repo := entry.repo
-		headRef, headErr := repo.Head()
-		if headErr != nil {
-			return abResult{}, fmt.Errorf("head: %w", headErr)
-		}
-		baseHash, baseErr := resolveRef(repo, base)
-		if baseErr != nil {
-			return abResult{}, fmt.Errorf("resolve base %q: %w", base, baseErr)
-		}
-		if headRef.Hash() == baseHash {
-			g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{headHash: headRef.Hash(), baseHash: baseHash, expiry: time.Now().Add(diffStatCacheTTL)})
-			return abResult{0, 0}, nil
-		}
-		// A TTL-expired entry whose head/base hashes still match the current
-		// ones means neither ref moved since the last computation — the BFS
-		// result can't have changed, so reuse it instead of re-running
-		// findMergeBase + two countCommitsTo walks (the actual expensive work;
-		// resolving HEAD/base above is cheap by comparison).
-		if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
-			if e := v.(aheadBehindEntry); e.headHash == headRef.Hash() && e.baseHash == baseHash {
-				e.expiry = time.Now().Add(diffStatCacheTTL)
-				g.aheadBehindCache.Store(cacheKey, e)
-				return abResult{e.ahead, e.behind}, nil
-			}
-		}
-		mb, mbErr := findMergeBase(repo, headRef.Hash(), baseHash)
-		if mbErr != nil {
-			return abResult{}, fmt.Errorf("merge base: %w", mbErr)
-		}
-		ahead, aheadErr := countCommitsTo(repo, headRef.Hash(), mb)
-		if aheadErr != nil {
-			return abResult{}, aheadErr
-		}
-		behind, behindErr := countCommitsTo(repo, baseHash, mb)
-		if behindErr != nil {
-			return abResult{}, behindErr
-		}
-		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, headHash: headRef.Hash(), baseHash: baseHash, expiry: time.Now().Add(diffStatCacheTTL)})
-		return abResult{ahead, behind}, nil
+		ahead, behind, abErr := g.aheadBehindCompute(entry, cacheKey)
+		return abResult{ahead, behind}, abErr
 	})
 	if err != nil {
 		return 0, 0, err
@@ -1310,69 +1016,47 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
-	cacheKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
-	if v, ok := g.commitMessagesCache.Load(cacheKey); ok {
-		if e := v.(commitMessagesEntry); time.Now().Before(e.expiry) {
-			return e.msgs, nil
-		}
+	cacheKey := commitMessagesKey{worktree: worktreePath, base: base, max: max}
+	if e, ok := g.commitMessagesCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
+		return e.msgs, nil
 	}
 
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
-	msgs, err := sfDo(&g.commitMessagesSF, cacheKey, func() ([]string, error) {
+	sfKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
+	msgs, err := sfDo(&g.commitMessagesSF, sfKey, func() ([]string, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return nil, openErr
 		}
 
-		// Phase 1: snapshot HEAD and base as plain hash values under a brief lock.
-		// These are cheap reference-store reads; holding the lock only here avoids
-		// keeping it across the far more expensive graph walks below.
-		var headHash plumbing.Hash
-		var baseHash plumbing.Hash
-		if err := func() error {
-			entry.mu.Lock()
-			defer entry.mu.Unlock()
-			headRef, headErr := entry.repo.Head()
-			if headErr != nil {
-				return headErr
-			}
-			headHash = headRef.Hash() // plumbing.Hash is a plain [20]byte value type
-			var baseErr error
-			baseHash, baseErr = resolveRef(entry.repo, base)
-			return baseErr
-		}(); err != nil {
+		// Phase 1: HEAD and base as plain hash values under a brief lock, so the
+		// far more expensive graph walks below never run under it.
+		headHash, baseHash, err := resolveCommitMessageRefs(entry, base)
+		if err != nil {
 			return nil, err
+		}
+
+		// Shared path: reach bitset plus hash-keyed message memos on the shared
+		// id graph. A graph fallback continues on the legacy phases below.
+		if msgs, handled, sharedErr := g.commitMessagesShared(entry, headHash, baseHash, max); handled {
+			if sharedErr != nil {
+				return nil, sharedErr
+			}
+			g.commitMessagesCache.Store(cacheKey, commitMessagesEntry{msgs: msgs, expiry: time.Now().Add(diffStatCacheTTL)})
+			return msgs, nil
 		}
 
 		// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
 		// only on a cache miss, so repeated calls within the TTL window skip the
 		// O(N) walk entirely and return the cached map without touching the mutex.
-		baseReachable, reachErr := g.cachedReachableSet(entry, worktreePath, baseHash)
+		baseReachable, reachErr := g.reachMembership(entry, worktreePath, baseHash)
 		if reachErr != nil {
 			return nil, reachErr
 		}
 
-		// Phase 3: log walk from HEAD. go-git's packfile reader requires the lock.
-		entry.mu.Lock()
-		defer entry.mu.Unlock()
-		iter, iterErr := entry.repo.Log(&git.LogOptions{From: headHash})
-		if iterErr != nil {
-			return nil, iterErr
-		}
-		defer iter.Close()
-
-		var result []string
-		walkErr := iter.ForEach(func(c *object.Commit) error {
-			if baseReachable[c.Hash] {
-				return storer.ErrStop
-			}
-			if len(result) < max {
-				// Mimic `git log --oneline`: short hash + first line of message.
-				result = append(result, c.Hash.String()[:7]+" "+firstLine(c.Message))
-			}
-			return nil
-		})
+		// Phase 3: log walk from HEAD (takes entry.mu itself).
+		result, walkErr := commitMessagesFromSet(entry, headHash, baseReachable, max)
 		if walkErr != nil {
 			return nil, walkErr
 		}
@@ -1386,23 +1070,37 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 // reusing the worktree's cached set while its base hash is unchanged.
 // Known limit: a shallow clone deepened in place keeps its truncated set until
 // the base moves or the process restarts (cosmetic, see maxReachableSetCommits).
-// On a cache miss it acquires entry.mu, runs the walk, then releases the lock.
+// On a cache miss one caller per (worktree, base) acquires entry.mu and runs the
+// walk; concurrent callers with other CommitMessages limits wait for its result.
 // The returned map must not be mutated by callers.
 func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, worktreePath string, baseHash plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	if set, ok := g.loadReachableSet(worktreePath, baseHash); ok {
+		return set, nil
+	}
+	sfKey := worktreePath + "\x00" + baseHash.String()
+	return sfDoJoined(&g.reachableSetSF, sfKey, &g.reachableSetJoined, func() (map[plumbing.Hash]bool, error) {
+		// A flight that finished between our miss and joining this one stored it.
+		if set, ok := g.loadReachableSet(worktreePath, baseHash); ok {
+			return set, nil
+		}
+		entry.mu.Lock()
+		set, err := reachableSet(entry.repo, baseHash)
+		entry.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		g.reachableSetCache.Store(worktreePath, reachableSetEntry{baseHash: baseHash, set: set})
+		return set, nil
+	})
+}
+
+func (g *GoGitVCSReader) loadReachableSet(worktreePath string, baseHash plumbing.Hash) (map[plumbing.Hash]bool, bool) {
 	if v, ok := g.reachableSetCache.Load(worktreePath); ok {
 		if e := v.(reachableSetEntry); e.baseHash == baseHash {
-			return e.set, nil
+			return e.set, true
 		}
 	}
-
-	entry.mu.Lock()
-	set, err := reachableSet(entry.repo, baseHash)
-	entry.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	g.reachableSetCache.Store(worktreePath, reachableSetEntry{baseHash: baseHash, set: set})
-	return set, nil
+	return nil, false
 }
 
 // InvalidateWorktree evicts worktreePath's TTL-cached results so the next call
@@ -1417,15 +1115,18 @@ func (g *GoGitVCSReader) InvalidateWorktree(worktreePath string) {
 func (g *GoGitVCSReader) evictWorktreeResults(worktreePath string) {
 	g.diffStatCache.Delete(worktreePath)
 	g.hasUncommittedCache.Delete(worktreePath)
-	prefix := worktreePath + "\x00"
-	for _, m := range []*sync.Map{&g.aheadBehindCache, &g.commitMessagesCache} {
-		m.Range(func(k, _ any) bool {
-			if key, _ := k.(string); strings.HasPrefix(key, prefix) {
-				m.Delete(k)
-			}
-			return true
-		})
-	}
+	g.aheadBehindCache.Range(func(k aheadBehindKey, _ aheadBehindEntry) bool {
+		if k.worktree == worktreePath {
+			g.aheadBehindCache.Delete(k)
+		}
+		return true
+	})
+	g.commitMessagesCache.Range(func(k commitMessagesKey, _ commitMessagesEntry) bool {
+		if k.worktree == worktreePath {
+			g.commitMessagesCache.Delete(k)
+		}
+		return true
+	})
 }
 
 func (g *GoGitVCSReader) pathInvalidationGen(worktreePath string) *atomic.Uint64 {
@@ -1453,536 +1154,7 @@ func (g *GoGitVCSReader) ForgetWorktree(worktreePath string) {
 	g.InvalidateWorktree(worktreePath)
 	g.reachableSetCache.Delete(worktreePath)
 	g.invalidationGen.Delete(worktreePath)
-}
-
-// DiffShortstat returns changed-file and line counts for the given worktree.
-// Results are cached for diffStatCacheTTL (30s) to avoid repeated wt.Status()
-// calls from concurrent scanner workers, which was the top mutex hotspot (537M
-// cycles, 13,941 events in profiling).
-func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
-	if v, ok := g.diffStatCache.Load(worktreePath); ok {
-		if e := v.(diffStatEntry); time.Now().Before(e.expiry) {
-			return e.result, nil
-		}
-	}
-	// After the cache check: the guard allocates, and a hit must stay alloc-free.
-	defer g.guardInvalidation(worktreePath)()
-	result, err := sfDo(&g.diffStatSF, worktreePath, func() (DiffStat, error) {
-		// diffShortstatUncached acquires entry.mu internally — do NOT add an outer lock here.
-		// It does not call DiffShortstat, so there is no recursive sfDo path for this key.
-		stat, uncachedErr := g.diffShortstatUncached(worktreePath)
-		if uncachedErr != nil {
-			return DiffStat{}, uncachedErr
-		}
-		g.diffStatCache.Store(worktreePath, diffStatEntry{
-			result: stat,
-			expiry: time.Now().Add(diffStatCacheTTL),
-		})
-		return stat, nil
-	})
-	if err != nil {
-		return DiffStat{}, err
-	}
-	return result, nil
-}
-
-// diffShortstatUncached computes a DiffStat for worktreePath using index metadata
-// to detect changed files, then loads HEAD blobs only for those files.
-//
-// This replaces the previous wt.Status() approach, which loaded ALL blob content
-// into Go heap (MemoryObject) to hash every tracked file — allocating ~30 GB/hour
-// cumulatively across active repos. The new approach:
-//
-//  1. Identifies staged changes by comparing index hashes with HEAD tree hashes
-//     (TreeWalker, no blobs loaded).
-//  2. Identifies unstaged changes by comparing index mtime/size with disk stat
-//     (O(n) lstat calls, zero blob reads for unchanged files).
-//  3. Loads HEAD blobs only for the M actually-changed files (M << N typical).
-//  4. Computes line diffs on []byte directly, avoiding string conversion overhead.
-func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, error) {
-	entry, err := g.openRepoEntry(worktreePath)
-	if err != nil {
-		return DiffStat{}, err
-	}
-
-	// ── Phase 1: go-git metadata reads under lock (no blob loading) ──────────
-	entry.mu.Lock()
-	repo := entry.repo
-
-	idx, err := repo.Storer.Index()
-	if err != nil {
-		entry.mu.Unlock()
-		return DiffStat{}, err
-	}
-
-	// Build HEAD tree hash map — reused across polls via entry.headTreeCache
-	// (shared with hasUncommittedGoGitPhase) as long as HEAD hasn't moved,
-	// since HEAD only changes on commit/checkout, far less often than the
-	// poll cycle. resolveHeadTreeHashes returns (nil, nil) for an unborn
-	// branch (no commits yet), which we treat as an empty HEAD tree below.
-	//
-	// NOTE: this now propagates HEAD-commit/HEAD-tree lookup errors as fatal,
-	// whereas the pre-extraction code silently swallowed them and proceeded
-	// with an empty headHashes map. Unifying to "always propagate" matches
-	// hasUncommittedGoGitPhase's existing behavior and is intentional — no
-	// test in this package or server/services relies on the old swallow
-	// behavior (verified via `go test ./session/unfinished/... ./server/services/...`).
-	headHashes, headErr := resolveHeadTreeHashes(g, entry, repo)
-	if headErr != nil {
-		entry.mu.Unlock()
-		return DiffStat{}, headErr
-	}
-	if headHashes == nil {
-		headHashes = make(map[string]plumbing.Hash, len(idx.Entries))
-	}
-
-	// F6: reuse the compiled gitignore matcher across polls; resolveHeadTreeHashes
-	// clears untrackedMatcherBuilt whenever HEAD moves, so a stale matcher can
-	// only persist for at most one HEAD move's worth of polls — an acceptable
-	// trade-off for skipping a redundant .gitignore walk every 30s poll.
-	untrackedMatcher := g.getOrBuildUntrackedMatcher(entry, worktreePath)
-
-	// Classify index entries: staged-changed (index hash ≠ HEAD hash) vs stable.
-	type indexMeta struct {
-		name       string
-		indexHash  plumbing.Hash
-		headHash   plumbing.Hash // zero if not in HEAD
-		size       uint32
-		modifiedAt time.Time
-		staged     bool
-	}
-	metas := make([]indexMeta, 0, len(idx.Entries))
-	indexedNames := make(map[string]struct{}, len(idx.Entries))
-	for _, e := range idx.Entries {
-		if e.Stage != 0 {
-			continue
-		}
-		indexedNames[e.Name] = struct{}{}
-		headHash := headHashes[e.Name]
-		metas = append(metas, indexMeta{
-			name:       e.Name,
-			indexHash:  e.Hash,
-			headHash:   headHash,
-			size:       e.Size,
-			modifiedAt: e.ModifiedAt,
-			staged:     e.Hash != headHash,
-		})
-	}
-
-	// Staged deletions: files in HEAD but absent from index.
-	type stagedDel struct {
-		name     string
-		headHash plumbing.Hash
-	}
-	var stagedDels []stagedDel
-	for name, headHash := range headHashes {
-		if _, inIdx := indexedNames[name]; !inIdx {
-			stagedDels = append(stagedDels, stagedDel{name, headHash})
-		}
-	}
-
-	entry.mu.Unlock() // release before OS operations
-
-	// indexMtime anchors the racy-git window check below: a file is only
-	// "racy" (stat can't prove it's unchanged) if its own mtime is not clearly
-	// before the index was last written — the same test git itself uses,
-	// rather than re-hashing every stat-clean file on every single poll.
-	var indexMtime time.Time
-	if fi, statErr := os.Stat(filepath.Join(worktreeGitDir(worktreePath), "index")); statErr == nil {
-		indexMtime = fi.ModTime()
-	}
-
-	// ── Phase 2: build change target list (no lock, no blob reads) ───────────
-	type changeTarget struct {
-		name      string
-		headHash  plumbing.Hash // zero = new file not in HEAD
-		isDeleted bool          // no working-tree file exists
-	}
-
-	stagedTargets := make([]changeTarget, 0, len(stagedDels))
-	for _, m := range metas {
-		if m.staged {
-			stagedTargets = append(stagedTargets, changeTarget{m.name, m.headHash, false})
-		}
-	}
-	for _, sd := range stagedDels {
-		stagedTargets = append(stagedTargets, changeTarget{sd.name, sd.headHash, true})
-	}
-
-	unstagedTargets := make([]changeTarget, 0)
-	for _, m := range metas {
-		if m.staged {
-			continue
-		}
-		wtPath := filepath.Join(worktreePath, m.name)
-		info, serr := os.Lstat(wtPath)
-		if serr != nil {
-			if os.IsNotExist(serr) {
-				unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, true})
-			}
-			continue
-		}
-		sizeDiffers := info.Size() != int64(m.size)
-		mtimeDiffers := !info.ModTime().Truncate(time.Second).Equal(m.modifiedAt.Truncate(time.Second))
-		if sizeDiffers || mtimeDiffers {
-			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
-			continue
-		}
-
-		// Racy-clean case: size matches the index entry AND the working-tree
-		// mtime (truncated to second) equals the index entry's recorded mtime.
-		// stat alone cannot prove the file is unchanged in the racy window —
-		// a file rewritten with identical size within the same wall-clock
-		// second as the index write looks clean by stat but may differ in
-		// content (the classic "racy git" problem). Outside that window
-		// (file mtime clearly predates the index write), stat alone is
-		// sufficient proof of no change, exactly as real git treats it — so
-		// only pay for a content hash when the file could actually be racy.
-		if !fileNeedsContentCheck(info.ModTime(), indexMtime) {
-			continue // stat-clean and outside the racy window: confirmed unchanged
-		}
-		if info.Size() > maxUntrackedFileSize {
-			// Too large to hash within the cap; conservatively treat as changed
-			// rather than reading it into memory, consistent with how large
-			// modified tracked files are handled elsewhere (applyDiff skips the
-			// read but still counts the file via readFileIfSmall returning false).
-			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
-			continue
-		}
-		wtData, ok := readFileIfSmall(wtPath)
-		if !ok {
-			// Unreadable or raced past the cap; treat as changed conservatively.
-			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
-			continue
-		}
-		if plumbing.ComputeHash(plumbing.BlobObject, wtData) != m.indexHash {
-			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
-		}
-	}
-
-	// ── Phase 3: batch-read all needed blobs under a single lock hold ────────
-	// Collecting all hashes first and reading them in one critical section
-	// eliminates the N lock-acquire/release cycles (one per changed file) that
-	// was the #2 mutex hotspot: 9.87B cycles, 1641 events in pprof profiling.
-	// Peak memory is bounded by the sum of changed-file blobs (M << N typical),
-	// which is acceptable since blobs > maxUntrackedFileSize are still skipped.
-	allTargets := append(stagedTargets, unstagedTargets...) //nolint:gocritic // intentional ephemeral append
-	blobMap := make(map[plumbing.Hash][]byte, len(allTargets))
-	func() {
-		// Deferred unlock (rather than an explicit entry.mu.Unlock() at the
-		// end of this block): a panic partway through the loop below would
-		// otherwise leave entry.mu permanently held, deadlocking every future
-		// operation on this repo entry.
-		entry.mu.Lock()
-		defer entry.mu.Unlock()
-		for _, t := range allTargets {
-			if t.headHash == (plumbing.Hash{}) {
-				continue
-			}
-			if _, already := blobMap[t.headHash]; already {
-				continue
-			}
-			// Blob content is keyed by its content-addressed hash, so a cache hit
-			// is always correct — no invalidation needed, ever. This skips
-			// re-decompressing the same HEAD blob from the packfile on every poll
-			// for a file that stays modified across several consecutive polls.
-			if cached, ok := entry.blobCache.get(t.headHash); ok {
-				blobMap[t.headHash] = cached
-				atomic.AddInt64(&g.blobCacheHits, 1)
-				continue
-			}
-			missStart := time.Now()
-			blob, berr := entry.repo.BlobObject(t.headHash)
-			if berr != nil {
-				continue
-			}
-			// Skip blobs larger than maxUntrackedFileSize to avoid reading large
-			// binaries or auto-generated files (e.g. package-lock.json, JARs).
-			if blob.Size > maxUntrackedFileSize {
-				continue
-			}
-			r, rerr := blob.Reader()
-			if rerr != nil {
-				continue
-			}
-			var buf bytes.Buffer
-			_, _ = buf.ReadFrom(r)
-			_ = r.Close()
-			data := bytes.Clone(buf.Bytes())
-			blobMap[t.headHash] = data
-			atomic.AddInt64(&g.blobCacheMisses, 1)
-			atomic.AddInt64(&g.blobCacheMissNanos, int64(time.Since(missStart)))
-			entry.blobCache.put(t.headHash, data, g.effectiveBlobCacheMaxBytes())
-		}
-	}()
-
-	var d DiffStat
-
-	applyDiff := func(t changeTarget) {
-		d.Files++
-		headData := blobMap[t.headHash] // nil for zero hash or skipped blobs
-		if t.isDeleted {
-			d.Deletions += countBytesLines(headData)
-			return
-		}
-		wtData, ok := readFileIfSmall(filepath.Join(worktreePath, t.name))
-		if !ok {
-			d.Deletions += countBytesLines(headData)
-			return
-		}
-		// F7: surface when the LCS cap forces a "fully replaced" approximation
-		// instead of an exact diff, so this is discoverable without reading code.
-		if oldLines, newLines := countBytesLines(headData), countBytesLines(wtData); oldLines > maxLCSLines || newLines > maxLCSLines {
-			log.DebugLog().Printf("[GoGitVCSReader] LCS cap hit for %s (old=%d new=%d lines, cap=%d): reporting a fully-replaced approximation instead of an exact line diff", t.name, oldLines, newLines, maxLCSLines)
-		}
-		ins, del := linesDiffBytes(headData, wtData)
-		d.Insertions += ins
-		d.Deletions += del
-	}
-
-	for _, t := range stagedTargets {
-		applyDiff(t)
-	}
-	for _, t := range unstagedTargets {
-		applyDiff(t)
-	}
-
-	// Untracked files: count lines as pure insertions (no HEAD version).
-	// Limited to maxUntrackedFiles to avoid OOM on repos with large build-artifact trees.
-	// Files over maxUntrackedFileSize are counted but not read for line counting.
-	// gitignore-matched paths (node_modules/, build output, etc.) are skipped
-	// entirely rather than walked and read — this was previously the single
-	// largest allocator in the app (~163GB cum in one profiling session),
-	// since ignored build trees were read just like any other untracked file.
-	// untrackedMatcher was resolved in Phase 1 above (cached on entry, F6).
-	_ = walkUntracked(worktreePath, indexedNames, untrackedMatcher, func(absPath string) {
-		d.Files++
-		if data, ok := readFileIfSmall(absPath); ok {
-			d.Insertions += countBytesLines(data)
-		}
-	})
-
-	return d, nil
-}
-
-// fileNeedsContentCheck reports whether a stat-clean file (size and mtime both
-// matching the index entry) still requires a content-hash fallback to rule
-// out the racy-git case. A file is only racy if its own mtime is not clearly
-// before the index was last written — the same window real git uses — so a
-// file whose mtime predates the index write is safe to trust from stat alone.
-// An unknown indexMtime (zero value) is treated conservatively as racy.
-func fileNeedsContentCheck(fileMtime, indexMtime time.Time) bool {
-	if indexMtime.IsZero() {
-		return true
-	}
-	return !fileMtime.Truncate(time.Second).Before(indexMtime.Truncate(time.Second))
-}
-
-// readFileIfSmall reads the file at path only if its size is ≤ maxUntrackedFileSize.
-// Returns (data, true) on success; (nil, false) when the file is too large or unreadable.
-// This is the single safe wrapper for all content reads in diffShortstatUncached —
-// callers should use this instead of os.ReadFile to prevent OOM on large build artifacts.
-func readFileIfSmall(path string) ([]byte, bool) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, false
-	}
-	if info.Size() > maxUntrackedFileSize {
-		return nil, false
-	}
-	// path is walked from repoPath by walkUntrackedFiles (an internal directory
-	// walk over the session's own git worktree), not user/RPC input.
-	data, err := os.ReadFile(path) // #nosec G304 -- path comes from an internal directory walk over the worktree, not user input
-	if err != nil {
-		return nil, false
-	}
-	return data, true
-}
-
-// LinesDiff returns inserted and deleted line counts between old and new using LCS.
-// Exported so tests can exercise the algorithm directly.
-func LinesDiff(old, newContent string) (insertions, deletions int) {
-	oldLines := splitLines(old)
-	newLines := splitLines(newContent)
-	lcs := lcsLength(oldLines, newLines)
-	return len(newLines) - lcs, len(oldLines) - lcs
-}
-
-// maxLCSLines caps the input size to the O(n*m) LCS DP below. A file well
-// under maxUntrackedFileSize in bytes can still contain hundreds of
-// thousands of lines (e.g. mostly-blank or single-character lines), and
-// n×m cells at that scale turns a shortstat poll into minutes of CPU on one
-// goroutine. Beyond this cap, lcsLength/lcsLengthBytes return 0, which the
-// existing len(new)-lcs / len(old)-lcs formulas turn into a "fully replaced"
-// approximation — bounded and cheap instead of exact and unbounded.
-// Cost at the cap: 20,000 × 20,000 = 4×10^8 DP-cell comparisons — on the
-// order of a few seconds of CPU per file at this size, even though the
-// rolling two-row implementation keeps memory at O(min(n,m)) (~160 KB of
-// ints), not O(n*m); it's the CPU time, not memory, that this cap bounds.
-// Declared as var (not const) so tests can lower it without generating huge fixtures.
-var maxLCSLines = 20_000
-
-// lcsLength computes the length of the longest common subsequence of two line slices.
-// Uses O(n*m) DP — acceptable for typical source files, capped by maxLCSLines.
-func lcsLength(a, b []string) int {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	if len(a) > maxLCSLines || len(b) > maxLCSLines {
-		return 0
-	}
-	// Use two rows to keep memory O(min(n,m)).
-	if len(a) < len(b) {
-		a, b = b, a
-	}
-	prev := make([]int, len(b)+1)
-	curr := make([]int, len(b)+1)
-	for i := 1; i <= len(a); i++ {
-		for j := 1; j <= len(b); j++ {
-			if a[i-1] == b[j-1] {
-				curr[j] = prev[j-1] + 1
-			} else if prev[j] > curr[j-1] {
-				curr[j] = prev[j]
-			} else {
-				curr[j] = curr[j-1]
-			}
-		}
-		prev, curr = curr, prev
-		for k := range curr {
-			curr[k] = 0
-		}
-	}
-	return prev[len(b)]
-}
-
-func splitLines(s string) []string {
-	if s == "" {
-		return nil
-	}
-	lines := strings.Split(s, "\n")
-	// Drop the empty string that results from a trailing newline.
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines
-}
-
-// countBytesLines counts the number of lines in data by counting '\n' bytes,
-// treating a trailing newline as not creating an extra empty line.
-func countBytesLines(data []byte) int {
-	if len(data) == 0 {
-		return 0
-	}
-	n := bytes.Count(data, []byte("\n"))
-	if data[len(data)-1] != '\n' {
-		n++ // last line without terminating newline
-	}
-	return n
-}
-
-// linesDiffBytes returns LCS-based insertion and deletion counts between old and new,
-// operating directly on []byte to avoid string conversion overhead.
-func linesDiffBytes(old, newData []byte) (insertions, deletions int) {
-	a := splitLinesBytes(old)
-	b := splitLinesBytes(newData)
-	lcs := lcsLengthBytes(a, b)
-	return len(b) - lcs, len(a) - lcs
-}
-
-// splitLinesBytes splits data into lines as subslices of data (no allocation per line).
-func splitLinesBytes(data []byte) [][]byte {
-	if len(data) == 0 {
-		return nil
-	}
-	lines := bytes.Split(data, []byte("\n"))
-	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
-		lines = lines[:len(lines)-1]
-	}
-	return lines
-}
-
-// lcsLengthBytes computes the LCS length of two byte-slice-of-lines sequences.
-// Uses O(min(n,m)) space rolling DP, same algorithm as lcsLength, capped by maxLCSLines.
-func lcsLengthBytes(a, b [][]byte) int {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	if len(a) > maxLCSLines || len(b) > maxLCSLines {
-		return 0
-	}
-	if len(a) < len(b) {
-		a, b = b, a
-	}
-	prev := make([]int, len(b)+1)
-	curr := make([]int, len(b)+1)
-	for i := 1; i <= len(a); i++ {
-		for j := 1; j <= len(b); j++ {
-			if bytes.Equal(a[i-1], b[j-1]) {
-				curr[j] = prev[j-1] + 1
-			} else if prev[j] > curr[j-1] {
-				curr[j] = prev[j]
-			} else {
-				curr[j] = curr[j-1]
-			}
-		}
-		prev, curr = curr, prev
-		for k := range curr {
-			curr[k] = 0
-		}
-	}
-	return prev[len(b)]
-}
-
-// walkUntracked calls fn for every file under root that is not in indexed and
-// not matched by matcher (pass nil to skip gitignore filtering entirely).
-// Skips the .git directory. Stops after maxUntrackedFiles files to avoid
-// unbounded walks in large build trees.
-func walkUntracked(root string, indexed map[string]struct{}, matcher gitignore.Matcher, fn func(absPath string)) error {
-	w := untrackedWalker{indexed: indexed, matcher: matcher, buf: make([]byte, 0, 256)}
-	count := 0
-	err := w.walk(root, &count, fn)
-	if errors.Is(err, errStopWalk) {
-		return nil
-	}
-	return err
-}
-
-// walk recurses depth-first over untrackedWalker's shared parts/buf state (see its
-// doc comment for why reusing them across siblings is safe).
-func (w *untrackedWalker) walk(dir string, count *int, fn func(string)) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, de := range entries {
-		name := de.Name()
-		if name == ".git" {
-			continue
-		}
-		prev := w.enter(name)
-		isDir := de.IsDir()
-		var walkErr error
-		switch {
-		case w.matcher != nil && w.matcher.Match(w.parts, isDir):
-			// gitignored — for a dir this skips the whole subtree
-		case isDir:
-			walkErr = w.walk(filepath.Join(dir, name), count, fn)
-		default:
-			if _, tracked := w.indexed[string(w.buf)]; !tracked {
-				*count++
-				if *count > maxUntrackedFiles {
-					walkErr = errStopWalk
-				} else {
-					fn(filepath.Join(dir, name))
-				}
-			}
-		}
-		w.leave(prev)
-		if walkErr != nil {
-			return walkErr
-		}
-	}
-	return nil
+	g.forgetScanSkip(worktreePath)
 }
 
 // worktreeGitDir returns the path to this worktree's own gitdir — the main
@@ -2005,14 +1177,17 @@ func worktreeGitDir(repoPath string) string {
 	if !strings.HasPrefix(line, prefix) {
 		return gitPath
 	}
-	wtGitDir := strings.TrimPrefix(line, prefix)
-	if !filepath.IsAbs(wtGitDir) {
-		// Defensive: git worktree add always writes an absolute path in
-		// practice, but resolve relative to repoPath if it ever isn't,
-		// matching how the commondir line below already handles this.
-		wtGitDir = filepath.Join(repoPath, wtGitDir)
+	return resolveGitPath(repoPath, strings.TrimPrefix(line, prefix))
+}
+
+// resolveGitPath resolves a path read from a git pointer file against base (the
+// directory holding that file). git >= 2.48 with worktree.useRelativePaths
+// writes relative `gitdir:` lines; older git always wrote absolute ones.
+func resolveGitPath(base, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
 	}
-	return filepath.Clean(wtGitDir)
+	return filepath.Clean(p)
 }
 
 // gitCommonDir returns the path to the common git directory (the main .git dir),
@@ -2031,15 +1206,11 @@ func gitCommonDir(repoPath string) string {
 	if !strings.HasPrefix(line, prefix) {
 		return gitPath
 	}
-	wtGitDir := strings.TrimPrefix(line, prefix)
+	wtGitDir := resolveGitPath(repoPath, strings.TrimPrefix(line, prefix))
 	// wtGitDir is parsed from gitPath above, which is itself rooted at the
 	// trusted repoPath -- not user input.
 	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil { // #nosec G304 -- wtGitDir derives from repoPath's own .git file, not user input
-		commondir := strings.TrimSpace(string(cdData))
-		if !filepath.IsAbs(commondir) {
-			commondir = filepath.Join(wtGitDir, commondir)
-		}
-		return commondir
+		return resolveGitPath(wtGitDir, strings.TrimSpace(string(cdData)))
 	}
 	return filepath.Dir(wtGitDir)
 }
@@ -2135,144 +1306,9 @@ func resolveRef(repo *git.Repository, name string) (plumbing.Hash, error) {
 	return plumbing.ZeroHash, fmt.Errorf("cannot resolve ref %q", name)
 }
 
-// maxReachableSetCommits caps the number of commits reachableSet will walk —
-// named to match this file's other max* caps (maxUntrackedFiles, maxLCSLines)
-// rather than the previous reachableSetLimit. The same kind of bound
-// findMergeBase already applies via mergeBaseBFSLimit.
-// The only caller (CommitMessages, via cachedReachableSet) uses the result
-// solely to detect "already merged into base" and stop printing — a partial
-// set beyond this depth means a handful of already-merged commits could
-// appear in the output on a repo with a base branch this deep, a cosmetic
-// imperfection preferable to an unbounded walk over the full history.
-// Cost at the cap: 50,000 plumbing.Hash keys (20 bytes each) plus Go map
-// bucket overhead is a few MB and a few tens of milliseconds of commit-log
-// walking — cheap and bounded, versus an unbounded walk that on a
-// million-commit repo would cost proportionally more of both.
-// Declared as var (not const) so tests can lower it without creating
-// thousands of commits.
-var maxReachableSetCommits = 50_000
-
-// reachableSet returns the set of commits reachable from start, up to
-// maxReachableSetCommits commits.
-func reachableSet(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]bool, error) {
-	seen := make(map[plumbing.Hash]bool, 64)
-	iter, err := repo.Log(&git.LogOptions{From: start})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	if err := iter.ForEach(func(c *object.Commit) error {
-		if len(seen) >= maxReachableSetCommits {
-			return storer.ErrStop
-		}
-		seen[c.Hash] = true
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return seen, nil
-}
-
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
 	}
 	return strings.TrimSpace(s)
-}
-
-// mergeBaseBFSLimit caps the number of commits visited per side in findMergeBase
-// and countCommitsTo. For a 10K-commit repo the unbounded walk allocates ~640 KB;
-// bounding at 2000 limits that to ~128 KB while still covering typical branch
-// divergences. A var (not const) so tests can shrink it instead of building a
-// repo with thousands of real commits to exercise the cap.
-var mergeBaseBFSLimit = 2000
-
-// findMergeBase returns the most-recent common ancestor of h1 and h2 using BFS.
-// It first marks ancestors of h1 (up to mergeBaseBFSLimit), then walks ancestors
-// of h2 until it finds one that is already marked. If no merge base is found
-// within the depth limit, a sentinel error is returned.
-func findMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
-	if h1 == h2 {
-		return h1, nil
-	}
-
-	// Mark ancestors of h1 (bounded).
-	anc := make(map[plumbing.Hash]bool, mergeBaseBFSLimit)
-	q := []plumbing.Hash{h1}
-	visited := 0
-	for len(q) > 0 && visited < mergeBaseBFSLimit {
-		h := q[len(q)-1]
-		q = q[:len(q)-1]
-		if anc[h] {
-			continue
-		}
-		anc[h] = true
-		visited++
-		c, err := repo.CommitObject(h)
-		if err != nil {
-			if !errors.Is(err, plumbing.ErrObjectNotFound) {
-				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
-			}
-			continue // object missing from shallow clone or pack — skip
-		}
-		q = append(q, c.ParentHashes...)
-	}
-
-	// Walk from h2 breadth-first; first ancestor in anc is the nearest merge base.
-	seen := make(map[plumbing.Hash]bool, mergeBaseBFSLimit)
-	q = []plumbing.Hash{h2}
-	visited = 0
-	for len(q) > 0 && visited < mergeBaseBFSLimit {
-		h := q[0]
-		q = q[1:]
-		if seen[h] {
-			continue
-		}
-		seen[h] = true
-		visited++
-		if anc[h] {
-			return h, nil
-		}
-		c, err := repo.CommitObject(h)
-		if err != nil {
-			if !errors.Is(err, plumbing.ErrObjectNotFound) {
-				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
-			}
-			continue
-		}
-		q = append(q, c.ParentHashes...)
-	}
-	return plumbing.ZeroHash, fmt.Errorf("merge base not found within %d commits", mergeBaseBFSLimit)
-}
-
-// countCommitsTo counts commits reachable from start that are not reachable from
-// stop (i.e. the number of commits between start and stop exclusive). Bounded at
-// mergeBaseBFSLimit for the same reason findMergeBase is: an unbounded walk on a
-// long-lived branch that never merged into base would otherwise decode every
-// commit back to the repo root. When the bound is hit the count is capped rather
-// than exact — callers display it as "mergeBaseBFSLimit+" ahead/behind, which is
-// the correct signal for "diverged a lot" without paying for an exact count.
-func countCommitsTo(repo *git.Repository, start, stop plumbing.Hash) (int, error) {
-	seen := make(map[plumbing.Hash]bool, 32)
-	q := []plumbing.Hash{start}
-	n := 0
-	for len(q) > 0 && n < mergeBaseBFSLimit {
-		h := q[len(q)-1]
-		q = q[:len(q)-1]
-		if seen[h] || h == stop {
-			continue
-		}
-		seen[h] = true
-		n++
-		c, err := repo.CommitObject(h)
-		if err != nil {
-			return 0, err
-		}
-		for _, p := range c.ParentHashes {
-			if !seen[p] && p != stop {
-				q = append(q, p)
-			}
-		}
-	}
-	return n, nil
 }

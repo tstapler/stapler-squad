@@ -28,7 +28,7 @@ func NewConfigWithExecutor(exec CommandExecutor) *Config {
 			exec = newTimeoutCommandExecutor(5 * time.Second)
 		}
 	}
-	return &Config{executor: exec}
+	return &Config{executor: exec, UnfinishedCaches: DefaultUnfinishedCaches()}
 }
 
 // NewConfig creates a Config with the default timeout executor.
@@ -192,6 +192,31 @@ func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
 	return result.Dir, nil
 }
 
+// UnfinishedCaches are the rollback-unit flags of the unfinished-work scanner
+// (project_plans/unfinished-scanner-dsa-perf ADR-008). Each unit can be turned
+// off in config.json without a deploy; dependents are normalized by
+// unfinished.EffectiveFlags.
+type UnfinishedCaches struct {
+	// SharedCommitState enables the per-repository shared commit state (graph,
+	// reach, ahead/behind memos, shared HEAD tree maps).
+	SharedCommitState bool `json:"shared_commit_state"`
+	// DiffCounter enables the Myers diff counter and per-file diff memo.
+	DiffCounter bool `json:"diff_counter"`
+	// ScanSkip enables scan skipping (ref snapshot, scan signature, index cache,
+	// untracked pruning, single stat pass).
+	ScanSkip bool `json:"scan_skip"`
+	// WatchWorktreeGitdirs enables Tier A linked-worktree gitdir watching.
+	WatchWorktreeGitdirs bool `json:"watch_worktree_gitdirs"`
+}
+
+// DefaultUnfinishedCaches returns the shipped rollback-unit defaults. A unit is
+// on here only after its own manual A/B passed (baseline.md "S2 A/B"); its
+// config.json key stays the off-switch, and LoadConfigFromPath seeds this value
+// before unmarshalling so an absent key keeps the default.
+func DefaultUnfinishedCaches() UnfinishedCaches {
+	return UnfinishedCaches{SharedCommitState: true, DiffCounter: true, ScanSkip: true, WatchWorktreeGitdirs: true}
+}
+
 // Config represents the application configuration
 type Config struct {
 	// executor is the command executor used for shell command discovery.
@@ -292,6 +317,10 @@ type Config struct {
 	// Empty string (the default) disables continuous profiling.
 	// Example: "http://localhost:4040"
 	PyroscopeServerAddress string `json:"pyroscope_server_address,omitempty"`
+	// UnfinishedCaches holds the rollback-unit flags for the unfinished-work
+	// scanner's shared caches. Read once at startup (restart-only); defaults come
+	// from DefaultUnfinishedCaches. See session/unfinished/flags.go for dependencies.
+	UnfinishedCaches UnfinishedCaches `json:"unfinished_caches"`
 	// NewProjectBaseDir is the base directory where new project directories are created.
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
@@ -337,6 +366,11 @@ type Config struct {
 	// MaxConcurrentTriage caps simultaneous headless triage calls; extra runs queue.
 	// 0 = default (8), clamped to [1, MaxConcurrentTriageCeiling].
 	MaxConcurrentTriage int `json:"max_concurrent_triage,omitempty"`
+
+	// WakeLimits overrides the defaults of the plan's "Wake limits" table for
+	// agent wake triggers; zero values keep the defaults and every value is
+	// clamped to the ceilings compiled into server/wakes.
+	WakeLimits WakeLimitsConfig `json:"wake_limits,omitempty"`
 	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
 	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
 	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
@@ -1065,6 +1099,24 @@ const (
 	HeadlessTriageModelAccountDefault = "none"
 )
 
+// WakeLimitsConfig is the operator-settable half of the Wake limits table.
+// Zero means "use the default"; server/wakes clamps each value to its hard
+// ceiling, so config can lower a limit or raise it only up to that ceiling.
+type WakeLimitsConfig struct {
+	MinCronIntervalMinutes int `json:"min_cron_interval_minutes,omitempty"`
+	PendingPerOwner        int `json:"pending_per_owner,omitempty"`
+	MaxFiresCron           int `json:"max_fires_cron,omitempty"`
+	ExpiresHorizonHours    int `json:"expires_horizon_hours,omitempty"`
+	Generation             int `json:"generation,omitempty"`
+	FiresPerOwnerHour      int `json:"fires_per_owner_hour,omitempty"`
+	FiresGlobalHour        int `json:"fires_global_hour,omitempty"`
+	PeerOpenPerAsker       int `json:"peer_open_per_asker,omitempty"`
+	PayloadChars           int `json:"payload_chars,omitempty"`
+	DebounceSeconds        int `json:"debounce_seconds,omitempty"`
+	BusyHoldMinutes        int `json:"busy_hold_minutes,omitempty"`
+	ReviveLockSeconds      int `json:"revive_lock_seconds,omitempty"`
+}
+
 // MaxConcurrentTriageOrDefault returns the triage concurrency cap, nil-safe.
 func (c *Config) MaxConcurrentTriageOrDefault() int {
 	switch {
@@ -1594,7 +1646,7 @@ func LoadConfigFromPath(path string) (*Config, error) {
 		return nil, err
 	}
 
-	var cfg Config
+	cfg := Config{UnfinishedCaches: DefaultUnfinishedCaches()}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}

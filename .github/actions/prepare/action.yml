@@ -9,21 +9,22 @@ runs:
       with:
         go-version-file: 'go.mod'
 
-    - name: Set up pnpm
-      uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      with:
-        version: 10.27.0
+    - name: Set up Bun
+      uses: ./.github/actions/setup-bun
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'pnpm'
-        cache-dependency-path: web-app/pnpm-lock.yaml
 
     - name: Install web dependencies
       shell: bash
-      run: cd web-app && pnpm install --frozen-lockfile
+      run: cd web-app && bun install --frozen-lockfile
+
+    # The codemod verification commands use rg; install it rather than rely on the runner image shipping it.
+    - name: Ensure ripgrep
+      shell: bash
+      run: command -v rg >/dev/null || sudo apt-get install -y ripgrep
 
     # Pre-populate buf-action's own tool-cache lookup path (runner.tool_cache
     # == $RUNNER_TOOL_CACHE, what its tc.find()/tc.cacheFile() calls read and
@@ -60,9 +61,9 @@ runs:
       uses: actions/cache@v4
       with:
         path: web-app/.next/cache
-        key: nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-${{ hashFiles('web-app/src/**') }}
+        key: nextjs-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
         restore-keys: |
-          nextjs-${{ runner.os }}-${{ hashFiles('web-app/pnpm-lock.yaml') }}-
+          nextjs-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
           nextjs-${{ runner.os }}-
 
     - name: Build web UI
@@ -70,7 +71,7 @@ runs:
       working-directory: web-app
       # next/font fetches fonts from fonts.gstatic.com at build time; retry
       # with backoff since that's an external network call, not our code.
-      run: ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
+      run: ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
 
     - name: Copy web UI to dist
       shell: bash

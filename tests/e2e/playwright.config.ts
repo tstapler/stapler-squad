@@ -1,10 +1,40 @@
-import { defineConfig, devices } from '@playwright/test';
+import * as fs from 'fs';
+import { defineConfig, devices, webkit } from '@playwright/test';
+
+/**
+ * WebKit (iPhone) project for mobile-webkit.spec.ts. Report-only by construction: when the
+ * browser build is not installed (npx playwright install webkit) the project is left out and the
+ * reason is printed, so a missing WebKit never fails the suite (plan Story 7.8b).
+ */
+function webkitMobileProjects() {
+  let installed = false;
+  try {
+    installed = fs.existsSync(webkit.executablePath());
+  } catch {
+    installed = false;
+  }
+  if (!installed) {
+    console.warn('[playwright.config] webkit-mobile skipped: WebKit is not installed (npx playwright install webkit)');
+    return [];
+  }
+  return [{ name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: '**/mobile-webkit.spec.ts' }];
+}
 
 /**
  * Playwright configuration for terminal flickering tests
  * Tests spin up a dedicated isolated backend on port 8544 via global-setup.ts.
  * Set TEST_SERVER_URL env var to override the target (e.g. for CI with a pre-started server).
  */
+
+// Files viewer mobile specs (and the lazy-doc/transport spikes) run in these projects as well as `chromium`.
+// Task 0.1.4b decision: WebKit ran green in the Playwright Noble image but is not yet proven on the CI runner, so
+// `mobile-chromium` (Pixel-class, 390x844, touch) is the gating mobile project and `mobile-webkit` is informational,
+// opt-in with PW_WEBKIT=1 (CI needs `npx playwright install webkit --with-deps` first).
+// Story 1.3.5c: the chord spec also runs on desktop Firefox and WebKit, informational only (real accelerator
+// delivery is the owner's manual check, Story 2.5.2). CI installs the browsers with `npx playwright install
+// firefox webkit --with-deps` and runs these two projects with `continue-on-error`; Chromium stays gating.
+const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
+const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
 
 export default defineConfig({
   globalSetup: './global-setup.ts',
@@ -103,6 +133,7 @@ export default defineConfig({
     },
     {
       name: 'chromium',
+      testIgnore: '**/mobile-webkit.spec.ts',
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -111,6 +142,30 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: 'desktop-firefox',
+      testMatch: SHORTCUT_SPECS,
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'desktop-webkit',
+      testMatch: SHORTCUT_SPECS,
+      use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'mobile-chromium',
+      testMatch: MOBILE_SPECS,
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
+    },
+    ...(process.env.PW_WEBKIT === '1'
+      ? [
+          {
+            name: 'mobile-webkit',
+            testMatch: MOBILE_SPECS,
+            use: { ...devices['iPhone 14'] },
+          },
+        ]
+      : []),
     {
       // DOM-renderer project: disables WebGL entirely so xterm.js falls back to
       // its built-in DOM renderer.  Text content appears in real .xterm-rows > div
@@ -123,6 +178,7 @@ export default defineConfig({
       //   if (typeof WebGL2RenderingContext !== 'undefined')
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
+      testIgnore: '**/mobile-webkit.spec.ts',
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -130,5 +186,6 @@ export default defineConfig({
         },
       },
     },
+    ...webkitMobileProjects(),
   ],
 });

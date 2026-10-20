@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -39,21 +38,18 @@ import (
 func TestMmapIndex_MatchesCopyBasedLoader_ByteForByte(t *testing.T) {
 	if testing.Short() {
 		// This test's own fixture build is cheap now that buildPackedFixture
-		// caches the real git work per numCommits (see gogitstore_test.go's
+		// caches the fixture work per numCommits (see gogitstore_test.go's
 		// "golden fixture cache" section) — the reason to keep this gated is
 		// that it was the specific test whose from-scratch fixture build (back
 		// when every call paid the real cost) bottomed out both a 30-minute
 		// goroutine-dump timeout and a later `-race` 600s timeout, both in the
-		// same buildPackedFixtureOnce/gitRunErr real-git-subprocess path. The
+		// same buildPackedFixtureOnce path. The
 		// correctness this test proves (mmap-based .idx loading is
 		// byte-for-byte equivalent to the copy-based decoder) is exercised
 		// on demand via BenchmarkMmapIndex_LoadVsCopyBased below instead of on
 		// every -short run. See mmap_stage2_test.go:156/434 and
 		// gogitstore_test.go:746/1017 for the established -short convention.
 		t.Skip("skipped under -short: see BenchmarkMmapIndex_LoadVsCopyBased for on-demand coverage of this path")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
 	}
 	dir := t.TempDir()
 	buildPackedFixture(t, dir, 90)
@@ -239,9 +235,6 @@ func TestMmapIndex_MatchesCopyBasedLoader_ByteForByte(t *testing.T) {
 // ./session/unfinished/gogitstore/...` — it is not part of any -short or
 // default `go test` run.
 func BenchmarkMmapIndex_LoadVsCopyBased(b *testing.B) {
-	if _, err := exec.LookPath("git"); err != nil {
-		b.Skip("git binary not available")
-	}
 	dir := b.TempDir()
 	buildPackedFixture(b, dir, 90)
 
@@ -344,9 +337,6 @@ func TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash(t *testing.T) {
 		runMmapCrashHelper(t)
 		return
 	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 
 	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash", "GOGITSTORE_MMAP_CRASH_HELPER=1")
 	if result.Outcome == crashSubprocessTimedOut {
@@ -355,7 +345,8 @@ func TestMmapIndexHandle_UnmapWhileSliceHeld_CausesCrash(t *testing.T) {
 	out, err := result.Output, result.Err
 
 	if err != nil {
-		var exitErr *exec.ExitError
+		// Structural stand-in for *exec.ExitError so this file needs no os/exec import.
+		var exitErr interface{ ExitCode() int }
 		if !errors.As(err, &exitErr) {
 			t.Fatalf("expected *exec.ExitError from the subprocess, got %T: %v\noutput:\n%s", err, err, out)
 		}

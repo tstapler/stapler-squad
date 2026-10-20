@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,6 +22,7 @@ import (
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const (
@@ -87,14 +89,25 @@ var knownTextExtensions = map[string]bool{
 // FileService handles ListFiles and GetFileContent RPCs.
 type FileService struct {
 	workspace      WorkspaceProvider
+	ops            *FileOps
+	writer         *FileWriter
+	search         *SearchHandler
+	ranges         *rangeLimiter
 	dirCache       *DirCache
 	gitignoreCache GitignoreCache
 }
 
 // NewFileService creates a FileService with the given workspace provider.
 func NewFileService(workspace WorkspaceProvider) *FileService {
+	guard, _ := workspace.(WriteGuard)
+	invalidator, _ := workspace.(StatusInvalidator)
+	ops := NewFileOps(FilePolicy{Workspace: workspace, Guard: guard}, osRootBackend{})
 	return &FileService{
 		workspace:      workspace,
+		ops:            ops,
+		writer:         NewFileWriter(ops, invalidator),
+		search:         newSearchHandler(ops),
+		ranges:         newRangeLimiter(),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),
 	}
@@ -119,36 +132,27 @@ func (fs *FileService) ListFiles(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListFilesRequest],
 ) (*connect.Response[sessionv1.ListFilesResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-
-	ws, err := fs.workspace.GetWorkspace(req.Msg.SessionId)
-	if err != nil {
-		return nil, err
-	}
-
-	basePath := ws.ExistingDir
-	if basePath == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
-	}
-
 	requestedPath := req.Msg.Path
 	if requestedPath == "" {
 		requestedPath = "."
 	}
-
-	fullPath, err := resolveAndValidatePath(basePath, requestedPath)
+	rr, err := resolveFileRequest(ctx, fs.workspace, FileRef{SessionID: req.Msg.SessionId, Path: requestedPath}, AccessRead)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rr.Root.Close() }()
+
+	basePath := rr.Root.Dir()
+	fullPath := filepath.Join(basePath, string(rr.Resolved))
+	// Entries are named under the path the client asked for, not the link target's path.
+	displayDir := path.Clean(filepath.ToSlash(requestedPath))
 
 	var entries []os.DirEntry
 	if cached, ok := fs.dirCache.Get(fullPath); ok {
 		entries = cached
 	} else {
 		var readErr error
-		entries, readErr = os.ReadDir(fullPath)
+		entries, readErr = rr.Root.ReadDir(rr.Resolved)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
 				return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("directory not found: %s", requestedPath))
@@ -156,25 +160,18 @@ func (fs *FileService) ListFiles(
 			if os.IsPermission(readErr) {
 				return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", requestedPath))
 			}
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read directory: %w", readErr))
+			return nil, internalIOError("read_dir", rr.Resolved, readErr, "failed to read directory")
 		}
-		if stat, statErr := os.Stat(fullPath); statErr == nil {
+		if stat, statErr := rr.Root.Stat(rr.Resolved); statErr == nil {
 			fs.dirCache.Put(fullPath, entries, stat.ModTime())
 		}
 	}
 
-	// Build gitignore matcher for this directory (patterns from root down to fullPath).
+	entries = withoutAtomicTemps(entries)
+
 	var matcher gitignore.Matcher
 	if !req.Msg.IncludeIgnored {
-		giKey := basePath + ":" + fullPath
-		var patterns []gitignore.Pattern
-		if cached, ok := fs.gitignoreCache.Get(giKey); ok {
-			patterns = cached
-		} else {
-			patterns = loadGitignorePatterns(basePath, fullPath)
-			fs.gitignoreCache.Put(giKey, patterns, time.Now())
-		}
-		matcher = gitignore.NewMatcher(patterns)
+		matcher = fs.dirGitignoreMatcher(basePath, fullPath)
 	}
 
 	totalCount := 0
@@ -196,21 +193,17 @@ func (fs *FileService) ListFiles(
 		symlinkTarget := ""
 
 		if isSymlink {
-			target, readErr := os.Readlink(filepath.Join(fullPath, name))
+			target, readErr := rr.Root.Readlink(path.Join(string(rr.Resolved), name))
 			if readErr == nil {
-				symlinkTarget = target
+				symlinkTarget = publicLinkTarget(target)
 			}
 			// Symlinked directories are reported as non-expandable (isDir=false).
 			isDir = false
 		}
 
 		// Build relative path segments for gitignore matching.
-		entryFullPath := filepath.Join(fullPath, name)
-		relPath, relErr := filepath.Rel(basePath, entryFullPath)
-		if relErr != nil {
-			continue
-		}
-		relSegments := strings.Split(filepath.ToSlash(relPath), "/")
+		relPath := path.Join(displayDir, name)
+		relSegments := strings.Split(relPath, "/")
 
 		// Gitignore check.
 		isIgnored := false
@@ -262,20 +255,23 @@ func (fs *FileService) ListFiles(
 
 	allNodes := append(dirs, files...)
 
-	// Compute base_path as the relative path from the worktree root.
-	baseFull := filepath.Clean(basePath)
-	relBase, relErr := filepath.Rel(baseFull, fullPath)
-	if relErr != nil {
-		relBase = requestedPath
-	}
-	relBase = filepath.ToSlash(relBase)
-
 	return connect.NewResponse(&sessionv1.ListFilesResponse{
 		Files:      allNodes,
-		BasePath:   relBase,
+		BasePath:   displayDir,
 		Truncated:  truncated,
 		TotalCount: int32(totalCount),
 	}), nil
+}
+
+// dirGitignoreMatcher builds (and caches) the matcher for patterns from basePath down to fullPath.
+func (fs *FileService) dirGitignoreMatcher(basePath, fullPath string) gitignore.Matcher {
+	giKey := basePath + ":" + fullPath
+	patterns, ok := fs.gitignoreCache.Get(giKey)
+	if !ok {
+		patterns = loadGitignorePatterns(basePath, fullPath)
+		fs.gitignoreCache.Put(giKey, patterns, time.Now())
+	}
+	return gitignore.NewMatcher(patterns)
 }
 
 // GetFileContent retrieves the content of a file in the session's worktree.
@@ -283,145 +279,26 @@ func (fs *FileService) GetFileContent(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetFileContentRequest],
 ) (*connect.Response[sessionv1.GetFileContentResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-	if req.Msg.Path == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
-	}
-
-	ws, err := fs.workspace.GetWorkspace(req.Msg.SessionId)
+	resp, err := fs.ops.GetContent(ctx, req.Msg.SessionId, req.Msg.Path)
 	if err != nil {
 		return nil, err
 	}
+	return connect.NewResponse(resp), nil
+}
 
-	basePath := ws.ExistingDir
-	if basePath == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session has no working directory"))
-	}
-
-	fullPath, err := resolveAndValidatePath(basePath, req.Msg.Path)
+// StatFile returns the version token, size and read-only reason of a file
+// without its content.
+func (fs *FileService) StatFile(
+	ctx context.Context,
+	req *connect.Request[sessionv1.StatFileRequest],
+) (*connect.Response[sessionv1.StatFileResponse], error) {
+	start := time.Now()
+	resp, err := fs.ops.StatWith(ctx, req.Msg)
+	recordStatMetrics(ctx, err, time.Since(start))
 	if err != nil {
 		return nil, err
 	}
-
-	// Stat first to get size and check existence.
-	info, statErr := os.Lstat(fullPath)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file not found: %s", req.Msg.Path))
-		}
-		if os.IsPermission(statErr) {
-			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", req.Msg.Path))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat file"))
-	}
-
-	if info.IsDir() {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is a directory, not a file"))
-	}
-
-	size := info.Size()
-
-	// Binary detection: known text extension → skip checks.
-	ext := strings.ToLower(filepath.Ext(fullPath))
-	if ext == "" {
-		// Check basename for files like "Dockerfile", "Makefile"
-		base := strings.ToLower(filepath.Base(fullPath))
-		if knownTextExtensions["."+base] {
-			ext = "." + base
-		}
-	}
-
-	isText := knownTextExtensions[ext]
-
-	// Open file and read enough bytes for content-type detection.
-	// #nosec G304 -- fullPath was already validated above via resolveAndValidatePath,
-	// which rejects any result escaping basePath (the session's worktree).
-	f, openErr := os.Open(fullPath)
-	if openErr != nil {
-		if os.IsNotExist(openErr) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", req.Msg.Path))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open file"))
-	}
-	defer func() { _ = f.Close() }()
-
-	// Read up to 512 bytes for content-type detection.
-	sniffBuf := make([]byte, 512)
-	sniffN, _ := f.Read(sniffBuf)
-	sniffBuf = sniffBuf[:sniffN]
-
-	contentType := http.DetectContentType(sniffBuf)
-
-	isBinary := false
-	if !isText {
-		// Layer 2: MIME sniffing.
-		if !strings.HasPrefix(contentType, "text/") {
-			isBinary = true
-		}
-		// Layer 3: null-byte scan on first 8000 bytes (overrides MIME if null found).
-		if !isBinary {
-			scanBuf := sniffBuf
-			if len(sniffBuf) < 8000 {
-				// Need to read more for the null scan (reopen from start).
-				_, _ = f.Seek(0, 0)
-				scanBuf = make([]byte, 8000)
-				n, _ := f.Read(scanBuf)
-				scanBuf = scanBuf[:n]
-			}
-			for _, b := range scanBuf {
-				if b == 0 {
-					isBinary = true
-					break
-				}
-			}
-		}
-	}
-
-	// Binary files: return metadata only — no size limit applies because no content is read.
-	if isBinary {
-		return connect.NewResponse(&sessionv1.GetFileContentResponse{
-			IsBinary:    true,
-			Size:        size,
-			ContentType: contentType,
-		}), nil
-	}
-
-	// Text files: enforce the hard size limit to prevent unbounded memory use.
-	if size > maxFileSize {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("file too large (%d bytes); maximum is %d bytes", size, maxFileSize))
-	}
-
-	// Determine read limit (truncate text files >1MB).
-	readLimit := size
-	isTruncated := false
-	if size > truncateSize {
-		readLimit = truncateSize
-		isTruncated = true
-	}
-
-	// Seek back to beginning and read up to readLimit bytes.
-	if _, seekErr := f.Seek(0, 0); seekErr != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file"))
-	}
-
-	buf := make([]byte, readLimit)
-	n, readErr := readFull(f, buf)
-	if readErr != nil && n == 0 {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read file content"))
-	}
-	buf = buf[:n]
-
-	return connect.NewResponse(&sessionv1.GetFileContentResponse{
-		Content:     string(buf),
-		Encoding:    "utf-8",
-		IsBinary:    false,
-		Size:        size,
-		ContentType: contentType,
-		IsTruncated: isTruncated,
-	}), nil
+	return connect.NewResponse(resp), nil
 }
 
 // readFull reads up to len(buf) bytes from r. Returns bytes read and any non-EOF error.
@@ -481,7 +358,8 @@ func (fs *FileService) SearchFiles(
 
 	files, truncated, totalMatches, walkErr := searchFilesInWorktree(ctx, basePath, req.Msg.Query, req.Msg.IncludeIgnored, maxResults, cachedPatterns)
 	if walkErr != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search failed: %w", walkErr))
+		log.Error("file name search failed", "err", walkErr)
+		return nil, connect.NewError(connect.CodeInternal, errors.New("search failed"))
 	}
 
 	return connect.NewResponse(&sessionv1.SearchFilesResponse{
@@ -513,7 +391,13 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 	truncated := false
 	totalMatches := int32(0)
 
-	walkErr := filepath.WalkDir(basePath, func(path string, d fs.DirEntry, err error) error {
+	root, rootErr := OpenWorktreeRoot(basePath)
+	if rootErr != nil {
+		return nil, false, 0, rootErr
+	}
+	defer func() { _ = root.Close() }()
+
+	walkErr := fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		// Respect context cancellation (e.g. client disconnect).
 		if ctx.Err() != nil {
 			return filepath.SkipAll
@@ -526,7 +410,7 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 
 		name := d.Name()
 
-		// Skip symlinks to prevent traversal loops.
+		// Skip symlinks: never follow a link out of the root or into a loop.
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
@@ -537,16 +421,12 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 		}
 
 		// Skip the root itself.
-		if path == basePath {
+		if path == "." {
 			return nil
 		}
 
 		// Build relative path for gitignore matching.
-		relPath, relErr := filepath.Rel(basePath, path)
-		if relErr != nil {
-			return nil
-		}
-		relPath = filepath.ToSlash(relPath)
+		relPath := path
 		relSegments := strings.Split(relPath, "/")
 
 		// Apply gitignore filter.
@@ -695,6 +575,21 @@ func loadGitignorePatterns(rootPath, targetDir string) []gitignore.Pattern {
 	return patterns
 }
 
+// httpStatusForFileError maps a resolveFileRequest error to the HTTP status ServeFileRaw
+// has always used; an unclassified workspace-lookup error stays a 404 ("session not found").
+func httpStatusForFileError(err error) int {
+	switch connect.CodeOf(err) {
+	case connect.CodePermissionDenied:
+		return http.StatusForbidden
+	case connect.CodeInvalidArgument, connect.CodeFailedPrecondition:
+		return http.StatusBadRequest
+	case connect.CodeInternal:
+		return http.StatusInternalServerError
+	default:
+		return http.StatusNotFound
+	}
+}
+
 // ServeFileRaw serves a file's raw bytes over HTTP, with optional Content-Disposition
 // for browser-triggered downloads. It validates the path against the session's worktree
 // root to prevent path traversal.
@@ -714,25 +609,14 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := fs.workspace.GetWorkspace(sessionID)
+	rr, err := resolveFileRequest(r.Context(), fs.workspace, FileRef{SessionID: sessionID, Path: relPath}, AccessRead)
 	if err != nil {
-		http.Error(w, "session not found", http.StatusNotFound)
+		http.Error(w, err.Error(), httpStatusForFileError(err))
 		return
 	}
+	defer func() { _ = rr.Root.Close() }()
 
-	basePath := ws.ExistingDir
-	if basePath == "" {
-		http.Error(w, "session has no working directory", http.StatusBadRequest)
-		return
-	}
-
-	absPath, err := resolveAndValidatePath(basePath, relPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	info, err := os.Stat(absPath)
+	info, err := rr.Root.Stat(rr.Resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "file not found", http.StatusNotFound)
@@ -747,7 +631,8 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(absPath))
+	absName := filepath.Base(relPath)
+	ext := strings.ToLower(filepath.Ext(relPath))
 
 	// PDF and video are streamed by http.ServeContent without buffering — no size cap.
 	// All other binary types retain the 10 MB limit (same as GetFileContent).
@@ -758,9 +643,7 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #nosec G304 -- absPath was already validated above via resolveAndValidatePath,
-	// which rejects any result escaping basePath (the session's worktree).
-	f, err := os.Open(absPath)
+	f, err := rr.Root.Open(rr.Resolved)
 	if err != nil {
 		http.Error(w, "could not open file", http.StatusInternalServerError)
 		return
@@ -793,14 +676,14 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 	if isPDF {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		cd := mime.FormatMediaType("inline", map[string]string{
-			"filename": filepath.Base(absPath),
+			"filename": absName,
 		})
 		w.Header().Set("Content-Disposition", cd)
 	}
 
 	if download {
 		cd := mime.FormatMediaType("attachment", map[string]string{
-			"filename": filepath.Base(absPath),
+			"filename": absName,
 		})
 		w.Header().Set("Content-Disposition", cd)
 	}
@@ -835,7 +718,7 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
+	http.ServeContent(w, r, absName, info.ModTime(), f)
 }
 
 // htmlLinkAttrRe matches src/href attribute values in HTML markup, e.g. src="foo.png" or href='bar.css'.
@@ -886,4 +769,14 @@ func rewriteRelativeHTMLLinks(html, sessionID, dir string) string {
 
 		return attr + eq + openQuote + newValue + closeQuote
 	})
+}
+
+// publicLinkTarget keeps a link target only when it is relative and stays inside the tree;
+// an absolute or escaping target would put a host path on the wire.
+func publicLinkTarget(target string) string {
+	clean := path.Clean(filepath.ToSlash(target))
+	if filepath.IsAbs(target) || strings.HasPrefix(clean, "/") || clean == ".." || strings.HasPrefix(clean, "../") {
+		return ""
+	}
+	return target
 }

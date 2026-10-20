@@ -1,0 +1,71 @@
+{
+  "story": "7.11a",
+  "capturedFrom": "next",
+  "states": {
+    "neutral": "Passes unchanged on any build: the Next-specific element is excluded or scoped away, so it is a no-op when absent (Bun's announcer is role=status).",
+    "rewritten": "Coupled to a Next build property; rewritten to be build-neutral and verified 3 of 3 on Next."
+  },
+  "specs": [
+    {
+      "spec": "insights-findings-panel.spec.ts",
+      "coupling": "Retry test queued the error response twice to absorb reactStrictMode's double mount effect (Next dev build only).",
+      "state": "rewritten",
+      "change": "InsightsPage.mockGetInsightsSummaryFailingUntilReleased: every request fails until release(), so the mount count no longer matters."
+    },
+    {
+      "spec": "jules-status-badge.spec.ts",
+      "coupling": "Header documents that BacklogItemDetail's useEffect never runs in a Next production static export, so the 'reconnect-required' badge and 'revoke' are not covered.",
+      "state": "neutral",
+      "change": "None: the spec asserts only the reachable phases and never asserts the effect is absent, so a build where the effect runs does not break it."
+    },
+    {
+      "spec": "accessibility.spec.ts",
+      "coupling": "Counts aria-live=assertive inside [data-testid=backlog-page], explicitly excluding #__next-route-announcer__.",
+      "state": "neutral",
+      "change": "None: scoped to the backlog page, so the route announcer is outside the selector on any build."
+    },
+    {
+      "spec": "terminal-resync-banner.spec.ts",
+      "coupling": "Hard-fail banner found with getByRole('alert') filtered by a Retry button, to skip Next's always-present role=alert announcer.",
+      "state": "neutral",
+      "change": "None: the filter has the same result when no announcer alert exists."
+    },
+    {
+      "spec": "terminal-resync-feature-flags.spec.ts",
+      "coupling": "Alert found with getByRole('alert') filtered by text 'refresh', to skip Next's announcer.",
+      "state": "neutral",
+      "change": "None."
+    },
+    {
+      "spec": "insights-session-route.spec.ts",
+      "coupling": "Error alert found with getByRole('alert') filtered by text, to skip Next's announcer.",
+      "state": "neutral",
+      "change": "None."
+    },
+    {
+      "spec": "multi-window.spec.ts",
+      "coupling": "nonToastAlerts excludes #__next-route-announcer__ by id.",
+      "state": "neutral",
+      "change": "None: the :not(#id) clause matches nothing on a build without that element."
+    },
+    {
+      "spec": "pages/EscapeAnalyticsGlobalViewPage.ts",
+      "coupling": "getErrorBanner excludes #__next-route-announcer__ by id (used by escape-analytics-global-view.spec.ts).",
+      "state": "neutral",
+      "change": "None."
+    }
+  ],
+  "budget": {
+    "cap": 12,
+    "classified": 8
+  },
+  "failingOnNextAtCapture": {
+    "note": "Fail 2 of 2 attempts on the isolated Next server on 2026-10-19 (spec and page-object files unchanged by this PR). Not diagnosed here; Story 7.10's comparator should treat them as baseline `fail`, not Bun regressions.",
+    "tests": [
+      "escape-analytics-global-view.spec.ts: EscapeAnalyticsGlobalView_should_ShowAggregateSummary_When_TabSwitched",
+      "escape-analytics-global-view.spec.ts: EscapeAnalyticsGlobalView_should_ShowErrorBanner_When_RpcFails",
+      "jules-status-badge.spec.ts: no badge renders before the first Jules state arrives",
+      "multi-window.spec.ts: renaming to empty reverts silently and renaming to a duplicate name is allowed silently"
+    ]
+  }
+}

@@ -4,6 +4,11 @@
 import { useState, useCallback } from "react";
 import { useListGuidanceRequestsQuery, useAnswerGuidanceRequestMutation } from "@/lib/api/guidanceApi";
 import { getErrorMessage } from "@/lib/utils/connectError";
+import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
+import { deliveryView, snapshotOf } from "@/lib/guidance/deliveryView";
+import { GuidanceDeliveryLine } from "./GuidanceDeliveryLine";
+import { GuidanceQuestionForm, formatAnswers } from "./GuidanceQuestionForm";
+import { LegacyAnswerForm } from "./LegacyAnswerForm";
 import * as styles from "./GuidanceRequestPanel.css";
 
 export interface GuidanceRequestPanelProps {
@@ -15,14 +20,6 @@ export interface GuidanceRequestPanelProps {
   title?: string;
 }
 
-interface GuidanceRow {
-  id: string;
-  questionText: string;
-  questionType: string;
-  options: string[];
-  answer: string;
-  status: string;
-}
 
 /** Encapsulates the answer-submission mutation + in-flight/error state, split out to keep GuidanceRequestPanel short. */
 function useGuidanceAnswering() {
@@ -102,11 +99,12 @@ function GuidanceRequestItem({
   busy,
   onSubmit,
 }: {
-  request: GuidanceRow;
+  request: PlainGuidanceRequest;
   busy: boolean;
   onSubmit: (answer: string) => void;
 }) {
   const isPending = request.status === "pending";
+  if ((request.questions?.length ?? 0) > 0) return <StructuredRequestItem request={request} busy={busy} onSubmit={onSubmit} />;
   return (
     <li className={styles.item} data-testid={`guidance-request-${request.id}`}>
       <div className={styles.itemHeader}>
@@ -119,7 +117,7 @@ function GuidanceRequestItem({
         <p className={styles.questionText}>{request.questionText}</p>
       </div>
       {isPending ? (
-        <GuidanceAnswerForm request={request} busy={busy} onSubmit={onSubmit} />
+        <LegacyAnswerForm request={request} busy={busy} onSubmit={onSubmit} />
       ) : (
         <p className={styles.answerText}>Answer: {request.answer}</p>
       )}
@@ -127,96 +125,35 @@ function GuidanceRequestItem({
   );
 }
 
-interface AnswerFormProps {
-  request: GuidanceRow;
-  busy: boolean;
-  onSubmit: (answer: string) => void;
-}
 
-function GuidanceAnswerForm(props: AnswerFormProps) {
-  switch (props.request.questionType) {
-    case "yes-no":
-      return <YesNoAnswer {...props} />;
-    case "multiple-choice":
-      return <MultipleChoiceAnswer {...props} />;
-    default:
-      return <ShortAnswerForm {...props} />;
-  }
-}
-
-function YesNoAnswer({ request, busy, onSubmit }: AnswerFormProps) {
+/** A request that carries structured questions: the shared form, then its delivery-state line. */
+function StructuredRequestItem({ request, busy, onSubmit }: { request: PlainGuidanceRequest; busy: boolean; onSubmit: (answer: string) => void }) {
+  const questions = (request.questions ?? []).map((q) => ({
+    text: q.question,
+    header: q.header || undefined,
+    multiSelect: q.multiSelect,
+    options: q.options.map((o) => ({ label: o.label, description: o.description || undefined })),
+  }));
+  const view = deliveryView(snapshotOf(request), { sending: busy });
+  const pending = request.status === "pending";
   return (
-    <div className={styles.actions}>
-      <button
-        type="button"
-        className={styles.answerButton}
-        disabled={busy}
-        onClick={() => onSubmit("yes")}
-        data-testid={`guidance-answer-yes-${request.id}`}
-      >
-        Yes
-      </button>
-      <button
-        type="button"
-        className={styles.answerButton}
-        disabled={busy}
-        onClick={() => onSubmit("no")}
-        data-testid={`guidance-answer-no-${request.id}`}
-      >
-        No
-      </button>
-    </div>
-  );
-}
-
-function MultipleChoiceAnswer({ request, busy, onSubmit }: AnswerFormProps) {
-  return (
-    <div className={styles.actions}>
-      {request.options.map((opt) => (
-        <button
-          key={opt}
-          type="button"
-          className={styles.answerButton}
-          disabled={busy}
-          onClick={() => onSubmit(opt)}
-          data-testid={`guidance-answer-option-${request.id}-${opt}`}
-        >
-          {opt}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ShortAnswerForm({ request, busy, onSubmit }: AnswerFormProps) {
-  const [value, setValue] = useState("");
-  return (
-    <form
-      className={styles.shortAnswerForm}
-      onSubmit={(e) => {
-        e.preventDefault();
-        const trimmed = value.trim();
-        if (trimmed) onSubmit(trimmed);
-      }}
-    >
-      <input
-        type="text"
-        className={styles.shortAnswerInput}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Type your answer…"
-        disabled={busy}
-        aria-label={`Answer for: ${request.questionText}`}
-        data-testid={`guidance-answer-input-${request.id}`}
+    <li className={styles.item} data-testid={`guidance-request-${request.id}`}>
+      <div className={styles.itemHeader}>
+        <span className={pending ? styles.badgePending : styles.badgeAnswered} data-testid="guidance-request-status">
+          {pending ? "Pending" : "Answered"}
+        </span>
+        {!pending && <p className={styles.questionText}>{request.questionText}</p>}
+      </div>
+      <GuidanceQuestionForm
+        id={request.id}
+        questions={questions}
+        mode={pending ? "answer" : "readonly"}
+        canTypeText
+        locked={busy || (view?.locked ?? false)}
+        openControl={null}
+        onSubmit={(answers) => onSubmit(formatAnswers(answers))}
+        delivery={view && <GuidanceDeliveryLine view={view} onAction={() => {}} openControl={null} />}
       />
-      <button
-        type="submit"
-        className={styles.answerButton}
-        disabled={busy || !value.trim()}
-        data-testid={`guidance-answer-submit-${request.id}`}
-      >
-        Submit
-      </button>
-    </form>
+    </li>
   );
 }

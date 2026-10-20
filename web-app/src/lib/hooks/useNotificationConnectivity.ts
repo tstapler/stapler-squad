@@ -4,6 +4,7 @@ import { useCallback, useContext, useEffect, useState, useSyncExternalStore } fr
 import { ReactReduxContext } from "react-redux";
 import { selectConnectionState, selectSessionsHasLoadedOnce, type ConnectionState } from "@/lib/store/sessionsSlice";
 import type { RootState } from "@/lib/store";
+import { useOnlineStatus } from "@/lib/hooks/useOnlineStatus";
 import { useNotificationState } from "@/lib/contexts/notificationContexts";
 
 export interface NotificationConnectivity {
@@ -35,23 +36,6 @@ export function useStreamConnectionState(): ConnectionState {
   return useSyncExternalStore(subscribe, getSnapshot, () => CONNECTED);
 }
 
-function subscribeBrowserOnline(onChange: () => void): () => void {
-  window.addEventListener("online", onChange);
-  window.addEventListener("offline", onChange);
-  return () => {
-    window.removeEventListener("online", onChange);
-    window.removeEventListener("offline", onChange);
-  };
-}
-
-function useBrowserOnline(): boolean {
-  return useSyncExternalStore(
-    subscribeBrowserOnline,
-    () => navigator.onLine,
-    () => true,
-  );
-}
-
 function useSessionsLoadedOnce(): boolean {
   const redux = useContext(ReactReduxContext);
   const store = redux?.store;
@@ -75,7 +59,7 @@ function useSessionsLoadedOnce(): boolean {
  */
 export function useNotificationConnectivity(): NotificationConnectivity {
   const state = useStreamConnectionState();
-  const browserOnline = useBrowserOnline();
+  const browserOnline = useOnlineStatus();
   const { historyError } = useNotificationState();
 
   const sessionsLoadedOnce = useSessionsLoadedOnce();

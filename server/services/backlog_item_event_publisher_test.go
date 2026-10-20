@@ -2,6 +2,10 @@ package services
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"testing"
 	"time"
 
@@ -278,5 +282,52 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 		t.Fatalf("workspace B subscriber received an event from workspace A's mutation (cross-workspace leak): %+v", received)
 	case <-time.After(100 * time.Millisecond):
 		// Expected: workspace B stays silent.
+	}
+}
+
+// TestEveryBacklogKindMapped fails when a session.BacklogChangeKind const is
+// added without a case in mapBacklogChangeKind (which would panic at publish
+// time and drop the event), and checks the wire kind keeps the same string so
+// wake triggers filter on it.
+func TestEveryBacklogKindMapped(t *testing.T) {
+	t.Parallel()
+	f, err := parser.ParseFile(token.NewFileSet(), "../../session/backlog_item_change.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []session.BacklogChangeKind
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs := spec.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "BacklogChangeKind" {
+				continue
+			}
+			for _, v := range vs.Values {
+				s, err := strconv.Unquote(v.(*ast.BasicLit).Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				kinds = append(kinds, session.BacklogChangeKind(s))
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		t.Fatal("found no session.BacklogChangeKind constants; the parse is stale")
+	}
+	for _, k := range kinds {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("session.BacklogChangeKind %q is not mapped by mapBacklogChangeKind: %v", k, r)
+				}
+			}()
+			if got := mapBacklogChangeKind(k); string(got) != string(k) {
+				t.Errorf("mapBacklogChangeKind(%q) = %q, want the same string", k, got)
+			}
+		}()
 	}
 }

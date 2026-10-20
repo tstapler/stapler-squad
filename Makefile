@@ -70,18 +70,20 @@ ifneq ($(wildcard .tool-versions),)
 	@if which asdf >/dev/null 2>&1; then \
 		echo "🔍 asdf detected, ensuring versions from .tool-versions are installed..."; \
 		asdf plugin add nodejs || true; \
+		asdf plugin add bun || true; \
 		asdf install; \
 	fi
 endif
-	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which pnpm >/dev/null 2>&1; then \
+	@which rg >/dev/null 2>&1 || { which brew >/dev/null 2>&1 && brew install ripgrep; } || echo "⚠️  ripgrep (rg) not found; codemod verification commands in project_plans use it"
+	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which bun >/dev/null 2>&1; then \
 		touch $(ASDF_STAMP); \
 	else \
 		if which brew >/dev/null 2>&1; then \
 			echo "🔍 Missing tools, installing via Homebrew..."; \
 			brew install go buf nodejs; \
-			brew install pnpm; \
+			brew install bun; \
 		else \
-			echo "❌ Error: go/buf/pnpm not found. Install asdf or Homebrew."; \
+			echo "❌ Error: go/buf/bun not found. Install asdf or Homebrew."; \
 			exit 1; \
 		fi; \
 		touch $(ASDF_STAMP); \
@@ -135,7 +137,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 
 registry-generate-frontend: ## Generate frontend feature registry from React component markers
 	@echo "Installing frontend scanner dependencies..."
-	@cd tools/scanner/frontend && pnpm install --silent
+	@cd tools/scanner/frontend && bun install --silent
 	@echo "Scanning frontend features..."
 	@tools/scanner/frontend/node_modules/.bin/ts-node \
 		tools/scanner/frontend/src/main.ts \
@@ -159,10 +161,10 @@ registry-diff: ## Show what would change in registry without writing files (dry 
 docs-features: ## Generate per-feature Markdown docs from the typed catalog
 	@echo "Generating feature docs..."
 	@mkdir -p docs/api/features
-	@cd tools/docs-gen && npm install --silent && npx ts-node --project tsconfig.json generate.ts
+	@cd tools/docs-gen && bun install --silent && bunx ts-node --project tsconfig.json generate.ts
 
 changelog-since: ## Print features introduced since a version: make changelog-since VERSION=1.4.0
-	@cd tools/docs-gen && npx ts-node --project tsconfig.json changelog.ts $(VERSION)
+	@cd tools/docs-gen && bunx ts-node --project tsconfig.json changelog.ts $(VERSION)
 
 e2e-report: ## Generate Allure HTML report from last test run
 	@cd tests/e2e && npx allure generate allure-results --clean -o allure-report
@@ -191,11 +193,11 @@ else
 endif
 	@echo "✅ stapler-squad built successfully"
 
-# Install web-app pnpm dependencies when pnpm-lock.yaml changes. Delegates to
-# shared-node-modules.sh, which symlinks node_modules into a dir shared
+# Install web-app Bun dependencies when bun.lock changes. Delegates to
+# tools/shared-node-modules, which symlinks node_modules into a dir shared
 # across every git worktree with the same lockfile (keyed by lockfile +
 # local file:-dependency content) instead of a full per-worktree install --
-# see that script's header and docs/explanation/package-management-evaluation.md.
+# see that tool's doc comment and docs/explanation/package-management-evaluation.md.
 # Opt out with STAPLER_SQUAD_SHARED_NODE_MODULES=0.
 #
 # A worktree whose node_modules predates this mechanism is a real directory
@@ -207,23 +209,23 @@ endif
 # against both states).
 NEEDS_NODE_MODULES_MIGRATION := $(shell [ -e web-app/node_modules ] && [ ! -L web-app/node_modules ] && echo force)
 
-web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
-	@echo "Installing web-app pnpm dependencies..."
-	@./scripts/shared-node-modules.sh web-app
+web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $(if $(NEEDS_NODE_MODULES_MIGRATION),FORCE-node-modules-migration)
+	@echo "Installing web-app Bun dependencies..."
+	@go run ./tools/shared-node-modules web-app
 
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
 # Build Next.js app to web-app/out
-web-app/out: ensure-tools proto-gen web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
-	@# Guard: re-install if node_modules was wiped by external tools without touching pnpm-lock.yaml
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) web-app/next.config.ts
+	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/next || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
-		./scripts/shared-node-modules.sh web-app; \
+		go run ./tools/shared-node-modules web-app; \
 	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
-	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- pnpm run build
+	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -334,7 +336,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # instead of requiring a cargo/rustc toolchain anywhere in this repo.
 
 # Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
-# in go.mod together — nothing enforces this automatically; see ADR-001
+# in go.mod together — tools/ci/check-tymux-pin.sh enforces it; see ADR-001
 # (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
 # v1.3.0 bump (from v1.1.0): go.mod's client pin (clients/go v0.1.0) is
 # unchanged — it's still the only tagged Go client version that exists, and
@@ -567,7 +569,7 @@ dev-stack: build ## Start an isolated backend+next-dev DevStack: make dev-stack 
 	$(DEV_STACK_TS_NODE) --compiler-options '$(DEV_STACK_TSC_OPTS)' scripts/dev-stack/launch.ts $(NAME)
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools web-app/node_modules/.modules.yaml ## Generate Go and TypeScript code from proto files
+proto-gen: ensure-tools web-app/node_modules/.ssq-install-stamp ## Generate Go and TypeScript code from proto files
 	@echo "Checking if proto files need regeneration..."
 	@if [ ! -f $(PROTO_STAMP) ] \
 	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
@@ -643,7 +645,8 @@ test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for pac
 	fi
 
 test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
-	cd web-app && BASE=$(or $(BASE),origin/main) pnpm run test:affected
+	cd web-app && BASE=$(or $(BASE),origin/main) bun run test:affected
+	cd web-app && bun run test:codemods
 
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
@@ -817,6 +820,9 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
 	go install github.com/mibk/dupl@latest
 	go install gotest.tools/gotestsum@v1.13.0
+	@echo "Checking web-app codemod tooling (ast-grep is a pinned web-app devDependency; never use the shadow-utils sg)..."
+	@which rg >/dev/null 2>&1 || (echo "❌ ripgrep (rg) missing: brew install ripgrep" && exit 1)
+	@cd web-app && bun install --frozen-lockfile >/dev/null && node_modules/.bin/ast-grep --version
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
@@ -1019,9 +1025,10 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # reachable origin/main; `git fetch origin main` first if it's stale.
 ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
-	cd web-app && pnpm run lint:css && pnpm run lint:css-vars
+	cd web-app && bun run lint:css && bun run lint:css-vars
+	tools/ci/check-tymux-pin.sh
 	cd tools/scanner && go test ./...
-	cd tools/ci-gates && pnpm install --silent && pnpm test
+	cd tools/ci-gates && bun install --silent && bun run test
 	@echo "✅ ready: local approximation of PR checks complete"
 
 ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
@@ -1046,7 +1053,62 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 # 0.1% leaves a small buffer above that irreducible baseline while still failing on any
 # meaningfully-sized new duplication.
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
-	cd web-app && pnpm run lint:duplicates
+	cd web-app && bun run lint:duplicates
+
+# --- files-viewer-revamp gates (project_plans/files-viewer-revamp, Story 0.2.4) ---
+# Package elapsed (go test -json, compile excluded) of `go test -race -short ./server/services` on origin/main at the
+# branch merge base 51132ee23, measured 2026-10-16 on a loaded 127%-CPU machine: 270.229s, 2813 tests, all pass.
+# Refresh these two values only by re-measuring on a clean checkout, never to make a gate pass.
+FILES_VIEWER_RACE_BASELINE_SECONDS ?= 270
+FILES_VIEWER_RACE_BUDGET_PERCENT ?= 10
+FILES_VIEWER_JSCPD_THRESHOLD ?= 0.14
+FILES_VIEWER_JSCPD_MIN_HEADROOM ?= 0.02
+# Fixed list of test-name prefixes owned by the files viewer; extend as stories land.
+FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRequest|TestFilesFlags|TestFilesViewerGoTests|TestGenFixtureTree|TestStreamingSpike|TestTransportSpike|TestGetFileContent|TestListFiles|TestSearchFiles|TestContent|TestWriteFile|TestFileCodec|TestNewFileVersionToken|TestParseFileVersionToken|TestClassifyReadOnly|TestTruncateOnRuneBoundary|TestStatFile|TestFileAtomic|TestFilesTelemetry|TestAtomicReplace|TestSearchContentHandler|TestStreamLimiter|TestSearchRegistry|TestPathMutexRegistry|TestNewSearchOptions|TestAnalyze|FuzzAnalyze|TestAnalysisCache|TestReadRange|TestFileOps|TestCapabilities)
+
+.PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
+
+files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services
+
+files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
+	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services
+
+# Probe for Task 0.2.4f: does revive(file-length-limit) report an edit to server/server.go?
+files-viewer-server-length-probe: ensure-tools
+	@echo "server/server.go non-blank, non-comment lines: $$(grep -vE '^[[:space:]]*(//|$$)' server/server.go | wc -l)"
+	@mkdir -p .cache && cp server/server.go .cache/server.go.bak && echo "// files-viewer-gates probe" >> server/server.go; \
+	out=$$(golangci-lint run --enable revive --new-from-rev=origin/main ./server/ 2>&1); \
+	cp .cache/server.go.bak server/server.go && rm -f .cache/server.go.bak; \
+	if echo "$$out" | grep -q 'file-length-limit'; then echo "revive file-length-limit: REPORTED -> run Task 0.2.4f before Wave 5"; else echo "revive file-length-limit: not reported"; fi
+
+# Set WAVE=4 to include the server.go length probe; FILES_VIEWER_SKIP_RACE=1 skips the (minutes-long) race timing.
+files-viewer-gates: ensure-tools proto-gen ## End-of-wave gates: jscpd + headroom, complexity/dupl, 350-line budget, race wall-clock delta
+	@set -e; rm -rf .cache/jscpd-files; mkdir -p .cache; \
+	echo "== jscpd =="; \
+	(cd web-app && bun run lint:duplicates --reporters json --output ../.cache/jscpd-files >/dev/null) && jscpd_rc=0 || jscpd_rc=$$?; \
+	jq -r --argjson thr $(FILES_VIEWER_JSCPD_THRESHOLD) --argjson min $(FILES_VIEWER_JSCPD_MIN_HEADROOM) \
+	  '.statistics.total | (.duplicatedLines / .lines * 100) as $$p | "jscpd: \($$p * 1000 | round / 1000)% (threshold \($$thr)%), headroom \(($$thr - $$p) * 1000 | round / 1000) pp" + (if ($$thr - $$p) < $$min then "  FLAG: headroom < \($$min) pp, next wave starts with a fixture extraction" else "" end)' \
+	  .cache/jscpd-files/jscpd-report.json; \
+	echo "jscpd gate exit: $$jscpd_rc"; \
+	echo "== complexity/dupl (new code vs origin/main) =="; \
+	$(MAKE) --no-print-directory ready-complexity-gate && echo "complexity gate: PASS" ; \
+	echo "== 350-line budget =="; \
+	if [ -f web-app/src/components/sessions/__tests__/FilesTabLineBudget.test.ts ]; then \
+	  (cd web-app && bunx jest --testPathPatterns=FilesTabLineBudget --no-coverage) && echo "line budget: PASS"; \
+	else echo "line budget: SKIPPED (FilesTabLineBudget.test.ts not created yet, Task 1.2.2d)"; fi; \
+	echo "== server/server.go length =="; \
+	echo "server/server.go non-blank, non-comment lines: $$(grep -vE '^[[:space:]]*(//|$$)' server/server.go | wc -l)"; \
+	if [ "$(WAVE)" = "4" ]; then $(MAKE) --no-print-directory files-viewer-server-length-probe; fi; \
+	echo "== server/services race wall-clock =="; \
+	if [ -n "$(FILES_VIEWER_SKIP_RACE)" ]; then echo "race timing: SKIPPED (FILES_VIEWER_SKIP_RACE set)"; else \
+	  go test -race -short -timeout=22m -json ./server/services > .cache/files-race.json && rc=0 || rc=$$?; \
+	  secs=$$(jq -r 'select(.Test==null and (.Action=="pass" or .Action=="fail")) | .Elapsed' .cache/files-race.json | tail -1); \
+	  base=$(FILES_VIEWER_RACE_BASELINE_SECONDS); \
+	  delta=$$(awk -v s=$$secs -v b=$$base 'BEGIN{printf "%.1f", (s-b)/b*100}'); \
+	  echo "server/services -race -short package elapsed: $${secs}s (baseline $${base}s, delta $${delta}%, test exit $$rc)"; \
+	  awk -v d=$$delta -v m=$(FILES_VIEWER_RACE_BUDGET_PERCENT) 'BEGIN{ if (d > m) print "FLAG: delta over " m "% budget, consider Task 0.2.4d" }'; fi; \
+	exit $$jscpd_rc
 
 # Quick development workflows
 quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
@@ -1112,7 +1174,7 @@ demo-gif: assets/demo.gif ## Alias for demo-post-process
 # Declaring it as a file target lets make skip the recording when the webm is
 # already newer than the stapler-squad binary and no source files changed.
 assets/demo.webm: stapler-squad tests/e2e/demo.spec.ts tests/demo/helpers.go
-	@cd tests/e2e && pnpm install --silent
+	@cd tests/e2e && bun install --silent
 	RECORD_DEMO=1 go test ./tests/demo/... -run TestRecordDemo -v -timeout 180s
 
 demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export GIF (assets/demo.webm + assets/demo.gif)
@@ -1121,7 +1183,7 @@ demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export
 validate-env: ensure-tools ## Validate development environment setup
 	@echo "Validating development environment..."
 	@go version
-	@pnpm --version
+	@bun --version
 	@buf --version
 	@which nilaway >/dev/null 2>&1 && echo "✅ nilaway installed" || echo "❌ nilaway missing (run 'make install-tools')"
 	@which staticcheck >/dev/null 2>&1 && echo "✅ staticcheck installed" || echo "❌ staticcheck missing (run 'make install-tools')"

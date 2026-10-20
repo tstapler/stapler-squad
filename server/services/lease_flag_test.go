@@ -70,7 +70,7 @@ func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeve
 	e := newAuditEnv(t)
 	e.svc.SetAudit(e.sink, map[string]FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
 	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: session.DefaultLeaseFlag})
-	e.mfs.failWrite = errDiskFull
+	e.mfs.setFailWrite(errDiskFull)
 
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))
 	v, ok := overrideOf(terminalWriteLeaseFlagName)

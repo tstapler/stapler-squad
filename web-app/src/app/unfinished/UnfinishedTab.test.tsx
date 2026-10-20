@@ -6,7 +6,7 @@ const mockUseSearchParams = jest.fn();
 const mockReplace = jest.fn();
 const mockHistoryReplace = jest.spyOn(window.history, "replaceState").mockImplementation(() => {});
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockUseSearchParams(),
   useRouter: () => ({ replace: mockReplace }),
 }));

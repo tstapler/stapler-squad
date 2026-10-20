@@ -42,6 +42,8 @@ var lifecycleFiles = []string{
 	"session/instance_claude.go",
 	"session/instance_serialization.go",
 	"server/dependencies.go",
+	"server/wakes/revive.go",
+	"server/services/question_answer_router.go",
 }
 
 func isLifecycleFile(filename string) bool {

@@ -5,6 +5,14 @@ import { useCallback, useMemo, useRef } from "react";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { useSessionHidden } from "@/lib/hooks/useSessionHidden";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+import { useFeatureFlagValue } from "@/lib/hooks/useFeatureFlagValue";
+import { useGuidanceRow } from "@/lib/hooks/useGuidanceRow";
+import { SAVED_ANSWERS_CHANGED } from "@/lib/hooks/useSavedAnswers";
+import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
+import type { DeliveryView } from "@/lib/guidance/deliveryView";
+import { ActionKind } from "@/gen/session/v1/notification_action_pb";
+import { ActionRow } from "./notification-actions/ActionRow";
+import { INLINE_ACTIONS_FLAG, STRUCTURED_QUESTION_FLAG, STRUCTURED_RENDER_SCOPE, approvalDisplay, isLocalListener } from "./notification-actions/inlineActions";
 import { replyAvailability } from "@/lib/reply/replyQuestion";
 import { BackgroundChip } from "./BackgroundChip";
 import { GroupedNotification, groupNotifications } from "@/lib/utils/notificationGrouping";
@@ -129,7 +137,21 @@ export interface NotificationItemProps {
    * check then never asks the server, so a page load does not fan out GetSession calls.
    */
   lookupHidden?: boolean;
+  /** Refetches the history page, so INVALID can re-read descriptors. */
+  onRefreshActions?: () => void;
+  /** An inline action was applied: mark these records read and close their toasts. */
+  onActionApplied?: (ids: string[], summary: string) => void;
+  /** Records another tab resolved, id to result: the row shows "Answered elsewhere". */
+  answeredElsewhere?: Readonly<Record<string, string>>;
+  /** Opens the rule builder for the Create rule confirm (desktop More menu). */
+  onCreateRule?: (notification: NotificationData) => void;
 }
+
+/** Delivery rows after which the card has left Needs you: acknowledged, handled in the terminal, replaced, session ended. */
+const RETIRING_ROWS: ReadonlySet<number> = new Set([4, 11, 12, 17]);
+
+/** Delivery rows 8 and 9: the answer was stored for a stopped or archived session. */
+const SAVED_ROWS: ReadonlySet<number> = new Set([8, 9]);
 
 const defaultSessionHref = (sessionId: string) => `/?session=${encodeURIComponent(sessionId)}`;
 
@@ -160,6 +182,10 @@ export function NotificationItem({
   onNavigate,
   offlineReason,
   lookupHidden = true,
+  onRefreshActions,
+  onActionApplied,
+  answeredElsewhere,
+  onCreateRule,
 }: NotificationItemProps) {
   const notification = group.notification;
   const contextString = getContextString(notification);
@@ -187,72 +213,88 @@ export function NotificationItem({
     onNavigate?.();
   };
 
-  return (
-    <div
-      key={notification.id}
-      className={`${item} ${notification.isRead ? read : unread}`}
-      style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
-    >
-      <div className={itemHeader}>
-        <div className={itemTitle}>
-          {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
-          <span className={typeIcon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</span>
-          <strong>{primaryTitle}</strong>
-          {sessionHidden && <BackgroundChip />}
-          <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
-            {notificationTypeLabel(notification.notificationType)}
-          </span>
-          {group.count > 1 && (
-            <span className={countBadge} aria-label={`${group.count} occurrences`}>
-              x{group.count}
-            </span>
-          )}
-        </div>
-        {removeFromHistory && (
-          <button
-            className={removeButton}
-            onClick={() => !offlineReason && removeFromHistory(notification.id)}
-            aria-label="Remove notification"
-            aria-disabled={offlineReason ? true : undefined}
-            title={offlineReason}
-          >
-            ✕
-          </button>
-        )}
-      </div>
+  // Descriptor-driven actions (ADR-002) replace the legacy buttons when the flag is on and the
+  // server sent something beyond Open; a resolved or CI-blocked approval keeps the legacy badge.
+  const descriptors = notification.actions ?? [];
+  const approvalKey = notification.notificationType === "approval_needed" ? notification.metadata?.approval_id : undefined;
+  const legacyOnly = !!approvalKey && !!(resolvedApprovals[approvalKey] || blockedApprovals[approvalKey]);
+  const hasInlineActions = descriptors.some((d) => d.kind !== ActionKind.OPEN);
+  // A question mirrored to a durable row renders as the shared question card (render stage of the structured flag).
+  const guidanceId = notification.metadata?.["guidance_request_id"];
+  const structuredOn = useFeatureFlagValue(STRUCTURED_QUESTION_FLAG, STRUCTURED_RENDER_SCOPE, false, !!guidanceId && !legacyOnly);
+  const guidanceRow = useGuidanceRow(structuredOn ? guidanceId : undefined, lookupHidden && !notification.isRead);
+  const guidance = guidanceRow && (guidanceRow.questions?.length ?? 0) > 0 ? guidanceRow : undefined;
+  const inlineFlag = useFeatureFlagValue(INLINE_ACTIONS_FLAG, undefined, false, (hasInlineActions || !!guidance) && !legacyOnly);
+  const rowOn = inlineFlag && (hasInlineActions || !!guidance) && !legacyOnly;
+  const { markAnswerHandled } = useNotificationCommands();
+  // The server reopens an Unconfirmed answer and retires a settled one; history is not pushed for either.
+  const lastRow = useRef<number | undefined>(undefined);
+  const onDeliveryRow = useCallback(
+    (view: DeliveryView | null) => {
+      if (!view || view.row === lastRow.current) return;
+      lastRow.current = view.row;
+      if (SAVED_ROWS.has(view.row)) window.dispatchEvent(new Event(SAVED_ANSWERS_CHANGED));
+      const reopened = view.needsYou && notification.isRead;
+      const retired = !view.needsYou && RETIRING_ROWS.has(view.row) && !notification.isRead;
+      if (reopened || retired) onRefreshActions?.();
+    },
+    [notification.isRead, onRefreshActions],
+  );
 
-      {subtitleText && <div className={itemSubtitle}>{subtitleText}</div>}
-      {contextString && <div className={itemContext}>{contextString}</div>}
-      <p className={itemMessage}>{notification.message}</p>
+  // One history row can stand for several pending approvals of a session (the "x20" row). Deciding it
+  // decides one; the rest stay pending, so the row must not be marked read here. The server hands it on
+  // to the next approval and the history refresh brings that one back.
+  const stillPending = approvalKey && group.allIds.length === 1 ? Math.max(group.count - 1, 0) : 0;
+  const decidedIds = stillPending > 0 ? [] : group.allIds;
+  const approval = rowOn && approvalKey ? approvalDisplay(notification) : undefined;
 
-      {notification.notificationType === "approval_needed" && notification.metadata && (
-        <div className={approvalDetails}>
-          {notification.metadata.tool_name && (
-            <span className={approvalTool}>🔧 {notification.metadata.tool_name}</span>
+  const focusControl = hasSourceApp && notification.onFocusWindow && !sessionHidden && (
+    <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
+      🔗 Focus
+    </button>
+  );
+  const openLinks = (
+    <>
+          {notification.metadata?.["item_id"] && (
+            <Link
+              href={`/backlog?item=${encodeURIComponent(notification.metadata["item_id"])}`}
+              className={viewButton}
+              onClick={() => navigate(group.allIds, undefined, notification.sessionId)}
+              data-testid="notification-view-backlog"
+            >
+              View in Backlog
+            </Link>
           )}
-          {notification.metadata.tool_input_command && (
-            <code className={approvalCommand}>{notification.metadata.tool_input_command}</code>
+          {!notification.metadata?.["item_id"] && notification.sessionId && (
+            <>
+              <Link
+                href={
+                  sessionHidden
+                    ? hiddenSessionHref(notification.sessionId, notification.id)
+                    : getSessionHref(notification.sessionId)
+                }
+                className={viewButton}
+                onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
+              >
+                {sessionHidden ? "View output" : "View Session"}
+              </Link>
+              {sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable" && (
+                <Link
+                  href={`${hiddenSessionHref(notification.sessionId, notification.id)}&reply=1`}
+                  className={viewButton}
+                  onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
+                  data-testid="notification-reply"
+                >
+                  Reply
+                </Link>
+              )}
+            </>
           )}
-          {notification.metadata.tool_input_file && !notification.metadata.tool_input_command && (
-            <code className={approvalCommand}>{notification.metadata.tool_input_file}</code>
-          )}
-          {notification.metadata.cwd && (
-            <span className={approvalCwd} title={notification.metadata.cwd}>
-              📁 {notification.metadata.cwd.split("/").slice(-2).join("/")}
-            </span>
-          )}
-        </div>
-      )}
-
-      {notification.sourceWorkingDir && (
-        <div className={itemWorkingDir} title={notification.sourceWorkingDir}>
-          📁 {notification.sourceWorkingDir.split("/").slice(-2).join("/")}
-        </div>
-      )}
-
-      <div className={itemFooter}>
-        <span className={timestamp}>{formatRelativeTime(notification.timestamp)}</span>
-        <div className={itemActions}>
+    </>
+  );
+  const legacyActions = (
+    <>
           {notification.notificationType === "approval_needed" &&
             notification.metadata?.approval_id &&
             (() => {
@@ -303,11 +345,11 @@ export function NotificationItem({
                       {/* No CI-checks URL (e.g. a reconciliation-race message) means there is
                           nothing left to "approve anyway" against — only Deny still applies. */}
                       {checksUrl && (
-                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
+                        <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds, true)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve despite failing CI"}>
                           {isPending ? "…" : "Approve anyway"}
                         </button>
                       )}
-                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
+                      <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                         {isPending ? "…" : "✗ Deny"}
                       </button>
                     </div>
@@ -322,58 +364,111 @@ export function NotificationItem({
                       {failedMessage}
                     </span>
                   )}
-                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
+                  <button className={approveButton} onClick={() => resolveApproval(approvalId, "allow", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Approve this tool use"}>
                     {isPending ? "…" : "✓ Approve"}
                   </button>
-                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", group.allIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
+                  <button className={denyButton} onClick={() => resolveApproval(approvalId, "deny", decidedIds)} disabled={isPending || !!offlineReason} title={offlineReason ?? "Deny this tool use"}>
                     {isPending ? "…" : "✗ Deny"}
                   </button>
                 </>
               );
             })()}
-          {hasSourceApp && notification.onFocusWindow && !sessionHidden && (
-            <button className={focusButton} onClick={notification.onFocusWindow} title="Focus the source application window">
-              🔗 Focus
-            </button>
-          )}
-          {notification.metadata?.["item_id"] && (
-            <Link
-              href={`/backlog?item=${encodeURIComponent(notification.metadata["item_id"])}`}
-              className={viewButton}
-              onClick={() => navigate(group.allIds, undefined, notification.sessionId)}
-              data-testid="notification-view-backlog"
-            >
-              View in Backlog
-            </Link>
-          )}
-          {!notification.metadata?.["item_id"] && notification.sessionId && (
-            <>
-              <Link
-                href={
-                  sessionHidden
-                    ? hiddenSessionHref(notification.sessionId, notification.id)
-                    : getSessionHref(notification.sessionId)
-                }
-                className={viewButton}
-                onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
-                data-testid={sessionHidden ? "notification-view-output" : "notification-view-session"}
-              >
-                {sessionHidden ? "View output" : "View Session"}
-              </Link>
-              {sessionHidden && replyEnabled && replyAvailability(notification)?.kind === "replyable" && (
-                <Link
-                  href={`${hiddenSessionHref(notification.sessionId, notification.id)}&reply=1`}
-                  className={viewButton}
-                  onClick={() => navigate(group.allIds, notification.onView, notification.sessionId)}
-                  data-testid="notification-reply"
-                >
-                  Reply
-                </Link>
-              )}
-            </>
+      {focusControl}
+      {openLinks}
+    </>
+  );
+
+  return (
+    <div
+      key={notification.id}
+      className={`${item} ${notification.isRead ? read : unread}`}
+      style={{ "--priority-color": priorityColor(notification.priority) } as React.CSSProperties}
+    >
+      <div className={itemHeader}>
+        <div className={itemTitle}>
+          {!notification.isRead && <span className={unreadDot} role="img" aria-label="Unread" />}
+          <span className={typeIcon} aria-hidden="true">{notificationTypeIcon(notification.notificationType)}</span>
+          <strong>{primaryTitle}</strong>
+          {sessionHidden && <BackgroundChip />}
+          <span className={typeLabel} style={{ backgroundColor: priorityColor(notification.priority) }}>
+            {notificationTypeLabel(notification.notificationType)}
+          </span>
+          {group.count > 1 && (
+            <span className={countBadge} aria-label={`${group.count} occurrences`}>
+              x{group.count}
+            </span>
           )}
         </div>
+        {removeFromHistory && (
+          <button
+            className={removeButton}
+            onClick={() => !offlineReason && removeFromHistory(notification.id)}
+            aria-label="Remove notification"
+            aria-disabled={offlineReason ? true : undefined}
+            title={offlineReason}
+          >
+            ✕
+          </button>
+        )}
       </div>
+
+      {subtitleText && <div className={itemSubtitle}>{subtitleText}</div>}
+      {contextString && <div className={itemContext}>{contextString}</div>}
+      <p className={itemMessage}>{notification.message}</p>
+
+      {notification.notificationType === "approval_needed" && notification.metadata && (
+        <div className={approvalDetails}>
+          {!rowOn && notification.metadata.tool_name && (
+            <span className={approvalTool}>🔧 {notification.metadata.tool_name}</span>
+          )}
+          {!rowOn && notification.metadata.tool_input_command && (
+            <code className={approvalCommand}>{notification.metadata.tool_input_command}</code>
+          )}
+          {!rowOn && notification.metadata.tool_input_file && !notification.metadata.tool_input_command && (
+            <code className={approvalCommand}>{notification.metadata.tool_input_file}</code>
+          )}
+          {notification.metadata.cwd && (
+            <span className={approvalCwd} title={notification.metadata.cwd}>
+              📁 {notification.metadata.cwd.split("/").slice(-2).join("/")}
+            </span>
+          )}
+        </div>
+      )}
+
+      {notification.sourceWorkingDir && (
+        <div className={itemWorkingDir} title={notification.sourceWorkingDir}>
+          📁 {notification.sourceWorkingDir.split("/").slice(-2).join("/")}
+        </div>
+      )}
+
+      <div className={itemFooter}>
+        <span className={timestamp}>{formatRelativeTime(notification.timestamp)}</span>
+        <div className={itemActions}>
+          {rowOn ? focusControl : legacyActions}
+        </div>
+      </div>
+      {rowOn && (
+        <ActionRow
+          rowId={notification.id}
+          descriptors={descriptors}
+          approval={approval}
+          prNumber={notification.metadata?.["pr_number"]}
+          openControl={openLinks}
+          onRefresh={onRefreshActions}
+          onApplied={(kind, summary) => {
+            if (stillPending > 0 && (kind === ActionKind.APPROVE || kind === ActionKind.DENY)) onRefreshActions?.();
+            else onActionApplied?.(group.allIds, summary);
+          }}
+          remaining={stillPending}
+          guidance={guidance}
+          onMarkHandled={() => markAnswerHandled(group.allIds)}
+          onDeliveryRow={onDeliveryRow}
+          elsewhere={group.allIds.map((id) => answeredElsewhere?.[id]).find((v) => v !== undefined)}
+          onCreateRule={onCreateRule ? () => onCreateRule(notification) : undefined}
+          localListener={isLocalListener()}
+          disabledReason={offlineReason}
+        />
+      )}
     </div>
   );
 }

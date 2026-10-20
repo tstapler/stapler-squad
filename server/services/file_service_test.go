@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -1040,5 +1045,352 @@ func TestServeFileRaw_LargeFileBinary(t *testing.T) {
 
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413 for large binary file, got %d", resp.StatusCode)
+	}
+}
+
+// ---- Real-handler tests for the os.Root retrofit (Story 0.2.1) ----
+//
+// The testFileService helpers above re-implement the handlers, so they cannot
+// catch a regression in the real FileService. These tests drive the real methods.
+
+func realFileService(root string) *FileService {
+	return NewFileService(&fakeWorkspaceProvider{existingDir: root})
+}
+
+func realGetFileContent(t *testing.T, root, rel string) (*sessionv1.GetFileContentResponse, error) {
+	t.Helper()
+	resp, err := realFileService(root).GetFileContent(context.Background(), connect.NewRequest(
+		&sessionv1.GetFileContentRequest{SessionId: "test-session", Path: rel}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+func TestGetFileContent_RealHandler_ShouldKeepBehavior_ForTextBinaryTruncatedAndErrors(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "main.go"), []byte("package main\n"))
+	writeFixtureFile(t, filepath.Join(root, "data.bin"), []byte{0, 1, 2, 0})
+	writeFixtureFile(t, filepath.Join(root, "nul.dat"), append([]byte("text then "), 0, 'x'))
+	writeFixtureFile(t, filepath.Join(root, "big.txt"), []byte(strings.Repeat("a", truncateSize+10)))
+	writeFixtureFile(t, filepath.Join(root, "huge.txt"), []byte(strings.Repeat("a", maxFileSize+1)))
+	mustMkdir(t, filepath.Join(root, "dir"))
+
+	got, err := realGetFileContent(t, root, "main.go")
+	if err != nil || got.Content != "package main\n" || got.IsBinary || got.Size != 13 || got.Encoding != "utf-8" {
+		t.Fatalf("text: %+v, %v", got, err)
+	}
+	if got, err = realGetFileContent(t, root, "data.bin"); err != nil || !got.IsBinary || got.Content != "" {
+		t.Fatalf("binary: %+v, %v", got, err)
+	}
+	if got, err = realGetFileContent(t, root, "nul.dat"); err != nil || !got.IsBinary {
+		t.Fatalf("null-byte scan: %+v, %v", got, err)
+	}
+	if got, err = realGetFileContent(t, root, "big.txt"); err != nil || !got.IsTruncated || len(got.Content) != truncateSize {
+		t.Fatalf("truncated: truncated=%v len=%d err=%v", got.GetIsTruncated(), len(got.GetContent()), err)
+	}
+	for rel, want := range map[string]connect.Code{
+		"huge.txt":   connect.CodeFailedPrecondition,
+		"missing.go": connect.CodeNotFound,
+		"dir":        connect.CodeInvalidArgument,
+		"../outside": connect.CodeInvalidArgument,
+		"":           connect.CodeInvalidArgument,
+	} {
+		if _, err = realGetFileContent(t, root, rel); connect.CodeOf(err) != want {
+			t.Errorf("%q: code %v, want %v (%v)", rel, connect.CodeOf(err), want, err)
+		}
+	}
+}
+
+func TestGetFileContent_ShouldReturnPermissionDenied_When_LeafIsSymlinkEscape(t *testing.T) {
+	dir, _ := newResolverFixture(t)
+	got, err := realGetFileContent(t, dir, "leak")
+	if connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("code %v, want PermissionDenied (%v)", connect.CodeOf(err), err)
+	}
+	if got != nil {
+		t.Fatalf("no content bytes may be returned, got %+v", got)
+	}
+}
+
+// In-tree link reads carry ReadOnlyReason=Symlink; escaping links are denied with a typed
+// ReadOnlyReasonDetail that does not echo the link target.
+func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithoutEchoingTarget_When_LinkClasses(t *testing.T) {
+	dir, outside := newResolverFixture(t)
+	for rel, want := range map[string]string{"AGENTS.md": "claude\n", "docs/alias.md": "readme\n", "chain1": "claude\n", "shared/x.txt": "shared\n"} {
+		got, err := realGetFileContent(t, dir, rel)
+		if err != nil || got.Content != want {
+			t.Errorf("%s: %+v, %v", rel, got, err)
+			continue
+		}
+		if got.ReadOnlyReason != sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK {
+			t.Errorf("%s: reason %v, want SYMLINK", rel, got.ReadOnlyReason)
+		}
+	}
+	denied := map[string]string{
+		"leak":            filepath.Join(outside, "secret"),
+		"leak_rel":        "../" + filepath.Base(outside) + "/secret",
+		"dir_leak/secret": outside,
+		"gitlink":         ".git",
+		"linkdir":         ".git/hooks",
+	}
+	for rel, target := range denied {
+		got, err := realGetFileContent(t, dir, rel)
+		var sym *SymlinkDeniedError
+		if got != nil || connect.CodeOf(err) != connect.CodePermissionDenied || !errors.As(err, &sym) || sym.Target != target {
+			t.Errorf("%s: got=%v err=%v want target %q", rel, got, err, target)
+			continue
+		}
+		detail := readOnlyDetail(t, err)
+		if detail == nil || detail.Reason != sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK || detail.LinkTarget != "" {
+			t.Errorf("%s: detail %+v, want SYMLINK without the link target", rel, detail)
+		}
+		if strings.Contains(err.Error(), "target") || (!strings.HasPrefix(target, ".git") && strings.Contains(err.Error(), target)) {
+			t.Errorf("%s: wire message %q echoes the link target %q", rel, err.Error(), target)
+		}
+	}
+	if _, err := realGetFileContent(t, dir, "dangling_inside"); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("dangling in-tree link: %v", err)
+	}
+	if _, err := realGetFileContent(t, dir, "dangling"); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Errorf("dangling link above the root: %v", err)
+	}
+	if _, err := realGetFileContent(t, dir, ".git/config"); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Errorf(".git read: %v", err)
+	}
+}
+
+func TestServeFileRaw_ShouldRefuseEscapingSymlinkAndServeInTreeLink(t *testing.T) {
+	dir, _ := newResolverFixture(t)
+	svc := realFileService(dir)
+	resp := serveFileRawRequest(t, svc, "leak", "")
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || strings.Contains(string(body), "TOPSECRET") {
+		t.Fatalf("escape: status %d body %q", resp.StatusCode, body)
+	}
+	resp = serveFileRawRequest(t, svc, ".git/config", "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf(".git: status %d", resp.StatusCode)
+	}
+	resp = serveFileRawRequest(t, svc, "AGENTS.md", "")
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "claude\n" {
+		t.Fatalf("in-tree link: status %d body %q", resp.StatusCode, body)
+	}
+}
+func realListFiles(t *testing.T, root, rel string) (*sessionv1.ListFilesResponse, error) {
+	t.Helper()
+	resp, err := realFileService(root).ListFiles(context.Background(), connect.NewRequest(
+		&sessionv1.ListFilesRequest{SessionId: "test-session", Path: rel, IncludeIgnored: true}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+func TestListFiles_ShouldListInTreeDirSymlinkAndRefuseEscapingOrGitLink_When_RetrofittedToOsRoot(t *testing.T) {
+	dir, _ := newResolverFixture(t)
+	got, err := realListFiles(t, dir, "shared")
+	if err != nil || len(got.Files) != 1 || got.Files[0].Name != "x.txt" || got.Files[0].Path != "shared/x.txt" {
+		t.Fatalf("shared: %+v, %v", got, err)
+	}
+	for _, rel := range []string{"dir_leak", "gitlink", "linkdir", ".git", "src/.git"} {
+		got, err = realListFiles(t, dir, rel)
+		if got != nil || connect.CodeOf(err) != connect.CodePermissionDenied {
+			t.Errorf("%s: got=%v err=%v", rel, got, err)
+		}
+	}
+	got, err = realListFiles(t, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, f := range got.Files {
+		names[f.Name] = f.IsSymlink
+	}
+	if !names["AGENTS.md"] || names["src"] || names[".git"] {
+		t.Errorf("root listing: %v", names)
+	}
+}
+
+func TestSearchFiles_ShouldNotFollowSymlinkOutOfRoot_When_TreeSearchWalksOsRoot(t *testing.T) {
+	dir, _ := newResolverFixture(t)
+	resp, err := realFileService(dir).SearchFiles(context.Background(), connect.NewRequest(
+		&sessionv1.SearchFilesRequest{SessionId: "test-session", Query: "secret", IncludeIgnored: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range resp.Msg.Files {
+		t.Errorf("unexpected match %q: the only %q file is outside the root", f.Path, "secret")
+	}
+	resp, err = realFileService(dir).SearchFiles(context.Background(), connect.NewRequest(
+		&sessionv1.SearchFilesRequest{SessionId: "test-session", Query: "a.go", IncludeIgnored: true}))
+	if err != nil || len(resp.Msg.Files) != 1 || resp.Msg.Files[0].Path != "src/a.go" {
+		t.Fatalf("legit match lost: %+v, %v", resp, err)
+	}
+}
+
+// readOnlyDetail extracts the typed ReadOnlyReasonDetail from a Connect error, or nil.
+func readOnlyDetail(t *testing.T, err error) *sessionv1.ReadOnlyReasonDetail {
+	t.Helper()
+	var ce *connect.Error
+	if !errors.As(err, &ce) {
+		return nil
+	}
+	for _, d := range ce.Details() {
+		v, vErr := d.Value()
+		if vErr != nil {
+			continue
+		}
+		if det, ok := v.(*sessionv1.ReadOnlyReasonDetail); ok {
+			return det
+		}
+	}
+	return nil
+}
+
+func realStatFile(t *testing.T, root, rel string) (*sessionv1.StatFileResponse, error) {
+	t.Helper()
+	resp, err := realFileService(root).StatFile(context.Background(), connect.NewRequest(
+		&sessionv1.StatFileRequest{SessionId: "test-session", Path: rel}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
+}
+
+// crlfBomDoc is 120 bytes: a 3-byte BOM plus CRLF-terminated lines.
+func crlfBomDoc() []byte {
+	body := strings.Repeat("0123456789abcdefghi\r\n", 5) // 21 bytes x 5 = 105
+	doc := append([]byte{0xEF, 0xBB, 0xBF}, []byte(body)...)
+	return append(doc, []byte("0123456789\r\n")[:12]...) // 3 + 105 + 12 = 120
+}
+
+func TestStatFileAndGetFileContent_ShouldReturnTokenLineEndingBomReason_When_CrlfBomFile(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "docs"))
+	doc := crlfBomDoc()
+	require.Len(t, doc, 120)
+	path := filepath.Join(root, "docs", "a.md")
+	writeFixtureFile(t, path, doc)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	wantTok := NewFileVersionToken(120, info.ModTime().UnixNano(), doc).String()
+
+	got, err := realGetFileContent(t, root, "docs/a.md")
+	require.NoError(t, err)
+	assert.Equal(t, wantTok, got.VersionToken)
+	_, parseErr := ParseFileVersionToken(got.VersionToken)
+	require.NoError(t, parseErr)
+	assert.True(t, strings.HasPrefix(got.VersionToken, "v1:120:"), got.VersionToken)
+	assert.Equal(t, sessionv1.LineEnding_LINE_ENDING_CRLF, got.LineEnding)
+	assert.True(t, got.HasBom)
+	assert.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE, got.ReadOnlyReason)
+	assert.Equal(t, string(doc[3:]), got.Content, "BOM stripped, CRLF kept for the client to normalize")
+	assert.Equal(t, int64(120), got.Size)
+
+	st1, err := realStatFile(t, root, "docs/a.md")
+	require.NoError(t, err)
+	assert.Equal(t, got.VersionToken, st1.VersionToken)
+	assert.Equal(t, int64(120), st1.Size)
+	assert.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE, st1.ReadOnlyReason)
+	st2, err := realStatFile(t, root, "docs/a.md")
+	require.NoError(t, err)
+	assert.Equal(t, st1.VersionToken, st2.VersionToken, "stable when unchanged")
+
+	changed := append(append([]byte(nil), doc[:119]...), 'X')
+	writeFixtureFile(t, path, changed)
+	require.NoError(t, os.Chtimes(path, info.ModTime().Add(time.Second), info.ModTime().Add(time.Second)))
+	st3, err := realStatFile(t, root, "docs/a.md")
+	require.NoError(t, err)
+	assert.NotEqual(t, st1.VersionToken, st3.VersionToken)
+}
+
+func TestGetFileContent_ShouldClassifyEveryReadOnlyReason_When_FixtureFiles(t *testing.T) {
+	root, _ := newResolverFixture(t)
+	writeFixtureFile(t, filepath.Join(root, "bin.dat"), []byte{0, 1, 2, 3})
+	writeFixtureFile(t, filepath.Join(root, "latin1.txt"), []byte("caf\xE9\n"))
+	writeFixtureFile(t, filepath.Join(root, "mixed.txt"), []byte("a\r\nb\nc\n"))
+	writeFixtureFile(t, filepath.Join(root, "lone_cr.txt"), []byte("a\nb\rc\n"))
+	writeFixtureFile(t, filepath.Join(root, "plain.txt"), []byte("a\nb\n"))
+	for rel, want := range map[string]sessionv1.ReadOnlyReason{
+		"bin.dat":     sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY,
+		"latin1.txt":  sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8,
+		"mixed.txt":   sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL,
+		"lone_cr.txt": sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL,
+		"AGENTS.md":   sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK,
+		"plain.txt":   sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE,
+	} {
+		got, err := realGetFileContent(t, root, rel)
+		require.NoError(t, err, rel)
+		assert.Equal(t, want, got.ReadOnlyReason, rel)
+		st, err := realStatFile(t, root, rel)
+		require.NoError(t, err, rel)
+		assert.Equal(t, want, st.ReadOnlyReason, "StatFile "+rel)
+		if want != sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE {
+			assert.True(t, strings.HasSuffix(got.VersionToken, ":-"), "%s token %s carries no editable hash", rel, got.VersionToken)
+		}
+	}
+	got, err := realGetFileContent(t, root, "latin1.txt")
+	require.NoError(t, err)
+	assert.True(t, utf8.ValidString(got.Content), "invalid bytes are replaced so the response can marshal")
+}
+
+func TestGetFileContent_ShouldCutOnRuneBoundaryAndCarryDashToken_When_TwoMegabyteText(t *testing.T) {
+	root := t.TempDir()
+	// 3-byte runes: 1 MiB is not a multiple of 3, so the raw cut lands inside a rune.
+	writeFixtureFile(t, filepath.Join(root, "big.txt"), []byte(strings.Repeat("\u4e16", (2<<20)/3)))
+	got, err := realGetFileContent(t, root, "big.txt")
+	require.NoError(t, err)
+	assert.True(t, got.IsTruncated)
+	assert.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TRUNCATED, got.ReadOnlyReason)
+	assert.True(t, strings.HasSuffix(got.VersionToken, ":-"), got.VersionToken)
+	assert.True(t, utf8.ValidString(got.Content))
+	assert.LessOrEqual(t, len(got.Content), truncateSize)
+	assert.Greater(t, len(got.Content), truncateSize-utf8.UTFMax)
+	assert.Equal(t, int64((2<<20)/3*3), got.Size)
+
+	st, err := realStatFile(t, root, "big.txt")
+	require.NoError(t, err)
+	assert.Equal(t, got.VersionToken, st.VersionToken)
+}
+
+func TestStatFile_ShouldReportNotFoundDirAndTooLarge_Without_Content(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "dir"))
+	writeFixtureFile(t, filepath.Join(root, "huge.txt"), []byte(strings.Repeat("a", maxFileSize+1)))
+	_, err := realStatFile(t, root, "missing.go")
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+	_, err = realStatFile(t, root, "dir")
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	_, err = realStatFile(t, root, "../x")
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	st, err := realStatFile(t, root, "huge.txt")
+	require.NoError(t, err)
+	assert.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE, st.ReadOnlyReason)
+	assert.Equal(t, int64(maxFileSize+1), st.Size)
+	_, err = realFileService(root).StatFile(context.Background(), connect.NewRequest(&sessionv1.StatFileRequest{}))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestListFiles_ShouldReturnOnlyInTreeRelativeSymlinkTargets_And_NeverHostPaths(t *testing.T) {
+	dir, outside := newResolverFixture(t)
+	got, err := realListFiles(t, dir, "")
+	require.NoError(t, err)
+	targets := map[string]string{}
+	for _, f := range got.Files {
+		if f.IsSymlink {
+			targets[f.Name] = f.SymlinkTarget
+		}
+	}
+
+	assert.Equal(t, "CLAUDE.md", targets["AGENTS.md"], "an in-tree relative target is useful and safe")
+	assert.Empty(t, targets["leak"], "an absolute host path never reaches the wire")
+	assert.Empty(t, targets["leak_rel"], "a ../ escape is hidden too")
+	for name, target := range targets {
+		assert.NotContains(t, target, outside, name)
 	}
 }

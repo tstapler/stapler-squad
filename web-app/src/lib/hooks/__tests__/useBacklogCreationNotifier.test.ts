@@ -2,7 +2,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useBacklogCreationNotifier } from "../useBacklogCreationNotifier";
 
 const mockPush = jest.fn();
-jest.mock("next/navigation", () => ({ useRouter: () => ({ push: mockPush }) }));
+jest.mock("@/lib/nav", () => ({ useRouter: () => ({ push: mockPush }) }));
 
 const mockAddNotification = jest.fn();
 jest.mock("@/lib/contexts/notificationContexts", () => ({

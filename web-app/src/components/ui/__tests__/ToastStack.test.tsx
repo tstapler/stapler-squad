@@ -389,7 +389,7 @@ describe("Move all to tray (Story 3.4)", () => {
 describe("Mobile and keyboard positioning (Story 3.7)", () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => {
-    setStackTopOffset(null);
+    act(() => setStackTopOffset(null));
     jest.useRealTimers();
   });
 
@@ -650,7 +650,7 @@ describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
     act(() => setStackTopOffset(120));
   });
   afterEach(() => {
-    setStackTopOffset(null);
+    act(() => setStackTopOffset(null));
     jest.useRealTimers();
   });
 
