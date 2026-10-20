@@ -68,7 +68,7 @@ interface FeatureFlagsContextValue {
   reload: () => Promise<void>;
   setFlag: (name: string, change: boolean | FlagChange) => Promise<SetFlagResult>;
   /** Re-reads GetFeatureFlags without flipping isLoading back on. */
-  refresh?: () => Promise<void>;
+  refresh?: (opts?: { quiet?: boolean }) => Promise<void>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({

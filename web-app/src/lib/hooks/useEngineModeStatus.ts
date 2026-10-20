@@ -7,6 +7,7 @@ import {
   BacklogService,
   WorkflowEngineMode,
   WorkflowEngineReviewState,
+  WorkflowEngineSoakVerdict,
   type GetWorkflowEngineStatusResponse,
 } from "@/gen/session/v1/backlog_pb";
 import { formatRelativeTime } from "@/lib/utils/datetime";
@@ -55,6 +56,44 @@ export interface EngineModeView {
   review: EngineReviewView | null;
   /** Feature-flag row for the first class not yet enforced (operators when all are). */
   flagRowId: string;
+}
+
+export type SoakVerdictKind = "ready" | "not_ready" | "needs_ack" | "unavailable";
+
+/** Decision-time evidence for flipping one caller class (GetWorkflowEngineStatus.class_readiness). */
+export interface ClassReadinessView {
+  /** Shadow differences in the last 24h (the server reports a floor past 200). */
+  divergence24h: number;
+  verdict: SoakVerdictKind;
+  /** Items that would lose an exit: one preview count, identical for every class. */
+  strandedItemCount: number;
+}
+
+function toVerdict(v: WorkflowEngineSoakVerdict): SoakVerdictKind {
+  switch (v) {
+    case WorkflowEngineSoakVerdict.READY:
+      return "ready";
+    case WorkflowEngineSoakVerdict.NOT_READY:
+      return "not_ready";
+    case WorkflowEngineSoakVerdict.NEEDS_OWNER_ACK:
+      return "needs_ack";
+    default:
+      return "unavailable";
+  }
+}
+
+/** Readiness for one class, or null when the server did not report it (callers fail closed). */
+export function readinessFromResponse(
+  resp: GetWorkflowEngineStatusResponse,
+  cls: CallerClass
+): ClassReadinessView | null {
+  const r = resp.classReadiness?.[cls];
+  if (!r) return null;
+  return {
+    divergence24h: Number(r.divergence24h),
+    verdict: toVerdict(r.soakVerdict),
+    strandedItemCount: Number(r.strandedItemCount),
+  };
 }
 
 const UNKNOWN_CLASSES: Record<CallerClass, ClassMode> = { operator: "unknown", agent: "unknown", system: "unknown" };
@@ -156,7 +195,7 @@ function shadowDifferences(n: number | null): string {
   return `${n} ${n === 1 ? "difference" : "differences"} in the last 24h.`;
 }
 
-const FALLBACK_NOTE = "The engine fell back to the built-in rules after an error, so edits may not be applied.";
+export const FALLBACK_NOTE = "The engine fell back to the built-in rules after an error, so edits may not be applied.";
 
 function fallbackAffectsClaim(v: EngineModeView): boolean {
   return v.fallbackActive && (v.kind === "enforced" || v.kind === "partial");

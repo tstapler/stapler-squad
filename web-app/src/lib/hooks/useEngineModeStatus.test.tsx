@@ -6,9 +6,11 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { TimestampSchema } from "@bufbuild/protobuf/wkt";
-import { useEngineModeStatus, ENGINE_STATUS_REFETCH_WINDOW_MS } from "./useEngineModeStatus";
+import { useEngineModeStatus, readinessFromResponse, ENGINE_STATUS_REFETCH_WINDOW_MS } from "./useEngineModeStatus";
 import {
+  ClassReadinessSchema,
   GetWorkflowEngineStatusResponseSchema,
+  WorkflowEngineSoakVerdict,
   WorkflowEngineMode,
   WorkflowEngineReviewState,
 } from "@/gen/session/v1/backlog_pb";
@@ -139,5 +141,29 @@ describe("useEngineModeStatus", () => {
       });
       expect(mockGetStatus).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe("readinessFromResponse", () => {
+  it("maps one class's evidence and returns null for a class the server did not report", () => {
+    const resp = evResponse(
+      {},
+      {
+        classReadiness: {
+          agent: create(ClassReadinessSchema, {
+            divergence24h: 3n,
+            soakVerdict: WorkflowEngineSoakVerdict.NEEDS_OWNER_ACK,
+            strandedItemCount: 2n,
+          }),
+        },
+      }
+    );
+    expect(readinessFromResponse(resp, "agent")).toEqual({ divergence24h: 3, verdict: "needs_ack", strandedItemCount: 2 });
+    expect(readinessFromResponse(resp, "system")).toBeNull();
+  });
+
+  it("maps an unspecified verdict to unavailable rather than ready", () => {
+    const resp = evResponse({}, { classReadiness: { operator: create(ClassReadinessSchema, {}) } });
+    expect(readinessFromResponse(resp, "operator")?.verdict).toBe("unavailable");
   });
 });
