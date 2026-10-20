@@ -109,3 +109,33 @@ func TestWriteGitBackendSoak_JSONAndText(t *testing.T) {
 		t.Errorf("text response = %q %q", rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }
+
+func TestHandleActuatorUnfinishedScanner_ShouldServeCounterJSON_WithoutTelemetry(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	handleActuatorUnfinishedScanner(rec, httptest.NewRequest(http.MethodGet, "/actuator/unfinished-scanner", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, k := range []string{"scan_cycles_total", "flags", "caches", "parity_mismatch_total",
+		"parity_transient_total", "shadow_verify", "decoded_commits_total", "dirty_full_walk_total",
+		"scan_skip", "signature_skip"} {
+		if _, ok := body[k]; !ok {
+			t.Errorf("missing key %q", k)
+		}
+	}
+	caches, _ := body["caches"].(map[string]any)
+	for _, c := range []string{"graph", "reach", "aheadbehind", "behind", "messages", "diffmemo", "index", "untracked"} {
+		if _, ok := caches[c]; !ok {
+			t.Errorf("missing cache %q", c)
+		}
+	}
+}

@@ -133,7 +133,80 @@ type SharedObjectStore struct {
 	// ensureIndex build) and only when useMmapIndex is true. Guarded by mu.
 	packWatchStarted bool
 	packWatchStop    chan struct{}
+
+	// ext is the opaque per-store extension slot (see Extension). Read
+	// lock-free (atomic) on every hit; created at most once under extMu;
+	// swapped to nil and closed exactly once by closeExtension.
+	ext       atomic.Pointer[Extension]
+	extMu     sync.Mutex
+	extClosed bool // guarded by extMu
 }
+
+// Extension is an opaque value hung on a SharedObjectStore so it shares the
+// store's lifecycle (refcount, idle TTL, LRU trim, budget) without gogitstore
+// knowing its concrete type.
+//
+// Callback contract: Close and Bytes are invoked while the owning
+// Registry.mu is held (Registry.pruneLocked, Registry.approxBytesPerStore).
+// They MUST NOT call back into the Registry, the SharedObjectStore,
+// Registry.ExtensionsDo or any code path that takes a lock; they may only
+// read atomics, sum sizes and drop references. Close is called exactly once,
+// when the store is evicted. Bytes should be cheap and race-free.
+type Extension interface {
+	Bytes() int64
+	Close()
+}
+
+// Extension returns the store's extension, creating it with newFn on first
+// use. Concurrent callers all receive the same instance and newFn runs once.
+// newFn runs under a store-local lock and must not call back into the
+// Registry. It returns nil only after the store was evicted, which cannot
+// happen while the caller holds a WorktreeStorer reference. The fast path
+// does not allocate.
+func (s *SharedObjectStore) Extension(newFn func() Extension) Extension {
+	if p := s.ext.Load(); p != nil {
+		return *p
+	}
+	s.extMu.Lock()
+	defer s.extMu.Unlock()
+	if p := s.ext.Load(); p != nil {
+		return *p
+	}
+	if s.extClosed {
+		return nil
+	}
+	e := newFn()
+	if e == nil {
+		return nil
+	}
+	s.ext.Store(&e)
+	return e
+}
+
+// extensionBytes returns the extension's reported size, 0 if none. Called
+// under Registry.mu; see Extension's callback contract.
+func (s *SharedObjectStore) extensionBytes() int64 {
+	if p := s.ext.Load(); p != nil {
+		return (*p).Bytes()
+	}
+	return 0
+}
+
+// closeExtension closes the extension exactly once and refuses later
+// creation. Called under Registry.mu on eviction; see Extension's contract.
+func (s *SharedObjectStore) closeExtension() {
+	s.extMu.Lock()
+	s.extClosed = true
+	p := s.ext.Swap(nil)
+	s.extMu.Unlock()
+	if p != nil {
+		(*p).Close()
+	}
+}
+
+// CommonDirKey returns the canonical (symlink-resolved) common .git directory
+// this store is registered under: the string Registry.acquire keyed on.
+func (s *SharedObjectStore) CommonDirKey() string { return s.commonDirAbs }
 
 // acquireRefLocked increments refCount and clears unusedSinceNs. Callers
 // MUST already hold the owning Registry's mu — see registry.go's acquire,

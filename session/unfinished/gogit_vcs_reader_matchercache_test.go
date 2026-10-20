@@ -8,6 +8,8 @@ package unfinished
 // again even though the repo's ignore rules hadn't changed.
 
 import (
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -84,4 +86,28 @@ func BenchmarkGetOrBuildUntrackedMatcher_RepeatedAccessUnderCacheEviction(b *tes
 		g.getOrBuildUntrackedMatcher(entry, dir)
 	})
 	b.ReportMetric(allocs, "allocs/op")
+}
+
+func TestGetOrBuildUntrackedMatcher_Rebuilds_WhenRootGitignoreEditedWithoutHeadMove(t *testing.T) {
+	t.Parallel()
+	dir := newGitignoreBenchRepo(t, 1)
+	g := &GoGitVCSReader{}
+	entry := &cachedRepo{headTreeHash: plumbing.NewHash("0000000000000000000000000000000000000001")}
+	g.getOrBuildUntrackedMatcher(entry, dir)
+	g.getOrBuildUntrackedMatcher(entry, dir)
+	if got := atomic.LoadInt64(&g.gitignoreMatcherRebuilds); got != 1 {
+		t.Fatalf("got %d rebuilds with .gitignore untouched, want 1", got)
+	}
+
+	// A longer body changes size, so the signature differs without a sleep.
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("build/\nanother-ignored-dir/\nmore/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := g.getOrBuildUntrackedMatcher(entry, dir)
+	if got := atomic.LoadInt64(&g.gitignoreMatcherRebuilds); got != 2 {
+		t.Fatalf("got %d rebuilds after an uncommitted .gitignore edit, want 2", got)
+	}
+	if !m.Match([]string{"another-ignored-dir"}, true) {
+		t.Error("rebuilt matcher does not honour the edited .gitignore")
+	}
 }

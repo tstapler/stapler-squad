@@ -598,3 +598,34 @@ func TestUserPRCacheConfigFromEnv_should_SelectDegradedDetails_When_EnvSet(t *te
 	t.Setenv(prPollDegradedEnv, "1")
 	assert.True(t, userPRCacheConfigFromEnv().DegradedDetails)
 }
+
+func TestParseShadowVerifyEvery(t *testing.T) {
+	t.Parallel()
+	env := func(v string) func(string) string {
+		return func(k string) string {
+			require.Equal(t, shadowVerifyEveryEnv, k)
+			return v
+		}
+	}
+	tests := []struct {
+		raw     string
+		wantN   int
+		wantSet bool
+		wantErr bool
+	}{
+		{raw: "", wantSet: false},
+		{raw: "  ", wantSet: false},
+		{raw: "3", wantN: 3, wantSet: true},
+		{raw: " 200 ", wantN: 200, wantSet: true},
+		{raw: "0", wantN: 0, wantSet: true}, // explicit off
+		{raw: "-1", wantErr: true},
+		{raw: "abc", wantErr: true},
+		{raw: "1.5", wantErr: true},
+	}
+	for _, tc := range tests {
+		n, set, err := parseShadowVerifyEvery(env(tc.raw))
+		assert.Equal(t, tc.wantErr, err != nil, "raw=%q", tc.raw)
+		assert.Equal(t, tc.wantN, n, "raw=%q", tc.raw)
+		assert.Equal(t, tc.wantSet, set, "raw=%q", tc.raw)
+	}
+}

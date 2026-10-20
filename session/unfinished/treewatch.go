@@ -7,6 +7,7 @@ import (
 
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/internal/fsevents"
 	"github.com/tstapler/stapler-squad/log"
@@ -50,7 +51,7 @@ func (s *Scanner) backstopInterval() time.Duration {
 // ctx is cancelled. Failure degrades to tick-only working-tree detection.
 func (s *Scanner) startTreeWatch(ctx context.Context) {
 	tw, err := newTreeWatcher(func(repoRoot string, scope gitEventScope) {
-		s.scheduleGitEvent(ctx, repoRoot, scope)
+		s.onTreeChange(ctx, repoRoot, scope)
 	})
 	if errors.Is(err, errNoTreeWatcher) {
 		return
@@ -60,6 +61,43 @@ func (s *Scanner) startTreeWatch(ctx context.Context) {
 		return
 	}
 	s.installTreeWatcher(ctx, tw)
+}
+
+// onTreeChange handles one working-tree event. The DirtyGen mark is immediate,
+// not debounced: a scan racing the debounce window must already see the change,
+// or a clean cached verdict (scan_skip) could survive it. The tree event does not
+// say what changed, so it is a directory-change (forces the untracked-dir and
+// index caches to refresh); a lost-events scope is an overflow on every
+// worktree. Unlike noteDirty it ignores watch_worktree_gitdirs: DirtyGen is
+// armed only under Tier A, and an unarmed one does full walks regardless.
+func (s *Scanner) onTreeChange(ctx context.Context, repoRoot string, scope gitEventScope) {
+	if d := s.dirtyTracker(); d != nil {
+		kind := EventDirChange
+		if scope == gitEventAllWorktrees {
+			kind = EventOverflow
+		}
+		d.NoteDirty(repoRoot, kind)
+		if scope == gitEventAllWorktrees {
+			s.repoWorktreePaths(repoRoot, func(wt string) { d.NoteDirty(wt, kind) })
+		}
+	}
+	s.scheduleGitEvent(ctx, repoRoot, scope)
+}
+
+// repoWorktreePaths calls fn for each linked worktree known for repoPath.
+func (s *Scanner) repoWorktreePaths(repoPath string, fn func(worktree string)) {
+	v, ok := s.repoWorktrees.Load(repoPath)
+	if !ok {
+		return
+	}
+	if set, ok := v.(*sync.Map); ok {
+		set.Range(func(k, _ any) bool {
+			if wt, _ := k.(string); wt != "" && wt != repoPath {
+				fn(wt)
+			}
+			return true
+		})
+	}
 }
 
 // installTreeWatcher publishes tw, replays already-tracked repos into it and
@@ -72,16 +110,33 @@ func (s *Scanner) installTreeWatcher(ctx context.Context, tw treeWatcher) {
 	// with no event source.
 	s.repoSet.Range(func(k, _ any) bool {
 		if repo, ok := k.(string); ok {
-			if err := tw.Add(repo); err != nil {
-				log.Debug("could not watch working tree", "repo", repo, "err", err)
-			}
+			s.addTreeWatch(tw, repo)
 		}
 		return true
 	})
 	s.wg.Go(func() {
 		<-ctx.Done()
 		tw.Close()
+		// A re-run Start must install a fresh watcher, not reuse this closed one.
+		s.mu.Lock()
+		if s.treeWatch == tw {
+			s.treeWatch = nil
+		}
+		s.mu.Unlock()
 	})
+}
+
+// addTreeWatch registers repo with tw. On failure the repo's DirtyGen is
+// disarmed and kept unarmed: without tree events its untracked-dir and index
+// caches could otherwise be trusted for up to the 15 min age bound.
+func (s *Scanner) addTreeWatch(tw treeWatcher, repo string) {
+	if err := tw.Add(repo); err != nil {
+		log.Debug("could not watch working tree", "repo", repo, "err", err)
+		s.treeUnwatched.Store(repo, struct{}{})
+		s.disarmDirty(repo)
+		return
+	}
+	s.treeUnwatched.Delete(repo)
 }
 
 // batchScope folds one event batch into a single scope for repoRoot (a build
