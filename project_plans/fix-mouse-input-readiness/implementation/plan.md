@@ -255,3 +255,12 @@ The X10 encoding fix (Epic 2) pays down pre-existing debt: `handleTap()` has alw
 | Desktop regression | `mouseMode` defaults to `'any'` on desktop; the gate `!== 'none'` passes, no change |
 | Reconnect stale mode | Epic 4 writes disable sequences on epoch bump |
 | Mobile initial value window | Existing `useEffect` auto-sets to `'none'` on mobile; one-render window not exploitable (terminal not interactable during layout); no code change needed (Epic 3 no-op) |
+
+---
+
+## Implementation Deviations (recorded at sdd:6-verify)
+
+- **Epic 2 reversed:** SGR encoding implemented. `?1006h/l` is tracked through the public `terminal.parser.registerCsiHandler` API (not `_core`); the flag resets on RIS, DECSTR and new-Terminal creation. Taps send SGR when set, X10 otherwise.
+- **Story 5.1:** native suppression uses the planned `onData` fallback filter (xterm 6 has no `mouseEnabled`); whole-chunk match of one or more SGR/X10 reports.
+- **Epic 4 skipped:** the post-snapshot disable write could wipe tracking a running vim/tmux legitimately re-enabled. Stale tracking with Mouse='any' remains; follow-up.
+- **Story 5.2 test not added.** Open: the toggle only gates the tap path; double-tap/long-press/scroll still use `isMouseTracking()`.
