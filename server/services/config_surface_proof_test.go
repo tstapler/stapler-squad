@@ -6,9 +6,10 @@ import (
 )
 
 // configSurfaceProofs maps a surface to the test proving it changes runtime
-// behavior, or a written exemption. Stories 2.1.1b, 1.2.4a, 1.5.3c, 1.5.8g,
-// 1.5.9c, 5.1.2 and 5.1.3 add entries and delete the matching pendingSurfaces
-// line in the same change.
+// behavior, or a written exemption. Stories 5.1.2 and 5.1.3 add the remaining
+// entries and delete the matching pendingSurfaces line in the same change. The
+// four workflow-engine mode flags (Task 1.5.9c) are proved through the
+// production per-class reader in backlog_gate_classes_test.go.
 var configSurfaceProofs = map[surfaceID]proofEntry{
 	"quota.enabled": {
 		testName:   "TestConfigSurfaceProof_QuotaEnabled_ChangesQuotaMode",
@@ -23,11 +24,11 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
 	},
 	"flag:backlog:workflow-engine-shadow": {
-		testName:   "TestConfigSurfaceProof_WorkflowEngineShadow_ChangesShadowCallsRecorded",
+		testName:   "TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryClass",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
 	"flag:backlog:workflow-engine-enforce": {
-		testName:   "TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer",
+		testName:   "TestConfigSurfaceProof_WorkflowEngineEnforceFlag_ChangesOperatorAnswerAndNoOtherClass",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
 	"flag:backlog:workflow-engine-enforce-agent": {
