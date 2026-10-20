@@ -87,12 +87,100 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_CreateTransitionGate_ChangesHandlerAnswer",
 		entrypoint: "BacklogService.CreateTransitionGate",
 	},
+	"proto.CreateStageRequest.description": {
+		exempt: "display-only: stored and echoed by GetStage/ListStages (stageToProto) and shown in Stages settings; no Go code outside the CRUD handlers reads it (grep of non-test session/ and server/ finds only the repository copy and stageToProto)",
+	},
+	"proto.CreateStageRequest.enabled": {
+		testName:   "TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateStage",
+	},
+	"proto.CreateStageRequest.is_entry": {
+		testName:   "TestConfigSurfaceProof_CreateStage_IsEntryAndIsTerminal_ChangeGraphValidation",
+		entrypoint: "BacklogService.CreateStage",
+	},
+	"proto.CreateStageRequest.is_terminal": {
+		testName:   "TestConfigSurfaceProof_CreateStage_IsEntryAndIsTerminal_ChangeGraphValidation",
+		entrypoint: "BacklogService.CreateStage",
+	},
+	"proto.CreateStageRequest.name": {
+		exempt: "display-only: stored and echoed by GetStage/ListStages (stageToProto) and shown in Stages settings; no Go code outside the CRUD handlers reads it (grep of non-test session/ and server/ finds only the repository copy and stageToProto)",
+	},
+	"proto.CreateStageRequest.slug": {
+		testName:   "TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateStage",
+	},
+	"proto.CreateStageTransitionRequest.enabled": {
+		testName:   "TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateStageTransition",
+	},
+	"proto.CreateStageTransitionRequest.from_stage_slug": {
+		testName:   "TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateStageTransition",
+	},
+	"proto.CreateStageTransitionRequest.to_stage_slug": {
+		testName:   "TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateStageTransition",
+	},
+	"proto.CreateTransitionGateRequest.config": {
+		testName:   "TestConfigSurfaceProof_CreateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.CreateTransitionGate",
+	},
+	"proto.CreateTransitionGateRequest.kind": {
+		testName:   "TestConfigSurfaceProof_CreateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.CreateTransitionGate",
+	},
+	"proto.CreateTransitionGateRequest.order_index": {
+		testName:   "TestConfigSurfaceProof_CreateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.CreateTransitionGate",
+	},
+	"proto.UpdateStageRequest.description": {
+		exempt: "display-only: stored and echoed by GetStage/ListStages (stageToProto) and shown in Stages settings; no Go code outside the CRUD handlers reads it (grep of non-test session/ and server/ finds only the repository copy and stageToProto)",
+	},
+	"proto.UpdateStageRequest.enabled": {
+		testName:   "TestConfigSurfaceProof_UpdateStage_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.UpdateStage",
+	},
+	"proto.UpdateStageRequest.id": {
+		testName:   "TestConfigSurfaceProof_UpdateStage_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.UpdateStage",
+	},
+	"proto.UpdateStageRequest.is_entry": {
+		testName:   "TestConfigSurfaceProof_UpdateStage_IsEntryAndIsTerminal_ChangeGraphValidation",
+		entrypoint: "BacklogService.UpdateStage",
+	},
+	"proto.UpdateStageRequest.is_terminal": {
+		testName:   "TestConfigSurfaceProof_UpdateStage_IsEntryAndIsTerminal_ChangeGraphValidation",
+		entrypoint: "BacklogService.UpdateStage",
+	},
+	"proto.UpdateStageRequest.name": {
+		exempt: "display-only: stored and echoed by GetStage/ListStages (stageToProto) and shown in Stages settings; no Go code outside the CRUD handlers reads it (grep of non-test session/ and server/ finds only the repository copy and stageToProto)",
+	},
+	"proto.UpdateTransitionGateRequest.config": {
+		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
+	"proto.UpdateTransitionGateRequest.enabled": {
+		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_EnabledAndID_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
+	"proto.UpdateTransitionGateRequest.id": {
+		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_EnabledAndID_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
+	"proto.UpdateTransitionGateRequest.kind": {
+		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
+	"proto.UpdateTransitionGateRequest.order_index": {
+		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
+		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
 }
 
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 67
+const pendingCeiling = 44
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -123,20 +211,7 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 		"flag:terminal:resync-compression", "flag:terminal:resync-correlation-id",
 		"flag:terminal:resync-exec-gate-fast-lane", "flag:terminal:resync-skip-stale-dimension-slowpath",
 		"flag:terminal:resync-stagger", "flag:terminal:resync-visibility-scope", "flag:terminal_write_lease",
-		"flag:triage_guidance_halt", "flag:unfinished:mmap-index", "flag:vcs:worktree-change-detection",
-		"proto.CreateStageRequest.description", "proto.CreateStageRequest.enabled",
-		"proto.CreateStageRequest.is_entry", "proto.CreateStageRequest.is_terminal",
-		"proto.CreateStageRequest.name", "proto.CreateStageRequest.slug",
-		"proto.CreateStageTransitionRequest.enabled", "proto.CreateStageTransitionRequest.from_stage_slug",
-		"proto.CreateStageTransitionRequest.to_stage_slug", "proto.CreateTransitionGateRequest.config",
-		"proto.CreateTransitionGateRequest.kind",
-		"proto.CreateTransitionGateRequest.order_index", "proto.CreateTransitionGateRequest.stateful",
-		"proto.UpdateStageRequest.description",
-		"proto.UpdateStageRequest.enabled", "proto.UpdateStageRequest.id", "proto.UpdateStageRequest.is_entry",
-		"proto.UpdateStageRequest.is_terminal", "proto.UpdateStageRequest.name",
-		"proto.UpdateTransitionGateRequest.config", "proto.UpdateTransitionGateRequest.enabled",
-		"proto.UpdateTransitionGateRequest.id", "proto.UpdateTransitionGateRequest.kind",
-		"proto.UpdateTransitionGateRequest.order_index", "proto.UpdateTransitionGateRequest.stateful")
+		"flag:triage_guidance_halt", "flag:unfinished:mmap-index", "flag:vcs:worktree-change-detection", "proto.CreateTransitionGateRequest.stateful", "proto.UpdateTransitionGateRequest.stateful")
 	return p
 }
 
