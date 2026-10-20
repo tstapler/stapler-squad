@@ -23,6 +23,38 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_QuotaDefaultCostBudgetThresholdUSD_ChangesBudgetWarning",
 		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
 	},
+	"quota.pause_below_headroom_pct": {
+		testName:   "TestConfigSurfaceProof_QuotaPauseBelowHeadroomPct_ChangesPauseDecision",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.consecutive_ticks_to_pause": {
+		testName:   "TestConfigSurfaceProof_QuotaConsecutiveTicksToPause_ChangesPauseTiming",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.consecutive_ticks_to_resume": {
+		testName:   "TestConfigSurfaceProof_QuotaConsecutiveTicksToResume_ChangesResumeTiming",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.resume_margin_pct": {
+		testName:   "TestConfigSurfaceProof_QuotaResumeMarginPct_ChangesResumeDecision",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.rate_limit_window_minutes": {
+		testName:   "TestConfigSurfaceProof_QuotaRateLimitWindowMinutes_ChangesHardOverride",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.foreground_throttle_delay_seconds": {
+		testName:   "TestConfigSurfaceProof_QuotaForegroundThrottleDelaySeconds_ChangesThrottleDeadline",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"quota.manual_override_grace_minutes": {
+		testName:   "TestConfigSurfaceProof_QuotaManualOverrideGraceMinutes_ChangesNotifyCooldownBypass",
+		entrypoint: "QuotaSettingsService.UpdateQuotaConfig",
+	},
+	"proto.StuckBacklogItem.allow_auto_merge": {
+		testName:   "TestConfigSurfaceProof_StuckAllowAutoMerge_ChangesListedField",
+		entrypoint: "BacklogService.ListStuckBacklogItems",
+	},
 	"flag:backlog:workflow-engine-shadow": {
 		testName:   "TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryClass",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -60,7 +92,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 75
+const pendingCeiling = 67
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -75,12 +107,6 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 			p[id] = pendingSurface{story: story, planned: planned}
 		}
 	}
-	add("5.1.2a", false,
-		"quota.consecutive_ticks_to_pause", "quota.consecutive_ticks_to_resume",
-		"quota.foreground_throttle_delay_seconds", "quota.manual_override_grace_minutes",
-		"quota.pause_below_headroom_pct", "quota.rate_limit_window_minutes",
-		"quota.resume_margin_pct")
-	add("5.1.2b", false, "proto.StuckBacklogItem.allow_auto_merge")
 	add("5.1.3", false,
 		"flag:agent_wake_triggers", "flag:askuserquestion_structured", "flag:background_activity_feed",
 		"flag:notification_inline_actions",                                      // arrived from main after the ratchet was set; backfilled with the rest
