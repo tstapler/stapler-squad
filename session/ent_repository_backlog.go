@@ -1542,7 +1542,10 @@ func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, pr
 // needing a fresh session, matching UnarchiveSession's identical
 // unconditional-flip precedent (server/services/session_service.go) rather
 // than erroring or no-op'ing on an already-non-archived item.
-func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+//
+// expectedStatus, when non-empty, makes the flip a compare-and-swap on the
+// current status (ErrPreconditionFailed on a lost race); "" keeps it unconditional.
+func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expectedStatus string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -1556,17 +1559,32 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id string) 
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	if expectedStatus != "" {
+		update = update.Where(backlogitem.StatusEQ(expectedStatus))
+	}
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	affected, err := update.
 		ClearArchivedAt().
 		SetStatus(string(BacklogStatusIdea)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to unarchive backlog item %s: %w", id, err)
+	}
+	if affected == 0 {
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, expectedStatus, latest.Status)
+	}
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after unarchive: %w", id, err)
 	}
 
 	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, r.client.BacklogStage, r.client.StageTransition, BacklogStatusIdea)

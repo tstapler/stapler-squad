@@ -126,13 +126,14 @@ type gateVerdict struct {
 func decideTransition(view WorkflowEngine, item *BacklogItemData, req TransitionRequest) gateVerdict {
 	from := BacklogStatus(item.Status)
 	snap := BuildStageConfigSnapshotFallback(item)
-	if !view.CanTransition(from, req.To, snap) && !operatorGraphOverride(view, guardInputFor(req, item, from).OverrideReason, req.To) {
+	in := guardInputFor(req, item, from)
+	if !view.CanTransition(from, req.To, snap) && !operatorGraphOverride(view, in.OverrideReason, req.To) {
 		return gateVerdict{
 			Err:    fmt.Errorf("invalid transition from %q to %q: %w", from, req.To, ErrTransitionNotAllowed),
 			Reason: DeniedConfigGraph,
 		}
 	}
-	if err := view.ValidateGates(guardInputFor(req, item, from), req.To, snap); err != nil {
+	if err := view.ValidateGates(in, req.To, snap); err != nil {
 		return gateVerdict{Err: err, Reason: classifyGateDenial(err)}
 	}
 	return gateVerdict{}
@@ -229,8 +230,9 @@ func (s *Storage) writeGatedArchive(ctx context.Context, req TransitionRequest, 
 	return s.repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
 }
 
-// GatedUnarchive decides archived->idea. The raw writer is an unconditional
-// flip, so the request cannot carry ExpectedUpdatedAt or a Note.
+// GatedUnarchive decides archived->idea. The write is a compare-and-swap on
+// status only (default: the observed status, which must be archived), so the
+// request cannot carry ExpectedUpdatedAt or a Note.
 func (s *Storage) GatedUnarchive(ctx context.Context, req TransitionRequest) (*BacklogItemData, error) {
 	if err := pinTarget(&req, BacklogStatusIdea); err != nil {
 		return nil, err
@@ -241,8 +243,12 @@ func (s *Storage) GatedUnarchive(ctx context.Context, req TransitionRequest) (*B
 	return s.gated(ctx, req, s.writeGatedUnarchive)
 }
 
-func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, _ TransitionCallerSpec, _ *BacklogItemData) (*BacklogItemData, error) {
-	return s.repo.rawUnarchiveBacklogItem(ctx, req.ItemID)
+func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
+	pre := gatePrecondition(req, spec, item)
+	if pre.ExpectedStatus != string(BacklogStatusArchived) {
+		return nil, fmt.Errorf("%w: item is %q, not archived", ErrPreconditionFailed, pre.ExpectedStatus)
+	}
+	return s.repo.rawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
 }
 
 // GatedSetPRAndTransition records pr on the item and moves it review->pr_pending
