@@ -16,10 +16,6 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
-// TransitionCaller names the call site of a status write. Story 1.5.1 grows
-// this into the closed caller registry; until then it is a bare label.
-type TransitionCaller string
-
 var (
 	engineBypassMu     sync.Mutex
 	engineBypassCounts = map[TransitionCaller]int64{}

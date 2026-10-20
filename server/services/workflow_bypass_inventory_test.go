@@ -134,12 +134,11 @@ var bypassInventory = []bypassSite{
 	pending("session/jules_session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "1.5.7c (two transitions and SetBacklogItemPRAndTransition)"),
 }
 
-// scanBypassCalls walks the module rooted at root and returns the number of
-// primitive calls per "file function" key. Test files and tools/lint are
-// excluded; the analyzers there are not status writers.
-func scanBypassCalls(t *testing.T, root string) map[string]int {
+// walkModuleFuncs parses every non-test Go file under root (skipping web-app,
+// tools/lint, gen and dot or vendor directories) and calls visit for each
+// function declaration with a body, passing its module-relative file path.
+func walkModuleFuncs(t *testing.T, root string, visit func(rel string, fd *ast.FuncDecl)) {
 	t.Helper()
-	counts := map[string]int{}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -165,25 +164,45 @@ func scanBypassCalls(t *testing.T, root string) map[string]int {
 			return fmt.Errorf("parse %s: %w", rel, perr)
 		}
 		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body != nil {
+				visit(rel, fd)
 			}
-			name := funcDisplayName(fd)
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && bypassPrimitives[sel.Sel.Name] {
-					counts[rel+" "+name]++
-				}
-				return true
-			})
 		}
 		return nil
 	})
 	require.NoError(t, err)
+}
+
+// calledName returns the function or selector name of a call, or "".
+func calledName(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fun.Sel.Name
+	case *ast.Ident:
+		return fun.Name
+	}
+	return ""
+}
+
+// scanBypassCalls returns the number of primitive calls per "file function"
+// key. Test files and tools/lint are excluded; the analyzers there are not
+// status writers.
+func scanBypassCalls(t *testing.T, root string) map[string]int {
+	t.Helper()
+	counts := map[string]int{}
+	walkModuleFuncs(t, root, func(rel string, fd *ast.FuncDecl) {
+		name := funcDisplayName(fd)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && bypassPrimitives[sel.Sel.Name] {
+				counts[rel+" "+name]++
+			}
+			return true
+		})
+	})
 	return counts
 }
 
@@ -272,6 +291,160 @@ func Free(x interface{ ReconcileStuckItems() }) { x.ReconcileStuckItems() }
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "x.go"), []byte(src), 0o600))
 	got := scanBypassCalls(t, dir)
 	assert.Equal(t, map[string]int{"x.go a.M": 3, "x.go Free": 1}, got)
+}
+
+const delegateFile = "server/mcp/tools_backlog_dependencies.go"
+
+// registryCallCounts sums the primitive calls the caller registry accounts for,
+// keyed like the inventory ("file function").
+func registryCallCounts() map[string]int {
+	counts := map[string]int{}
+	add := func(cs session.CallSite) { counts[cs.File+" "+cs.Func] += cs.Calls }
+	for _, c := range session.TransitionCallers() {
+		for _, cs := range c.Sites {
+			add(cs)
+		}
+	}
+	for _, e := range session.ExemptTransitionSites() {
+		add(e.CallSite)
+	}
+	for _, cs := range session.SharedGuardHelperSites() {
+		add(cs)
+	}
+	return counts
+}
+
+// Story 1.5.1a: every site the inventory still has to migrate (and every
+// engine-routed one) maps to registry entries whose call counts add up, and the
+// registry names no site the inventory does not know.
+func TestWorkflowBypassInventory_EveryPendingAndEngineRoutedSiteIsRegistered(t *testing.T) {
+	got := registryCallCounts()
+	var problems []string
+	covered := map[string]bool{}
+	for _, s := range bypassInventory {
+		inScope := s.class == classPending || s.class == classEngineRouted || s.file == delegateFile
+		if !inScope {
+			continue
+		}
+		covered[s.key()] = true
+		switch n := got[s.key()]; {
+		case n == 0:
+			problems = append(problems, fmt.Sprintf("unregistered %s site %s: add a caller entry to session/transition_callers.go", s.class, s.key()))
+		case n != s.calls:
+			problems = append(problems, fmt.Sprintf("%s: registry accounts for %d call(s), inventory says %d (duplicate or missing registration)", s.key(), n, s.calls))
+		}
+	}
+	for key := range got {
+		if !covered[key] {
+			problems = append(problems, fmt.Sprintf("registry names %s, which is not a pending or engine-routed inventory site", key))
+		}
+	}
+	sort.Strings(problems)
+	assert.Empty(t, problems, strings.Join(problems, "\n"))
+}
+
+// Closes pre-mortem #13: every (to) literal handed to transitionWithGuard or
+// GuardedTransitionAllowed is an edge some registered caller declares, and the
+// functions making those calls are registered as an Origin or Site.
+func TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirTargets(t *testing.T) {
+	owners := map[string][]session.TransitionCallerSpec{}
+	origins := map[string]bool{}
+	for _, c := range session.TransitionCallers() {
+		for _, cs := range c.Origins {
+			owners[cs.File+" "+cs.Func] = append(owners[cs.File+" "+cs.Func], c)
+			origins[cs.File+" "+cs.Func] = true
+		}
+		for _, cs := range c.Sites {
+			owners[cs.File+" "+cs.Func] = append(owners[cs.File+" "+cs.Func], c)
+		}
+	}
+	guarded := map[string]bool{"transitionWithGuard": true, "GuardedTransitionAllowed": true}
+	found := map[string]bool{}
+	var problems []string
+	walkModuleFuncs(t, moduleRoot(t), func(rel string, fd *ast.FuncDecl) {
+		key := rel + " " + funcDisplayName(fd)
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || !guarded[calledName(call)] || len(call.Args) < 3 {
+				return true
+			}
+			found[key] = true
+			specs := owners[key]
+			if len(specs) == 0 {
+				problems = append(problems, fmt.Sprintf("%s calls %s but is not a registered origin", key, calledName(call)))
+				return true
+			}
+			if to := statusLiteralName(call.Args[2]); to != "" && !anyDeclaresTarget(specs, to) {
+				problems = append(problems, fmt.Sprintf("%s requests %s but no registered caller there declares that target", key, to))
+			}
+			return true
+		})
+	})
+	for key := range origins {
+		if !found[key] {
+			problems = append(problems, fmt.Sprintf("stale origin %s: it no longer calls a guarded transition helper", key))
+		}
+	}
+	sort.Strings(problems)
+	assert.Empty(t, problems, strings.Join(problems, "\n"))
+}
+
+var statusConstNames = map[string]session.BacklogStatus{
+	"BacklogStatusIdea": session.BacklogStatusIdea, "BacklogStatusRefining": session.BacklogStatusRefining,
+	"BacklogStatusReady": session.BacklogStatusReady, "BacklogStatusQueued": session.BacklogStatusQueued,
+	"BacklogStatusInProgress": session.BacklogStatusInProgress, "BacklogStatusReview": session.BacklogStatusReview,
+	"BacklogStatusPRPending": session.BacklogStatusPRPending, "BacklogStatusDone": session.BacklogStatusDone,
+	"BacklogStatusArchived": session.BacklogStatusArchived,
+}
+
+// statusLiteralName returns the status value of a BacklogStatus* constant
+// expression, or "" for a computed value.
+func statusLiteralName(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.SelectorExpr:
+		return string(statusConstNames[v.Sel.Name])
+	case *ast.Ident:
+		return string(statusConstNames[v.Name])
+	}
+	return ""
+}
+
+func anyDeclaresTarget(specs []session.TransitionCallerSpec, to string) bool {
+	for _, c := range specs {
+		for _, e := range c.Edges {
+			if string(e.To) == to {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The autonomous_complete registry entry pins the set {ready}: toStatus is
+// assigned exactly once in onAutonomousDriverComplete, to BacklogStatusReady.
+func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *testing.T) {
+	const file = "server/services/autonomous_orchestration_service.go"
+	var assigned []string
+	walkModuleFuncs(t, moduleRoot(t), func(rel string, fd *ast.FuncDecl) {
+		if rel != file {
+			return
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name == "toStatus" {
+				assigned = append(assigned, statusLiteralName(as.Rhs[0]))
+			}
+			return true
+		})
+	})
+	assert.Equal(t, []string{"ready"}, assigned, "a new toStatus assignment needs a registry edge and a new pin")
+
+	c, ok := session.LookupTransitionCaller(session.CallerAutonomousComplete)
+	require.True(t, ok)
+	assert.Equal(t, []session.SystemEdge{{From: session.BacklogStatusIdea, To: session.BacklogStatusReady}}, c.Edges)
 }
 
 func TestRecordEngineBypass_IncrementsCounter(t *testing.T) {
