@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,6 +137,39 @@ func TestComputeMiss_ShouldReturnCtxErrAtOnce_WhenWaiterIsCancelled(t *testing.T
 	close(release)
 	if v := <-leaderDone; string(v) != "v" {
 		t.Errorf("leader v = %q, want v: a cancelled waiter must not fail the leader", v)
+	}
+}
+
+// The leader's fn uses resources the caller frees on return (a Walk's scratch),
+// so the leader must outlive its own fn even after cancel.
+func TestComputeMiss_ShouldNotReturnToLeader_UntilItsFnHasReturned(t *testing.T) {
+	c := newByteCache(1<<20, 0, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release := make(chan struct{}), make(chan struct{})
+	var returned atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.computeMiss(ctx, "k", func() ([]byte, error) {
+			close(started)
+			<-ctx.Done()
+			<-release // fn is still using the caller's resources
+			return nil, ctx.Err()
+		})
+		returned.Store(true)
+		done <- err
+	}()
+	<-started
+	cancel()
+	for i := 0; i < 10000 && !returned.Load(); i++ {
+		runtime.Gosched()
+	}
+	if returned.Load() {
+		t.Fatal("computeMiss returned to the leader while its fn was still running")
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 

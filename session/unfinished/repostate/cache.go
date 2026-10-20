@@ -180,62 +180,31 @@ func (c *RepoCache[K, V]) computeMiss(ctx context.Context, key K, fn func() (V, 
 
 // computeMissKeep is computeMiss that skips the Put when keep (if non-nil)
 // reports false after fn ran, e.g. the value is pinned to a dropped generation.
-//
-// fn is the caller's own closure and runs under the flight leader's ctx, so a
-// cancelled leader fails with a context error that belongs to the leader, not
-// to the callers sharing its flight. A follower whose own ctx is still live
-// therefore retries (becoming leader itself) instead of inheriting that error,
-// and every waiter stops waiting when its own ctx ends. A cancelled flight never
-// reaches Put, so nothing poisoned is cached.
+// Waiting, cancellation and the retry of a follower whose leader was cancelled
+// are FlightCtx's; a failed or cancelled fn never reaches Put.
 func (c *RepoCache[K, V]) computeMissKeep(ctx context.Context, key K, fn func() (V, error), keep func() bool) (V, error) {
-	for {
-		var led bool // written by the flight goroutine, read after <-ch
-		ch := c.sf.DoChan(fmt.Sprint(key), func() (out any, doErr error) {
-			defer func() {
-				if r := recover(); r != nil {
-					doErr = fmt.Errorf("repostate compute panic: %v", r)
-				}
-			}()
-			// A caller can miss in Get, then reach DoChan after the previous flight
-			// already published: without this re-check it would build a second time.
-			if v, ok := c.peek(key); ok {
-				return v, nil
-			}
-			led = true
-			v, fnErr := fn()
-			if fnErr != nil {
-				return nil, fnErr
-			}
-			if keep == nil || keep() {
-				c.Put(key, v)
-			}
+	computed := false // set by this caller's own closure, read after FlightCtx returns
+	v, _, err := FlightCtx(ctx, &c.sf, fmt.Sprint(key), &c.joined, func() (V, error) {
+		// A caller can miss in Get, then reach the flight after the previous one
+		// already published: without this re-check it would build a second time.
+		if v, ok := c.peek(key); ok {
 			return v, nil
-		})
-		// DoChan has registered this caller in the flight by now.
-		c.joined.Add(1)
-		var r singleflight.Result
-		select {
-		case r = <-ch:
-		case <-ctx.Done():
+		}
+		computed = true
+		v, err := fn()
+		if err != nil {
 			var zero V
-			return zero, ctx.Err()
+			return zero, err
 		}
-		if r.Err != nil && !led && ctx.Err() == nil && isContextErr(r.Err) {
-			continue // the leader was cancelled, this caller was not
+		if keep == nil || keep() {
+			c.Put(key, v)
 		}
-		if !led {
-			c.coalesced.Add(1)
-		}
-		if r.Err != nil {
-			var zero V
-			return zero, r.Err
-		}
-		return r.Val.(V), nil
+		return v, nil
+	})
+	if !computed && ctx.Err() == nil {
+		c.coalesced.Add(1)
 	}
-}
-
-func isContextErr(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return v, err
 }
 
 // Stats returns a snapshot of the counters.
