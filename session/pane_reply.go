@@ -76,18 +76,8 @@ func DialogMatch(capture string, q QuestionDialog) bool {
 	if n < 1 || q.Question == "" || q.Header == "" {
 		return false
 	}
-	raw := strings.Split(capture, "\n")
-	lines := make([]string, len(raw))
-	for i, l := range raw {
-		lines[i] = normalizeDialogLine(l)
-	}
-	footer := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(lines[i], dialogFooterPrefix) {
-			footer = i
-			break
-		}
-	}
+	lines := dialogLines(capture)
+	footer := lastFooterIndex(lines)
 	if footer < 0 {
 		return false
 	}
@@ -110,24 +100,29 @@ func DialogMatch(capture string, q QuestionDialog) bool {
 	return matchDialogRegion(lines[header+1:footer], q)
 }
 
-func matchDialogRegion(region []string, q QuestionDialog) bool {
-	var questionParts []string
-	var rows []numberedLine
-	for _, l := range region {
-		if m := numberedRow.FindStringSubmatch(l); m != nil {
-			idx, err := strconv.Atoi(m[1])
-			if err != nil {
-				return false
-			}
-			rows = append(rows, numberedLine{index: idx, text: m[2]})
-			continue
-		}
-		if l == "" || len(rows) > 0 {
-			continue // blanks, and unnumbered description or separator lines under a row
-		}
-		questionParts = append(questionParts, l)
+// dialogLines normalizes every line of capture.
+func dialogLines(capture string) []string {
+	raw := strings.Split(capture, "\n")
+	lines := make([]string, len(raw))
+	for i, l := range raw {
+		lines[i] = normalizeDialogLine(l)
 	}
-	if strings.Join(questionParts, " ") != normalizeDialogText(q.Question) {
+	return lines
+}
+
+// lastFooterIndex is the last `Enter to select` line, or -1.
+func lastFooterIndex(lines []string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.HasPrefix(lines[i], dialogFooterPrefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+func matchDialogRegion(region []string, q QuestionDialog) bool {
+	question, rows, ok := parseDialogRegion(region)
+	if !ok || question != normalizeDialogText(q.Question) {
 		return false
 	}
 	n := len(q.Labels)
@@ -145,6 +140,27 @@ func matchDialogRegion(region []string, q QuestionDialog) bool {
 		}
 	}
 	return rows[n].text == dialogTypeSomethingRow && rows[n+1].text == dialogChatAboutRow
+}
+
+// parseDialogRegion splits the lines between the header and the footer into the
+// question text and the numbered rows; unnumbered lines under a row are skipped.
+func parseDialogRegion(region []string) (question string, rows []numberedLine, ok bool) {
+	var questionParts []string
+	for _, l := range region {
+		if m := numberedRow.FindStringSubmatch(l); m != nil {
+			idx, err := strconv.Atoi(m[1])
+			if err != nil {
+				return "", nil, false
+			}
+			rows = append(rows, numberedLine{index: idx, text: m[2]})
+			continue
+		}
+		if l == "" || len(rows) > 0 {
+			continue // blanks, and unnumbered description or separator lines under a row
+		}
+		questionParts = append(questionParts, l)
+	}
+	return strings.Join(questionParts, " "), rows, true
 }
 
 type numberedLine struct {

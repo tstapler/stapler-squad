@@ -22,6 +22,9 @@
       }
     ],
     "paths": {
+      "@/lib/lazy/impl": [
+        "./src/lib/lazy/impl.next.tsx"
+      ],
       "@/*": [
         "./src/*"
       ]

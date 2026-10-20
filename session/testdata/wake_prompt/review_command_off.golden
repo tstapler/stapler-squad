@@ -1,0 +1,7 @@
+Call request_review with item_id=11111111-1111-1111-1111-111111111111 and a 2-3 sentence summary of what was built.
+
+Then end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait: every wake re-reads your whole context. The app sends you a message with the verdict as soon as it is recorded.
+
+PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part of this task, not a separate step someone else does.
+
+FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Its request_review call reports which attempt number you're on out of 3 allowed in this session — the count is tracked server-side, so trust what it reports rather than counting your own calls. Once it says you've hit the cap, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, rather than retrying /backlog/review again.

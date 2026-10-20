@@ -103,6 +103,13 @@ export interface GestureOptions {
    * never reach it, so the two scroll mechanisms cannot both fire for one drag.
    */
   onAltScreenScrollUp?: (lines: number) => void;
+  /**
+   * User's "Mouse" toolbar toggle. 'none' stops handleTap() forwarding click bytes even when the
+   * terminal reports mouse tracking (often stale from a program that never reset it). Default 'any'.
+   */
+  mouseModeOverride?: 'none' | 'any';
+  /** True while the PTY program has enabled SGR mouse encoding (?1006h); taps then send SGR, else X10. */
+  isSgrMouseEncoding?: () => boolean;
 }
 
 /**
@@ -627,20 +634,29 @@ export function useTerminalGestures(options: GestureOptions): void {
         }));
       } else if (t) {
         // Normal tap handling
-        if (!isMouseTracking()) {
+        // Read via optionsRef: the gesture effect doesn't re-run when the toggle changes.
+        const forwardMouseClicks = isMouseTracking() && optionsRef.current.mouseModeOverride !== 'none';
+        if (!forwardMouseClicks) {
           t.focus();
         } else if (t.element) {
           const { cellH, cellW } = getCellDimensions(t);
           const canvasRect = t.element.getBoundingClientRect();
           const col = Math.floor((tapX - canvasRect.left) / cellW) + 1; // 1-based
           const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
-          // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
-          // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
-          const clampedCol = Math.max(1, Math.min(col, 223));
-          const clampedRow = Math.max(1, Math.min(row, 223));
-          const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
-          const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
-          onSendData(press + release);
+          if (optionsRef.current.isSgrMouseEncoding?.()) {
+            // SGR (?1006h): \x1b[<0;col;rowM press, ...m release; no coordinate limit.
+            const c = Math.max(1, col);
+            const r = Math.max(1, row);
+            onSendData(`\x1b[<0;${c};${r}M\x1b[<0;${c};${r}m`);
+          } else {
+            // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
+            // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
+            const clampedCol = Math.max(1, Math.min(col, 223));
+            const clampedRow = Math.max(1, Math.min(row, 223));
+            const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
+            const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
+            onSendData(press + release);
+          }
           t.focus();
         }
       }

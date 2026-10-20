@@ -314,6 +314,18 @@ Config directory resolution priority:
 
 This ensures test data never interferes with production data.
 
+## Next-baseline specs and fixtures (web-app-bun-build Phase 7)
+
+Specs such as `route-titles`, `route-focus-and-announce`, `history-behaviour`, `deep-link-trailing-slash`,
+`theme-fouc`, `viewport-meta`, `not-found`, `scroll-policy`, `login-static-assets` and `route-smoke` pin
+the behaviour of the Next build so a router swap can be compared against it. Their expected values live in
+`fixtures/route-titles.json` and `fixtures/next-baseline.json`; regenerate them, against the Next build
+only, with `CAPTURE_NEXT_FIXTURES=1 npx playwright test tools/capture-next-fixtures.spec.ts --project=chromium`.
+`tools/parity-diff.ts` compares computed styles between two running builds
+(`node --no-warnings tools/parity-diff.ts --a <url> --b <url>`); its allow-list, `tools/parity-allow.json`,
+needs a URL or quoted CSS rule as the `reason` for every entry. `baseline/build-coupled-specs.json` lists the
+specs that depend on a Next build property and how each was made build-neutral.
+
 ## Additional Resources
 
 - [Playwright Documentation](https://playwright.dev/)

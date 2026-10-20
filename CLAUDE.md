@@ -22,7 +22,7 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 ./stapler-squad --tmux-keep-server                     # Keep tmux server alive after sessions close
 ```
 
-**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `docs/explanation/tmux-keep-server-on-restart.md`.
+**Note:** `make install-service` restarts the running service, but this does not kill live tmux sessions — `scripts/install-service.sh` has deployed the unit with `--tmux-keep-server` on both platforms since #180, so the tmux server and every session (including the one you're working in) survive the restart. See `docs/explanation/tmux-keep-server-on-restart.md` for the historical bug this fixed and how to re-verify the deployed unit if you ever suspect regression.
 
 ### Profiling
 
@@ -191,6 +191,8 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 3. Update protobuf definitions in `proto/session/v1/` if needed → `make proto-gen`
 4. Test with `make install-service`
 
+**New page:** also add a row to `web-app/src/app/route-meta.ts` (title and optional feature-flag `guard`); `route-meta.test.ts` fails with the fix instruction if it is missing or differs from the page's `metadata`. Gate a subtree with `<FeatureGuard>` in its layout. See `.claude/rules/nav-facade.md`.
+
 ### New Omnibar Capabilities
 Two registries must stay in sync — see `docs/reference/feature-testing-registry.md`:
 - **OmnibarAction union** (`types.ts` + `dispatch.ts` + `dispatch.test.ts`) for user-triggerable actions
@@ -260,7 +262,7 @@ make e2e-lighthouse
 
 ### Manual/interactive testing without touching the live deployed instance
 
-Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `docs/explanation/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
+Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it briefly takes the live server down during the restart and ships your in-progress build to every session/backlog item in flight; tmux sessions themselves survive the restart — see the Note above — but the binary swap and restart-window downtime are still real). To click around a change by hand instead, run a second, fully separate instance:
 
 ```bash
 mkdir -p ~/.stapler-squad/manual-builds/manual-1
@@ -349,7 +351,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | E2E test conventions (annotation, locators, no waitForTimeout) | `e2e-test-conventions` skill |
 | Commit SDD planning artifacts before ending a session | `docs/how-to/commit-sdd-planning-artifacts.md` |
 | Prefer go-git over shelling out to git CLI | `prefer-go-git-over-subshells` skill |
-| Service restart kills every live tmux session without `--tmux-keep-server` | `docs/explanation/tmux-keep-server-on-restart.md` |
+| Why service restarts no longer kill tmux sessions (`--tmux-keep-server`, fixed in #180) | `docs/explanation/tmux-keep-server-on-restart.md` |
 | Package manager: always Bun (every JS project), never npm/yarn/pnpm | `docs/how-to/use-bun-in-web-app.md` |
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
@@ -370,3 +372,10 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
 | Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
+| Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
+| Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
+| Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
+| Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |
+| Verify the notification-actions rollout on an isolated instance, per flag | `docs/how-to/verify-notification-actions-rollout.md` |
+| Flag-default flip PR checklist for the four notification-actions flags | `docs/how-to/flag-default-flip-pr-template.md` |
+| Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |

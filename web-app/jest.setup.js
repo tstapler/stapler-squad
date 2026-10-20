@@ -202,3 +202,7 @@ jest.mock("@/lib/hooks/useBacklogStages", () => ({
     error: null,
   }),
 }));
+
+// Interaction-safety windows (settled layout, commit delay) would swallow or defer clicks made
+// right after render. Suites that exercise them restore the real values with setTimingForTests().
+require("./src/lib/hooks/interactionTiming").setTimingForTests({ settleMs: 0, commitDelayMs: 0 });

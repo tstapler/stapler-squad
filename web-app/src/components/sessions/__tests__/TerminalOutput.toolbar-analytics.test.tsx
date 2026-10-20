@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { screen, fireEvent, within } from "@testing-library/react";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -43,46 +43,11 @@ jest.mock("@/components/providers/ViewportProvider", () => ({
 
 // ── Imports (after mocks) ──────────────────────────────────────────────────────
 
-// eslint-disable-next-line import/first
-import { TerminalOutput } from "../TerminalOutput";
-import { TerminalPoolProvider } from "@/lib/terminal/TerminalPool";
+import { makeStreamMock, renderTerminal } from "./terminalOutputRenderHelpers";
 // eslint-disable-next-line import/first
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function makeStreamMock(overrides = {}) {
-  return {
-    isConnected: false,
-    error: null,
-    connect: jest.fn(),
-    disconnect: jest.fn(),
-    sendInput: jest.fn(),
-    resize: jest.fn(),
-    scrollbackLoaded: false,
-    requestScrollback: jest.fn(),
-    sendFlowControl: jest.fn(),
-    startRecording: jest.fn(),
-    stopRecording: jest.fn(),
-    // useVisibilityResync is wired unconditionally in TerminalOutput.tsx and
-    // calls these on every unmount/session-id change.
-    requestFullResync: jest.fn(),
-    markResyncComplete: jest.fn(),
-    markPaneResponseReceived: jest.fn(),
-    ...overrides,
-  };
-}
-
-// Story 3 — TerminalOutput now sources its xterm.js instance from
-// TerminalPoolProvider (see TerminalPool.tsx); every render in this file
-// must be wrapped in one, matching production's app-level provider.
-function renderTerminal(sessionId = "session-abc", baseUrl = "/api") {
-  return render(
-    <TerminalPoolProvider>
-      <TerminalOutput sessionId={sessionId} baseUrl={baseUrl} isVisible={false} />
-    </TerminalPoolProvider>
-  );
-}
 
 // ── Setup / Teardown ──────────────────────────────────────────────────────────
 

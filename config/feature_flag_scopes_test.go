@@ -86,3 +86,47 @@ func mustMarshal(t *testing.T, c *Config) string {
 	}
 	return string(b)
 }
+
+func TestGetFeatureFlagScoped_ShouldReturnFalse_WhenScopedFalseOverridesGlobalTrue(t *testing.T) {
+	cfg := &Config{
+		FeatureFlags: map[string]bool{"notification_inline_actions": true},
+		FeatureFlagScopes: map[string]map[string]bool{
+			"notification_inline_actions": {"action:DENY": false},
+		},
+	}
+	if cfg.GetFeatureFlagScoped("notification_inline_actions", "action:DENY", false) {
+		t.Error("action:DENY scoped false must beat global true")
+	}
+	if !cfg.GetFeatureFlagScoped("notification_inline_actions", "action:APPROVE", false) {
+		t.Error("action:APPROVE with no override must follow global true")
+	}
+}
+
+func TestGetFeatureFlagScoped_ShouldInheritGlobal_WhenScopeAbsentForAllFourFlags(t *testing.T) {
+	flags := []struct {
+		name, scope string
+		def         bool
+	}{
+		{"background_activity_feed", "", true},
+		{"notification_inline_actions", "action:APPROVE", false},
+		{"askuserquestion_structured", "stage:answer", false},
+		{"agent_wake_triggers", "trigger:at", false},
+	}
+	for _, f := range flags {
+		t.Run(f.name, func(t *testing.T) {
+			if got := (&Config{}).GetFeatureFlagScoped(f.name, f.scope, f.def); got != f.def {
+				t.Errorf("no values: got %v, want default %v", got, f.def)
+			}
+			for _, global := range []bool{true, false} {
+				cfg := &Config{FeatureFlags: map[string]bool{f.name: global}}
+				if got := cfg.GetFeatureFlagScoped(f.name, f.scope, f.def); got != global {
+					t.Errorf("explicit global %v: got %v", global, got)
+				}
+				cfg.FeatureFlagScopes = map[string]map[string]bool{f.name: {f.scope: !global}}
+				if got := cfg.GetFeatureFlagScoped(f.name, f.scope, f.def); got != !global {
+					t.Errorf("scoped %v under global %v: got %v", !global, global, got)
+				}
+			}
+		})
+	}
+}

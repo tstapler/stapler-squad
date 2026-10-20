@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { registry, ShortcutContext, Shortcut } from "@/lib/shortcuts/shortcutRegistry";
 import { Kbd } from "./Kbd";
+import { FILES_CHORDS } from "@/lib/hooks/filesChords";
+import { chordLabel, useLayoutMap } from "@/lib/hooks/chordLabels";
 import {
   backdrop,
   dialog,
@@ -85,6 +87,13 @@ export function KeyboardShortcutOverlay({ isOpen, onClose }: KeyboardShortcutOve
     return () => document.removeEventListener("keydown", trap);
   }, [isOpen]);
 
+  const layout = useLayoutMap();
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "");
+  const filesRows = [
+    ...FILES_CHORDS.map((c) => ({ label: c.label, ...chordLabel(c, layout, isMac) })),
+    { label: "Leave the editor", text: "Esc, then Tab", note: undefined },
+  ].filter((r) => !query || r.label.toLowerCase().includes(query.toLowerCase()));
+
   const allShortcuts = registry.getAll();
   const loweredQuery = query.toLowerCase();
 
@@ -100,7 +109,7 @@ export function KeyboardShortcutOverlay({ isOpen, onClose }: KeyboardShortcutOve
     }
   }
 
-  const totalVisible = Object.values(filteredByContext).reduce((acc, arr) => acc + arr.length, 0);
+  const totalVisible = Object.values(filteredByContext).reduce((acc, arr) => acc + arr.length, 0) + filesRows.length;
 
   if (!isOpen) return null;
 
@@ -160,6 +169,18 @@ export function KeyboardShortcutOverlay({ isOpen, onClose }: KeyboardShortcutOve
                 </section>
               );
             })
+          )}
+          {filesRows.length > 0 && (
+            <section className={contextSection} aria-label="Files">
+              <h3 className={contextHeading}>Files</h3>
+              {filesRows.map((r) => (
+                <div key={r.label} className={shortcutRow}>
+                  <span className={shortcutLabel}>{r.label}</span>
+                  <Kbd size="sm">{r.text}</Kbd>
+                  {r.note && <span className={shortcutLabel}>{r.note}</span>}
+                </div>
+              ))}
+            </section>
           )}
         </div>
       </div>

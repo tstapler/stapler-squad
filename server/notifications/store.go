@@ -210,7 +210,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	}
 
 	// Check for a duplicate by (sessionID, notificationType) and collapse.
-	if existing := s.findDuplicate(record.SessionID, record.NotificationType); existing != nil {
+	if existing := s.findDuplicate(record); existing != nil {
 		// For APPROVAL_NEEDED: update the record ID to the new approval UUID so that
 		// SetMetadata("newApprovalID", ...) can still find this record after collapse.
 		if record.NotificationType == notifTypeApprovalNeeded {
@@ -304,12 +304,14 @@ func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, to
 	return s.Append(record)
 }
 
-// findDuplicate scans s.records for a record matching the given
-// (sessionID, notificationType) key, regardless of read state. Returns nil if no
-// match is found. Must be called with the write lock held.
-func (s *NotificationHistoryStore) findDuplicate(sessionID string, notifType int32) *NotificationRecord {
+// findDuplicate scans s.records for a record of the same session and type as
+// record, regardless of read state, that is not a different question (see
+// questionKey). Returns nil if no match is found. Must be called with the write
+// lock held.
+func (s *NotificationHistoryStore) findDuplicate(record *NotificationRecord) *NotificationRecord {
+	want := questionKey(record)
 	for _, r := range s.records {
-		if r.SessionID == sessionID && r.NotificationType == notifType {
+		if r.SessionID == record.SessionID && r.NotificationType == record.NotificationType && questionKey(r) == want {
 			return r
 		}
 	}
@@ -646,10 +648,11 @@ func (s *NotificationHistoryStore) deduplicateExisting() error {
 	type dedupKey struct {
 		sessionID string
 		notifType int32
+		question  string
 	}
 	groups := make(map[dedupKey][]*NotificationRecord)
 	for _, r := range s.records {
-		key := dedupKey{sessionID: r.SessionID, notifType: r.NotificationType}
+		key := dedupKey{sessionID: r.SessionID, notifType: r.NotificationType, question: questionKey(r)}
 		groups[key] = append(groups[key], r)
 	}
 

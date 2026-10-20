@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
 import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package, FileText } from "lucide-react";
-import dynamic from "next/dynamic";
+import { lazyComponent } from "@/lib/lazy";
 import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
 import { VcsPanel } from "./VcsPanel";
@@ -286,10 +286,9 @@ export function useResyncStaggerQueue(
 }
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
-const TerminalOutput = dynamic(
-  () => import("./TerminalOutput").then((mod) => mod.TerminalOutput),
+const TerminalOutput = lazyComponent(
+  () => import("./TerminalOutput").then((mod) => ({ default: mod.TerminalOutput })),
   {
-    ssr: false,
     loading: () => (
       <div style={{ padding: "20px", textAlign: "center" }}>
         Loading terminal...
@@ -490,24 +489,17 @@ export function SessionDetailView({
   }, [shells]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [filesSelectedPath, setFilesSelectedPath] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    const hash = window.location.hash;
-    if (hash.startsWith("#file=")) return decodeURIComponent(hash.slice(6)) || null;
-    return null;
+  // The path is remembered with its session so a switch to another session never inherits it.
+  const [filesSelection, setFilesSelection] = useState<{ sessionId: string; path: string | null }>(() => {
+    const hash = typeof window === "undefined" ? "" : window.location.hash;
+    const path = hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
+    return { sessionId: session.id, path };
   });
-  // Sync file selection to/from URL hash so the user can always navigate back.
-  React.useEffect(() => {
-    if (filesSelectedPath) {
-      history.replaceState(null, "", `#file=${encodeURIComponent(filesSelectedPath)}`);
-    } else {
-      history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-  }, [filesSelectedPath]);
-  // Clear file selection when the session changes so stale paths don't leak across sessions.
-  React.useEffect(() => {
-    setFilesSelectedPath(null);
-  }, [session.id]);
+  const filesSelectedPath = filesSelection.sessionId === session.id ? filesSelection.path : null;
+  const setFilesSelectedPath = useCallback(
+    (path: string | null) => setFilesSelection({ sessionId: session.id, path }),
+    [session.id]
+  );
   const [showWorkspaceSwitchModal, setShowWorkspaceSwitchModal] = useState(false);
   // The action sheet's own opener buttons unmount when the sheet closes, so
   // any modal launched from the sheet restores focus to the persistent
@@ -1219,10 +1211,14 @@ export function SessionDetailView({
           data-active={activeTab === "files"}
         >
           <FilesTab
+            key={session.id}
             sessionId={session.id}
             baseUrl={getApiBaseUrl()}
             initialSelectedPath={filesSelectedPath}
             onSelectedPathChange={setFilesSelectedPath}
+            sessionRunning={session.status === SessionStatus.RUNNING}
+            sessionName={session.title}
+            onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
           />
         </div>
         {activeTab === "logs" && (

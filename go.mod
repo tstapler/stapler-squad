@@ -14,6 +14,7 @@ go 1.26.6
 godebug netdns=go
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/otelconnect v0.8.0
 	entgo.io/ent v0.14.5
@@ -45,7 +46,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	github.com/tstapler/tymux/clients/go v0.1.0
+	github.com/tstapler/tymux/clients/go v0.1.1-0.20261018004533-4f517c47d2ec
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/zalando/go-keyring v0.2.8
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0

@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
@@ -168,7 +169,7 @@ func (as *ApprovalService) resolveApproval(ctx context.Context, approvalID, deci
 	// Stamp the decision on the notification record so the panel can render the
 	// correct badge after a page refresh. Approval ID == notification ID by convention
 	// (wired in ApprovalHandler.broadcastApprovalNotification).
-	if as.notificationStore != nil {
+	if as.notificationStore != nil && !as.advanceCollapsedRow(approvalID, sessionID) {
 		if err := as.notificationStore.SetMetadata(approvalID, "approval_decision", decisionStr); err != nil {
 			log.Warn("[ApprovalService] could not persist approval decision in notification", "err", err)
 		}
@@ -298,4 +299,37 @@ func (as *ApprovalService) ListPendingApprovals(
 	return connect.NewResponse(&sessionv1.ListPendingApprovalsResponse{
 		Approvals: protos,
 	}), nil
+}
+
+// collapsedApprovalRows is implemented by the history store: an approval row
+// that stands for several pending approvals of a session can be handed on.
+type collapsedApprovalRows interface {
+	AdvanceApproval(decidedID string, head notifications.ApprovalHead) (bool, error)
+}
+
+// advanceCollapsedRow keeps the collapsed "x20" row of a session alive, pointed
+// at the next pending approval, while any other approval of that session still
+// waits: deciding one approval is not a decision on the others, whose commands
+// the operator has not seen. It reports whether the row was handed on.
+func (as *ApprovalService) advanceCollapsedRow(decidedID, sessionID string) bool {
+	rows, ok := as.notificationStore.(collapsedApprovalRows)
+	if !ok || sessionID == "" {
+		return false
+	}
+	var next *PendingApproval
+	for _, a := range as.approvalStore.GetBySession(sessionID) {
+		if a.ID != decidedID && (next == nil || !a.CreatedAt.Before(next.CreatedAt)) {
+			next = a
+		}
+	}
+	if next == nil {
+		return false
+	}
+	advanced, err := rows.AdvanceApproval(decidedID, notifications.ApprovalHead{
+		ID: next.ID, Title: approvalNotificationTitle(next), Message: buildApprovalMessage(next), Metadata: approvalNotificationMetadata(next),
+	})
+	if err != nil {
+		log.Warn("[ApprovalService] could not hand the collapsed approval row to the next approval", "approval_id", decidedID, "err", err)
+	}
+	return advanced
 }

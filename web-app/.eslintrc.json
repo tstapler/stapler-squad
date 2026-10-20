@@ -110,10 +110,39 @@
   },
   "overrides": [
     {
+      "files": ["src/components/sessions/**/*.ts", "src/components/sessions/**/*.tsx", "src/lib/files/**/*.ts", "src/lib/files/**/*.tsx"],
+      "excludedFiles": ["src/lib/files/analytics/**", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": { "analytics/no-direct-files-track": "error" }
+    },
+    {
       "files": ["**/*.ts", "**/*.tsx"],
       "rules": {
         "@typescript-eslint/no-non-null-assertion": "warn",
         "@typescript-eslint/consistent-type-imports": "warn"
+      }
+    },
+    {
+      "files": ["src/components/sessions/**/*.ts", "src/components/sessions/**/*.tsx", "src/lib/files/**/*.ts", "src/lib/files/**/*.tsx"],
+      "excludedFiles": [
+        "src/components/sessions/files/engine/**",
+        "src/components/sessions/files/extensions/**",
+        "**/__tests__/**",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spike.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@codemirror/*", "@replit/codemirror-vim", "@lezer/*", "codemirror"],
+                "message": "ADR-036: import the EditorEngine/Highlighter/MergeSurface ports from files/engine; CodeMirror stays inside files/engine/ and files/extensions/."
+              }
+            ]
+          }
+        ]
       }
     },
     {

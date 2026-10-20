@@ -10,14 +10,15 @@ package services
 
 // terminalWriteRPCs are the RPCs that can type into or restart a pane.
 var terminalWriteRPCs = map[string]string{
-	"SessionService.WriteToSession":         `types raw input into the agent pane (Story 5.2: refused for a hidden target)`,
-	"SessionService.UpdateSession":          `classified by field, see updateSessionFieldClass: steer_message types into the pane, program and auto_approve restart it and type a marker`,
-	"SessionService.SwitchWorkspace":        `directory switch types cd into the pane, revision and worktree switches restart the agent (refused for a hidden target)`,
-	"SessionService.RestartSession":         `restarts the agent and types a marker into the new pane (refused for a hidden target)`,
-	"SessionService.SpawnShell":             `runs an arbitrary command in a new sibling tmux session in the workspace; refused for a hidden target with RestartShell (T-RO-17)`,
-	"SessionService.RestartShell":           `relaunches a session shell; refused for a hidden target with the other restart RPCs`,
-	"SessionService.ReplyToPendingQuestion": `types one option digit into a hidden session's question dialog; the claim-gated, audited UI exception of ADR-010 (Story 5.6)`,
-	"GitHubUserService.NudgeSessionForPR":   `types a prompt into the linked session through SteerInstanceGuarded`,
+	"SessionService.WriteToSession":           `types raw input into the agent pane (Story 5.2: refused for a hidden target)`,
+	"SessionService.UpdateSession":            `classified by field, see updateSessionFieldClass: steer_message types into the pane, program and auto_approve restart it and type a marker`,
+	"SessionService.SwitchWorkspace":          `directory switch types cd into the pane, revision and worktree switches restart the agent (refused for a hidden target)`,
+	"SessionService.RestartSession":           `restarts the agent and types a marker into the new pane (refused for a hidden target)`,
+	"SessionService.SpawnShell":               `runs an arbitrary command in a new sibling tmux session in the workspace; refused for a hidden target with RestartShell (T-RO-17)`,
+	"SessionService.RestartShell":             `relaunches a session shell; refused for a hidden target with the other restart RPCs`,
+	"SessionService.ReplyToPendingQuestion":   `types one option digit into a hidden session's question dialog; the claim-gated, audited UI exception of ADR-010 (Story 5.6)`,
+	"GitHubUserService.NudgeSessionForPR":     `types a prompt into the linked session through SteerInstanceGuarded`,
+	"SessionService.InvokeNotificationAction": `ANSWER_QUESTION types the answer keys into a visible session's question dialog through PaneReplyCore (lease, audit line, frame checks); the other kinds write no pane`,
 }
 
 // notTerminalWriteReasons records why a lifecycle-looking RPC is not a terminal write.
@@ -71,7 +72,7 @@ var notTerminalWriteRPCs = map[string][]string{
 	},
 	"GuidanceRequestService": {
 		"AnswerGuidanceRequest", "CreateGuidanceRequest", "GetGuidanceRequest", "ListAllPendingGuidanceRequests",
-		"ListGuidanceRequests",
+		"ListGuidanceRequests", "ListSavedGuidanceAnswers",
 	},
 	"HandoffSummaryService": {
 		"GetHandoffSummary", "TriggerHandoffSummary",
@@ -90,6 +91,9 @@ var notTerminalWriteRPCs = map[string][]string{
 	"LLMBackendService": {
 		"GetLLMBackendSettings", "UpdateLLMBackendSettings",
 	},
+	"WakeTriggerService": {
+		"CancelWakeTrigger", "CreateOperatorReminder", "ListPeerHelpRequests", "ListWakeTriggers",
+	},
 	"RemoteService": {
 		"CreateRemote", "DeleteRemote", "GenerateRemoteIdentity", "ListRemotes", "TestRemoteConnection",
 		"TrustRemoteHostKey",
@@ -106,7 +110,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"GetBackgroundModels", "GetCallbackConfig", "GetCaptureTap", "GetClaudeConfig", "GetClaudeHistoryDetail",
 		"GetClaudeHistoryMessages", "GetConfigFileRules", "GetCurrentDatabase", "GetDeliveryGateStats",
 		"GetDetectionEvents", "GetEscapeAnalyticsGlobalSummary", "GetEscapeAnalyticsSummary", "GetFeatureFlags",
-		"GetFileContent", "GetHookStatus", "GetJulesConfig", "GetLauncherPresets", "GetLogs",
+		"GetFileContent", "GetFileTransportCapabilities", "GetHookStatus", "GetJulesConfig", "GetLauncherPresets", "GetLogs",
 		"GetNotificationHistory", "GetPRComments", "GetPRInfo", "GetProgramAnalytics", "GetProviderLimits",
 		"GetReviewQueue", "GetSession", "GetSessionDefaults", "GetSessionDiff", "GetSlackConfig",
 		"GetStreamHubRolloutStatus", "GetTaggingClassifierConfig", "GetTerminalSnapshot", "GetTmuxVersionStatus",
@@ -116,18 +120,18 @@ var notTerminalWriteRPCs = map[string][]string{
 		"ListPromptHistory", "ListSessions", "ListShells", "ListSlashCommands", "ListTaggingRules",
 		"ListTriggerFireEvents", "ListWorkflows", "ListWorkspaceTargets", "ListWorktrees", "LogClientEvents",
 		"LogUserInteraction", "MarkNotificationRead", "MergeDatabase", "MergePR", "PinSession", "PostPRComment",
-		"PreviewDestinationPath", "ProbeProgram", "PruneHiddenSessionNotifications", "QueryEscapeAnalytics",
+		"PreviewDestinationPath", "ProbeProgram", "PruneHiddenSessionNotifications", "QueryEscapeAnalytics", "ReadFileRange",
 		"PickFanoutWinner", "ReclassifySessionTags", "ReloadClaudeSettingsRules", "RenameSession", "ResolveApproval",
 		"ResolveDefaults", "RestartTmuxServer", "ResumeCrashedSession", "ResumeHibernatedSession", "RetrySession",
 		"RetrySessionCreation", "RevokeEgressConsent", "RunOneShot", "RunWorkflow", "SaveRulesToConfigFile",
-		"SearchClaudeHistory", "SearchFiles", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
-		"SetStreamHubSessionOverride", "StopShell", "StreamTerminal", "SwitchDatabase",
+		"SearchClaudeHistory", "SearchContent", "SearchFiles", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
+		"SetStreamHubSessionOverride", "StatFile", "StopShell", "StreamTerminal", "SwitchDatabase",
 		"TestJulesConnection", "TestSlackWebhook", "UnarchiveSession", "UnpinSession", "UpdateBackgroundModels",
 		"UpdateCallbackConfig", "UpdateClaudeConfig", "UpdateFeatureFlag", "UpdateGlobalDefaults",
 		"UpdateJulesConfig", "UpdateProject", "UpdateSlackConfig", "UpdateTaggingClassifierConfig",
 		"UpdateWorkflow", "UpsertAlias", "UpsertApprovalRule", "UpsertDirectoryRule", "UpsertProfile",
 		"UpsertProgramConfig", "UpsertTaggingRule", "ValidateRules", "WatchReviewQueue", "WatchSessions",
-		"WatchWorkflows",
+		"WatchWorkflows", "WriteFile",
 	},
 	"SessionSummaryService": {
 		"GetSessionSummary", "RegenerateSessionSummary",

@@ -6,7 +6,7 @@ import { create } from "@bufbuild/protobuf";
 import { SessionService, ListSessionsRequestSchema } from "@/gen/session/v1/session_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { getConnectTransport } from "@/lib/api/transport";
-import type { HiddenSessionRef, HiddenSessionSummary } from "@/lib/utils/backgroundActivity";
+import type { BackgroundOutcome, HiddenSessionRef, HiddenSessionSummary } from "@/lib/utils/backgroundActivity";
 import { knownHiddenSessions, rememberHiddenSession } from "@/lib/utils/hiddenSessionRegistry";
 
 export const BACKGROUND_POLL_MS = 30_000;
@@ -27,6 +27,10 @@ function stateOf(status: SessionStatus): HiddenSessionSummary["state"] {
   if (status === SessionStatus.ACTIVE || status === SessionStatus.READY) return "running";
   if (status === SessionStatus.STOPPED) return "stopped";
   return "other";
+}
+
+export function outcomeOf(raw: string | undefined): BackgroundOutcome {
+  return raw === "completed" || raw === "failed" ? raw : "unknown";
 }
 
 /**
@@ -58,6 +62,7 @@ export function useBackgroundSessions(enabled: boolean, intervalMs = BACKGROUND_
         title: s.title,
         state: stateOf(s.status),
         updatedAtMs: s.updatedAt ? Number(s.updatedAt.seconds) * 1000 : 0,
+        backgroundOutcome: outcomeOf(s.backgroundOutcome),
       }));
       next.forEach(rememberHiddenSession);
       const live = new Set(next.flatMap((s) => [s.id, s.title]));

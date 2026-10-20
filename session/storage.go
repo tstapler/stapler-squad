@@ -1387,6 +1387,11 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 	return s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
 }
 
+// ListItemSessionsBySessionUUIDs batches GetItemSessionBySessionUUID: one query for all UUIDs.
+func (s *Storage) ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]ItemSessionSummary, error) {
+	return s.repo.ListItemSessionsBySessionUUIDs(ctx, uuids)
+}
+
 // IsDiagnoseCaller reports whether sessionUUID is currently linked to a
 // backlog item with SessionRoleDiagnose — i.e. whether it's a dispatched
 // Diagnose & Nudge investigation session, as opposed to any other role. Used

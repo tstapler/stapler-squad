@@ -1382,6 +1382,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	})
 
 	writer := h.writerFor(instance)
+	noteOperatorOpen(instance)
 
 	h.performInitialResizeNudge(writer, instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)
 
@@ -2139,6 +2140,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	writer := h.writerFor(instance)
+	noteOperatorOpen(instance)
 	subscriberID := h.attachHubSubscriber(connCtx, hub, hubSubscriberAttachment{
 		writer:          writer,
 		stream:          stream,
@@ -3587,6 +3589,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	// Method calls (MarkViewed, ResizePTY, etc.) and write paths are left as-is.
 	snap := instance.Snapshot()
 	writer := h.writerFor(instance)
+	if shellTmuxSessionName == "" {
+		noteOperatorOpen(instance)
+	}
 	cpt := resolveCapturePaneTarget(instance, snap, shellTmuxSessionName, writer)
 	sessionID := cpt.sessionID
 	tmuxSessionName := cpt.tmuxSessionName
