@@ -21,10 +21,13 @@ func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidance 
 		Store: deps.Storage, Guidance: guidance, Titles: titles.Title,
 		Enabled: func() bool { return wakeDispatcherEnabled(config.LoadConfig()) },
 	}
+	if deps.WakeMetrics == nil {
+		deps.WakeMetrics = wakes.NewMetrics()
+	}
 	if deps.Storage != nil {
 		notifier := wakeNotifier{bus: deps.EventBus}
 		svcDeps.ExpireOverdue = func(ctx context.Context) error {
-			_, err := wakes.ExpireOverdue(ctx, deps.Storage, notifier, time.Now())
+			_, err := wakes.ExpireOverdue(ctx, deps.Storage, notifier, deps.WakeMetrics, time.Now())
 			return err
 		}
 	}

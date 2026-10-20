@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
@@ -35,6 +36,9 @@ import (
 // Use BuildDependencies to construct and wire them in the correct order.
 // See the initialization order comment on NewServer for dependency constraints.
 type ServerDependencies struct {
+	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
+	// so both feed one wake_trigger_total mirror; set at registration.
+	WakeMetrics             *wakes.Metrics
 	SessionService          *services.SessionService
 	Storage                 *session.Storage
 	Instances               []*session.Instance
