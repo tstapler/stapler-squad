@@ -40,12 +40,16 @@ export function useHashRowFocus(listState: ListState): void {
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const handled = useRef<string | null>(null);
   const interacted = useRef(false);
+  // Which list state the latest press happened in, and what `interacted` was when the list failed.
+  const lastPressState = useRef<ListState | null>(null);
+  const interactedBeforeFailure = useRef(false);
   const stateRef = useRef(listState);
   stateRef.current = listState;
 
   useEffect(() => {
     const mark = () => {
       interacted.current = true;
+      lastPressState.current = stateRef.current;
     };
     const opts = { capture: true } as const;
     document.addEventListener("keydown", mark, opts);
@@ -79,10 +83,16 @@ export function useHashRowFocus(listState: ListState): void {
     return () => clearTimeout(timer);
   }, [attempt]);
 
-  // The press that leaves "failed" is the Retry that triggered this load, not the user choosing another target.
+  // A press made while "failed" is the Retry that triggered this load, not the user choosing another target;
+  // a press made in any other state is real interaction and must survive the retry.
   const previousState = useRef(listState);
   useEffect(() => {
-    if (previousState.current === "failed" && listState !== "failed") interacted.current = false;
+    const prev = previousState.current;
+    if (prev !== "failed" && listState === "failed") interactedBeforeFailure.current = interacted.current;
+    if (prev === "failed" && listState !== "failed" && lastPressState.current === "failed") {
+      interacted.current = interactedBeforeFailure.current;
+      lastPressState.current = null;
+    }
     previousState.current = listState;
   }, [listState]);
 

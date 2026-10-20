@@ -86,6 +86,18 @@ describe("useHashRowFocus", () => {
     }
   });
 
+  it("keeps an interaction made before the load failed, so a later Retry does not let the row steal focus", () => {
+    setHashNow(ROW_A);
+    const { rerender } = render(<HashFocusHarness state="loading" />);
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    rerender(<HashFocusHarness state="failed" />);
+    fireEvent.pointerDown(document.body);
+    rerender(<HashFocusHarness state="loading" />);
+    rerender(<HashFocusHarness state="loaded" />);
+    expect(document.getElementById(ROW_A)).not.toHaveFocus();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("still does not steal focus from a key press made after the Retry while the list loads", () => {
     setHashNow(ROW_A);
     const { rerender } = render(<HashFocusHarness state="failed" />);
