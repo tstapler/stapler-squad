@@ -74,7 +74,7 @@ func (h *systemGateHarness) blockWithGate(t *testing.T, from, to session.Backlog
 	}
 }
 
-func newItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) *session.BacklogItemData {
+func systemItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) *session.BacklogItemData {
 	t.Helper()
 	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestGuardedTransitionCaller_should_NameQueueClaimAndJulesDispatch_When_Give
 func TestForceResetItem_should_ReturnDenialAndLeaveStatus_When_OperatorGateBlocksReviewToInProgress(t *testing.T) {
 	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	item := newItemAt(t, svc, session.BacklogStatusReview)
+	item := systemItemAt(t, svc, session.BacklogStatusReview)
 	remove := h.blockWithGate(t, session.BacklogStatusReview, session.BacklogStatusInProgress)
 
 	_, err := svc.forceResetItem(context.Background(), item, session.TriggeredByUser)
@@ -130,7 +130,7 @@ func TestForceResetItem_should_ReturnDenialAndLeaveStatus_When_OperatorGateBlock
 func TestForceResetItem_should_ReDecideAgainstTheTrueStatus_When_ItemLeftReviewAfterTheRead(t *testing.T) {
 	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
-	stale := newItemAt(t, svc, session.BacklogStatusReview)
+	stale := systemItemAt(t, svc, session.BacklogStatusReview)
 	_, err := svc.storage.RawArchiveBacklogItem(context.Background(), stale.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
@@ -184,7 +184,7 @@ func TestAttachSessionToItem_should_ReportDenialAndKeepStatus_When_SystemGateBlo
 func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressToReview(t *testing.T) {
 	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	item := newItemAt(t, svc, session.BacklogStatusReview)
+	item := systemItemAt(t, svc, session.BacklogStatusReview)
 	inProgress, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
 		Caller: session.CallerAutoReopenFailedReview, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
@@ -201,7 +201,7 @@ func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressT
 func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcurrentMover(t *testing.T) {
 	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
-	item := newItemAt(t, svc, session.BacklogStatusPRPending)
+	item := systemItemAt(t, svc, session.BacklogStatusPRPending)
 	_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
 		Caller: session.CallerAutoReopenForPRFix, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
@@ -220,7 +220,7 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	svc := NewBacklogService(createTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
 	handler := NewBacklogDebugMutateHandler(svc.storage)
-	item := newItemAt(t, svc, session.BacklogStatusIdea)
+	item := systemItemAt(t, svc, session.BacklogStatusIdea)
 	before := session.EngineBypassCount(session.CallerDebug)
 
 	post := func(fn http.HandlerFunc, body string) int {
