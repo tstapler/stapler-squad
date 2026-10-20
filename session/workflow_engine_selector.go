@@ -479,12 +479,11 @@ func (v engineView) compareGateErrors(legacy error, ans gateAnswer) DivergenceCl
 }
 
 func (v engineView) compareGateStatuses(legacy, enf []GateStatus) DivergenceClass {
-	if v.unchecked {
-		if cls := compareGateStatuses(legacy, enf); cls == ClassGateExtra {
-			return classifyExtraGates(legacy, enf)
-		}
+	cls := compareGateStatuses(legacy, enf)
+	if v.unchecked && cls == ClassGateExtra {
+		return classifyExtraGates(legacy, enf)
 	}
-	return compareGateStatuses(legacy, enf)
+	return cls
 }
 
 // classifyExtraGates returns guard_new when every extra unsatisfied gate is a
