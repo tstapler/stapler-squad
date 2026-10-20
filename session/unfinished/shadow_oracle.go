@@ -74,14 +74,18 @@ func (g *GoGitVCSReader) OracleDiffShortstat(worktreePath string) (DiffStat, err
 	return g.shadowOracle().diffShortstatUncached(worktreePath)
 }
 
-// OracleBegin registers a sampled run as an oracle user. It waits only while
+// OracleBegin registers a sampled run as an oracle user. It blocks only while
 // the last releaser is clearing (counter -1), so a run never starts on handles
 // that are being closed.
 func (g *GoGitVCSReader) OracleBegin() {
 	for {
 		n := g.scanSkip.oracleUsers.Load()
 		if n < 0 {
-			runtime.Gosched()
+			if gate := g.scanSkip.oracleGate.Load(); gate != nil {
+				<-*gate
+			} else {
+				runtime.Gosched() // clearer has not published its gate yet
+			}
 			continue
 		}
 		if g.scanSkip.oracleUsers.CompareAndSwap(n, n+1) {
@@ -105,13 +109,30 @@ func (g *GoGitVCSReader) OracleDone() {
 			if !g.scanSkip.oracleUsers.CompareAndSwap(1, -1) {
 				continue
 			}
-			if o := g.scanSkip.oracle.Load(); o != nil {
-				o.ClearCache()
-			}
-			g.scanSkip.oracleUsers.Store(0)
+			g.clearOracleLast()
 			return
 		default: // unbalanced Done; nothing to release
 			return
 		}
 	}
+}
+
+// clearOracleLast runs with oracleUsers at -1. The deferred reset runs even if the
+// clear panics, so a panic cannot leave every later OracleBegin blocked.
+func (g *GoGitVCSReader) clearOracleLast() {
+	gate := make(chan struct{})
+	g.scanSkip.oracleGate.Store(&gate)
+	defer func() {
+		g.scanSkip.oracleUsers.Store(0)
+		close(gate)
+	}()
+	o := g.scanSkip.oracle.Load()
+	if o == nil {
+		return
+	}
+	if g.scanSkip.clearOracle != nil {
+		g.scanSkip.clearOracle(o)
+		return
+	}
+	o.ClearCache()
 }

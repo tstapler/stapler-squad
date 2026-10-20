@@ -246,3 +246,50 @@ func TestShadowOracle_ShouldClearOnlyOnLastRelease_WhenRunsOverlap(t *testing.T)
 	g.OracleDone() // unbalanced: no-op, no panic
 	assert.Zero(t, g.scanSkip.oracleUsers.Load())
 }
+
+func oracleWithClear(clear func(*GoGitVCSReader)) *GoGitVCSReader {
+	g := &GoGitVCSReader{}
+	g.scanSkip.oracle.Store(&GoGitVCSReader{})
+	g.scanSkip.clearOracle = clear
+	return g
+}
+
+// A panicking ClearCache used to leave oracleUsers at -1 forever, so every later
+// OracleBegin waited for a release that never came.
+func TestShadowOracle_ShouldResetCounter_WhenClearPanics(t *testing.T) {
+	t.Parallel()
+	g := oracleWithClear(func(*GoGitVCSReader) { panic("clear failed") })
+	g.OracleBegin()
+	require.Panics(t, g.OracleDone)
+	require.Zero(t, g.scanSkip.oracleUsers.Load(), "the reset must survive the panic")
+
+	g.OracleBegin() // returns instead of waiting on a counter stuck at -1
+	assert.EqualValues(t, 1, g.scanSkip.oracleUsers.Load())
+}
+
+// A run that begins while the last releaser clears waits for the clear to end.
+func TestShadowOracle_ShouldBlockBegin_UntilClearFinishes(t *testing.T) {
+	t.Parallel()
+	inClear, release := make(chan struct{}), make(chan struct{})
+	var cleared atomic.Bool
+	g := oracleWithClear(func(*GoGitVCSReader) {
+		close(inClear)
+		<-release
+		cleared.Store(true)
+	})
+	g.OracleBegin()
+	releaser := make(chan struct{})
+	go func() { defer close(releaser); g.OracleDone() }()
+	<-inClear
+
+	started, begun := make(chan struct{}), make(chan bool)
+	go func() {
+		close(started)
+		g.OracleBegin()
+		begun <- cleared.Load()
+	}()
+	<-started
+	close(release)
+	assert.True(t, <-begun, "Begin returned before the clear finished")
+	<-releaser
+}

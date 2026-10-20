@@ -73,6 +73,12 @@ type scanSkipState struct {
 	// oracleUsers counts sampled runs holding the oracle; -1 while the last
 	// releaser clears it (see OracleBegin/OracleDone).
 	oracleUsers atomic.Int32
+	// oracleGate is closed when the clear that set oracleUsers to -1 ends, waking
+	// OracleBegin waiters without spinning. A waiter that loads a stale (closed)
+	// gate just loops once more.
+	oracleGate atomic.Pointer[chan struct{}]
+	// clearOracle overrides the oracle's ClearCache (tests inject a panic).
+	clearOracle func(*GoGitVCSReader)
 
 	// passSF coalesces HasUncommittedPass callers; its result type differs
 	// from hasUncommittedSF's, so it needs its own group.
