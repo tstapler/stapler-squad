@@ -158,13 +158,10 @@ func TestTransitionCallerAudit_OffGraphEdgesAreExactlyTheDecidedOnes(t *testing.
 		"lifecycle_recover_drifted_pr: ready->pr_pending":       true,
 		"lifecycle_recover_drifted_pr: queued->pr_pending":      true,
 		"lifecycle_recover_drifted_pr: in_progress->pr_pending": true,
-		"mcp_report_blocked: review->review":                    true,
 	}
 	require.Equal(t, sortedSetKeys(want), sortedSetKeys(got))
 
-	require.Len(t, KnownOffGraphCallerEdges(), 1, "tolerated caller bugs are pinned; fix the caller instead of growing this")
-	k := KnownOffGraphCallerEdges()[0]
-	require.False(t, IsSystemRequired(k.Edge.From, k.Edge.To), "a tolerated caller bug must not leak into the system-required set")
+	require.Empty(t, KnownOffGraphCallerEdges(), "tolerated caller bugs are pinned; fix the caller instead of growing this")
 }
 
 func TestTransitionCallerAudit_ArchiveWildcardOnlyTargetsArchived(t *testing.T) {

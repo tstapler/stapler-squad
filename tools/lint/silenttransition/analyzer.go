@@ -101,6 +101,7 @@ var OperatorCallers = map[string]bool{
 	"operator_update_pr_association": true,
 	"operator_trigger_triage":        true,
 	"operator_force_reset":           true,
+	"operator_notification_action":   true,
 }
 
 // targetPackagePath is the package these methods must resolve to — guards
