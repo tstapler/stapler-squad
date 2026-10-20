@@ -112,7 +112,8 @@ func TestNewSampler_ShouldReadLiveSelf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sample(self): %v", err)
 	}
-	if sm.CPUTotal() <= 0 || sm.Load1 < 0 {
+	// CPU time is read in clock ticks (10 ms on Linux), so a fresh process may report 0.
+	if sm.CPUTotal() < 0 || sm.Load1 < 0 {
 		t.Fatalf("implausible self sample: cpu=%v load1=%v", sm.CPUTotal(), sm.Load1)
 	}
 }
