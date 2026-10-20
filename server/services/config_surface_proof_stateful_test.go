@@ -52,8 +52,8 @@ func stfRegressedAnswer(t *testing.T, configure func(svc *BacklogService, edge s
 	require.NoError(t, err)
 
 	require.NoError(t, enfTransition(t.Context(), svc, item.ID, session.BacklogStatusRefining, ""), "first attempt satisfies the gate")
-	_, err = storage.Rollback(t.Context(), item.ID, session.BacklogStatusIdea,
-		&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusRefining)}, "test")
+	// DebugForce, not Rollback: Rollback clears the undone edge's latches.
+	_, err = storage.DebugForce(t.Context(), item.ID, session.BacklogStatusIdea, "test")
 	require.NoError(t, err)
 	pending := session.AcCriteriaJSON(stfACPending)
 	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &pending}, nil)
