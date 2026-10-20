@@ -65,6 +65,15 @@ The Features rows have the ids `flag-row-backlog-workflow-engine-shadow`, `-enfo
 
 Set `SSQ_URL` to read another instance, for example `SSQ_URL=http://localhost:62871 make workflow-engine-soak-status`. `/actuator` sits behind the same authentication as `/actuator/metrics`. A 401 makes the script exit 2.
 
+The actuator reports verdicts and counters per class, not the class modes. Read the modes from the status RPC (`class_modes`), the Stages banner, or the startup log line `workflow engine gate: ... class_modes=operator:shadow,agent:shadow,system:shadow`. Call the RPC directly with:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' -d '{}' \
+  http://localhost:8543/api/session.v1.BacklogService/GetWorkflowEngineStatus
+```
+
+The RPC (and so the banner) returns `not_found: feature "backlog" is not enabled` while the `backlog` feature flag is off, which is the default on a fresh instance. Turn `backlog` on in Settings > Features first.
+
 ### Soak parameters
 
 The service holds these values as constants (`session/workflow_engine_soak.go`), so a verdict cannot be tuned to pass. The owner approved them on 2026-10-17.
@@ -99,7 +108,7 @@ N=20 and the floor of 100 are printed as targets. They are not reachable for the
 3. The per-caller table: every registered caller driven through the choke point, in `server/services/backlog_gate_classes_test.go`.
 4. The replay report from `make workflow-engine-replay` on a copy of the database.
 
-The operator class expects every edge in the graph, so it needs the low-volume acknowledgement or per-edge acknowledgements to read READY at live volume.
+The operator class expects every edge in the graph, so it needs the low-volume acknowledgement or per-edge acknowledgements to read READY at live volume. The low-volume acknowledgement waives the per-edge N only for an edge that has at least one `path=transition` sample. An edge with zero samples still reads "no owner acknowledgement" until you list it under `edges`. It does not waive the history window W either, so no class can read READY before W days of history exist.
 
 ## Prepare
 
@@ -111,18 +120,18 @@ In the first deployed hour, and again before each flip, print the live stage con
 make workflow-engine-soak-status ARGS=--config-diff
 ```
 
-The preview lists items that would lose every exit, or sit in a disabled stage, under Enforce. If it lists any item, the command exits 1. Do not flip a class until you have decided what to do with each previewed item, and acknowledged it. Fix the stage configuration, or move the item, before the flip.
+The preview lists items that would lose every exit, or sit in a disabled stage, under Enforce. If it lists any item, the command exits 1. It also exits 1 while any class is NOT READY, so a clean preview (`0 item(s)`) on an instance with no soak evidence still exits 1; read the `stranded item preview` line, not only the exit code. Do not flip a class until you have decided what to do with each previewed item, and acknowledged it. Fix the stage configuration, or move the item, before the flip.
 
 ### 2. Run the replay on a copy of the database
 
 Never point the replay at the live database file. It refuses a path inside a live state directory, and it refuses a copy with a non-empty `-wal` sidecar.
 
 ```bash
-sqlite3 ~/.stapler-squad/<your database file> ".backup /tmp/workflow-replay.db"
+sqlite3 ~/.stapler-squad/sessions.db ".backup /tmp/workflow-replay.db"
 make workflow-engine-replay DB=/tmp/workflow-replay.db
 ```
 
-Replace `<your database file>` with the SQLite file in your config directory. Exit 0 means no fixed agent or system edge is denied with no gate. Exit 1 means one is, and the output names it. Exit 2 means the `DB` argument is missing. The output includes `go test` lines such as `=== RUN`.
+`sessions.db` is the SQLite file in the config directory (an isolated instance keeps it in its own state directory). Exit 0 means no fixed agent or system edge is denied with no gate. Exit 1 means one is, and the output names it. Exit 2 means the `DB` argument is missing. The output includes `go test` lines such as `=== RUN`.
 
 The replay marks `ready->pr_pending` and `idea->pr_pending` as `n/a:no_stored_transition`. Those system-required edges have no stored stage transition, so no configuration edit can attach an operator gate to them. For those edges the guarantee holds at the graph level only.
 
@@ -169,7 +178,7 @@ make workflow-engine-soak-status ARGS="--ack-file $HOME/workflow-engine-acks.jso
 
 Without `--class`, the target checks `operator`, `agent` and `system` in turn and exits with the worst code. The output prints the reasons a class is not READY. The unacknowledged `guard_new` lines name the exact `caller|from->to` string to add.
 
-Exit codes:
+Exit codes of `scripts/workflow-engine-soak-status.sh`. `make workflow-engine-soak-status` returns make's own status 2 for any non-zero script exit, so read the per-class `exit=` lines or run the script directly (`scripts/workflow-engine-soak-status.sh --class operator`) when you need the exact code:
 
 | Exit | Meaning |
 |---|---|
