@@ -1809,3 +1809,17 @@ Actual usage is not readable in the table's unit. The only per-story figure avai
 | 1.5.3 | 306k | 315k | 1.0x |
 
 Reading: individual stories vary widely, several small stories overran by more than 50% (2.1.3, 3.1.2, 3.1.4), mostly from Files-line stops that needed a resume or one test hang, while the large stories ran under or at estimate. These numbers exclude the dispatcher's own (this session's) verification cost, which the table's x1.75 multiplier is meant to cover and which is not measured here. Wrong estimate, not a surprise: recurring cause is stories whose `Files:` lines omit a file they need.
+
+## W11 errata (Story 1.5.4, merged)
+
+Verified by the dispatcher after merge: `go build ./...`, `go vet ./...`, gofmt, `make lint-custom`, `make ready-complexity-gate` (0 issues), `go -C tools/lint test ./silenttransition/...`, and `-race` filtered runs of `./session`, `./server/services` (inventory, surface-proof, gate, Jules, archive, reconcile) plus `./server/mcp`. The unfiltered `./session` and `./server/services` suites were not run.
+
+- **Overlap check**: `HEAD..origin/main` empty; open PRs #1107, #1106, #1099, #1098, #1073 touch none of the backlog, workflow, storage, Jules or `silenttransition` files. The live-backlog item "Investigate false triage artifact does not exist error" is still UNVERIFIED (MCP unreachable).
+- **Rename method**: not a single `ast-grep` command. The old names collide with the `BacklogService` RPC handlers and proto request types, so the worker renamed definitions and prefixed `Raw`/`raw` at each compiler-error position. Commit bodies say so. Remaining old-name hits are RPC handler names, not `Storage` writers.
+- **Compile state between commits**: `go build ./...` green after commit 1; `session` tests do not compile between commits 2 and 4; `go vet ./...` green from commit 4 on.
+- **`GatedReconcileStuck`**: appends the "[auto] Transitioned to review" line in the same UPDATE via new unexported `rawTransitionBacklogItemStatusWithNote`; one status event and one `ChangeStatusTransition` per item. Inventory scanner primitive set gained `GatedReconcileStuck` and `TransitionBacklogItemStatusWithNote`; `session/transition_callers.go` untouched. **Story 1.5.7a must revisit.**
+- **`GatedSetPRAndTransition`** takes `PRAssociation{URL, Number, Summary, Guard}`; reassignment (observed `pr_pending`) skips the engine decision (`pr_pending->pr_pending` is not an edge, ADR-007 D7) and `PRReassignmentGuard` decides.
+- **`GatedUnarchive`** rejects a precondition carrying `ExpectedUpdatedAt` or `Note`; under Enforce, unarchiving a non-archived item decides `X->idea` and may be denied (today a silent flip).
+- **New annotation**: one `//nolint:silenttransition` on `RawSetBacklogItemPRAndTransition` in `reconcileOrphanedAgentPRs` (9 now on status-write calls).
+- **`create` rule**: `session/backlog_sync.go` is `exempt: forwarder` (item comes from a plugin `MapToBacklogItem`); `Storage.CreateBacklogItem` is a forwarder too.
+- **Not verified**: the registry-pin test was not mutation-tested for drift; the worker's `./server` failure `TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled` is unconfirmed on a clean tree (likely the `.placeholder` dist).
