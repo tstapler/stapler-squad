@@ -1,6 +1,8 @@
 /**
- * Characterises SessionDetailView's raw history.replaceState file-selection hash
- * before it moves behind the nav facade: exact `#file=` encoding, and clearing it.
+ * SessionDetailView no longer writes the `#file=` hash: useFilesDeepLink (inside FilesTab) is
+ * the single writer. SessionDetailView only seeds the initial selection from the hash and
+ * forgets it when the session changes. The hash encoding itself is covered by the
+ * useFilesDeepLink tests.
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -30,8 +32,9 @@ jest.mock("@/lib/hooks/useShells", () => require("./sessionDetailViewTestFixture
 
 // Exposes the selection callbacks so the test can drive the file selection.
 jest.mock("../FilesTab", () => ({
-  FilesTab: (props: { onSelectedPathChange: (p: string | null) => void }) => (
+  FilesTab: (props: { initialSelectedPath: string | null; onSelectedPathChange: (p: string | null) => void }) => (
     <div>
+      <span data-testid="initial-path">{props.initialSelectedPath}</span>
       <button onClick={() => props.onSelectedPathChange("a/b.go")}>select-file</button>
       <button onClick={() => props.onSelectedPathChange(null)}>clear-file</button>
     </div>
@@ -56,7 +59,10 @@ const session = {
 installConsoleErrorSilencer();
 
 describe("SessionDetailView file-selection hash", () => {
-  it("writes #file=<encoded path> via replaceState and clears it again", () => {
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("seeds FilesTab from #file= and never writes the hash itself", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
     const replaceState = jest.spyOn(window.history, "replaceState");
     render(
       <SessionDetailView
@@ -66,13 +72,12 @@ describe("SessionDetailView file-selection hash", () => {
         onClose={jest.fn()}
       />,
     );
+    expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
 
     fireEvent.click(screen.getByText("select-file"));
-    expect(window.location.hash).toBe("#file=a%2Fb.go");
-    expect(replaceState).toHaveBeenLastCalledWith(null, "", "#file=a%2Fb.go");
-
     fireEvent.click(screen.getByText("clear-file"));
-    expect(window.location.hash).toBe("");
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("#file=a%2Fb.go");
     replaceState.mockRestore();
   });
 });
