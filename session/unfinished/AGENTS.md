@@ -61,7 +61,7 @@ leaves: `xsync` bucket locks and `singleflight` internals. `SharedObjectStore.mu
 
 ## Where the counters live
 
-- `report.go`: `BuildReport` (served at `/actuator/unfinished-scanner`, `server/actuator.go`) and the
+- `report.go`: `BuildReport(scanner)` (served at `/actuator/unfinished-scanner`, `server/actuator.go`) and the
   one startup INFO line (`LogStartup`).
 - `metrics_repostate.go`: the `unfinished.repostate.*` OTel catalog and its per-cache inputs;
   `metrics_duration.go`: graph-extension timing; `metrics.go`: scan cycles, full-walk reasons.
@@ -111,7 +111,7 @@ Hot files are split so each shared file has one editing story per wave
 | `gogit_vcs_reader_walkers.go` | untracked/tracked walkers | 0.1.2b -> 4.2.3b -> 4.4.1 rows |
 | `gogit_vcs_reader_mergebase.go` | `parentMemo`, plain-walk `findMergeBase` (paint-down-to-common), `countCommitsTo`, `reachableSet`; the shared walk lives in `repostate/walk.go` | 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
 | `aheadbehind.go` | ahead/behind extraction and the shared-memo/graph switch | 1.1.4a -> 2.1.2b -> 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
-| `flags.go` | `FlagSpec`/`Flags`, `FlagSpecs` (4 rollback units, `RemoveBy`), `EffectiveFlags` snapshot | not tracked in the plan table (added during implementation) |
+| `flags.go` | `FlagSpec`/`Flags`, `FlagSpecs` (4 rollback units, `RemoveBy`), `FlagsFromConfig` (the Scanner owns its immutable `Flags`, passed with `WithFlags`) | not tracked in the plan table (added during implementation) |
 | `scanstate.go` | `RefSnapshot` per-Burst prelude, `fillCommittedState` signature reuse | not tracked in the plan table (added during implementation) |
 | `scanstate_reader.go` | reader side of the prelude: `ResolveRefSnapshot`, `AheadBehindResolved`, ref-resolve counters | not tracked in the plan table (added during implementation) |
 | `scanskip_state.go` | `statSig` and the racy-timestamp rule | not tracked in the plan table (added during implementation) |

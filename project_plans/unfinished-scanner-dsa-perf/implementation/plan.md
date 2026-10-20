@@ -1780,8 +1780,10 @@ Deferred, with reason: none of the nine gaps; two choices are owner decisions by
 
 ## Follow-ups (deferred, repair iteration 2)
 
-- Thread ctx through scanRepo/VCSReader into repostate walks (interface change, ~73 call sites; singleflight shares leader ctx) - deferred, walks bounded by mergeBaseBFSLimit.
-- Package-level flagsSnapshot/currentScanner injection.
+- DONE (68745aeab, dfe966d8b, c7775eee3, da010893b): ctx threaded from the scan worker through `scanRepo`/`VCSReader` (`AheadBehind`, `CommitMessages`, `AheadBehindResolved`) into the repostate walks; `repostate.FlightCtx` keeps a cancelled leader from failing followers; a cancelled scan is dropped and never cached. Legacy plain walks, `HasUncommitted` and `DiffShortstat` still ignore ctx. See the ADR-009 addendum.
+- DONE (ebd4ec4ac): `flagsSnapshot`/`SetFlags`/`EffectiveFlags`/`currentScanner` removed; `Scanner` owns immutable `Flags` (`WithFlags`), `BuildReport`/`LogStartup`/`RegisterMetrics` take the scanner. `currentReader` stays for the debug endpoint that starts before the scanner exists.
+- DONE (e8e398836): with `shared_commit_state` on, `AheadBehindResolved` served a TTL-stale `AheadBehind` result after rejecting it by hash (surfaced once readers carried their own flags).
+- DONE (c747c72e9): flake `TestFileDiffMemo_ShouldMatchLegacyCounts_WhenDiffCounterOn`. Root cause was the stat-clean shortcut in `unstagedTargetList` (second-truncated mtime plus index-file-mtime racy check), not the memo: a same-size rewrite in the second the entry was recorded, then a later index write, was dropped from the legacy count. Nanoseconds now force a content hash.
 - DONE (cddb575d1): Shadow oracle refcount. `OracleBegin`/`OracleDone` count sampled runs; only the last release clears; `scanWorktree` defers the release.
 - DONE (a9de7ca87): Rate-limited rebuild on ErrGraphFull (`Options.GraphRebuildInterval`, default 5 min, CAS from the full generation; `graph_full_rebuilds_total`).
 - Comment-density sweep.

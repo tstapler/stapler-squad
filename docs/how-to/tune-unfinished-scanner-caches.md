@@ -4,7 +4,7 @@ The scanner's shared caches sit behind four rollback-unit flags. A unit's defaul
 `config.DefaultUnfinishedCaches` (`config/config.go`) after its own manual A/B passes (`baseline.md`,
 "S2 A/B"); today all four are on (`scan_skip` last, after the round-2 A/B showed engagement). The config key is the off-switch: an absent
 key keeps the default, an explicit `false` disables the unit (`session/unfinished/flags.go:24`). Flags are read once at startup, so every
-change below needs a restart (`SetFlags`, `session/unfinished/flags.go:72`, called from `server/dependencies.go`).
+change below needs a restart (`FlagsFromConfig` in `session/unfinished/flags.go`, handed to `NewScanner` via `WithFlags` in `server/dependencies.go`).
 
 ## Read the counters (no OpenTelemetry needed)
 
@@ -13,7 +13,7 @@ curl -s localhost:8543/actuator/unfinished-scanner | jq .
 ```
 
 The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it renders
-`unfinished.BuildReport()` (`session/unfinished/report.go`), built from atomics with no lock. Keys:
+`unfinished.BuildReport(scanner)` (`session/unfinished/report.go`), built from atomics with no lock. Keys:
 
 | Key | Meaning |
 |---|---|
