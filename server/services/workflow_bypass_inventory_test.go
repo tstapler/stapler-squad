@@ -86,6 +86,7 @@ var bypassInventory = []bypassSite{
 	exempt("session/storage.go", "Storage.UnarchiveBacklogItem", 1, wrapperReason),
 	exempt("session/storage.go", "Storage.SetBacklogItemPRAndTransition", 1, wrapperReason+"; its call is TransitionBacklogItemStatusWithPRFields"),
 	exempt("server/mcp/tools_backlog_dependencies.go", "backlogHandlers.transitionBacklogItemStatus", 1, delegateReason),
+	exempt("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "notification action forwards the operator's click to the RPC handler, which routes through the engine; Story 1.5.5 registers it as an operator caller"),
 
 	// Engine-routed: ask the WorkflowEngine today; re-pointed at the gate in Stories 1.5.5-1.5.7.
 	engineRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", "handler: CanTransition + ValidateGates before the write"),
