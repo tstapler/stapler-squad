@@ -1893,6 +1893,60 @@ func (s *BacklogService) writeSessionFilesLocked(item *session.BacklogItemData, 
 	return nil
 }
 
+// evaluateReviewFailureBreakers applies AutoReopenAfterFailedReview's two
+// repeated-failure circuit breakers. park is true when the streak survived the
+// escalated retry and the item must stay in review for remediation;
+// escalateRetryReason is non-empty when the respawn should be flagged as an
+// escalated (not identical) retry. BuildSessionInitialPrompt recomputes the same
+// streak from the verdict history, so no request field carries the reason.
+func (s *BacklogService) evaluateReviewFailureBreakers(ctx context.Context, item *session.BacklogItemData, sessions []session.ItemSessionSummary, recentVerdicts []session.ReviewVerdictSummary, verdictErr error) (escalateRetryReason string, park bool) {
+	itemID := item.ID
+	if verdictErr != nil {
+		log.Warn("[AutoReopenAfterFailedReview] GetRecentReviewVerdictSummaries failed", "item", itemID, "error", verdictErr)
+	} else if streak := session.ReviewFailureStreakLen(recentVerdicts); streak >= session.RepeatedFailureParkThreshold {
+		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", streak)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
+		return escalateRetryReason, true
+	} else if streak >= session.RepeatedFailureEscalationThreshold {
+		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly; granting one escalated retry before parking", "item", itemID, "streak", streak)
+		escalateRetryReason = recentVerdicts[0].Summary
+	}
+
+	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
+	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
+	// was killed, or hit its turn cap before ever calling submit_review_verdict
+	// is invisible to the check above — the ReviewFailureStreakLen check above
+	// never even sees it, so it can never trip on this failure shape no matter
+	// how many times it repeats. sessions (already fetched above for the work
+	// session cap check) has the review-role entries with ReviewVerdict
+	// eagerly loaded, so no extra query is needed. See
+	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
+	// loop (78 cycles in 24h) this closes. Same escalate-once-then-park shape
+	// as the verdict-summary streak above.
+	//
+	// The two streaks are checked as mutually exclusive (verdict-summary
+	// streak first, claiming the one escalation/park slot for this call if it
+	// has ANY signal at all) rather than independently — a mixed history
+	// (e.g. two matching FAIL verdicts further back, then the most recent
+	// review session crashed with no verdict) is rare enough in practice that
+	// picking one breaker over evaluating both isn't worth the added
+	// complexity here.
+	if escalateRetryReason == "" {
+		noVerdictStreak := session.NoVerdictStreakLen(recentReviewHadVerdict(sessions, session.RepeatedFailureParkThreshold))
+		switch {
+		case noVerdictStreak >= session.RepeatedFailureParkThreshold:
+			log.Info("[AutoReopenAfterFailedReview] review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", noVerdictStreak)
+			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
+			return escalateRetryReason, true
+		case noVerdictStreak >= session.RepeatedFailureEscalationThreshold:
+			log.Info("[AutoReopenAfterFailedReview] review sessions exited without ever writing a verdict; granting one escalated retry before parking", "item", itemID, "streak", noVerdictStreak)
+			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
+		}
+	}
+
+	return escalateRetryReason, false
+}
+
 // AutoReopenAfterFailedReview implements session.AutoReopenSpawner.
 // It always transitions the item from review back to in_progress (required
 // for request_review to become callable again — see its hardcoded
@@ -1983,55 +2037,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// reads recentVerdicts[0]/[1], so fetching more entries above is safe.
 	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
 
-	// escalateRetryReason is non-empty exactly when this call should proceed
-	// with a respawn but flag it as an escalated (not identical) retry.
-	// Consumed a few lines down where the prompt for the new session gets
-	// built, via priorSessions — no new request/proto field needed, since
-	// BuildSessionInitialPrompt already recomputes the identical streak from
-	// the same review-verdict history this function just queried.
-	var escalateRetryReason string
-
-	if verdictErr != nil {
-		log.Warn("[AutoReopenAfterFailedReview] GetRecentReviewVerdictSummaries failed", "item", itemID, "error", verdictErr)
-	} else if streak := session.ReviewFailureStreakLen(recentVerdicts); streak >= session.RepeatedFailureParkThreshold {
-		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", streak)
-		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
+	escalateRetryReason, park := s.evaluateReviewFailureBreakers(ctx, item, sessions, recentVerdicts, verdictErr)
+	if park {
 		return nil
-	} else if streak >= session.RepeatedFailureEscalationThreshold {
-		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly; granting one escalated retry before parking", "item", itemID, "streak", streak)
-		escalateRetryReason = recentVerdicts[0].Summary
-	}
-
-	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
-	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
-	// was killed, or hit its turn cap before ever calling submit_review_verdict
-	// is invisible to the check above — the ReviewFailureStreakLen check above
-	// never even sees it, so it can never trip on this failure shape no matter
-	// how many times it repeats. sessions (already fetched above for the work
-	// session cap check) has the review-role entries with ReviewVerdict
-	// eagerly loaded, so no extra query is needed. See
-	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
-	// loop (78 cycles in 24h) this closes. Same escalate-once-then-park shape
-	// as the verdict-summary streak above.
-	//
-	// The two streaks are checked as mutually exclusive (verdict-summary
-	// streak first, claiming the one escalation/park slot for this call if it
-	// has ANY signal at all) rather than independently — a mixed history
-	// (e.g. two matching FAIL verdicts further back, then the most recent
-	// review session crashed with no verdict) is rare enough in practice that
-	// picking one breaker over evaluating both isn't worth the added
-	// complexity here.
-	if escalateRetryReason == "" {
-		noVerdictStreak := session.NoVerdictStreakLen(recentReviewHadVerdict(sessions, session.RepeatedFailureParkThreshold))
-		switch {
-		case noVerdictStreak >= session.RepeatedFailureParkThreshold:
-			log.Info("[AutoReopenAfterFailedReview] review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", noVerdictStreak)
-			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
-			return nil
-		case noVerdictStreak >= session.RepeatedFailureEscalationThreshold:
-			log.Info("[AutoReopenAfterFailedReview] review sessions exited without ever writing a verdict; granting one escalated retry before parking", "item", itemID, "streak", noVerdictStreak)
-			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
-		}
 	}
 
 	workCount := 0
@@ -2107,38 +2115,46 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		Autonomous: true,
 	}))
 	if spawnErr != nil {
-		// Roll back: item should stay in review rather than stranded in in_progress
-		// with no active session. ReconcileStuckItems is an eventual fallback, but
-		// an explicit rollback provides faster recovery.
-		//
-		// The rollback precondition is tied to the in_progress row *this call*
-		// just wrote (ExpectedUpdatedAt: inProgress.UpdatedAt), not applied
-		// unconditionally. An unconditional rollback (precondition: nil) would
-		// blindly overwrite whatever status the item is in by the time the
-		// rollback runs — including a "done" reached in the meantime by a
-		// completely different, legitimate path (the live work session shipping
-		// on its own). That is exactly what happened live on 2026-07-20 to
-		// backlog item 0fd4a940 (PR #176): SpawnSessionFromItem failed after the
-		// item had already shipped, and the unconditional rollback silently
-		// dragged an already-done item back to "review" with no audit note,
-		// kicking off a stale-verdict reprocessing cascade. Scoping the
-		// precondition here means the rollback only fires if nothing else has
-		// touched the item since this function's own in_progress write landed.
-		rollbackPrecondition := &session.BacklogItemPrecondition{
-			ExpectedStatus:    string(session.BacklogStatusInProgress),
-			ExpectedUpdatedAt: &inProgress.UpdatedAt,
-		}
-		if _, rollbackErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
-			log.Error("[AutoReopenAfterFailedReview] rollback to review failed", "item", itemID, "error", rollbackErr)
-			// The item is now stranded in_progress with no active session and no
-			// visible error anywhere else (BUG-030) — a log line nobody reads.
-			// Mark it durably stuck so the reconciliation sweep and the operator
-			// both see it, instead of it sitting invisible forever.
-			s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
-		}
+		s.rollbackFailedReopen(ctx, item, inProgress, spawnErr)
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
 	return nil
+}
+
+// rollbackFailedReopen returns an item to review after the respawn that followed
+// its review->in_progress reopen failed, so it is not stranded in_progress with
+// no session.
+func (s *BacklogService) rollbackFailedReopen(ctx context.Context, item *session.BacklogItemData, inProgress *session.BacklogItemData, spawnErr error) {
+	itemID := item.ID
+	// Roll back: item should stay in review rather than stranded in in_progress
+	// with no active session. ReconcileStuckItems is an eventual fallback, but
+	// an explicit rollback provides faster recovery.
+	//
+	// The rollback precondition is tied to the in_progress row *this call*
+	// just wrote (ExpectedUpdatedAt: inProgress.UpdatedAt), not applied
+	// unconditionally. An unconditional rollback (precondition: nil) would
+	// blindly overwrite whatever status the item is in by the time the
+	// rollback runs — including a "done" reached in the meantime by a
+	// completely different, legitimate path (the live work session shipping
+	// on its own). That is exactly what happened live on 2026-07-20 to
+	// backlog item 0fd4a940 (PR #176): SpawnSessionFromItem failed after the
+	// item had already shipped, and the unconditional rollback silently
+	// dragged an already-done item back to "review" with no audit note,
+	// kicking off a stale-verdict reprocessing cascade. Scoping the
+	// precondition here means the rollback only fires if nothing else has
+	// touched the item since this function's own in_progress write landed.
+	rollbackPrecondition := &session.BacklogItemPrecondition{
+		ExpectedStatus:    string(session.BacklogStatusInProgress),
+		ExpectedUpdatedAt: &inProgress.UpdatedAt,
+	}
+	if _, rollbackErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+		log.Error("[AutoReopenAfterFailedReview] rollback to review failed", "item", itemID, "error", rollbackErr)
+		// The item is now stranded in_progress with no active session and no
+		// visible error anywhere else (BUG-030) — a log line nobody reads.
+		// Mark it durably stuck so the reconciliation sweep and the operator
+		// both see it, instead of it sitting invisible forever.
+		s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
+	}
 }
 
 // AutoRespawnAutonomousWork implements the AutonomousStuckRespawner interface
