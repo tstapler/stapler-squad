@@ -505,3 +505,113 @@ func TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer(t *tes
 			})
 	}, false, true)
 }
+
+// --- Story 1.5.2: ModeFor(class) over the class-to-flag table ------------------
+
+// TestModeFor_ComposesFourFlagsPerClass_AndDefaultsToShadow lands in full with
+// Task 1.5.8g; until then each task that registers a class's enforce flag adds
+// that class's rows here. Only the operator flag exists at Story 1.5.2.
+func TestModeFor_ComposesFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
+	t.Parallel()
+	shadow, enforce := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag
+	set := func(flags map[string]bool) *config.Config { return &config.Config{FeatureFlags: flags} }
+
+	cases := []struct {
+		name  string
+		class session.CallerClass
+		cfg   *config.Config
+		want  session.EngineMode
+	}{
+		{"operator, empty config", session.ClassOperator, set(nil), session.ModeShadow},
+		{"operator, nil config", session.ClassOperator, nil, session.ModeShadow},
+		{"operator, shadow off", session.ClassOperator, set(map[string]bool{shadow: false}), session.ModeOff},
+		{"operator, enforce wins over shadow on", session.ClassOperator, set(map[string]bool{shadow: true, enforce: true}), session.ModeEnforce},
+		{"operator, enforce wins over shadow off", session.ClassOperator, set(map[string]bool{shadow: false, enforce: true}), session.ModeEnforce},
+		{"operator, shadow on enforce off", session.ClassOperator, set(map[string]bool{shadow: true, enforce: false}), session.ModeShadow},
+		// A class with no registered enforce flag resolves from the shadow flag alone,
+		// so the operator enforce flag must not leak into it.
+		{"agent, empty config", session.ClassAgent, set(nil), session.ModeShadow},
+		{"agent, operator enforce on", session.ClassAgent, set(map[string]bool{enforce: true}), session.ModeShadow},
+		{"agent, shadow off", session.ClassAgent, set(map[string]bool{shadow: false, enforce: true}), session.ModeOff},
+		{"system, empty config", session.ClassSystem, set(nil), session.ModeShadow},
+		{"system, operator enforce on", session.ClassSystem, set(map[string]bool{enforce: true}), session.ModeShadow},
+		{"system, shadow off", session.ClassSystem, set(map[string]bool{shadow: false}), session.ModeOff},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, session.ModeForClassFlags(tc.class, tc.cfg), tc.name)
+	}
+}
+
+func TestModeFor_OperatorRowMatchesProductionReader_ForEveryFlagCombination(t *testing.T) {
+	t.Parallel()
+	shadow, enforce := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag
+	values := []*bool{nil, ptrBool(false), ptrBool(true)}
+	for _, s := range values {
+		for _, e := range values {
+			flags := map[string]bool{}
+			if s != nil {
+				flags[shadow] = *s
+			}
+			if e != nil {
+				flags[enforce] = *e
+			}
+			cfg := &config.Config{FeatureFlags: flags}
+			require.Equalf(t, WorkflowEngineModeFromConfig(cfg), session.ModeForClassFlags(session.ClassOperator, cfg), "flags=%v", flags)
+		}
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
+
+func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault(t *testing.T) {
+	t.Parallel()
+	name, def, ok := session.ClassEnforceFlag(session.ClassOperator)
+	require.True(t, ok)
+	require.Equal(t, config.WorkflowEngineEnforceFeatureFlag, name, "operator is bound to the existing enforce flag")
+	require.Equal(t, featureFlagDefault(name), def, "table default equals the registry default")
+
+	for _, class := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
+		name, _, ok := session.ClassEnforceFlag(class)
+		if !ok {
+			continue // not registered yet: Tasks 1.5.3c (agent) and 1.5.8g (system)
+		}
+		registered := false
+		for _, kf := range knownFeatureFlags {
+			registered = registered || kf.name == name
+		}
+		require.Truef(t, registered, "class %s row names %q, which must be in knownFeatureFlags", class, name)
+	}
+	_, _, ok = session.ClassEnforceFlag(session.ClassAgent)
+	require.False(t, ok, "the agent flag is registered in Task 1.5.3c, not here")
+	_, _, ok = session.ClassEnforceFlag(session.ClassSystem)
+	require.False(t, ok, "the system flag is registered in Task 1.5.8g, not here")
+}
+
+func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
+	withIsolatedStateDir(t)
+	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
+	src := session.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock)
+	svc := NewFeatureFlagService()
+	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassOperator))
+	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassAgent))
+	require.Equal(t, session.ModeOff, src.ModeFor(session.CallerClass("bogus")))
+
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
+	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassOperator), "cached inside the TTL")
+	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassOperator))
+	require.Equal(t, session.ModeEnforce, src.Mode(), "Mode() is the operator class")
+	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassAgent), "the operator flag does not enforce another class")
+	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassSystem))
+}
+
+func TestSelectorModeFor_UsesTheClassAwareSource(t *testing.T) {
+	withIsolatedStateDir(t)
+	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
+	svc := NewFeatureFlagService()
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
+	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil,
+		session.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock))
+	require.Equal(t, session.ModeEnforce, sel.ModeFor(session.ClassOperator))
+	require.Equal(t, session.ModeShadow, sel.ModeFor(session.ClassAgent))
+}

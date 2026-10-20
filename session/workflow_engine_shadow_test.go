@@ -262,3 +262,66 @@ func TestNewConfigLabeler_LabelsSeededEditedAndUnlabeled_AndCachesFingerprint(t 
 	clock.Advance(labelerRefreshWindow + time.Second)
 	require.Equal(t, ConfigUnlabeled, label())
 }
+
+// --- Story 1.5.2: per-class ledger sections and the guard_new class ----------
+
+func TestShadowLedger_KeepsSeparateSectionPerClass_AndCountsDivergencePerCaller(t *testing.T) {
+	t.Parallel()
+	rig := newShadowRig(t, ConfigSeeded)
+	rig.sel.modes = classModes{ClassOperator: ModeShadow, ClassAgent: ModeShadow, ClassSystem: ModeShadow}
+	spec, ok := LookupTransitionCaller(CallerMCPResumeWork) // agent, unchecked, built-in guards
+	require.True(t, ok)
+	agent := rig.sel.ForCaller(spec)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, agent.ValidateGates(BacklogItemTransitionInput{Status: BacklogStatusReady}, BacklogStatusInProgress, nil))
+	}
+	_ = rig.sel.CanTransition(BacklogStatusReady, BacklogStatusQueued, nil) // operator policy
+
+	snap := rig.rec.Snapshot()
+	ag, op := snap.Classes[string(ClassAgent)], snap.Classes[string(ClassOperator)]
+	require.NotNil(t, ag)
+	require.Equal(t, int64(3), ag.Calls["ValidateGates|transition"])
+	require.Equal(t, int64(3), ag.Divergence["ValidateGates|guard_new|seeded|transition"])
+	require.Equal(t, int64(3), ag.CallerDivergence[string(CallerMCPResumeWork)+"|guard_new"])
+	require.Equal(t, int64(3), ag.Edges["ready->in_progress"].Divergences)
+	require.Equal(t, int64(1), op.Calls["CanTransition|transition"], "operator section holds only the operator call")
+	require.Zero(t, totalDivergenceCount(op))
+	require.Nil(t, snap.Classes[string(ClassSystem)], "an untouched class gets no section")
+
+	require.NotEmpty(t, snap.Repro)
+	last := snap.Repro[len(snap.Repro)-1]
+	require.Equal(t, string(ClassAgent), last.Class)
+	require.Equal(t, string(CallerMCPResumeWork), last.Caller)
+	require.Equal(t, string(ClassGuardNew), last.Divergence)
+}
+
+func TestShadowLedger_PerClassSectionsSurviveFlushAndRestart(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	clock := newSelectorClock()
+	first := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
+	first.RecordShadowCallFor(ClassAgent, MethodValidateGates, PathTransition)
+	first.RecordDivergenceFor(ClassAgent, MethodValidateGates, ClassGuardNew, ConfigSeeded, PathTransition)
+	first.RecordObservation(ShadowObservation{
+		Method: MethodValidateGates, Path: PathTransition, From: BacklogStatusReady, To: BacklogStatusInProgress,
+		Class: ClassGuardNew, Config: ConfigSeeded, CallerClass: ClassAgent, Caller: CallerMCPResumeWork,
+	})
+	first.RecordShadowCallFor(ClassSystem, MethodCanTransition, PathTransition)
+	require.NoError(t, first.Flush())
+
+	second := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
+	second.RecordShadowCallFor(ClassAgent, MethodValidateGates, PathTransition)
+	snap := second.Snapshot()
+	require.Equal(t, int64(2), snap.Classes[string(ClassAgent)].Calls["ValidateGates|transition"])
+	require.Equal(t, int64(1), snap.Classes[string(ClassAgent)].CallerDivergence[string(CallerMCPResumeWork)+"|guard_new"])
+	require.Equal(t, int64(1), snap.Classes[string(ClassSystem)].Calls["CanTransition|transition"])
+}
+
+func TestShadowLedgerRecorder_UnclassedMethodsRecordIntoTheRecordersOwnClass(t *testing.T) {
+	t.Parallel()
+	rec := NewShadowLedgerRecorder("", WithShadowClass(ClassAgent))
+	rec.RecordShadowCall(MethodCanTransition, PathTransition)
+	rec.RecordShadowCallFor(CallerClass("bogus"), MethodCanTransition, PathTransition)
+	require.Equal(t, int64(2), rec.Snapshot().Classes[string(ClassAgent)].Calls["CanTransition|transition"], "an unknown class falls back to the recorder's own")
+}

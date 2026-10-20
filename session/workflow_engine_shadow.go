@@ -22,8 +22,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// CallerClass is the caller class a ledger is kept for. Only the operator class
-// is recorded until the engine-gated transition choke point lands.
+// CallerClass is the caller class a ledger section is kept for; the recorder
+// keeps one section per class.
 type CallerClass string
 
 const (
@@ -64,13 +64,16 @@ type EdgeStats struct {
 // ClassLedger is the persisted aggregate for one caller class. Keys are
 // "Method|path", "Method|class|config|path" and the NotComparedReason.
 type ClassLedger struct {
-	Calls         map[string]int64     `json:"calls"`
-	Divergence    map[string]int64     `json:"divergence"`
-	NotCompared   map[string]int64     `json:"not_compared"`
-	Edges         map[string]EdgeStats `json:"edges"`
-	ConfigSeen    map[string]int64     `json:"config_seen"`
-	FirstSampleAt time.Time            `json:"first_sample_at"`
-	LastSampleAt  time.Time            `json:"last_sample_at"`
+	Calls       map[string]int64     `json:"calls"`
+	Divergence  map[string]int64     `json:"divergence"`
+	NotCompared map[string]int64     `json:"not_compared"`
+	Edges       map[string]EdgeStats `json:"edges"`
+	ConfigSeen  map[string]int64     `json:"config_seen"`
+	// CallerDivergence counts divergences per registry caller, keyed
+	// "caller|divergence_class".
+	CallerDivergence map[string]int64 `json:"caller_divergence,omitempty"`
+	FirstSampleAt    time.Time        `json:"first_sample_at"`
+	LastSampleAt     time.Time        `json:"last_sample_at"`
 }
 
 // ReproRecord is a redacted divergence: an item id hash, never a title or id.
@@ -83,6 +86,7 @@ type ReproRecord struct {
 	To         string    `json:"to"`
 	ItemHash   string    `json:"item_hash,omitempty"`
 	Divergence string    `json:"divergence"`
+	Caller     string    `json:"caller,omitempty"`
 	Config     string    `json:"config"`
 	Default    string    `json:"default"`
 	Enforce    string    `json:"enforce"`
@@ -142,7 +146,8 @@ type divKey struct {
 var (
 	shadowMethods = []EngineMethod{MethodCanTransition, MethodAllowedTransitions, MethodPendingGates, MethodValidateGates}
 	shadowPaths   = []CallPath{PathTransition, PathRead}
-	shadowClasses = []DivergenceClass{ClassGraph, ClassGateMissing, ClassGateExtra, ClassErrorKind}
+	shadowClasses = []DivergenceClass{ClassGraph, ClassGateMissing, ClassGateExtra, ClassErrorKind, ClassGuardNew}
+	ledgerClasses = []CallerClass{ClassOperator, ClassAgent, ClassSystem}
 	shadowConfigs = []string{ConfigSeeded, ConfigEdited, ConfigUnlabeled}
 )
 
@@ -150,13 +155,26 @@ var (
 // call path touches atomics only; the mutex guards the divergence ring, which
 // is written only when a divergence occurs.
 type ShadowLedgerRecorder struct {
-	class CallerClass
+	class CallerClass // the class the unclassed ShadowRecorder methods record into
 	dir   string
 	clock Clock
 	warn  func(format string, args ...any)
 
 	base ShadowLedger // loaded at start; never mutated afterwards
 
+	live map[CallerClass]*liveClass // fixed at construction, read-only after
+
+	mu    sync.Mutex // guards ring, start
+	ring  []ReproRecord
+	start time.Time
+
+	flushMu     sync.Mutex
+	lastFlushAt time.Time
+}
+
+// liveClass is one class's in-process counters: atomics on the call path, a
+// mutex only for the rare per-caller divergence map.
+type liveClass struct {
 	calls       *counterSet[shadowKey]
 	divergences *counterSet[divKey]
 	notCompared *counterSet[NotComparedReason]
@@ -165,18 +183,26 @@ type ShadowLedgerRecorder struct {
 	edgeCount   atomic.Int64
 	firstSample atomic.Int64
 	lastSample  atomic.Int64
+	active      atomic.Bool
 
-	mu    sync.Mutex // guards ring, started
-	ring  []ReproRecord
-	start time.Time
+	mu        sync.Mutex // guards callerDiv
+	callerDiv map[string]int64
+}
 
-	flushMu     sync.Mutex
-	lastFlushAt time.Time
+func newLiveClass() *liveClass {
+	return &liveClass{
+		calls:       newCounterSet(crossShadowKeys()...),
+		divergences: newCounterSet(crossDivKeys()...),
+		notCompared: newCounterSet(NotComparedStatefulGate),
+		configSeen:  newCounterSet(shadowConfigs...),
+		callerDiv:   map[string]int64{},
+	}
 }
 
 var (
-	_ ShadowRecorder      = (*ShadowLedgerRecorder)(nil)
-	_ ObservationRecorder = (*ShadowLedgerRecorder)(nil)
+	_ ShadowRecorder        = (*ShadowLedgerRecorder)(nil)
+	_ ClassedShadowRecorder = (*ShadowLedgerRecorder)(nil)
+	_ ObservationRecorder   = (*ShadowLedgerRecorder)(nil)
 )
 
 // ShadowRecorderOption customizes NewShadowLedgerRecorder.
@@ -209,14 +235,17 @@ func ShadowLedgerPath(dir string) string { return filepath.Join(dir, shadowLedge
 func NewShadowLedgerRecorder(dir string, opts ...ShadowRecorderOption) *ShadowLedgerRecorder {
 	r := &ShadowLedgerRecorder{
 		class: ClassOperator, dir: dir, clock: realClock{},
-		warn:        func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
-		calls:       newCounterSet(crossShadowKeys()...),
-		divergences: newCounterSet(crossDivKeys()...),
-		notCompared: newCounterSet(NotComparedStatefulGate),
-		configSeen:  newCounterSet(shadowConfigs...),
+		warn: func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
+		live: map[CallerClass]*liveClass{},
+	}
+	for _, c := range ledgerClasses {
+		r.live[c] = newLiveClass()
 	}
 	for _, o := range opts {
 		o(r)
+	}
+	if r.live[r.class] == nil {
+		r.live[r.class] = newLiveClass()
 	}
 	r.start = r.clock.Now().UTC()
 	if dir != "" {
@@ -252,29 +281,62 @@ func crossDivKeys() []divKey {
 	return keys
 }
 
+// forClass returns the live counters for c; an empty or unknown class records
+// into the recorder's own class.
+func (r *ShadowLedgerRecorder) forClass(c CallerClass) (CallerClass, *liveClass) {
+	if lc := r.live[c]; lc != nil {
+		return c, lc
+	}
+	return r.class, r.live[r.class]
+}
+
 // RecordShadowCall implements ShadowRecorder.
 func (r *ShadowLedgerRecorder) RecordShadowCall(m EngineMethod, p CallPath) {
-	r.calls.inc(shadowKey{m, p})
+	r.RecordShadowCallFor(r.class, m, p)
+}
+
+// RecordShadowCallFor implements ClassedShadowRecorder.
+func (r *ShadowLedgerRecorder) RecordShadowCallFor(class CallerClass, m EngineMethod, p CallPath) {
+	_, lc := r.forClass(class)
+	lc.active.Store(true)
+	lc.calls.inc(shadowKey{m, p})
 	now := r.clock.Now().UnixNano()
-	r.firstSample.CompareAndSwap(0, now)
-	r.lastSample.Store(now)
+	lc.firstSample.CompareAndSwap(0, now)
+	lc.lastSample.Store(now)
 }
 
 // RecordDivergence implements ShadowRecorder.
 func (r *ShadowLedgerRecorder) RecordDivergence(m EngineMethod, c DivergenceClass, config string, p CallPath) {
-	r.divergences.inc(divKey{m, c, normalizeConfigLabel(config), p})
+	r.RecordDivergenceFor(r.class, m, c, config, p)
+}
+
+// RecordDivergenceFor implements ClassedShadowRecorder.
+func (r *ShadowLedgerRecorder) RecordDivergenceFor(class CallerClass, m EngineMethod, c DivergenceClass, config string, p CallPath) {
+	_, lc := r.forClass(class)
+	lc.active.Store(true)
+	lc.divergences.inc(divKey{m, c, normalizeConfigLabel(config), p})
 }
 
 // RecordNotCompared implements ShadowRecorder.
 func (r *ShadowLedgerRecorder) RecordNotCompared(reason NotComparedReason) {
-	r.notCompared.inc(reason)
+	r.RecordNotComparedFor(r.class, reason)
+}
+
+// RecordNotComparedFor implements ClassedShadowRecorder.
+func (r *ShadowLedgerRecorder) RecordNotComparedFor(class CallerClass, reason NotComparedReason) {
+	_, lc := r.forClass(class)
+	lc.active.Store(true)
+	lc.notCompared.inc(reason)
 }
 
 // RecordObservation implements ObservationRecorder: per-edge counts, the
-// window's config label, and the redacted repro ring.
+// window's config label, the per-caller divergence count and the redacted
+// repro ring, all in the observation's class section.
 func (r *ShadowLedgerRecorder) RecordObservation(o ShadowObservation) {
-	r.configSeen.inc(normalizeConfigLabel(o.Config))
-	e := r.edge(EdgeKey(o.From, o.To))
+	class, lc := r.forClass(o.CallerClass)
+	lc.active.Store(true)
+	lc.configSeen.inc(normalizeConfigLabel(o.Config))
+	e := lc.edge(EdgeKey(o.From, o.To))
 	if o.Path == PathTransition {
 		e.transition.Add(1)
 	} else {
@@ -287,9 +349,14 @@ func (r *ShadowLedgerRecorder) RecordObservation(o ShadowObservation) {
 		return
 	}
 	e.diverge.Add(1)
+	if o.Caller != "" {
+		lc.mu.Lock()
+		lc.callerDiv[string(o.Caller)+"|"+string(o.Class)]++
+		lc.mu.Unlock()
+	}
 	rec := ReproRecord{
-		At: r.clock.Now().UTC(), Class: string(r.class), Method: string(o.Method), Path: string(o.Path),
-		From: string(o.From), To: string(o.To), ItemHash: o.ItemHash, Divergence: string(o.Class),
+		At: r.clock.Now().UTC(), Class: string(class), Method: string(o.Method), Path: string(o.Path),
+		From: string(o.From), To: string(o.To), ItemHash: o.ItemHash, Divergence: string(o.Class), Caller: string(o.Caller),
 		Config: normalizeConfigLabel(o.Config), Default: o.Default, Enforce: o.Enforce,
 	}
 	r.mu.Lock()
@@ -302,16 +369,16 @@ func (r *ShadowLedgerRecorder) RecordObservation(o ShadowObservation) {
 
 // edge returns the counters for key, folding edges past maxLedgerEdges into
 // "other" so a custom-stage explosion cannot grow the ledger without bound.
-func (r *ShadowLedgerRecorder) edge(key string) *liveEdge {
-	if v, ok := r.edges.Load(key); ok {
+func (lc *liveClass) edge(key string) *liveEdge {
+	if v, ok := lc.edges.Load(key); ok {
 		return v.(*liveEdge)
 	}
-	if r.edgeCount.Load() >= maxLedgerEdges {
+	if lc.edgeCount.Load() >= maxLedgerEdges {
 		key = otherEdgeKey
 	}
-	v, loaded := r.edges.LoadOrStore(key, &liveEdge{})
+	v, loaded := lc.edges.LoadOrStore(key, &liveEdge{})
 	if !loaded {
-		r.edgeCount.Add(1)
+		lc.edgeCount.Add(1)
 	}
 	return v.(*liveEdge)
 }
@@ -327,12 +394,18 @@ func (r *ShadowLedgerRecorder) Snapshot() ShadowLedger {
 		out.Classes[k] = cloneClassLedger(v)
 	}
 	out.BinaryStarts = capBinaryStarts(append(append([]time.Time(nil), r.base.BinaryStarts...), r.start))
-	cl := out.Classes[string(r.class)]
-	if cl == nil {
-		cl = newClassLedger()
-		out.Classes[string(r.class)] = cl
+	for _, class := range r.liveClassOrder() {
+		lc := r.live[class]
+		if class != r.class && !lc.active.Load() {
+			continue
+		}
+		cl := out.Classes[string(class)]
+		if cl == nil {
+			cl = newClassLedger()
+			out.Classes[string(class)] = cl
+		}
+		lc.mergeInto(cl)
 	}
-	r.mergeLiveInto(cl)
 
 	r.mu.Lock()
 	live := append([]ReproRecord(nil), r.ring...)
@@ -345,28 +418,46 @@ func (r *ShadowLedgerRecorder) Snapshot() ShadowLedger {
 	return out
 }
 
-func (r *ShadowLedgerRecorder) mergeLiveInto(cl *ClassLedger) {
-	for _, k := range r.calls.keys {
-		if n := r.calls.get(k); n > 0 {
+// liveClassOrder lists the live classes in a stable order.
+func (r *ShadowLedgerRecorder) liveClassOrder() []CallerClass {
+	out := make([]CallerClass, 0, len(r.live))
+	for c := range r.live {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (lc *liveClass) mergeInto(cl *ClassLedger) {
+	for _, k := range lc.calls.keys {
+		if n := lc.calls.get(k); n > 0 {
 			cl.Calls[ledgerCallKey(k.m, k.p)] += n
 		}
 	}
-	for _, k := range r.divergences.keys {
-		if n := r.divergences.get(k); n > 0 {
+	for _, k := range lc.divergences.keys {
+		if n := lc.divergences.get(k); n > 0 {
 			cl.Divergence[ledgerDivergenceKey(k.m, k.c, k.f, k.p)] += n
 		}
 	}
-	for _, k := range r.notCompared.keys {
-		if n := r.notCompared.get(k); n > 0 {
+	for _, k := range lc.notCompared.keys {
+		if n := lc.notCompared.get(k); n > 0 {
 			cl.NotCompared[string(k)] += n
 		}
 	}
-	for _, k := range r.configSeen.keys {
-		if n := r.configSeen.get(k); n > 0 {
+	for _, k := range lc.configSeen.keys {
+		if n := lc.configSeen.get(k); n > 0 {
 			cl.ConfigSeen[k] += n
 		}
 	}
-	r.edges.Range(func(k, v any) bool {
+	lc.mu.Lock()
+	for k, n := range lc.callerDiv {
+		if cl.CallerDivergence == nil {
+			cl.CallerDivergence = map[string]int64{}
+		}
+		cl.CallerDivergence[k] += n
+	}
+	lc.mu.Unlock()
+	lc.edges.Range(func(k, v any) bool {
 		le := v.(*liveEdge)
 		es := cl.Edges[k.(string)]
 		es.TransitionSamples += le.transition.Load()
@@ -376,13 +467,13 @@ func (r *ShadowLedgerRecorder) mergeLiveInto(cl *ClassLedger) {
 		cl.Edges[k.(string)] = es
 		return true
 	})
-	if first := r.firstSample.Load(); first != 0 {
+	if first := lc.firstSample.Load(); first != 0 {
 		t := time.Unix(0, first).UTC()
 		if cl.FirstSampleAt.IsZero() || t.Before(cl.FirstSampleAt) {
 			cl.FirstSampleAt = t
 		}
 	}
-	if last := r.lastSample.Load(); last != 0 {
+	if last := lc.lastSample.Load(); last != 0 {
 		if t := time.Unix(0, last).UTC(); t.After(cl.LastSampleAt) {
 			cl.LastSampleAt = t
 		}
@@ -408,6 +499,12 @@ func cloneClassLedger(c *ClassLedger) *ClassLedger {
 	}
 	for k, v := range c.ConfigSeen {
 		out.ConfigSeen[k] = v
+	}
+	for k, v := range c.CallerDivergence {
+		if out.CallerDivergence == nil {
+			out.CallerDivergence = map[string]int64{}
+		}
+		out.CallerDivergence[k] = v
 	}
 	out.FirstSampleAt, out.LastSampleAt = c.FirstSampleAt, c.LastSampleAt
 	return out
