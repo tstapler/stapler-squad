@@ -108,6 +108,28 @@ func (s *BacklogService) transitionDenialAlreadyOpen(ctx context.Context, itemID
 	return false
 }
 
+// transitionDeniedReporter adapts notifyTransitionDenied to the gate's
+// session.TransitionDeniedReporter, so session callers reach the service-layer
+// stuck row, comment and notification without importing this package.
+type transitionDeniedReporter struct{ svc *BacklogService }
+
+// TransitionDeniedReporter returns the reporter to inject into
+// session.Storage.SetTransitionGate. Idempotence per (item, caller, from, to,
+// reason) is notifyTransitionDenied's.
+func (s *BacklogService) TransitionDeniedReporter() session.TransitionDeniedReporter {
+	return transitionDeniedReporter{svc: s}
+}
+
+// Report implements session.TransitionDeniedReporter.
+func (r transitionDeniedReporter) Report(ctx context.Context, item *session.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+	r.svc.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
+		Caller: string(caller),
+		From:   string(from),
+		To:     string(to),
+		Reason: reason,
+	}, denyErr)
+}
+
 // resolveTransitionDeniedLogged clears an open transition_denied row once the
 // same automatic caller succeeds, so a denial is never a permanent park.
 func (s *BacklogService) resolveTransitionDeniedLogged(ctx context.Context, itemID string) {
