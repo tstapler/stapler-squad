@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, type RefObject } from "react";
 import { AlertConfirmDialog } from "@/components/settings/AlertConfirmDialog";
-import type { CallerClass, ClassReadinessView } from "@/lib/hooks/useEngineModeStatus";
+import { differencesText, type CallerClass, type ClassReadinessView } from "@/lib/hooks/useEngineModeStatus";
 import {
   VERDICT_LABEL,
   evidenceAnnouncement,
@@ -14,13 +14,6 @@ import { ackCheckbox, ackLabel, dialogNote, evidenceNotClean, evidenceRegion, re
 
 export const ROLLOUT_CHECKLIST = "docs/how-to/flip-workflow-engine-enforcement.md";
 const ACK_LABEL = "I have reviewed this evidence and the rollout checklist";
-/** The server reports a floor, not a count, past this many differences. */
-const DIVERGENCE_FLOOR = 200;
-
-function differencesText(n: number): string {
-  return n >= DIVERGENCE_FLOOR ? `at least ${n}` : String(n);
-}
-
 function EvidenceLines({ readiness }: { readiness: ClassReadinessView }) {
   const bad = (flag: boolean) => (flag ? evidenceNotClean : undefined);
   return (

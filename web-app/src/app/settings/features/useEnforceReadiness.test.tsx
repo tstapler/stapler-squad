@@ -12,7 +12,7 @@ import {
   WorkflowEngineSoakVerdict,
 } from "@/gen/session/v1/backlog_pb";
 import type { ClassReadinessView } from "@/lib/hooks/useEngineModeStatus";
-import { isClean, useEnforceReadiness, worseningOf } from "./useEnforceReadiness";
+import { evidenceAnnouncement, isClean, useEnforceReadiness, worseningOf } from "./useEnforceReadiness";
 
 const mockGetStatus = jest.fn();
 
@@ -57,6 +57,13 @@ describe("worseningOf / isClean", () => {
 
   it("counts evidence the operator never saw as a change", () => {
     expect(worseningOf(null, clean)).not.toBeNull();
+  });
+});
+
+describe("evidenceAnnouncement", () => {
+  it("says at least 200 for the capped count, matching the visible text", () => {
+    const r = { divergence24h: 200, verdict: "not_ready", strandedItemCount: 0 } as ClassReadinessView;
+    expect(evidenceAnnouncement(r, true)).toContain("at least 200 shadow differences");
   });
 });
 

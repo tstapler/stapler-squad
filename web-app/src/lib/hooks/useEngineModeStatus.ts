@@ -189,10 +189,18 @@ function classModePhrase(m: ClassMode): string {
   }
 }
 
+/** The server reports a floor, not a count, at or past this many differences. */
+export const DIVERGENCE_FLOOR = 200;
+
+/** "5" or "at least 200": the one spelling every surface (visual, banner, screen reader) uses. */
+export function differencesText(n: number): string {
+  return n >= DIVERGENCE_FLOOR ? `at least ${n}` : String(n);
+}
+
 function shadowDifferences(n: number | null): string {
   if (n === null) return "Difference count unavailable.";
   if (n === 0) return "No differences in the last 24h.";
-  return `${n} ${n === 1 ? "difference" : "differences"} in the last 24h.`;
+  return `${differencesText(n)} ${n === 1 ? "difference" : "differences"} in the last 24h.`;
 }
 
 export const FALLBACK_NOTE = "The engine fell back to the built-in rules after an error, so edits may not be applied.";

@@ -5,6 +5,7 @@ import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import {
+  differencesText,
   readinessFromResponse,
   type CallerClass,
   type ClassReadinessView,
@@ -54,7 +55,7 @@ export function worseningOf(prev: ClassReadinessView | null, next: ClassReadines
 }
 
 export function evidenceAnnouncement(r: ClassReadinessView, needsAck: boolean): string {
-  const lines = `${r.divergence24h} shadow ${r.divergence24h === 1 ? "difference" : "differences"}, soak verdict ${
+  const lines = `${differencesText(r.divergence24h)} shadow ${r.divergence24h === 1 ? "difference" : "differences"}, soak verdict ${
     VERDICT_LABEL[r.verdict]
   }, ${r.strandedItemCount} ${r.strandedItemCount === 1 ? "item" : "items"} would lose an exit.`;
   return `Readiness evidence: ${lines}${needsAck ? " Acknowledgement required." : ""}`;

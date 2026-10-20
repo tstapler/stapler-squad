@@ -6,7 +6,7 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { TimestampSchema } from "@bufbuild/protobuf/wkt";
-import { useEngineModeStatus, readinessFromResponse, ENGINE_STATUS_REFETCH_WINDOW_MS } from "./useEngineModeStatus";
+import { useEngineModeStatus, readinessFromResponse, bannerText, differencesText, ENGINE_STATUS_REFETCH_WINDOW_MS } from "./useEngineModeStatus";
 import {
   ClassReadinessSchema,
   GetWorkflowEngineStatusResponseSchema,
@@ -66,6 +66,14 @@ describe("useEngineModeStatus", () => {
     mockGetStatus.mockResolvedValue(evResponse(modes));
     const { result } = renderHook(() => useEngineModeStatus());
     await waitFor(() => expect(result.current.view.kind).toBe(kind));
+  });
+
+  it("states the 200 divergence cap as a floor in the shadow banner", async () => {
+    mockGetStatus.mockResolvedValue(evResponse({ operator: M.SHADOW, agent: M.SHADOW, system: M.SHADOW }, { divergence24h: 200n }));
+    const { result } = renderHook(() => useEngineModeStatus());
+    await waitFor(() => expect(result.current.view.kind).toBe("shadow"));
+    expect(bannerText(result.current.view)).toContain("at least 200 differences in the last 24h");
+    expect(differencesText(199)).toBe("199");
   });
 
   it("treats an unwired gate as unknown even when every class says enforce", async () => {
