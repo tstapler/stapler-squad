@@ -52,6 +52,7 @@ func (f *oracleFake) OracleHasUncommitted(string) (bool, error) {
 	return f.oracleDirty, nil
 }
 func (f *oracleFake) OracleDiffShortstat(string) (DiffStat, error) { return DiffStat{}, nil }
+func (f *oracleFake) OracleBegin()                                 {}
 func (f *oracleFake) OracleDone()                                  {}
 
 // newShadowScanner returns a scanner that samples every scan and records debug lines.
@@ -217,4 +218,30 @@ func TestShadowVerify_ShouldReportNoMismatch_WhenRealNewPathsMatchLegacy(t *test
 	assert.Equal(t, [numParityFields]int64{}, st.Mismatch)
 	assert.Equal(t, [numParityFields]int64{}, st.Transient)
 	assert.Zero(t, st.OracleErrors, "every oracle read answered: the comparison was not vacuous")
+}
+
+// Two overlapping sampled runs share one oracle: the first Done must not close
+// the repo handles the second still reads; only the last Done clears.
+func TestShadowOracle_ShouldClearOnlyOnLastRelease_WhenRunsOverlap(t *testing.T) {
+	t.Parallel()
+	p := newPreludeRepo(t, 1)
+	g := newPreludeReader()
+
+	g.OracleBegin()
+	g.OracleBegin()
+	_, err := g.OracleHasUncommitted(p.wts[0])
+	require.NoError(t, err)
+	oracle := g.scanSkip.oracle.Load()
+	require.NotNil(t, oracle)
+	require.EqualValues(t, 1, atomic.LoadInt64(&oracle.repoCacheSize), "precondition: oracle holds a handle")
+
+	g.OracleDone()
+	assert.EqualValues(t, 1, atomic.LoadInt64(&oracle.repoCacheSize), "first release must keep the handle the other run reads")
+	_, err = g.OracleHasUncommitted(p.wts[0])
+	assert.NoError(t, err, "the surviving run still gets answers")
+
+	g.OracleDone()
+	assert.Zero(t, atomic.LoadInt64(&oracle.repoCacheSize), "last release clears")
+	g.OracleDone() // unbalanced: no-op, no panic
+	assert.Zero(t, g.scanSkip.oracleUsers.Load())
 }

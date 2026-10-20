@@ -70,6 +70,9 @@ type scanSkipState struct {
 	refs       refResolveCounters
 	// oracle is the lazily built legacy-path reader of the shadow-verify sampler.
 	oracle atomic.Pointer[GoGitVCSReader]
+	// oracleUsers counts sampled runs holding the oracle; -1 while the last
+	// releaser clears it (see OracleBegin/OracleDone).
+	oracleUsers atomic.Int32
 
 	// passSF coalesces HasUncommittedPass callers; its result type differs
 	// from hasUncommittedSF's, so it needs its own group.

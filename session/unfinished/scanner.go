@@ -703,6 +703,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	}
 
 	shadow := s.beginShadow(repoPath, wt.Path)
+	defer shadow.release()
 
 	uncommitted, pass, err := s.hasUncommitted(wt.Path)
 	if err != nil {

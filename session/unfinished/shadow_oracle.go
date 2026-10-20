@@ -1,6 +1,9 @@
 package unfinished
 
-import "fmt"
+import (
+	"fmt"
+	"runtime"
+)
 
 var _ oracleReader = (*GoGitVCSReader)(nil)
 
@@ -71,9 +74,44 @@ func (g *GoGitVCSReader) OracleDiffShortstat(worktreePath string) (DiffStat, err
 	return g.shadowOracle().diffShortstatUncached(worktreePath)
 }
 
-// OracleDone drops the oracle's repo handles so a sampled scan holds no memory.
+// OracleBegin registers a sampled run as an oracle user. It waits only while
+// the last releaser is clearing (counter -1), so a run never starts on handles
+// that are being closed.
+func (g *GoGitVCSReader) OracleBegin() {
+	for {
+		n := g.scanSkip.oracleUsers.Load()
+		if n < 0 {
+			runtime.Gosched()
+			continue
+		}
+		if g.scanSkip.oracleUsers.CompareAndSwap(n, n+1) {
+			return
+		}
+	}
+}
+
+// OracleDone releases one OracleBegin. Only the last user clears the oracle's
+// repo handles so a sampled scan holds no memory afterwards; clearing earlier
+// would close storers another overlapping run is still reading.
 func (g *GoGitVCSReader) OracleDone() {
-	if o := g.scanSkip.oracle.Load(); o != nil {
-		o.ClearCache()
+	for {
+		n := g.scanSkip.oracleUsers.Load()
+		switch {
+		case n > 1:
+			if g.scanSkip.oracleUsers.CompareAndSwap(n, n-1) {
+				return
+			}
+		case n == 1:
+			if !g.scanSkip.oracleUsers.CompareAndSwap(1, -1) {
+				continue
+			}
+			if o := g.scanSkip.oracle.Load(); o != nil {
+				o.ClearCache()
+			}
+			g.scanSkip.oracleUsers.Store(0)
+			return
+		default: // unbalanced Done; nothing to release
+			return
+		}
 	}
 }
