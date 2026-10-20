@@ -799,6 +799,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// The selector must exist, with its shadow recorder, before NewBacklogService
 	// and the BacklogController's SyncLoop take their engine.
 	workflowEngine := newWorkflowEngineWiring(defaultWorkflowEngine, stageConfigEngine, storage.GetEntClient(), config.LoadConfig)
+	session.InitNudgeOutcomes()
 
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
 	// via constructor (eliminating the post-construction wiring race). Non-fatal if
