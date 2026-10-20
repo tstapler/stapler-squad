@@ -1379,7 +1379,8 @@ func (s *BacklogService) OverrideVerdict(
 		case transErr == nil:
 			updatedItem = updated
 		case isTransitionDenial(transErr):
-			return nil, transitionConnectError(transErr, itemID, "transition backlog item")
+			code := connect.CodeOf(transitionConnectError(transErr, itemID, ""))
+			return nil, connect.NewError(code, fmt.Errorf("override verdict recorded, but the item was not moved to %s: %w", toStatus, transErr))
 		default:
 			log.ErrorLog().Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		}

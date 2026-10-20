@@ -1518,6 +1518,7 @@ func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHa
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "override verdict recorded, but the item was not moved")
 
 	final, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
