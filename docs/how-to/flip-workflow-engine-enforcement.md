@@ -85,7 +85,7 @@ The verdict for a class is READY only when all of these hold:
 4. Every expected edge for the class has at least N `path=transition` samples, or you acknowledged it.
 5. There are zero `graph`, `gate_missing`, `gate_extra` and `error_kind` differences under `config=seeded`. These alarms fire on either path (`transition` or the legacy path), but READY counts `path=transition` samples only.
 6. Every divergent edge is acknowledged when the config is `edited`. A window that spans an edit, or any unlabeled sample, counts as edited.
-7. Every edge listed `UNVERIFIED in shadow (not_compared{stateful_gate})` is acknowledged. These are edges with a `human_approval`, `automated_review` or `custom` gate, which shadow cannot fully compare.
+7. Every edge listed `UNVERIFIED in shadow (not_compared{stateful_gate})` is acknowledged. These are edges with a stateful gate, which shadow cannot fully compare. A gate is stateful when its `stateful` field is set or its kind is `human_approval`, `automated_review` or `custom` (those are always stateful); a stateful `structural` gate reads its latch record from the database, so shadow skips it like the recorded kinds.
 8. Every `guard_new` difference is acknowledged per `(caller, from, to)` (see the ack file below).
 
 Lifecycle edges are not exempt. Under the engine they are gated per class, and the `system` soak is its own gate.

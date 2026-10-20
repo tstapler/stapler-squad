@@ -466,6 +466,9 @@ message TransitionGate {
   // "automated_review", "structural", "custom".
   string kind = 3;
   map<string, string> config = 4;
+  // stateful is the EFFECTIVE value: true for a one-shot gate whose outcome is
+  // recorded and never re-evaluated. human_approval, automated_review and custom
+  // gates are always stateful; a structural gate is stateful only when set.
   bool stateful = 5;
   int32 order_index = 6;
   bool enabled = 7;
@@ -1299,6 +1302,9 @@ message CreateTransitionGateRequest {
   string transition_id = 1;
   string kind = 2;
   map<string, string> config = 3;
+  // stateful latches a structural gate after its first satisfied transition.
+  // Recorded kinds are always stateful: false is normalized to true here (a
+  // plain bool cannot distinguish unset from false).
   bool stateful = 4;
   int32 order_index = 5;
   bool enabled = 6;
@@ -1317,6 +1323,8 @@ message UpdateTransitionGateRequest {
   string id = 1;
   string kind = 2;
   map<string, string> config = 3;
+  // An explicit false on a recorded kind is rejected InvalidArgument; unset on a
+  // recorded kind stores true.
   optional bool stateful = 4;
   optional int32 order_index = 5;
   optional bool enabled = 6;

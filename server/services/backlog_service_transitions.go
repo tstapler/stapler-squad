@@ -54,7 +54,7 @@ func transitionGateToProto(g *session.GateData) *sessionv1.TransitionGate {
 		TransitionId: g.TransitionID.String(),
 		Kind:         g.Kind,
 		Config:       configMapToProto(g.Config),
-		Stateful:     g.Stateful,
+		Stateful:     session.EffectiveGateStateful(session.GateKind(g.Kind), g.Stateful),
 		OrderIndex:   int32(g.OrderIndex),
 		Enabled:      g.Enabled,
 		CreatedAt:    timestamppb.New(g.CreatedAt),
@@ -504,11 +504,13 @@ func (s *BacklogService) CreateTransitionGate(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
+	// Create's stateful is a plain bool, so an explicit false cannot be told
+	// from unset: a recorded kind is normalized to true rather than rejected.
 	gate, err := s.stageCRUDRepo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: transitionID,
 		Kind:         req.Msg.Kind,
 		Config:       configMapFromProto(req.Msg.Config),
-		Stateful:     req.Msg.Stateful,
+		Stateful:     session.EffectiveGateStateful(session.GateKind(req.Msg.Kind), req.Msg.Stateful),
 		OrderIndex:   int(req.Msg.OrderIndex),
 		Enabled:      req.Msg.Enabled,
 	})
@@ -546,6 +548,10 @@ func (s *BacklogService) UpdateTransitionGate(
 	}
 
 	kind := req.Msg.Kind
+	stateful, err := resolveUpdateStateful(kind, req.Msg.Stateful)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	var orderIndex *int
 	if req.Msg.OrderIndex != nil {
 		v := int(*req.Msg.OrderIndex)
@@ -555,7 +561,7 @@ func (s *BacklogService) UpdateTransitionGate(
 	gate, err := s.stageCRUDRepo.UpdateGate(ctx, id, session.GateUpdateInput{
 		Kind:       &kind,
 		Config:     configMapFromProto(req.Msg.Config),
-		Stateful:   req.Msg.Stateful,
+		Stateful:   stateful,
 		OrderIndex: orderIndex,
 		Enabled:    req.Msg.Enabled,
 	})
@@ -568,6 +574,19 @@ func (s *BacklogService) UpdateTransitionGate(
 	return connect.NewResponse(&sessionv1.UpdateTransitionGateResponse{
 		Item: transitionGateToProto(gate),
 	}), nil
+}
+
+// resolveUpdateStateful rejects an explicit stateful=false on a recorded kind
+// and stores true when a recorded kind arrives with stateful unset.
+func resolveUpdateStateful(kind string, requested *bool) (*bool, error) {
+	if !session.IsRecordedGateKind(session.GateKind(kind)) {
+		return requested, nil
+	}
+	if requested != nil && !*requested {
+		return nil, fmt.Errorf("%s gates are always stateful: their outcome is a recorded approval", kind)
+	}
+	t := true
+	return &t, nil
 }
 
 // DeleteTransitionGate removes a gate from its transition.

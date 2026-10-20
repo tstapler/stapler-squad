@@ -386,7 +386,8 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *BacklogIt
 	}
 
 	noteGateCall(c.spec.Class, c.spec.Name, c.engine.ModeFor(c.spec.Class))
-	if v := decideTransition(c.engine.ForCaller(c.spec), item, req); v.Err != nil {
+	view := c.engine.ForCaller(c.spec)
+	if v := decideTransition(view, item, req); v.Err != nil {
 		c.reportDenial(ctx, item, v)
 		return nil, false, v.Err
 	}
@@ -396,6 +397,9 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *BacklogIt
 		}
 	}
 	updated, err = c.write(ctx, req, c.spec, item)
+	if err == nil {
+		notifyTransitionCommitted(view, guardInputFor(req, item, BacklogStatus(item.Status)), req.To)
+	}
 	return updated, errors.Is(err, ErrPreconditionFailed), err
 }
 
