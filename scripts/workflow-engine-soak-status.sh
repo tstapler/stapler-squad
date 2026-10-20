@@ -16,7 +16,13 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --config-diff) query="$query&config_diff=1" ;;
     --ack-file) shift; ackfile="$1" ;;
-    --class) shift; query=$(printf '%s' "$query" | sed "s/class=[a-z]*/class=$1/") ;;
+    --class)
+      [ $# -ge 2 ] || { echo "--class needs operator, agent or system" >&2; exit 2; }
+      shift
+      case "$1" in
+        operator|agent|system) query=$(printf '%s' "$query" | sed "s/class=[a-z]*/class=$1/") ;;
+        *) echo "unknown class: $1 (want operator, agent or system)" >&2; exit 2 ;;
+      esac ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *) base="$1" ;;
   esac
