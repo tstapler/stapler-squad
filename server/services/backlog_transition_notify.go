@@ -55,13 +55,13 @@ func (s *BacklogService) notifyTransitionDenied(ctx context.Context, item *sessi
 }
 
 // transitionDenialAlreadyOpen reports whether an un-snoozed transition_denied
-// row for exactly d is open (a read error counts as open: stay quiet, retry
-// next sweep).
+// row for exactly d is open. A read error counts as not open: an unknown state
+// must not silence the denial, and MarkStuck still decides whether it applies.
 func (s *BacklogService) transitionDenialAlreadyOpen(ctx context.Context, itemID string, d domain.TransitionDenial) bool {
 	rows, err := s.storage.FindOpenStuckStates(ctx)
 	if err != nil {
 		log.Warn("[notifyTransitionDenied] FindOpenStuckStates failed", "item", itemID, "error", err)
-		return true
+		return false
 	}
 	for _, row := range rows {
 		if row.ItemID != itemID || row.Reason != domain.StuckReasonTransitionDenied {
