@@ -2922,6 +2922,27 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 	return path
 }
 
+// skipTriageForNewItem reports whether a skip rule applies to the new item. It
+// records the skip and advances the item idea->ready, since triage is what
+// normally does that and a skipped item would otherwise sit in idea forever.
+func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string) bool {
+	item, getErr := s.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		return false
+	}
+	reason := newItemTriageSkipReason(item)
+	if reason == "" {
+		return false
+	}
+	s.recordTriageSkip(ctx, itemID, reason)
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+	if _, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, //nolint:silenttransition surfaced via the triage-gate activity note recorded just above
+		session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
+		log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+	}
+	return true
+}
+
 // MaybeTriggerTriage is the single "should this newly created item get
 // auto-triaged" decision, shared by every backlog-item creation entry point:
 // RPC CreateBacklogItem and ImportGitHubIssue (backlog_service_lifecycle.go,
@@ -2944,20 +2965,8 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 	if skipTriage || repoPath == "" || s.headlessPool == nil {
 		return false
 	}
-	if s.storage != nil {
-		if item, getErr := s.storage.GetBacklogItem(ctx, itemID); getErr == nil {
-			if reason := newItemTriageSkipReason(item); reason != "" {
-				s.recordTriageSkip(ctx, itemID, reason)
-				// Triage is what normally advances idea->ready; without it a skipped item
-				// would sit in idea forever, so advance it here (the note above is the visible record).
-				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
-				if _, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, //nolint:silenttransition surfaced via the triage-gate activity note recorded just above
-					session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
-					log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
-				}
-				return false
-			}
-		}
+	if s.storage != nil && s.skipTriageForNewItem(ctx, itemID) {
+		return false
 	}
 	// 30s gates only the synchronous path (item lookup + ItemSession creation).
 	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
