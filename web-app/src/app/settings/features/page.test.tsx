@@ -763,6 +763,15 @@ describe("FeaturesPage — workflow engine rows", () => {
     );
   });
 
+  it("keeps the unavailable wording, without an unconfirmed suffix, when flags are on but the status cannot be read", async () => {
+    mockGetEngineStatus.mockRejectedValue(new Error("down"));
+    mountPage(engineFlags({ op: true }));
+    await waitFor(() =>
+      expect(screen.getByTestId("workflow-engine-summary")).toHaveTextContent("Mode unavailable: couldn't read the engine status.")
+    );
+    expect(screen.getByTestId("workflow-engine-summary").textContent).not.toMatch(/not yet confirmed/);
+  });
+
   it("repeats the review-due line from the status", async () => {
     mockGetEngineStatus.mockResolvedValue(
       create(GetWorkflowEngineStatusResponseSchema, {

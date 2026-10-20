@@ -185,7 +185,10 @@ function unconfirmedClasses(modes: Record<CallerClass, ClassMode>, flagList: Fea
 export function workflowEngineSummary(view: EngineModeView, flagList: FeatureFlagMeta[]): string {
   const base = engineSummaryBase(view, flagList);
   if (view.kind === "loading") return base;
-  const unconfirmed = unconfirmedClasses(classModesFromFlags(view, flagList), flagList);
+  const modes = classModesFromFlags(view, flagList);
+  // "Mode unavailable" already says nothing is confirmed.
+  const unavailable = view.kind === "unknown" || CALLER_CLASSES.some((c) => modes[c] === "unknown");
+  const unconfirmed = unavailable ? [] : unconfirmedClasses(modes, flagList);
   const ago = lastCheckedAgo(view);
   return [
     base,
