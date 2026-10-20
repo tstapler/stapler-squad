@@ -31,6 +31,7 @@ type Report struct {
 	DecodedCommitsTotal  int64                  `json:"decoded_commits_total"`
 	StatCallsTotal       int64                  `json:"stat_calls_total"`
 	StatCallsPerScan     int64                  `json:"stat_calls_per_scan"`
+	NanosForcedHashes    int64                  `json:"nanos_forced_hashes_total"`
 	RepoStates           int64                  `json:"repostates"`
 	RepoStateBytes       int64                  `json:"repostate_bytes"`
 	Caches               map[string]CacheReport `json:"caches"`
@@ -67,6 +68,7 @@ func BuildReport(s *Scanner) Report {
 		DecodedCommitsTotal: in.decoded,
 		StatCallsTotal:      in.statCalls,
 		StatCallsPerScan:    perScan(in.statCalls, ScanCyclesTotal()),
+		NanosForcedHashes:   in.nanosHashes,
 		RepoStates:          in.repoStates,
 		RepoStateBytes:      in.repoBytes,
 		Caches:              make(map[string]CacheReport, len(repostateCaches)+2),

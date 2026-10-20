@@ -338,3 +338,30 @@ func TestUnstagedTargetList_ShouldFlagSameSizeRewrite_WhenOnlyNanosecondsDiffer(
 		t.Fatalf("targets = %+v, want none for identical content", got)
 	}
 }
+
+// A file whose nanoseconds differ from the index but is otherwise stat-clean and
+// outside the racy window is hashed every scan; that cost is counted.
+func TestUnstagedTargetList_ShouldCountForcedHashes_WhenOnlyNanosMoved(t *testing.T) {
+	dir := t.TempDir()
+	recorded := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
+	write := func(name string, nanos time.Duration) indexMeta {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("aaaa"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := recorded.Add(nanos)
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		return indexMeta{name: name, indexHash: plumbing.ComputeHash(plumbing.BlobObject, []byte("aaaa")), size: 4, modifiedAt: recorded}
+	}
+	moved := write("moved.txt", 700*time.Microsecond)
+	same := write("same.txt", 0) // identical nanoseconds: no hash forced
+	g := &GoGitVCSReader{}
+	for scan := 1; scan <= 2; scan++ {
+		g.unstagedTargetList(dir, []indexMeta{moved, same}, recorded.Add(10*time.Second), nil)
+		if got := g.NanosForcedHashes(); got != int64(scan) {
+			t.Fatalf("scan %d: forced hashes = %d, want %d (moved.txt only)", scan, got, scan)
+		}
+	}
+}

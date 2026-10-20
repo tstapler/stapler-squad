@@ -108,8 +108,15 @@ func (g *GoGitVCSReader) unstagedTargetList(worktreePath string, metas []indexMe
 		// (file mtime clearly predates the index write), stat alone is
 		// sufficient proof of no change, exactly as real git treats it — so
 		// only pay for a content hash when the file could actually be racy.
-		if !fileNeedsContentCheck(info.ModTime(), indexMtime) && !nanosMoved(info.ModTime(), m.modifiedAt) {
+		racy := fileNeedsContentCheck(info.ModTime(), indexMtime)
+		moved := nanosMoved(info.ModTime(), m.modifiedAt)
+		if !racy && !moved {
 			continue // stat-clean and outside the racy window: confirmed unchanged
+		}
+		if !racy {
+			// Not capped: treating an unhashed file as modified would change the
+			// verdict, so the extra hashes are only counted.
+			g.nanosForcedHashes.Add(1)
 		}
 		if info.Size() > maxUntrackedFileSize {
 			// Too large to hash within the cap; conservatively treat as changed

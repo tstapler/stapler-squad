@@ -38,6 +38,7 @@ type repostateInputs struct {
 	internerSize int64
 	reachBuilds  repostate.ReachStats
 	statCalls    int64
+	nanosHashes  int64
 	graphExt     OpDurationStats
 	// redundancy sums both merge-base walks' redundancy-check outcomes.
 	redundancy [numRedundancyOutcomes]int64
@@ -89,6 +90,7 @@ func collectRepostateInputs(s *Scanner) repostateInputs {
 		})
 		in.skip = r.ScanSkipStats()
 		in.statCalls = r.StatCalls()
+		in.nanosHashes = r.NanosForcedHashes()
 	}
 	in.graphExt = GraphExtensionDurations()
 	m := DiffMemoStats()
@@ -338,6 +340,7 @@ func (in repostateInputs) points() []seriesPoint {
 	add("reach_builds_total", "incremental", int64(in.reachBuilds.Incremental)) //nolint:gosec // counters never approach int64
 	add("stat_calls_total", "", in.statCalls)
 	add("stat_calls_per_scan", "", perScan(in.statCalls, ScanCyclesTotal()))
+	add("nanos_forced_hashes_total", "", in.nanosHashes)
 	add("graph_extension_total", "", in.graphExt.Count)
 	add("graph_extension_over_100ms_total", "", in.graphExt.SlowOver100ms)
 	add("commit_parents_reader", "stock", 1)
@@ -410,6 +413,10 @@ func (g *GoGitVCSReader) noteStat(rel string) {
 		g.statFn(rel)
 	}
 }
+
+// NanosForcedHashes returns the content hashes forced only by a sub-second mtime
+// mismatch since process start.
+func (g *GoGitVCSReader) NanosForcedHashes() int64 { return g.nanosForcedHashes.Load() }
 
 // StatCalls returns the file stats issued by the scan loop since process start.
 func (g *GoGitVCSReader) StatCalls() int64 { return g.statCalls.Load() }

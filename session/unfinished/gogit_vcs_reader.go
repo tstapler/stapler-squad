@@ -622,6 +622,11 @@ type GoGitVCSReader struct {
 	// feeding stat_calls_per_scan; atomic, so it is safe on the hot path.
 	statCalls atomic.Int64
 
+	// nanosForcedHashes counts content hashes forced only by a sub-second mtime
+	// mismatch (nanosMoved) on a file outside the racy window; it climbs every scan
+	// on filesystems whose nanoseconds differ from the index (bind mounts, NFS).
+	nanosForcedHashes atomic.Int64
+
 	// scanSkip holds the scan_skip rollback unit's caches (index, untracked
 	// dirs, DirtyGen) and its clock/flag test seams; see scanskip_state.go.
 	scanSkip scanSkipState
