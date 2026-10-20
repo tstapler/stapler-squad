@@ -200,6 +200,13 @@ func specViaHelper(name TransitionCaller, edges []SystemEdge, file, fn string) T
 	return s
 }
 
+// withOrigin adds a function that pre-checks the caller's edge through
+// GuardedTransitionAllowed without holding the primitive call itself.
+func withOrigin(s TransitionCallerSpec, file, fn string) TransitionCallerSpec {
+	s.Origins = append(s.Origins, CallSite{File: file, Func: fn})
+	return s
+}
+
 const (
 	stIdea, stRefining, stReady, stQueued = BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued
 	stInProg, stReview, stPrPend, stDone  = BacklogStatusInProgress, BacklogStatusReview, BacklogStatusPRPending, BacklogStatusDone
@@ -239,9 +246,9 @@ var transitionCallers = []TransitionCallerSpec{
 	specSys(CallerAttachSessionToItem, LegacyEngine, GuardsBuiltIn,
 		[]SystemEdge{edge(stReady, stInProg), edge(stQueued, stInProg), edge(stReview, stInProg), edge(stPrPend, stInProg), edge(stDone, stInProg)},
 		site(fileSync, "BacklogService.AttachSessionToItem", 1)),
-	specSys(CallerSyncLoopBackward, LegacyEngine, GuardsBuiltIn,
+	withOrigin(specSys(CallerSyncLoopBackward, LegacyEngine, GuardsBuiltIn,
 		[]SystemEdge{edge(stIdea, stArchived), edge(stRefining, stArchived), edge(stReady, stArchived), edge(stQueued, stArchived)},
-		site(fileSessSync, "SyncLoop.SyncOne", 1)),
+		site(fileSessSync, "SyncLoop.transitionBackward", 1)), fileSessSync, "SyncLoop.SyncOne"),
 
 	// System: storage-direct today. toStatus is assigned once (stIdea->stReady).
 	specUnchecked(CallerAutonomousComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileAutonomous, "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1)),
@@ -258,7 +265,7 @@ var transitionCallers = []TransitionCallerSpec{
 	specUnchecked(CallerArchiveStaleDone, []SystemEdge{edge(stDone, stArchived)}, site(fileSessLifeArch, "BacklogLifecycleListener.archiveStaleDoneItems", 1)),
 	specUnchecked(CallerCloseSupersededPR, []SystemEdge{edge(stPrPend, stDone)}, site(fileSessLifePR, "BacklogLifecycleListener.closeIfSupersededByMain", 1)),
 	specUnchecked(CallerPushCreatePRFallback, []SystemEdge{edge(stReview, stDone), edge(stReady, stDone)}, site(fileSessLifePR, "BacklogLifecycleListener.pushAndCreatePR", 1)),
-	specUnchecked(CallerOrphanedAgentPR, []SystemEdge{edge(stReview, stPrPend)}, site(fileSessLifePR, "BacklogLifecycleListener.reconcileOrphanedAgentPRs", 1)),
+	specUnchecked(CallerOrphanedAgentPR, []SystemEdge{edge(stReview, stPrPend)}, site(fileSessLifePR, "BacklogLifecycleListener.recordOrphanedAgentPR", 1)),
 	specUnchecked(CallerReconcilePRPendingMerge, []SystemEdge{edge(stPrPend, stDone)}, site(fileSessLifePR, "BacklogLifecycleListener.reconcilePRPendingItem", 1)),
 	// FindDriftedPRItems selects every status except pr_pending, stDone and stArchived.
 	specUnchecked(CallerRecoverDriftedPR, []SystemEdge{

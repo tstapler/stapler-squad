@@ -300,6 +300,28 @@ func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.I
 	return itemCount, sampleTitles, possiblyIncomplete, nil
 }
 
+// backwardSyncOutcome is the SyncOne counter delta of one backward-sync write.
+type backwardSyncOutcome struct{ updated, skipped, errored int }
+
+// transitionBackward archives-or-rewinds an item for a closed GitHub issue
+// through the gate. A concurrent mover or a gate denial is a skip retried on the
+// next tick (the gate has already reported a denial); anything else is an error.
+func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, target BacklogStatus) backwardSyncOutcome {
+	_, err := sl.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
+	})
+	switch {
+	case err == nil:
+		return backwardSyncOutcome{updated: 1}
+	case isGateDenial(err) || errors.Is(err, ErrPreconditionFailed):
+		log.Debug("[SyncLoop] backward-sync transition skipped, retried next tick", "item", itemID, "error", err)
+		return backwardSyncOutcome{skipped: 1}
+	default:
+		log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", itemID, err)
+		return backwardSyncOutcome{errored: 1}
+	}
+}
+
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
 // for the same source (e.g. a manual TriggerSync racing the periodic tick)
 // are serialized via a per-source lock — see syncSourceLocks.
@@ -459,13 +481,10 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 							PlanArtifactsPath: existing.PlanArtifactsPath,
 						}
 						if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
-							if _, transErr := sl.storage.RawTransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
-								log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
-								errored++
-								advanceWatermark = false
-							} else {
-								updated++
-							}
+							// A skip or failure leaves the watermark alone so the next tick retries.
+							res := sl.transitionBackward(ctx, existing.ID.String(), target)
+							updated, skipped, errored = updated+res.updated, skipped+res.skipped, errored+res.errored
+							advanceWatermark = res.updated > 0
 						} else {
 							log.InfoLog().Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
 							skipped++

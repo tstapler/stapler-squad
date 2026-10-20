@@ -724,12 +724,37 @@ func (l *BacklogLifecycleListener) notifyAutoRemediating(itemID, title, message 
 // (BUG-030, BUG-040, BUG-041, BUG-046, BUG-048, and this fix's sibling call
 // sites in reconcileBouncingItems/ReconcilePRPending).
 func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
+	if isGateDenial(writeErr) {
+		// The gate's reporter already raised the one comment and notification.
+		log.Debug("[BacklogLifecycle] transition denied by the workflow gate; not re-notifying", "item", itemID, "error", writeErr)
+		return
+	}
 	l.notify(itemID,
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
 		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
 		true, true, // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 	)
+}
+
+// isGateDenial reports whether err is the engine refusing a transition (graph,
+// Configured gate or Default guard) rather than a write failure. The gate has
+// already reported such a denial for a system caller.
+func isGateDenial(err error) bool {
+	return errors.Is(err, ErrTransitionNotAllowed) ||
+		errors.Is(err, ErrGateNotSatisfied) ||
+		errors.Is(err, ErrVerdictRequired)
+}
+
+// logSystemTransitionFailure logs a failed gated system write: a denial or a
+// lost compare-and-swap is expected and retried on the next tick (Debug); any
+// other failure is an Error.
+func logSystemTransitionFailure(where, itemID string, to BacklogStatus, err error) {
+	if isGateDenial(err) || errors.Is(err, ErrPreconditionFailed) {
+		log.Debug("[BacklogLifecycle] "+where+": transition skipped", "item", itemID, "to", to, "error", err)
+		return
+	}
+	log.Error("[BacklogLifecycle] "+where+": transition failed", "item", itemID, "to", to, "error", err)
 }
 
 // SetSessionArchiver wires in the archiver used to soft-archive backlog work
@@ -1048,8 +1073,10 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedStatus:    string(BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
-	if _, err := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
-		log.Error("[BacklogLifecycle] TransitionBacklogItemStatus failed", "item", item.ID, "to", toStatus, "error", err)
+	if _, err := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); err != nil {
+		logSystemTransitionFailure("onSessionExited", item.ID, toStatus, err)
 		return
 	}
 
@@ -1920,14 +1947,18 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	status := item.Status
 	if status == string(BacklogStatusInProgress) {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: status}
-		if _, err := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, precondition, TriggeredBySystem); err != nil {
+		if _, err := l.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerBouncingToDone, ItemID: item.ID, To: BacklogStatusReview, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+		}); err != nil {
 			return fmt.Errorf("in_progress->review: %w", err)
 		}
 		status = string(BacklogStatusReview)
 	}
 
 	precondition := &BacklogItemPrecondition{ExpectedStatus: status}
-	if _, err := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
+	if _, err := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerBouncingToDone, ItemID: item.ID, To: BacklogStatusDone, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
 	l.cleanupTerminalItemSync(ctx, item.ID)

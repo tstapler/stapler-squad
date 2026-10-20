@@ -470,3 +470,79 @@ func TestPushAndCreatePR_Preflight_SilentWhenUndetermined(t *testing.T) {
 	h.listener.pushAndCreatePR(context.Background(), item, is)
 	assert.Empty(t, h.infoCalls(), "failure to determine the setting sends nothing")
 }
+
+// Story 1.5.7b: under Enforce an operator human_approval gate on pr_pending->done
+// holds a merged PR's item at pr_pending, the gate reports the denial for the
+// registered caller, the reconcile raises no "status update failed" notification,
+// and the first tick after the gate is satisfied moves the item to done.
+func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhenSatisfied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusPRPending, BacklogStatusDone, GateKindHumanApproval, nil)
+	item := newPRPendingTestItem(t, h.storage, 9701)
+	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
+
+	notifier := &fakeNotifier{}
+	listener := NewBacklogLifecycleListener(h.storage)
+	listener.SetNotifier(notifier)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/sess-gate-merge")
+
+	for tick := 1; tick <= 2; tick++ {
+		listener.ReconcilePRPending(ctx, h.repo)
+		require.Equal(t, string(BacklogStatusPRPending), h.status(t, item.ID), "tick %d", tick)
+	}
+	reports := h.rep.snapshot()
+	require.Len(t, reports, 2)
+	for _, r := range reports {
+		assert.Equal(t, CallerReconcilePRPendingMerge, r.caller)
+		assert.Equal(t, DeniedOperatorGate, r.reason)
+	}
+	for _, c := range notifier.calls {
+		assert.NotEqual(t, "Status update failed after work completed", c.Title, "the gate's report is the only notification")
+	}
+
+	sessDisableGates(t, h)
+	listener.ReconcilePRPending(ctx, h.repo)
+	assert.Equal(t, string(BacklogStatusDone), h.status(t, item.ID))
+}
+
+func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusReview, BacklogStatusPRPending, GateKindHumanApproval, nil)
+	item := h.newItem(t, BacklogStatusReview)
+	listener := NewBacklogLifecycleListener(h.storage)
+	pr := &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/77", Number: 77}
+
+	err := listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found")
+	require.ErrorIs(t, err, ErrGateNotSatisfied)
+	require.True(t, isGateDenial(err))
+	got, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), got.Status)
+	assert.Zero(t, got.PrNumber)
+	require.Len(t, h.rep.snapshot(), 1)
+	assert.Equal(t, CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
+
+	sessDisableGates(t, h)
+	require.NoError(t, listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found"))
+	got, err = h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), got.Status)
+	assert.Equal(t, 77, got.PrNumber)
+}
+
+func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReassignment(t *testing.T) {
+	t.Parallel()
+	h := newGateHarness(t, ModeOff)
+	item := h.newItem(t, BacklogStatusInProgress)
+	listener := NewBacklogLifecycleListener(h.storage)
+
+	err := listener.recordOrphanedAgentPR(context.Background(), item.ID, &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/78", Number: 78}, "found")
+
+	require.ErrorIs(t, err, ErrPreconditionFailed)
+	assert.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
+}

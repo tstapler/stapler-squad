@@ -305,12 +305,33 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		summary := fmt.Sprintf("Reconciliation backstop: found an existing open PR #%d for this item's branch %q with no report_pr_created call on record.", info.Number, wt.BranchName)
 		// nil guard: this reconciler only ever lists review-status items
 		// (filter above), so it never hits the reassignment path.
-		if setErr := l.storage.RawSetBacklogItemPRAndTransition(ctx, &item, info.HTMLURL, info.Number, summary, nil); setErr != nil { //nolint:silenttransition the item stays in review and this backstop re-lists it every tick, so a failed write is retried, not dropped
+		if setErr := l.recordOrphanedAgentPR(ctx, item.ID, info, summary); setErr != nil {
+			if isGateDenial(setErr) || errors.Is(setErr, ErrPreconditionFailed) {
+				log.Debug("[BacklogLifecycle] reconcileOrphanedAgentPRs: PR association skipped, retried next tick", "item", item.ID, "pr", info.Number, "error", setErr)
+				continue
+			}
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs SetBacklogItemPRAndTransition item=%s pr=%d: %v", item.ID, info.Number, setErr)
 			continue
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs item=%s → pr_pending (recovered PR #%d %s, never reported)", item.ID, info.Number, info.HTMLURL)
 	}
+}
+
+// recordOrphanedAgentPR records the recovered PR and moves the item
+// review->pr_pending through the gate. It re-reads the item so the gate decides
+// on its full status history; the list read the caller holds carries none. It
+// passes no reassignment guard because the caller lists review items only.
+func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, itemID string, info *github.PRInfo, summary string) error {
+	observed, err := l.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	if observed.Status != string(BacklogStatusReview) {
+		return fmt.Errorf("%w: item %s is %q, not review", ErrPreconditionFailed, itemID, observed.Status)
+	}
+	return l.storage.GatedSetPRAndTransition(ctx,
+		TransitionRequest{Caller: CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: TriggeredBySystem},
+		PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary})
 }
 
 // mostRecentWorkCommitShippedToMain finds itemID's most recent work session
@@ -598,8 +619,13 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s falling back to done: %s", item.ID, reason)
 		// No status precondition: item may be at review or ready depending on when
 		// the PASS verdict was delivered relative to other transitions.
-		if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] pushAndCreatePR fallback done item=%s: %v", item.ID, transErr)
+		if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerPushCreatePRFallback, ItemID: item.ID, To: BacklogStatusDone, TriggeredBy: TriggeredBySystem,
+		}); transErr != nil {
+			logSystemTransitionFailure("pushAndCreatePR fallback done", item.ID, BacklogStatusDone, transErr)
+			if errors.Is(transErr, ErrPreconditionFailed) {
+				return // a concurrent mover changed the status; the next tick re-evaluates
+			}
 			// A PASS verdict already confirmed the work; there was nothing to
 			// ship, so done was the correct terminal state — a failure here
 			// leaves the item stuck with no further signal.
@@ -908,7 +934,9 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 // if any, so callers can apply their own logging/fallback behavior.
 func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemID, note, caller string) error {
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: note}
-	if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerResolveToPRPending, ItemID: itemID, To: BacklogStatusPRPending, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); transErr != nil {
 		return transErr
 	}
 	l.resolveStuckLogged(ctx, l.storage.repo, itemID, domain.StuckReasonPushFailed, caller)
@@ -937,7 +965,13 @@ func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, ite
 		Note: fmt.Sprintf("self-heal (%s): recovered from drift — item has PR #%d (%s) cached but status was %q, not pr_pending",
 			caller, item.PrNumber, item.PrURL, item.Status),
 	}
-	if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerRecoverDriftedPR, ItemID: item.ID, To: BacklogStatusPRPending, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); transErr != nil {
+		if isGateDenial(transErr) {
+			log.Debug("[BacklogLifecycle] recoverDriftedPRItem: transition denied, will retry next tick", "caller", caller, "item", item.ID, "error", transErr)
+			return false
+		}
 		log.WarningLog().Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovery transition failed (likely a concurrent legitimate transition, will retry next tick): %v", caller, item.ID, transErr)
 		return false
 	}
@@ -1634,8 +1668,11 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
-		if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
-			log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)
+		if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerReconcilePRPendingMerge, ItemID: item.ID.String(), To: BacklogStatusDone, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+		}); transErr != nil {
+			// A gate denial is reported once by the gate; the item stays pr_pending and is retried next tick.
+			logSystemTransitionFailure("ReconcilePRPending done", item.ID.String(), BacklogStatusDone, transErr)
 			// PR #%d is already confirmed merged — the item is left at
 			// pr_pending with nothing else surfacing this until the next
 			// tick retries it.
@@ -2286,8 +2323,10 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
 			closedPrNum, lastCommitSha, bounceMainBranch),
 	}
-	if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
-		log.ErrorLog().Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)
+	if _, transErr := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerCloseSupersededPR, ItemID: item.ID, To: BacklogStatusDone, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); transErr != nil {
+		logSystemTransitionFailure("closeIfSupersededByMain done", item.ID, BacklogStatusDone, transErr)
 		return false
 	}
 	l.cleanupTerminalItemSync(ctx, item.ID)

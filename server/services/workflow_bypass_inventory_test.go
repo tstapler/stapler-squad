@@ -5,9 +5,10 @@ package services
 // whole module with go/parser, so a new raw call anywhere (server/, session/,
 // server/mcp/, any other package) fails here unless it is classified.
 //
-// The pending list is a ratchet: it can only shrink. Epic 1.5 migrates a site,
+// The pending class is a ratchet: it can only shrink. Epic 1.5 migrates a site,
 // then deletes its entry; a stale entry (no matching call, or a different call
-// count) fails. Story 1.5.9a empties the list.
+// count) fails. Story 1.5.7 migrated the last pending site, so no entry uses the
+// class now; Story 1.5.9a replaces the scan.
 
 import (
 	"fmt"
@@ -39,7 +40,7 @@ var bypassPrimitives = func() map[string]bool {
 		"SetBacklogItemPRAndTransition", "ReconcileStuckItems", "TransitionBacklogItemStatusWithPRFields",
 		"TransitionBacklogItemStatusWithNote",
 		// ReconcileStuckItems has no Storage wrapper; GatedReconcileStuck is its only
-		// form and stays counted until Story 1.5.7a registers the caller.
+		// form and stays counted as the gated lifecycle_reconcile_stuck site.
 		"GatedReconcileStuck",
 		"GatedTransition", "GatedArchive", "GatedUnarchive", "GatedSetPRAndTransition",
 	} {
@@ -97,20 +98,12 @@ const (
 	delegateReason = "MCP delegate forwards to the handler, which routes through the engine (ADR-007 D2 forwarding)"
 )
 
-func engineRouted(file, fn, how string) bypassSite {
-	return bypassSite{file: file, fn: fn, calls: 1, class: classEngineRouted, reason: how}
-}
-
 func gated(file, fn string, calls int, how string) bypassSite {
 	return bypassSite{file: file, fn: fn, calls: calls, class: classGated, reason: how}
 }
 
 func gateRouted(file, fn string, calls int, how string) bypassSite {
 	return bypassSite{file: file, fn: fn, calls: calls, class: classEngineRouted, reason: how}
-}
-
-func pending(file, fn string, calls int, story string) bypassSite {
-	return bypassSite{file: file, fn: fn, calls: calls, class: classPending, reason: "migrate in Story " + story}
 }
 
 func exempt(file, fn string, calls int, why string) bypassSite {
@@ -137,7 +130,6 @@ var bypassInventory = []bypassSite{
 	// Engine-routed: ask the WorkflowEngine today; re-pointed at the gate in Stories 1.5.5-1.5.7.
 	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", 1, "GatedTransition as operator_transition_rpc or mcp_transition_delegate, by context actor (Story 1.5.5a)"),
 	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
-	engineRouted("session/backlog_sync.go", "SyncLoop.SyncOne", "engine check on the backward-sync target"),
 
 	// Gate-routed in Story 1.5.5 (operator and agent writers).
 	gateRouted("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
@@ -170,19 +162,20 @@ var bypassInventory = []bypassSite{
 	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
 	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
 
-	// Pending, Story 1.5.7 (system writers in session).
-	pending("session/backlog_lifecycle.go", "BacklogLifecycleListener.onSessionExited", 1, "1.5.7a"),
-	pending("session/backlog_lifecycle.go", "BacklogLifecycleListener.transitionBouncingItemToDone", 2, "1.5.7a"),
-	pending("session/backlog_lifecycle.go", "BacklogLifecycleListener.ReconcileStuck", 1, "1.5.7a (ReconcileStuckItems, via GatedReconcileStuck)"),
-	pending("session/backlog_lifecycle_archive.go", "BacklogLifecycleListener.archiveStaleDoneItems", 1, "1.5.7a"),
-	pending("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.closeIfSupersededByMain", 1, "1.5.7b"),
-	pending("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.pushAndCreatePR", 1, "1.5.7b"),
-	pending("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcileOrphanedAgentPRs", 1, "1.5.7b (SetBacklogItemPRAndTransition)"),
-	pending("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcilePRPendingItem", 1, "1.5.7b"),
-	pending("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recoverDriftedPRItem", 1, "1.5.7b"),
-	pending("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.resolveToPRPending", 1, "1.5.7b"),
-	pending("session/jules_session_poller.go", "JulesSessionPoller.failJulesSession", 1, "1.5.7c"),
-	pending("session/jules_session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "1.5.7c (two transitions and SetBacklogItemPRAndTransition)"),
+	// Gated, Story 1.5.7 (system writers in session).
+	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.onSessionExited", 1, "GatedTransition as lifecycle_session_exited"),
+	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.transitionBouncingItemToDone", 2, "GatedTransition as lifecycle_bouncing_to_done"),
+	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.ReconcileStuck", 1, "GatedReconcileStuck as lifecycle_reconcile_stuck"),
+	gated("session/backlog_lifecycle_archive.go", "BacklogLifecycleListener.archiveStaleDoneItems", 1, "GatedTransition as lifecycle_archive_stale_done"),
+	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.closeIfSupersededByMain", 1, "GatedTransition as lifecycle_close_superseded_pr"),
+	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.pushAndCreatePR", 1, "GatedTransition as lifecycle_push_create_pr_fallback"),
+	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recordOrphanedAgentPR", 1, "GatedSetPRAndTransition as lifecycle_orphaned_agent_pr"),
+	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcilePRPendingItem", 1, "GatedTransition as lifecycle_reconcile_pr_pending"),
+	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recoverDriftedPRItem", 1, "GatedTransition as lifecycle_recover_drifted_pr"),
+	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.resolveToPRPending", 1, "GatedTransition as lifecycle_resolve_to_pr_pending"),
+	gated("session/jules_session_poller.go", "JulesSessionPoller.failJulesSession", 1, "GatedTransition as jules_fail_session"),
+	gated("session/jules_session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "GatedTransition twice and GatedSetPRAndTransition as jules_apply_completed"),
+	gated("session/backlog_sync.go", "SyncLoop.transitionBackward", 1, "GatedTransition as sync_loop_backward"),
 }
 
 // walkModuleFuncs parses every non-test Go file under root (skipping web-app,

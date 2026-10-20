@@ -120,6 +120,8 @@ type fakeJulesPollerStorage struct {
 	notes       []fakeNote
 	transitions []fakeTransition
 	prRecorded  []fakePRRecord
+	// gatedCallers records the registry caller of every gated write, in order.
+	gatedCallers []TransitionCaller
 }
 
 func newFakeJulesPollerStorage() *fakeJulesPollerStorage {
@@ -175,22 +177,24 @@ func (f *fakeJulesPollerStorage) AppendProgressNote(_ context.Context, itemID st
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) RawSetBacklogItemPRAndTransition(_ context.Context, observed *BacklogItemData, prURL string, prNumber int, _ string, _ *PRReassignmentGuard) error {
+func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, req TransitionRequest, pr PRAssociation) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.prRecorded = append(f.prRecorded, fakePRRecord{observed.ID, prURL, prNumber})
+	f.prRecorded = append(f.prRecorded, fakePRRecord{req.Observed.ID, pr.URL, pr.Number})
+	f.gatedCallers = append(f.gatedCallers, req.Caller)
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) RawTransitionBacklogItemStatus(_ context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, _ string) (*BacklogItemData, error) {
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req TransitionRequest) (*BacklogItemData, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	expected := ""
-	if precondition != nil {
-		expected = precondition.ExpectedStatus
+	if req.Precondition != nil {
+		expected = req.Precondition.ExpectedStatus
 	}
-	f.transitions = append(f.transitions, fakeTransition{id, toStatus, expected})
-	return &BacklogItemData{ID: id, Status: string(toStatus), UpdatedAt: time.Now()}, nil
+	f.transitions = append(f.transitions, fakeTransition{req.ItemID, req.To, expected})
+	f.gatedCallers = append(f.gatedCallers, req.Caller)
+	return &BacklogItemData{ID: req.ItemID, Status: string(req.To), UpdatedAt: time.Now()}, nil
 }
 
 func (f *fakeJulesPollerStorage) notesFor(itemID string) []fakeNote {
@@ -540,6 +544,7 @@ func TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs(
 	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
 
 	assert.Empty(t, storage.prRecorded, "no PR output must never call SetBacklogItemPRAndTransition")
+	assert.Equal(t, []TransitionCaller{CallerJulesApplyCompleted}, storage.gatedCallers, "the no-PR review move goes through the gate as jules_apply_completed")
 	require.Contains(t, storage.ended, "row-1")
 	assert.Equal(t, "jules_completed_no_pr", storage.ended["row-1"])
 	notes := storage.notesFor("item-1")
@@ -743,6 +748,7 @@ func TestApplyJulesState_should_ReturnItemToReadyWithJulesMessage_When_StateIsFa
 	lastTransition := storage.transitions[len(storage.transitions)-1]
 	assert.Equal(t, BacklogStatusReady, lastTransition.toStatus)
 	assert.Equal(t, string(BacklogStatusInProgress), lastTransition.expectedStatus)
+	assert.Equal(t, []TransitionCaller{CallerJulesFailSession}, storage.gatedCallers, "the failure write goes through the gate as jules_fail_session")
 
 	notes := storage.notesFor("item-1")
 	require.NotEmpty(t, notes)

@@ -75,11 +75,11 @@ func (f *fakeJulesPollerStorage) AppendProgressNote(_ context.Context, _ string,
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) RawSetBacklogItemPRAndTransition(_ context.Context, _ *session.BacklogItemData, _ string, _ int, _ string, _ *session.PRReassignmentGuard) error {
+func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ session.TransitionRequest, _ session.PRAssociation) error {
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) RawTransitionBacklogItemStatus(_ context.Context, _ string, _ session.BacklogStatus, _ *session.BacklogItemPrecondition, _ string) (*session.BacklogItemData, error) {
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ session.TransitionRequest) (*session.BacklogItemData, error) {
 	return &session.BacklogItemData{}, nil
 }
 

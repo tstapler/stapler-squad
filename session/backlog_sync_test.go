@@ -1483,3 +1483,25 @@ func TestSyncOne_should_CreateItem_When_NoForeignClaimLookupWired(t *testing.T) 
 	_, err = storage.repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-1")
 	require.NoError(t, err)
 }
+
+// Story 1.5.7c: the backward-sync write goes through the gate; a denial or a
+// lost compare-and-swap is a counted skip retried next tick, not an error.
+func TestTransitionBackward_GateOutcomes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	sl := &SyncLoop{storage: h.storage}
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	item := h.newItem(t, BacklogStatusIdea)
+
+	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusArchived))
+	require.Equal(t, string(BacklogStatusIdea), h.status(t, item.ID))
+	require.Len(t, h.rep.snapshot(), 1)
+	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
+
+	sessDisableGates(t, h)
+	require.Equal(t, backwardSyncOutcome{updated: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusArchived))
+	require.Equal(t, string(BacklogStatusArchived), h.status(t, item.ID))
+
+	require.Equal(t, backwardSyncOutcome{errored: 1}, sl.transitionBackward(ctx, "no-such-item", BacklogStatusArchived))
+}
