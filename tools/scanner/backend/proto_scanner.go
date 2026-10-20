@@ -403,6 +403,12 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetGuidanceRequest":             "guidance-request:get",
 	"ListGuidanceRequests":           "guidance-request:list",
 	"ListAllPendingGuidanceRequests": "guidance-request:list-all-pending",
+	// WakeTriggerService (wake_trigger.proto): must match the "// +api:
+	// wake-trigger:*" markers in server/services/wake_trigger_service.go.
+	"ListWakeTriggers":       "wake-trigger:list",
+	"CancelWakeTrigger":      "wake-trigger:cancel",
+	"CreateOperatorReminder": "wake-trigger:remind",
+	"ListPeerHelpRequests":   "wake-trigger:list-peer-help",
 	// DismissFinding (InsightsService in insights.proto) -- its
 	// "// +api: DismissFinding" marker in server/services/insights_service.go
 	// already uses the method-name-as-id convention (see the SearchGitHubRepos

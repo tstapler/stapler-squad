@@ -21,6 +21,7 @@ import { useStreamConnectionState } from "@/lib/hooks/useNotificationConnectivit
 import { useToastQueue } from "@/lib/hooks/useToastQueue";
 import { useToastTimers } from "@/lib/hooks/useToastTimers";
 import { useAnnounce } from "@/lib/hooks/useAnnounce";
+import { useReviewedMarks } from "@/lib/hooks/useReviewedMarks";
 import { createToastTrayCommands, MOVE_UNDO_TIMER_ID, type MovedBatch } from "@/lib/contexts/toastTray";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapPriority } from "@/lib/utils/notificationMapping";
@@ -97,6 +98,8 @@ function reviewItemToNotificationType(reason: AttentionReason): NotificationData
   }
 }
 
+const handledKeyOf = (n: NotificationHistoryItem) => `answer:${n.id}@${n.timestamp}`;
+const reviewedKeyOf = (n: NotificationHistoryItem) => `bgrecord:${n.id}@${n.timestamp}`;
 const newNotificationId = () => `notification-${Date.now()}-${Math.random()}`;
 const toIdSet = (id: string | string[]) => new Set(Array.isArray(id) ? id : [id]);
 
@@ -130,6 +133,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   const announceRef = useRef(announce);
   announceRef.current = announce;
 
+  const handledMarks = useReviewedMarks();
+  const handledMarksRef = useRef(handledMarks);
+  handledMarksRef.current = handledMarks;
+
   const auditLog = useAuditLog();
   const streamLive = useStreamConnectionState() === "connected";
   const history = useNotificationHistory({ streamLive });
@@ -139,6 +146,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   const historyRef = useRef(history);
   historyRef.current = history;
   const [quietMode, setQuietModeState] = useState(false);
+  const [answeredElsewhere, setAnsweredElsewhere] = useState<Readonly<Record<string, string>>>({});
   const quietRef = useRef(false);
   // Read after mount so server and client render the same first frame.
   useEffect(() => {
@@ -204,6 +212,18 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
     const addToHistoryOnly: NotificationCommandsValue["addToHistoryOnly"] = (notification) =>
       addToHistory({ ...notification, id: notification.id ?? newNotificationId(), timestamp: Date.now() });
 
+    const markAnswerHandled: NotificationCommandsValue["markAnswerHandled"] = (ids) => {
+      const set = new Set(ids);
+      const keys = historyStateRef.current.filter((n) => set.has(n.id)).map(handledKeyOf);
+      handledMarksRef.current.mark(keys, { track: false });
+    };
+
+    const markBackgroundReviewed: NotificationCommandsValue["markBackgroundReviewed"] = (ids) => {
+      const set = new Set(ids);
+      const keys = historyStateRef.current.filter((n) => set.has(n.id)).map(reviewedKeyOf);
+      handledMarksRef.current.mark(keys, { track: false });
+    };
+
     const markAsRead = (id: string | string[]) => {
       const ids = Array.isArray(id) ? id : [id];
       const idSet = new Set(ids);
@@ -216,6 +236,8 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
 
     return {
       addNotification,
+      markAnswerHandled,
+      markBackgroundReviewed,
       addToHistoryOnly,
       removeNotification: removeToast,
       dismissToast: removeToast,
@@ -290,6 +312,7 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
         dispatch({ type: "remove", ids: idSet });
         markAsRead(ids);
       },
+      broadcastActionResolved: (ids, summary) => sendToOtherTabs({ type: "NOTIFICATION_ACTION_RESOLVED", ids, summary }),
       markAsReadBySessionId: (sessionId) => {
         const sessionIds = toIdSet(sessionId);
         const idsToMark = historyStateRef.current
@@ -365,6 +388,13 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
           prev.map((n) => (n.id === notificationId ? { ...n, isRead: true, isPendingDecision: false } : n))
         );
       }
+      if (message.type === "NOTIFICATION_ACTION_RESOLVED") {
+        const ids = new Set(message.ids);
+        ids.forEach((id) => timers.cancel(id));
+        dispatch({ type: "remove", ids });
+        setAnsweredElsewhere((prev) => ({ ...prev, ...Object.fromEntries(message.ids.map((id) => [id, message.summary])) }));
+        setNotificationHistory((prev) => prev.map((n) => (ids.has(n.id) ? { ...n, isRead: true, isPendingDecision: false } : n)));
+      }
       if (message.type === "NOTIFICATIONS_BULK_DISMISSED") {
         const ids = new Set(message.ids);
         ids.forEach((id) => timers.cancel(id));
@@ -387,15 +417,22 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
   // Only one page of history is loaded, so the server's unread total is the floor: a badge
   // for 120 unread must not read 49 just because that is what has been paged in.
   const serverUnread = history.unreadCount ?? 0;
-  const unreadCount = useMemo(
-    () => Math.max(groupNotifications(notificationHistory.filter((n) => !n.isRead)).length, serverUnread),
-    [notificationHistory, serverUnread],
+  // Records the operator marked handled in this browser leave Needs you and the badge here only.
+  const isHandled = handledMarks.isReviewed;
+  const visibleHistory = useMemo(
+    () => notificationHistory.map((n) => (!n.isRead && isHandled(handledKeyOf(n)) ? { ...n, isRead: true, isPendingDecision: false } : n)),
+    [notificationHistory, isHandled],
   );
+  const handledUnread = visibleHistory.filter((n, i) => n !== notificationHistory[i]).length;
+  // Reviewed Background records stay unread in the list (their row must keep its exception state) but not in the bell.
+  const unreviewedUnread = visibleHistory.filter((n) => !n.isRead && !isHandled(reviewedKeyOf(n)));
+  const reviewedUnread = visibleHistory.filter((n) => !n.isRead).length - unreviewedUnread.length;
+  const unreadCount = Math.max(groupNotifications(unreviewedUnread).length, serverUnread - handledUnread - reviewedUnread);
 
   const state = useMemo<NotificationStateValue>(
     () => ({
       notifications,
-      notificationHistory,
+      notificationHistory: visibleHistory,
       isPanelOpen,
       historyLoading: history.loading,
       historyHasMore: history.hasMore,
@@ -403,9 +440,10 @@ function NotificationProviderInner({ children }: { children: React.ReactNode }) 
       historyLastUpdatedAt: history.lastUpdatedAt,
       unreadCount,
       movedToTray: moved ? { count: moved.toasts.length } : null,
+      answeredElsewhere,
       quietMode,
     }),
-    [notifications, notificationHistory, isPanelOpen, moved, quietMode, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
+    [notifications, visibleHistory, isPanelOpen, moved, quietMode, answeredElsewhere, history.loading, history.hasMore, history.error, history.lastUpdatedAt, unreadCount],
   );
 
   return (

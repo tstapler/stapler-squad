@@ -5,6 +5,8 @@
  * import from here — never from UI components or contexts.
  */
 
+import type { NotificationActionDescriptor } from "@/gen/session/v1/notification_action_pb";
+
 export interface NotificationData {
   id: string;
   sessionId: string;
@@ -29,6 +31,8 @@ export interface NotificationData {
   isPendingDecision?: boolean;
   /** Times an identical (session, type) toast replaced its predecessor; shown as "x2". */
   repeatCount?: number;
+  /** Inline actions the server says are valid now (never stored); absent for stream-only items. */
+  actions?: NotificationActionDescriptor[];
   /** Additional metadata key-value pairs */
   metadata?: Record<string, string>;
   onView?: () => void;

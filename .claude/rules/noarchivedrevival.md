@@ -2,7 +2,7 @@
 
 In the automated-lifecycle files, a call to `Start(false)`, `RecoverFromStopped()`, `restartForRetry(...)`, or `transitionToLocked(..., Active)` must be preceded by an archival check (`IsArchived()` or an `ArchivedAt != nil` comparison) — never revive a session that was deliberately archived.
 
-Files in scope (`tools/lint/noarchivedrevival`): `session/health.go`, `session/review_queue_poller.go`, `session/session_driver.go`, `session/instance_claude.go`, `session/instance_serialization.go`, `server/dependencies.go`.
+Files in scope (`tools/lint/noarchivedrevival`): `session/health.go`, `session/review_queue_poller.go`, `session/session_driver.go`, `session/instance_claude.go`, `session/instance_serialization.go`, `server/dependencies.go`, `server/wakes/revive.go` (`reviveStoppedOwner` is the only wake code that revives, and checks `IsArchived()` itself), `server/services/question_answer_router.go` (a ratchet: the `resume` route never revives).
 
 **Wrong:**
 ```go

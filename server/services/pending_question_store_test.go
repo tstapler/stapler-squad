@@ -130,53 +130,6 @@ func TestClaim_ShouldConsumeOnConsumeAndRemoveRegisteredEntriesOnSessionDelete(t
 	assert.Zero(t, s.Len())
 }
 
-func TestParseAskUserQuestion_ShouldClassifyTheRealPayloadShapes(t *testing.T) {
-	opts := func(labels ...string) []interface{} {
-		out := make([]interface{}, 0, len(labels))
-		for _, l := range labels {
-			out = append(out, map[string]interface{}{"label": l, "description": "d"})
-		}
-		return out
-	}
-	q := func(multi interface{}, labels ...string) map[string]interface{} {
-		m := map[string]interface{}{"question": "Pick one?", "header": "Pick", "options": opts(labels...)}
-		if multi != nil {
-			m["multiSelect"] = multi
-		}
-		return m
-	}
-	long := make([]byte, 81)
-	for i := range long {
-		long[i] = 'x'
-	}
-	cases := []struct {
-		name  string
-		input map[string]interface{}
-		want  QuestionShape
-	}{
-		{"single", map[string]interface{}{"questions": []interface{}{q(false, "A", "B")}}, QuestionShapeSingle},
-		{"seven options", map[string]interface{}{"questions": []interface{}{q(false, "1", "2", "3", "4", "5", "6", "7")}}, QuestionShapeSingle},
-		{"multiSelect", map[string]interface{}{"questions": []interface{}{q(true, "A", "B")}}, QuestionShapeMulti},
-		{"two questions", map[string]interface{}{"questions": []interface{}{q(false, "A"), q(true, "B")}}, QuestionShapeMulti},
-		{"multiSelect absent", map[string]interface{}{"questions": []interface{}{q(nil, "A", "B")}}, QuestionShapeUnknown},
-		{"eight options", map[string]interface{}{"questions": []interface{}{q(false, "1", "2", "3", "4", "5", "6", "7", "8")}}, QuestionShapeUnknown},
-		{"zero options", map[string]interface{}{"questions": []interface{}{q(false)}}, QuestionShapeUnknown},
-		{"empty label", map[string]interface{}{"questions": []interface{}{q(false, "A", " ")}}, QuestionShapeUnknown},
-		{"label too long", map[string]interface{}{"questions": []interface{}{q(false, string(long))}}, QuestionShapeUnknown},
-		{"legacy prompt key", map[string]interface{}{"prompt": "Which?"}, QuestionShapeUnknown},
-		{"nil", nil, QuestionShapeUnknown},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, ParseAskUserQuestion(tc.input).Shape)
-		})
-	}
-	got := ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{q(false, "A", "B")}})
-	assert.Equal(t, "Pick one?", got.Question)
-	assert.Equal(t, "Pick", got.Header)
-	assert.Equal(t, []string{"A", "B"}, got.Labels)
-}
-
 func TestPendingCount_ShouldCountOnlyParallelWindowQuestions_WhenOlderOnesWereAnsweredInTheTerminal(t *testing.T) {
 	clock := newGateTestClock()
 	s := NewPendingQuestionStore(clock.Now)

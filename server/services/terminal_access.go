@@ -80,7 +80,7 @@ func (a TerminalAccess) Writer(sender tmuxInputSender) (TerminalWriter, error) {
 	if sender == nil {
 		sender = realTmuxInputSender{}
 	}
-	return &paneWriter{sender: sender}, nil
+	return &paneWriter{sender: sender, activity: defaultHumanActivity}, nil
 }
 
 // controlModeInput is what a control-mode attach exposes for keystrokes;
@@ -132,12 +132,14 @@ func (realTmuxInputSender) Resize(p capturePaneStreamParams, cols, rows int) {
 // paneWriter is the only TerminalWriter implementation. It is constructed only
 // by TerminalAccess.Writer (guard check (a)).
 type paneWriter struct {
-	sender tmuxInputSender
+	sender   tmuxInputSender
+	activity *HumanActivity
 }
 
 func (w *paneWriter) Sender() tmuxInputSender { return w.sender }
 
 func (w *paneWriter) SendInput(ctx context.Context, in PaneInput) error {
+	w.activity.Record(in.TmuxSession) // every browser keystroke is human activity, sent or not
 	err := in.ControlMode.SendInputViaControlMode(ctx, in.Data)
 	if err == nil {
 		return nil

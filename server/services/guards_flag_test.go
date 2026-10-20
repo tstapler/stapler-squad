@@ -132,7 +132,7 @@ func TestGuardBypass_ShouldRefuseWithZeroWrites_WhenTheAuditSinkIsDown_AndStillS
 	diag := e.addSession("down-diagnose", true, session.SessionRoleDiagnose)
 	e.setGuards(false)
 	e.sink.Close() // drains the flag-change result line before the fault is injected
-	e.mfs.failWrite = errDiskFull
+	e.mfs.setFailWrite(errDiskFull)
 
 	err := e.steer(e.localCtx(), diag.inst.Title, "bypass")
 	require.Error(t, err)
@@ -196,7 +196,7 @@ func TestGuardsFlag_ShouldRecordFlagChangeLinesAndPersistOffWithOnlyTheFallbackR
 	assert.Equal(t, 1, requested, "only the loosening flip writes a durable requested line first")
 	assert.Equal(t, 2, results)
 
-	e.mfs.failWrite = errDiskFull
+	e.mfs.setFailWrite(errDiskFull)
 	require.NoError(t, flagUpdateCtx(context.Background(), e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName, false),
 		"off is the hatch for a sink fault: never refused")
 	assert.False(t, e.fix.svc.guards.GuardsEnabled())

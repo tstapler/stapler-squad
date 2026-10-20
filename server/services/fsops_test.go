@@ -20,12 +20,26 @@ type memFS struct {
 	modes map[string]os.FileMode
 
 	failMkdir  error
-	failWrite  error // WriteFileSync and append Write
+	failWrite  error // WriteFileSync and append Write; set via setFailWrite, read via writeFault
 	failRename error
 	// syncStall, when non-nil, blocks every fsync (WriteFileSync and append
 	// Sync) until it is closed; syncEntered receives one value per blocked call.
 	syncStall   chan struct{}
 	syncEntered chan struct{}
+}
+
+// setFailWrite and writeFault guard failWrite: the audit sink's drain goroutine
+// reads it while a test goroutine arms it.
+func (m *memFS) setFailWrite(err error) {
+	m.mu.Lock()
+	m.failWrite = err
+	m.mu.Unlock()
+}
+
+func (m *memFS) writeFault() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.failWrite
 }
 
 func newMemFS() *memFS {
@@ -102,8 +116,8 @@ func (m *memFS) ReadFile(path string) ([]byte, error) {
 }
 
 func (m *memFS) WriteFileSync(path string, data []byte, perm os.FileMode) error {
-	if m.failWrite != nil {
-		return m.failWrite
+	if err := m.writeFault(); err != nil {
+		return err
 	}
 	m.stall()
 	m.mu.Lock()
@@ -171,8 +185,8 @@ func (m *memFS) OpenAppend(path string, perm os.FileMode) (appendFile, error) {
 }
 
 func (a *memAppend) Write(p []byte) (int, error) {
-	if a.m.failWrite != nil {
-		return 0, a.m.failWrite
+	if err := a.m.writeFault(); err != nil {
+		return 0, err
 	}
 	a.m.mu.Lock()
 	defer a.m.mu.Unlock()

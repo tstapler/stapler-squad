@@ -443,8 +443,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		if qa.uuid != "" {
 			sessionID = qa.uuid // a verified proof's UUID is the attribution; the title header is ignored
 		}
-		h.broadcastQuestionNotification(sessionID, payload, qa)
+		// The defer reply goes out before the mirror write so a slow repository
+		// can never hold the native dialog back (pre-mortem #7).
 		h.writeDeferDecision(w)
+		_ = http.NewResponseController(w).Flush()
+		h.broadcastQuestionNotification(sessionID, payload, qa)
 		return
 	}
 
@@ -722,9 +725,13 @@ func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
 	return sessionID
 }
 
-// broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
-// The approval ID is passed in the notification metadata so the UI can resolve it.
-func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+func approvalNotificationTitle(approval *PendingApproval) string {
+	return fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+}
+
+// approvalNotificationMetadata is the display metadata of an approval's
+// notification: the id to resolve it by and the fields the card shows.
+func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
 	metadata := map[string]string{
 		"approval_id": approval.ID,
 		"tool_name":   approval.ToolName,
@@ -746,7 +753,18 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		metadata["tool_input_description"] = desc
 	}
 
-	title := fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+	if toolInputUnrenderable(approval.ToolInput) {
+		metadata[metaToolInputUnrenderable] = boolTrue
+	}
+	return metadata
+}
+
+// broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
+// The approval ID is passed in the notification metadata so the UI can resolve it.
+func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+	metadata := approvalNotificationMetadata(approval)
+
+	title := approvalNotificationTitle(approval)
 	message := buildApprovalMessage(approval)
 
 	event := events.NewNotificationEvent(
@@ -796,7 +814,8 @@ func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payloa
 			message = truncateString(prompt, maxNotificationMessageLen)
 		}
 	}
-	meta := h.registerQuestion(sessionID, qa, asked)
+	message, _ = RedactSecrets(message)
+	meta := h.registerQuestion(sessionID, qa, asked, payload.ToolUseID)
 	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
 
 	event := events.NewNotificationEvent(

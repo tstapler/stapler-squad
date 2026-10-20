@@ -8,7 +8,13 @@ export type NotificationSyncMessage =
    * (history untouched); "dismissed" also drops the rows the other tab cleared.
    * Applying it twice, or with ids the receiver never saw, changes nothing.
    */
-  | { type: "NOTIFICATIONS_BULK_DISMISSED"; kind: BulkDismissKind; ids: string[] };
+  | { type: "NOTIFICATIONS_BULK_DISMISSED"; kind: BulkDismissKind; ids: string[] }
+  /**
+   * An inline action resolved these records in another tab. Receivers show
+   * "Answered elsewhere: <summary>" on exactly these ids and nothing else; an id
+   * they do not hold changes nothing, and applying it twice is harmless.
+   */
+  | { type: "NOTIFICATION_ACTION_RESOLVED"; ids: string[]; summary: string };
 
 const CHANNEL_NAME = "stapler-squad:notification-sync";
 const STORAGE_KEY = "stapler-squad:notification-sync";

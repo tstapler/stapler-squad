@@ -1,0 +1,24 @@
+
+ ▐▛███▛█   Claude Code v2.1.303
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/scratchpad/cap/proj
+
+
+❯ Use the AskUserQuestion tool exactly once with two questions. Q1: 'Which cache?' header 'Cache' multiSelect false, options Redis, Memcached, None. Q2: 'Which letters?' header 'Letters' multiSelect
+  true, options labelled A, B, C with short descriptions. Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Cache  ☐ Letters  ✔ Submit  →
+
+Which cache?
+
+❯ 1. Redis
+     In-memory data store with rich data types and optional persistence
+  2. Memcached
+     Simple, multi-threaded in-memory key-value cache
+  3. None
+     Do not use a cache
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
