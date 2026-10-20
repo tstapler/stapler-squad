@@ -153,11 +153,12 @@ func TestGetFeatureFlags_should_PopulateStatusDetailForBacklogOnly_When_QuotaGat
 	require.NotNil(t, resp.Msg)
 
 	for _, f := range resp.Msg.Flags {
-		if f.Name == "backlog" {
+		switch f.Name {
+		case "backlog":
 			assert.Equal(t, "Paused: session-quota headroom below threshold.", f.StatusDetail)
-		} else if f.Name == config.DiagnoseNudgeFeatureFlag || f.Name == config.AutonomousStallNudgeFeatureFlag {
+		case config.DiagnoseNudgeFeatureFlag, config.AutonomousStallNudgeFeatureFlag:
 			assert.Contains(t, f.StatusDetail, "not set explicitly", "nudge flags always report their value source")
-		} else {
+		default:
 			assert.Empty(t, f.StatusDetail, "flag %q should have empty StatusDetail (no provider wired)", f.Name)
 		}
 	}
