@@ -55,7 +55,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 70
+const pendingCeiling = 76
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -79,7 +79,9 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 	add("5.1.2b", false, "proto.StuckBacklogItem.allow_auto_merge")
 	add("5.1.3", false,
 		"flag:agent_wake_triggers", "flag:askuserquestion_structured", "flag:background_activity_feed",
-		"flag:notification_inline_actions", // arrived from main after the ratchet was set; backfilled with the rest
+		"flag:notification_inline_actions",                                      // arrived from main after the ratchet was set; backfilled with the rest
+		"flag:files:delta-write", "flag:files:edit-large", "flag:files:editing", // arrived from main (#1107); backfilled with the rest
+		"flag:files:merge-phone", "flag:files:range-read", "flag:files:viewer-v2",
 		"flag:autonomous_stall_nudge_enabled", "flag:backlog", "flag:backlog:completion-reviewer",
 		"flag:backlog:conversation-view", "flag:backlog:sdd-default-pipeline", "flag:browser-passthrough",
 		"flag:changelog", "flag:changelog:update-check", "flag:cross_host_claim_dedup",
