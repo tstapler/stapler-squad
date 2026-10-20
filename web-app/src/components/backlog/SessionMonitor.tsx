@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ConnectError, Code } from "@connectrpc/connect";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useFeatureFlag, useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import * as styles from "./SessionMonitor.css";
 
@@ -26,6 +27,9 @@ const TERMINAL_LINES = 60;
 
 export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMonitorProps) {
   const { getTerminalSnapshot, writeToSession, getConversationMessages } = useSessionService();
+  // The flag reads false while loading; with no conversation view yet there is nothing to flash.
+  const { isLoading: flagsLoading } = useFeatureFlags();
+  const conversationEnabled = useFeatureFlag("backlog:conversation-view") && !flagsLoading;
 
   const [view, setView] = useState<"terminal" | "history">("terminal");
   const [terminalOutput, setTerminalOutput] = useState("");
@@ -65,6 +69,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
   }, [sessionId, getTerminalSnapshot, stopPolling]);
 
   const fetchConversation = useCallback(async () => {
+    if (!conversationEnabled) return;
     try {
       const msgs = await getConversationMessages(sessionId, CONVERSATION_LIMIT);
       setConversationError(null);
@@ -73,7 +78,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       setConversationError(getErrorMessage(err, "Could not reach the server."));
       if (err instanceof ConnectError && err.code === Code.NotFound) stopPolling();
     }
-  }, [sessionId, getConversationMessages, stopPolling]);
+  }, [sessionId, conversationEnabled, getConversationMessages, stopPolling]);
 
   const refresh = useCallback(() => {
     void fetchTerminal();
@@ -107,6 +112,9 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
     }
   }, [terminalOutput, messages]);
 
+  // Flag turned off while History was showing: fall back to the terminal view.
+  const activeView = conversationEnabled ? view : "terminal";
+
   const handleSend = useCallback(
     async (text: string) => {
       if (!text.trim() || sending) return;
@@ -138,19 +146,21 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
           {sessionRole ? `${sessionRole} session` : "session"} · {isRunning ? "running" : "ended"}
         </span>
         <button
-          className={`${styles.viewToggle} ${view === "terminal" ? styles.viewToggleActive : ""}`}
+          className={`${styles.viewToggle} ${activeView === "terminal" ? styles.viewToggleActive : ""}`}
           onClick={() => setView("terminal")}
           title="Show terminal output"
         >
           Terminal
         </button>
-        <button
-          className={`${styles.viewToggle} ${view === "history" ? styles.viewToggleActive : ""}`}
-          onClick={() => setView("history")}
-          title="Show conversation history"
-        >
-          History
-        </button>
+        {conversationEnabled && (
+          <button
+            className={`${styles.viewToggle} ${activeView === "history" ? styles.viewToggleActive : ""}`}
+            onClick={() => setView("history")}
+            title="Show conversation history"
+          >
+            History
+          </button>
+        )}
         <a
           className={styles.openLink}
           href={`/?session=${sessionId}`}
@@ -162,7 +172,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       </div>
 
       <div className={styles.outputArea} ref={outputRef} aria-label="Session output" aria-live="polite">
-        {view === "history" ? (
+        {activeView === "history" ? (
           conversationError ? (
             <div className={styles.errorState} data-testid="session-monitor-conversation-error">
               <span>Failed to load conversation history: {conversationError}</span>

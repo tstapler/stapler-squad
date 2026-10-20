@@ -70,6 +70,33 @@ describe("useHashRowFocus", () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
+  it("focuses the hash row when the press that triggered the load was Retry (click or Enter)", () => {
+    for (const press of [
+      () => fireEvent.pointerDown(document.body),
+      () => fireEvent.keyDown(document.body, { key: "Enter" }),
+    ]) {
+      setHashNow(ROW_A);
+      const { rerender, unmount } = render(<HashFocusHarness state="failed" />);
+      press();
+      rerender(<HashFocusHarness state="loading" />);
+      rerender(<HashFocusHarness state="loaded" />);
+      expect(document.getElementById(ROW_A)).toHaveFocus();
+      unmount();
+      (document.activeElement as HTMLElement | null)?.blur();
+    }
+  });
+
+  it("still does not steal focus from a key press made after the Retry while the list loads", () => {
+    setHashNow(ROW_A);
+    const { rerender } = render(<HashFocusHarness state="failed" />);
+    fireEvent.pointerDown(document.body);
+    rerender(<HashFocusHarness state="loading" />);
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    rerender(<HashFocusHarness state="loaded" />);
+    expect(document.getElementById(ROW_A)).not.toHaveFocus();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("does not move focus again when a later refetch re-renders the list", () => {
     setHashNow(ROW_A);
     const { rerender } = render(<HashFocusHarness state="loaded" />);
