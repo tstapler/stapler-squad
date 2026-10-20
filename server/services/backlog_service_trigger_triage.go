@@ -754,7 +754,7 @@ func (s *BacklogService) TriggerTriage(
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			log.Error("[TriggerTriage] marshal triage result failed", "item", itemID, "error", marshalErr)
-			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
+			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 			return
 		}
 		// persistFailures accumulates which of the post-triage persistence steps below
@@ -869,7 +869,7 @@ func (s *BacklogService) TriggerTriage(
 		// where DB lock contention under -p made that window wide enough to hit
 		// reliably. Clearing triageInFlight before the status write closes it: by the
 		// time Ready is observable to any caller, this item is already re-triggerable.
-		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now())
+		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 		s.triageInFlight.Delete(itemID)
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
@@ -936,7 +936,7 @@ func (s *BacklogService) CancelTriage(
 		if s.sessionStopper != nil {
 			_ = s.sessionStopper.StopSessionByUUID(ctx, is.SessionUUID)
 		}
-		_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now)
+		_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 		cancelled = true
 	}
 

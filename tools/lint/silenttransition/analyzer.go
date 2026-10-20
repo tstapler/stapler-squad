@@ -153,9 +153,20 @@ func checkStmtList(pass *analysis.Pass, stmts []ast.Stmt) {
 					checkErrBody(pass, callPos, method, s.Body)
 				}
 			}
+		case *ast.ExprStmt:
+			if call, ok := s.X.(*ast.CallExpr); ok && isTargetCall(pass, call) {
+				reportDiscarded(pass, call.Pos(), call.Fun.(*ast.SelectorExpr).Sel.Name)
+			}
 		case *ast.AssignStmt:
 			callPos, method, names, ok := targetCallInAssign(pass, s)
-			if !ok || i+1 >= len(stmts) {
+			if !ok {
+				continue
+			}
+			if last, isIdent := s.Lhs[len(s.Lhs)-1].(*ast.Ident); isIdent && last.Name == "_" {
+				reportDiscarded(pass, callPos, method)
+				continue
+			}
+			if i+1 >= len(stmts) {
 				continue
 			}
 			nextIf, ok := stmts[i+1].(*ast.IfStmt)
@@ -267,6 +278,16 @@ func isErrNilCheck(cond ast.Expr, names map[string]bool) bool {
 	default:
 		return false
 	}
+}
+
+// reportDiscarded flags a watched call whose error is never looked at: a bare
+// expression statement or a blank assignment of the error result.
+func reportDiscarded(pass *analysis.Pass, callPos token.Pos, method string) {
+	if nolintcomment.Contains(pass, callPos, "silenttransition") {
+		return
+	}
+	pass.Reportf(callPos,
+		"error from %s is discarded — the write's failure is silently swallowed after side effects already happened; check it and route it through a notify/publish call or return it, or add a //nolint:silenttransition justification", method)
 }
 
 // checkErrBody inspects an if-err body and reports a diagnostic at callPos

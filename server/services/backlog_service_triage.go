@@ -3723,7 +3723,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 			if reason != "" {
 				_ = s.storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
 			} else {
-				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now())
+				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 			}
 			continue
 		}
