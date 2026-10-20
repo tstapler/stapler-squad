@@ -9,7 +9,7 @@ jest.mock("remark-gfm", () => ({ __esModule: true, default: () => {} }));
 jest.mock("../help.css", () => new Proxy({}, { get: (_t, p) => (p === "sidebarLink" ? () => "" : typeof p === "string" ? p : "") }));
 
 let mockDocParam: string | null = null;
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => new URLSearchParams(mockDocParam ? { doc: mockDocParam } : {}),
 }));
 

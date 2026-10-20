@@ -11,14 +11,18 @@ import { REMINDER_UNDO_MS, RemindMeMenu } from "./RemindMeMenu";
 import { makeBackgroundRow, makeHiddenSession } from "./__fixtures__/notificationFixtures";
 import { NOW, makeTrigger } from "./__fixtures__/scheduledPromptsFixtures";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 jest.mock("@/lib/api/wakeTriggerApi", () => ({ createOperatorReminder: jest.fn(), cancelWakeTrigger: jest.fn() }));
 jest.mock("@/lib/hooks/useFeatureFlagValue", () => ({ useFeatureFlagValue: () => true }));
 

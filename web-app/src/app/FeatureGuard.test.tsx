@@ -6,7 +6,7 @@ import { FeatureGuard } from "./FeatureGuard";
 const mockReplace = jest.fn();
 const mockGetFeatureFlags = jest.fn();
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));

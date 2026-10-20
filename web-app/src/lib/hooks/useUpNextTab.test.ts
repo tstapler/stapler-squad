@@ -1,9 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import { useUpNextTab } from "./useUpNextTab";
 import { UP_NEXT_TAB_STORAGE_KEY } from "@/lib/unfinished/upNextTab";
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: jest.fn(),
 }));
 

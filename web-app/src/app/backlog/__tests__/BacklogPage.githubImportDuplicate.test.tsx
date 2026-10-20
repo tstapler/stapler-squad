@@ -22,7 +22,7 @@ import type { GitHubIssue } from "@/lib/hooks/useBacklogService";
 
 const importGitHubIssue = jest.fn();
 
-jest.mock("next/navigation", () => require("./backlogPageTestFixtures").nextNavigationMock());
+jest.mock("@/lib/nav", () => require("./backlogPageTestFixtures").nextNavigationMock());
 jest.mock("@/lib/analytics", () => require("./backlogPageTestFixtures").analyticsMock());
 jest.mock("@/lib/analytics/usePageView", () => require("./backlogPageTestFixtures").usePageViewMock());
 jest.mock("@/components/backlog/BacklogItemDetail", () => require("./backlogPageTestFixtures").backlogItemDetailMock());

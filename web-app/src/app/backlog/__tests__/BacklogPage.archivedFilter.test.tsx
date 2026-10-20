@@ -41,7 +41,7 @@ function renderPage() {
   return { store, ...utils };
 }
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));

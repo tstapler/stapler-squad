@@ -9,6 +9,7 @@ import {
   type UpNextTab,
 } from "@/lib/unfinished/upNextTab";
 import { emitTabEvent } from "@/lib/unfinished/tabStats";
+import { stringParam } from "@/lib/nav/search-params";
 
 // useLayoutEffect warns during SSR/static export; fall back to useEffect there.
 const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
@@ -25,7 +26,7 @@ export interface UseUpNextTab {
  */
 export function useUpNextTab(now: () => number = () => performance.now()): UseUpNextTab {
   const searchParams = useSearchParams();
-  const urlTab = tabFromUrl({ item: searchParams.get("item"), tab: searchParams.get("tab") });
+  const urlTab = tabFromUrl({ item: stringParam(searchParams, "item"), tab: stringParam(searchParams, "tab") });
   const [storedTab, setStoredTab] = useState<UpNextTab | null>(null);
   // A click wins over the URL until the URL itself changes: history.replaceState does not always
   // re-render useSearchParams on the static export.

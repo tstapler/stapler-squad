@@ -4,30 +4,33 @@ import { DrawerNav } from "../DrawerNav";
 
 // Mock next/navigation — writable so individual tests can override usePathname
 const mockUsePathname = jest.fn(() => "/");
-jest.mock("next/navigation", () => ({
-  usePathname: () => mockUsePathname(),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    navigation: () => ({
+      usePathname: () => mockUsePathname(),
+    }),
+    link: () => ({
+      __esModule: true,
+      default: ({
+        href,
+        children,
+        className,
+        ...props
+      }: {
+        href: string;
+        children: React.ReactNode;
+        className?: string;
+        [key: string]: unknown;
+      }) => (
+        <a href={href} className={className} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 
 // Mock next/link
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({
-    href,
-    children,
-    className,
-    ...props
-  }: {
-    href: string;
-    children: React.ReactNode;
-    className?: string;
-    [key: string]: unknown;
-  }) => (
-    <a href={href} className={className} {...props}>
-      {children}
-    </a>
-  ),
-}));
-
 // Mock NavigationContext
 jest.mock("@/lib/contexts/NavigationContext", () => ({
   useNavigation: () => ({ isDrawerOpen: true, toggleDrawer: jest.fn() }),

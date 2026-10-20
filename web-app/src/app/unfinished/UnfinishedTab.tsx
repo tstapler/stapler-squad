@@ -16,6 +16,7 @@ import {
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
+import { stringParam } from "@/lib/nav/search-params";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
 import { UnfinishedRepoGroup } from "@/components/unfinished/UnfinishedRepoGroup";
 import { GitHubPRsSection } from "@/components/unfinished/GitHubPRsSection";
@@ -51,7 +52,7 @@ export function UnfinishedTab() {
   const { items: stuckItems, lastFetched: stuckLastFetched } = useStuckBacklogItems();
   // routes.unfinishedItem(itemId) deep link — pre-expands/filters the
   // matching Stuck Backlog Items card (see StuckItemsSection's focusItemId).
-  const urlItemId = searchParams.get("item") ?? undefined;
+  const urlItemId = stringParam(searchParams, "item");
   // history.replaceState does not always re-render useSearchParams on the static export, so
   // "Show all stuck items" records the item it dismissed instead of waiting for the URL to update.
   const [dismissedItemId, setDismissedItemId] = useState<string | undefined>();

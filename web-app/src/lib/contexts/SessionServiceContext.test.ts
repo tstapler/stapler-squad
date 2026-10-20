@@ -11,7 +11,7 @@ import type { SessionServiceContextValue } from "./SessionServiceContext";
 // itself (Provider + useSessionServiceContext hook), so we mock the heavy
 // modules that the file imports at the top level.
 
-jest.mock("next/navigation", () => ({ useRouter: () => ({ push: jest.fn() }) }));
+jest.mock("@/lib/nav", () => ({ useRouter: () => ({ push: jest.fn() }) }));
 jest.mock("@/lib/hooks/useSessionService", () => ({ useSessionService: jest.fn() }));
 jest.mock("@/lib/hooks/useSessionNotifications", () => ({ useSessionNotifications: jest.fn(() => jest.fn()) }));
 jest.mock("@/lib/contexts/AuthContext", () => ({ useAuth: () => ({ authEnabled: false, authenticated: true, loading: false }) }));
