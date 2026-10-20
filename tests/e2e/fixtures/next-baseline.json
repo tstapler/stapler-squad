@@ -1,0 +1,31 @@
+{
+  "capturedFrom": "next",
+  "redirects": {
+    "/backlog": "/",
+    "/backlog/board": "/",
+    "/config": "/settings",
+    "/login": "/",
+    "/sessions/new": "/",
+    "/settings/backlog-sources": "/",
+    "/settings/defaults": "/settings"
+  },
+  "skipLink": {
+    "tabPresses": 19,
+    "path": "/history",
+    "hash": "#main-content",
+    "mainFocused": false,
+    "outlineStyle": "none"
+  },
+  "historyNavAriaCurrent": "page",
+  "notFound": {
+    "status": 200,
+    "finalPath": "/",
+    "title": "Stapler Squad Sessions"
+  },
+  "scrollPolicy": {
+    "scrolledTo": 1200,
+    "forwardNavScrollTop": 0,
+    "backScrollTop": 0,
+    "hashNavKeepsDocument": true
+  }
+}
