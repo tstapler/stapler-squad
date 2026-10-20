@@ -99,6 +99,9 @@ func (s *Scanner) noteDirtyRepo(repoPath string, kind EventKind) {
 
 // armDirty marks worktree's watcher live once its watch registered (Tier A only).
 func (s *Scanner) armDirty(worktree string) {
+	if _, unwatched := s.treeUnwatched.Load(worktree); unwatched {
+		return
+	}
 	if d := s.dirtyTracker(); d != nil && s.gitwatch.watchWorktreeGitdirs {
 		d.ArmDirty(worktree)
 	}
@@ -123,9 +126,7 @@ func (s *Scanner) watchRepo(repoPath string) {
 	tw := s.treeWatch
 	s.mu.RUnlock()
 	if tw != nil {
-		if err := tw.Add(repoPath); err != nil {
-			log.Debug("could not watch working tree", "repo", repoPath, "err", err)
-		}
+		s.addTreeWatch(tw, repoPath)
 	}
 	w := s.activeWatcher()
 	if w == nil {
@@ -153,8 +154,11 @@ func (s *Scanner) watchTierA(w gitWatcher, repoPath, gitDir string) bool {
 	if !fi.IsDir() {
 		// Registered path is itself a linked worktree: watch its resolved
 		// admin gitdir, not the pointer file.
-		admin := worktreeGitDir(repoPath)
-		s.addWorktreeGitdir(w, admin, worktreeTarget{repoRoot: repoPath, worktree: repoPath})
+		if admin, ok := linkedAdminDir(repoPath); ok {
+			s.addWorktreeGitdir(w, admin, worktreeTarget{repoRoot: repoPath, worktree: repoPath})
+		} else {
+			log.Debug("not watching gitdir outside <commondir>/worktrees", "repo", repoPath)
+		}
 		return true
 	}
 	if err := w.Add(gitDir); err != nil {
@@ -184,6 +188,18 @@ func (s *Scanner) watchTierA(w gitWatcher, repoPath, gitDir string) bool {
 		s.addWorktreeGitdir(w, admin, worktreeTarget{repoRoot: repoPath, worktree: wt})
 	}
 	return true
+}
+
+// linkedAdminDir resolves a linked worktree's admin gitdir from its .git pointer
+// file, accepting it only as a direct child of <commondir>/worktrees (after
+// Clean). A pointer to anywhere else (absolute elsewhere, or ".." climbing out)
+// is never handed to fsnotify or armed.
+func linkedAdminDir(repoPath string) (string, bool) {
+	admin := worktreeGitDir(repoPath)
+	if filepath.Dir(admin) != filepath.Join(gitCommonDir(repoPath), "worktrees") {
+		return "", false
+	}
+	return admin, true
 }
 
 func (s *Scanner) addWorktreeGitdir(w gitWatcher, admin string, t worktreeTarget) {
@@ -231,6 +247,7 @@ func (s *Scanner) unwatchRepo(repoPath string) {
 	if tw != nil {
 		tw.Remove(repoPath)
 	}
+	s.treeUnwatched.Delete(repoPath)
 	w := s.activeWatcher()
 	if w == nil {
 		return

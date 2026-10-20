@@ -110,16 +110,33 @@ func (s *Scanner) installTreeWatcher(ctx context.Context, tw treeWatcher) {
 	// with no event source.
 	s.repoSet.Range(func(k, _ any) bool {
 		if repo, ok := k.(string); ok {
-			if err := tw.Add(repo); err != nil {
-				log.Debug("could not watch working tree", "repo", repo, "err", err)
-			}
+			s.addTreeWatch(tw, repo)
 		}
 		return true
 	})
 	s.wg.Go(func() {
 		<-ctx.Done()
 		tw.Close()
+		// A re-run Start must install a fresh watcher, not reuse this closed one.
+		s.mu.Lock()
+		if s.treeWatch == tw {
+			s.treeWatch = nil
+		}
+		s.mu.Unlock()
 	})
+}
+
+// addTreeWatch registers repo with tw. On failure the repo's DirtyGen is
+// disarmed and kept unarmed: without tree events its untracked-dir and index
+// caches could otherwise be trusted for up to the 15 min age bound.
+func (s *Scanner) addTreeWatch(tw treeWatcher, repo string) {
+	if err := tw.Add(repo); err != nil {
+		log.Debug("could not watch working tree", "repo", repo, "err", err)
+		s.treeUnwatched.Store(repo, struct{}{})
+		s.disarmDirty(repo)
+		return
+	}
+	s.treeUnwatched.Delete(repo)
 }
 
 // batchScope folds one event batch into a single scope for repoRoot (a build

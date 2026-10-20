@@ -226,6 +226,10 @@ type Scanner struct {
 	// unavailable, in which case the backstop tick keeps its normal period.
 	// Guarded by mu; set once in Start before the coordinator launches.
 	treeWatch treeWatcher
+	// treeUnwatched holds repos whose working-tree watch failed (inotify
+	// limit, symlink resolution): their DirtyGen stays unarmed so every scan
+	// is a full walk instead of trusting caches with no tree events.
+	treeUnwatched sync.Map
 
 	// severePressureWarned rate-limits the "skipping scan under memory
 	// pressure" log line to once per pressure episode rather than once per
