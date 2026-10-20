@@ -10,7 +10,9 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -82,6 +84,10 @@ func ParseSoakAckFile(data []byte) (SoakAckFile, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
 		return SoakAckFile{}, fmt.Errorf("ack file: %w", err)
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return SoakAckFile{}, errors.New("ack file: unexpected data after the JSON object")
 	}
 	for c := range f.Classes {
 		switch CallerClass(c) {

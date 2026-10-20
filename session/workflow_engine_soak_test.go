@@ -261,6 +261,8 @@ func TestParseSoakAckFile_IsStrict_AndMergesPerClass(t *testing.T) {
 		"unknown field": `{"classes":{"agent":{"edgez":["a->b"]}}}`,
 		"unknown class": `{"classes":{"robot":{}}}`,
 		"not json":      `edges: [a->b]`,
+		"second value":  `{"classes":{}}{"classes":{"agent":{"edges":["a->b"]}}}`,
+		"stray brace":   `{"classes":{}}}`,
 	} {
 		_, err := ParseSoakAckFile([]byte(doc))
 		require.Errorf(t, err, name)
