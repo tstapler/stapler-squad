@@ -87,7 +87,7 @@ func (d *Dispatcher) reviveWaiting(ctx context.Context) {
 	}
 	d.observeNeedsReviveAge(rows)
 	for _, row := range rows {
-		d.spawn(func() { d.processNeedsRevive(ctx, row) })
+		d.spawnRevive(ctx, row)
 	}
 }
 

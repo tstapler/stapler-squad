@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -115,6 +116,11 @@ func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
 	}
 	gate, _ := r.RouteFor(in.SessionID)
+	if in.ExpectedRoute != nil && *in.ExpectedRoute != gate {
+		// The tier and flag gate ran on another route; a live keystroke must not
+		// slip past the Tier B remote gate because the session changed since.
+		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "route_changed"}, nil
+	}
 	if !r.flags.Answer(gate) {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage), nil
 	}
@@ -223,6 +229,9 @@ func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRou
 	if res, done := settledAnswer(row); done {
 		return res, nil
 	}
+	if !answerFitsQuestion(row, in.OptionLabel) {
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
+	}
 	stored, err := r.rows.AnswerGuidanceRequest(ctx, id, in.OptionLabel)
 	if err != nil {
 		return ActionResult{}, fmt.Errorf("store answer %s: %w", in.QuestionID, err)
@@ -234,6 +243,42 @@ func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRou
 		log.Warn("[AnswerRouter] answer stored but delivery state not recorded", "question", in.QuestionID, "err", err)
 	}
 	return applied(), nil
+}
+
+// answerFitsQuestion reports whether answer is one the question offers, as the
+// live path and hook_reply.go already require. A row with no recorded options
+// takes free text.
+func answerFitsQuestion(row *session.GuidanceRequestData, answer string) bool {
+	if row.QuestionsJSON != "" {
+		payload, err := domain.ParseQuestionPayload([]byte(row.QuestionsJSON))
+		if err != nil {
+			return false
+		}
+		qs := payload.Questions()
+		if len(qs) == 1 && !qs[0].MultiSelect {
+			return optionOffered(qs[0], answer)
+		}
+		picks, err := DecodeSequencePicks(answer)
+		if err != nil || len(picks) != len(qs) {
+			return false
+		}
+		for i, labels := range picks {
+			for _, l := range labels {
+				if !optionOffered(qs[i], l) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if opts := decodeGuidanceOptions(row.Options); len(opts) > 0 {
+		return slices.Contains(opts, answer)
+	}
+	return true
+}
+
+func optionOffered(q domain.Question, label string) bool {
+	return slices.ContainsFunc(q.Options, func(o domain.Option) bool { return o.Label == label })
 }
 
 // settledAnswer reports a row that can no longer take an answer: cancelled (a

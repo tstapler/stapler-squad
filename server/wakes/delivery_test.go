@@ -268,3 +268,9 @@ func TestWriteIfIdle_should_RefuseText_When_NotWakeMarked(t *testing.T) {
 	assert.Equal(t, WriteNotAttempted, out)
 	assert.Zero(t, p.locks, "refused before touching the pane")
 }
+
+func TestEscapeWakePayload_should_DropC0AndC1Controls_When_PayloadCarriesThem(t *testing.T) {
+	t.Parallel()
+	in := "a\u001bb\u007fc\u0080d\u009be\u009ff g\th\ni"
+	assert.Equal(t, "abcdef g\th\ni", escapeWakePayload(in), "keeps NBSP, tab and newline; drops ESC, DEL and U+0080-U+009F")
+}

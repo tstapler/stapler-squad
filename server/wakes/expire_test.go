@@ -21,11 +21,14 @@ func TestExpireOverdue_should_MarkTimeAndEventRowsMissedOnce_When_DispatcherIsSt
 	eventRow := backlogRow(t, &dispatcherRig{repo: p.repo}, itemX, "verdict_recorded", rowOpts{owner: "owner-2", payload: "evented", expiresAt: &soon})
 	liveRow := newRow(t, p.repo, rowOpts{owner: "owner-3", payload: "still valid", spec: domain.AtSpec{At: due}, nextFire: &due, expiresAt: &later})
 	h.clock.Advance(time.Hour)
+	m := NewMetrics()
 
-	n, err := ExpireOverdue(context.Background(), p.repo, h.notifier, h.clock.Now())
+	n, err := ExpireOverdue(context.Background(), p.repo, h.notifier, m, h.clock.Now())
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
+	assert.EqualValues(t, 1, m.Value(MetricTrigger, string(domain.WakeTriggerAt), string(domain.WakeStatusMissed)))
+	assert.EqualValues(t, 1, m.Value(MetricTrigger, string(domain.WakeTriggerBacklogEvent), string(domain.WakeStatusMissed)))
 	assert.Equal(t, domain.WakeStatusMissed, p.status(t, timeRow.ID))
 	assert.Equal(t, domain.WakeStatusMissed, p.status(t, eventRow.ID))
 	assert.Equal(t, domain.WakeStatusPending, p.status(t, liveRow.ID))
@@ -37,9 +40,10 @@ func TestExpireOverdue_should_MarkTimeAndEventRowsMissedOnce_When_DispatcherIsSt
 	assert.Contains(t, notes[0].Message+notes[1].Message, "timed")
 	assert.Contains(t, notes[0].Message+notes[1].Message, "evented")
 
-	again, err := ExpireOverdue(context.Background(), p.repo, h.notifier, h.clock.Now())
+	again, err := ExpireOverdue(context.Background(), p.repo, h.notifier, m, h.clock.Now())
 	require.NoError(t, err)
 	assert.Zero(t, again, "a second sweep ends nothing")
+	assert.EqualValues(t, 2, m.Value(MetricTrigger, string(domain.WakeTriggerAt), string(domain.WakeStatusMissed))+m.Value(MetricTrigger, string(domain.WakeTriggerBacklogEvent), string(domain.WakeStatusMissed)), "a repeat sweep does not recount")
 
 	h.start(p)
 	assert.Len(t, h.notifier.all(), 2, "the later start does not report the swept rows again")
