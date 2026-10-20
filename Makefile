@@ -356,7 +356,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # instead of requiring a cargo/rustc toolchain anywhere in this repo.
 
 # Bump this and the github.com/tstapler/tymux/clients/go/gen/tymux/v1 require
-# in go.mod together — nothing enforces this automatically; see ADR-001
+# in go.mod together — tools/ci/check-tymux-pin.sh enforces it; see ADR-001
 # (project_plans/tymux-bundled-integration/decisions/ADR-001-prebuilt-tymuxd-binary-download.md).
 # v1.3.0 bump (from v1.1.0): go.mod's client pin (clients/go v0.1.0) is
 # unchanged — it's still the only tagged Go client version that exists, and
@@ -1042,6 +1042,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && npx next lint
 	cd web-app && bun run lint:css && bun run lint:css-vars
+	tools/ci/check-tymux-pin.sh
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && bun install --silent && bun run test
 	@echo "✅ ready: local approximation of PR checks complete"
