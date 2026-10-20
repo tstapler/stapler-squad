@@ -486,8 +486,8 @@ type fakePRInstanceStore struct {
 	saveCalls      int
 }
 
-func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)            { return nil, nil }
-func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error)      { return nil, nil }
+func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)       { return nil, nil }
+func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error) { return nil, nil }
 func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*session.InstanceData, error) {
 	return nil, session.ErrInstanceDataNotFound
 }
