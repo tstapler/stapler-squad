@@ -178,6 +178,20 @@ export interface ScrollGestureProps {
   mouseModeOverride?: GestureOptions["mouseModeOverride"];
 }
 
+/** Tracks DECSET/DECRST ?1006 (SGR mouse encoding), which xterm's public `modes` doesn't expose. */
+export function trackSgrMouseEncoding(terminal: Terminal, flag: { current: boolean }): { dispose(): void }[] {
+  const track = (enabled: boolean) => (params: (number | number[])[]) => {
+    if (params.includes(1006)) flag.current = enabled;
+    return false; // let xterm's own handler run
+  };
+  const parser = terminal.parser;
+  if (!parser) return [];
+  return [
+    parser.registerCsiHandler({ prefix: "?", final: "h" }, track(true)),
+    parser.registerCsiHandler({ prefix: "?", final: "l" }, track(false)),
+  ];
+}
+
 const INITIAL_SCROLL_MODE: ScrollMode = { bufferType: "normal", mouseTrackingMode: "none" };
 
 export interface XtermTerminalProps {
@@ -338,6 +352,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const onResizeRef = useRef(onResize);
 
   const onScrollModeChangeRef = useRef(onScrollModeChange);
+  const sgrMouseEncodingRef = useRef(false);
   const mouseModeOverrideRef = useRef(scrollGesture?.mouseModeOverride);
   mouseModeOverrideRef.current = scrollGesture?.mouseModeOverride;
   const onProgrammaticDataRef = useRef(scrollGesture?.onProgrammaticData);
@@ -374,6 +389,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     onGestureActiveChange: scrollGesture?.onGestureActiveChange,
     isInputBusy: scrollGesture?.isInputBusy,
     mouseModeOverride: scrollGesture?.mouseModeOverride,
+    isSgrMouseEncoding: useCallback(() => sgrMouseEncodingRef.current, []),
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
@@ -897,6 +913,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       // Setup event handlers using refs to avoid recreating terminal
+      const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
       const dataDisposable = terminal.onData((data) => {
         if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
         onDataRef.current?.(data);
@@ -1539,6 +1556,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         cleanupContextMenu();
         resizeObserver.disconnect();
         dataDisposable?.dispose();
+        sgrDisposables.forEach((d) => d.dispose());
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();
         scrollDisposable?.dispose();

@@ -227,6 +227,18 @@ describe('useTerminalGestures', () => {
       expect(arg.length).toBe(12); // 2 × "\x1b[M" + 3 chars
     });
 
+    it('handleTap_should_sendSgrReports_When_sgrEncodingEnabled', () => {
+      const terminalRef = makeTerminalRef('vt200');
+      renderHook(() =>
+        useTerminalGestures({ containerRef, terminalRef: terminalRef as any, onSendData, isSgrMouseEncoding: () => true }),
+      );
+      fireTouchStart(50, 60);
+      jest.advanceTimersByTime(100);
+      fireTouchEnd(50, 60);
+      expect(onSendData).toHaveBeenCalledTimes(1);
+      expect(onSendData.mock.calls[0][0]).toMatch(/^\x1b\[<0;\d+;\d+M\x1b\[<0;\d+;\d+m$/);
+    });
+
     describe('mouseModeOverride gate', () => {
       function mountWithOverride(initial: 'none' | 'any' | undefined) {
         const terminalRef = makeTerminalRef('vt200');

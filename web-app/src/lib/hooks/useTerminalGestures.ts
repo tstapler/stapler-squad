@@ -108,6 +108,8 @@ export interface GestureOptions {
    * terminal reports mouse tracking (often stale from a program that never reset it). Default 'any'.
    */
   mouseModeOverride?: 'none' | 'any';
+  /** True while the PTY program has enabled SGR mouse encoding (?1006h); taps then send SGR, else X10. */
+  isSgrMouseEncoding?: () => boolean;
 }
 
 /**
@@ -641,15 +643,18 @@ export function useTerminalGestures(options: GestureOptions): void {
           const canvasRect = t.element.getBoundingClientRect();
           const col = Math.floor((tapX - canvasRect.left) / cellW) + 1; // 1-based
           const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
-          // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
-          // Known limitation: apps that enabled SGR (?1006h) still get X10; xterm's public
-          // modes surface doesn't expose that flag.
-          // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
-          const clampedCol = Math.max(1, Math.min(col, 223));
-          const clampedRow = Math.max(1, Math.min(row, 223));
-          const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
-          const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
-          onSendData(press + release);
+          if (optionsRef.current.isSgrMouseEncoding?.()) {
+            // SGR (?1006h): \x1b[<0;col;rowM press, ...m release; no coordinate limit.
+            onSendData(`\x1b[<0;${Math.max(1, col)};${Math.max(1, row)}M\x1b[<0;${Math.max(1, col)};${Math.max(1, row)}m`);
+          } else {
+            // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
+            // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
+            const clampedCol = Math.max(1, Math.min(col, 223));
+            const clampedRow = Math.max(1, Math.min(row, 223));
+            const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
+            const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
+            onSendData(press + release);
+          }
           t.focus();
         }
       }

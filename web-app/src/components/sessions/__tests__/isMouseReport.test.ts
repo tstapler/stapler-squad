@@ -9,3 +9,20 @@ describe("isMouseReport", () => {
     expect(isMouseReport(s)).toBe(false);
   });
 });
+
+describe("trackSgrMouseEncoding", () => {
+  it("follows ?1006h / ?1006l from the real xterm parser and ignores other modes", async () => {
+    const { Terminal } = await import("@xterm/xterm");
+    const { trackSgrMouseEncoding } = await import("../XtermTerminal");
+    const term = new Terminal();
+    const flag = { current: false };
+    trackSgrMouseEncoding(term, flag);
+    const write = (d: string) => new Promise<void>((r) => term.write(d, r));
+    await write("\x1b[?1000h");
+    expect(flag.current).toBe(false);
+    await write("\x1b[?1000;1006h");
+    expect(flag.current).toBe(true);
+    await write("\x1b[?1006l");
+    expect(flag.current).toBe(false);
+  });
+});
