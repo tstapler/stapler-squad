@@ -73,21 +73,21 @@ func (g *GoGitVCSReader) storeAheadBehind(key aheadBehindKey, ahead, behind int,
 // aheadBehindCompute is the call-site switch behind shared_commit_state: flag
 // off (or a storer without the extension slot) runs the legacy path under
 // entry.mu; flag on walks the shared commit graph without it.
-func (g *GoGitVCSReader) aheadBehindCompute(entry *cachedRepo, key aheadBehindKey) (int, int, error) {
+func (g *GoGitVCSReader) aheadBehindCompute(ctx context.Context, entry *cachedRepo, key aheadBehindKey) (int, int, error) {
 	rs := g.repoState(entry)
 	if rs == nil {
 		entry.mu.Lock()
 		defer entry.mu.Unlock() // REQUIRED: defer, never explicit unlocks, so a panic releases it
 		return g.aheadBehindLocked(entry, key)
 	}
-	return g.aheadBehindShared(entry, key, rs)
+	return g.aheadBehindShared(ctx, entry, key, rs)
 }
 
 // aheadBehindShared: phase 1 (refs, under entry.mu, released before any graph
 // work), then phase 2 on the shared id graph with no entry.mu. A fallback error
 // (full arena, severe pressure, closed or failing storer) reruns the plain walk
 // under entry.mu for this call; its result is the same one.
-func (g *GoGitVCSReader) aheadBehindShared(entry *cachedRepo, key aheadBehindKey, rs *repostate.RepoState) (int, int, error) {
+func (g *GoGitVCSReader) aheadBehindShared(ctx context.Context, entry *cachedRepo, key aheadBehindKey, rs *repostate.RepoState) (int, int, error) {
 	head, baseHash, err := g.resolveRefsLocked(entry, key.base)
 	if err != nil {
 		return 0, 0, err
@@ -98,7 +98,7 @@ func (g *GoGitVCSReader) aheadBehindShared(entry *cachedRepo, key aheadBehindKey
 	ord, shallow := g.observeShallow(entry, rs)
 	src := newGraphSource(entry.repo.Storer, shallow)
 	defer src.done()
-	ahead, behind, err := aheadBehindOnShared(rs, entry, src, ord, head, baseHash)
+	ahead, behind, err := aheadBehindOnShared(ctx, rs, entry, src, ord, head, baseHash)
 	if errors.Is(err, repostate.ErrFallback) {
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
@@ -120,18 +120,18 @@ func (g *GoGitVCSReader) resolveRefsLocked(entry *cachedRepo, base string) (head
 
 // aheadBehindOnShared runs phase 2 through the shared (head, base) memo, which
 // answers a second worktree at the same head and base without a walk.
-func aheadBehindOnShared(rs *repostate.RepoState, entry *cachedRepo, src repostate.ParentsSource, ord repostate.StampOrd, head, base plumbing.Hash) (int, int, error) {
+func aheadBehindOnShared(ctx context.Context, rs *repostate.RepoState, entry *cachedRepo, src repostate.ParentsSource, ord repostate.StampOrd, head, base plumbing.Hash) (int, int, error) {
 	repo, ok := repoKeyOf(entry)
 	if !ok {
-		return aheadBehindOnGraph(rs, src, ord, head, base)
+		return aheadBehindOnGraph(ctx, rs, src, ord, head, base)
 	}
-	res, err := rs.AheadBehind(context.Background(), src, ord, repostate.ABKey{Repo: repo, Head: head, Base: base, Cap: mergeBaseBFSLimit})
+	res, err := rs.AheadBehind(ctx, src, ord, repostate.ABKey{Repo: repo, Head: head, Base: base, Cap: mergeBaseBFSLimit})
 	return res.Ahead, res.Behind, err
 }
 
 // aheadBehindOnGraph runs phase 2 on the id graph; it reads no cachedRepo.
-func aheadBehindOnGraph(rs *repostate.RepoState, src repostate.ParentsSource, ord repostate.StampOrd, head, base plumbing.Hash) (int, int, error) {
-	w := rs.NewWalk(context.Background(), src, ord, mergeBaseBFSLimit)
+func aheadBehindOnGraph(ctx context.Context, rs *repostate.RepoState, src repostate.ParentsSource, ord repostate.StampOrd, head, base plumbing.Hash) (int, int, error) {
+	w := rs.NewWalk(ctx, src, ord, mergeBaseBFSLimit)
 	defer w.Close()
 	return aheadBehindWalk(&w, head, base)
 }

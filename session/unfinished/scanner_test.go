@@ -265,8 +265,8 @@ func TestGetOrCreateCache_DoesNotRedoScan_When_WithinTickInterval(t *testing.T) 
 	s := NewScannerWithReader(pkgevents.NewEventBus(10), nil, reader)
 	s.SetTickInterval(5 * time.Minute)
 
-	s.scanRepo("/tmp/repo-1", false)
-	s.scanRepo("/tmp/repo-1", false)
+	s.scanRepo(context.Background(), "/tmp/repo-1", false)
+	s.scanRepo(context.Background(), "/tmp/repo-1", false)
 
 	assert.Equal(t, 1, reader.hasUncommittedCalls, "second scan within the tick interval should hit the cache, not recompute")
 }
@@ -286,8 +286,10 @@ func (f *fakeVCSReaderForCacheTest) HasUncommitted(string) (bool, error) {
 	f.hasUncommittedCalls++
 	return false, nil
 }
-func (f *fakeVCSReaderForCacheTest) AheadBehind(string, string) (int, int, error) { return 0, 0, nil }
-func (f *fakeVCSReaderForCacheTest) CommitMessages(string, string, int) ([]string, error) {
+func (f *fakeVCSReaderForCacheTest) AheadBehind(context.Context, string, string) (int, int, error) {
+	return 0, 0, nil
+}
+func (f *fakeVCSReaderForCacheTest) CommitMessages(context.Context, string, string, int) ([]string, error) {
 	return nil, nil
 }
 func (f *fakeVCSReaderForCacheTest) DiffShortstat(string) (DiffStat, error) { return DiffStat{}, nil }
@@ -313,7 +315,7 @@ func TestScanner_hydrateCacheFromDisk_should_skipRescan_When_PersistedEntryIsFre
 	s.SetTickInterval(5 * time.Minute)
 
 	s.hydrateCacheFromDisk()
-	s.scanRepo("/repo-x", false)
+	s.scanRepo(context.Background(), "/repo-x", false)
 
 	assert.Equal(t, 0, reader.hasUncommittedCalls, "a fresh persisted entry should be used instead of rescanning")
 }
@@ -338,7 +340,7 @@ func TestScanner_hydrateCacheFromDisk_should_rescan_When_PersistedEntryIsStale(t
 	s.SetTickInterval(5 * time.Minute)
 
 	s.hydrateCacheFromDisk()
-	s.scanRepo("/repo-y", false)
+	s.scanRepo(context.Background(), "/repo-y", false)
 
 	assert.Equal(t, 1, reader.hasUncommittedCalls, "a stale persisted entry should not suppress the first live scan")
 }
@@ -358,7 +360,7 @@ func TestScanner_persistCacheToDisk_should_roundTrip_When_ScanCompletes(t *testi
 	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
 	s.SetTickInterval(5 * time.Minute)
 
-	s.scanRepo("/repo-z", false)
+	s.scanRepo(context.Background(), "/repo-z", false)
 	s.persistCacheToDisk()
 
 	loaded := store.LoadScanCache()
@@ -401,7 +403,7 @@ func TestScanner_persistCacheToDisk_should_skipWrite_When_NotDirty(t *testing.T)
 	s := NewScannerWithReader(pkgevents.NewEventBus(10), store, reader)
 	s.SetTickInterval(5 * time.Minute)
 
-	s.scanRepo("/repo-z", false)
+	s.scanRepo(context.Background(), "/repo-z", false)
 	s.persistCacheToDisk() // first persist: writes and clears the dirty flag
 	require.Len(t, store.LoadScanCache(), 1)
 
@@ -436,7 +438,7 @@ func TestScanner_Start_should_persistPeriodically_When_MaintenanceTickFires(t *t
 
 	// Dirty the cache directly (bypassing the coordinator) so the only thing
 	// that can persist it is the maintenance tick this test is verifying.
-	s.scanRepo("/repo-tick", false)
+	s.scanRepo(context.Background(), "/repo-tick", false)
 
 	err := wait.WaitForCondition(func() bool {
 		return len(store.LoadScanCache()) == 1
@@ -467,7 +469,7 @@ func TestScanner_Start_should_flushOnShutdown_When_ContextCancelled(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Start(ctx)
 
-	s.scanRepo("/repo-shutdown", false)
+	s.scanRepo(context.Background(), "/repo-shutdown", false)
 	require.Empty(t, store.LoadScanCache(), "sanity: nothing persisted yet before shutdown")
 
 	cancel()
@@ -526,10 +528,10 @@ func (r *staleTestReader) ResolveDefaultBranch(repoPath string) string { return 
 func (r *staleTestReader) HasUncommitted(worktreePath string) (bool, error) {
 	return r.hasUncommitted, nil
 }
-func (r *staleTestReader) AheadBehind(worktreePath, base string) (int, int, error) {
+func (r *staleTestReader) AheadBehind(_ context.Context, worktreePath, base string) (int, int, error) {
 	return 0, 0, nil
 }
-func (r *staleTestReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+func (r *staleTestReader) CommitMessages(_ context.Context, worktreePath, base string, max int) ([]string, error) {
 	return nil, nil
 }
 func (r *staleTestReader) DiffShortstat(worktreePath string) (DiffStat, error) {
@@ -548,7 +550,7 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 	sub, _ := bus.Subscribe(ctx)
 
 	// First scan: dirty worktree is stored as an unfinished result.
-	results := s.scanRepo(repoPath, false)
+	results := s.scanRepo(context.Background(), repoPath, false)
 	require.Len(t, results, 1)
 	s.publishResults(results)
 	key := repoPath + "|feature-x"
@@ -570,7 +572,7 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 	reader.hasUncommitted = false
 	s.InvalidateCache(repoPath)
 
-	results = s.scanRepo(repoPath, false)
+	results = s.scanRepo(context.Background(), repoPath, false)
 	assert.Empty(t, results, "clean worktree should not be returned")
 
 	_, ok = s.resultStore.Load(key)
@@ -595,29 +597,29 @@ func TestScanRepo_ForceBypassesPerWorktreeCache(t *testing.T) {
 	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
 	s := NewScannerWithReader(pkgevents.NewEventBus(10), nil, reader)
 
-	results := s.scanRepo(repoPath, false)
+	results := s.scanRepo(context.Background(), repoPath, false)
 	require.Len(t, results, 1)
 	require.True(t, results[0].HasUncommitted)
 
 	// Underlying state changes, but the per-worktree cache is still warm —
 	// an unforced scan must keep returning the stale (dirty) cached entry.
 	reader.hasUncommitted = false
-	results = s.scanRepo(repoPath, false)
+	results = s.scanRepo(context.Background(), repoPath, false)
 	require.Len(t, results, 1, "unforced scan should return the stale cached (still-dirty) entry")
 	assert.True(t, results[0].HasUncommitted)
 
 	// A forced scan must bypass the cache and observe the real clean state
 	// (and refresh the cache to match).
-	results = s.scanRepo(repoPath, true)
+	results = s.scanRepo(context.Background(), repoPath, true)
 	require.Empty(t, results, "forced scan should re-read live state, which is now clean")
 
 	// Flip back to dirty: an unforced scan should still return the
 	// now-stale clean cache entry the forced call above just wrote.
 	reader.hasUncommitted = true
-	results = s.scanRepo(repoPath, false)
+	results = s.scanRepo(context.Background(), repoPath, false)
 	require.Empty(t, results, "unforced scan should still return the stale clean cache entry")
 
-	results = s.scanRepo(repoPath, true)
+	results = s.scanRepo(context.Background(), repoPath, true)
 	require.Len(t, results, 1, "forced scan must bypass the per-worktree cache and observe the new dirty state")
 	assert.True(t, results[0].HasUncommitted)
 }

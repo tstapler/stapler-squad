@@ -1,21 +1,22 @@
 package unfinished
 
 import (
+	"context"
 	"slices"
 	"testing"
 )
 
 // coldCommitMessages runs CommitMessages once per worktree on a fresh counting
 // reader and returns each result with the total commit-object reads.
-func coldCommitMessages(t *testing.T, paths []string) (*CountingReader, [][]string, int64) {
+func coldCommitMessages(t *testing.T, flags Flags, paths []string) (*CountingReader, [][]string, int64) {
 	t.Helper()
-	r := NewCountingReader()
+	r := NewCountingReader(flags)
 	for _, p := range paths {
 		r.Track(t, p)
 	}
 	out := make([][]string, 0, len(paths))
 	for _, p := range paths {
-		msgs, err := r.CommitMessages(p, "base", 20)
+		msgs, err := r.CommitMessages(context.Background(), p, "base", 20)
 		if err != nil {
 			t.Fatalf("CommitMessages %s: %v", p, err)
 		}
@@ -26,7 +27,7 @@ func coldCommitMessages(t *testing.T, paths []string) (*CountingReader, [][]stri
 
 func TestCommitMessages_ShouldBuildOneReachSet_WhenThreeWorktreesShareBase(t *testing.T) {
 	paths := clockedWorktrees(t, 3)
-	r, shared, sharedDecodes := coldCommitMessages(t, paths)
+	r, shared, sharedDecodes := coldCommitMessages(t, Flags{SharedCommitState: true}, paths)
 
 	entry, err := r.openRepoEntry(paths[0])
 	if err != nil {
@@ -44,7 +45,7 @@ func TestCommitMessages_ShouldBuildOneReachSet_WhenThreeWorktreesShareBase(t *te
 		t.Errorf("reach Hits = %d, want 2", st.Hits)
 	}
 
-	_, legacy, legacyDecodes := coldCommitMessages(t, clockedWorktrees(t, 3))
+	_, legacy, legacyDecodes := coldCommitMessages(t, Flags{}, clockedWorktrees(t, 3))
 	t.Logf("CommitMessages W=3 cold: DecodeCount shared=%d flag-off=%d", sharedDecodes, legacyDecodes)
 	if sharedDecodes >= legacyDecodes {
 		t.Errorf("shared DecodeCount %d, want < flag-off control %d", sharedDecodes, legacyDecodes)
@@ -62,12 +63,12 @@ func TestCommitMessages_ShouldEqualLegacy_WhenReachSetIsCappedAndFlagOn(t *testi
 	maxReachableSetCommits = 20
 	t.Cleanup(func() { maxReachableSetCommits = prev })
 
-	legacy, err := NewCountingReader(Flags{SharedCommitState: false}).CommitMessages(dir, "base", 20)
+	legacy, err := NewCountingReader(Flags{SharedCommitState: false}).CommitMessages(context.Background(), dir, "base", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := NewCountingReader(Flags{SharedCommitState: true})
-	got, err := r.CommitMessages(dir, "base", 20)
+	got, err := r.CommitMessages(context.Background(), dir, "base", 20)
 	if err != nil {
 		t.Fatal(err)
 	}

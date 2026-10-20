@@ -1,5 +1,7 @@
 package unfinished
 
+import "context"
+
 // VCSReader is the read-only interface the Scanner uses to interrogate
 // repositories. All methods must be safe to call concurrently.
 // The interface is intentionally narrow — only what the scanner needs.
@@ -15,11 +17,12 @@ type VCSReader interface {
 	HasUncommitted(worktreePath string) (bool, error)
 
 	// AheadBehind returns how many commits worktreePath is ahead of and behind base.
-	AheadBehind(worktreePath, base string) (ahead, behind int, err error)
+	// A cancelled ctx stops the commit walk and returns its error.
+	AheadBehind(ctx context.Context, worktreePath, base string) (ahead, behind int, err error)
 
 	// CommitMessages returns up to max one-line commit messages that are in
 	// worktreePath but not in base.
-	CommitMessages(worktreePath, base string, max int) ([]string, error)
+	CommitMessages(ctx context.Context, worktreePath, base string, max int) ([]string, error)
 
 	// DiffShortstat returns a summary of the diff between HEAD and the working tree.
 	DiffShortstat(worktreePath string) (DiffStat, error)

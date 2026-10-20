@@ -15,6 +15,7 @@ package unfinished
 // so tests complete quickly without creating 10 000 files.
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -306,7 +307,7 @@ func TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers(t *test
 	for i := range workers {
 		go func(idx int) {
 			defer wg.Done()
-			a, b, err := r.AheadBehind(dir, "main")
+			a, b, err := r.AheadBehind(context.Background(), dir, "main")
 			results[idx] = result{a, b, err}
 		}(i)
 	}
@@ -372,7 +373,7 @@ func TestGoGitVCSReader_AheadBehind_InvalidPath_ReturnsError(t *testing.T) {
 	// Use a non-existent path — openRepoEntry returns error, not panic,
 	// but confirms the caller handles Do errors without crashing.
 	r := &GoGitVCSReader{}
-	_, _, err := r.AheadBehind("/nonexistent/path/guaranteed-missing", "main")
+	_, _, err := r.AheadBehind(context.Background(), "/nonexistent/path/guaranteed-missing", "main")
 	if err == nil {
 		t.Fatal("expected error from non-existent repo, got nil")
 	}
@@ -424,7 +425,7 @@ func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(
 	commitInternal(t, dir, "diverge from main")
 
 	r := &GoGitVCSReader{}
-	ahead, behind, err := r.AheadBehind(dir, "main")
+	ahead, behind, err := r.AheadBehind(context.Background(), dir, "main")
 	if err != nil {
 		t.Fatalf("cold call: %v", err)
 	}
@@ -443,7 +444,7 @@ func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(
 	entry.expiry = time.Now().Add(-time.Second) // force TTL-expired path
 	r.aheadBehindCache.Store(cacheKey, entry)
 
-	gotAhead, gotBehind, err := r.AheadBehind(dir, "main")
+	gotAhead, gotBehind, err := r.AheadBehind(context.Background(), dir, "main")
 	if err != nil {
 		t.Fatalf("warm call: %v", err)
 	}

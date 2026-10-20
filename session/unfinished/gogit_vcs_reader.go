@@ -3,6 +3,7 @@ package unfinished
 import (
 	"cmp"
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -996,17 +997,17 @@ func gitignoreEntriesChanged(old, newer map[string]plumbing.Hash) bool {
 // Strategy (no subprocess): find the merge base with a BFS over each side,
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
-func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
+func (g *GoGitVCSReader) AheadBehind(ctx context.Context, worktreePath, base string) (int, int, error) {
 	cacheKey := aheadBehindKey{worktree: worktreePath, base: base}
 	if e, ok := g.aheadBehindCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
 		return e.ahead, e.behind, nil
 	}
-	return g.aheadBehindFlight(cacheKey)
+	return g.aheadBehindFlight(ctx, cacheKey)
 }
 
 // aheadBehindFlight is AheadBehind past its TTL cache check: it re-resolves
 // refs and computes, coalescing concurrent callers.
-func (g *GoGitVCSReader) aheadBehindFlight(cacheKey aheadBehindKey) (int, int, error) {
+func (g *GoGitVCSReader) aheadBehindFlight(ctx context.Context, cacheKey aheadBehindKey) (int, int, error) {
 	worktreePath, base := cacheKey.worktree, cacheKey.base
 	type abResult struct{ ahead, behind int }
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
@@ -1017,7 +1018,7 @@ func (g *GoGitVCSReader) aheadBehindFlight(cacheKey aheadBehindKey) (int, int, e
 			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
 		}
 
-		ahead, behind, abErr := g.aheadBehindCompute(entry, cacheKey)
+		ahead, behind, abErr := g.aheadBehindCompute(ctx, entry, cacheKey)
 		return abResult{ahead, behind}, abErr
 	})
 	if err != nil {
@@ -1026,7 +1027,7 @@ func (g *GoGitVCSReader) aheadBehindFlight(cacheKey aheadBehindKey) (int, int, e
 	return result.ahead, result.behind, nil
 }
 
-func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+func (g *GoGitVCSReader) CommitMessages(ctx context.Context, worktreePath, base string, max int) ([]string, error) {
 	cacheKey := commitMessagesKey{worktree: worktreePath, base: base, max: max}
 	if e, ok := g.commitMessagesCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
 		return e.msgs, nil
@@ -1050,7 +1051,7 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 
 		// Shared path: reach bitset plus hash-keyed message memos on the shared
 		// id graph. A graph fallback continues on the legacy phases below.
-		if msgs, handled, sharedErr := g.commitMessagesShared(entry, headHash, baseHash, max); handled {
+		if msgs, handled, sharedErr := g.commitMessagesShared(ctx, entry, headHash, baseHash, max); handled {
 			if sharedErr != nil {
 				return nil, sharedErr
 			}
@@ -1061,7 +1062,7 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
 		// only on a cache miss, so repeated calls within the TTL window skip the
 		// O(N) walk entirely and return the cached map without touching the mutex.
-		baseReachable, reachErr := g.reachMembership(entry, worktreePath, baseHash)
+		baseReachable, reachErr := g.reachMembership(ctx, entry, worktreePath, baseHash)
 		if reachErr != nil {
 			return nil, reachErr
 		}

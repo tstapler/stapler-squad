@@ -5,6 +5,7 @@ package unfinished
 // per file; the statFn seam counts them.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -136,7 +137,7 @@ func scanOnce(t testing.TB, c *CountingReader, dir string) (ScanResult, int64) {
 	t.Helper()
 	s := NewScannerWithReader(nil, nil, c)
 	before := c.StatCount()
-	res := s.scanWorktree(WorktreeInfo{Path: dir, Branch: "main"}, "", dir, true)
+	res := s.scanWorktree(context.Background(), WorktreeInfo{Path: dir, Branch: "main"}, "", dir, true)
 	require.Equal(t, ScanResultStatusOK, res.Status, res.ErrorMsg)
 	return res, c.StatCount() - before
 }

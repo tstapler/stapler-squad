@@ -1,6 +1,7 @@
 package unfinished
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"testing"
@@ -47,7 +48,7 @@ func TestCommitMessages_ShouldRunOneReachWalk_WhenFourGoroutinesUseDifferentMax(
 		go func() {
 			defer wg.Done()
 			<-start
-			msgs, err := r.CommitMessages(dir, "base", max)
+			msgs, err := r.CommitMessages(context.Background(), dir, "base", max)
 			if err != nil {
 				t.Error(err)
 			}

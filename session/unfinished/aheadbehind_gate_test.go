@@ -145,7 +145,7 @@ func TestAheadBehind_ShouldDecodeNoMoreThanLegacyAndLockstep_WhenCold2500LinearW
 	r := NewCountingReader(Flags{SharedCommitState: true})
 	r.Track(t, dir)
 	assertRefsBalanced(t, r.GoGitVCSReader)
-	ahead, behind, err := r.AheadBehind(dir, "base")
+	ahead, behind, err := r.AheadBehind(context.Background(), dir, "base")
 	if err != nil || ahead != 3 || behind != 2 {
 		t.Fatalf("AheadBehind = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
@@ -177,8 +177,8 @@ func TestAheadBehind_ShouldDecodeOnce_WhenThreeWorktreesShareHeadAndBase(t *test
 	paths := clockedWorktrees(t, 3)
 	repoHead, repoBase := headAndBase(t, paths[0])
 	legacyW1 := legacyStackDecodes(t, paths[0], repoHead, repoBase)
-	w1 := coldAheadBehindDecodes(t, paths[:1])
-	w3 := coldAheadBehindDecodes(t, paths)
+	w1 := coldAheadBehindDecodes(t, Flags{SharedCommitState: true}, paths[:1])
+	w3 := coldAheadBehindDecodes(t, Flags{SharedCommitState: true}, paths)
 	t.Logf("G2 shared head and base: DecodeCount shared W=1=%d W=3=%d, committed-old W=1=%d", w1, w3, legacyW1)
 	if w3 > legacyW1 {
 		t.Errorf("DecodeCount(new, W=3) = %d, want <= DecodeCount(committed-old, W=1) = %d", w3, legacyW1)
@@ -204,13 +204,13 @@ func headAndBase(tb testing.TB, dir string) (head, base plumbing.Hash) {
 
 func TestAheadBehind_ShouldDecodeWTimes_WhenSharedCommitStateFlagOff(t *testing.T) {
 	paths := clockedWorktrees(t, 3)
-	w1 := coldAheadBehindDecodes(t, paths[:1])
-	w3 := coldAheadBehindDecodes(t, paths)
+	w1 := coldAheadBehindDecodes(t, Flags{SharedCommitState: false}, paths[:1])
+	w3 := coldAheadBehindDecodes(t, Flags{SharedCommitState: false}, paths)
 	if w3 < 3*w1 {
 		t.Errorf("flag off: DecodeCount W=3 = %d, want >= 3 x W=1 = %d (legacy decodes per worktree)", w3, 3*w1)
 	}
 	r := readerWithFlags(Flags{SharedCommitState: false}, &GoGitVCSReader{})
-	if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := r.repoStateTotals(); n != 0 {
@@ -252,7 +252,7 @@ func TestAheadBehind_ShouldDecodeExactlyDistinct_WhenWalksSequencedByLatches(t *
 	}
 	assertRefsBalanced(t, r.GoGitVCSReader)
 	for _, p := range paths {
-		if _, _, err := r.AheadBehind(p, "base"); err != nil {
+		if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -279,7 +279,7 @@ func TestAheadBehind_ShouldBoundDecodes_WhenThreeDistinctTipsRace(t *testing.T) 
 	jobs := make([]func(), len(paths))
 	for i, p := range paths {
 		jobs[i] = func() {
-			if _, _, err := r.AheadBehind(p, "base"); err != nil {
+			if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 				t.Errorf("AheadBehind %s: %v", p, err)
 			}
 		}
@@ -324,19 +324,19 @@ func TestAheadBehind_ShouldNotDeadlock_WhenThreeWorktreesAndCommitMessagesRunCon
 	jobs := make([]func(), 0, 2+len(paths)-1)
 	jobs = append(jobs,
 		func() {
-			if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
+			if _, _, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil {
 				t.Errorf("AheadBehind: %v", err)
 			}
 		},
 		func() {
-			if _, err := r.CommitMessages(paths[0], "base", 20); err != nil {
+			if _, err := r.CommitMessages(context.Background(), paths[0], "base", 20); err != nil {
 				t.Errorf("CommitMessages: %v", err)
 			}
 		},
 	)
 	for _, p := range paths[1:] {
 		jobs = append(jobs, func() {
-			if _, _, err := r.AheadBehind(p, "base"); err != nil {
+			if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 				t.Errorf("AheadBehind %s: %v", p, err)
 			}
 		})
@@ -376,7 +376,7 @@ func TestDeadlockHarness_ShouldDetectHang_WhenAdapterTakesEntryMuInsideWalk(t *t
 	entry.mu.Lock()
 	src := lockingSource{inner: newGraphSource(entry.repo.Storer, false), mu: &entry.mu}
 	hung := runWithDeadline(200*time.Millisecond, func() {
-		_, _, _ = aheadBehindOnGraph(rs, src, 0, h.Head, h.Base)
+		_, _, _ = aheadBehindOnGraph(context.Background(), rs, src, 0, h.Head, h.Base)
 	})
 	entry.mu.Unlock() // releases the leaked goroutine
 	if !hung {
@@ -422,7 +422,7 @@ func TestGraphSource_ShouldTreatClosedStorerAsFallback_WhenStorerClosedMidFill(t
 		t.Fatal(err)
 	}
 	rs := r.repoState(entry)
-	_, _, abErr := aheadBehindOnGraph(rs, newGraphSource(closedStorer{}, false), 0, h.Head, h.Base)
+	_, _, abErr := aheadBehindOnGraph(context.Background(), rs, newGraphSource(closedStorer{}, false), 0, h.Head, h.Base)
 	if !isFallback(abErr) || !errors.Is(abErr, errStoreClosed) {
 		t.Fatalf("err = %v, want a fallback error wrapping the storer failure", abErr)
 	}
@@ -430,7 +430,7 @@ func TestGraphSource_ShouldTreatClosedStorerAsFallback_WhenStorerClosedMidFill(t
 		t.Errorf("%d rows published from a failed read, want none (claims must roll back)", got)
 	}
 	// The same failure through the reader reruns the plain walk, which reads the live repo.
-	if ahead, behind, err := r.AheadBehind(dir, "base"); err != nil || ahead != 3 || behind != 2 {
+	if ahead, behind, err := r.AheadBehind(context.Background(), dir, "base"); err != nil || ahead != 3 || behind != 2 {
 		t.Errorf("AheadBehind after a failed graph walk = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
 }
@@ -441,7 +441,7 @@ func TestShallowStamp_ShouldStatOncePerColdCallAndBumpOrdinal_WhenShallowFileCha
 	repo, dir, h := divergedClocked(t, 40, 3, 2)
 	r := NewCountingReader(Flags{SharedCommitState: true})
 	assertRefsBalanced(t, r.GoGitVCSReader)
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.StatCount(); got != 1 {
@@ -452,7 +452,7 @@ func TestShallowStamp_ShouldStatOncePerColdCallAndBumpOrdinal_WhenShallowFileCha
 
 	testrepo.Shallow(t, repo, h.Fork) // writes <commondir>/shallow
 	r.aheadBehindCache.Range(func(k aheadBehindKey, _ aheadBehindEntry) bool { r.aheadBehindCache.Delete(k); return true })
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	if after := rs.Graph().Load().StampOrd(); after == before {
@@ -478,7 +478,7 @@ func TestStartupHerd_ShouldDecodeLEOracleTotal_WhenSixReposThreeWorktreesOpenTog
 		jobs := make([]func(), len(paths))
 		for i, p := range paths {
 			jobs[i] = func() {
-				if _, _, err := r.AheadBehind(p, "base"); err != nil {
+				if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 					t.Errorf("AheadBehind %s: %v", p, err)
 				}
 			}
@@ -531,7 +531,7 @@ func TestAheadBehind_ShouldStayWithinG2AndBalanceRefs_When52000CommitsAnd24Workt
 	}
 	assertRefsBalanced(t, r.GoGitVCSReader)
 	for _, p := range paths {
-		if ahead, behind, err := r.AheadBehind(p, "base"); err != nil || ahead != 3 || behind != 2 {
+		if ahead, behind, err := r.AheadBehind(context.Background(), p, "base"); err != nil || ahead != 3 || behind != 2 {
 			t.Fatalf("AheadBehind %s = (%d, %d, %v), want (3, 2, nil)", p, ahead, behind, err)
 		}
 	}

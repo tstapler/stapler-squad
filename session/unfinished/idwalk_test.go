@@ -139,7 +139,7 @@ func TestIDWalk_ShouldFallBackToPlainWalkWithSameResult_WhenErrGraphFullMidWalk(
 
 	r := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{repoStateMaxGraphCommits: 8})
 	assertRefsBalanced(t, r)
-	gotA, gotB, err := r.AheadBehind(dir, "base")
+	gotA, gotB, err := r.AheadBehind(context.Background(), dir, "base")
 	if err != nil {
 		t.Fatalf("AheadBehind with a tiny graph: %v", err)
 	}

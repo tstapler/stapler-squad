@@ -4,6 +4,7 @@ package unfinished
 // and counts every call, so each assertion is a call count, never a timing.
 
 import (
+	"context"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -62,12 +63,12 @@ func TestScanSignature_ShouldReuseCommittedFieldsAndStillRunHasUncommitted_WhenS
 	for i, wt := range []string{w1, w2} {
 		testrepo.CommitAll(t, testrepo.OpenLinked(t, wt), map[string]string{"f.txt": "x\n"}, "ahead", testrepo.Epoch.Add(time.Duration(i+1)*time.Hour))
 	}
-	s.scanRepo(p.mainDir, true)
+	s.scanRepo(context.Background(), p.mainDir, true)
 	resolved0, uncommitted0 := r.resolved.Load(), hasUncommitted.calls.Load()
 
 	// A commit in W1 only: W2's HEAD, base and shallow stamp are unchanged.
 	testrepo.CommitAll(t, testrepo.OpenLinked(t, w1), map[string]string{"g.txt": "y\n"}, "second", testrepo.Epoch.Add(5*time.Hour))
-	results := s.scanRepo(p.mainDir, true)
+	results := s.scanRepo(context.Background(), p.mainDir, true)
 
 	assert.EqualValues(t, 1, r.resolved.Load()-resolved0, "AheadBehind recomputed for W1 only; main and W2 are unchanged")
 	assert.EqualValues(t, 3, hasUncommitted.calls.Load()-uncommitted0, "HasUncommitted runs for every worktree regardless")
@@ -157,9 +158,11 @@ func (f *sigFake) HasUncommitted(wt string) (bool, error) {
 	f.mu.Unlock()
 	return false, nil
 }
-func (f *sigFake) AheadBehind(string, string) (int, int, error)         { return 0, 0, nil }
-func (f *sigFake) CommitMessages(string, string, int) ([]string, error) { return nil, nil }
-func (f *sigFake) DiffShortstat(string) (DiffStat, error)               { return DiffStat{}, nil }
+func (f *sigFake) AheadBehind(context.Context, string, string) (int, int, error) { return 0, 0, nil }
+func (f *sigFake) CommitMessages(context.Context, string, string, int) ([]string, error) {
+	return nil, nil
+}
+func (f *sigFake) DiffShortstat(string) (DiffStat, error) { return DiffStat{}, nil }
 
 func (f *sigFake) ResolveRefSnapshot(_, base string, paths []string) *RefSnapshot {
 	f.mu.Lock()
@@ -172,7 +175,7 @@ func (f *sigFake) ResolveRefSnapshot(_, base string, paths []string) *RefSnapsho
 }
 
 // AheadBehindResolved derives counts from the hash bytes so a stale reuse is visible.
-func (f *sigFake) AheadBehindResolved(_, _ string, head, base plumbing.Hash) (int, int, error) {
+func (f *sigFake) AheadBehindResolved(_ context.Context, _, _ string, head, base plumbing.Hash) (int, int, error) {
 	f.resolved.Add(1)
 	return int(head[0]), int(base[0]), nil
 }
@@ -183,7 +186,7 @@ func (f *sigFake) set(mutate func()) {
 	mutate()
 }
 
-func scanFake(s *Scanner) []ScanResult { return s.scanRepo("/repo", true) }
+func scanFake(s *Scanner) []ScanResult { return s.scanRepo(context.Background(), "/repo", true) }
 
 func TestScanSignature_ShouldRecompute_WhenShallowStampOrBaseHashChanges(t *testing.T) {
 	t.Parallel()
@@ -266,7 +269,7 @@ func TestEnqueueRepo_ShouldNotSkipRepo_WhenSiblingSignatureChanged(t *testing.T)
 	f := newSigFake("/w1", "/w2")
 	s := NewScannerWithReader(nil, nil, f)
 	repo := "/repo"
-	s.scanRepo(repo, false) // leaves fresh caches for both worktrees
+	s.scanRepo(context.Background(), repo, false) // leaves fresh caches for both worktrees
 
 	s.enqueueRepo(repo, false)
 	assert.Empty(t, s.scanQueue, "nothing moved: the fresh caches still skip the repo")
@@ -319,14 +322,14 @@ func TestScanSignature_ShouldDecodeFewerCommits_WhenSiblingCommits(t *testing.T)
 			testrepo.CommitAll(t, testrepo.OpenLinked(t, wt), map[string]string{"f.txt": "x\n"}, "ahead", testrepo.Epoch.Add(time.Duration(i+1)*time.Hour))
 		}
 		s := NewScannerWithReader(nil, nil, c)
-		s.scanRepo(p.mainDir, true)
+		s.scanRepo(context.Background(), p.mainDir, true)
 
 		testrepo.CommitAll(t, testrepo.OpenLinked(t, p.wts[0]), map[string]string{"g.txt": "y\n"}, "second", testrepo.Epoch.Add(9*time.Hour))
 		for _, wt := range p.all() {
 			c.InvalidateWorktree(wt)
 		}
 		before := c.DecodeCount()
-		s.scanRepo(p.mainDir, true)
+		s.scanRepo(context.Background(), p.mainDir, true)
 		return c.DecodeCount() - before
 	}
 

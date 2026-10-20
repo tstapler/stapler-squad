@@ -620,7 +620,7 @@ func (s *Scanner) worker(ctx context.Context) {
 				return
 			}
 			started := s.now()
-			results := s.scanRepo(task.repoPath, task.force)
+			results := s.scanRepo(ctx, task.repoPath, task.force)
 			s.publishResults(results)
 			recordScanCycle()
 			recordScanCycleDuration(s.now().Sub(started))
@@ -630,7 +630,7 @@ func (s *Scanner) worker(ctx context.Context) {
 }
 
 // scanRepo enumerates all worktrees in the given repo root and scans each one.
-func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
+func (s *Scanner) scanRepo(ctx context.Context, repoPath string, force bool) []ScanResult {
 	worktrees, err := s.reader.ListWorktrees(repoPath)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -661,7 +661,7 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 		if wt.Branch == "" {
 			continue
 		}
-		result := s.scanWorktree(wt, defaultBranch, repoPath, force)
+		result := s.scanWorktree(ctx, wt, defaultBranch, repoPath, force)
 		if result.Status == ScanResultStatusOK && !result.IsUnfinished() {
 			// Worktree went clean (e.g. the only uncommitted file was deleted) —
 			// remove any stale entry left in resultStore. Mirrors the CleanWorktree
@@ -679,7 +679,7 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 }
 
 // scanWorktree produces a ScanResult for a single git worktree.
-func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, force bool) ScanResult {
+func (s *Scanner) scanWorktree(ctx context.Context, wt WorktreeInfo, defaultBranch, repoPath string, force bool) ScanResult {
 	result := ScanResult{
 		RepoPath:      repoPath,
 		Branch:        wt.Branch,
@@ -736,7 +736,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	result.HasUncommitted = uncommitted
 
 	if defaultBranch != "" {
-		s.fillCommittedState(&result, repoPath, wt.Path, defaultBranch)
+		s.fillCommittedState(ctx, &result, repoPath, wt.Path, defaultBranch)
 	}
 
 	// Skip when uncommitted is false: DiffShortstat re-derives the identical

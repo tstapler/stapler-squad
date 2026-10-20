@@ -3,6 +3,7 @@
 package unfinished
 
 import (
+	"context"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
@@ -11,11 +12,11 @@ import (
 func TestCommitMessages_ShouldAllocZero_WhenPrimedWithinTTL(t *testing.T) {
 	_, dir, _ := testrepo.Diverged(t, 50, cmAhead, cmBehind)
 	r := &GoGitVCSReader{}
-	if _, err := r.CommitMessages(dir, "base", 20); err != nil {
+	if _, err := r.CommitMessages(context.Background(), dir, "base", 20); err != nil {
 		t.Fatal(err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, err := r.CommitMessages(dir, "base", 20); err != nil {
+		if _, err := r.CommitMessages(context.Background(), dir, "base", 20); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -27,11 +28,11 @@ func TestCommitMessages_ShouldAllocZero_WhenPrimedWithinTTL(t *testing.T) {
 func TestAheadBehind_ShouldAllocZero_WhenCachedWithinTTL(t *testing.T) {
 	_, dir, _ := testrepo.Diverged(t, 50, cmAhead, cmBehind)
 	r := &GoGitVCSReader{}
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+		if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 			t.Fatal(err)
 		}
 	})

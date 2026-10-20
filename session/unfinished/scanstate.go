@@ -1,6 +1,7 @@
 package unfinished
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,7 @@ import (
 // shallow stamp once, then run phase 2 of AheadBehind from those hashes.
 type refSnapshotReader interface {
 	ResolveRefSnapshot(repoPath, base string, worktrees []string) *RefSnapshot
-	AheadBehindResolved(worktreePath, base string, head, baseHash plumbing.Hash) (ahead, behind int, err error)
+	AheadBehindResolved(ctx context.Context, worktreePath, base string, head, baseHash plumbing.Hash) (ahead, behind int, err error)
 }
 
 // WorktreeRefs is what one Burst observed about one worktree.
@@ -186,7 +187,7 @@ func (s *Scanner) signatureMaxAge() time.Duration {
 // worktree's committed key is unchanged and younger than one tick it reuses the
 // stored values and skips AheadBehind and CommitMessages; HasUncommitted and
 // the diff are the caller's and always run.
-func (s *Scanner) fillCommittedState(result *ScanResult, repoPath, worktreePath, base string) {
+func (s *Scanner) fillCommittedState(ctx context.Context, result *ScanResult, repoPath, worktreePath, base string) {
 	snap := s.burstSnapshot(repoPath)
 	sig, haveSig := snap.signatureOf(worktreePath)
 	var wrec *worktreeScanRecord
@@ -202,13 +203,13 @@ func (s *Scanner) fillCommittedState(result *ScanResult, repoPath, worktreePath,
 		}
 	}
 	complete := false
-	ahead, behind, aErr := s.aheadBehind(snap, worktreePath, base)
+	ahead, behind, aErr := s.aheadBehind(ctx, snap, worktreePath, base)
 	if aErr == nil {
 		result.AheadCount = ahead
 		result.BehindCount = behind
 		complete = true
 		if ahead > 0 {
-			msgs, mErr := s.reader.CommitMessages(worktreePath, base, 5)
+			msgs, mErr := s.reader.CommitMessages(ctx, worktreePath, base, 5)
 			if mErr == nil {
 				result.AheadMessages = msgs
 			} else {
@@ -402,15 +403,15 @@ func (s *Scanner) burstSnapshot(repoPath string) *RefSnapshot {
 
 // aheadBehind runs phase 2 from the Burst's resolved hashes when the snapshot
 // still covers worktreePath, and the reader's full call otherwise.
-func (s *Scanner) aheadBehind(snap *RefSnapshot, worktreePath, base string) (int, int, error) {
+func (s *Scanner) aheadBehind(ctx context.Context, snap *RefSnapshot, worktreePath, base string) (int, int, error) {
 	if snap != nil && snap.Base == base && snap.BaseErr == nil {
 		if r, ok := s.reader.(refSnapshotReader); ok {
 			if refs, ok := snap.Worktrees[worktreePath]; ok && refs.Err == nil {
-				return r.AheadBehindResolved(worktreePath, base, refs.Head, snap.BaseHash)
+				return r.AheadBehindResolved(ctx, worktreePath, base, refs.Head, snap.BaseHash)
 			}
 		}
 	}
-	return s.reader.AheadBehind(worktreePath, base)
+	return s.reader.AheadBehind(ctx, worktreePath, base)
 }
 
 // worktreePaths lists the paths of the worktrees a Burst will scan.

@@ -15,7 +15,7 @@ func TestAheadBehindFrom_ShouldAllocZeroAndDecodeZero_WhenGraphPrimedWithCallerS
 	r := NewCountingReader(Flags{SharedCommitState: true})
 	r.Track(t, dir)
 	assertRefsBalanced(t, r.GoGitVCSReader)
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	rs := assertSharedPathEngaged(t, r.GoGitVCSReader, dir)

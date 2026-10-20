@@ -4,6 +4,7 @@ package unfinished
 // are sampled is a function of the seed, never of timing.
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"sync"
@@ -203,7 +204,7 @@ func TestShadowVerify_ShouldReportNoMismatch_WhenRealNewPathsMatchLegacy(t *test
 	s := NewScannerWithReader(nil, nil, r)
 	s.shadow.intn = func(int) int { return 0 }
 
-	results := s.scanRepo(p.mainDir, true)
+	results := s.scanRepo(context.Background(), p.mainDir, true)
 
 	var got ScanResult
 	for _, res := range results {

@@ -1,6 +1,7 @@
 package unfinished_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -349,7 +350,7 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 		repo := initRepo(t)
 		// Set up a "base" branch pointing at the same commit.
 		branchAtHead(t, repo, "base")
-		ahead, behind, err := r.AheadBehind(repo, "base")
+		ahead, behind, err := r.AheadBehind(context.Background(), repo, "base")
 		if err != nil {
 			t.Fatalf("AheadBehind: %v", err)
 		}
@@ -368,7 +369,7 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 		addCommit(t, repo, "a.txt", "commit a")
 		addCommit(t, repo, "b.txt", "commit b")
 
-		ahead, behind, err := r.AheadBehind(repo, "base")
+		ahead, behind, err := r.AheadBehind(context.Background(), repo, "base")
 		if err != nil {
 			t.Fatalf("AheadBehind: %v", err)
 		}
@@ -388,7 +389,7 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 		addCommit(t, repo, "x.txt", "feat: add x")
 		addCommit(t, repo, "y.txt", "fix: add y")
 
-		msgs, err := r.CommitMessages(repo, "base", 5)
+		msgs, err := r.CommitMessages(context.Background(), repo, "base", 5)
 		if err != nil {
 			t.Fatalf("CommitMessages: %v", err)
 		}
@@ -521,7 +522,7 @@ func TestGoGitVCSReader_AheadBehind_BehindCount(t *testing.T) {
 	assertBehindFixtureShape(t, repo)
 
 	// main is 0 ahead, 1 behind base.
-	ahead, behind, err := r.AheadBehind(repo, "base")
+	ahead, behind, err := r.AheadBehind(context.Background(), repo, "base")
 	if err != nil {
 		t.Fatalf("AheadBehind: %v", err)
 	}
@@ -671,11 +672,11 @@ func (f *fakeVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 	return f.hasUncommitted[worktreePath], nil
 }
 
-func (f *fakeVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
+func (f *fakeVCSReader) AheadBehind(_ context.Context, worktreePath, base string) (int, int, error) {
 	return f.aheadCounts[worktreePath], 0, nil
 }
 
-func (f *fakeVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+func (f *fakeVCSReader) CommitMessages(_ context.Context, worktreePath, base string, max int) ([]string, error) {
 	return f.commitMessages[worktreePath], nil
 }
 

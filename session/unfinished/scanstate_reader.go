@@ -1,6 +1,7 @@
 package unfinished
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -99,7 +100,7 @@ func (g *GoGitVCSReader) statShallow(repoPath string) repostate.ShallowStamp {
 // resolved. A cache hit needs matching hashes, not just an unexpired TTL, so a
 // result for an older head or base is never served for a newer one. With
 // shared_commit_state on it defers to AheadBehind, which owns the shared walk.
-func (g *GoGitVCSReader) AheadBehindResolved(worktreePath, base string, head, baseHash plumbing.Hash) (int, int, error) {
+func (g *GoGitVCSReader) AheadBehindResolved(ctx context.Context, worktreePath, base string, head, baseHash plumbing.Hash) (int, int, error) {
 	key := aheadBehindKey{worktree: worktreePath, base: base}
 	if e, ok := g.aheadBehindCache.Load(key); ok && time.Now().Before(e.expiry) && e.headHash == head && e.baseHash == baseHash {
 		return e.ahead, e.behind, nil
@@ -111,7 +112,7 @@ func (g *GoGitVCSReader) AheadBehindResolved(worktreePath, base string, head, ba
 	if g.repoState(entry) != nil {
 		// Not AheadBehind: its TTL-only cache hit would serve the stale result
 		// the hash check above just rejected.
-		return g.aheadBehindFlight(key)
+		return g.aheadBehindFlight(ctx, key)
 	}
 
 	type abResult struct{ ahead, behind int }
