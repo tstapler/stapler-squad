@@ -89,6 +89,8 @@ type Dispatcher struct {
 	digest        *digest
 	lastDigest    map[string]time.Time
 	reviveAlerted map[string]struct{}
+	reviveRunning map[string]struct{} // needs_revive rows with a revive in flight
+	started       bool                // Start ran once; a Dispatcher is single-use
 	matchers      []EventMatcher
 	predicates    map[domain.WakeTriggerType]Predicate
 
@@ -133,7 +135,7 @@ func NewDispatcher(cfg Config) *Dispatcher {
 		BusyHold:      limits.BusyHold,
 		OnEnded:       d.ended,
 		OnNeedsRevive: func(ctx context.Context, row *session.WakeTriggerData) {
-			d.spawn(func() { d.processNeedsRevive(ctx, row) })
+			d.spawnRevive(ctx, row)
 		},
 	})
 	d.timer = NewTimekeeper(cfg.Store, cfg.Clock, d.onClaimed,
@@ -199,6 +201,29 @@ func (d *Dispatcher) spawn(fn func()) {
 	}()
 }
 
+// spawnRevive runs processNeedsRevive for row unless one is already in flight
+// for it, so a slow revive does not collect a goroutine per reconcile tick.
+func (d *Dispatcher) spawnRevive(ctx context.Context, row *session.WakeTriggerData) {
+	d.mu.Lock()
+	if _, busy := d.reviveRunning[row.ID]; busy {
+		d.mu.Unlock()
+		return
+	}
+	if d.reviveRunning == nil {
+		d.reviveRunning = map[string]struct{}{}
+	}
+	d.reviveRunning[row.ID] = struct{}{}
+	d.mu.Unlock()
+	d.spawn(func() {
+		defer func() {
+			d.mu.Lock()
+			delete(d.reviveRunning, row.ID)
+			d.mu.Unlock()
+		}()
+		d.processNeedsRevive(ctx, row)
+	})
+}
+
 // WaitIdle blocks until the spawned background work (revives) has finished.
 func (d *Dispatcher) WaitIdle() { d.bg.Wait() }
 
@@ -213,6 +238,10 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		d.mu.Unlock()
 		return errors.New("wakes: dispatcher already running")
 	}
+	if d.started {
+		d.mu.Unlock()
+		return ErrDispatcherReused
+	}
 	release, ok, err := d.cfg.Leader.TryAcquire()
 	if err != nil {
 		d.mu.Unlock()
@@ -223,7 +252,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		return ErrNotLeader
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
-	d.running, d.cancel, d.release = true, cancel, release
+	d.running, d.started, d.cancel, d.release = true, true, cancel, release
 	d.startedAt = d.cfg.Clock.Now()
 	d.mu.Unlock()
 

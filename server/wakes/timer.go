@@ -20,6 +20,9 @@ const storeRetryDelay = 5 * time.Second
 
 const errKey = "error"
 
+// ErrDispatcherReused is returned by Start on a Dispatcher that already ran.
+var ErrDispatcherReused = errors.New("wakes: dispatcher already started once; build a new one")
+
 // ErrNotLeader is returned by Start when another process holds the leader guard.
 var ErrNotLeader = errors.New("wakes: another process holds the wake dispatcher leader guard")
 
