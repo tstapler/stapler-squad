@@ -8,6 +8,8 @@ package session
 // verdict cannot be tuned to pass.
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -44,6 +46,70 @@ type SoakAcks struct {
 	DivergentEdges []string `json:"divergent_edges,omitempty"`
 	// StatefulEdges are stateful-gate edges the owner accepts as unverified.
 	StatefulEdges []string `json:"stateful_edges,omitempty"`
+	// GuardNew are the "caller|from->to" triples whose guard_new divergence
+	// (a Default guard the legacy path never asked) the owner accepts.
+	GuardNew []string `json:"guard_new,omitempty"`
+	// LowVolume is the four-part acknowledgement that stands in for the floor
+	// and the per-edge N on a low-volume class (Risk Control).
+	LowVolume LowVolumeAck `json:"low_volume"`
+}
+
+// LowVolumeAck is the owner's acknowledgement of the four artifacts: the
+// --config-diff output, the stranded-item preview, the Story 1.5.9b
+// every-registered-caller table and the Story 1.5.9d replay report.
+type LowVolumeAck struct {
+	ConfigDiff      bool `json:"config_diff"`
+	StrandedPreview bool `json:"stranded_preview"`
+	CallerTable     bool `json:"caller_table"`
+	ReplayReport    bool `json:"replay_report"`
+}
+
+// Complete reports whether all four artifacts are acknowledged.
+func (a LowVolumeAck) Complete() bool {
+	return a.ConfigDiff && a.StrandedPreview && a.CallerTable && a.ReplayReport
+}
+
+// SoakAckFile is the --ack-file document: one SoakAcks per caller class.
+type SoakAckFile struct {
+	Classes map[string]SoakAcks `json:"classes"`
+}
+
+// ParseSoakAckFile decodes an ack file strictly: an unknown field or class is
+// an error, so a typo can never silently acknowledge nothing.
+func ParseSoakAckFile(data []byte) (SoakAckFile, error) {
+	var f SoakAckFile
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil {
+		return SoakAckFile{}, fmt.Errorf("ack file: %w", err)
+	}
+	for c := range f.Classes {
+		switch CallerClass(c) {
+		case ClassOperator, ClassAgent, ClassSystem:
+		default:
+			return SoakAckFile{}, fmt.Errorf("ack file: unknown class %q", c)
+		}
+	}
+	return f, nil
+}
+
+// For returns the acknowledgements recorded for class.
+func (f SoakAckFile) For(class CallerClass) SoakAcks { return f.Classes[string(class)] }
+
+// Merge returns a with b's entries appended; each LowVolume part holds if
+// either side acknowledges it.
+func (a SoakAcks) Merge(b SoakAcks) SoakAcks {
+	a.Edges = append(append([]string(nil), a.Edges...), b.Edges...)
+	a.DivergentEdges = append(append([]string(nil), a.DivergentEdges...), b.DivergentEdges...)
+	a.StatefulEdges = append(append([]string(nil), a.StatefulEdges...), b.StatefulEdges...)
+	a.GuardNew = append(append([]string(nil), a.GuardNew...), b.GuardNew...)
+	a.LowVolume = LowVolumeAck{
+		ConfigDiff:      a.LowVolume.ConfigDiff || b.LowVolume.ConfigDiff,
+		StrandedPreview: a.LowVolume.StrandedPreview || b.LowVolume.StrandedPreview,
+		CallerTable:     a.LowVolume.CallerTable || b.LowVolume.CallerTable,
+		ReplayReport:    a.LowVolume.ReplayReport || b.LowVolume.ReplayReport,
+	}
+	return a
 }
 
 // SoakParams are the inputs EvaluateSoak needs besides the ledger.
@@ -58,9 +124,43 @@ type SoakParams struct {
 	ReproPath        string // where the redacted repro records live, printed on alarm
 }
 
-// DefaultSoakParams returns the owner-approved parameters for class. The
-// expected-edge list is the Group 1 system-required set until the caller
-// registry supplies per-class lists.
+// ExpectedEdgesForClass lists the edges the caller registry says class can
+// request, wildcard archive edges expanded over the built-in statuses and
+// forwarding entries (which declare none) contributing nothing. Sorted, unique.
+func ExpectedEdgesForClass(class CallerClass) []SystemEdge {
+	seen := map[SystemEdge]bool{}
+	var out []SystemEdge
+	add := func(e SystemEdge) {
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	for _, c := range transitionCallers {
+		if c.Class != class || c.Forwarding {
+			continue
+		}
+		for _, e := range c.Edges {
+			if e.From != AnyStatus {
+				add(e)
+				continue
+			}
+			for _, from := range builtInStageOrder {
+				add(SystemEdge{From: from, To: e.To})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From != out[j].From {
+			return out[i].From < out[j].From
+		}
+		return out[i].To < out[j].To
+	})
+	return out
+}
+
+// DefaultSoakParams returns the owner-approved parameters for class, with the
+// expected-edge list taken from the caller registry.
 func DefaultSoakParams(class CallerClass, now time.Time) SoakParams {
 	w := SoakWindowOperatorAgent
 	if class == ClassSystem {
@@ -68,7 +168,7 @@ func DefaultSoakParams(class CallerClass, now time.Time) SoakParams {
 	}
 	return SoakParams{
 		Now: now, Window: w, Floor: SoakMinTransitionTotal, MinEdgeSamples: SoakMinEdgeSamples,
-		ExpectedEdges: append([]SystemEdge(nil), systemRequiredCore[:4]...),
+		ExpectedEdges: ExpectedEdgesForClass(class),
 	}
 }
 
@@ -146,6 +246,7 @@ type soakEvaluation struct {
 func (e *soakEvaluation) run() {
 	e.labelWindow()
 	e.checkAlarms()
+	e.checkGuardNew()
 	e.collectStateful()
 	e.checkFloor()
 	e.checkSpan()
@@ -191,6 +292,22 @@ func (e *soakEvaluation) checkAlarms() {
 	}
 }
 
+// checkGuardNew requires an owner acknowledgement for every (caller,from,to)
+// with a guard_new divergence: a newly governed Unchecked caller (Risk Control).
+func (e *soakEvaluation) checkGuardNew() {
+	acked := toSet(e.p.Acks.GuardNew)
+	suffix := "|" + string(ClassGuardNew)
+	for _, key := range sortedKeys(e.cl.CallerEdgeDivergence) {
+		if !strings.HasSuffix(key, suffix) || e.cl.CallerEdgeDivergence[key] == 0 {
+			continue
+		}
+		triple := strings.TrimSuffix(key, suffix)
+		if !acked[triple] {
+			e.notReady = append(e.notReady, fmt.Sprintf("guard_new on %s (%d) is not acknowledged in the ack file", triple, e.cl.CallerEdgeDivergence[key]))
+		}
+	}
+}
+
 func (e *soakEvaluation) reproPath() string {
 	if e.p.ReproPath == "" {
 		return "(ledger path unknown)"
@@ -230,6 +347,10 @@ func (e *soakEvaluation) checkFloor() {
 	}
 	e.v.TransitionSamples = total
 	if total < e.p.Floor {
+		if e.p.Acks.LowVolume.Complete() {
+			e.waive("floor", fmt.Sprintf("%d of %d path=transition samples, waived by the four-part low-volume acknowledgement", total, e.p.Floor))
+			return
+		}
 		e.notReady = append(e.notReady, fmt.Sprintf("only %d path=transition samples, floor is %d", total, e.p.Floor))
 	}
 }
@@ -254,10 +375,21 @@ func (e *soakEvaluation) checkExpectedEdges() {
 			continue // reported through the UNVERIFIED rule above
 		}
 		n := e.cl.Edges[key].TransitionSamples
+		if n > 0 && n < e.p.MinEdgeSamples && e.p.Acks.LowVolume.Complete() {
+			e.waive("edge "+key, fmt.Sprintf("%d of %d samples, waived by the four-part low-volume acknowledgement", n, e.p.MinEdgeSamples))
+			continue
+		}
 		if n < e.p.MinEdgeSamples && !acked[key] {
 			e.notReady = append(e.notReady, fmt.Sprintf("expected edge %s has %d of %d path=transition samples and no owner acknowledgement", key, n, e.p.MinEdgeSamples))
 		}
 	}
+}
+
+func (e *soakEvaluation) waive(what, why string) {
+	if e.v.Detail == nil {
+		e.v.Detail = map[string]string{}
+	}
+	e.v.Detail[what] = why
 }
 
 func (e *soakEvaluation) listCoveredOffline() {

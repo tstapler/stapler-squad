@@ -146,8 +146,8 @@ func soakReadyLedger() session.ShadowLedger {
 		NotCompared: map[string]int64{}, ConfigSeen: map[string]int64{session.ConfigSeeded: 300},
 		Edges: map[string]session.EdgeStats{}, FirstSampleAt: soakTestNow.Add(-8 * 24 * time.Hour),
 	}
-	for _, e := range []string{"ready->queued", "queued->in_progress", "ready->in_progress", "done->in_progress"} {
-		cl.Edges[e] = session.EdgeStats{TransitionSamples: 25}
+	for _, edge := range session.ExpectedEdgesForClass(session.ClassOperator) {
+		cl.Edges[session.EdgeKey(edge.From, edge.To)] = session.EdgeStats{TransitionSamples: 25}
 	}
 	return session.ShadowLedger{
 		Version: 1, BinaryStarts: []time.Time{soakTestNow.Add(-8 * 24 * time.Hour)},
@@ -489,5 +489,32 @@ func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNew
 	}
 	if !found {
 		t.Errorf("divergence_total must carry agent guard_new=1, got %+v", report.DivergenceTotal)
+	}
+}
+
+func TestSoakStatus_AckFilePostedWithTheRequest_AcknowledgesPerClass_AndBadFileIs400(t *testing.T) {
+	t.Parallel()
+	l := soakReadyLedger()
+	l.Classes["operator"].Divergence["ValidateGates|guard_new|seeded|transition"] = 2
+	l.Classes["operator"].CallerEdgeDivergence = map[string]int64{"operator_submit_manual_review|review->done|guard_new": 2}
+	src := soakTestSource(l, nil)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/actuator/workflow-engine?format=text&class=operator", strings.NewReader(body))
+		writeWorkflowEngineSoak(rec, req, src)
+		return rec
+	}
+	if rec := getSoak(t, src, "format=text&class=operator"); soakExit(rec) != "1" || !strings.Contains(rec.Body.String(), "guard_new on operator_submit_manual_review|review->done") {
+		t.Fatalf("unacknowledged guard_new must be NOT READY, got exit=%q body=%s", soakExit(rec), rec.Body.String())
+	}
+	if rec := post(`{"classes":{"operator":{"guard_new":["operator_submit_manual_review|review->done"]}}}`); soakExit(rec) != "0" {
+		t.Errorf("the acknowledged triple must pass, got exit=%q body=%s", soakExit(rec), rec.Body.String())
+	}
+	if rec := post(`{"classes":{"agent":{"guard_new":["operator_submit_manual_review|review->done"]}}}`); soakExit(rec) != "1" {
+		t.Errorf("an ack recorded under another class must not apply, got exit=%q", soakExit(rec))
+	}
+	if rec := post(`{"classes":{"operator":{"guard_nwe":[]}}}`); rec.Code != http.StatusBadRequest || soakExit(rec) != "2" {
+		t.Errorf("a malformed ack file must be 400 with exit 2, got code=%d exit=%q", rec.Code, soakExit(rec))
 	}
 }

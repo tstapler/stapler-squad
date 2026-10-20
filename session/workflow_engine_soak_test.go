@@ -12,13 +12,13 @@ import (
 var soakNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
 // readyLedger is a ledger that satisfies every READY criterion for class
-// operator at soakNow: 8 days of history, Group 1 edges at 25 samples each.
+// operator at soakNow: 8 days of history, every registry edge at 25 samples each.
 func readyLedger() ShadowLedger {
 	cl := newClassLedger()
 	cl.Calls["CanTransition|transition"] = 300
 	cl.ConfigSeen[ConfigSeeded] = 300
 	cl.FirstSampleAt = soakNow.Add(-8 * 24 * time.Hour)
-	for _, e := range systemRequiredCore[:4] {
+	for _, e := range ExpectedEdgesForClass(ClassOperator) {
 		cl.Edges[EdgeKey(e.From, e.To)] = EdgeStats{TransitionSamples: 25}
 	}
 	return ShadowLedger{
@@ -69,7 +69,7 @@ func TestEvaluateSoak_LabelsWindowEdited_AndNeedsAckForDivergence_WhenConfigEdit
 	cl := l.Classes[string(ClassOperator)]
 	cl.ConfigSeen[ConfigEdited] = 5
 	cl.Divergence["CanTransition|graph|edited|transition"] = 5
-	cl.Edges["done->refining"] = EdgeStats{TransitionSamples: 5, Divergences: 5}
+	cl.Edges["done->refining"] = EdgeStats{TransitionSamples: 25, Divergences: 5}
 
 	v := evalOperator(l, nil)
 	require.Equal(t, ConfigEdited, v.ConfigWindow, "a window spanning an edit is never seeded")
@@ -156,4 +156,113 @@ func TestOverallSoakExit_IsOneForNoVerdictsAndForAnyNotReady(t *testing.T) {
 	require.Equal(t, 1, OverallSoakExit(nil))
 	require.Equal(t, 1, OverallSoakExit([]Verdict{{ExitCode: 0}, {ExitCode: 1}}))
 	require.Equal(t, 0, OverallSoakExit([]Verdict{{ExitCode: 0}}))
+}
+
+// --- Story 1.5.2d: registry expected edges, guard_new and the ack file ------------
+
+func TestExpectedEdgesForClass_TakenFromRegistry_ExpandsArchiveWildcard_SkipsForwarding(t *testing.T) {
+	t.Parallel()
+	keys := func(c CallerClass) map[string]bool {
+		out := map[string]bool{}
+		for _, e := range ExpectedEdgesForClass(c) {
+			out[EdgeKey(e.From, e.To)] = true
+		}
+		return out
+	}
+	agent, system, operator := keys(ClassAgent), keys(ClassSystem), keys(ClassOperator)
+	require.True(t, agent["in_progress->review"], "request_review")
+	require.True(t, agent["review->archived"], "report_duplicate's *->archived is expanded")
+	require.False(t, agent["ready->queued"], "queue_backlog_item is a system caller")
+	require.True(t, system["ready->queued"])
+	require.True(t, system["pr_pending->done"])
+	require.True(t, operator["review->done"])
+	require.NotEmpty(t, ExpectedEdgesForClass(ClassOperator))
+	require.Empty(t, ExpectedEdgesForClass(CallerClass("bogus")))
+	for _, c := range TransitionCallers() {
+		if c.Forwarding {
+			require.Empty(t, c.Edges, "a forwarder declares no edge, so it adds none")
+		}
+	}
+	require.Equal(t, ExpectedEdgesForClass(ClassSystem), DefaultSoakParams(ClassSystem, soakNow).ExpectedEdges)
+}
+
+func guardNewLedger() ShadowLedger {
+	l := readyLedger()
+	cl := l.Classes[string(ClassOperator)]
+	cl.Divergence["ValidateGates|guard_new|seeded|transition"] = 3
+	cl.CallerEdgeDivergence = map[string]int64{"operator_submit_manual_review|review->done|guard_new": 3}
+	return l
+}
+
+func TestEvaluateSoak_GuardNewNeedsPerCallerEdgeAcknowledgement_NotAnAlarmClass(t *testing.T) {
+	t.Parallel()
+	require.False(t, alarmClasses[string(ClassGuardNew)], "guard_new is acknowledged per (caller,from,to), not a blanket seeded alarm")
+
+	v := evalOperator(guardNewLedger(), nil)
+	require.Equal(t, VerdictNotReady, v.Status)
+	require.Contains(t, strings.Join(v.Reasons, "\n"), "guard_new on operator_submit_manual_review|review->done")
+
+	v = evalOperator(guardNewLedger(), func(p *SoakParams) { p.Acks.GuardNew = []string{"operator_submit_manual_review|review->done"} })
+	require.Equal(t, VerdictReady, v.Status, v.Reasons)
+
+	v = evalOperator(guardNewLedger(), func(p *SoakParams) { p.Acks.GuardNew = []string{"operator_submit_manual_review|review->in_progress"} })
+	require.Equal(t, VerdictNotReady, v.Status, "an ack for another edge does not count")
+}
+
+func TestEvaluateSoak_LowVolumeNeedsAllFourArtifacts_ToWaiveFloorAndEdgeN_ButNotVacuityOrSpan(t *testing.T) {
+	t.Parallel()
+	thin := func() ShadowLedger {
+		l := readyLedger()
+		cl := l.Classes[string(ClassOperator)]
+		cl.Calls = map[string]int64{"CanTransition|transition": 30}
+		for k, es := range cl.Edges {
+			es.TransitionSamples = 1
+			cl.Edges[k] = es
+		}
+		return l
+	}
+	full := LowVolumeAck{ConfigDiff: true, StrandedPreview: true, CallerTable: true, ReplayReport: true}
+
+	require.Equal(t, VerdictNotReady, evalOperator(thin(), nil).Status)
+	partial := full
+	partial.ReplayReport = false
+	require.Equal(t, VerdictNotReady, evalOperator(thin(), func(p *SoakParams) { p.Acks.LowVolume = partial }).Status, "three of four is not enough")
+
+	v := evalOperator(thin(), func(p *SoakParams) { p.Acks.LowVolume = full })
+	require.Equal(t, VerdictReady, v.Status, v.Reasons)
+	require.Contains(t, v.Detail["floor"], "waived")
+
+	// Zero samples on an expected edge must still be named in the ack file.
+	l := thin()
+	delete(l.Classes[string(ClassOperator)].Edges, "review->done")
+	v = evalOperator(l, func(p *SoakParams) { p.Acks.LowVolume = full })
+	require.Equal(t, VerdictNotReady, v.Status)
+	v = evalOperator(l, func(p *SoakParams) { p.Acks.LowVolume = full; p.Acks.Edges = []string{"review->done"} })
+	require.Equal(t, VerdictReady, v.Status, v.Reasons)
+
+	// The span window is never waived.
+	young := thin()
+	young.BinaryStarts = []time.Time{soakNow.Add(-time.Hour)}
+	young.Classes[string(ClassOperator)].FirstSampleAt = soakNow.Add(-time.Hour)
+	require.Equal(t, VerdictNotReady, evalOperator(young, func(p *SoakParams) { p.Acks.LowVolume = full }).Status)
+}
+
+func TestParseSoakAckFile_IsStrict_AndMergesPerClass(t *testing.T) {
+	t.Parallel()
+	f, err := ParseSoakAckFile([]byte(`{"classes":{"agent":{"edges":["a->b"],"guard_new":["c|a->b"],"low_volume":{"config_diff":true}}}}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"a->b"}, f.For(ClassAgent).Edges)
+	require.Empty(t, f.For(ClassOperator).Edges)
+	m := f.For(ClassAgent).Merge(SoakAcks{Edges: []string{"x->y"}, LowVolume: LowVolumeAck{ReplayReport: true}})
+	require.Equal(t, []string{"a->b", "x->y"}, m.Edges)
+	require.True(t, m.LowVolume.ConfigDiff && m.LowVolume.ReplayReport)
+
+	for name, doc := range map[string]string{
+		"unknown field": `{"classes":{"agent":{"edgez":["a->b"]}}}`,
+		"unknown class": `{"classes":{"robot":{}}}`,
+		"not json":      `edges: [a->b]`,
+	} {
+		_, err := ParseSoakAckFile([]byte(doc))
+		require.Errorf(t, err, name)
+	}
 }

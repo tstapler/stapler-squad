@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -72,6 +73,12 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 		http.Error(w, "workflow engine soak is not wired in this process", http.StatusServiceUnavailable)
 		return
 	}
+	fileAcks, err := readSoakAckBody(w, r)
+	if err != nil {
+		w.Header().Set("X-Workflow-Engine-Soak-Exit", "2")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	now := time.Now()
 	if src.Now != nil {
 		now = src.Now()
@@ -88,6 +95,7 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 		if src.Acks != nil {
 			p.Acks = src.Acks()
 		}
+		p.Acks = p.Acks.Merge(fileAcks.For(c))
 		if src.AnyClassEnforced != nil {
 			p.AnyClassEnforced = src.AnyClassEnforced()
 		}
@@ -110,6 +118,21 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rep)
+}
+
+// maxSoakAckBytes bounds a posted --ack-file.
+const maxSoakAckBytes = 64 << 10
+
+// readSoakAckBody parses the --ack-file a POST carries; a GET has none.
+func readSoakAckBody(w http.ResponseWriter, r *http.Request) (session.SoakAckFile, error) {
+	if r.Method != http.MethodPost {
+		return session.SoakAckFile{}, nil
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSoakAckBytes))
+	if err != nil {
+		return session.SoakAckFile{}, fmt.Errorf("ack file unreadable: %w", err)
+	}
+	return session.ParseSoakAckFile(data)
 }
 
 func fillConfigDiff(ctx context.Context, src *WorkflowEngineSoakSource, rep *workflowEngineReport) {

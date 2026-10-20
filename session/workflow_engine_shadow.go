@@ -72,8 +72,12 @@ type ClassLedger struct {
 	// CallerDivergence counts divergences per registry caller, keyed
 	// "caller|divergence_class".
 	CallerDivergence map[string]int64 `json:"caller_divergence,omitempty"`
-	FirstSampleAt    time.Time        `json:"first_sample_at"`
-	LastSampleAt     time.Time        `json:"last_sample_at"`
+	// CallerEdgeDivergence is the same count per edge, keyed
+	// "caller|from->to|divergence_class": the unit of the owner's guard_new
+	// acknowledgement.
+	CallerEdgeDivergence map[string]int64 `json:"caller_edge_divergence,omitempty"`
+	FirstSampleAt        time.Time        `json:"first_sample_at"`
+	LastSampleAt         time.Time        `json:"last_sample_at"`
 }
 
 // ReproRecord is a redacted divergence: an item id hash, never a title or id.
@@ -185,8 +189,9 @@ type liveClass struct {
 	lastSample  atomic.Int64
 	active      atomic.Bool
 
-	mu        sync.Mutex // guards callerDiv
-	callerDiv map[string]int64
+	mu            sync.Mutex // guards callerDiv, callerEdgeDiv
+	callerDiv     map[string]int64
+	callerEdgeDiv map[string]int64
 }
 
 func newLiveClass() *liveClass {
@@ -196,6 +201,8 @@ func newLiveClass() *liveClass {
 		notCompared: newCounterSet(NotComparedStatefulGate),
 		configSeen:  newCounterSet(shadowConfigs...),
 		callerDiv:   map[string]int64{},
+
+		callerEdgeDiv: map[string]int64{},
 	}
 }
 
@@ -352,6 +359,7 @@ func (r *ShadowLedgerRecorder) RecordObservation(o ShadowObservation) {
 	if o.Caller != "" {
 		lc.mu.Lock()
 		lc.callerDiv[string(o.Caller)+"|"+string(o.Class)]++
+		lc.callerEdgeDiv[string(o.Caller)+"|"+EdgeKey(o.From, o.To)+"|"+string(o.Class)]++
 		lc.mu.Unlock()
 	}
 	rec := ReproRecord{
@@ -456,6 +464,12 @@ func (lc *liveClass) mergeInto(cl *ClassLedger) {
 		}
 		cl.CallerDivergence[k] += n
 	}
+	for k, n := range lc.callerEdgeDiv {
+		if cl.CallerEdgeDivergence == nil {
+			cl.CallerEdgeDivergence = map[string]int64{}
+		}
+		cl.CallerEdgeDivergence[k] += n
+	}
 	lc.mu.Unlock()
 	lc.edges.Range(func(k, v any) bool {
 		le := v.(*liveEdge)
@@ -505,6 +519,12 @@ func cloneClassLedger(c *ClassLedger) *ClassLedger {
 			out.CallerDivergence = map[string]int64{}
 		}
 		out.CallerDivergence[k] = v
+	}
+	for k, v := range c.CallerEdgeDivergence {
+		if out.CallerEdgeDivergence == nil {
+			out.CallerEdgeDivergence = map[string]int64{}
+		}
+		out.CallerEdgeDivergence[k] = v
 	}
 	out.FirstSampleAt, out.LastSampleAt = c.FirstSampleAt, c.LastSampleAt
 	return out
