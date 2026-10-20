@@ -391,3 +391,63 @@ func TestDispatcher_should_ReturnErrNotLeader_When_AnotherProcessLeads(t *testin
 type denyLeader struct{}
 
 func (denyLeader) TryAcquire() (func(), bool, error) { return nil, false, nil }
+
+func TestDispatcher_should_ReturnErrDispatcherReused_When_StartedAfterStop(t *testing.T) {
+	t.Parallel()
+	r := newDispatcherRig(t)
+	require.NoError(t, r.d.Start(context.Background()))
+	require.NoError(t, r.d.Stop(context.Background()))
+
+	assert.ErrorIs(t, r.d.Start(context.Background()), ErrDispatcherReused, "a second Start would close ready twice")
+}
+
+func TestDispatcher_should_StartAgain_When_FirstStartLostTheLeaderGuard(t *testing.T) {
+	t.Parallel()
+	var leader atomic.Bool
+	r := newDispatcherRig(t, func(c *Config) { c.Leader = switchLeader{&leader} })
+	require.ErrorIs(t, r.d.Start(context.Background()), ErrNotLeader)
+
+	leader.Store(true)
+	r.start(r.d)
+}
+
+type switchLeader struct{ on *atomic.Bool }
+
+func (l switchLeader) TryAcquire() (func(), bool, error) { return func() {}, l.on.Load(), nil }
+
+// blockingAdmission parks every Admit until released and counts the calls.
+type blockingAdmission struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (a *blockingAdmission) Admit(ctx context.Context) (bool, error) {
+	a.calls.Add(1)
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+	}
+	return false, nil
+}
+
+func TestReviveWaiting_should_RunOneRevivePerRow_When_ReconcileTicksWhileItIsInFlight(t *testing.T) {
+	t.Parallel()
+	adm := &blockingAdmission{release: make(chan struct{})}
+	r := newDispatcherRig(t, func(c *Config) { c.Admission = adm })
+	r.owners.set("owner-1", OwnerFacts{Exists: true, Revive: &spyTarget{}})
+	row := newRow(t, r.repo, rowOpts{allowRevive: true})
+	r.start(r.d)
+	r.d.timerClaim(context.Background(), row) // first revive parks inside Admit
+	r.eventually(func() bool { return adm.calls.Load() == 1 })
+
+	for range 5 {
+		r.d.Reconcile(context.Background())
+	}
+	assert.EqualValues(t, 1, adm.calls.Load(), "no second goroutine for a row already being revived")
+
+	close(adm.release)
+	r.d.WaitIdle()
+	r.d.Reconcile(context.Background())
+	r.d.WaitIdle()
+	assert.EqualValues(t, 2, adm.calls.Load(), "the row is retried once the first attempt finished")
+}
