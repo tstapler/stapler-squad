@@ -328,3 +328,36 @@ func TestObserveShallow_ShouldNeverReturnPreBumpOrdinal_WhenObserverRacesTheBump
 		t.Fatalf("ordinal not bumped: %d", got)
 	}
 }
+
+// An observer still holding the old stamp must return the old ordinal while a
+// changing observer is paused between its bump and the publish of the new pair.
+func TestObserveShallow_ShouldReturnOldOrdinal_WhenOldStampObserverRacesPublish(t *testing.T) {
+	rs := NewRepoState(Options{}, 1<<20)
+	oldStamp := ShallowStamp{Exists: true, Size: 1, MtimeNs: 1}
+	newStamp := ShallowStamp{Exists: true, Size: 2, MtimeNs: 2}
+	var pre StampOrd
+	var armed, ran bool
+	var racerOrd StampOrd
+	rs.graph.Store(newGraph(Options{}, graphHooks{Yield: func() {
+		if !armed || ran || rs.Graph().Load().StampOrd() == pre {
+			return // only fire after the bump, before the publish
+		}
+		ran = true
+		racerOrd = rs.ObserveShallow(oldStamp)
+	}}))
+	rs.ObserveShallow(oldStamp)
+	pre = rs.Graph().Load().StampOrd()
+	armed = true
+
+	got := rs.ObserveShallow(newStamp)
+
+	if !ran {
+		t.Fatal("interleaving never fired")
+	}
+	if racerOrd != pre {
+		t.Fatalf("old-stamp observer returned ordinal %d, want pre-bump %d", racerOrd, pre)
+	}
+	if got == pre {
+		t.Fatalf("changing observer returned the pre-bump ordinal %d", got)
+	}
+}
