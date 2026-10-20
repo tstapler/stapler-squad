@@ -135,6 +135,28 @@ func (ws *WorkspaceService) GetWorkspace(sessionID string) (session.Workspace, e
 	return inst.Workspace(), nil
 }
 
+// CheckWriteAccess is the WriteGuard for file saves: archived sessions are refused (a
+// save never revives one) and so are hidden sessions while the read-only guards are on.
+func (ws *WorkspaceService) CheckWriteAccess(sessionID string) error {
+	inst, err := ws.findInstanceFast(sessionID)
+	if err != nil {
+		return err
+	}
+	if inst.IsArchived() {
+		return archivedSessionRefusal()
+	}
+	if _, err := AccessForUnary(inst, ws.guards).Writer(nil); err != nil {
+		return hiddenSessionRefusal()
+	}
+	return nil
+}
+
+// InvalidateVCSStatus drops the cached status of workDir (keyed as GetVCSStatus keys it),
+// so a file save shows in the next status poll instead of after the TTL.
+func (ws *WorkspaceService) InvalidateVCSStatus(workDir string) {
+	ws.vcsStatusCache.Delete(workDir)
+}
+
 // GetVCSStatus retrieves the current version control status for a session.
 func (ws *WorkspaceService) GetVCSStatus(
 	ctx context.Context,

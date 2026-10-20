@@ -721,9 +721,9 @@ func TestReconcile_should_DetectManualOverrideOnlyOnce_When_ExternalStateStaysCh
 // Story 2.1.2 — resume on disable, legible status text, effective-config log.
 // ---------------------------------------------------------------------------
 
-// captureSlog swaps the package slog default for a buffer; callers must not
+// captureQuotaSlog swaps the package slog default for a buffer; callers must not
 // be t.Parallel (the seam is process-global).
-func captureSlog(t *testing.T) *quotalog.SyncBuffer {
+func captureQuotaSlog(t *testing.T) *quotalog.SyncBuffer {
 	t.Helper()
 	buf := &quotalog.SyncBuffer{}
 	prev := quotalog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, nil)))
@@ -732,7 +732,7 @@ func captureSlog(t *testing.T) *quotalog.SyncBuffer {
 }
 
 func TestQuotaGateReconcile_ResumesBacklogOnce_WhenGateDisabledWhilePaused(t *testing.T) {
-	buf := captureSlog(t)
+	buf := captureQuotaSlog(t)
 	cfg := config.QuotaConfig{}.QuotaConfigOrDefault() // Enabled=false: the operator just switched the gate off
 	ctrl := &countingFeatureController{enabled: false}
 	qg := newTestQuotaGate(cfg, &fakeTokenStore{}, &mockInstancePoller{}, ctrl, events.NewEventBus(1))
@@ -805,7 +805,7 @@ func TestStatusDetail_should_PointToSettingsPage_When_EnabledWithZeroBudget(t *t
 }
 
 func TestLogQuotaEffectiveConfig_IncludesEveryValueAndMode_WhenProactive(t *testing.T) {
-	buf := captureSlog(t)
+	buf := captureQuotaSlog(t)
 
 	LogQuotaEffectiveConfig("Using quota gate config", config.QuotaConfig{
 		Enabled: true, PauseBelowHeadroomPct: 30, AssumedWindowTokenBudget: 5_000_000,

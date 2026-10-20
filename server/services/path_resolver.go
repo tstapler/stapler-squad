@@ -1,0 +1,303 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"connectrpc.com/connect"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
+)
+
+// errGitInternal and errWorktreeMissing let the write path attach typed reasons to resolver refusals.
+var (
+	errGitInternal     = errors.New(".git is not accessible")
+	errWorktreeMissing = errors.New("WorktreeMissing: session worktree is not on disk")
+)
+
+// maxSymlinkHops bounds symlink expansion so a link cycle cannot loop forever.
+const maxSymlinkHops = 40
+
+// AccessMode says whether a file request reads or writes.
+type AccessMode int
+
+const (
+	AccessRead AccessMode = iota
+	AccessWrite
+)
+
+// ResolvedPath is a slash-separated, root-relative path that resolveInWorktree
+// has confined to the worktree: no "..", no absolute form, no ".git" component
+// and no symlink that leaves the root. "." names the root itself.
+type ResolvedPath string
+
+// SymlinkDeniedError reports a symlink whose target leaves the worktree or
+// points into .git. Target is the link's raw Readlink string, kept for server-side
+// logs and tests only: it never reaches the wire message or the detail.
+type SymlinkDeniedError struct {
+	Link   string
+	Target string
+}
+
+func (e *SymlinkDeniedError) Error() string {
+	return fmt.Sprintf("symlink %q points outside the worktree or into .git", e.Link)
+}
+
+// linkProber is the part of a root the resolver needs to expand symlinks. It sees
+// raw, not-yet-confined components, so only the resolver may call it.
+type linkProber interface {
+	lstatRel(rel string) (os.FileInfo, error)
+	Readlink(rel string) (string, error)
+}
+
+// symlinkDenied builds the PermissionDenied error for a refused link, carrying
+// the typed ReadOnlyReasonDetail (SYMLINK). The raw target is logged, not returned,
+// since it can be an absolute host path.
+func symlinkDenied(link, target string) *connect.Error {
+	if target != "" {
+		log.Debug("symlink read refused", "link", link, "target", target)
+	}
+	ce := connect.NewError(connect.CodePermissionDenied, &SymlinkDeniedError{Link: link, Target: target})
+	if d, err := connect.NewErrorDetail(&sessionv1.ReadOnlyReasonDetail{
+		Reason: sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK,
+	}); err == nil {
+		ce.AddDetail(d)
+	}
+	return ce
+}
+
+// WorktreeRoot confines filesystem access to one worktree directory via os.Root.
+type WorktreeRoot struct {
+	dir  string
+	root *os.Root
+}
+
+// OpenWorktreeRoot opens dir as a confinement root. The caller must Close it.
+func OpenWorktreeRoot(dir string) (*WorktreeRoot, error) {
+	// #nosec G304 -- dir is a session workspace directory from WorkspaceProvider, not request input.
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &WorktreeRoot{dir: dir, root: r}, nil
+}
+
+// Close releases the underlying directory handle.
+func (w *WorktreeRoot) Close() error { return w.root.Close() }
+
+// Dir returns the absolute directory the root was opened on.
+func (w *WorktreeRoot) Dir() string { return w.dir }
+
+// Open opens a resolved path for reading, confined by os.Root.
+func (w *WorktreeRoot) Open(p ResolvedPath) (*os.File, error) { return w.root.Open(string(p)) }
+
+// Lstat stats a resolved path without following a final symlink.
+func (w *WorktreeRoot) Lstat(p ResolvedPath) (os.FileInfo, error) { return w.root.Lstat(string(p)) }
+
+// Stat stats a resolved path, following symlinks inside the root.
+func (w *WorktreeRoot) Stat(p ResolvedPath) (os.FileInfo, error) { return w.root.Stat(string(p)) }
+
+// ReadDir lists a resolved directory through the root.
+func (w *WorktreeRoot) ReadDir(p ResolvedPath) ([]os.DirEntry, error) {
+	f, err := w.root.Open(string(p))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.ReadDir(-1)
+}
+
+// resolveInWorktree confines rel to the root. It rejects NUL, absolute and
+// escaping paths, any ".git" component (before and after symlink expansion) and
+// symlinks that leave the root or point into .git. In-tree symlinks are followed
+// in AccessRead mode and refused in AccessWrite mode, so a write can never be
+// redirected through a link. A missing leaf is not an error here: the open
+// reports NotFound, and a write may create it.
+func resolveInWorktree(root linkProber, rel string, mode AccessMode) (ResolvedPath, error) {
+	resolved, _, err := resolveInWorktreeLinks(root, rel, mode)
+	return resolved, err
+}
+
+// resolveInWorktreeLinks is resolveInWorktree that also reports whether any
+// component was a symlink, which callers surface as ReadOnlyReason=Symlink.
+func resolveInWorktreeLinks(root linkProber, rel string, mode AccessMode) (ResolvedPath, bool, error) {
+	if strings.ContainsRune(rel, 0) {
+		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("path contains NUL"))
+	}
+	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
+		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("absolute paths are not allowed"))
+	}
+	clean := path.Clean(filepath.ToSlash(rel))
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("path traversal detected"))
+	}
+	if hasGitComponent(clean) {
+		return "", false, connect.NewError(connect.CodePermissionDenied, errGitInternal)
+	}
+	return expandLinks(root, clean, mode)
+}
+
+func hasGitComponent(p string) bool {
+	for _, c := range strings.Split(p, "/") {
+		if strings.EqualFold(c, ".git") {
+			return true
+		}
+	}
+	return false
+}
+
+// expandLinks walks p component by component, replacing each symlink by its
+// target (re-checked for escape and .git) until no link remains.
+func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool, error) {
+	pending := splitComponents(p)
+	var cur []string
+	viaLink := false
+	for hops := 0; len(pending) > 0; {
+		comp := pending[0]
+		pending = pending[1:]
+		next := append(append([]string(nil), cur...), comp)
+		nextPath := strings.Join(next, "/")
+		fi, err := root.lstatRel(nextPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+				return finishResolved(append(next, pending...), viaLink), viaLink, nil
+			}
+			return "", false, internalIOError("resolve_lstat", ResolvedPath(nextPath), err, "failed to stat path")
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		if mode == AccessWrite {
+			return "", false, symlinkDenied(nextPath, "")
+		}
+		if hops++; hops > maxSymlinkHops {
+			return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("too many symlinks"))
+		}
+		viaLink = true
+		target, err := root.Readlink(nextPath)
+		if err != nil {
+			return "", false, internalIOError("readlink", ResolvedPath(nextPath), err, "failed to read symlink")
+		}
+		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
+			return "", false, symlinkDenied(nextPath, target)
+		}
+		joined := path.Clean(path.Join(strings.Join(cur, "/"), filepath.ToSlash(target)))
+		if joined == ".." || strings.HasPrefix(joined, "../") || hasGitComponent(joined) {
+			return "", false, symlinkDenied(nextPath, target)
+		}
+		cur = nil
+		pending = append(splitComponents(joined), pending...)
+	}
+	return finishResolved(cur, viaLink), viaLink, nil
+}
+
+func splitComponents(p string) []string {
+	if p == "." || p == "" {
+		return nil
+	}
+	return strings.Split(p, "/")
+}
+
+func finishResolved(parts []string, _ bool) ResolvedPath {
+	if len(parts) == 0 {
+		return "."
+	}
+	return ResolvedPath(path.Clean(strings.Join(parts, "/")))
+}
+
+// FileRef is a session-relative file reference, parsed once at the proto boundary.
+type FileRef struct {
+	SessionID string
+	Path      string
+}
+
+// resolvedRequest is what resolveFileRequest hands to a handler. The caller
+// must Close Root.
+type resolvedRequest struct {
+	Root      *WorktreeRoot
+	Resolved  ResolvedPath
+	ViaLink   bool
+	Workspace session.Workspace
+}
+
+// resolveFileRequest is the shared request preamble: workspace lookup, root
+// selection per mode, and path confinement. Read uses ExistingDir. Write uses
+// ActiveDir and requires it to equal ExistingDir, which blocks the silent
+// fallback to the repo root after a worktree has been cleaned up.
+func resolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileRef, mode AccessMode) (*resolvedRequest, error) {
+	ws, dir, err := workspaceDirFor(provider, ref, mode)
+	if err != nil {
+		return nil, err
+	}
+	root, err := OpenWorktreeRoot(dir)
+	if err != nil {
+		return nil, openRootError(err)
+	}
+	resolved, viaLink, err := resolveInWorktreeLinks(root, refPathOrDot(ref), mode)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	return &resolvedRequest{Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
+}
+
+// workspaceDirFor looks up the session's workspace and picks the directory for mode.
+func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (session.Workspace, string, error) {
+	if ref.SessionID == "" {
+		return session.Workspace{}, "", connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
+	}
+	ws, err := provider.GetWorkspace(ref.SessionID)
+	if err != nil {
+		return session.Workspace{}, "", err
+	}
+	dir := ws.ExistingDir
+	if mode == AccessWrite {
+		if !worktreeOnDisk(ws) {
+			return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errWorktreeMissing)
+		}
+		dir = ws.ActiveDir
+	}
+	if dir == "" {
+		return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("session has no working directory"))
+	}
+	return ws, dir, nil
+}
+
+// worktreeOnDisk is false once the session's active directory is gone and ExistingDir
+// has fallen back to the repo root. Writes and content search both refuse that state.
+func worktreeOnDisk(ws session.Workspace) bool {
+	return ws.ActiveDir != "" && ws.ActiveDir == ws.ExistingDir
+}
+
+func openRootError(err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return connect.NewError(connect.CodeNotFound, errors.New("working directory not found"))
+	}
+	log.Error("file I/O failed", "op", "open_root", "err", err)
+	return connect.NewError(connect.CodeInternal, errors.New("failed to open working directory"))
+}
+
+func refPathOrDot(ref FileRef) string {
+	if ref.Path == "" {
+		return "."
+	}
+	return ref.Path
+}
+
+// FS returns an fs.FS rooted at the worktree for walking; it cannot follow a link out of the root.
+func (w *WorktreeRoot) FS() fs.FS { return w.root.FS() }
+
+func (w *WorktreeRoot) lstatRel(rel string) (os.FileInfo, error) { return w.root.Lstat(rel) }
+
+// Readlink reads a symlink's raw target (metadata only) through the root.
+func (w *WorktreeRoot) Readlink(rel string) (string, error) { return w.root.Readlink(rel) }

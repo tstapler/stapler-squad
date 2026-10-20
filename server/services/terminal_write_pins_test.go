@@ -87,5 +87,6 @@ var pinnedAccessCallers = map[string]callerRow{
 	"server/services:SessionService.decideUpdateAccess": {kind: kindUI, reason: "UpdateSession access-decision block"},
 	"server/services:SessionService.runSteer":           {kind: kindUI, reason: "UpdateSession steer dispatch"},
 	"server/services:TerminalService.WriteToSession":    {kind: kindUI, reason: "Story 5.2 unary handler"},
+	"server/services:WorkspaceService.CheckWriteAccess": {kind: kindUI, reason: "WriteFile access decision: the hidden-session guard of a file save"},
 	"server/services:WorkspaceService.SwitchWorkspace":  {kind: kindUI, reason: "Story 5.2 unary handler"},
 }

@@ -51,9 +51,14 @@ Notes:
 - `reopen_after_action_total` counts an `applied` `ANSWER_QUESTION` followed by the
   operator's web terminal attaching to that session within 60 s
   (`reopenWindow` in `notification_quality_metrics.go`). Only `ANSWER_QUESTION` carries
-  a session id, so approve, deny and backlog decisions are not tracked. A terminal
-  stream that is already open produces no new attach and no count. The tracker is
-  in process and resets on restart.
+  a session id, so approve, deny and backlog decisions are not tracked. Any new
+  terminal stream attach counts (`noteOperatorOpen` in `connectrpc_websocket.go`),
+  so a websocket reconnect or re-subscribe within 60 s of the answer is counted as a
+  reopen even though the operator did not open the terminal again; the counter
+  overstates reopens by those reconnects. A stream that stays connected produces no
+  new attach and no count. The session is matched by stable id or title, a server
+  restart clears the in-process tracker, and the 60 s window is checked per
+  attach.
 
 ## Answer delivery metrics
 

@@ -2,6 +2,8 @@
 
 import React, {
   useEffect,
+  useId,
+  useMemo,
   useRef,
   useState,
   useCallback,
@@ -10,7 +12,10 @@ import { createPortal } from "react-dom";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 import { searchFiles } from "@/lib/hooks/useFileService";
 import { getFileIcon as getFileIconByName } from "@/lib/utils/fileIcons";
+import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
+import type { LabelsOf } from "@/lib/files/analytics/events";
 import * as styles from "./QuickOpenPalette.css";
+import { visuallyHidden } from "@/styles/a11y.css";
 
 // ---------------------------------------------------------------------------
 // Fuse.js — optional progressive enhancement
@@ -43,12 +48,26 @@ function dirPart(path: string): string {
 // Types
 // ---------------------------------------------------------------------------
 
+type PaletteLabels = LabelsOf<"files.nav.palette">;
+
+/** A command-mode (`>`) entry; `id` is the analytics enum value, so typed text never reaches an event. */
+export interface PaletteCommand {
+  id: Exclude<PaletteLabels["command"], "none">;
+  label: string;
+  shortcut?: string;
+  /** Listed but not runnable; shown as "<label> (<reason>)". */
+  disabledReason?: string;
+  run: () => void;
+}
+
 interface QuickOpenPaletteProps {
   sessionId: string;
   baseUrl: string;
   recentPaths: string[];
   onSelect: (path: string) => void;
   onClose: () => void;
+  /** Enables `>` command mode. */
+  commands?: PaletteCommand[];
 }
 
 // ---------------------------------------------------------------------------
@@ -61,8 +80,19 @@ export function QuickOpenPalette({
   recentPaths,
   onSelect,
   onClose,
+  commands,
 }: QuickOpenPaletteProps) {
   const [query, setQuery] = useState("");
+  const [notice, setNotice] = useState("");
+  const analytics = useFilesAnalytics({ component: "QuickOpenPalette", sessionId });
+  const commandMode = !!commands && query.startsWith(">");
+  const listId = useId();
+  const optionId = (i: number) => `${listId}-opt-${i}`;
+  const matchedCommands = useMemo(() => {
+    if (!commandMode || !commands) return [];
+    const needle = query.slice(1).trim().toLowerCase();
+    return commands.filter((c) => c.label.toLowerCase().includes(needle));
+  }, [commandMode, commands, query]);
   const [results, setResults] = useState<FileNode[]>(() =>
     recentPaths.map((p) => ({
       path: p,
@@ -103,6 +133,11 @@ export function QuickOpenPalette({
   useEffect(() => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
+    }
+
+    if (commandMode) {
+      setActiveIndex(0);
+      return;
     }
 
     if (query === "") {
@@ -163,7 +198,7 @@ export function QuickOpenPalette({
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
     };
-  }, [query, sessionId, baseUrl, recentPaths]);
+  }, [query, commandMode, sessionId, baseUrl, recentPaths]);
 
   // Clear stale DOM refs when the results list changes length
   useEffect(() => {
@@ -178,41 +213,77 @@ export function QuickOpenPalette({
     }
   }, [activeIndex]);
 
+  const mode: PaletteLabels["mode"] = commandMode ? "command" : "file";
+  const rowCount = commandMode ? matchedCommands.length : results.length;
+  const emit = useCallback(
+    (outcome: PaletteLabels["outcome"], command: PaletteLabels["command"] = "none") =>
+      analytics.emit("files.nav.palette", { mode, outcome, command }),
+    [analytics, mode],
+  );
+  const cancel = useCallback(() => {
+    emit("cancel");
+    onClose();
+  }, [emit, onClose]);
+
+  const runCommand = useCallback(
+    (cmd: PaletteCommand) => {
+      if (cmd.disabledReason) {
+        setNotice(`${cmd.label} is unavailable: ${cmd.disabledReason}`);
+        return;
+      }
+      emit("run", cmd.id);
+      onClose();
+      cmd.run();
+    },
+    [emit, onClose],
+  );
+  const pickFile = useCallback(
+    (path: string) => {
+      emit("run");
+      onSelect(path);
+    },
+    [emit, onSelect],
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setActiveIndex((i) => (results.length === 0 ? 0 : (i + 1) % results.length));
+          setActiveIndex((i) => (rowCount === 0 ? 0 : (i + 1) % rowCount));
           break;
         case "ArrowUp":
           e.preventDefault();
-          setActiveIndex((i) =>
-            results.length === 0 ? 0 : (i - 1 + results.length) % results.length
-          );
+          setActiveIndex((i) => (rowCount === 0 ? 0 : (i - 1 + rowCount) % rowCount));
           break;
         case "Enter":
           e.preventDefault();
-          if (results[activeIndex]) {
-            onSelect(results[activeIndex].path);
+          if (commandMode) {
+            const cmd = matchedCommands[activeIndex];
+            if (cmd) runCommand(cmd);
+            else emit("empty");
+          } else if (results[activeIndex]) {
+            pickFile(results[activeIndex].path);
+          } else {
+            emit("empty");
           }
           break;
         case "Escape":
           e.preventDefault();
-          onClose();
+          cancel();
           break;
       }
     },
-    [results, activeIndex, onSelect, onClose]
+    [rowCount, commandMode, matchedCommands, results, activeIndex, runCommand, pickFile, cancel, emit]
   );
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (e.target === e.currentTarget) {
-        onClose();
+        cancel();
       }
     },
-    [onClose]
+    [cancel]
   );
 
   return createPortal(
@@ -226,30 +297,56 @@ export function QuickOpenPalette({
           ref={inputRef}
           className={styles.searchInput}
           type="text"
-          placeholder={loading ? "Searching…" : "Go to file…"}
+          role="combobox"
+          aria-expanded="true"
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={rowCount > 0 ? optionId(activeIndex) : undefined}
+          placeholder={loading ? "Searching…" : commands ? "Go to file… (> for commands)" : "Go to file…"}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); setNotice(""); }}
           onKeyDown={handleKeyDown}
           aria-label="Quick open file"
           autoComplete="off"
           spellCheck={false}
         />
-        <div className={styles.resultsList} role="listbox" aria-label="File results">
-          {results.length === 0 && !loading && (
+        <div data-testid="palette-count" role="status" aria-live="polite" className={visuallyHidden}>
+          {notice || (commandMode ? `${matchedCommands.length} commands` : `${results.length} results`)}
+        </div>
+        <div id={listId} className={styles.resultsList} role="listbox" aria-label={commandMode ? "Commands" : "File results"}>
+          {commandMode && matchedCommands.length === 0 && <div className={styles.emptyState}>No commands match</div>}
+          {!commandMode && results.length === 0 && !loading && (
             <div className={styles.emptyState}>
               {query ? "No files found" : "No recent files"}
             </div>
           )}
-          {results.map((node, i) => (
+          {commandMode && matchedCommands.map((cmd, i) => (
+            <div
+              key={cmd.id}
+              id={optionId(i)}
+              ref={(el) => { resultRefs.current[i] = el; }}
+              className={i === activeIndex ? styles.resultItemActive : styles.resultItem}
+              role="option"
+              aria-selected={i === activeIndex}
+              aria-disabled={cmd.disabledReason ? true : undefined}
+              onClick={() => runCommand(cmd)}
+              onMouseEnter={() => setActiveIndex(i)}
+            >
+              <span className={styles.resultName}>{cmd.disabledReason ? `${cmd.label} (${cmd.disabledReason})` : cmd.label}</span>
+              {cmd.shortcut && <span className={styles.resultPath}>{cmd.shortcut}</span>}
+            </div>
+          ))}
+          {!commandMode && results.map((node, i) => (
             <div
               key={node.path}
+              id={optionId(i)}
               ref={(el) => {
                 resultRefs.current[i] = el;
               }}
               className={i === activeIndex ? styles.resultItemActive : styles.resultItem}
               role="option"
               aria-selected={i === activeIndex}
-              onClick={() => onSelect(node.path)}
+              onClick={() => pickFile(node.path)}
               onMouseEnter={() => setActiveIndex(i)}
             >
               <span className={styles.resultIcon}>

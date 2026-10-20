@@ -67,6 +67,8 @@ interface FeatureFlagsContextValue {
   /** Re-fetches the flag list, showing the loading state. */
   reload: () => Promise<void>;
   setFlag: (name: string, change: boolean | FlagChange) => Promise<SetFlagResult>;
+  /** Re-reads GetFeatureFlags without flipping isLoading back on. */
+  refresh?: () => Promise<void>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
@@ -77,6 +79,7 @@ const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
   loadError: null,
   reload: async () => {},
   setFlag: async () => ({ ok: true }),
+  refresh: async () => {},
 });
 
 export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
@@ -103,6 +106,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       }
       setFlags(map);
       setFlagList(list);
+      setError(null);
       setLoadError(null);
     } catch (err) {
       setError("Failed to load feature flags");
@@ -151,15 +155,16 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       return { ok: true };
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
+      // Re-read first: a successful fetch clears the error, and this one must outlive it.
+      await fetchFlags({ quiet: true });
       setError("Failed to update feature flag");
-      void fetchFlags({ quiet: true });
       return { ok: false, error: err instanceof Error ? err.message : "request failed" };
     }
   }, [client, fetchFlags]);
 
   const value = useMemo(
-    () => ({ flags, flagList, isLoading, error, loadError, reload, setFlag }),
-    [flags, flagList, isLoading, error, loadError, reload, setFlag]
+    () => ({ flags, flagList, isLoading, error, loadError, reload, setFlag, refresh: fetchFlags }),
+    [flags, flagList, isLoading, error, loadError, reload, setFlag, fetchFlags]
   );
 
   return (

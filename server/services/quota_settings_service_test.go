@@ -181,7 +181,7 @@ func TestConfigSurfaceProof_QuotaAssumedWindowTokenBudget_ChangesQuotaMode(t *te
 
 func TestUpdateQuotaConfig_LogsNewEffectiveValues_WhenSaved(t *testing.T) {
 	withIsolatedStateDir(t)
-	buf := captureSlog(t)
+	buf := captureQuotaSlog(t)
 
 	_, err := updateQuota(t, &sessionv1.QuotaSettings{
 		Enabled: proto.Bool(true), PauseBelowHeadroomPct: proto.Float64(30), AssumedWindowTokenBudget: proto.Int64(5_000_000),
