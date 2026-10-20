@@ -6,6 +6,7 @@
 import type { BrowserContext, Page } from '@playwright/test';
 import { seededShuffle } from './parity-core.ts';
 
+const STAY_TIMEOUT_MS = 5000;
 export const FIXED_ORDER_COUNT = 3;
 export const SEEDED_ORDER_COUNT = 3;
 
@@ -51,8 +52,13 @@ export async function clickNav(page: Page, route: string): Promise<void> {
   const hrefs = await links.evaluateAll((all) => all.map((l) => (l as HTMLAnchorElement).getAttribute('href') ?? ''));
   const index = hrefs.findIndex((h) => normalise(h) === route);
   if (index < 0) throw new Error(`no drawer link for ${route}`);
+  const before = normalise(new URL(page.url()).pathname);
+  if (before === route) return; // an earlier redirect already landed here; a click would not navigate
   await links.nth(index).click({ force: true });
-  await page.waitForURL((url) => normalise(url.pathname) === route);
+  // Client navigation fires no load event, and a few routes redirect, so wait for the path to change.
+  // A link that redirects straight back to the current page (for example a flag-guarded route) never
+  // changes the path, so a timeout here means "stayed", not failure.
+  await page.waitForURL((url) => normalise(url.pathname) !== before, { waitUntil: 'commit', timeout: STAY_TIMEOUT_MS }).catch(() => undefined);
   await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 }
 

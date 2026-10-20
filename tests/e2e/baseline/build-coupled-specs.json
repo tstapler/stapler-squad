@@ -55,5 +55,17 @@
       "change": "None."
     }
   ],
-  "budget": { "cap": 12, "classified": 8 }
+  "budget": {
+    "cap": 12,
+    "classified": 8
+  },
+  "failingOnNextAtCapture": {
+    "note": "Fail 2 of 2 attempts on the isolated Next server on 2026-10-19 (spec and page-object files unchanged by this PR). Not diagnosed here; Story 7.10's comparator should treat them as baseline `fail`, not Bun regressions.",
+    "tests": [
+      "escape-analytics-global-view.spec.ts: EscapeAnalyticsGlobalView_should_ShowAggregateSummary_When_TabSwitched",
+      "escape-analytics-global-view.spec.ts: EscapeAnalyticsGlobalView_should_ShowErrorBanner_When_RpcFails",
+      "jules-status-badge.spec.ts: no badge renders before the first Jules state arrives",
+      "multi-window.spec.ts: renaming to empty reverts silently and renaming to a duplicate name is allowed silently"
+    ]
+  }
 }

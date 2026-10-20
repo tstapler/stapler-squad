@@ -137,6 +137,11 @@ export class TestServer {
       console.log('✅ Test server stopped');
     }
 
+    // --tmux-keep-server leaves the private tmux server behind; drop it (touches only that socket).
+    if (this.config.remoteAuth) {
+      await execPromise(`tmux -L ssq-e2e-remote-${process.pid} kill-server`).catch(() => undefined);
+    }
+
     await this.cleanupTestDir();
     await this.cleanupBinDir();
   }
