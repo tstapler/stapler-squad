@@ -11,6 +11,8 @@ import { useSearchParams } from "next/navigation";
 import { useBacklogStagesAdmin, isBuiltInStage } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage } from "@/lib/hooks/useBacklogStages";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
+import { useEngineModeStatus, saveConfirmation } from "@/lib/hooks/useEngineModeStatus";
+import { EngineModeBanner } from "./EngineModeBanner";
 import { StageForm } from "./StageForm";
 import * as styles from "./page.css";
 
@@ -39,6 +41,10 @@ function BacklogStagesPageInner() {
 
   const [editingStage, setEditingStage] = useState<BacklogStage | null>(null);
   const [creating, setCreating] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
+
+  // One status fetch, shared by the banner and the stage form's mode reminder.
+  const { view: engineMode, refetch: refetchEngineMode } = useEngineModeStatus();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -81,11 +87,13 @@ function BacklogStagesPageInner() {
   }, [loading, stages, searchParams]);
 
   const handleNewStage = useCallback(() => {
+    setSaveStatus("");
     setEditingStage(null);
     setCreating(true);
   }, []);
 
   const handleEditStage = useCallback((stage: BacklogStage) => {
+    setSaveStatus("");
     setCreating(false);
     setEditingStage(stage);
   }, []);
@@ -98,17 +106,25 @@ function BacklogStagesPageInner() {
   // Success updates local state directly (no refetch) — matches
   // pipeline-modes/page.tsx's handleSaved, and ux.md Surface 2's "no
   // navigation, list updates in place" acceptance criterion.
-  const handleSaved = useCallback((saved: BacklogStage) => {
-    setStages((prev) => {
-      const idx = prev.findIndex((s) => s.id === saved.id);
-      if (idx === -1) return [...prev, saved];
-      const next = [...prev];
-      next[idx] = saved;
-      return next;
-    });
-    setCreating(false);
-    setEditingStage(null);
-  }, []);
+  const handleSaved = useCallback(
+    (saved: BacklogStage) => {
+      // The form unmounts on save, so the page owns the confirmation. It is
+      // computed from the status as it stood at save time; the status is then
+      // re-fetched so the banner reflects any change.
+      setSaveStatus(saveConfirmation(engineMode));
+      void refetchEngineMode();
+      setStages((prev) => {
+        const idx = prev.findIndex((s) => s.id === saved.id);
+        if (idx === -1) return [...prev, saved];
+        const next = [...prev];
+        next[idx] = saved;
+        return next;
+      });
+      setCreating(false);
+      setEditingStage(null);
+    },
+    [engineMode, refetchEngineMode]
+  );
 
   const handleDeleted = useCallback((id: string) => {
     setStages((prev) => prev.filter((s) => s.id !== id));
@@ -149,13 +165,22 @@ function BacklogStagesPageInner() {
           <div>
             <h1 className={styles.title}>Backlog Stages</h1>
             <p className={styles.description}>
-              Configure workflow stages, the transitions between them, and the gates that must pass before a
-              transition is allowed.
+              Configure workflow stages, the transitions between them, and the gates a transition is meant to
+              require. Whether these settings are enforced is shown below.
             </p>
           </div>
           <button className={styles.newBtn} onClick={handleNewStage} data-testid="backlog-stage-new">
             New Stage
           </button>
+        </div>
+
+        <EngineModeBanner view={engineMode} onRetry={() => void refetchEngineMode()} />
+        <p className={styles.description} data-testid="backlog-stages-carve-out-note">
+          Edges that automation relies on are fixed; their gates are editable. Archive from active stages cannot
+          be gated here; gate <code>done-&gt;archived</code> instead.
+        </p>
+        <div role="status" className={styles.saveStatus} data-testid="stage-save-status">
+          {saveStatus}
         </div>
 
         {loadError && (
@@ -181,6 +206,7 @@ function BacklogStagesPageInner() {
               key={editingStage?.id ?? "new"}
               stage={editingStage}
               allStages={stages}
+              engineMode={engineMode}
               onSaved={handleSaved}
               onDeleted={handleDeleted}
               onCancel={closeForm}

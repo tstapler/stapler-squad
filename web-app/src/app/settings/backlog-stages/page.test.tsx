@@ -13,6 +13,8 @@ import BacklogStagesPage from "./page";
 import { useBacklogStagesAdmin } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage } from "@/lib/hooks/useBacklogStages";
 import { useSearchParams } from "next/navigation";
+import { useEngineModeStatus } from "@/lib/hooks/useEngineModeStatus";
+import type { EngineModeView } from "@/lib/hooks/useEngineModeStatus";
 
 jest.mock("@/lib/hooks/useBacklogStages", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogStages");
@@ -38,10 +40,46 @@ jest.mock("@/components/analytics/PageViewTracker", () => ({
 // pipeline modes) is covered by StageForm.test.tsx — stubbed here so these
 // page-level tests only assert what `editingStage` was initialized to.
 jest.mock("./StageForm", () => ({
-  StageForm: ({ stage }: { stage: { slug: string } | null }) => (
-    <div data-testid="stage-form-stub">{stage ? `editing:${stage.slug}` : "creating"}</div>
+  StageForm: ({
+    stage,
+    engineMode,
+    onSaved,
+  }: {
+    stage: { slug: string } | null;
+    engineMode?: { kind: string };
+    onSaved: (s: unknown) => void;
+  }) => (
+    <div data-testid="stage-form-stub">
+      {stage ? `editing:${stage.slug}` : "creating"}
+      <span data-testid="stage-form-stub-mode">{engineMode?.kind}</span>
+      <button onClick={() => onSaved(stage)}>stub-save</button>
+    </div>
   ),
 }));
+
+// The status fetch itself is covered by useEngineModeStatus.test.tsx; here the
+// page only needs a controllable view shared by the banner and the form.
+jest.mock("@/lib/hooks/useEngineModeStatus", () => ({
+  ...jest.requireActual("@/lib/hooks/useEngineModeStatus"),
+  useEngineModeStatus: jest.fn(),
+}));
+const mockUseEngineModeStatus = useEngineModeStatus as jest.MockedFunction<typeof useEngineModeStatus>;
+const mockRefetchEngineMode = jest.fn().mockResolvedValue(undefined);
+
+function pgTestView(overrides: Partial<EngineModeView> = {}): EngineModeView {
+  return {
+    kind: "shadow",
+    classes: { operator: "shadow", agent: "shadow", system: "shadow" },
+    divergence24h: 3,
+    stale: false,
+    lastCheckedAt: Date.now(),
+    fallbackActive: false,
+    invalidatorWired: true,
+    review: null,
+    flagRowId: "flag-row-backlog-workflow-engine-enforce",
+    ...overrides,
+  };
+}
 
 const mockUseBacklogStages = useBacklogStagesAdmin as jest.MockedFunction<typeof useBacklogStagesAdmin>;
 const mockListStages = jest.fn();
@@ -74,6 +112,53 @@ beforeEach(() => {
     updateStage: mockUpdateStage,
   } as unknown as ReturnType<typeof useBacklogStagesAdmin>);
   mockUseSearchParams.mockReturnValue(new URLSearchParams());
+  mockRefetchEngineMode.mockResolvedValue(undefined);
+  mockUseEngineModeStatus.mockReturnValue({ view: pgTestView(), refetch: mockRefetchEngineMode });
+});
+
+describe("BacklogStagesPage engine-mode banner (Story 1.3.2)", () => {
+  it("renders the banner before the stage list, with the carve-out note", async () => {
+    mockListStages.mockResolvedValue([makeStage({ id: "1", slug: "idea", name: "Idea" })]);
+    render(<BacklogStagesPage />);
+    const banner = screen.getByTestId("engine-mode-banner");
+    await waitFor(() => expect(screen.getByTestId("backlog-stage-row-idea")).toBeInTheDocument());
+    expect(banner.compareDocumentPosition(screen.getByTestId("backlog-stage-row-idea"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    expect(banner).toHaveTextContent("not enforced. 3 differences in the last 24h.");
+    expect(screen.getByTestId("backlog-stages-carve-out-note")).toHaveTextContent(
+      "Archive from active stages cannot be gated here; gate done->archived instead."
+    );
+  });
+
+  it("passes the same status object to the form and the banner", async () => {
+    mockListStages.mockResolvedValue([makeStage({ id: "1", slug: "idea", name: "Idea" })]);
+    mockUseEngineModeStatus.mockReturnValue({ view: pgTestView({ kind: "off" }), refetch: mockRefetchEngineMode });
+    render(<BacklogStagesPage />);
+    await waitFor(() => expect(screen.getByTestId("backlog-stage-row-idea")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("backlog-stage-edit-idea"));
+    expect(screen.getByTestId("stage-form-stub-mode")).toHaveTextContent("off");
+    expect(screen.getByTestId("engine-mode-banner")).toHaveTextContent("Not in use");
+  });
+
+  it("a save shows the mode-aware confirmation and refetches the status", async () => {
+    mockListStages.mockResolvedValue([makeStage({ id: "1", slug: "idea", name: "Idea" })]);
+    render(<BacklogStagesPage />);
+    await waitFor(() => expect(screen.getByTestId("backlog-stage-row-idea")).toBeInTheDocument());
+    expect(screen.getByTestId("stage-save-status")).toBeEmptyDOMElement();
+    fireEvent.click(screen.getByTestId("backlog-stage-edit-idea"));
+    fireEvent.click(screen.getByText("stub-save"));
+    expect(screen.getByTestId("stage-save-status")).toHaveTextContent("Saved. Not enforced yet (shadow)");
+    expect(mockRefetchEngineMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("Retry on the banner refetches the status", async () => {
+    mockListStages.mockResolvedValue([]);
+    mockUseEngineModeStatus.mockReturnValue({ view: pgTestView({ kind: "unknown" }), refetch: mockRefetchEngineMode });
+    render(<BacklogStagesPage />);
+    fireEvent.click(screen.getByTestId("engine-mode-banner-retry"));
+    expect(mockRefetchEngineMode).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("BacklogStagesPage", () => {

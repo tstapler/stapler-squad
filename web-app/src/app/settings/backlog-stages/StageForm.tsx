@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ConnectError } from "@connectrpc/connect";
+import { Code, ConnectError } from "@connectrpc/connect";
+import { formReminder } from "@/lib/hooks/useEngineModeStatus";
+import type { EngineModeView } from "@/lib/hooks/useEngineModeStatus";
 import {
   useBacklogStagesAdmin,
   isBuiltInStage,
@@ -52,7 +54,21 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
+/**
+ * Edge named by the server's system-required rejection
+ * (session.ErrDisableSystemRequiredEdge: "transition is system-required: a->b. Automation relies on ..."),
+ * or null when the failure is anything else.
+ */
+export function systemRequiredEdge(err: unknown): string | null {
+  if (!(err instanceof ConnectError) || err.code !== Code.FailedPrecondition) return null;
+  const m = /system-required: (\S+?->\S+?)\./.exec(err.rawMessage);
+  if (m) return m[1];
+  return err.rawMessage.includes("system-required") ? "a system-required transition" : null;
+}
+
 export interface StageFormProps {
+  /** Shared engine-mode status (same object the page banner reads); the mode reminder above Save renders only when given. */
+  engineMode?: EngineModeView;
   /** null = create a new stage; non-null = edit this existing stage (slug becomes read-only). */
   stage: BacklogStage | null;
   /** Every currently configured stage — the "To" select's options and the graph diagram's node set. */
@@ -70,7 +86,7 @@ export interface StageFormProps {
  * the two-step delete action. Mirrors PipelineModeForm.tsx's overlay/
  * slug-immutable/two-step-delete/inline-error shape (Task 2.8.2a).
  */
-export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: StageFormProps) {
+export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, onCancel }: StageFormProps) {
   const {
     createStage,
     updateStage,
@@ -97,6 +113,8 @@ export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: St
   const [pipelineModes, setPipelineModes] = useState<PipelineMode[]>([]);
 
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [rejectedEdge, setRejectedEdge] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   // Holds the just-saved stage while a warning banner is up, so
   // acknowledging it reports the fresh save — not the stale `stage` prop —
@@ -211,6 +229,8 @@ export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: St
       e.preventDefault();
       if (!canSubmit) return;
       setError(null);
+      setSaveError(null);
+      setRejectedEdge(null);
       setWarning(null);
 
       // Client-side required-field check runs before any RPC call (ux.md
@@ -264,7 +284,10 @@ export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: St
 
         onSaved(saved);
       } catch (err) {
-        setError(errorMessage(err));
+        // Entered values are kept in both branches: state is not reset.
+        const edge = systemRequiredEdge(err);
+        if (edge) setRejectedEdge(edge);
+        else setSaveError(errorMessage(err));
       } finally {
         setSubmitting(false);
       }
@@ -325,6 +348,22 @@ export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: St
       {error && (
         <div className={styles.errorMessage} role="alert" data-testid="stage-form-error">
           {error}
+        </div>
+      )}
+
+      {rejectedEdge && (
+        <div className={styles.errorMessage} role="alert" data-testid="stage-form-edge-rejected">
+          Can&apos;t remove {rejectedEdge}. Automation relies on this transition; edit its gates instead of
+          disabling it. Your entries are kept; Cancel closes the form.
+        </div>
+      )}
+
+      {saveError && (
+        <div className={styles.errorMessage} role="alert" data-testid="stage-form-save-error">
+          <span>Couldn&apos;t save stage: {saveError}</span>
+          <button type="submit" className={styles.cancelBtn} data-testid="stage-form-save-retry">
+            Retry
+          </button>
         </div>
       )}
 
@@ -454,8 +493,20 @@ export function StageForm({ stage, allStages, onSaved, onDeleted, onCancel }: St
         <StageGraphDiagram stages={allStages} transitions={allTransitions} />
       </div>
 
+      {engineMode && (
+        <p className={styles.hint} data-testid="stage-form-mode-reminder">
+          {formReminder(engineMode)}
+        </p>
+      )}
+
       <div className={styles.actionRow}>
-        <button type="submit" className={styles.submitBtn} disabled={!canSubmit} data-testid="stage-form-submit">
+        <button
+          type="submit"
+          className={styles.submitBtn}
+          disabled={!canSubmit && !submitting}
+          aria-disabled={submitting || undefined}
+          data-testid="stage-form-submit"
+        >
           {submitting ? "Saving…" : stage ? "Save changes" : "Create stage"}
         </button>
         <button type="button" className={styles.cancelBtn} onClick={onCancel} data-testid="stage-form-cancel">
