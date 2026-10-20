@@ -1757,3 +1757,10 @@ W0 implementation found these plan errors; each was checked against code before 
 ## Dispatcher decision (2026-10-19): Story 3.1.4 Files extended
 
 Adds `github/repo_settings_cache.go` (a cached-only, non-fetching peek `RepoSettingsCached`), `session/backlog_lifecycle.go` (listener fields, mutex-guarded setters, injectable clock) and `server/dependencies.go` (wiring). Disjoint from Story 1.5.2's files.
+
+## Errata from W9, Story 3.1.4 (2026-10-19)
+
+- Files extended (dispatcher): `github/repo_settings_cache.go` (`RepoSettingsCached`, no fetch/breaker/counter), `github/repo_settings_test.go`, `session/backlog_lifecycle.go` (`RepoSettingsSeam`, `SetRepoSettingsSeam`, `preflightNowFn`), `server/dependencies.go`.
+- AC2 reading: the preflight runs after PR creation and before `EnablePRAutoMerge`; if a preflight was sent for a PR and auto-merge then fails, the "Auto-merge not enabled" notification is skipped for that PR (one message per PR). The plan text had the existing message winning; the outcome (one message) is the same, the surviving text differs. A repeat PR within 24h gets no preflight, so the existing message is its only one.
+- `NotificationItem.tsx` `Remove notification` moved from `:215` to `:406`; it still dismisses an INFO row (code read, no UI test run).
+- Merging the worker branch pulled newer `main` (inline notification actions, wake triggers); run `make ent-gen proto-gen` after merging. Four main-origin flags (`agent_wake_triggers`, `askuserquestion_structured`, `background_activity_feed`, `notification_inline_actions`) had no config-surface proof; they were added to the Story 5.1.3 pending list and `pendingCeiling` raised 71 -> 75. Story 5.1.3 must reach an empty list including these.
