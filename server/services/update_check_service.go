@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/changelog"
 )
@@ -20,6 +21,16 @@ const (
 	updateCheckInitialWait = 30 * time.Second
 	updateCheckTick        = 15 * time.Minute
 )
+
+// ChangelogEnabled reports the changelog flag (default on) from cfg.
+func ChangelogEnabled(cfg *config.Config) bool {
+	return cfg.GetFeatureFlagWithDefault(ChangelogFlagName, true)
+}
+
+// UpdateCheckFlagEnabled reports the opt-in update-check flag (default off) from cfg.
+func UpdateCheckFlagEnabled(cfg *config.Config) bool {
+	return cfg.GetFeatureFlagWithDefault(UpdateCheckFlagName, false)
+}
 
 // UpdateCheckResult is the JSON served by GET /api/update-check.
 type UpdateCheckResult struct {

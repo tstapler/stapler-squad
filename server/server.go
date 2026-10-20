@@ -744,9 +744,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		blOpts := append(
 			ConnectOptions(deps.ErrorRegistry),
-			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", func() bool {
-				return config.LoadConfig().GetFeatureFlag("backlog")
-			})),
+			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", services.BacklogFlagEnabled)),
 		)
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath

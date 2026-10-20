@@ -37,6 +37,14 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
+const backlogFlagName = "backlog"
+
+// BacklogFlagEnabled reports the live state of the backlog flag, read per request.
+func BacklogFlagEnabled() bool {
+	return config.LoadConfig().GetFeatureFlag(backlogFlagName)
+}
+
 // programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
 // Default on; read per request via ProgramCLIFlagProbeEnabled.
 const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
