@@ -319,3 +319,39 @@ func TestFileDiffMemo_ShouldStayUnderBudgetAndCountEvictions_When10000Files(t *t
 		t.Errorf("byte accounting drifted: tracked %d, actual %d", m.bytes.Load(), sum)
 	}
 }
+
+// A same-size rewrite inside the second the index entry was recorded keeps the
+// truncated mtime equal, and a later index rewrite (go-git does not smudge racy
+// entries) pushes indexMtime past it. Only the nanosecond part tells them apart.
+func TestUnstagedTargetList_ShouldFlagSameSizeRewrite_WhenOnlyNanosecondsDiffer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	recorded := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
+	if err := os.WriteFile(path, []byte("bbbb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, recorded.Add(700*time.Microsecond), recorded.Add(700*time.Microsecond)); err != nil {
+		t.Fatal(err)
+	}
+	m := indexMeta{
+		name:       "f.txt",
+		indexHash:  plumbing.ComputeHash(plumbing.BlobObject, []byte("aaaa")),
+		size:       4,
+		modifiedAt: recorded,
+	}
+	got := (&GoGitVCSReader{}).unstagedTargetList(dir, []indexMeta{m}, recorded.Add(10*time.Second), nil)
+	if len(got) != 1 || got[0].name != "f.txt" {
+		t.Fatalf("targets = %+v, want f.txt flagged as changed", got)
+	}
+
+	// Same bytes as the index, only the mtime moved within the second: not a change.
+	if err := os.WriteFile(path, []byte("aaaa"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, recorded.Add(700*time.Microsecond), recorded.Add(700*time.Microsecond)); err != nil {
+		t.Fatal(err)
+	}
+	if got := (&GoGitVCSReader{}).unstagedTargetList(dir, []indexMeta{m}, recorded.Add(10*time.Second), nil); len(got) != 0 {
+		t.Fatalf("targets = %+v, want none for identical content", got)
+	}
+}

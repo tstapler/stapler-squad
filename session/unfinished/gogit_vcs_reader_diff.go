@@ -275,7 +275,7 @@ func (g *GoGitVCSReader) unstagedTargetList(worktreePath string, metas []indexMe
 		// (file mtime clearly predates the index write), stat alone is
 		// sufficient proof of no change, exactly as real git treats it — so
 		// only pay for a content hash when the file could actually be racy.
-		if !fileNeedsContentCheck(info.ModTime(), indexMtime) {
+		if !fileNeedsContentCheck(info.ModTime(), indexMtime) && !nanosMoved(info.ModTime(), m.modifiedAt) {
 			continue // stat-clean and outside the racy window: confirmed unchanged
 		}
 		if info.Size() > maxUntrackedFileSize {
@@ -440,6 +440,15 @@ func racyFileMatchesIndex(path string, indexHash plumbing.Hash) bool {
 	}
 	defer releaseFileBuf(bp)
 	return plumbing.ComputeHash(plumbing.BlobObject, *bp) == indexHash
+}
+
+// nanosMoved reports a sub-second mtime change the second-truncated comparison
+// cannot see: a same-size rewrite in the second the entry was recorded. go-git
+// does not smudge racy entries when it rewrites the index, so indexMtime alone
+// cannot expose it. An entry with zero nanoseconds came from a second-precision
+// writer, so it proves nothing and is not treated as moved.
+func nanosMoved(fileMtime, entryMtime time.Time) bool {
+	return entryMtime.Nanosecond() != 0 && fileMtime.Nanosecond() != entryMtime.Nanosecond()
 }
 
 // fileNeedsContentCheck reports whether a stat-clean file (size and mtime both
