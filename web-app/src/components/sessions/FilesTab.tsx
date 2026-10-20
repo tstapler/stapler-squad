@@ -1,21 +1,31 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FileTree } from "./FileTree";
-import type { FileTreeHandle, SortMode } from "./FileTree";
+import { useFilesFlags } from "@/lib/hooks/useFilesFlags";
+import { useFilesV2, type FilesV2 } from "@/lib/hooks/useFilesV2";
+import type { OpenSource } from "@/lib/hooks/useOpenBuffers";
+import { useFilesShortcuts } from "@/lib/hooks/useFilesShortcuts";
+import { useFilesDeepLink } from "@/lib/hooks/useFilesDeepLink";
+import { FileTransportProvider } from "@/lib/hooks/useFileTransport";
+import type { FileTreeHandle } from "./FileTree";
 import { FileContentViewer } from "./FileContentViewer";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { useResizablePanel } from "@/lib/hooks/useResizablePanel";
-import { buildGitStatusMap, buildLineStatsMap } from "@/lib/utils/gitStatus";
+import { useFilesLayout } from "@/lib/hooks/useFilesLayout";
+import { useMobilePane } from "@/lib/hooks/useMobilePane";
 import { TreeResizeHandle } from "./TreeResizeHandle";
-import { RecentFilesSection } from "./RecentFilesSection";
 import { QuickOpenPalette } from "./QuickOpenPalette";
-import {
-  container, treePane, treePaneCollapsed, contentPane, toolbar, searchInput,
-  toolbarLabel, toolbarButton, searchCount, treeWrapper,
-  mobilePaneHidden, mobilePaneVisible, mobileBackButton,
-  toolbarButtonMobileHidden, mobileSearchButton, toolbarDivider,
-} from "./FilesTab.css";
+import { FilesV2Chrome } from "./files/FilesV2Chrome";
+import { FilesV2Footer } from "./files/FilesV2Footer";
+import { FilesLeftPane } from "./files/FilesLeftPane";
+import { MobileFilesLayout } from "./files/MobileFilesLayout";
+import { useActiveBufferWait } from "./files/ActiveBufferWait";
+import type { SearchPanelHandle } from "./files/SearchPanel";
+import type { QuickfixView } from "./files/SearchResults";
+import { useSearchPane } from "@/lib/hooks/useSearchPane";
+import { AccessibleSkipLink } from "./files/AccessibleView";
+import { tabPanel } from "./files/FilesV2Chrome.css";
+import { container, treePane, treePaneCollapsed, contentPane, mobileBackButton, mobileSearchButton, expandStrip } from "./FilesTab.css";
 
 // ---- Props ----
 
@@ -25,267 +35,217 @@ interface FilesTabProps {
   /** Path to pre-select when the tab opens (e.g. from VCS panel cross-link). */
   initialSelectedPath?: string | null;
   onSelectedPathChange?: (path: string | null) => void;
+  /** Whether the session's agent is running, for the "this may be the agent" stale-banner wording. */
+  sessionRunning?: boolean;
+  /** Shown in the Search panel's empty state. */
+  sessionName?: string;
+  /** Resume action for a paused session (Search refuses without a worktree). */
+  onResumeSession?: (trigger: HTMLElement) => void;
 }
 
 // ---- Component ----
 
-export function FilesTab({
-  sessionId,
-  baseUrl,
-  initialSelectedPath,
-  onSelectedPathChange,
-}: FilesTabProps) {
+const RECENT_LIMIT = 8;
+const PANEL_ID = "files-editor-panel";
+
+/** Shared layout; where the selection and recent list come from is the caller's business. */
+interface FilesTabViewProps extends FilesTabProps {
+  selectedPath: string | null;
+  recentPaths: string[];
+  onOpen: (path: string, source?: OpenSource) => void;
+  /** Present only with files:viewer-v2: tabs, jumplist, outline and stale detection. */
+  v2?: FilesV2;
+}
+
+export function FilesTab(props: FilesTabProps) {
+  return (
+    <FileTransportProvider>
+      <FilesTabGate {...props} />
+    </FileTransportProvider>
+  );
+}
+
+function FilesTabGate(props: FilesTabProps) {
+  const { status, viewerV2 } = useFilesFlags();
+  if (status === "loading") return <div className={container} data-testid="files-tab-skeleton" aria-busy="true" />;
+  return viewerV2 ? <BufferedFilesTab {...props} /> : <LegacyFilesTab {...props} />;
+}
+
+/** files:viewer-v2 on: selection is the active buffer of the open-buffers reducer. */
+function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, sessionRunning = false, ...rest }: FilesTabProps) {
+  const v2 = useFilesV2(sessionId, sessionRunning, { initialSelectedPath, onSelectedPathChange });
+  const { open } = v2.bridge;
+  const onOpen = useCallback((path: string, source?: OpenSource) => open(path, { source }), [open]);
+  return (
+    <FilesTabView
+      {...rest}
+      sessionId={sessionId}
+      initialSelectedPath={initialSelectedPath}
+      selectedPath={v2.buffers.selectedPath}
+      recentPaths={v2.recentPaths}
+      onOpen={onOpen}
+      v2={v2}
+    />
+  );
+}
+
+/** files:viewer-v2 off: the pre-revamp single-selection behavior. */
+function LegacyFilesTab({ initialSelectedPath, onSelectedPathChange, ...rest }: FilesTabProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(initialSelectedPath ?? null);
-  const [includeIgnored, setIncludeIgnored] = useState(false);
-  const [sortBy, setSortBy] = useState<SortMode>("name");
-  const [filterChangedOnly, setFilterChangedOnly] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [searchResultCount, setSearchResultCount] = useState<number | null>(null);
-  const [searchResultTruncated, setSearchResultTruncated] = useState(false);
-  const [mobilePane, setMobilePane] = useState<"tree" | "content">("tree");
   const [recentPaths, setRecentPaths] = useState<string[]>([]);
-  const [isQuickOpenOpen, setIsQuickOpenOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const fileTreeRef = useRef<FileTreeHandle>(null);
-
-  // Resizable panel
-  const panel = useResizablePanel({
-    storageKey: "filestab.treeWidth",
-    defaultWidth: 260,
-    minWidth: 160,
-    maxWidthFraction: 0.5,
-  });
-
-  // VCS status/diff come from shared context — no independent fetch.
-  const { status, diff, statusLoading: vcsLoading, refreshStatus } = useSessionVcsContext();
-
-  // Derive git status + per-file line-count maps from shared VCS status.
-  const changedFiles = useMemo(() => {
-    if (!status) return [];
-    const { stagedFiles, unstagedFiles, untrackedFiles } = status;
-    return [...stagedFiles, ...unstagedFiles, ...untrackedFiles];
-  }, [status]);
-  const gitStatusMap = useMemo(() => buildGitStatusMap(changedFiles), [changedFiles]);
-  const lineStatsMap = useMemo(() => buildLineStatsMap(changedFiles), [changedFiles]);
-
-  // Notify parent when selection changes.
-  const handleFileSelect = useCallback(
+  const onOpen = useCallback(
     (path: string) => {
       setSelectedPath(path);
       onSelectedPathChange?.(path);
-      setMobilePane("content");
-      setRecentPaths((prev) => [path, ...prev.filter((p) => p !== path)].slice(0, 8));
+      setRecentPaths((prev) => [path, ...prev.filter((p) => p !== path)].slice(0, RECENT_LIMIT));
     },
     [onSelectedPathChange]
   );
-
-  // Apply initialSelectedPath changes from parent (VCS cross-link).
   useEffect(() => {
-    if (initialSelectedPath !== undefined && initialSelectedPath !== selectedPath) {
-      setSelectedPath(initialSelectedPath);
-      if (initialSelectedPath) {
-        fileTreeRef.current?.revealPath(initialSelectedPath);
-      }
-    }
-  }, [initialSelectedPath]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (initialSelectedPath !== undefined) setSelectedPath(initialSelectedPath);
+  }, [initialSelectedPath]);
+  return (
+    <FilesTabView {...rest} initialSelectedPath={initialSelectedPath} selectedPath={selectedPath} recentPaths={recentPaths} onOpen={onOpen} />
+  );
+}
 
-  // Cmd+F / Ctrl+F focuses the search input.
-  // Cmd+P / Ctrl+P opens quick open palette.
-  // Guard: only intercept when the files tab is actually visible (offsetParent is null when
-  // an ancestor has display:none, which happens when the tab panel is inactive).
+function FilesTabView({
+  sessionId,
+  baseUrl,
+  initialSelectedPath,
+  selectedPath,
+  recentPaths,
+  onOpen,
+  v2,
+  sessionName,
+  onResumeSession,
+}: FilesTabViewProps) {
+  const [isQuickOpenOpen, setIsQuickOpenOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const fileTreeRef = useRef<FileTreeHandle>(null);
+  const searchRef = useRef<SearchPanelHandle>(null);
+  const [quickfix, setQuickfix] = useState<QuickfixView | null>(null);
+
+  const panel = useResizablePanel({ storageKey: "filestab.treeWidth", defaultWidth: 260, minWidth: 160, maxWidthFraction: 0.5 });
+  const { layout, containerWidth } = useFilesLayout(panel.containerRef);
+  const mobile = layout === "mobile";
+  const nav = useMobilePane(mobile);
+  const { go } = nav;
+  const { diff } = useSessionVcsContext();
+
+  const handleFileSelect = useCallback(
+    (path: string, source?: OpenSource) => {
+      onOpen(path, source);
+      go("editor", "tap_hit");
+    },
+    [onOpen, go]
+  );
+
+  const jumpTo = v2?.bridge.jumpTo;
+  const onDeepLink = useMemo(
+    () => jumpTo && ((path: string, line = 1) => { jumpTo(path, line, { pinned: true, source: "deeplink" }); go("editor", "tap_hit"); }),
+    [jumpTo, go],
+  );
+  useFilesDeepLink({ initialSelectedPath, tree: fileTreeRef, selectedPath, onJump: onDeepLink });
+  const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
+  const search = useSearchPane(v2, {
+    expandPanel: panel.expand,
+    showTreePane: useCallback(() => go("search", "bottom_bar"), [go]),
+    showContentPane: useCallback(() => go("editor", "tap_hit"), [go]),
+  });
+  // On mobile the Files and Search panes pick which left view shows; the editor pane leaves it as it was.
+  const { showLeftPane } = search;
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        if (!searchInputRef.current) return;
-        if (searchInputRef.current.offsetParent === null) return;
-        if (panel.collapsed) return;
-        e.preventDefault();
-        searchInputRef.current.focus();
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
-        if (!searchInputRef.current || searchInputRef.current.offsetParent === null) return;
-        if (panel.collapsed) return;
-        e.preventDefault();
-        setIsQuickOpenOpen(true);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [panel.collapsed]);
+    if (mobile && nav.pane !== "editor") showLeftPane(nav.pane === "search" ? "search" : "explorer");
+  }, [mobile, nav.pane, showLeftPane]);
+  useFilesShortcuts({ searchInputRef, collapsed: panel.collapsed, onQuickOpen: openQuickOpen, onSearch: v2 ? search.openSearch : undefined,
+    onNextHit: v2 ? () => searchRef.current?.step(1) : undefined, onPrevHit: v2 ? () => searchRef.current?.step(-1) : undefined, ...v2?.shortcuts });
+  const wait = useActiveBufferWait(v2, fileTreeRef);
+  const active = v2?.buffers.active;
 
-  // Build tree pane class names
-  const treePaneClasses = [
-    treePane,
-    panel.collapsed ? treePaneCollapsed : "",
-    mobilePane === "content" ? mobilePaneHidden : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  // Build content pane class names
-  const contentPaneClasses = [
-    contentPane,
-    mobilePane === "tree" ? mobilePaneHidden : "",
-    mobilePane === "content" ? mobilePaneVisible : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const treePaneClasses = [treePane, panel.collapsed && !mobile ? treePaneCollapsed : ""].filter(Boolean).join(" ");
 
   return (
-    <div className={container} ref={panel.containerRef}>
-      {/* Left pane: file tree */}
-      <div
-        className={treePaneClasses}
-        style={{ width: panel.collapsed ? 0 : panel.width }}
+    <div className={container} ref={panel.containerRef} data-testid="files-tab" data-layout={layout} data-pane={nav.pane} data-chrome={v2 ? "v2" : "legacy"}>
+      <MobileFilesLayout
+        active={mobile}
+        v2={v2}
+        pane={nav.pane}
+        origin={nav.origin}
+        containerWidth={containerWidth}
+        onPane={nav.go}
+        onBack={nav.back}
+        onQuickOpen={openQuickOpen}
+        onSearch={search.openSearch}
+        quickfix={quickfix}
       >
-        <div className={toolbar}>
-          <input
-            ref={searchInputRef}
-            type="search"
-            className={searchInput}
-            placeholder="Search files…"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setSearchTerm("");
-                searchInputRef.current?.blur();
-              }
-            }}
-            enterKeyHint="search"
-            aria-label="Search files"
-          />
-          {searchResultCount !== null && searchTerm.length >= 2 && (
-            <span
-              className={searchCount}
-              title={searchResultTruncated ? "Results truncated at 500" : undefined}
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {searchResultCount}{searchResultTruncated ? "+" : ""} match{searchResultCount !== 1 ? "es" : ""}
-            </span>
-          )}
-          <label className={toolbarLabel} title="Show gitignored files">
-            <input
-              type="checkbox"
-              checked={includeIgnored}
-              onChange={(e) => setIncludeIgnored(e.target.checked)}
-            />
-            Ignored
-          </label>
-          <label className={toolbarLabel} title="Show only files with git changes">
-            <input
-              type="checkbox"
-              checked={filterChangedOnly}
-              onChange={(e) => setFilterChangedOnly(e.target.checked)}
-            />
-            Changed
-          </label>
-          <button
-            className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-            onClick={() => setSortBy((prev) => (prev === "name" ? "type" : "name"))}
-            title={`Sort by ${sortBy === "name" ? "type" : "name"}`}
-            aria-label={`Sort by ${sortBy === "name" ? "type" : "name"}`}
-          >
-            Sort: {sortBy === "name" ? "Name" : "Type"}
-          </button>
-          <button
-            className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-            onClick={() => fileTreeRef.current?.collapseAll()}
-            title="Collapse all directories"
-            aria-label="Collapse all directories"
-          >
-            ⊟
-          </button>
-          <div className={toolbarDivider} />
-          {panel.collapsed ? (
-            <button
-              className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-              onClick={() => panel.expand()}
-              title="Expand file tree panel"
-              aria-label="Expand file tree panel"
-            >
-              ⊞
-            </button>
-          ) : (
-            <button
-              className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
-              onClick={() => panel.collapse()}
-              title="Collapse file tree panel"
-              aria-label="Collapse file tree panel"
-            >
-              ⊠
-            </button>
-          )}
-          <button
-            className={toolbarButton}
-            onClick={() => refreshStatus()}
-            title="Refresh git status"
-            aria-label="Refresh git status"
-            disabled={vcsLoading}
-          >
-            {vcsLoading ? "⟳" : "↺"}
-          </button>
-        </div>
-        <RecentFilesSection
-          paths={recentPaths}
-          selectedPath={selectedPath}
-          onSelect={handleFileSelect}
-        />
-        <div className={treeWrapper}>
-          <FileTree
-            ref={fileTreeRef}
+        {/* Left pane: file tree and search */}
+        <div className={treePaneClasses} data-testid="files-tree-pane" style={{ width: panel.collapsed ? 0 : panel.width }}>
+          <FilesLeftPane
             sessionId={sessionId}
             baseUrl={baseUrl}
-            onFileSelect={handleFileSelect}
-            gitStatusMap={gitStatusMap}
-            lineStatsMap={lineStatsMap}
-            sortBy={sortBy}
-            filterChangedOnly={filterChangedOnly}
+            v2={v2}
             selectedPath={selectedPath}
-            includeIgnored={includeIgnored}
-            searchTerm={searchTerm}
-            onSearchResults={(count, truncated) => {
-              setSearchResultCount(count);
-              setSearchResultTruncated(truncated);
-            }}
+            recentPaths={recentPaths}
+            onSelect={handleFileSelect}
+            searchInputRef={searchInputRef}
+            fileTreeRef={fileTreeRef}
+            searchRef={searchRef}
+            panel={panel}
+            search={search}
+            onQuickfix={setQuickfix}
+            sessionName={sessionName}
+            onResumeSession={onResumeSession}
+            mobile={mobile}
           />
         </div>
-      </div>
 
-      {!panel.collapsed && <TreeResizeHandle {...panel.handleProps} />}
+        {!mobile && !panel.collapsed && <TreeResizeHandle {...panel.handleProps} />}
+        {!mobile && panel.collapsed && (
+          <button className={expandStrip} onClick={panel.expand} title="Expand file tree panel" aria-label="Expand file tree panel">
+            ⊞
+          </button>
+        )}
 
-      {/* Right pane: file content */}
-      <div className={contentPaneClasses}>
-        <button
-          className={mobileBackButton}
-          onClick={() => setMobilePane("tree")}
-        >
-          ← Files
-        </button>
-        <button
-          className={mobileSearchButton}
-          onClick={() => setIsQuickOpenOpen(true)}
-          aria-label="Search files"
-        >
-          🔍
-        </button>
-        <FileContentViewer
-          sessionId={sessionId}
-          filePath={selectedPath}
-          baseUrl={baseUrl}
-          diffContent={diff?.content}
-        />
-      </div>
+        {/* Right pane: file content */}
+        <div className={contentPane}>
+          <button className={mobileBackButton} onClick={() => nav.back()}>
+            ← Files
+          </button>
+          <button className={mobileSearchButton} onClick={openQuickOpen} aria-label="Search files">
+            🔍
+          </button>
+          {v2 && <FilesV2Chrome v2={v2} fileTreeRef={fileTreeRef} panelId={PANEL_ID} mobile={mobile} onQuickOpen={openQuickOpen} onSearch={search.openSearch} />}
+          <div className={tabPanel} role={v2 ? "tabpanel" : undefined} id={PANEL_ID} aria-labelledby={v2 ? `files-tab-${v2.buffers.state.activeIndex}` : undefined}>
+            {v2 && active && <AccessibleSkipLink on={v2.accessible.on} onToggle={() => v2.accessible.toggle("skip_link")} />}
+            {wait.node}
+            <div hidden={wait.hideViewer} style={wait.hideViewer ? undefined : { display: "contents" }}>
+              <FileContentViewer
+                sessionId={sessionId}
+                filePath={selectedPath}
+                baseUrl={baseUrl}
+                diffContent={diff?.content}
+                reloadKey={v2?.bridge.reloadKey}
+                onEditorReady={v2?.bridge.onEditorReady}
+                accessible={v2?.accessible.on}
+                dirty={v2?.buffers.active?.status === "loaded" && v2.buffers.active.dirty}
+                source={v2?.viewerSource}
+              />
+            </div>
+          </div>
+          {v2 && <FilesV2Footer v2={v2} quickfix={mobile ? null : quickfix} />}
+        </div>
+      </MobileFilesLayout>
 
       {isQuickOpenOpen && (
         <QuickOpenPalette
           sessionId={sessionId}
           baseUrl={baseUrl}
           recentPaths={recentPaths}
+          commands={v2?.paletteCommands}
           onSelect={(path) => {
             setIsQuickOpenOpen(false);
-            handleFileSelect(path);
+            handleFileSelect(path, "palette");
             fileTreeRef.current?.revealPath(path);
           }}
           onClose={() => setIsQuickOpenOpen(false)}

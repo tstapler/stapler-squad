@@ -499,6 +499,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	_ = streamhub.DefaultTapRegistry()
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, sessionOpts...)
 	handler = services.WithRequestHost(handler)
+	handler = withFileBodyLimits(handler)
 	apiPath := "/api" + path
 
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
@@ -1897,66 +1898,6 @@ func (s *Server) registerServerInfoHandler() {
 			log.Error("server-info: encode error", "err", encErr)
 		}
 	})
-}
-
-// probeProcedurePath is the full request path of ProbeProgram as seen by the
-// outer handler, before the mux strips the "/api" prefix.
-const probeProcedurePath = "/api" + sessionv1connect.SessionServiceProbeProgramProcedure
-
-// nudgeProcedurePath is the full request path of the write-capable
-// NudgeSessionForPR, guarded like ProbeProgram on the unauthenticated listener.
-const nudgeProcedurePath = "/api" + sessionv1connect.GitHubUserServiceNudgeSessionForPRProcedure
-
-// pruneProcedurePath is the full request path of PruneHiddenSessionNotifications,
-// guarded whole (dry run and apply) with the rebinding profile.
-const pruneProcedurePath = "/api" + sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
-
-// updateFlagProcedurePath is the full request path of UpdateFeatureFlag, which
-// flips protections (read-only guards, the delivery gate), guarded like prune.
-const updateFlagProcedurePath = "/api" + sessionv1connect.SessionServiceUpdateFeatureFlagProcedure
-
-// replyProcedurePath is the full request path of ReplyToPendingQuestion, the
-// audited write into a hidden session's question dialog, guarded with the
-// rebinding profile (the in-handler local-caller gate adds the peer check).
-const replyProcedurePath = "/api" + sessionv1connect.SessionServiceReplyToPendingQuestionProcedure
-
-// guardedProcedures is the LocalWriteGuard set. A new member names its profile;
-// ProbeProgram and the nudge keep the original probe verdict byte for byte.
-var guardedProcedures = map[string]middleware.GuardProfile{
-	probeProcedurePath: middleware.ProfileProbe,
-	nudgeProcedurePath: middleware.ProfileProbe,
-	pruneProcedurePath: middleware.ProfileRebinding,
-
-	updateFlagProcedurePath: middleware.ProfileRebinding,
-	replyProcedurePath:      middleware.ProfileRebinding,
-}
-
-// localChain is the :8543 middleware chain (inside otelhttp):
-// Logging -> CORS -> Compress -> HostGuard -> [auth | ProbeGuard] -> mux.
-// HostGuard covers every route (and WebSocket upgrade), so a rebinding or
-// reverse-proxy Host never reaches a handler.
-// The listener has no auth unless authMiddleware is set, so ProbeGuard is the
-// boundary for the RPCs that execute a program or write to a session's terminal
-// (ProbeProgram, NudgeSessionForPR); with auth, auth is the boundary.
-func (s *Server) localChain() http.Handler {
-	return s.localChainWith(guardedProcedures)
-}
-
-// localChainWith builds localChain over an explicit guard set so tests can
-// exercise a profile before a real procedure registers in it.
-func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) http.Handler {
-	inner := http.Handler(s)
-	if s.authMiddleware != nil {
-		inner = s.authMiddleware(inner)
-	} else {
-		inner = middleware.LocalWriteGuard(procedures, middleware.LocalWriteGuardConfig{
-			Probe:     s.probeGuardConfig(),
-			Rebinding: s.LocalWriteVerdictConfig(),
-		})(inner)
-	}
-	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
 }
 
 // localExemptPaths skip the Host guard on :8543.

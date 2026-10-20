@@ -322,6 +322,8 @@ func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredP
 
 		updateFlagProcedurePath: middleware.ProfileRebinding,
 		replyProcedurePath:      middleware.ProfileRebinding,
+
+		writeFileProcedurePath: middleware.ProfileRebinding,
 	}, guardedProcedures)
 	_, hasClear := guardedProcedures["/api"+sessionv1connect.SessionServiceClearNotificationHistoryProcedure]
 	assert.False(t, hasClear)
@@ -402,4 +404,35 @@ func TestLocalChain_ShouldRefuseRebindingHostAndForeignOriginOnPrune_WithTheProd
 		assert.Equal(t, http.StatusOK, postPath(chain, pruneProcedurePath, "localhost:8543", ""), addr)
 		assert.Equal(t, 1, *reached, addr)
 	}
+}
+
+// Pre-mortem #1: WriteFile is in the real guarded set with the rebinding profile.
+func TestGuardedProcedures_ShouldContainWriteFileWithRebindingProfile(t *testing.T) {
+	assert.Equal(t, "/api/session.v1.SessionService/WriteFile", writeFileProcedurePath)
+	profile, ok := guardedProcedures[writeFileProcedurePath]
+	require.True(t, ok, "WriteFile must stay in guardedProcedures")
+	assert.Equal(t, middleware.ProfileRebinding, profile)
+}
+
+func TestLocalWriteGuard_ShouldRejectForeignOriginRebindingHostAndGet_When_WriteFileInGuardedProcedures(t *testing.T) {
+	srv, _ := newServerBase("localhost:8543")
+	t.Cleanup(srv.connCtxCancel)
+	reached := 0
+	srv.mux.HandleFunc(writeFileProcedurePath, func(w http.ResponseWriter, _ *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusOK)
+	})
+	chain := srv.localChain() // the production guardedProcedures map, not a substitute
+
+	assert.Equal(t, http.StatusForbidden, postPath(chain, writeFileProcedurePath, "localhost:8543", "https://evil.example"), "foreign Origin")
+	assert.Equal(t, http.StatusForbidden, postPath(chain, writeFileProcedurePath, "evil.example:8543", ""), "rebinding Host")
+	r := httptest.NewRequest(http.MethodGet, writeFileProcedurePath, nil)
+	r.Host = "localhost:8543"
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "GET")
+	assert.Zero(t, reached, "no rejected request reached the handler")
+
+	assert.Equal(t, http.StatusOK, postPath(chain, writeFileProcedurePath, "localhost:8543", "http://localhost:8543"), "same-origin POST")
+	assert.Equal(t, 1, reached)
 }

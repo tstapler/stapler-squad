@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,31 @@ var validCategories = map[string]bool{
 	"performance": true,
 	"navigation":  true,
 	"rpc":         true,
+}
+
+const (
+	filesEventPrefix = "files."
+	maxFilesLabels   = 8
+)
+
+// filesLabelValueShape and filesLabelKeyShape bound what a files.* event may carry,
+// so a path, query or draft text cannot be recorded even by a buggy client.
+var (
+	filesLabelValueShape = regexp.MustCompile(`^[a-z0-9_+-]{1,24}$`)
+	filesLabelKeyShape   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,23}$`)
+)
+
+// filesLabelsValid reports whether a files.* event's labels fit the privacy shape.
+func filesLabelsValid(labels map[string]string) bool {
+	if len(labels) > maxFilesLabels {
+		return false
+	}
+	for k, v := range labels {
+		if !filesLabelKeyShape.MatchString(k) || !filesLabelValueShape.MatchString(v) {
+			return false
+		}
+	}
+	return true
 }
 
 // analyticsEventRequest matches the frontend AnalyticsEvent JSON shape.
@@ -160,7 +186,12 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	dropped := 0
 	for _, ev := range req.Events {
+		if strings.HasPrefix(ev.EventName, filesEventPrefix) && !filesLabelsValid(ev.Labels) {
+			dropped++
+			continue
+		}
 		// Sanitize event name: strip newlines to prevent log injection.
 		safeName := strings.ReplaceAll(ev.EventName, "\n", `\n`)
 		safeName = strings.ReplaceAll(safeName, "\r", `\r`)
@@ -180,6 +211,9 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if dropped > 0 {
+		log.Warn("analytics dropped files events with out-of-shape labels", "dropped", dropped, "batch", len(req.Events))
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

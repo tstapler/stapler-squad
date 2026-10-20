@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/analytics"
 )
 
@@ -229,5 +232,72 @@ func TestAnalytics_MethodNotAllowed(t *testing.T) {
 	mux.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /api/analytics/summary: want 405, got %d", w2.Code)
+	}
+}
+
+type capturingProvider struct{ events []analytics.Event }
+
+func (p *capturingProvider) Record(_ context.Context, e analytics.Event) error {
+	p.events = append(p.events, e)
+	return nil
+}
+
+func filesEvent(name string, labels map[string]string) map[string]any {
+	return map[string]any{"name": name, "category": "user_action", "labels": labels}
+}
+
+func TestAnalyticsHandler_ShouldDropFilesEventsWithBadLabelShapeAndRecordOthers_When_MixedBatch(t *testing.T) {
+	var logs strings.Builder
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
+
+	nine := map[string]string{}
+	for i := 0; i < 9; i++ {
+		nine[string(rune('a'+i))] = "x"
+	}
+	p := &capturingProvider{}
+	w := postAnalytics(NewAnalyticsHandler(p), map[string]any{"events": []any{
+		filesEvent("files.edit.save", map[string]string{"outcome": "src/a.go"}),
+		filesEvent("files.edit.save", nine),
+		filesEvent("files.edit.save", map[string]string{"outcome": "Ok Now"}),
+		filesEvent("files.edit.save", map[string]string{"outcome": "ok", "tier": "t0"}),
+		filesEvent("files.search.open", nil),
+		filesEvent("session_attach", map[string]string{"path": "src/A b.go"}),
+	}})
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", w.Code)
+	}
+	names := make([]string, 0, len(p.events))
+	for _, e := range p.events {
+		names = append(names, e.EventName)
+	}
+	want := []string{"files.edit.save", "files.search.open", "session_attach"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Errorf("recorded %v, want %v", names, want)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "dropped=3") {
+		t.Errorf("Warn log should carry the drop count, got %q", out)
+	}
+	for _, leak := range []string{"src/a.go", "Ok Now"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("Warn log leaked label value %q: %s", leak, out)
+		}
+	}
+}
+
+func TestAnalyticsHandler_ShouldLeaveNonFilesEventsUnchanged_When_GuardAdded(t *testing.T) {
+	p := &capturingProvider{}
+	w := postAnalytics(NewAnalyticsHandler(p), map[string]any{"events": []any{
+		filesEvent("session_attach", map[string]string{"free_form": "Any Value/with spaces", "k1": "1", "k2": "2", "k3": "3",
+			"k4": "4", "k5": "5", "k6": "6", "k7": "7", "k8": "8"}),
+		map[string]any{"name": "page_view", "category": "navigation", "page": "/sessions"},
+	}})
+	if w.Code != http.StatusNoContent || len(p.events) != 2 {
+		t.Fatalf("status %d, recorded %d, want 204 and 2", w.Code, len(p.events))
+	}
+	if p.events[0].Labels["free_form"] != "Any Value/with spaces" {
+		t.Errorf("non-files labels were altered: %v", p.events[0].Labels)
 	}
 }

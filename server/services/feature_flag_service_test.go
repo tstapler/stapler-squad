@@ -222,3 +222,47 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 	svc.SetStatusDetailProvider("backlog", func() string { return "resumed" })
 	require.Equal(t, "resumed; extra", statusDetailOf(t, svc, "backlog"), "the setter replaces only its own slot")
 }
+
+func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFlag(t *testing.T) {
+	withIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	ctx := context.Background()
+	helpers := []struct {
+		name string
+		read func(context.Context) bool
+		want bool
+	}{
+		{"files:editing", FilesEditingEnabled, false},
+		{"files:viewer-v2", FilesViewerV2Enabled, true},
+		{"files:merge-phone", FilesMergePhoneEnabled, true},
+		{"files:range-read", FilesRangeReadEnabled, false},
+		{"files:delta-write", FilesDeltaWriteEnabled, false},
+		{"files:edit-large", FilesEditLargeEnabled, false},
+	}
+	for _, h := range helpers {
+		t.Run(h.name, func(t *testing.T) {
+			require.Equal(t, h.want, h.read(ctx), "default on a fresh config")
+			require.NoError(t, flagUpdate(svc, h.name, !h.want))
+			require.Equal(t, !h.want, h.read(ctx), "flip applies on the next call without restart")
+			require.NoError(t, flagUpdate(svc, h.name, h.want))
+			require.Equal(t, h.want, h.read(ctx))
+		})
+	}
+}
+
+func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
+	withIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	for _, name := range []string{
+		"files:editing", "files:viewer-v2", "files:merge-phone",
+		"files:range-read", "files:delta-write", "files:edit-large",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+				Name: name, Enabled: true, Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED, Scope: "kind:review",
+			}))
+			require.Error(t, err)
+			require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		})
+	}
+}
