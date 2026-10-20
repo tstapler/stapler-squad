@@ -347,13 +347,17 @@ type cachedRepo struct {
 	// Rebuilt when HEAD moves AND a .gitignore file actually changed
 	// (resolveHeadTreeHashes clears untrackedMatcherBuilt in that case,
 	// checked via gitignoreEntriesChanged), or when the root .gitignore's stat
-	// signature differs (an uncommitted edit). Nested .gitignore edits between
-	// HEAD moves stay stale. Guarded by mu, same as the fields above.
+	// signature or any nested .gitignore it read differs (an uncommitted
+	// edit). A nested .gitignore created after the build stays unseen until the
+	// next rebuild. Guarded by mu, same as the fields above.
 	untrackedMatcherBuilt bool
 	untrackedMatcher      gitignore.Matcher
 	// untrackedMatcherSig is the root .gitignore signature untrackedMatcher was
 	// built from, so an uncommitted edit also forces a rebuild.
 	untrackedMatcherSig ignoreSig
+	// untrackedMatcherNested are the non-root .gitignore files untrackedMatcher
+	// read, with their signatures taken before the read.
+	untrackedMatcherNested []nestedIgnore
 }
 
 // gogitstoreCloser is implemented by storage.Storer values that hold a
@@ -630,6 +634,7 @@ type matcherCacheEntry struct {
 	matcher      gitignore.Matcher
 	headTreeHash plumbing.Hash
 	ignoreSig    ignoreSig
+	nested       []nestedIgnore
 	accessedAtNs int64
 }
 
