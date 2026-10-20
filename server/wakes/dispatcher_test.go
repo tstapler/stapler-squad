@@ -3,6 +3,7 @@ package wakes
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -450,4 +451,46 @@ func TestReviveWaiting_should_RunOneRevivePerRow_When_ReconcileTicksWhileItIsInF
 	r.d.Reconcile(context.Background())
 	r.d.WaitIdle()
 	assert.EqualValues(t, 2, adm.calls.Load(), "the row is retried once the first attempt finished")
+}
+
+// The event loop spawns revives while WaitIdle callers wait; a sync.WaitGroup
+// reports that as a data race (and, rarely, fails every parallel test).
+func TestIdleGroup_should_NotRace_When_AddRunsWhileAnotherGoroutineWaits(t *testing.T) {
+	t.Parallel()
+	var g idleGroup
+	var done sync.WaitGroup
+	for range 200 {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			g.Add()
+			g.Done()
+		}()
+		g.Wait()
+	}
+	done.Wait()
+	g.Wait()
+}
+
+func TestIdleGroup_should_ReleaseEveryWaiter_When_LastWorkFinishes(t *testing.T) {
+	t.Parallel()
+	var g idleGroup
+	g.Add()
+	released := make(chan struct{}, 3)
+	for range 3 {
+		go func() { g.Wait(); released <- struct{}{} }()
+	}
+	select {
+	case <-released:
+		t.Fatal("a waiter returned while work was running")
+	case <-time.After(20 * time.Millisecond):
+	}
+	g.Done()
+	for range 3 {
+		select {
+		case <-released:
+		case <-time.After(5 * time.Second):
+			t.Fatal("waiter not released")
+		}
+	}
 }

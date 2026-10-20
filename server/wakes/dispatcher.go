@@ -95,7 +95,7 @@ type Dispatcher struct {
 	predicates    map[domain.WakeTriggerType]Predicate
 
 	wg sync.WaitGroup // long-running loops
-	bg sync.WaitGroup // spawned one-shot work (revives)
+	bg idleGroup      // spawned one-shot work (revives)
 
 	// testBeforeRead runs between the bus subscription and the first state read.
 	testBeforeRead func()
@@ -191,10 +191,51 @@ func (d *Dispatcher) allowClaim(ctx context.Context, row *session.WakeTriggerDat
 	return d.admit == nil || d.admit(ctx, row, now)
 }
 
+// idleGroup counts running work and lets callers wait for zero. Unlike
+// sync.WaitGroup, Add may race with Wait: the event loop spawns revives while
+// WaitIdle callers (tests, Stop) wait, which the WaitGroup contract forbids and
+// the race detector reports.
+type idleGroup struct {
+	mu      sync.Mutex
+	n       int
+	waiters []chan struct{}
+}
+
+func (g *idleGroup) Add() {
+	g.mu.Lock()
+	g.n++
+	g.mu.Unlock()
+}
+
+func (g *idleGroup) Done() {
+	g.mu.Lock()
+	g.n--
+	if g.n == 0 {
+		for _, w := range g.waiters {
+			close(w)
+		}
+		g.waiters = nil
+	}
+	g.mu.Unlock()
+}
+
+// Wait returns once no work is running.
+func (g *idleGroup) Wait() {
+	g.mu.Lock()
+	if g.n == 0 {
+		g.mu.Unlock()
+		return
+	}
+	w := make(chan struct{})
+	g.waiters = append(g.waiters, w)
+	g.mu.Unlock()
+	<-w
+}
+
 // spawn runs fn on a goroutine joined by Stop (revives block up to the revive
 // lock budget, which must not stall the timer or event loop).
 func (d *Dispatcher) spawn(fn func()) {
-	d.bg.Add(1)
+	d.bg.Add()
 	go func() {
 		defer d.bg.Done()
 		fn()
