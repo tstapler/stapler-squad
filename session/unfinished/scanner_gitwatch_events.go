@@ -40,10 +40,8 @@ func (s *Scanner) rescanAllOnOverflow(ctx context.Context) {
 	})
 }
 
-// fsnotifyLoop handles fsnotify events on every watched repo's .git dir and
-// enqueues a targeted rescan of just that repo — this is the "only run when
-// things change" trigger; the coordinator's tick is now a pure backstop.
-// Exits cleanly when ctx is cancelled, per this package's goroutine convention.
+// fsnotifyLoop turns .git events into targeted rescans of the affected repo;
+// the coordinator's tick is only a backstop. It exits when ctx is cancelled.
 func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 	w := s.activeWatcher()
 	if w == nil {
@@ -127,9 +125,7 @@ func (s *Scanner) handleEvent(ctx context.Context, event fsnotify.Event) {
 		s.scheduleWorktreeEvent(ctx, t)
 		return
 	}
-	// Derive the repo root by walking up from the event path to the
-	// nearest ".git" component (mirrors WatchDirWatcher.fsnotifyLoop's
-	// event-handling shape in watcher.go).
+	// Walk up from the event path to the nearest ".git" component for the repo root.
 	dir := event.Name
 	for {
 		if filepath.Base(dir) == ".git" {
@@ -179,13 +175,11 @@ const (
 )
 
 // classifyGitEvent decides whether a write to the named file directly under
-// <repo>/.git warrants a rescan. Lock files, git's index temp files and
-// watchman cookies are transient; the real file's own Create/Write follows
-// the lock's rename, so reacting to them only doubles the work. index, config
-// and MERGE_RR churn constantly but only describe the main worktree; every
-// other file (HEAD, FETCH_HEAD, COMMIT_EDITMSG, packed-refs, ...) is a
-// commit/fetch/ref signal that can move linked worktrees' ahead/behind too,
-// and loose refs under .git/refs are not watched, so these are the proxy.
+// <repo>/.git warrants a rescan. Lock, index temp and watchman cookie files are
+// skipped: the real file's own event follows the lock's rename. index, config
+// and MERGE_RR describe only the main worktree; any other file (HEAD,
+// packed-refs, ...) can move linked worktrees' ahead/behind too, and loose refs
+// under .git/refs are not watched, so those files are the proxy.
 func classifyGitEvent(name string) (scope gitEventScope, relevant bool) {
 	switch {
 	case strings.HasSuffix(name, ".lock"),
@@ -199,10 +193,9 @@ func classifyGitEvent(name string) (scope gitEventScope, relevant bool) {
 	}
 }
 
-// scheduleGitEvent invalidates and enqueues repoRoot once, fsDebounce after
-// the first event of a burst (fixed window, so continuous events cannot starve
-// a repo), widening the scope if any event in the
-// burst needed it. Skipped after ctx is cancelled.
+// scheduleGitEvent invalidates and enqueues repoRoot once, fsDebounce after the
+// first event of a burst (fixed window, so continuous events cannot starve a
+// repo), widening the scope if any event in the burst needed it.
 func (s *Scanner) scheduleGitEvent(ctx context.Context, repoRoot string, scope gitEventScope) {
 	s.debounce(ctx, repoRoot, scope, func(scope gitEventScope) {
 		if scope == gitEventAllWorktrees {

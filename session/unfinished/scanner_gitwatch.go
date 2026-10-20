@@ -11,9 +11,7 @@ import (
 
 // Git watcher plumbing: watcher interface, dirty-tracker hooks, and watchRepo/unwatchRepo lifecycle.
 
-// gitWatcher is the seam over *fsnotify.Watcher so tests can inject a fake
-// with no real filesystem events. Remove is an addition to the plan's
-// four-method sketch: unwatchRepo needs it.
+// gitWatcher is the seam over *fsnotify.Watcher so tests can inject a fake.
 type gitWatcher interface {
 	Add(name string) error
 	Remove(name string) error
@@ -35,14 +33,13 @@ func (f fsnotifyWatcher) Close() error                  { return f.w.Close() }
 // rescan of repoRoot, whose ListWorktrees scan covers it.
 type worktreeTarget struct{ repoRoot, worktree string }
 
-// gitwatchState is the Tier A (linked-worktree gitdir) state. The zero value
-// is the default behaviour: only <repo>/.git is watched, exactly as before.
+// gitwatchState is the Tier A (linked-worktree gitdir) state; the zero value
+// watches only <repo>/.git.
 type gitwatchState struct {
 	// override replaces the watcher derived from Scanner.fsWatcher (tests).
 	override gitWatcher
-	// watchWorktreeGitdirs gates every Tier A behaviour: linked gitdir
-	// watches, Rename events, and overflow rescans. The config flag wires in
-	// here later; it must be set before Start.
+	// watchWorktreeGitdirs gates every Tier A behaviour (linked gitdir watches,
+	// Rename events, overflow rescans); set it before Start.
 	watchWorktreeGitdirs bool
 	// targets maps an admin gitdir to what its events invalidate (guarded by
 	// Scanner.fsMu).
@@ -110,14 +107,10 @@ func (s *Scanner) disarmDirty(worktree string) {
 	}
 }
 
-// watchRepo best-effort registers repoPath's .git dir with the fsnotify
-// watcher so a real change triggers an immediate targeted rescan. No-op if
-// fsnotify is unavailable on this platform (no active watcher) — that's the
-// graceful-degradation path back to relying solely on the ticker. Errors are
-// logged at Debug, not Warn: many repo paths won't have a .git dir yet at
-// the moment they're first tracked (e.g. auto-spidered from a session whose
-// worktree is still being created), which is a normal transient condition,
-// not a fault.
+// watchRepo best-effort registers repoPath's .git dir so a real change
+// triggers a targeted rescan; without a watcher the ticker is the only trigger.
+// Add errors log at Debug: a path often has no .git yet when first tracked
+// (its worktree is still being created).
 func (s *Scanner) watchRepo(repoPath string) {
 	s.mu.RLock()
 	tw := s.treeWatch
@@ -140,9 +133,8 @@ func (s *Scanner) watchRepo(repoPath string) {
 	}
 }
 
-// unwatchRepo best-effort removes repoPath's .git dir (and, under Tier A, its
-// linked gitdirs) from the fsnotify watcher, avoiding a slow leak of watch
-// descriptors as repos come and go. No-op if fsnotify is unavailable.
+// unwatchRepo removes repoPath's .git dir (and, under Tier A, its linked
+// gitdirs) from the watcher so watch descriptors do not leak as repos come and go.
 func (s *Scanner) unwatchRepo(repoPath string) {
 	s.mu.RLock()
 	tw := s.treeWatch
