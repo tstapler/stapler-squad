@@ -40,6 +40,7 @@ export const flagRow = style({
 
 export const flagInfo = style({
   flex: 1,
+  order: 1,
 });
 
 export const flagName = style({
@@ -58,6 +59,7 @@ export const flagDescription = style({
 
 // The button is the 44x44 hit area; the visible track inside it stays 44x24.
 export const toggle = style({
+  order: 2,
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
@@ -257,6 +259,124 @@ export const overrideSegment = style({
 export const overrideSegmentActive = style({
   background: vars.color.primary,
   color: "white",
+});
+
+// Deep-link target (UX-37): the offsets are the shell's own tokens, so sticky chrome never covers the row.
+export const hashTargetRow = style({
+  scrollMarginTop: "calc(var(--header-height) + 16px)",
+  scrollMarginBottom: "calc(var(--bottom-nav-height) + 16px)",
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.primary}`,
+    outlineOffset: "2px",
+  },
+});
+
+export const engineIntro = style({
+  color: vars.color.textSecondary,
+  fontSize: "0.875rem",
+  lineHeight: 1.4,
+  margin: "0.75rem 0 0.25rem",
+});
+
+export const engineSummary = style({
+  color: vars.color.textPrimary,
+  fontSize: "0.9375rem",
+  fontWeight: 600,
+  margin: "0.5rem 0 0.25rem",
+});
+
+export const engineReviewOverdue = style({
+  color: vars.color.warningText,
+  background: vars.color.warningBg,
+  border: `1px solid ${vars.color.warning}`,
+  borderRadius: vars.radii.md,
+  padding: "0.5rem 0.75rem",
+  fontSize: "0.8125rem",
+  margin: "0.25rem 0",
+});
+
+export const rowControls = style({
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "0.5rem 0.75rem",
+  marginTop: "0.5rem",
+});
+
+export const rowControlButton = style({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minHeight: "44px",
+  padding: "0 0.75rem",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: "transparent",
+  color: vars.color.textPrimary,
+  fontSize: "0.8125rem",
+  textDecoration: "none",
+  cursor: "pointer",
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.primary}`,
+    outlineOffset: "2px",
+  },
+  selectors: {
+    '&[aria-disabled="true"]': { cursor: "progress", opacity: 0.6 },
+  },
+});
+
+export const srOnly = style({
+  position: "absolute",
+  width: "1px",
+  height: "1px",
+  margin: "-1px",
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+});
+
+// Reserves three lines so evidence arriving causes no jump (UX-44).
+export const evidenceRegion = style({
+  minHeight: "5.25rem",
+  margin: "0.75rem 0",
+  padding: "0.5rem 0.75rem",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  color: vars.color.textPrimary,
+  fontSize: "0.875rem",
+  lineHeight: 1.5,
+});
+
+export const evidenceNotClean = style({
+  color: vars.color.warningText,
+  fontWeight: 600,
+});
+
+export const ackLabel = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.75rem",
+  width: "100%",
+  minHeight: "44px",
+  margin: "0.5rem 0",
+  color: vars.color.textPrimary,
+  fontSize: "0.875rem",
+  cursor: "pointer",
+});
+
+export const ackCheckbox = style({
+  width: "1.25rem",
+  height: "1.25rem",
+  flexShrink: 0,
+});
+
+export const dialogNote = style({
+  color: vars.color.textSecondary,
+  fontSize: "0.8125rem",
+  lineHeight: 1.4,
+  margin: "0.5rem 0",
 });
 
 export const resetButton = style({

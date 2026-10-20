@@ -11,6 +11,15 @@ import { render, screen, fireEvent, waitFor, within, act } from "@testing-librar
 import FeaturesPage from "./page";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import type { FeatureFlagMeta } from "@/lib/contexts/FeatureFlagsContext";
+import { create } from "@bufbuild/protobuf";
+import { TimestampSchema } from "@bufbuild/protobuf/wkt";
+import {
+  ClassReadinessSchema,
+  GetWorkflowEngineStatusResponseSchema,
+  WorkflowEngineMode,
+  WorkflowEngineReviewState,
+  WorkflowEngineSoakVerdict,
+} from "@/gen/session/v1/backlog_pb";
 
 jest.mock("@/lib/analytics", () => ({
   usePageView: () => {},
@@ -37,8 +46,12 @@ jest.mock("./GateStatusLine", () => ({
 
 // The override disclosure reads GetDeliveryGateStats for its per-kind counts.
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
+const mockGetEngineStatus = jest.fn();
 jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({ getDeliveryGateStats: async () => ({ eventsByKind24h: {} }) }),
+  createClient: () => ({
+    getDeliveryGateStats: async () => ({ eventsByKind24h: {} }),
+    getWorkflowEngineStatus: (...a: unknown[]) => mockGetEngineStatus(...a),
+  }),
 }));
 
 const mockUseFeatureFlags = useFeatureFlags as jest.MockedFunction<typeof useFeatureFlags>;
@@ -72,6 +85,11 @@ beforeAll(() => {
 
 afterAll(() => {
   jest.restoreAllMocks();
+});
+
+// The page reads the engine status for its summary; an empty response renders as "unavailable".
+beforeEach(() => {
+  mockGetEngineStatus.mockResolvedValue(create(GetWorkflowEngineStatusResponseSchema, {}));
 });
 
 describe("FeaturesPage", () => {
@@ -613,5 +631,327 @@ describe("FeaturesPage - Story 4.1.4", () => {
     expect(status).toHaveTextContent("Backlog is now On.");
     expect(sw).not.toHaveAttribute("aria-disabled");
     expect(sw).toHaveFocus();
+  });
+});
+
+// Story 1.3.3: the "Workflow engine" group (shadow flag plus one enforce row per caller class).
+describe("FeaturesPage — workflow engine rows", () => {
+  const SHADOW = "backlog:workflow-engine-shadow";
+  const OPERATOR = "backlog:workflow-engine-enforce";
+  const AGENT = "backlog:workflow-engine-enforce-agent";
+  const SYSTEM = "backlog:workflow-engine-enforce-system";
+  const M = WorkflowEngineMode;
+  const V = WorkflowEngineSoakVerdict;
+
+  type Modes = { operator: WorkflowEngineMode; agent: WorkflowEngineMode; system: WorkflowEngineMode };
+  const SHADOW_MODES: Modes = { operator: M.SHADOW, agent: M.SHADOW, system: M.SHADOW };
+
+  function readiness(divergence = 0n, verdict = V.READY, stranded = 0n) {
+    return create(ClassReadinessSchema, { divergence24h: divergence, soakVerdict: verdict, strandedItemCount: stranded });
+  }
+
+  function engineStatus(modes: Modes = SHADOW_MODES, ready = readiness()) {
+    return create(GetWorkflowEngineStatusResponseSchema, {
+      classModes: modes,
+      gateWired: true,
+      invalidatorWired: true,
+      classReadiness: { operator: ready, agent: ready, system: ready },
+    });
+  }
+
+  function engineFlags(on: Partial<Record<"op" | "agent" | "system", boolean>> = {}) {
+    return [
+      makeFlag({ name: SHADOW, enabled: true }),
+      makeFlag({ name: OPERATOR, enabled: Boolean(on.op) }),
+      makeFlag({ name: AGENT, enabled: Boolean(on.agent) }),
+      makeFlag({ name: SYSTEM, enabled: Boolean(on.system) }),
+    ];
+  }
+
+  function mountPage(flagList: FeatureFlagMeta[], setFlag = jest.fn().mockResolvedValue({ ok: true })) {
+    mockUseFeatureFlags.mockReturnValue({
+      flags: Object.fromEntries(flagList.map((f) => [f.name, f.enabled])),
+      flagList,
+      isLoading: false,
+      error: null,
+      loadError: null,
+      reload: jest.fn(),
+      setFlag,
+    });
+    render(<FeaturesPage />);
+    return setFlag;
+  }
+
+  const rowFor = (flag: string) => document.getElementById(`flag-row-${flag.replace(/:/g, "-")}`) as HTMLElement;
+  const switchOf = (flag: string) => within(rowFor(flag)).getByRole("switch");
+
+  // jsdom dispatches hashchange on a later task; let it land before the page mounts.
+  async function setHash(hash: string) {
+    window.location.hash = hash;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  beforeEach(async () => {
+    mockGetEngineStatus.mockReset();
+    mockGetEngineStatus.mockResolvedValue(engineStatus());
+    await setHash("");
+    Element.prototype.scrollIntoView = jest.fn();
+  });
+
+  it("renders the group with the shadow row, three labelled enforce rows, the intro, step lines and the id contract", async () => {
+    mountPage(engineFlags());
+    const group = screen.getByRole("region", { name: "Workflow engine" });
+    expect(within(group).getAllByTestId("feature-flag-row")).toHaveLength(4);
+    expect(group).toHaveTextContent("These three switches are independent. Recommended order: operators, then agents, then automation.");
+    for (const label of [
+      "Enforce for operators (this UI)",
+      "Enforce for agents (MCP tools)",
+      "Enforce for automation (lifecycle, sync, pollers)",
+    ]) {
+      expect(within(group).getByRole("switch", { name: label })).toBeInTheDocument();
+    }
+    for (const id of [
+      "flag-row-backlog-workflow-engine-enforce",
+      "flag-row-backlog-workflow-engine-enforce-agent",
+      "flag-row-backlog-workflow-engine-enforce-system",
+    ]) {
+      const row = document.getElementById(id);
+      expect(row).not.toBeNull();
+      expect(row).toHaveAttribute("tabindex", "-1");
+    }
+    expect(within(rowFor(OPERATOR)).getByTestId("feature-flag-step")).toHaveTextContent("Step 1 of 3 (recommended first).");
+    expect(within(rowFor(SYSTEM)).getByTestId("feature-flag-step")).toHaveTextContent("Step 3 of 3. Enforce last;");
+    expect(within(rowFor(OPERATOR)).getByTestId("flag-live-note")).toHaveTextContent(
+      "Takes effect within a few seconds, without reload"
+    );
+    await screen.findByText(/0 of 3 caller classes enforced/);
+  });
+
+  it.each([
+    [engineFlags(), SHADOW_MODES, "0 of 3 caller classes enforced. Shadow: edits are compared with the built-in rules but not applied."],
+    [
+      engineFlags({ op: true }),
+      { operator: M.ENFORCE, agent: M.SHADOW, system: M.SHADOW },
+      "1 of 3 caller classes enforced (Partly enforced): operators enforced; agents and automation still in shadow.",
+    ],
+    [
+      engineFlags({ op: true, agent: true, system: true }),
+      { operator: M.ENFORCE, agent: M.ENFORCE, system: M.ENFORCE },
+      "All 3 caller classes enforced.",
+    ],
+  ])("summarises the engine mode in plain words (%#)", async (flags, modes, expected) => {
+    mockGetEngineStatus.mockResolvedValue(engineStatus(modes));
+    mountPage(flags);
+    await waitFor(() => expect(screen.getByTestId("workflow-engine-summary")).toHaveTextContent(expected));
+    expect(screen.getByTestId("workflow-engine-summary")).not.toHaveAttribute("role");
+  });
+
+  it("says the mode is unavailable, not Off, when the status cannot be read", async () => {
+    mockGetEngineStatus.mockRejectedValue(new Error("down"));
+    mountPage(engineFlags());
+    await waitFor(() =>
+      expect(screen.getByTestId("workflow-engine-summary")).toHaveTextContent(
+        "Mode unavailable: couldn't read the engine status."
+      )
+    );
+  });
+
+  it("repeats the review-due line from the status", async () => {
+    mockGetEngineStatus.mockResolvedValue(
+      create(GetWorkflowEngineStatusResponseSchema, {
+        ...engineStatus(),
+        classModes: SHADOW_MODES,
+        gateWired: true,
+        reviewState: WorkflowEngineReviewState.NOT_DUE,
+        reviewDueAt: create(TimestampSchema, { seconds: BigInt(Date.UTC(2026, 10, 15) / 1000) }),
+      })
+    );
+    mountPage(engineFlags());
+    expect(await screen.findByTestId("workflow-engine-review")).toHaveTextContent("Soak review due 2026-11-15.");
+  });
+
+  it("enforces a clean class after one re-check and appends the new count to the row confirmation", async () => {
+    const setFlag = mountPage(engineFlags());
+    const sw = switchOf(OPERATOR);
+    fireEvent.click(sw);
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Stage edits will change which transitions and gates are allowed.");
+    expect(screen.getByTestId("alert-confirm-cancel")).toHaveFocus();
+    await waitFor(() => expect(screen.getByTestId("feature-flag-enforce-evidence")).not.toHaveAttribute("aria-busy"));
+    expect(screen.getByTestId("feature-flag-enforce-evidence")).toHaveTextContent(
+      "Readiness evidence: 0 shadow differences, soak verdict READY, 0 items would lose an exit."
+    );
+    expect(screen.queryByTestId("feature-flag-enforce-ack")).toBeNull();
+    const enforce = screen.getByTestId("alert-confirm-confirm");
+    expect(enforce).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("alert-confirm-cancel")).toHaveFocus();
+
+    const callsBefore = mockGetEngineStatus.mock.calls.length;
+    fireEvent.click(enforce);
+    await waitFor(() => expect(setFlag).toHaveBeenCalledTimes(1));
+    expect(setFlag).toHaveBeenCalledWith(OPERATOR, true);
+    // One re-check before the write.
+    expect(mockGetEngineStatus.mock.calls.length).toBeGreaterThan(callsBefore);
+    await waitFor(() =>
+      expect(within(rowFor(OPERATOR)).getByTestId("feature-flag-row-status")).toHaveTextContent(
+        "Enforce for operators (this UI) is now On. 1 of 3 caller classes enforced."
+      )
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps Enforce disabled on a not-ready class until the evidence is acknowledged", async () => {
+    mockGetEngineStatus.mockResolvedValue(engineStatus(SHADOW_MODES, readiness(3n, V.NOT_READY, 2n)));
+    const setFlag = mountPage(engineFlags());
+    fireEvent.click(switchOf(AGENT));
+
+    const ack = await screen.findByTestId("feature-flag-enforce-ack");
+    const enforce = screen.getByTestId("alert-confirm-confirm");
+    expect(enforce).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("feature-flag-enforce-hint")).toHaveTextContent(
+      "Tick the acknowledgement above to enable Enforce."
+    );
+    expect(screen.getByTestId("feature-flag-enforce-evidence")).toHaveTextContent("NOT READY");
+    expect(screen.getByTestId("feature-flag-enforce-evidence")).toHaveTextContent("Acknowledgement required.");
+    expect(screen.getByTestId("feature-flag-enforce-order-advisory")).toHaveTextContent(
+      "Operators are not enforced yet; the recommended order is operators first."
+    );
+
+    fireEvent.click(enforce);
+    expect(setFlag).not.toHaveBeenCalled();
+
+    fireEvent.click(ack);
+    expect(enforce).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(enforce);
+    await waitFor(() => expect(setFlag).toHaveBeenCalledWith(AGENT, true));
+  });
+
+  it("shows a failed evidence load with Retry, never zeros, and gates Enforce on the acknowledgement", async () => {
+    mockGetEngineStatus.mockResolvedValueOnce(engineStatus()); // the page's own status read
+    mockGetEngineStatus.mockRejectedValue(new Error("boom"));
+    const setFlag = mountPage(engineFlags());
+    await waitFor(() => expect(mockGetEngineStatus).toHaveBeenCalled());
+    fireEvent.click(switchOf(OPERATOR));
+
+    const region = await screen.findByTestId("feature-flag-enforce-evidence");
+    await waitFor(() => expect(region).toHaveTextContent("Couldn't load readiness evidence: boom"));
+    expect(region).not.toHaveTextContent("Shadow differences");
+    expect(screen.getByTestId("feature-flag-enforce-ack")).toBeInTheDocument();
+    expect(screen.getByTestId("alert-confirm-confirm")).toHaveAttribute("aria-disabled", "true");
+
+    mockGetEngineStatus.mockResolvedValue(engineStatus());
+    fireEvent.click(screen.getByTestId("feature-flag-enforce-evidence-retry"));
+    await waitFor(() => expect(region).toHaveTextContent("Soak verdict: READY"));
+    expect(screen.getByTestId("alert-confirm-cancel")).toHaveFocus();
+    expect(setFlag).not.toHaveBeenCalled();
+  });
+
+  it("does not write the flag when the re-check finds the evidence worse, and asks again", async () => {
+    const setFlag = mountPage(engineFlags());
+    fireEvent.click(switchOf(OPERATOR));
+    await waitFor(() => expect(screen.getByTestId("feature-flag-enforce-evidence")).not.toHaveAttribute("aria-busy"));
+
+    mockGetEngineStatus.mockResolvedValue(engineStatus(SHADOW_MODES, readiness(4n, V.READY, 0n)));
+    fireEvent.click(screen.getByTestId("alert-confirm-confirm"));
+
+    const ack = await screen.findByTestId("feature-flag-enforce-ack");
+    expect(screen.getByTestId("feature-flag-enforce-evidence")).toHaveTextContent(
+      "Readiness evidence changed since you opened this dialog: shadow differences rose from 0 to 4."
+    );
+    expect(ack).toHaveFocus();
+    expect(ack).not.toBeChecked();
+    expect(screen.getByTestId("alert-confirm-confirm")).toHaveAttribute("aria-disabled", "true");
+    expect(setFlag).not.toHaveBeenCalled();
+  });
+
+  it("does not write the flag when the re-check fails, and offers Retry", async () => {
+    const setFlag = mountPage(engineFlags());
+    fireEvent.click(switchOf(OPERATOR));
+    await waitFor(() => expect(screen.getByTestId("feature-flag-enforce-evidence")).not.toHaveAttribute("aria-busy"));
+
+    mockGetEngineStatus.mockRejectedValue(new Error("offline"));
+    fireEvent.click(screen.getByTestId("alert-confirm-confirm"));
+
+    const alert = await screen.findByTestId("feature-flag-enforce-recheck-alert");
+    expect(alert).toHaveTextContent("Couldn't re-check readiness: offline");
+    expect(setFlag).not.toHaveBeenCalled();
+
+    mockGetEngineStatus.mockResolvedValue(engineStatus());
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(setFlag).toHaveBeenCalledWith(OPERATOR, true));
+  });
+
+  it("returns focus to the switch and writes nothing on Cancel", async () => {
+    const setFlag = mountPage(engineFlags());
+    const sw = switchOf(OPERATOR);
+    fireEvent.click(sw);
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByTestId("alert-confirm-cancel"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sw).toHaveFocus();
+    expect(setFlag).not.toHaveBeenCalled();
+  });
+
+  it("adds the stuck-item warning to the automation dialog only", async () => {
+    mountPage(engineFlags());
+    fireEvent.click(switchOf(SYSTEM));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "Blocked automated transitions appear as stuck items (transition_denied) until the gate is satisfied."
+    );
+    fireEvent.click(screen.getByTestId("alert-confirm-cancel"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    fireEvent.click(switchOf(OPERATOR));
+    expect(await screen.findByRole("alertdialog")).not.toHaveTextContent("transition_denied");
+  });
+
+  it("turning an enforce row Off needs no dialog; Revert and Edit stages follow the switch in tab order", async () => {
+    const setFlag = mountPage(engineFlags({ op: true }));
+    const row = rowFor(OPERATOR);
+    const order = Array.from(row.querySelectorAll<HTMLElement>("button, a"));
+    expect(order.map((el) => el.getAttribute("data-testid"))).toEqual([
+      "feature-flag-switch",
+      "feature-flag-revert",
+      "feature-flag-edit-stages",
+    ]);
+    expect(within(row).getByTestId("feature-flag-edit-stages")).toHaveAttribute("href", "/settings/backlog-stages");
+    expect(within(rowFor(AGENT)).queryByTestId("feature-flag-revert")).toBeNull();
+
+    fireEvent.click(within(row).getByTestId("feature-flag-revert"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(setFlag).toHaveBeenCalledWith(OPERATOR, false));
+    await waitFor(() =>
+      expect(within(row).getByTestId("feature-flag-row-status")).toHaveTextContent("is now Off. 0 of 3 caller classes enforced.")
+    );
+  });
+
+  it("sends one request and keeps the switch focused while a revert is in flight", async () => {
+    let finish: (v: { ok: true }) => void = () => {};
+    const setFlag = jest.fn().mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    mountPage(engineFlags({ op: true }), setFlag);
+    const row = rowFor(OPERATOR);
+    const revert = within(row).getByTestId("feature-flag-revert");
+    fireEvent.click(revert);
+    await waitFor(() => expect(revert).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(revert);
+    fireEvent.click(within(row).getByRole("switch"));
+    expect(setFlag).toHaveBeenCalledTimes(1);
+    expect(within(row).getByTestId("feature-flag-row-status")).toHaveTextContent("Saving Enforce for operators (this UI)...");
+    await act(async () => finish({ ok: true }));
+  });
+
+  it("focuses the row named by the hash on mount, once", async () => {
+    await setHash("#flag-row-backlog-workflow-engine-enforce-agent");
+    mountPage(engineFlags());
+    await waitFor(() => expect(rowFor(AGENT)).toHaveFocus());
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads normally when the hash names no row", async () => {
+    await setHash("#flag-row-nope");
+    mountPage(engineFlags());
+    await screen.findByText(/0 of 3 caller classes enforced/);
+    expect(document.body).toHaveFocus();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 });

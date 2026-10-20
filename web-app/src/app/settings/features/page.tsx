@@ -1,12 +1,25 @@
 // +feature: settings-features
 "use client";
 
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useFeatureFlags, type FeatureFlagMeta } from "@/lib/contexts/FeatureFlagsContext";
 import { usePageView } from "@/lib/analytics";
 import { StreamHubRolloutPanel } from "@/components/settings/StreamHubRolloutPanel";
 import { TymuxRolloutPanel } from "@/components/settings/TymuxRolloutPanel";
-import { FEATURE_META, FLAG_EXTRAS, layoutFlags, type FlagSetter } from "./flagExtras";
+import { useEngineModeStatus } from "@/lib/hooks/useEngineModeStatus";
+import {
+  FEATURE_META,
+  FLAG_EXTRAS,
+  GROUP_HEADERS,
+  enforcedCountAfter,
+  flagRowId,
+  isEngineEnforceFlag,
+  isEngineModeFlag,
+  layoutFlags,
+  type FlagSetter,
+} from "./flagExtras";
+import { EnforceDialog } from "./EnforceReadinessEvidence";
+import { useHashRowFocus } from "./useHashRowFocus";
 import {
   container,
   title,
@@ -31,6 +44,7 @@ import {
   skeletonRow,
   errorMessage,
   emptyMessage,
+  hashTargetRow,
 } from "./page.css";
 
 type RowPhase = { phase: "saving" } | { phase: "done"; message: string } | { phase: "failed"; error: string };
@@ -51,11 +65,16 @@ interface FlagRowProps {
   flag: FeatureFlagMeta;
   nested?: boolean;
   status: RowPhase | undefined;
-  onToggle: (flag: FeatureFlagMeta) => void;
+  /** `trigger` is the switch that was activated, when there is one (focus returns to it). */
+  onToggle: (flag: FeatureFlagMeta, trigger?: HTMLElement) => void;
+  onRevert: (flag: FeatureFlagMeta) => void;
   setFlag: FlagSetter;
 }
 
-function FlagRow({ flag, nested, status, onToggle, setFlag }: FlagRowProps) {
+/** Window in which a focus/visibility wake-up re-reads the list at most once. */
+const FLAG_REFETCH_WINDOW_MS = 5000;
+
+function FlagRow({ flag, nested, status, onToggle, onRevert, setFlag }: FlagRowProps) {
   const { name, enabled, description, statusDetail } = flag;
   const label = FEATURE_META[name]?.label ?? name;
   const extra = FLAG_EXTRAS[name];
@@ -72,7 +91,28 @@ function FlagRow({ flag, nested, status, onToggle, setFlag }: FlagRowProps) {
   const badgeText = enabled ? (inert ? "On (inactive)" : "On") : "Off";
 
   return (
-    <div className={`${flagRow} ${nested ? nestedRow : ""}`} data-testid="feature-flag-row">
+    <div
+      id={flagRowId(name)}
+      tabIndex={-1}
+      className={`${flagRow} ${hashTargetRow} ${nested ? nestedRow : ""}`}
+      data-testid="feature-flag-row"
+    >
+      {/* First in DOM so Tab runs switch, Revert, Edit stages; CSS order keeps it on the right. */}
+      <button
+        type="button"
+        role="switch"
+        className={toggle}
+        aria-checked={enabled}
+        aria-label={label}
+        aria-describedby={describedBy || undefined}
+        aria-disabled={pending || undefined}
+        data-testid="feature-flag-switch"
+        onClick={(e) => onToggle(flag, e.currentTarget)}
+      >
+        <span className={toggleTrack}>
+          <span className={toggleThumb} />
+        </span>
+      </button>
       <div className={flagInfo}>
         <div className={flagName} data-testid="feature-flag-name">
           {label}
@@ -95,7 +135,7 @@ function FlagRow({ flag, nested, status, onToggle, setFlag }: FlagRowProps) {
         {source && (
           <div id={`${ids}-source`} className={flagDescription} data-testid="feature-flag-source">{source}</div>
         )}
-        {extra?.renderExtras?.({ flag, pending, setFlag })}
+        {extra?.renderExtras?.({ flag, pending, setFlag, revert: () => onRevert(flag) })}
         <div className={rowStatus} role="status" data-testid="feature-flag-row-status">
           {status?.phase === "saving" && `Saving ${label}...`}
           {status?.phase === "done" && status.message}
@@ -109,21 +149,6 @@ function FlagRow({ flag, nested, status, onToggle, setFlag }: FlagRowProps) {
           </div>
         )}
       </div>
-      <button
-        type="button"
-        role="switch"
-        className={toggle}
-        aria-checked={enabled}
-        aria-label={label}
-        aria-describedby={describedBy || undefined}
-        aria-disabled={pending || undefined}
-        data-testid="feature-flag-switch"
-        onClick={() => onToggle(flag)}
-      >
-        <span className={toggleTrack}>
-          <span className={toggleThumb} />
-        </span>
-      </button>
     </div>
   );
 }
@@ -141,9 +166,14 @@ function FlagListSkeleton() {
 
 export default function FeaturesPage() {
   usePageView();
-  const { flagList, isLoading, loadError, reload, setFlag } = useFeatureFlags();
+  const { flagList, isLoading, loadError, reload, refresh, setFlag } = useFeatureFlags();
+  const { view: engineView, refetch: refetchEngine } = useEngineModeStatus();
   const [rowStatus, setRowStatus] = useState<Record<string, RowPhase | undefined>>({});
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [enforcing, setEnforcing] = useState<string | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const flagListRef = useRef(flagList);
+  flagListRef.current = flagList;
   // A ref, not state: two activations in one tick must not both pass the guard.
   const inFlight = useRef(new Set<string>());
 
@@ -159,20 +189,34 @@ export default function FeaturesPage() {
       inFlight.current.delete(flag.name);
       if (result && !result.ok) {
         setStatus(flag.name, { phase: "failed", error: result.error });
-      } else {
-        setStatus(flag.name, { phase: "done", message: `${label} is now ${next ? "On" : "Off"}.` });
+        return;
       }
+      const isEngine = isEngineEnforceFlag(flag.name);
+      // The row's confirmation carries the new count: the summary line is static (live-region policy).
+      const count = isEngine
+        ? ` ${enforcedCountAfter(flagListRef.current, flag.name, next)} of 3 caller classes enforced.`
+        : "";
+      setStatus(flag.name, { phase: "done", message: `${label} is now ${next ? "On" : "Off"}.${count}` });
+      if (isEngineModeFlag(flag.name)) void refetchEngine();
     },
-    [setFlag, setStatus],
+    [setFlag, setStatus, refetchEngine],
   );
 
   // The displayed value is always the server's read-back, so a retry flips from it.
   const handleToggle = useCallback(
-    async (flag: FeatureFlagMeta) => {
+    async (flag: FeatureFlagMeta, trigger?: HTMLElement) => {
       if (inFlight.current.has(flag.name)) return;
+      const next = !flag.enabled;
+      if (next && FLAG_EXTRAS[flag.name]?.enforce) {
+        // Safari and Firefox on macOS do not focus a clicked button, so name the return target.
+        trigger?.focus();
+        returnFocusRef.current = trigger ?? null;
+        setStatus(flag.name, undefined);
+        setEnforcing(flag.name);
+        return;
+      }
       inFlight.current.add(flag.name);
       setStatus(flag.name, { phase: "saving" });
-      const next = !flag.enabled;
       const confirmDisable = FLAG_EXTRAS[flag.name]?.confirmDisable;
       if (!next && confirmDisable && (await confirmDisable.needsConfirm())) {
         inFlight.current.delete(flag.name);
@@ -185,8 +229,45 @@ export default function FeaturesPage() {
     [apply, setStatus],
   );
 
+  const handleRevert = useCallback(
+    (flag: FeatureFlagMeta) => {
+      if (inFlight.current.has(flag.name)) return;
+      inFlight.current.add(flag.name);
+      setStatus(flag.name, { phase: "saving" });
+      void apply(flag, false);
+    },
+    [apply, setStatus],
+  );
+
+  const listState = isLoading ? "loading" : loadError ? "failed" : "loaded";
+  useHashRowFocus(listState);
+
+  // A flag flipped in another tab or device shows up when this tab is looked at again (UX-36).
+  const lastRefetchRef = useRef(0);
+  useEffect(() => {
+    if (!refresh) return;
+    const onWake = () => {
+      if (document.visibilityState === "hidden") return;
+      if (Date.now() - lastRefetchRef.current < FLAG_REFETCH_WINDOW_MS) return;
+      lastRefetchRef.current = Date.now();
+      void refresh({ quiet: true });
+    };
+    lastRefetchRef.current = Date.now();
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, [refresh]);
+
+  const enforcingFlag = enforcing ? flagList.find((f) => f.name === enforcing) : undefined;
+  const enforcingExtra = enforcing ? FLAG_EXTRAS[enforcing]?.enforce : undefined;
   const confirmingFlag = confirming ? flagList.find((f) => f.name === confirming) : undefined;
   const ConfirmDialog = confirming ? FLAG_EXTRAS[confirming]?.confirmDisable?.Dialog : undefined;
+
+  const orderAdvisory = (predecessor: { flag: string; advisory: string } | undefined) =>
+    predecessor && !flagList.find((f) => f.name === predecessor.flag)?.enabled ? predecessor.advisory : undefined;
 
   const renderRow = (flag: FeatureFlagMeta, nested = false) => (
     <FlagRow
@@ -195,9 +276,15 @@ export default function FeaturesPage() {
       nested={nested}
       status={rowStatus[flag.name]}
       onToggle={handleToggle}
+      onRevert={handleRevert}
       setFlag={setFlag}
     />
   );
+
+  const renderGroupHeader = (heading: string) => {
+    const Header = GROUP_HEADERS[heading];
+    return Header ? <Header view={engineView} flagList={flagList} /> : null;
+  };
 
   const renderList = () =>
     layoutFlags(flagList).map((item) => {
@@ -207,6 +294,7 @@ export default function FeaturesPage() {
       return (
         <section key={item.heading} className={group} aria-label={item.heading} data-testid="feature-flag-group">
           <h2 className={groupHeading}>{item.heading}</h2>
+          {renderGroupHeader(item.heading)}
           {item.members.flatMap((m) => [renderRow(m.flag), ...m.children.map((c) => renderRow(c, true))])}
         </section>
       );
@@ -236,6 +324,23 @@ export default function FeaturesPage() {
 
       <StreamHubRolloutPanel />
       <TymuxRolloutPanel />
+
+      {enforcingFlag && enforcingExtra && (
+        <EnforceDialog
+          cls={enforcingExtra.cls}
+          flagLabel={FEATURE_META[enforcingFlag.name]?.label ?? enforcingFlag.name}
+          classNote={enforcingExtra.classNote}
+          orderAdvisory={orderAdvisory(enforcingExtra.predecessor)}
+          returnFocusRef={returnFocusRef}
+          onCancel={() => setEnforcing(null)}
+          onConfirm={() => {
+            setEnforcing(null);
+            inFlight.current.add(enforcingFlag.name);
+            setStatus(enforcingFlag.name, { phase: "saving" });
+            void apply(enforcingFlag, true);
+          }}
+        />
+      )}
 
       {confirmingFlag && ConfirmDialog && (
         <ConfirmDialog
