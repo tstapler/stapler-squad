@@ -306,9 +306,13 @@ type backwardSyncOutcome struct{ updated, skipped, errored int }
 // transitionBackward archives-or-rewinds an item for a closed GitHub issue
 // through the gate. A concurrent mover or a gate denial is a skip retried on the
 // next tick (the gate has already reported a denial); anything else is an error.
-func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, target BacklogStatus) backwardSyncOutcome {
+//
+// from is the status target was chosen for: pinning the write to it stops a
+// live item that moved since the sync read from being archived.
+func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target BacklogStatus) backwardSyncOutcome {
 	_, err := sl.storage.GatedTransition(ctx, TransitionRequest{
 		Caller: CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
+		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(from)},
 	})
 	switch {
 	case err == nil:
@@ -320,6 +324,17 @@ func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, targe
 		log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", itemID, err)
 		return backwardSyncOutcome{errored: 1}
 	}
+}
+
+// backwardPrecheckAllows is the cheap pre-check before the gated write. A
+// SwitchableWorkflowEngine answers as the operator class, not the system class
+// the write runs as, so a denial there would skip the gate and its
+// transition_denied row; the gate is the authority, so it decides instead.
+func (sl *SyncLoop) backwardPrecheckAllows(in BacklogItemTransitionInput, target BacklogStatus) bool {
+	if _, selector := sl.workflowEngine.(*SwitchableWorkflowEngine); selector {
+		return true
+	}
+	return GuardedTransitionAllowed(sl.workflowEngine, in, target)
 }
 
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
@@ -480,9 +495,9 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 							SkipPlanning:      existing.SkipPlanning,
 							PlanArtifactsPath: existing.PlanArtifactsPath,
 						}
-						if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
+						if sl.backwardPrecheckAllows(guardInput, target) {
 							// A skip or failure leaves the watermark alone so the next tick retries.
-							res := sl.transitionBackward(ctx, existing.ID.String(), target)
+							res := sl.transitionBackward(ctx, existing.ID.String(), BacklogStatus(existing.Status), target)
 							updated, skipped, errored = updated+res.updated, skipped+res.skipped, errored+res.errored
 							advanceWatermark = res.updated > 0
 						} else {
