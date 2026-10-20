@@ -20,7 +20,7 @@ import { SessionStatus } from "@/gen/session/v1/types_pb";
 const mockPush = jest.fn();
 let mockSessionParam: string | null = null;
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => ({ get: (key: string) => (key === "session" ? mockSessionParam : null) }),
   useRouter: () => ({ push: mockPush }),
 }));

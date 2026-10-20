@@ -5,14 +5,18 @@ import { NotificationItem } from "./NotificationItem";
 import { makeDescriptor, makeGuidanceRow, makeNotification, makeQuestionDescriptors } from "./__fixtures__/notificationFixtures";
 import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
 jest.mock("@/lib/hooks/useFeatureFlagValue", () => ({
   ...jest.requireActual("@/lib/hooks/useFeatureFlagValue"),

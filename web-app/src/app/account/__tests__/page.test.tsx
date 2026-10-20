@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AccountPage from "../page";
 
-jest.mock("next/navigation", () => ({ useRouter: () => ({ replace: jest.fn() }) }));
+jest.mock("@/lib/nav", () => ({ useRouter: () => ({ replace: jest.fn() }) }));
 jest.mock("@/lib/analytics/usePageView", () => ({ usePageView: () => {} }));
 jest.mock("@/lib/contexts/AuthContext", () => ({
   useAuth: () => ({ authEnabled: true, authenticated: true, loading: false }),

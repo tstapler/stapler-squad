@@ -32,7 +32,7 @@ const mockPush = jest.fn();
 // Module mocks
 // ---------------------------------------------------------------------------
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => ({ get: () => null }),
   useRouter: () => ({ push: mockPush }),
 }));

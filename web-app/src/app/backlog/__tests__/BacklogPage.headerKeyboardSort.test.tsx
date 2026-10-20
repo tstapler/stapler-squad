@@ -3,7 +3,7 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 import BacklogPage from "../page";
 import { itemFixture, mockUseWatchBacklogItems } from "./backlogPageTestFixtures";
 
-jest.mock("next/navigation", () => require("./backlogPageTestFixtures").nextNavigationMock());
+jest.mock("@/lib/nav", () => require("./backlogPageTestFixtures").nextNavigationMock());
 jest.mock("@/lib/analytics", () => require("./backlogPageTestFixtures").analyticsMock());
 jest.mock("@/lib/analytics/usePageView", () => require("./backlogPageTestFixtures").usePageViewMock());
 jest.mock("@/components/backlog/BacklogItemDetail", () => require("./backlogPageTestFixtures").backlogItemDetailMock());

@@ -29,7 +29,7 @@ import {
 // Mocks (copied verbatim from Omnibar.alias.test.tsx's baseline block)
 // ---------------------------------------------------------------------------
 
-jest.mock("next/navigation", () => require("./omnibarTestFixtures").mockNextNavigationModule());
+jest.mock("@/lib/nav", () => require("./omnibarTestFixtures").mockNextNavigationModule());
 
 jest.mock("@/lib/contexts/ThemeContext", () => require("./omnibarTestFixtures").mockThemeContextModule());
 

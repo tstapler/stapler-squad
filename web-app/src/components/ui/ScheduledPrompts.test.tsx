@@ -9,14 +9,18 @@ import { ScheduledPrompts, type ScheduledPromptsProps } from "./ScheduledPrompts
 import { formatClockTime } from "./OfflineBanner";
 import { MIN, NOW, makePeer, makeState, makeTrigger } from "./__fixtures__/scheduledPromptsFixtures";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 jest.mock("@/lib/api/wakeTriggerApi", () => ({ cancelWakeTrigger: jest.fn(), createOperatorReminder: jest.fn() }));
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
 

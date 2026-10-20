@@ -22,7 +22,7 @@ import { resetDefaultRegistry } from "@/lib/omnibar";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 
 const mockPush = jest.fn();
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   usePathname: jest.fn(),
   useRouter: () => ({ push: mockPush, replace: jest.fn() }),
 }));
