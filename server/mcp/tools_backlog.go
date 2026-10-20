@@ -1504,7 +1504,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
 	if recoverFromReview {
 		reopen := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
-		if _, reopenErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, reopen, session.TriggeredByAgent); reopenErr != nil {
+		if _, reopenErr := h.storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, reopen, session.TriggeredByAgent); reopenErr != nil {
 			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
 			return errResult(ErrInternalError, "item state changed since your last read — call get_backlog_item to see its current status", ""), nil
 		}
@@ -1512,7 +1512,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 	// Transition item from its validated source status to the target status.
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
+	if _, transErr := h.storage.RawTransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
 		log.InfoLog().Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
@@ -1679,7 +1679,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	}
 
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
+	if _, transErr := h.storage.RawTransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
 		log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
@@ -1818,7 +1818,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	}
 
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredByAgent); transErr != nil {
+	if _, transErr := h.storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredByAgent); transErr != nil {
 		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
 		if errors.Is(transErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
@@ -2522,7 +2522,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 
 	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
-	if _, archErr := h.storage.ArchiveBacklogItem(ctx, itemID, precondition, session.TriggeredByAgent, note); archErr != nil {
+	if _, archErr := h.storage.RawArchiveBacklogItem(ctx, itemID, precondition, session.TriggeredByAgent, note); archErr != nil {
 		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
 		if errors.Is(archErr, session.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it) — call get_backlog_item to see its current status", ""), nil

@@ -1048,7 +1048,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedStatus:    string(BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
-	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
+	if _, err := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
 		log.Error("[BacklogLifecycle] TransitionBacklogItemStatus failed", "item", item.ID, "to", toStatus, "error", err)
 		return
 	}
@@ -1920,14 +1920,14 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	status := item.Status
 	if status == string(BacklogStatusInProgress) {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: status}
-		if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, precondition, TriggeredBySystem); err != nil {
+		if _, err := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, precondition, TriggeredBySystem); err != nil {
 			return fmt.Errorf("in_progress->review: %w", err)
 		}
 		status = string(BacklogStatusReview)
 	}
 
 	precondition := &BacklogItemPrecondition{ExpectedStatus: status}
-	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
+	if _, err := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
 	l.cleanupTerminalItemSync(ctx, item.ID)

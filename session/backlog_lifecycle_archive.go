@@ -85,7 +85,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	archived := 0
 	for _, item := range items {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusDone)}
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil { //nolint:silenttransition idempotent by construction (see doc comment above) — item stays "done" and reappears in FindDoneItemsOlderThan's result on the next tick, so a failed archive here is retried, not silently dropped
+		if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil { //nolint:silenttransition idempotent by construction (see doc comment above) — item stays "done" and reappears in FindDoneItemsOlderThan's result on the next tick, so a failed archive here is retried, not silently dropped
 			log.WarningLog().Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
 			continue
 		}

@@ -365,7 +365,7 @@ func (s *BacklogService) TriggerTriage(
 	// races with this re-triage doesn't drag the item backwards to idea.
 	if item.Status == string(session.BacklogStatusReady) {
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
+		if _, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, req.Msg.ItemId,
 			session.BacklogStatusIdea, precondition, session.TriggeredByUser); transErr != nil {
 			log.Warn("[TriggerTriage] moved past ready before triage reset (race with work-session spawn); aborting re-triage", "item", req.Msg.ItemId)
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -862,7 +862,7 @@ func (s *BacklogService) TriggerTriage(
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.TransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
+		if _, transErr := s.storage.RawTransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
 			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
 			log.Error("[TriggerTriage] status transition idea→ready failed", "item", itemID, "error", transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")

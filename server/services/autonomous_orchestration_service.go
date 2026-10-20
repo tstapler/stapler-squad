@@ -583,7 +583,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					}
 					if toStatus != "" {
 						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil { //nolint:silenttransition surfaced below via statusTransitionErr, which overrides the operator notification title/body ("status update failed") rather than a silent success
+						if _, transErr := concreteStorage.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil { //nolint:silenttransition surfaced below via statusTransitionErr, which overrides the operator notification title/body ("status update failed") rather than a silent success
 							statusTransitionErr = transErr
 							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
 						} else {

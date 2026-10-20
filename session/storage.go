@@ -1086,14 +1086,14 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp and status. See
+// RawArchiveBacklogItem sets the archived_at timestamp and status. See
 // EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
-func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
 	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
-// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
-func (s *Storage) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+// RawUnarchiveBacklogItem clears archived_at and restores the item to "idea".
+func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
 	return s.repo.UnarchiveBacklogItem(ctx, id)
 }
 
@@ -1102,12 +1102,12 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 	return s.repo.DeleteBacklogItem(ctx, id)
 }
 
-// TransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+// RawTransitionBacklogItemStatus changes the status of a backlog item.
+func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
-// SetBacklogItemPRAndTransition is the shared primary-write path for
+// RawSetBacklogItemPRAndTransition is the shared primary-write path for
 // recording a PR that genuinely exists on GitHub against a backlog item and
 // moving it review -> pr_pending, or — when observed is already pr_pending —
 // correcting an already-recorded PR to a different one (a reassignment, e.g.
@@ -1164,7 +1164,7 @@ func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, to
 // than silently succeeding because the check only lived in one handler.
 // guard is ignored (may be nil) when observed.Status is review — a
 // first-time recording never needs one.
-func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
+func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}

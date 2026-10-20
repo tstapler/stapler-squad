@@ -305,7 +305,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		summary := fmt.Sprintf("Reconciliation backstop: found an existing open PR #%d for this item's branch %q with no report_pr_created call on record.", info.Number, wt.BranchName)
 		// nil guard: this reconciler only ever lists review-status items
 		// (filter above), so it never hits the reassignment path.
-		if setErr := l.storage.SetBacklogItemPRAndTransition(ctx, &item, info.HTMLURL, info.Number, summary, nil); setErr != nil {
+		if setErr := l.storage.RawSetBacklogItemPRAndTransition(ctx, &item, info.HTMLURL, info.Number, summary, nil); setErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs SetBacklogItemPRAndTransition item=%s pr=%d: %v", item.ID, info.Number, setErr)
 			continue
 		}
@@ -598,7 +598,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog().Printf("[BacklogLifecycle] pushAndCreatePR item=%s falling back to done: %s", item.ID, reason)
 		// No status precondition: item may be at review or ready depending on when
 		// the PASS verdict was delivered relative to other transitions.
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
+		if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] pushAndCreatePR fallback done item=%s: %v", item.ID, transErr)
 			// A PASS verdict already confirmed the work; there was nothing to
 			// ship, so done was the correct terminal state — a failure here
@@ -908,7 +908,7 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 // if any, so callers can apply their own logging/fallback behavior.
 func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemID, note, caller string) error {
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: note}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
 		return transErr
 	}
 	l.resolveStuckLogged(ctx, l.storage.repo, itemID, domain.StuckReasonPushFailed, caller)
@@ -937,7 +937,7 @@ func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, ite
 		Note: fmt.Sprintf("self-heal (%s): recovered from drift — item has PR #%d (%s) cached but status was %q, not pr_pending",
 			caller, item.PrNumber, item.PrURL, item.Status),
 	}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovery transition failed (likely a concurrent legitimate transition, will retry next tick): %v", caller, item.ID, transErr)
 		return false
 	}
@@ -1634,7 +1634,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
+		if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)
 			// PR #%d is already confirmed merged — the item is left at
 			// pr_pending with nothing else surfacing this until the next
@@ -2286,7 +2286,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
 			closedPrNum, lastCommitSha, bounceMainBranch),
 	}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
+	if _, transErr := l.storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] closeIfSupersededByMain done transition item=%s: %v", item.ID, transErr)
 		return false
 	}

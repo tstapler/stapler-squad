@@ -467,7 +467,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		// it can no longer silently swap an already-tracked PR (including a
 		// merged one) with zero verification.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
-		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, updated, prURL, prNumber, note, nil); setErr != nil {
+		if setErr := s.storage.RawSetBacklogItemPRAndTransition(ctx, updated, prURL, prNumber, note, nil); setErr != nil {
 			if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("cannot associate PR: item %q already has PR #%d tracked (status pr_pending) — this manual override endpoint does not support reassigning an already-tracked PR to a different one (no GitHub verification is performed here); use report_pr_created from a work session instead: %w", req.Msg.ItemId, updated.PrNumber, setErr))
@@ -513,7 +513,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 		s.commitAndPushItemWorktrees(ctx, sessions)
 	}
 
-	archived, err := s.storage.ArchiveBacklogItem(ctx, req.Msg.ItemId, nil, session.TriggeredByUser, "")
+	archived, err := s.storage.RawArchiveBacklogItem(ctx, req.Msg.ItemId, nil, session.TriggeredByUser, "")
 	if err != nil {
 		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
@@ -544,7 +544,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	unarchived, err := s.storage.UnarchiveBacklogItem(ctx, req.Msg.ItemId)
+	unarchived, err := s.storage.RawUnarchiveBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
 		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
@@ -956,7 +956,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, triggeredBy)
+	updated, err := s.storage.RawTransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, triggeredBy)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -1329,7 +1329,7 @@ func (s *BacklogService) OverrideVerdict(
 			ExpectedStatus:    string(from),
 			ExpectedUpdatedAt: &updatedAt,
 		}
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
+		updated, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
 		if transErr != nil {
 			log.ErrorLog().Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {
@@ -1443,7 +1443,7 @@ func (s *BacklogService) SubmitManualReview(
 				log.InfoLog().Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
+				if _, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
 					log.WarningLog().Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
 					// Same shape as TriggerReReview's PASS->done path: code is
 					// confirmed shipped to main but the item is left stuck in review.

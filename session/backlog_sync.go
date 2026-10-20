@@ -459,7 +459,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 							PlanArtifactsPath: existing.PlanArtifactsPath,
 						}
 						if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
-							if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
+							if _, transErr := sl.storage.RawTransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
 								log.WarningLog().Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
 								errored++
 								advanceWatermark = false

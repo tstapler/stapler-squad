@@ -372,7 +372,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		}
 	}
 
-	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary, guard); setErr != nil {
+	if setErr := h.storage.RawSetBacklogItemPRAndTransition(ctx, item, prURL, prNumber, summary, guard); setErr != nil {
 		if errors.Is(setErr, session.ErrPreconditionFailed) {
 			// AC8: the item's status changed out from under this call between
 			// our read above and the atomic write (another action resolved it,
