@@ -21,6 +21,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
+	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -830,6 +831,15 @@ func sfDo[T any](sf *singleflight.Group, key string, fn func() (T, error)) (T, e
 	return val.(T), nil
 }
 
+// sfDoCtx is sfDo for a computation that honours ctx; see repostate.FlightCtx for
+// who waits on what and how a cancelled leader is kept from failing its followers.
+// fn must not cache a result when it fails, so a cancelled flight stores nothing.
+// joined, if non-nil, counts callers once registered in a flight (tests).
+func sfDoCtx[T any](ctx context.Context, sf *singleflight.Group, key string, joined *atomic.Int64, fn func() (T, error)) (T, error) {
+	v, _, err := repostate.FlightCtx(ctx, sf, key, joined, fn)
+	return v, err
+}
+
 // sfDoJoined is sfDo with a flight-registration counter: joined is incremented
 // once the caller is registered in the flight, so tests can wait for every
 // caller to join before releasing a blocked computation.
@@ -1012,7 +1022,7 @@ func (g *GoGitVCSReader) aheadBehindFlight(ctx context.Context, cacheKey aheadBe
 	type abResult struct{ ahead, behind int }
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
-	result, err := sfDo(&g.aheadBehindSF, worktreePath+"\x00"+base, func() (abResult, error) {
+	result, err := sfDoCtx(ctx, &g.aheadBehindSF, worktreePath+"\x00"+base, nil, func() (abResult, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
@@ -1036,7 +1046,7 @@ func (g *GoGitVCSReader) CommitMessages(ctx context.Context, worktreePath, base 
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
 	sfKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
-	msgs, err := sfDo(&g.commitMessagesSF, sfKey, func() ([]string, error) {
+	msgs, err := sfDoCtx(ctx, &g.commitMessagesSF, sfKey, nil, func() ([]string, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return nil, openErr

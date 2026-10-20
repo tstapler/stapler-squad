@@ -662,6 +662,9 @@ func (s *Scanner) scanRepo(ctx context.Context, repoPath string, force bool) []S
 			continue
 		}
 		result := s.scanWorktree(ctx, wt, defaultBranch, repoPath, force)
+		if ctx.Err() != nil {
+			return nil // shutting down: the partial scan is neither published nor cached
+		}
 		if result.Status == ScanResultStatusOK && !result.IsUnfinished() {
 			// Worktree went clean (e.g. the only uncommitted file was deleted) —
 			// remove any stale entry left in resultStore. Mirrors the CleanWorktree
@@ -737,6 +740,9 @@ func (s *Scanner) scanWorktree(ctx context.Context, wt WorktreeInfo, defaultBran
 
 	if defaultBranch != "" {
 		s.fillCommittedState(ctx, &result, repoPath, wt.Path, defaultBranch)
+		if ctx.Err() != nil {
+			return result // cancelled mid-walk: zero counts must not reach the cache
+		}
 	}
 
 	// Skip when uncommitted is false: DiffShortstat re-derives the identical
