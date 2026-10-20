@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import type { ReactNode } from "react";
 import { routes } from "@/lib/routes";
 import { ErrorBoundary } from "./ErrorBoundary";

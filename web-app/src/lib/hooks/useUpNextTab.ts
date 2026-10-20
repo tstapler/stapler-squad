@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useReplaceSearch, useSearchParams } from "@/lib/nav";
 import {
   readStoredTab,
   tabFromUrl,
@@ -26,6 +26,7 @@ export interface UseUpNextTab {
  */
 export function useUpNextTab(now: () => number = () => performance.now()): UseUpNextTab {
   const searchParams = useSearchParams();
+  const replaceSearch = useReplaceSearch();
   const urlTab = tabFromUrl({ item: stringParam(searchParams, "item"), tab: stringParam(searchParams, "tab") });
   const [storedTab, setStoredTab] = useState<UpNextTab | null>(null);
   // A click wins over the URL until the URL itself changes: history.replaceState does not always
@@ -65,11 +66,10 @@ export function useUpNextTab(now: () => number = () => performance.now()): UseUp
       const params = new URLSearchParams(searchParams.toString());
       params.delete("item");
       params.set("tab", next);
-      // history.replaceState (Next 15 syncs useSearchParams) instead of router.replace: on the static
-      // export router.replace hard-reloads the document, which drops keyboard focus and all state.
-      window.history.replaceState(window.history.state, "", `?${params.toString()}`);
+      // Not router.replace: on the static export that hard-reloads the document, dropping focus and state.
+      replaceSearch(`?${params.toString()}`);
     },
-    [searchParams, now],
+    [searchParams, now, replaceSearch],
   );
 
   return { tab, setTab };

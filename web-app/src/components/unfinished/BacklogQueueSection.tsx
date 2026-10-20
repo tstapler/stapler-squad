@@ -3,7 +3,7 @@
 
 import { useState, useCallback, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { useBacklogService, type BacklogItem, type GitHubIssue } from "@/lib/hooks/useBacklogService";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";

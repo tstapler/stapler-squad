@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useId, useMemo } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { type UserPR } from "@/gen/session/v1/types_pb";
 import { type UseGitHubPRsReturn } from "@/lib/hooks/useGitHubPRs";
 import { type FilterStatus, type SortBy, type PRListFilters } from "@/lib/hooks/usePRListFilters";

@@ -2,7 +2,7 @@
 // +feature: session-list session-search session-filter session-groupby session-list-collapse-groups
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
 import { SessionDetailTab } from "@/components/sessions/SessionDetail";
@@ -190,7 +190,7 @@ function HomeContent() {
       }
     }
     const query = params.toString();
-    router.replace(query ? `/?${query}` : "/", { scroll: false });
+    router.replace(query ? `/?${query}` : "/", { resetScroll: false });
   }, [router]);
 
   // Handle pending session navigation from notification click
@@ -233,7 +233,7 @@ function HomeContent() {
         const params = new URLSearchParams();
         params.set("session", sessionId);
         if (tabParam) params.set("tab", tabParam);
-        router.replace(`/?${params.toString()}`, { scroll: false });
+        router.replace(`/?${params.toString()}`, { resetScroll: false });
       }
     },
     [router]

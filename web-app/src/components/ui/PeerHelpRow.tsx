@@ -2,7 +2,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import type { PeerHelpInfo } from "@/gen/session/v1/wake_trigger_pb";
 import { ActionKind, ActionOutcome, ActionTargetKey } from "@/gen/session/v1/notification_action_pb";
 import { invokeNotificationAction } from "@/lib/api/notificationActionApi";

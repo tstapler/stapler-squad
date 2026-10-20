@@ -1,7 +1,7 @@
 "use client";
 
 import { AppLink } from "@/components/ui/AppLink";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/lib/nav";
 import { routes } from "@/lib/routes";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import {

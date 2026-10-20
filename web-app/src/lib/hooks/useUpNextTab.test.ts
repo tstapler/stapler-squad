@@ -4,6 +4,7 @@ import { useUpNextTab } from "./useUpNextTab";
 import { UP_NEXT_TAB_STORAGE_KEY } from "@/lib/unfinished/upNextTab";
 
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useSearchParams: jest.fn(),
 }));
 

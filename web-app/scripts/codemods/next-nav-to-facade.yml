@@ -1,0 +1,11 @@
+# Matcher for next-nav-to-facade.mjs (it applies the edits; ast-grep only locates the nodes).
+# Run through `ast-grep`, never `sg` (shadow-utils on Ubuntu). The driver also runs this as `language: TypeScript` for *.ts files.
+id: nav-import
+language: Tsx
+rule:
+  kind: string_fragment
+  regex: ^next/(navigation|link)$
+  inside:
+    kind: string
+    inside:
+      kind: import_statement

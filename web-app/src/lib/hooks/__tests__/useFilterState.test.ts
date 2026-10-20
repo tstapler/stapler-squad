@@ -38,7 +38,7 @@ describe("useFilterState", () => {
       result.current.setFilter("status", "running");
     });
 
-    expect(mockReplace).toHaveBeenCalledWith("?status=running", { scroll: false });
+    expect(mockReplace).toHaveBeenCalledWith("?status=running", { resetScroll: false });
   });
 
   it("setFilter(key, value) preserves existing params", () => {

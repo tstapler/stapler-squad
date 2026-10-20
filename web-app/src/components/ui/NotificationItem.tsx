@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { useCallback, useMemo, useRef } from "react";
 import { useFocusRestoreOnRemoval } from "@/lib/hooks/useFocusRestoreOnRemoval";
 import { useSessionHidden } from "@/lib/hooks/useSessionHidden";

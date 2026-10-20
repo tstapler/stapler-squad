@@ -23,6 +23,7 @@ import { useBacklogService } from "@/lib/hooks/useBacklogService";
 
 const mockPush = jest.fn();
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   usePathname: jest.fn(),
   useRouter: () => ({ push: mockPush, replace: jest.fn() }),
 }));
