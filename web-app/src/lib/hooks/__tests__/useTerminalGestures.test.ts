@@ -266,12 +266,14 @@ describe('useTerminalGestures', () => {
         mountWithOverride('any');
         tap();
         expect(onSendData).toHaveBeenCalledTimes(1);
+        expect(onSendData.mock.calls[0][0]).toMatch(/^\x1b\[M/);
       });
 
       it('handleTap_should_sendMouseBytes_When_overrideUndefined', () => {
         mountWithOverride(undefined);
         tap();
         expect(onSendData).toHaveBeenCalledTimes(1);
+        expect(onSendData.mock.calls[0][0]).toMatch(/^\x1b\[M/);
       });
 
       it('handleTap_should_reflectLatestOverride_When_toggledMidSession', () => {
