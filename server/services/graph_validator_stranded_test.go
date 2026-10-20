@@ -173,4 +173,3 @@ func TestDeleteStage_should_NotSuggestForce_When_StageHostsSystemRequiredEdges(t
 	assert.NotContains(t, err.Error(), "force")
 	assert.Contains(t, err.Error(), "system-required")
 }
-
