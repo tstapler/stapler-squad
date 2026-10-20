@@ -306,6 +306,12 @@ func (s *SwitchableWorkflowEngine) ForClass(class CallerClass, guards GuardPolic
 	return engineView{s: s, pol: callPolicy{Class: class, Guards: guards}}
 }
 
+// ForClassQuiet is ForClass without enforce-denial counting, for re-deciding or
+// probing a denial that was already counted.
+func (s *SwitchableWorkflowEngine) ForClassQuiet(class CallerClass, guards GuardPolicy) WorkflowEngine {
+	return engineView{s: s, pol: callPolicy{Class: class, Guards: guards}, quiet: true}
+}
+
 // ForCaller returns a WorkflowEngine bound to a registry entry: its class,
 // guard policy and forwarding flag, with an Unchecked caller's legacy answer
 // being "allow".
@@ -328,6 +334,24 @@ type engineView struct {
 	pol       callPolicy
 	caller    TransitionCaller
 	unchecked bool // a bare storage write today: the legacy answer is allow
+	// quiet suppresses enforce-denial counting and logging: a re-decide or probe
+	// of an already-recorded denial is not a new denial of a real attempt.
+	quiet bool
+}
+
+// Quiet returns the same view without denial counting.
+func (v engineView) Quiet() WorkflowEngine {
+	v.quiet = true
+	return v
+}
+
+// NoteGraphDenied counts a graph denial that the caller confirmed after
+// evaluating quietly (no operator override freed it).
+func (v engineView) NoteGraphDenied(from, to BacklogStatus) {
+	if v.quiet || v.mode() != ModeEnforce {
+		return
+	}
+	v.s.noteDenied(from, to, DenialConfigGraph)
 }
 
 var _ WorkflowEngine = engineView{}
@@ -359,7 +383,7 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnaps
 	case ModeEnforce:
 		allowed, reason := s.enf.canTransitionFor(v.pol, from, to, snap)
 		s.noteFallback(reason)
-		if !allowed {
+		if !allowed && !v.quiet {
 			s.noteDenied(from, to, DenialConfigGraph)
 		}
 		return allowed
@@ -448,7 +472,7 @@ func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogSta
 	case ModeEnforce:
 		ans := s.enf.validateGatesFor(v.pol, item, to, snap, evalAllGates)
 		s.noteFallback(ans.Fallback)
-		if ans.Err != nil {
+		if ans.Err != nil && !v.quiet {
 			s.noteDenied(item.Status, to, ans.Source)
 		}
 		return ans.Err

@@ -127,7 +127,7 @@ func decideTransition(view WorkflowEngine, item *BacklogItemData, req Transition
 	from := BacklogStatus(item.Status)
 	snap := BuildStageConfigSnapshotFallback(item)
 	in := guardInputFor(req, item, from)
-	if !view.CanTransition(from, req.To, snap) && !operatorGraphOverride(view, in.OverrideReason, req.To) {
+	if !graphAllows(view, from, req.To, snap, in.OverrideReason) {
 		return gateVerdict{
 			Err:    fmt.Errorf("invalid transition from %q to %q: %w", from, req.To, ErrTransitionNotAllowed),
 			Reason: DeniedConfigGraph,
@@ -137,6 +137,23 @@ func decideTransition(view WorkflowEngine, item *BacklogItemData, req Transition
 		return gateVerdict{Err: err, Reason: classifyGateDenial(err)}
 	}
 	return gateVerdict{}
+}
+
+// graphAllows is the graph check. It evaluates quietly and counts a denial only
+// when no operator override frees it, so an overridden transition is not
+// recorded as a denied one.
+func graphAllows(view WorkflowEngine, from, to BacklogStatus, snap *StageConfigSnapshot, overrideReason string) bool {
+	q, quietable := view.(interface{ Quiet() WorkflowEngine })
+	if !quietable {
+		return view.CanTransition(from, to, snap) || operatorGraphOverride(view, overrideReason, to)
+	}
+	if q.Quiet().CanTransition(from, to, snap) || operatorGraphOverride(view, overrideReason, to) {
+		return true
+	}
+	if n, ok := view.(interface{ NoteGraphDenied(from, to BacklogStatus) }); ok {
+		n.NoteGraphDenied(from, to)
+	}
+	return false
 }
 
 // graphOverrider is implemented by a class-aware view that lets an operator's
