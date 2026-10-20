@@ -28,8 +28,8 @@ describe("next-nav-to-facade-tests", () => {
   });
 
   it("produces the expected output, including one merged mock for a file with both", () => {
-    for (const name of filesIn(path.join(fixtures, "out"))) {
-      assert.equal(readFileSync(path.join(work, name), "utf8"), readFileSync(path.join(fixtures, "out", name), "utf8"), name);
+    for (const name of filesIn(path.join(fixtures, "expected"))) {
+      assert.equal(readFileSync(path.join(work, name), "utf8"), readFileSync(path.join(fixtures, "expected", name), "utf8"), name);
     }
   });
 
