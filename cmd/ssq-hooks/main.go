@@ -100,9 +100,10 @@ func handleCheck() {
 			payload.Source = "claude"
 		}
 		// AskUserQuestion is not a permission gate — Claude is asking the user a question.
-		// Return no output (empty stdout) so the hook defers to Claude Code's native terminal dialog.
-		// This mirrors the writeDeferDecision path in the HTTP approval handler.
+		// Print nothing so the hook defers to Claude Code's native terminal dialog, unless the
+		// operator already answered it. Always exit 0: exit 2 would deny the question (spike S2).
 		if strings.EqualFold(payload.ToolName, "AskUserQuestion") {
+			askUserQuestionViaResident(payload, hookipc.DialUnix, os.LookupEnv, os.Stdout)
 			os.Exit(0)
 		}
 	}

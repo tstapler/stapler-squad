@@ -98,8 +98,9 @@ export class TestServer {
         // config.GetConfigDirForDir), so this only affects the debug-handler
         // gate and log prefix, not data isolation.
         STAPLER_SQUAD_INSTANCE: 'e2e-local',
-        // A remote-auth server runs beside the global one, so it gets its own tmux server too.
-        ...(this.config.remoteAuth ? { STAPLER_SQUAD_TMUX_SOCKET: `ssq-e2e-remote-${process.pid}` } : {}),
+        // A private tmux server, so this run's sessions never share the live service's
+        // default server (where its leaked-control-mode sweeper could see them).
+        STAPLER_SQUAD_TMUX_SOCKET: this.tmuxSocket(),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -136,14 +137,16 @@ export class TestServer {
       this.process = null;
       console.log('✅ Test server stopped');
     }
-
-    // --tmux-keep-server leaves the private tmux server behind; drop it (touches only that socket).
-    if (this.config.remoteAuth) {
-      await execPromise(`tmux -L ssq-e2e-remote-${process.pid} kill-server`).catch(() => undefined);
-    }
+    // --tmux-keep-server leaves the private tmux server behind; it holds only this run's sessions.
+    await execPromise(`tmux -L ${this.tmuxSocket()} kill-server`).catch(() => undefined);
 
     await this.cleanupTestDir();
     await this.cleanupBinDir();
+  }
+
+  /** The private tmux socket name of this run: port-scoped, so concurrent runs never share one. */
+  tmuxSocket(): string {
+    return `ssq-e2e-${this.config.port}`;
   }
 
   getBaseUrl(): string {
@@ -209,7 +212,10 @@ export class TestServer {
     // Playwright (see 2026-09-04 insights-cost-intelligence e2e debugging).
     console.log('Ensuring Go binary is up to date (make stapler-squad)...');
     const projectRoot = path.join(__dirname, '../../..');
-    await execPromise('make stapler-squad', { cwd: projectRoot });
+    // `npx playwright` leaves npm_config_user_agent=npm/..., which web-app's bun-only
+    // preinstall guard rejects when make triggers `bun install`.
+    const { npm_config_user_agent: _npmUserAgent, ...makeEnv } = process.env;
+    await execPromise('make stapler-squad', { cwd: projectRoot, env: makeEnv });
     console.log('✅ Binary up to date');
 
     // The Makefile target always writes to the single repo-root path, which

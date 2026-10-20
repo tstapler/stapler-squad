@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useSwipeToDismiss } from "@/lib/hooks/useSwipeToDismiss";
+import { useEngagement } from "@/lib/hooks/useEngagedCard";
+import { EngagedRow } from "./EngagedRow";
 import type { GroupedNotification, TrayRow } from "@/lib/utils/notificationGrouping";
 import { NotificationItem, type NotificationItemProps } from "./NotificationItem";
 import {
@@ -41,6 +43,18 @@ interface TrayListProps {
   onDismissSession: (sessionKey: string) => void;
   /** Restores a representative id to its group for the ✕ control. */
   groupForId: (id: string) => GroupedNotification | undefined;
+  /** A row that held focus left the list and focus moved to the next item header. */
+  onFocusAdvanced?: (leftKey: string) => void;
+}
+
+/** Needs-you cards report engagement; every other row is a plain listitem. */
+function RowShell({ cardId, preExpand, children, ...rest }: React.HTMLAttributes<HTMLDivElement> & { cardId?: string; preExpand?: boolean }) {
+  if (!cardId) return <div {...rest}>{children}</div>;
+  return (
+    <EngagedRow cardId={cardId} preExpand={preExpand} {...rest}>
+      {children}
+    </EngagedRow>
+  );
 }
 
 const HEADER_HEIGHT = 44;
@@ -84,7 +98,9 @@ export function TrayList({
   onDismissGroup,
   onDismissSession,
   groupForId,
+  onFocusAdvanced,
 }: TrayListProps) {
+  const tracker = useEngagement();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const focusKeyRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -113,9 +129,29 @@ export function TrayList({
     const el = listRef.current?.querySelector<HTMLElement>(`[data-tray-row="${CSS.escape(key)}"]`);
     if (el) {
       focusKeyRef.current = null;
-      el.focus({ preventScroll: true });
+      if (tracker) tracker.focusProgrammatically(el);
+      else el.focus({ preventScroll: true });
     }
   });
+
+  // Focus inside a row that leaves moves to the next item header, never to an engaged state (7.1).
+  const heldFocusKey = useRef<string | null>(null);
+  const prevKeys = useRef<string[]>([]);
+  useEffect(() => {
+    const keys = rows.map((r) => r.key).filter((k) => k !== "nothing-needs-attention");
+    const left = heldFocusKey.current;
+    const before = prevKeys.current;
+    prevKeys.current = keys;
+    if (before.join("\0") !== keys.join("\0")) tracker?.noteListChange();
+    if (!left || (document.activeElement && document.activeElement !== document.body)) return;
+    const at = before.indexOf(left);
+    const next = keys.find((k) => k !== left && before.indexOf(k) > at) ?? keys.find((k) => k !== left);
+    heldFocusKey.current = null;
+    if (!next) return;
+    focusKeyRef.current = next;
+    setActiveKey(next);
+    onFocusAdvanced?.(left);
+  }, [rows, tracker, onFocusAdvanced]);
 
   const focusableKeys = rows.map((r) => r.key).filter((k) => k !== "nothing-needs-attention");
   // Under virtualization the active row can be outside the rendered window; the tab stop must stay on a mounted row.
@@ -135,7 +171,8 @@ export function TrayList({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest("input, textarea, select")) return;
+    // Shortcuts are inert in fields, the terminal and mid-composition (ux.md 7.1, WCAG 2.1.4).
+    if (target.closest("input, textarea, select, [contenteditable], .xterm") || e.nativeEvent.isComposing) return;
     const rowEl = target.closest<HTMLElement>("[data-tray-row]");
     const currentKey = rowEl?.dataset.trayRow ?? tabbableKey;
     const at = focusableKeys.indexOf(currentKey ?? "");
@@ -178,7 +215,14 @@ export function TrayList({
           const rowProps = {
             "data-tray-row": row.key,
             tabIndex: row.key === tabbableKey ? 0 : -1,
-            onFocus: () => setActiveKey(row.key),
+            onFocus: () => {
+              setActiveKey(row.key);
+              heldFocusKey.current = row.key;
+            },
+            onBlur: (e: React.FocusEvent<HTMLElement>) => {
+              // A real blur (element still connected) ends the claim; removal fires none.
+              if (e.target.isConnected && !e.currentTarget.contains(e.relatedTarget as Node | null)) heldFocusKey.current = null;
+            },
           };
           let body: React.ReactNode;
           if (row.kind === "header") {
@@ -258,7 +302,9 @@ export function TrayList({
               className={virtualRow}
               style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
             >
-              <div
+              <RowShell
+                cardId={isGroup && row.pinned ? row.key : undefined}
+                preExpand={isGroup && row.pinned && row.posInSet === 1}
                 role="listitem"
                 {...rowProps}
                 aria-posinset={isGroup ? row.posInSet : undefined}
@@ -266,7 +312,7 @@ export function TrayList({
                 data-testid={isGroup ? "tray-row" : undefined}
               >
                 {body}
-              </div>
+              </RowShell>
             </div>
           );
         })}

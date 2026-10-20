@@ -30,6 +30,12 @@ describe("recordToHistoryItem", () => {
     } as unknown as NotificationHistoryRecord;
     expect(recordToHistoryItem(record).isPendingDecision).toBe(true);
   });
+
+  it("carries the server's action descriptors onto the history item", () => {
+    const actions = [{ kind: 2, label: "Approve" }];
+    const record = { id: "r1", metadata: {}, actions } as unknown as NotificationHistoryRecord;
+    expect(recordToHistoryItem(record).actions).toBe(actions);
+  });
 });
 
 describe("mergeBackendHistory", () => {

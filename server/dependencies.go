@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
@@ -35,6 +36,9 @@ import (
 // Use BuildDependencies to construct and wire them in the correct order.
 // See the initialization order comment on NewServer for dependency constraints.
 type ServerDependencies struct {
+	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
+	// so both feed one wake_trigger_total mirror; set at registration.
+	WakeMetrics             *wakes.Metrics
 	SessionService          *services.SessionService
 	Storage                 *session.Storage
 	Instances               []*session.Instance
@@ -1321,6 +1325,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Warn("could not determine config dir for analytics DB", "err", configErr)
 	}
 
+	var filesAnalytics analytics.AnalyticsProvider = analytics.NewLogAnalyticsProvider()
+	if analyticsClient != nil {
+		filesAnalytics = analytics.NewSQLiteAnalyticsProvider(analyticsClient)
+	}
+	sessionService.GetFileService().SetTelemetry(services.NewFilesTelemetry(filesAnalytics))
+
 	// Diagnostics bundle retention: prune bundles older than 30 days at startup
 	// and then once per day. Non-fatal: a missing directory is silently skipped.
 	if retentionConfigDir, retentionConfigErr := config.GetConfigDir(); retentionConfigErr == nil {
@@ -1455,6 +1465,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for range ticker.C {
 			recoverAndLog("backlog reconcile ticker", func() { backlogLifecycleListener.ReconcileStuck(ctx) })
 			recoverAndLog("quota gate reconcile ticker", func() { quotaGate.Reconcile(ctx) })
+			recoverAndLog("wake reconcile ticker", func() { runWakeReconcile(ctx) })
 		}
 	}()
 

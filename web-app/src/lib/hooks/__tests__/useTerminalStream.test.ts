@@ -737,10 +737,13 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
       streams.push(s);
       return s.iterable;
     });
+    // The backoff delay is Math.random() * 1000ms. Pin it near its ceiling so the
+    // natural reconnect cannot fire before the visibility path (a ~0ms draw used to
+    // make the natural reconnect win, leaving the visibility connect() a no-op).
+    jest.spyOn(Math, 'random').mockReturnValue(0.999);
 
     const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
 
-    // Connect then let stream end (so shouldReconnect is true, isConnected is false)
     await act(async () => { result.current.connect(); });
     await waitFor(() => expect(streams.length).toBe(1));
     await act(async () => { streams[0].push(makeOutputMsg()); });
@@ -748,19 +751,17 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     await act(async () => { streams[0].end(); });
     await waitFor(() => expect(result.current.isConnected).toBe(false));
 
-    // Cancel any pending backoff timer from the natural reconnect
-    await act(async () => { jest.advanceTimersByTime(0); });
+    // The natural backoff reconnect is still pending: nothing has reconnected yet.
+    expect(callCount).toBe(1);
 
-    const callCountBefore = callCount;
-
-    // Simulate visibilitychange → visible
     await act(async () => {
       Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
-      jest.advanceTimersByTime(300); // debounce
+      jest.advanceTimersByTime(300); // 200ms debounce, well under the ~999ms backoff
     });
 
-    await waitFor(() => expect(callCount).toBeGreaterThan(callCountBefore));
+    // Exactly one connect, and it came from the visibility path.
+    expect(callCount).toBe(2);
   });
 
   it('handleVisibilityOrOnline_should_notCallConnect_When_shouldReconnectRefIsFalse', async () => {

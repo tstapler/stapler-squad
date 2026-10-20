@@ -38,6 +38,9 @@ jest.mock("@codemirror/view", () => {
   class EditorView {
     static lineWrapping = {};
     static theme = jest.fn(() => ({}));
+    static baseTheme = jest.fn(() => ({}));
+    static decorations = { from: () => ({}) };
+    static contentAttributes = { of: (attrs: unknown) => ({ attrs }) };
     constructor(opts: unknown) {
       mockEditorViewCtor(opts);
     }
@@ -54,14 +57,24 @@ jest.mock("@codemirror/view", () => {
       return { __keymap: bindings };
     }),
   };
-  return { EditorView, gutter, GutterMarker, keymap };
+  const Decoration = { none: {}, mark: () => ({ range: () => ({}) }), set: () => ({}) };
+  class WidgetType {}
+  const ViewPlugin = { fromClass: () => ({}) };
+  const lineNumbers = () => ({});
+  return { EditorView, gutter, GutterMarker, keymap, Decoration, WidgetType, ViewPlugin, lineNumbers };
 });
 
 jest.mock("@codemirror/state", () => ({
   EditorState: {
     readOnly: { of: (v: unknown) => ({ readOnly: v }) },
+    changeFilter: { of: (f: unknown) => ({ changeFilter: f }) },
     create: (opts: unknown) => opts,
   },
+  // Module-scope definitions in extensions/searchHighlight.ts need these to exist.
+  StateEffect: { define: () => ({ of: (value: unknown) => ({ value }), is: () => false }) },
+  StateField: { define: () => ({}) },
+  // Module-scope Facet.define in the engine's cm6LazyDoc modules (pulled in by CmEngine).
+  Facet: { define: () => ({}) },
   // Minimal stand-in for CodeMirror's Compartment: of()/reconfigure() just
   // need to be callable and return something dispatch() (also mocked) can
   // accept; the real reconfiguration behavior is CodeMirror's own, not this

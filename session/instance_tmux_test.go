@@ -1012,6 +1012,7 @@ func TestBuildClaudeCommand_FallsBackToSnapshotWhenNoProvider(t *testing.T) {
 // WireInstanceCallbacks runs, not a failure — no --mcp-config flag and no
 // log line.
 func TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow(t *testing.T) {
+	envtest.NewIsolatedStateDir(t) // LoadConfig must not write default config under the real state dir
 	buf := captureLogInfo(t)
 	inst := &Instance{Program: "claude", UUID: "test-uuid-boot"}
 
@@ -1048,6 +1049,7 @@ func TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty(t *testing.T) {
 // log-spam risk: a non-claude program launch must never attempt MCP URL
 // resolution or emit its log line.
 func TestBuildLaunchCommand_PiProgramSkipsMCPResolution(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
 	buf := captureLogInfo(t)
 	inst := &Instance{Program: "pi", UUID: "test-uuid-pi"}
 	inst.SetMCPServerURLProvider(func() string { return "" })

@@ -201,7 +201,7 @@ func TestLooseningFlip_ShouldReturnInternalAfterBoundWithNothingPersistedAndNotD
 
 func TestLooseningFlip_ShouldFailWithInternalAndZeroPersisted_WhenDiskIsFullButHatchFlipSucceedsWithFallback(t *testing.T) {
 	e := newAuditEnv(t)
-	e.mfs.failWrite = errDiskFull
+	e.mfs.setFailWrite(errDiskFull)
 
 	err := e.flip(flagLoosening, false)
 	require.Error(t, err)

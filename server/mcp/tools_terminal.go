@@ -262,7 +262,7 @@ func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallT
 		truncated = true
 	}
 
-	output := strings.Join(toStringSlice(allLines), "\n")
+	output := session.RedactMCPProofs(strings.Join(toStringSlice(allLines), "\n"))
 	if truncated {
 		output = fmt.Sprintf("[... %d lines omitted. Call read_session_output with lines=200 to see earlier output ...]\n", totalLines-lines) + output
 	}
@@ -515,14 +515,14 @@ func (th *terminalHandlers) waitForOutput(_ context.Context, req mcpgo.CallToolR
 			matched := false
 			for _, lineBytes := range allLines {
 				if strings.Contains(strings.ToLower(string(lineBytes)), patternLower) {
-					matchedLine = string(lineBytes)
+					matchedLine = session.RedactMCPProofs(string(lineBytes))
 					matched = true
 					break
 				}
 			}
 
 			if matched {
-				output := strings.Join(toStringSlice(displayLines), "\n")
+				output := session.RedactMCPProofs(strings.Join(toStringSlice(displayLines), "\n"))
 				if truncated {
 					output = "[... earlier output omitted ...]\n" + output
 				}
@@ -547,7 +547,7 @@ func (th *terminalHandlers) waitForOutput(_ context.Context, req mcpgo.CallToolR
 				displayLines = allLines[len(allLines)-50:]
 				truncated = true
 			}
-			output := strings.Join(toStringSlice(displayLines), "\n")
+			output := session.RedactMCPProofs(strings.Join(toStringSlice(displayLines), "\n"))
 			return okResult(WaitForOutputResult{
 				MCPResult: MCPResult{Success: true, Error: &MCPError{
 					Code:    "WAIT_TIMEOUT",

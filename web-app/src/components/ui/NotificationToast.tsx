@@ -381,7 +381,7 @@ export function NotificationToast({
               <div className={actionError} data-testid="toast-approve-confirm">
                 <strong>Approve this command?</strong>
                 <button type="button" className={inlineAction} onClick={decision.cancelConfirm}>
-                  Cancel
+                  Back
                 </button>
                 <button
                   type="button"

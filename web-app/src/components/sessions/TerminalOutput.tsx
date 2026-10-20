@@ -1107,8 +1107,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       onGestureActiveChange: setGestureActive,
       onProgrammaticData: deliverTerminalData,
       isInputBusy: isInputChunking,
+      mouseModeOverride: mouseMode,
     }),
-    [scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart, handlePageKeysSent, deliverTerminalData, isInputChunking],
+    [mouseMode, scrollOverride, gestureScrollEnabled, connectionEpoch, reportMisroute, notifyScrollStart, handlePageKeysSent, deliverTerminalData, isInputChunking],
   );
   const handleScrollOverrideChange = useCallback(
     (value: ScrollOverride) => {

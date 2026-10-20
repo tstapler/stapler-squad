@@ -118,8 +118,8 @@ func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string) (flag
 			}
 		}
 	case sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE:
-		if !strings.HasPrefix(op.scope, "kind:") {
-			return op, invalidFlagRequest("CLEAR_SCOPE needs a kind: scope, got %q", op.scope)
+		if op.scope == "" || op.scope == globalScopeLiteral {
+			return op, invalidFlagRequest("CLEAR_SCOPE needs a registered scope, got %q", op.scope)
 		}
 		if err := validKind(); err != nil {
 			return op, err

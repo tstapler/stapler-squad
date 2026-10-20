@@ -60,6 +60,10 @@ type HookSpecificOutput struct {
 	HookEventName            string `json:"hookEventName"`
 	PermissionDecision       string `json:"permissionDecision,omitempty"`
 	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+	// UpdatedInput replaces the tool input when the decision is allow. For
+	// AskUserQuestion it carries the echoed questions plus answers, which makes
+	// Claude skip the dialog (spike S1).
+	UpdatedInput map[string]any `json:"updatedInput,omitempty"`
 }
 
 type HookOutput struct {

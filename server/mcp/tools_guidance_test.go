@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newTestGuidanceStorage creates a temporary Storage for guidance tool tests,
@@ -281,4 +282,36 @@ func TestGetGuidanceRequest_should_ReturnError_When_QuestionIdMissing(t *testing
 	require.NoError(t, err)
 	m := parseResult(t, result)
 	assert.False(t, m["success"].(bool))
+}
+
+// A stopped or archived session's answer is stored, not pushed (ADR-005 resume
+// route); the agent reads it back after the operator resumes the session.
+func TestGetGuidanceRequest_should_ReturnTheStoredAnswer_When_AnswerWasSavedForALaterResume(t *testing.T) {
+	t.Parallel()
+	storage := newTestGuidanceStorage(t)
+	h := &backlogHandlers{storage: storage}
+	sessionUUID := uuid.New().String()
+	created, err := h.createGuidanceRequest(WithSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
+		"scope": "session", "question_text": "Which cache?", "question_type": "multiple-choice",
+		"options": []interface{}{"Redis", "Memcached"},
+	}))
+	require.NoError(t, err)
+	id := parseResult(t, created)["id"].(string)
+	rowID := uuid.MustParse(id)
+
+	applied, err := storage.AnswerGuidanceRequest(context.Background(), rowID, "Redis")
+	require.NoError(t, err)
+	require.True(t, applied)
+	_, err = storage.SetGuidanceDelivery(context.Background(), rowID, domain.DeliveryRouteResume, domain.DeliveryStateSavedForLater, 0)
+	require.NoError(t, err)
+
+	fetched, err := h.getGuidanceRequest(WithSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{"question_id": id}))
+
+	require.NoError(t, err)
+	m := parseResult(t, fetched)
+	require.True(t, m["success"].(bool), "got: %v", m)
+	assert.Equal(t, "answered", m["status"])
+	assert.Equal(t, "Redis", m["answer"])
+	assert.Equal(t, "saved_for_later", m["delivery_state"])
+	assert.NotEmpty(t, m["answered_at"])
 }

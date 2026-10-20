@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { NotificationProvider, useNotifications } from "@/lib/contexts/NotificationContext";
 import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS } from "@/lib/notification-policy";
 import type { NotificationData } from "@/lib/types/notification";
+import { resetReviewedMarksForTests } from "@/lib/hooks/useReviewedMarks";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
 // AttentionReason numeric values — matches proto/session/v1/types.proto
@@ -969,6 +970,27 @@ describe("NotificationContext", () => {
       expect(result.current.notificationHistory.map((n) => n.id).sort()).toEqual(["b", "c"]);
     });
 
+    it("action_resolved_sync_should_mark_exactly_the_id_set_answered_elsewhere_and_be_idempotent_when_replayed", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      seed(result);
+      const message = { type: "NOTIFICATION_ACTION_RESOLVED", ids: ["a", "ghost"], summary: "Redis" };
+
+      act(() => capturedSubscribeHandler?.(message));
+      act(() => capturedSubscribeHandler?.(message));
+
+      expect(result.current.answeredElsewhere).toEqual({ a: "Redis", ghost: "Redis" });
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["b", "c"]);
+      const byId = (id: string) => result.current.notificationHistory.find((n) => n.id === id);
+      expect(byId("a")?.isRead).toBe(true);
+      expect(byId("b")?.isRead).toBe(false);
+    });
+
+    it("broadcastActionResolved sends the id set and the result to the other tabs", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+      act(() => result.current.broadcastActionResolved(["q1"], "Redis"));
+      expect(mockBroadcast).toHaveBeenCalledWith({ type: "NOTIFICATION_ACTION_RESOLVED", ids: ["q1"], summary: "Redis" });
+    });
+
     it("moveAllToTray broadcasts the moved ids once", () => {
       const { result } = renderHook(() => useNotifications(), { wrapper });
       seed(result);
@@ -1079,5 +1101,58 @@ describe("unread count floor (TH-1)", () => {
       result.current.markAsReadBySessionId("s1");
     });
     expect(mockMarkAsRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Mark as handled (Unconfirmed answers, design/ux.md 3.1)", () => {
+  afterEach(() => {
+    mockServerUnread = 0;
+    window.localStorage.clear();
+    act(() => resetReviewedMarksForTests());
+  });
+
+  it("marked_handled_should_leave_this_browsers_badge_and_Needs_you_without_a_server_write", () => {
+    mockServerUnread = 2;
+    mockMarkAsRead.mockClear();
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "a" }), id: "ans-1" });
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "b" }), id: "ans-2" });
+    });
+    expect(result.current.getUnreadCount()).toBe(2);
+
+    act(() => result.current.markAnswerHandled(["ans-1"]));
+
+    expect(result.current.getUnreadCount()).toBe(1);
+    const handled = result.current.notificationHistory.find((n) => n.id === "ans-1");
+    expect(handled).toMatchObject({ isRead: true, isPendingDecision: false });
+    expect(result.current.notificationHistory.find((n) => n.id === "ans-2")?.isRead).toBe(false);
+    expect(mockMarkAsRead).not.toHaveBeenCalled();
+  });
+
+  it("reviewed_background_records_should_leave_the_bell_but_stay_unread_in_the_list_with_no_server_write", () => {
+    mockServerUnread = 2;
+    mockMarkAsRead.mockClear();
+    const { result } = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "a" }), id: "bg-1" });
+      result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "b" }), id: "bg-2" });
+    });
+    expect(result.current.getUnreadCount()).toBe(2);
+
+    act(() => result.current.markBackgroundReviewed(["bg-1"]));
+
+    expect(result.current.getUnreadCount()).toBe(1);
+    expect(result.current.notificationHistory.find((n) => n.id === "bg-1")?.isRead).toBe(false);
+    expect(mockMarkAsRead).not.toHaveBeenCalled();
+  });
+
+  it("marked_handled_should_survive_a_reload_in_this_browser_only", () => {
+    const first = renderHook(() => useNotifications(), { wrapper });
+    act(() => {
+      first.result.current.addToHistoryOnly({ ...makeNotification({ sessionId: "z" }), id: "ans-9" });
+    });
+    act(() => first.result.current.markAnswerHandled(["ans-9"]));
+    expect(window.localStorage.getItem("ssq.background.reviewed")).toContain("answer:ans-9@");
   });
 });
