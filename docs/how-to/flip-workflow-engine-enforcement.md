@@ -183,7 +183,7 @@ Exit codes of `scripts/workflow-engine-soak-status.sh`. `make workflow-engine-so
 | Exit | Meaning |
 |---|---|
 | 0 | READY |
-| 1 | NOT READY, or NEEDS_OWNER_ACK |
+| 1 | NOT READY, NEEDS_OWNER_ACK, or the config diff and stranded-item preview could not be computed (`config_diff_error`) |
 | 2 | Service unreachable, a 401, or a rejected ack file |
 
 Check one class: `make workflow-engine-soak-status ARGS="--class agent --ack-file $HOME/workflow-engine-acks.json"`.

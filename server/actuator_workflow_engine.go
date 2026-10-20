@@ -105,7 +105,7 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 	rep.ShadowCalls, rep.DivergenceTotal, rep.NotComparedTotal = soakSeriesFrom(ledger)
 	if r.URL.Query().Get("config_diff") != "" {
 		fillConfigDiff(r.Context(), src, &rep)
-		if len(rep.StrandedItems) > 0 {
+		if len(rep.StrandedItems) > 0 || rep.ConfigDiffMessage != "" {
 			rep.ExitCode = 1
 		}
 	}
