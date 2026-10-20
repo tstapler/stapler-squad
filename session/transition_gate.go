@@ -449,7 +449,9 @@ func gatePrecondition(req TransitionRequest, spec TransitionCallerSpec, item *Ba
 
 // Rollback restores the status a failed multi-step operation moved the item
 // away from. It is never engine-checked, only counted, and it requires an
-// ExpectedStatus so it cannot overwrite a concurrent mover.
+// ExpectedStatus so it cannot overwrite a concurrent mover. It also clears the
+// stateful gate latches of the edge it undoes (to -> ExpectedStatus), since the
+// transition that latched them did not stick.
 func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	if precondition == nil || precondition.ExpectedStatus == "" {
 		return nil, fmt.Errorf("%w: a rollback requires an ExpectedStatus", ErrInvalidTransitionRequest)
@@ -457,6 +459,9 @@ func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus,
 	updated, err := s.repo.rawTransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
 	if err == nil {
 		RecordEngineBypass(CallerRollback)
+		if g := s.gate.Load(); g != nil {
+			g.engine.ClearLatches(itemID, to, BacklogStatus(precondition.ExpectedStatus))
+		}
 	}
 	return updated, err
 }

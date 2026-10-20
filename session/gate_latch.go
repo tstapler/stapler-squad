@@ -69,6 +69,52 @@ func (e *ConfiguredWorkflowEngine) RecordLatchesAfterCommit(item BacklogItemTran
 	}
 }
 
+// gateLatchClearer is the optional repository capability ClearLatches needs; a
+// repository without it leaves latches in place.
+type gateLatchClearer interface {
+	DeleteByItemAndGate(ctx context.Context, itemID, gateID uuid.UUID) error
+}
+
+// ClearLatches removes the latch of each effectively-stateful structural gate on
+// the from->to edge, so an undone transition does not leave the gate answering
+// "previously satisfied". A failure is logged; the stale latch then stays.
+func (e *ConfiguredWorkflowEngine) ClearLatches(itemID string, from, to BacklogStatus) {
+	itemUUID, ok := e.latchKey(itemID)
+	clearer, canClear := e.gateSatisfactionRepo.(gateLatchClearer)
+	if !ok || !canClear {
+		return
+	}
+	edge, found := e.cache.Get(from, to)
+	if !found {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), e.lookupTimeout())
+	defer cancel()
+	for _, g := range edge.Gates {
+		if g.Kind != GateKindStructural || !g.effectiveStateful() {
+			continue
+		}
+		if err := clearer.DeleteByItemAndGate(ctx, itemUUID, g.ID); err != nil {
+			log.WarningLog().Printf("[ConfiguredWorkflowEngine] latch clear failed for item %s gate %s: %v", itemUUID, g.ID, err)
+		}
+	}
+}
+
+func (e *ConfiguredWorkflowEngine) lookupTimeout() time.Duration {
+	if e.gateLookupTimeout > 0 {
+		return e.gateLookupTimeout
+	}
+	return defaultGateLookupTimeout
+}
+
+// ClearLatches undoes RecordLatchesAfterCommit for the from->to edge; a no-op
+// without a usable Configured engine.
+func (s *SwitchableWorkflowEngine) ClearLatches(itemID string, from, to BacklogStatus) {
+	if cfg, _ := s.enf.usableConfigured(); cfg != nil {
+		cfg.ClearLatches(itemID, from, to)
+	}
+}
+
 // recordLatch is idempotent: losing a create race to an existing record is
 // success.
 func (e *ConfiguredWorkflowEngine) recordLatch(itemID, gateID uuid.UUID) error {

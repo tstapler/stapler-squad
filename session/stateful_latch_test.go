@@ -69,3 +69,21 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 		}
 	}
 }
+
+func TestRollback_ClearsStatefulLatchOfUndoneEdge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	from, to := newCustomTransitionWithGates(t, h.repo.client, h.cfg, []GateKind{GateKindStructural}, []bool{true})
+	item := h.newItem(t, from)
+	satisfied := BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACDone}
+	regressed := BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACPending}
+
+	h.cfg.RecordLatchesAfterCommit(satisfied, to)
+	require.NoError(t, h.cfg.ValidateGates(regressed, to, nil), "latched")
+	h.moveRaw(t, item.ID, to)
+
+	_, err := h.storage.Rollback(ctx, item.ID, from, &BacklogItemPrecondition{ExpectedStatus: string(to)}, TriggeredBySystem)
+	require.NoError(t, err)
+	require.Error(t, h.cfg.ValidateGates(regressed, to, nil), "a rolled-back transition must not leave the gate latched")
+}
