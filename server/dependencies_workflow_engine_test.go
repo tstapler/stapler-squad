@@ -71,6 +71,39 @@ func TestBuildServerDependencies_WiresSelectorIntoBacklogServiceAndSyncLoop_When
 	require.NotNil(t, rt.WorkflowEngine.Soak.Ledger)
 }
 
+func TestBuildServerDependencies_InjectsTransitionGateWithSameSelectorAndReporter(t *testing.T) {
+	rt, logs := buildNarrowRuntimeDeps(t)
+
+	require.True(t, rt.Storage.TransitionGateWired(), "production Storage has the gate injected")
+	require.Same(t, rt.WorkflowEngine.Engine, rt.Storage.TransitionGateEngine(), "the gate decides with the selector the handler uses")
+	require.Same(t, rt.WorkflowEngine.Engine, rt.BacklogService.WorkflowEngine())
+	require.Contains(t, logs, "workflow engine gate: transition_gate=wired reporter=wired class_modes=operator:shadow,agent:shadow,system:shadow")
+}
+
+func TestBuildServerDependencies_ClassModesFollowTheirOwnFlags(t *testing.T) {
+	rt, _ := buildNarrowRuntimeDeps(t)
+	modes := rt.WorkflowEngine.Modes
+	require.NotNil(t, modes)
+	require.Equal(t, session.ModeShadow, modes.ModeFor(session.ClassAgent), "agent enforce ships off")
+
+	// The selector answers per class from the same source: an unchecked agent
+	// write (idea->done has no edge) is allowed until the agent class enforces.
+	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork)
+	require.True(t, ok)
+	require.True(t, rt.WorkflowEngine.Engine.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil))
+}
+
+func TestTransitionGateStartupLine_ReportsUnwiredStorage(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	w := newWorkflowEngineWiring(session.NewDefaultWorkflowEngine(), nil, nil, config.LoadConfig)
+	storage := &session.Storage{}
+
+	require.Equal(t, "workflow engine gate: transition_gate=unwired reporter=unwired class_modes=operator:shadow,agent:shadow,system:shadow",
+		transitionGateStartupLine(storage, false, w.Modes))
+	require.Error(t, w.InjectTransitionGate(storage, nil), "the gate cannot be injected without its reporter")
+	require.False(t, storage.TransitionGateWired())
+}
+
 func TestBuildServerDependencies_LogsEngineModeStartupLine(t *testing.T) {
 	_, logs := buildNarrowRuntimeDeps(t)
 

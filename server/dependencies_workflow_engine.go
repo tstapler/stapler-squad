@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -20,6 +21,8 @@ type WorkflowEngineWiring struct {
 	// never be handed to BacklogLifecycleListener, which needs the concrete
 	// *session.ConfiguredWorkflowEngine (see BacklogLifecycleListener.workflowEngine).
 	Engine *session.SwitchableWorkflowEngine
+	// Modes resolves each caller class's mode from live config.
+	Modes *session.FlagClassModeSource
 	// Recorder persists the shadow ledger; its Run is started with the server.
 	Recorder *session.ShadowLedgerRecorder
 	// Soak backs /actuator/workflow-engine.
@@ -36,15 +39,18 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 		dir = ""
 	}
 	recorder := session.NewShadowLedgerRecorder(dir)
-	modes := services.NewWorkflowEngineModeSource(loadConfig, nil)
+	modes := services.NewWorkflowEngineClassModeSource(loadConfig, nil)
 	engine := session.NewSwitchableWorkflowEngine(def, cfgEngine, modes,
 		session.WithShadowRecorder(recorder),
 		session.WithConfigLabeler(session.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
 	)
 
 	soak := &WorkflowEngineSoakSource{
-		Ledger:           func() (session.ShadowLedger, error) { return recorder.Snapshot(), nil },
-		AnyClassEnforced: func() bool { return config.EffectiveWorkflowEngineEnforce(loadConfig()) },
+		Ledger: func() (session.ShadowLedger, error) { return recorder.Snapshot(), nil },
+		AnyClassEnforced: func() bool {
+			cfg := loadConfig()
+			return config.EffectiveWorkflowEngineEnforce(cfg) || config.EffectiveWorkflowEngineEnforceAgent(cfg)
+		},
 	}
 	if dir != "" {
 		soak.ReproPath = session.ShadowLedgerPath(dir)
@@ -54,7 +60,36 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 	}
 
 	logWorkflowEngineStartup(modes.Mode(), cfgEngine)
-	return &WorkflowEngineWiring{Engine: engine, Recorder: recorder, Soak: soak}
+	return &WorkflowEngineWiring{Engine: engine, Modes: modes, Recorder: recorder, Soak: soak}
+}
+
+// InjectTransitionGate wires the selector and the denial reporter into storage
+// in one call, so the gate can never be live without its reporter, and logs the
+// startup line that says so.
+func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, reporter session.TransitionDeniedReporter) error {
+	if err := storage.SetTransitionGate(w.Engine, reporter); err != nil {
+		return fmt.Errorf("inject transition gate: %w", err)
+	}
+	log.Info(transitionGateStartupLine(storage, reporter != nil, w.Modes))
+	return nil
+}
+
+// transitionGateStartupLine is the line an operator greps for to confirm the
+// choke point is live. The system class has no enforce flag until Task 1.5.8g,
+// so it reads shadow (or off when the shadow flag is off).
+func transitionGateStartupLine(storage *session.Storage, reporterWired bool, modes session.ClassModeSource) string {
+	wired := func(b bool) string {
+		if b {
+			return "wired"
+		}
+		return "unwired"
+	}
+	classModes := make([]string, 0, 3)
+	for _, c := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
+		classModes = append(classModes, fmt.Sprintf("%s:%s", c, engineModeName(modes.ModeFor(c))))
+	}
+	return fmt.Sprintf("workflow engine gate: transition_gate=%s reporter=%s class_modes=%s",
+		wired(storage.TransitionGateWired()), wired(reporterWired), strings.Join(classModes, ","))
 }
 
 // RegisterStatusDetail shows the shadow divergence count on the shadow flag's status line.

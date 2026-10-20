@@ -584,11 +584,12 @@ type classEnforceFlag struct {
 	Default bool
 }
 
-// classEnforceFlags maps a class to its enforce flag. Task 1.5.3c adds the
-// agent row and Task 1.5.8g the system row, each in the task that registers the
-// flag; a class absent here resolves from the shadow flag alone (ADR-007 D8).
+// classEnforceFlags maps a class to its enforce flag. Task 1.5.8g adds the
+// system row in the task that registers its flag; a class absent here resolves
+// from the shadow flag alone (ADR-007 D8).
 var classEnforceFlags = map[CallerClass]classEnforceFlag{
 	ClassOperator: {Name: config.WorkflowEngineEnforceFeatureFlag, Default: config.WorkflowEngineEnforceDefault},
+	ClassAgent:    {Name: config.WorkflowEngineEnforceAgentFeatureFlag, Default: config.WorkflowEngineEnforceAgentDefault},
 }
 
 // ClassEnforceFlag returns class's enforce flag name and registered default;

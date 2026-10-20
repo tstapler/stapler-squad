@@ -581,18 +581,22 @@ func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
 }
 
-// WorkflowEngineShadowFeatureFlag and WorkflowEngineEnforceFeatureFlag select
-// the backlog workflow engine mode (session.ModeFromFlags): shadow compares the
-// configured engine against today's answer without changing anything; enforce
-// makes the configured graph and gates decide. Both are live-settable.
+// WorkflowEngineShadowFeatureFlag and the per-class enforce flags select the
+// backlog workflow engine mode (session.ModeFromFlags): shadow compares the
+// configured engine against today's answer without changing anything; an
+// enforce flag makes the configured graph and gates decide for its caller
+// class (operator, agent; system lands with Task 1.5.8g). All are live-settable.
 const (
-	WorkflowEngineShadowFeatureFlag  = "backlog:workflow-engine-shadow"
-	WorkflowEngineEnforceFeatureFlag = "backlog:workflow-engine-enforce"
+	WorkflowEngineShadowFeatureFlag       = "backlog:workflow-engine-shadow"
+	WorkflowEngineEnforceFeatureFlag      = "backlog:workflow-engine-enforce"
+	WorkflowEngineEnforceAgentFeatureFlag = "backlog:workflow-engine-enforce-agent"
 
 	// WorkflowEngineShadowDefault is on so the soak accrues evidence from the first boot.
 	WorkflowEngineShadowDefault = true
 	// WorkflowEngineEnforceDefault is off until the soak verdict is READY.
 	WorkflowEngineEnforceDefault = false
+	// WorkflowEngineEnforceAgentDefault is off until the agent class's soak is acknowledged.
+	WorkflowEngineEnforceAgentDefault = false
 )
 
 // EffectiveWorkflowEngineShadow reports whether shadow comparison is on. Read
@@ -605,6 +609,12 @@ func EffectiveWorkflowEngineShadow(cfg *Config) bool {
 // EffectiveWorkflowEngineEnforce reports whether the configured engine decides.
 func EffectiveWorkflowEngineEnforce(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceFeatureFlag, WorkflowEngineEnforceDefault)
+}
+
+// EffectiveWorkflowEngineEnforceAgent reports whether the configured engine
+// decides for agent (MCP tool) callers.
+func EffectiveWorkflowEngineEnforceAgent(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceAgentFeatureFlag, WorkflowEngineEnforceAgentDefault)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager

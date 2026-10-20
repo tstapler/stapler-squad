@@ -62,6 +62,7 @@ func (s bypassSite) key() string { return s.file + " " + s.fn }
 
 const (
 	wrapperReason  = "Storage wrapper over the repo primitive; renamed Raw* in Task 1.5.4a"
+	gateReason     = "Storage.GatedTransition choke point (ADR-007 D1)"
 	delegateReason = "MCP delegate forwards to the handler, which routes through the engine (ADR-007 D2 forwarding)"
 )
 
@@ -85,6 +86,9 @@ var bypassInventory = []bypassSite{
 	exempt("session/storage.go", "Storage.ArchiveBacklogItem", 1, wrapperReason),
 	exempt("session/storage.go", "Storage.UnarchiveBacklogItem", 1, wrapperReason),
 	exempt("session/storage.go", "Storage.SetBacklogItemPRAndTransition", 1, wrapperReason+"; its call is TransitionBacklogItemStatusWithPRFields"),
+	exempt("session/transition_gate.go", "Storage.writeGated", 1, gateReason+": the write after the engine allowed"),
+	exempt("session/transition_gate.go", "Storage.Rollback", 1, gateReason+": exempt entry point, counted"),
+	exempt("session/transition_gate.go", "Storage.DebugForce", 2, gateReason+": exempt entry point, counted (transition and archive)"),
 	exempt("server/mcp/tools_backlog_dependencies.go", "backlogHandlers.transitionBacklogItemStatus", 1, delegateReason),
 	exempt("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "notification action forwards the operator's click to the RPC handler, which routes through the engine; Story 1.5.5 registers it as an operator caller"),
 
