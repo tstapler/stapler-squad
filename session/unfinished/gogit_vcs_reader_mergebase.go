@@ -247,6 +247,8 @@ func anyFresh(q paintQueue, flags map[plumbing.Hash]uint8) bool {
 // visit bound is hit anyway, c is treated as NOT redundant: a valid common
 // ancestor, where failing would turn a usable answer into an error. Commits
 // missing from a shallow clone or pack are skipped, as in findMergeBase.
+// A bound hit or a miss after pruning is counted (recordRedundancyOutcome): both
+// are where clock skew can leave a redundant candidate in place.
 // repostate.Walk.reaches must stay in lockstep with this.
 func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.Hash) (bool, error) {
 	if len(candidates) < 2 {
@@ -262,8 +264,10 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 		}
 		seen := map[plumbing.Hash]struct{}{}
 		stack := []plumbing.Hash{o}
+		pruned := false
 		for len(stack) > 0 {
 			if len(seen) >= mergeBaseBFSLimit {
+				recordRedundancyOutcome(redundancyBound)
 				return false, nil
 			}
 			h := stack[len(stack)-1]
@@ -280,6 +284,7 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 				return false, fmt.Errorf("commit object %s: %w", h, err)
 			}
 			if hi.when < cInfo.when {
+				pruned = true
 				continue
 			}
 			for _, p := range hi.parents {
@@ -288,6 +293,9 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 				}
 				stack = append(stack, p)
 			}
+		}
+		if pruned {
+			recordRedundancyOutcome(redundancyPrunedMiss)
 		}
 	}
 	return false, nil

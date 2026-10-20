@@ -39,6 +39,8 @@ type repostateInputs struct {
 	reachBuilds  repostate.ReachStats
 	statCalls    int64
 	graphExt     OpDurationStats
+	// redundancy sums both merge-base walks' redundancy-check outcomes.
+	redundancy [numRedundancyOutcomes]int64
 }
 
 func newRepostateInputs() repostateInputs {
@@ -74,6 +76,10 @@ func collectRepostateInputs() repostateInputs {
 	m := DiffMemoStats()
 	in.caches["diffmemo"] = repostate.CacheStats{Hits: m.Hits, Misses: m.Misses, Evictions: m.Evictions}
 	in.decoded = DecodedCommitsTotal()
+	in.redundancy = [numRedundancyOutcomes]int64{
+		redundancyBound:      mergeBaseRedundancyTotal[redundancyBound].Load() + int64(in.graph.RedundancyBound),           //nolint:gosec // counters never approach int64
+		redundancyPrunedMiss: mergeBaseRedundancyTotal[redundancyPrunedMiss].Load() + int64(in.graph.RedundancyPrunedMiss), //nolint:gosec // counters never approach int64
+	}
 	if s := currentScanner.Load(); s != nil {
 		in.scan = s.ScanStateStats()
 		in.parity = s.ParityStats()
@@ -251,6 +257,7 @@ var repostateCatalog = []seriesSpec{
 	{"shadow_verify_oracle_errors_total", "Oracle reads that failed (comparisons that did not happen)", "", kindCounter},
 	{"parity_mismatch_total", "Stable disagreements between the new path and the legacy oracle", "field", kindCounter},
 	{"parity_transient_total", "Disagreements discarded because the oracle disagreed with itself", "field", kindCounter},
+	{"mergebase_redundancy_unproven_total", "Merge-base redundancy checks that answered not-redundant without finding the candidate, by why (visit bound or pruned miss), plain and id walks summed", "outcome", kindCounter},
 	{"reach_builds_total", "Reach sets built, by how (scratch walk or incremental extension)", "kind", kindCounter},
 	{"stat_calls_total", "File stats issued by the scan loop", "", kindCounter},
 	{"stat_calls_per_scan", "File stats per completed scan cycle (integer mean since start)", "", kindGauge},
@@ -305,6 +312,9 @@ func (in repostateInputs) points() []seriesPoint {
 	for f := range numParityFields {
 		add("parity_mismatch_total", f.String(), in.parity.Mismatch[f])
 		add("parity_transient_total", f.String(), in.parity.Transient[f])
+	}
+	for o := range numRedundancyOutcomes {
+		add("mergebase_redundancy_unproven_total", redundancyOutcomeNames[o], in.redundancy[o])
 	}
 	add("reach_builds_total", "scratch", int64(in.reachBuilds.Scratch))         //nolint:gosec // counters never approach int64
 	add("reach_builds_total", "incremental", int64(in.reachBuilds.Incremental)) //nolint:gosec // counters never approach int64

@@ -392,8 +392,10 @@ func (w *Walk) reaches(from, c uint32) (bool, error) {
 		return false, err
 	}
 	s.stack = append(s.stack[:0], from)
+	pruned := false
 	for len(s.stack) > 0 {
 		if s.seen.count() >= w.limit {
+			w.gen.stats.redundancyBound.V.Add(1)
 			return false, nil
 		}
 		h := s.stack[len(s.stack)-1]
@@ -407,7 +409,11 @@ func (w *Walk) reaches(from, c uint32) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if missing || when < cWhen {
+		if missing {
+			continue
+		}
+		if when < cWhen {
+			pruned = true
 			continue
 		}
 		for _, p := range parents {
@@ -416,6 +422,9 @@ func (w *Walk) reaches(from, c uint32) (bool, error) {
 			}
 			s.stack = append(s.stack, p)
 		}
+	}
+	if pruned {
+		w.gen.stats.redundancyPrunedMiss.V.Add(1)
 	}
 	return false, nil
 }

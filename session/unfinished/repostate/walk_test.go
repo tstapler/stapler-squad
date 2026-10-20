@@ -193,3 +193,70 @@ func TestWalk_ShouldRebuildFullGraphOnce_WhenIntervalElapsed(t *testing.T) {
 		t.Errorf("in-flight refusal rebuilt again: FullRebuild = %d", got)
 	}
 }
+
+// reachesFixture interns c and o over a hand-built dag and returns a walk.
+func reachesFixture(t *testing.T, d *dag, limit int) (rs *RepoState, w *Walk) {
+	t.Helper()
+	rs = newWalkState(Options{})
+	wk := rs.NewWalk(context.Background(), &mapSource{d: d}, 0, limit)
+	t.Cleanup(wk.Close)
+	return rs, &wk
+}
+
+func twoCommitDAG(cWhen, oWhen int64) (d *dag, c, o plumbing.Hash) {
+	c, o = testHash(2, 0), testHash(2, 1)
+	d = &dag{
+		hashes:  []plumbing.Hash{c, o},
+		parents: map[plumbing.Hash][]plumbing.Hash{c: nil, o: {c}},
+		when:    map[plumbing.Hash]int64{c: cWhen, o: oWhen},
+	}
+	return d, c, o
+}
+
+// Lockstep with the plain walk's skew test: c is o's parent but newer than o,
+// so reaches prunes o and answers false, counting a pruned miss.
+func TestWalk_ShouldAnswerNotRedundant_WhenAncestorHasNewerCommitterTime(t *testing.T) {
+	d, c, o := twoCommitDAG(200, 100)
+	rs, w := reachesFixture(t, d, 2000)
+	cid, _ := w.intern(c)
+	oid, _ := w.intern(o)
+
+	found, err := w.reaches(oid, cid)
+
+	if err != nil || found {
+		t.Fatalf("reaches = %v, %v; want false, nil (documented skew limit)", found, err)
+	}
+	if st := rs.Graph().Stats(); st.RedundancyPrunedMiss != 1 || st.RedundancyBound != 0 {
+		t.Errorf("stats pruned=%d bound=%d; want 1, 0", st.RedundancyPrunedMiss, st.RedundancyBound)
+	}
+
+	d2, c2, o2 := twoCommitDAG(100, 200) // sane clocks: found, nothing counted
+	rs2, w2 := reachesFixture(t, d2, 2000)
+	cid2, _ := w2.intern(c2)
+	oid2, _ := w2.intern(o2)
+	if found, err = w2.reaches(oid2, cid2); err != nil || !found {
+		t.Fatalf("ordered clocks reaches = %v, %v; want true, nil", found, err)
+	}
+	if st := rs2.Graph().Stats(); st.RedundancyPrunedMiss != 0 || st.RedundancyBound != 0 {
+		t.Errorf("a found ancestor must not be counted: %+v", st)
+	}
+}
+
+func TestWalk_ShouldCountBound_WhenReachesHitsVisitLimit(t *testing.T) {
+	d, head, _ := chain(50, 44, 3)
+	rs := newWalkState(Options{})
+	wk := rs.NewWalk(context.Background(), &mapSource{d: d}, 0, 4)
+	defer wk.Close()
+	w := &wk
+	cid, _ := w.intern(testHash(1, 0)) // deep ancestor, newer-than-it chain never reaches within 4 visits
+	oid, _ := w.intern(head)
+
+	found, err := w.reaches(oid, cid)
+
+	if err != nil || found {
+		t.Fatalf("reaches = %v, %v; want false, nil at the bound", found, err)
+	}
+	if st := rs.Graph().Stats(); st.RedundancyBound != 1 {
+		t.Errorf("RedundancyBound = %d, want 1", st.RedundancyBound)
+	}
+}

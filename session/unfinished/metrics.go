@@ -21,6 +21,25 @@ func recordScanCycle() { scanCyclesTotal.Add(1) }
 // ScanCyclesTotal returns the number of scan cycles completed since process start.
 func ScanCyclesTotal() int64 { return scanCyclesTotal.Load() }
 
+// redundancyOutcome labels the merge-base redundancy checks (isAncestorOfOther
+// and repostate's reaches) that answered "not redundant" without finding the
+// candidate: where a skewed committer clock can leave a redundant base in place.
+type redundancyOutcome int
+
+const (
+	redundancyBound redundancyOutcome = iota
+	redundancyPrunedMiss
+	numRedundancyOutcomes
+)
+
+var redundancyOutcomeNames = [numRedundancyOutcomes]string{"bound", "pruned_miss"}
+
+// mergeBaseRedundancyTotal counts the plain walk's outcomes; the id walk's live
+// in repostate.GraphStats and are summed in by the repostate inputs.
+var mergeBaseRedundancyTotal [numRedundancyOutcomes]atomic.Int64
+
+func recordRedundancyOutcome(o redundancyOutcome) { mergeBaseRedundancyTotal[o].Add(1) }
+
 // dirtyFullWalkTotal counts forced full walks per FullWalkReason
 // (dirty_full_walk_total{reason}).
 var dirtyFullWalkTotal [numFullWalkReasons]atomic.Int64

@@ -28,7 +28,8 @@ The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it rend
 | `dirty_full_walk_total` | forced full walks by reason |
 | `scan_skip`, `signature_skip` | index-cache and untracked-directory engagement; signature `checks`, `hits`, `misses` |
 | `stat_calls_total`, `stat_calls_per_scan` | file stats issued by the scan loop |
-| `reach_builds`, `cas_retries_total`, `graph_full_fallbacks_total`, `graph_extension` | build kinds, arena/CLOCK contention, plain-walk fallbacks, walks that extended the graph (`over_100ms` slow ones) |
+| `reach_builds`, `cas_retries_total`, `graph_full_fallbacks_total`, `graph_full_rebuilds_total`, `graph_extension` | build kinds, arena/CLOCK contention, plain-walk fallbacks, full arenas replaced (at most once per `GraphRebuildInterval`, default 5 min, per repo), walks that extended the graph (`over_100ms` slow ones) |
+| `mergebase_redundancy_unproven_total{bound,pruned_miss}` (series `unfinished.repostate.mergebase_redundancy_unproven_total{outcome}`) | merge-base redundancy checks (`isAncestorOfOther` plain walk and `reaches` id walk, summed) that answered "not redundant" without finding the candidate: `bound` = the visit bound ran out, `pruned_miss` = the search ended after skipping commits older than the candidate. Both are where a skewed committer clock can leave a redundant (still valid, not best) base; a sustained rate points at clock skew or very deep criss-cross history |
 
 The same series are exported as `unfinished.repostate.*` OTel instruments
 (`session/unfinished/metrics_repostate.go`, catalog `repostateCatalog`) when telemetry is on. They are

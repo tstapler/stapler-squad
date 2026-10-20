@@ -39,21 +39,26 @@ const sideWordsPerRow = 4
 const bindingIndexBytesPerRow = 48
 
 type graphStats struct {
-	fillLostCAS    padded[atomic.Uint64]
-	fillLostDecode padded[atomic.Uint64]
-	reprobe        padded[atomic.Uint64]
-	rollback       padded[atomic.Uint64]
-	casRetries     padded[atomic.Uint64]
-	graphFull      padded[atomic.Uint64]
-	fullRebuild    padded[atomic.Uint64] // generations replaced because the arena stayed full
-	rowHits        padded[atomic.Uint64] // walk reads served from a Filled/Truncated row
-	rowMisses      padded[atomic.Uint64] // walk reads that had to Fill a row
+	fillLostCAS          padded[atomic.Uint64]
+	fillLostDecode       padded[atomic.Uint64]
+	reprobe              padded[atomic.Uint64]
+	rollback             padded[atomic.Uint64]
+	casRetries           padded[atomic.Uint64]
+	graphFull            padded[atomic.Uint64]
+	redundancyBound      padded[atomic.Uint64] // reaches() hit its visit bound before finding c
+	redundancyPrunedMiss padded[atomic.Uint64] // reaches() found nothing after pruning older commits
+	fullRebuild          padded[atomic.Uint64] // generations replaced because the arena stayed full
+	rowHits              padded[atomic.Uint64] // walk reads served from a Filled/Truncated row
+	rowMisses            padded[atomic.Uint64] // walk reads that had to Fill a row
 }
 
 // GraphStats is a point-in-time copy of the contention counters, cumulative
 // across generations (the plan's *_total metrics).
 type GraphStats struct {
 	FillLostCAS, FillLostDecode, Reprobe, Rollback, CASRetries, GraphFull, FullRebuild uint64
+	// RedundancyBound and RedundancyPrunedMiss count merge-base redundancy checks
+	// (Walk.reaches) that answered "not redundant" by bound or by pruned miss.
+	RedundancyBound, RedundancyPrunedMiss uint64
 }
 
 // Generation is one immutable-shape assignment of ids: a fixed segment
@@ -440,12 +445,14 @@ func (g *Graph) CacheStats() CacheStats {
 func (g *Graph) Stats() GraphStats {
 	s := g.stats
 	return GraphStats{
-		FillLostCAS:    s.fillLostCAS.V.Load(),
-		FillLostDecode: s.fillLostDecode.V.Load(),
-		Reprobe:        s.reprobe.V.Load(),
-		Rollback:       s.rollback.V.Load(),
-		CASRetries:     s.casRetries.V.Load(),
-		GraphFull:      s.graphFull.V.Load(),
-		FullRebuild:    s.fullRebuild.V.Load(),
+		FillLostCAS:          s.fillLostCAS.V.Load(),
+		FillLostDecode:       s.fillLostDecode.V.Load(),
+		Reprobe:              s.reprobe.V.Load(),
+		Rollback:             s.rollback.V.Load(),
+		CASRetries:           s.casRetries.V.Load(),
+		GraphFull:            s.graphFull.V.Load(),
+		FullRebuild:          s.fullRebuild.V.Load(),
+		RedundancyBound:      s.redundancyBound.V.Load(),
+		RedundancyPrunedMiss: s.redundancyPrunedMiss.V.Load(),
 	}
 }
