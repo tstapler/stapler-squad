@@ -126,8 +126,13 @@ export async function waitForTrayScrollIdle(page: Page, quietMs = 200): Promise<
   );
 }
 
-/** Clicks a control inside the tray once the scroll region is quiet, so the fling guard cannot eat the press. */
+/**
+ * Clicks a control inside the tray once the scroll region is quiet, so the fling guard cannot eat the press.
+ * The control is scrolled into view first: click() would otherwise scroll it itself and press within the
+ * guard's 120 ms window, dropping the click on a small viewport where the control starts below the fold.
+ */
 export async function clickWhenScrollIdle(page: Page, control: Locator): Promise<void> {
+  await control.scrollIntoViewIfNeeded();
   await waitForTrayScrollIdle(page);
   await control.click();
 }
