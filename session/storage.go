@@ -1089,12 +1089,12 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 // RawArchiveBacklogItem sets the archived_at timestamp and status. See
 // EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
 func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
-	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
+	return s.repo.rawArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
 // RawUnarchiveBacklogItem clears archived_at and restores the item to "idea".
 func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.UnarchiveBacklogItem(ctx, id)
+	return s.repo.rawUnarchiveBacklogItem(ctx, id)
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.
@@ -1104,7 +1104,7 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 
 // RawTransitionBacklogItemStatus changes the status of a backlog item.
 func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
-	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
+	return s.repo.rawTransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
 // RawSetBacklogItemPRAndTransition is the shared primary-write path for
@@ -1218,7 +1218,7 @@ func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	if _, err := s.repo.TransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+	if _, err := s.repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 

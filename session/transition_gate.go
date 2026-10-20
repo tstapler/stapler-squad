@@ -174,6 +174,15 @@ func classifyGateDenial(err error) string {
 // an agent or system caller reaches the reporter before the error returns; an
 // operator denial returns the error only.
 func (s *Storage) GatedTransition(ctx context.Context, req TransitionRequest) (*BacklogItemData, error) {
+	return s.gated(ctx, req, s.writeGated)
+}
+
+// gateWriter performs the raw write once the engine allowed req.
+type gateWriter func(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error)
+
+// gated is the one decision function behind every Gated* entry point: they
+// differ only in the target status they pin and the raw writer they call.
+func (s *Storage) gated(ctx context.Context, req TransitionRequest, write gateWriter) (*BacklogItemData, error) {
 	spec, ok := LookupTransitionCaller(req.Caller)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnregisteredTransitionCaller, req.Caller)
@@ -181,7 +190,7 @@ func (s *Storage) GatedTransition(ctx context.Context, req TransitionRequest) (*
 	if err := normalizeRequest(&req); err != nil {
 		return nil, err
 	}
-	call := &gateCall{spec: spec, engine: unwiredEngine}
+	call := &gateCall{spec: spec, engine: unwiredEngine, write: write}
 	if g := s.gate.Load(); g != nil {
 		call.engine, call.reporter = g.engine, g.reporter
 	} else {
@@ -209,6 +218,7 @@ type gateCall struct {
 	spec     TransitionCallerSpec
 	engine   *SwitchableWorkflowEngine
 	reporter TransitionDeniedReporter
+	write    gateWriter
 }
 
 func normalizeRequest(req *TransitionRequest) error {
@@ -253,7 +263,7 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *BacklogIt
 			return nil, false, err
 		}
 	}
-	updated, err = s.writeGated(ctx, req, c.spec, item)
+	updated, err = c.write(ctx, req, c.spec, item)
 	return updated, errors.Is(err, ErrPreconditionFailed), err
 }
 
@@ -271,6 +281,13 @@ func (c *gateCall) reportDenial(ctx context.Context, item *BacklogItemData, v ga
 
 // writeGated derives the CAS from the decided "from" and calls the raw writer.
 func (s *Storage) writeGated(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
+	pre := gatePrecondition(req, spec, item)
+	return s.repo.rawTransitionBacklogItemStatus(ctx, req.ItemID, req.To, &pre, req.TriggeredBy)
+}
+
+// gatePrecondition derives the raw writer's compare-and-swap from the request
+// and the decided "from".
+func gatePrecondition(req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) BacklogItemPrecondition {
 	pre := BacklogItemPrecondition{}
 	if req.Precondition != nil {
 		pre = *req.Precondition
@@ -285,7 +302,7 @@ func (s *Storage) writeGated(ctx context.Context, req TransitionRequest, spec Tr
 		observedAt := item.UpdatedAt
 		pre.ExpectedUpdatedAt = &observedAt
 	}
-	return s.repo.TransitionBacklogItemStatus(ctx, req.ItemID, req.To, &pre, req.TriggeredBy)
+	return pre
 }
 
 // Rollback restores the status a failed multi-step operation moved the item
@@ -295,7 +312,7 @@ func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus,
 	if precondition == nil || precondition.ExpectedStatus == "" {
 		return nil, fmt.Errorf("%w: a rollback requires an ExpectedStatus", ErrInvalidTransitionRequest)
 	}
-	updated, err := s.repo.TransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
+	updated, err := s.repo.rawTransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
 	if err == nil {
 		RecordEngineBypass(CallerRollback)
 	}
@@ -310,9 +327,9 @@ func (s *Storage) DebugForce(ctx context.Context, itemID string, to BacklogStatu
 		err     error
 	)
 	if to == BacklogStatusArchived {
-		updated, err = s.repo.ArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
+		updated, err = s.repo.rawArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
 	} else {
-		updated, err = s.repo.TransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
+		updated, err = s.repo.rawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
 	}
 	if err == nil {
 		RecordEngineBypass(CallerDebug)
