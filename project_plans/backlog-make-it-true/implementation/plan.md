@@ -1773,3 +1773,8 @@ Adds `github/repo_settings_cache.go` (a cached-only, non-fetching peek `RepoSett
 - `notification_action_backlog.go` (`backlogDecider.transition`, from main PR #1104) is an exempt forwarder in the bypass inventory; Story 1.5.5 must register it as an operator caller.
 - ADR-007 D3 and Tasks 1.5.2a/1.5.5c text still say "agents get no override_reason"; the owner's narrower grant (2026-10-19) governs. Update the texts when 1.5.5c is implemented.
 - Stale test fixed: `TestEnforceAnswer_MatchesDefaultOn81Pairs...` now includes the Story 1.5.1 `systemRequiredOffGraph` edges.
+
+## Errata from W10, Task 3.1.3c (2026-10-19)
+
+- Task 3.1.3c shipped: `Files:` extended (dispatcher) with `web-app/src/components/backlog-stuck/StuckItem.tsx` and `StuckItemsSection.test.tsx`. Forced refresh is a context flag (`WithRepoSettingsRefresh`/`IsRepoSettingsRefresh` in `github/repo_settings_cache.go`): it skips cache freshness, keeps ETag revalidation, singleflight (separate key), 2s timeout and the host breaker; a 5s per-repo guard (`repoSettingsForceMinInterval`) makes repeated Retry clicks reuse the last forced result; a failed forced refresh keeps the earlier OK value as Stale. `ListStuckBacklogItems` honors `refresh_auto_merge`; `useStuckBacklogItems` exposes `refreshAutoMerge(itemId)`.
+- Not covered: the Section-level Retry test does not make the mocked refresh fail again (the repeat-failure focus case is covered in `StuckItemDetail.test.tsx`); the "failed refresh keeps Stale" server test only checks the proto mapping with a faked lookup.
