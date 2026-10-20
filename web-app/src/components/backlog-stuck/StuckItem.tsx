@@ -167,6 +167,7 @@ export function StuckItem({
   focusItemId,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const wasExpandedRef = useRef(isExpanded);
   const hoverUnavailable = useHoverUnavailable();
@@ -203,7 +204,7 @@ export function StuckItem({
   // must never be dropped to <body>.
   useEffect(() => {
     if (wasExpandedRef.current && !isExpanded) {
-      cardRef.current?.focus();
+      toggleRef.current?.focus();
     }
     wasExpandedRef.current = isExpanded;
   }, [isExpanded]);
@@ -218,10 +219,6 @@ export function StuckItem({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onToggleExpand();
-      }
       if (e.key === "Escape" && isExpanded) {
         onToggleExpand();
       }
@@ -245,9 +242,6 @@ export function StuckItem({
       {// analytics-exempt
       <div
         ref={cardRef}
-        role="button"
-        tabIndex={0}
-        aria-expanded={isExpanded}
         className={`${styles.card} ${isExpanded ? styles.cardExpanded : ""} ${
           justResolved ? styles.cardResolved : ""
         }`}
@@ -267,9 +261,19 @@ export function StuckItem({
             {chipLabel}
           </span>
           {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef} />}
-          <span className={styles.title} title={item.title}>
-            {item.title}
-          </span>
+          {/* The one real expand/collapse button; the card's onClick is a mouse/touch convenience.
+              The action buttons are its siblings, so no control is nested inside a button. */}
+          <button
+            ref={toggleRef}
+            type="button"
+            className={styles.toggle}
+            aria-expanded={isExpanded}
+            data-testid="stuck-item-toggle"
+          >
+            <span className={styles.title} title={item.title}>
+              {item.title}
+            </span>
+          </button>
           <span className={styles.duration} data-testid="stuck-item-duration">
             stuck {formatStuckDuration(item.firstDetectedAt)}
           </span>

@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { AutoMergeLookupStatus, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
@@ -689,11 +689,12 @@ describe("StuckItemsSection", () => {
       const findTargetCard = () =>
         screen.getAllByTestId("stuck-item").find((c) => c.getAttribute("data-item-id") === "target-item")!;
 
-      await waitFor(() => expect(findTargetCard()).toHaveAttribute("aria-expanded", "true"));
+      const targetToggle = () => within(findTargetCard()).getByTestId("stuck-item-toggle");
+      await waitFor(() => expect(targetToggle()).toHaveAttribute("aria-expanded", "true"));
 
       // User manually collapses the deep-linked card.
       fireEvent.click(findTargetCard());
-      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+      expect(targetToggle()).toHaveAttribute("aria-expanded", "false");
 
       // Simulate a poll tick: same data, but a fresh array reference and a
       // fresh item object, and focusItemId is still on the URL.
@@ -701,7 +702,7 @@ describe("StuckItemsSection", () => {
       mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: polledItems }));
       rerender(<StuckItemsSection focusItemId="target-item" />);
 
-      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+      expect(targetToggle()).toHaveAttribute("aria-expanded", "false");
     });
   });
 

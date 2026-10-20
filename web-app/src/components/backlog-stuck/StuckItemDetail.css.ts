@@ -22,7 +22,7 @@ export const row = style({
 });
 
 export const label = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontWeight: 600,
   minWidth: "90px",
   flexShrink: 0,
@@ -49,7 +49,7 @@ export const prLink = style({
 });
 
 export const unknownNote = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontStyle: "italic",
 });
 
@@ -109,7 +109,7 @@ export const overrideUnlimitedButton = style({
 });
 
 export const overrideStatus = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontSize: vars.fontSize.xs,
 });
 

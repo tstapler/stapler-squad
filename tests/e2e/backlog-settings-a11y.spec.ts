@@ -59,29 +59,10 @@ async function installMocks(page: Page) {
   return { store, status, quotaGet, quotaUpdate, stuck };
 }
 
-/**
- * Defects this spec's first run found in web-app components outside Story 6.1.1's files, by state. Axe
- * rules listed here are tolerated for that state only so the spec can gate everything else; remove an
- * entry when its defect is fixed, never add one (the same contract as KNOWN in a11y-route-sweep.spec.ts).
- *  - stages: the disabled/terminal stage rows' secondary text is below 4.5:1 in the Light (4.03) and Dark (3.65) themes.
- *  - stage form: the read-only graph preview is a scrollable region with no focusable content.
- *  - stuck: the card is a role=button that contains focusable descendants (nested-interactive), and the
- *    auto-merge line's secondary text is 4.15 to 4.4:1.
- */
-const KNOWN_AXE: Record<string, string[]> = {
-  "stages: shadow banner": ["color-contrast"],
-  "stages: unknown banner": ["color-contrast"],
-  "stages: stage form with mode reminder": ["scrollable-region-focusable"],
-  "stuck: auto-merge not allowed": ["color-contrast", "nested-interactive"],
-  "stuck: failed lookup with Retry": ["color-contrast", "nested-interactive"],
-};
-
-/** WCAG 2.2 AA violations on the page as `rule (impact): nodes, e.g. target - why`, minus this state's KNOWN_AXE rules. */
-async function axeViolations(page: Page, state: string): Promise<string[]> {
+/** Every WCAG 2.2 AA violation on the page as `rule (impact): nodes, e.g. target - why`. */
+async function axeViolations(page: Page): Promise<string[]> {
   const result = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
-  const tolerated = new Set(KNOWN_AXE[state] ?? []);
   return result.violations
-    .filter((v) => !tolerated.has(v.id))
     .map(
       (v) => `${v.id} (${v.impact}): ${v.nodes.length} node(s), e.g. ${v.nodes[0]?.target.join(" ")} - ${v.nodes[0]?.failureSummary?.split("\n")[1] ?? ""}`,
     );
@@ -169,7 +150,7 @@ for (const vp of VIEWPORTS) {
         const stuck = new StuckItemsPage(page);
         const found: Record<string, string[]> = {};
         const check = async (state: string) => {
-          const violations = await axeViolations(page, state);
+          const violations = await axeViolations(page);
           if (violations.length) found[state] = violations;
         };
 
@@ -346,7 +327,7 @@ for (const vp of VIEWPORTS) {
       // Stuck: expand the card and reach Retry.
       mocks.stuck.use(stuckReport({ lookup: "RATE_LIMITED", checkedAt: new Date().toISOString() }));
       await stuck.goto();
-      await stuck.cardByTitle(STUCK_ITEM_TITLE).focus();
+      await stuck.cardByTitle(STUCK_ITEM_TITLE).getByTestId("stuck-item-toggle").focus();
       await page.keyboard.press("Enter");
       await expect(page.getByTestId("stuck-item-detail")).toBeVisible();
       obscured.push(...(await tabToTestId(page, "stuck-item-auto-merge-retry")));
