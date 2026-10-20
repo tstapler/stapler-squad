@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 import { createVanillaExtractPlugin } from "@vanilla-extract/next-plugin";
 
@@ -33,6 +34,12 @@ const nextConfig: NextConfig = {
       '.js': ['.js', '.ts', '.tsx'],
       '.mjs': ['.mjs', '.mts'],
       '.cjs': ['.cjs', '.cts'],
+    };
+
+    // Lazy-loading seam: the Next build keeps next/dynamic (impl.bun.tsx is for the Bun build).
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@/lib/lazy/impl': path.resolve(__dirname, 'src/lib/lazy/impl.next.tsx'),
     };
 
     // Disable minification for development builds (better error messages)
