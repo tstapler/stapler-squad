@@ -41,6 +41,9 @@ func (s *QuotaSettingsService) UpdateQuotaConfig(
 	_ context.Context, req *connect.Request[sessionv1.UpdateQuotaConfigRequest],
 ) (*connect.Response[sessionv1.UpdateQuotaConfigResponse], error) {
 	in := req.Msg.GetSettings()
+	if in == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("settings is required"))
+	}
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		merged := mergeQuotaSettings(cfg.Quota, in)
 		if err := validateQuotaConfig(merged); err != nil {
