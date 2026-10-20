@@ -894,42 +894,15 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 			fmt.Errorf("invalid transition from %q to %q", from, to))
 	}
 
-	// Load the most recent ReviewVerdict for this item so TransitionGuard can
-	// evaluate the review→done guard (ErrVerdictRequired) and the
-	// review/pr_pending→ready guard (ErrVerdictClearRequiredForReady).
-	overallOutcome, verdictErr := s.storage.GetMostRecentReviewVerdictForItem(ctx, req.Msg.ItemId)
-	if verdictErr != nil {
-		log.WarningLog().Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
-		// Non-fatal: proceed with empty outcome; TransitionGuard will block review→done if needed.
+	// Gather the guard inputs (review verdict, unshipped code, unresolved
+	// blockers) so TransitionGuard can evaluate its business rules. A PrURL alone
+	// is not proof the code shipped, so buildGuardInput verifies the most recent
+	// work session's commit is an ancestor of main when moving to done.
+	guardInput, blockersErr := s.buildGuardInput(ctx, item, to, "TransitionBacklogItemStatus")
+	if blockersErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check unresolved blockers: %w", blockersErr))
 	}
-
-	// Check for unshipped worktree code when transitioning to done. A PrURL alone
-	// is not proof the code shipped — that PR may still be open, may have been
-	// closed without merging, or may have been reverted — so verify the most
-	// recent work session's commit is actually an ancestor of main (locally or on
-	// origin) rather than trusting the cached PrURL field. This is a distinct
-	// gate from OverallOutcome above: a PASS verdict says the code is good, not
-	// that it has landed on main.
-	var hasUnshippedCode bool
-	if to == session.BacklogStatusDone {
-		hasUnshippedCode = !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "TransitionBacklogItemStatus")
-	}
-
-	var hasUnresolvedBlockers bool
-	if to == session.BacklogStatusInProgress {
-		hasUnresolvedBlockers, err = s.hasUnresolvedBlockers(ctx, req.Msg.ItemId)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check unresolved blockers: %w", err))
-		}
-	}
-
-	// Run transition guard for business rules.
-	guardInput := session.NewBacklogItemTransitionInput(item, from)
-	guardInput.OverallOutcome = overallOutcome
 	guardInput.OverrideReason = req.Msg.OverrideReason
-	guardInput.HasUnshippedCode = hasUnshippedCode
-	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
-	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
 		if isFailedPreconditionGuardError(guardErr) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
