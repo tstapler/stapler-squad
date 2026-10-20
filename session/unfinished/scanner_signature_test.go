@@ -340,3 +340,27 @@ func TestScanSignature_ShouldDecodeFewerCommits_WhenSiblingCommits(t *testing.T)
 	assert.Positive(t, off)
 	assert.Less(t, on, off)
 }
+
+// cancelingFake cancels the scan's ctx mid-compute and reports it.
+type cancelingFake struct {
+	*sigFake
+	cancel context.CancelFunc
+}
+
+func (c *cancelingFake) AheadBehindResolved(ctx context.Context, _, _ string, _, _ plumbing.Hash) (int, int, error) {
+	c.cancel()
+	return 0, 0, ctx.Err()
+}
+
+func TestScanSignature_ShouldNotRecordSignature_WhenCtxCancelledMidCompute(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &cancelingFake{sigFake: newSigFake("/a"), cancel: cancel}
+	s := NewScannerWithReader(nil, nil, f)
+
+	s.scanRepo(ctx, "/repo", true)
+
+	wrec := s.scanRecord("/repo").worktree("/a")
+	assert.Nil(t, wrec.last.Load(), "a cancelled compute must not record the signature as scanned")
+	assert.Nil(t, wrec.committed.Load())
+}
