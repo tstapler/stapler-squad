@@ -105,14 +105,18 @@ Hot files are split so each shared file has one editing story per wave
 | File | Holds | Editing stories, in order |
 |---|---|---|
 | `gogit_vcs_reader.go` | cache lifecycle, open/prune, `AheadBehind`/`CommitMessages` wrappers, `RepoCacheStats` | 1.1.4 -> 1.1.3b -> 5.1.1a -> 5.3.1 |
-| `gogit_vcs_reader_diff.go` | `DiffShortstat`, LCS/line-diff helpers | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
+| `gogit_vcs_reader_diff.go` | `DiffShortstat` orchestration, memo resolution, `applyDiff` | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
+| `gogit_vcs_reader_diff_classify.go` | `classifyIndex`, staged/unstaged target lists, racy-stat content checks | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
+| `gogit_vcs_reader_diff_lcs.go` | `LinesDiff`, `lcsLength` and byte variants, `maxLCSLines` | 3.2.2 -> 3.2.3b -> 4.4.1 rows |
 | `gogit_vcs_reader_trees.go` | `resolveHeadTreeHashes` | 3.1.1b |
 | `gogit_vcs_reader_dirty.go` | `HasUncommitted`, `hasUncommittedGoGitPhase`, `trackedFile`, `getOrBuildUntrackedMatcher` | 4.2.2b -> 4.3.2b -> 4.2.4b -> 3.3.1b |
 | `gogit_vcs_reader_walkers.go` | untracked/tracked walkers | 0.1.2b -> 4.2.3b -> 4.4.1 rows |
 | `gogit_vcs_reader_mergebase.go` | `parentMemo`, plain-walk `findMergeBase` (paint-down-to-common), `countCommitsTo`, `reachableSet`; the shared walk lives in `repostate/walk.go` | 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
 | `aheadbehind.go` | ahead/behind extraction and the shared-memo/graph switch | 1.1.4a -> 2.1.2b -> 2.1.3b -> 2.2.1b -> 2.2.2b (2.2.3b superseded) |
 | `flags.go` | `FlagSpec`/`Flags`, `FlagSpecs` (4 rollback units, `RemoveBy`), `FlagsFromConfig` (the Scanner owns its immutable `Flags`, passed with `WithFlags`) | not tracked in the plan table (added during implementation) |
-| `scanstate.go` | `RefSnapshot` per-Burst prelude, `fillCommittedState` signature reuse | not tracked in the plan table (added during implementation) |
+| `scanstate.go` | scan-state data model: `RefSnapshot`, scan records, `ScanSignature`, `scanResultCoverage` | not tracked in the plan table (added during implementation) |
+| `scanstate_commit.go` | `fillCommittedState` signature reuse, `changedFirst`, signature-change checks | not tracked in the plan table (added during implementation) |
+| `scanstate_burst.go` | Burst prelude lifecycle (`beginBurst`/`endBurst`), `ScanStateStats`, `logScanCycle` | not tracked in the plan table (added during implementation) |
 | `scanstate_reader.go` | reader side of the prelude: `ResolveRefSnapshot`, `AheadBehindResolved`, ref-resolve counters | not tracked in the plan table (added during implementation) |
 | `scanskip_state.go` | `statSig` and the racy-timestamp rule | not tracked in the plan table (added during implementation) |
 | `scanskip_decision.go` | per-worktree `DirtyGen` registry (`ArmDirty`, `Decide`) | not tracked in the plan table (added during implementation) |
@@ -131,5 +135,7 @@ Hot files are split so each shared file has one editing story per wave
 | `commit_parents.go`, `commit_parents_stock.go` | header-only commit parent reader | not tracked in the plan table (added during implementation) |
 | `metrics_repostate.go`, `metrics_duration.go` | `unfinished.repostate.*` series and slow-op histograms | not tracked in the plan table (added during implementation) |
 | `scanner.go` | scan/enqueue/`scanWorktree` | 4.2.4b -> 4.1.1 -> 4.1.2 -> 5.1.1b |
-| `scanner_gitwatch.go` | `watchRepo`/`unwatchRepo`, fsnotify loop, `classifyGitEvent`, debounce, Tier A linked-gitdir watches | 4.3.1 -> 4.3.2b (DirtyGen bump only); 4.3.3 not built (Tier B skipped) |
+| `scanner_gitwatch.go` | `gitWatcher` seam, dirty-tracker hooks, `watchRepo`/`unwatchRepo` | 4.3.1 -> 4.3.2b (DirtyGen bump only); 4.3.3 not built (Tier B skipped) |
+| `scanner_gitwatch_tiera.go` | Tier A linked-gitdir watches: `watchTierA`, admin dirs, worktree targets | 4.3.1 -> 4.3.2b |
+| `scanner_gitwatch_events.go` | fsnotify loop, `handleEvent`, `classifyGitEvent`, debounce | 4.3.1 -> 4.3.2b |
 | `watcher.go` | event filter/debounce for `.git` fsnotify events (the scanner's miss-count lever) | pre-existing |
