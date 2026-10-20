@@ -74,21 +74,6 @@ func (h *systemGateHarness) blockWithGate(t *testing.T, from, to session.Backlog
 	}
 }
 
-// disableEdge turns from->to off in the configured graph and returns the
-// function that turns it back on.
-func (h *systemGateHarness) disableEdge(t *testing.T, from, to session.BacklogStatus) (enable func()) {
-	t.Helper()
-	ctx := context.Background()
-	id := h.transitionID(t, from, to).ID
-	set := func(on bool) {
-		_, err := h.repo.UpdateTransition(ctx, id, session.TransitionUpdateInput{Enabled: &on})
-		require.NoError(t, err)
-		require.NoError(t, h.engine.InvalidateCache(ctx))
-	}
-	set(false)
-	return func() { set(true) }
-}
-
 func newItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) *session.BacklogItemData {
 	t.Helper()
 	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "gate item", Status: string(status)})
@@ -98,8 +83,9 @@ func newItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) 
 
 func deniedCallers(t *testing.T, svc *BacklogService, itemID string) []string {
 	t.Helper()
-	var callers []string
-	for _, row := range transitionDeniedRows(t, svc, itemID) {
+	rows := transitionDeniedRows(t, svc, itemID)
+	callers := make([]string, 0, len(rows))
+	for _, row := range rows {
 		callers = append(callers, row.DeniedCaller)
 	}
 	return callers
