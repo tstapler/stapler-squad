@@ -878,6 +878,11 @@ func TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewR
 
 func stuckAutoMergeSvc(t *testing.T, lookup RepoSettingsLookup, prURLs ...string) []*sessionv1.StuckBacklogItem {
 	t.Helper()
+	return stuckAutoMergeSvcReq(t, lookup, &sessionv1.ListStuckBacklogItemsRequest{}, prURLs...)
+}
+
+func stuckAutoMergeSvcReq(t *testing.T, lookup RepoSettingsLookup, req *sessionv1.ListStuckBacklogItemsRequest, prURLs ...string) []*sessionv1.StuckBacklogItem {
+	t.Helper()
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetRepoSettingsLookup(lookup)
@@ -892,7 +897,7 @@ func stuckAutoMergeSvc(t *testing.T, lookup RepoSettingsLookup, prURLs ...string
 		require.NoError(t, err)
 		seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now().Add(-time.Hour), "ctx")
 	}
-	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	resp, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(req))
 	require.NoError(t, err)
 	return resp.Msg.Items
 }
@@ -954,4 +959,37 @@ func TestListStuckBacklogItems_should_LeaveAllowAutoMergeNil_When_LookupNotOK(t 
 			assert.WithinDuration(t, attempt, items[0].AutoMergeCheckedAt.AsTime(), time.Second)
 		})
 	}
+}
+
+func TestListStuckBacklogItems_should_ForceRefreshOncePerRepo_When_RefreshAutoMergeSet(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh=%v", refresh), func(t *testing.T) {
+			var calls, forced int
+			items := stuckAutoMergeSvcReq(t, func(ctx context.Context, _ githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+				calls++
+				if githubpkg.IsRepoSettingsRefresh(ctx) {
+					forced++
+				}
+				return githubpkg.RepoSettingsResult{Status: githubpkg.RepoSettingsOK, CheckedAt: time.Now()}
+			}, &sessionv1.ListStuckBacklogItemsRequest{RefreshAutoMerge: refresh},
+				"https://github.com/acme/web/pull/1", "https://github.com/acme/web/pull/2")
+			require.Len(t, items, 2)
+			assert.Equal(t, 1, calls, "one lookup per repo")
+			if refresh {
+				assert.Equal(t, 1, forced)
+			} else {
+				assert.Equal(t, 0, forced, "non-refresh requests must not bypass the cache")
+			}
+		})
+	}
+}
+
+func TestListStuckBacklogItems_should_KeepStaleValue_When_ForcedRefreshFails(t *testing.T) {
+	checked := time.Now().Add(-time.Minute)
+	items := stuckAutoMergeSvcReq(t, func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		return githubpkg.RepoSettingsResult{Status: githubpkg.RepoSettingsOK, Stale: true, Reason: "timeout", CheckedAt: checked}
+	}, &sessionv1.ListStuckBacklogItemsRequest{RefreshAutoMerge: true}, "https://github.com/acme/web/pull/1")
+	require.Len(t, items, 1)
+	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK, items[0].AutoMergeLookupStatus)
+	assert.WithinDuration(t, checked, items[0].AutoMergeCheckedAt.AsTime(), time.Second)
 }

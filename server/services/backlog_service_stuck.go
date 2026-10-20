@@ -169,10 +169,14 @@ func toProtoAutoMergeStatus(s githubpkg.RepoSettingsStatus) sessionv1.AutoMergeL
 
 // populateAutoMerge fills the auto-merge fields on items from the repo each
 // item's PR URL names, fetching settings once per repo. Items with no
-// parseable GitHub PR URL stay UNSPECIFIED and trigger no lookup.
-func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*sessionv1.StuckBacklogItem) {
+// parseable GitHub PR URL stay UNSPECIFIED and trigger no lookup. refresh
+// bypasses the lookup cache (still once per repo per call).
+func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*sessionv1.StuckBacklogItem, refresh bool) {
 	if s.repoSettings == nil {
 		return
+	}
+	if refresh {
+		ctx = githubpkg.WithRepoSettingsRefresh(ctx)
 	}
 	hosts := s.EnterpriseHosts()
 	byRepo := make(map[githubpkg.RepoRef]githubpkg.RepoSettingsResult)
@@ -250,7 +254,7 @@ func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBac
 // +api: backlog:list-stuck
 func (s *BacklogService) ListStuckBacklogItems(
 	ctx context.Context,
-	_ *connect.Request[sessionv1.ListStuckBacklogItemsRequest],
+	req *connect.Request[sessionv1.ListStuckBacklogItemsRequest],
 ) (*connect.Response[sessionv1.ListStuckBacklogItemsResponse], error) {
 	if s.storage == nil {
 		return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{}), nil
@@ -274,7 +278,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 		}
 	}
 
-	s.populateAutoMerge(ctx, items)
+	s.populateAutoMerge(ctx, items, req.Msg.GetRefreshAutoMerge())
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil
 }

@@ -23,6 +23,9 @@ const (
 	repoSettingsBreakerOpen   = 60 * time.Second
 	repoSettingsMaxEntries    = 1024
 	repoSettingsMinRateWindow = time.Second
+	// repoSettingsForceMinInterval bounds forced refreshes per repo: repeated
+	// Retry clicks inside it reuse the last forced result.
+	repoSettingsForceMinInterval = 5 * time.Second
 )
 
 // Lookup outcome labels for github.repo_settings.lookup_total.
@@ -43,6 +46,23 @@ const (
 // circuit breaker. It never returns an error: failures are encoded in Status.
 func RepoSettings(ctx context.Context, ref RepoRef) RepoSettingsResult {
 	return defaultRepoSettings.lookup(ctx, ref)
+}
+
+type forceRefreshKey struct{}
+
+// WithRepoSettingsRefresh marks ctx so RepoSettings skips the cache freshness
+// check and revalidates against GitHub. Singleflight, the timeout, the host
+// breaker and rate-limit accounting still apply, and a repo is force-fetched
+// at most once per repoSettingsForceMinInterval; calls inside that window get
+// the last forced result.
+func WithRepoSettingsRefresh(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forceRefreshKey{}, true)
+}
+
+// IsRepoSettingsRefresh reports whether ctx was marked by WithRepoSettingsRefresh.
+func IsRepoSettingsRefresh(ctx context.Context) bool {
+	force, _ := ctx.Value(forceRefreshKey{}).(bool)
+	return force
 }
 
 // RepoSettingsCached returns the cached repo settings without any network
@@ -71,6 +91,9 @@ type repoSettingsEntry struct {
 
 	neg      RepoSettingsResult
 	negUntil time.Time
+
+	forcedAt  time.Time
+	forcedRes RepoSettingsResult
 }
 
 type hostBreaker struct {
@@ -115,7 +138,12 @@ func (c *repoSettingsLookup) lookup(ctx context.Context, ref RepoRef) RepoSettin
 		return RepoSettingsResult{Status: RepoSettingsError, Reason: "invalid_ref"}
 	}
 	key := ref.repoKey()
-	v, _, _ := c.sf.Do(key, func() (any, error) { return c.resolve(ctx, ref, key), nil })
+	force := IsRepoSettingsRefresh(ctx)
+	sfKey := key
+	if force {
+		sfKey += "|refresh"
+	}
+	v, _, _ := c.sf.Do(sfKey, func() (any, error) { return c.resolve(ctx, ref, key, force), nil })
 	return v.(RepoSettingsResult)
 }
 
@@ -134,14 +162,20 @@ func (c *repoSettingsLookup) peek(ref RepoRef) (RepoSettingsResult, bool) {
 
 // resolve runs inside the singleflight, so it re-checks the cache: a caller
 // that missed just before another flight finished must not fetch again.
-func (c *repoSettingsLookup) resolve(ctx context.Context, ref RepoRef, key string) RepoSettingsResult {
+func (c *repoSettingsLookup) resolve(ctx context.Context, ref RepoRef, key string, force bool) RepoSettingsResult {
 	host := NormalizeHost(ref.Host())
 
 	c.mu.Lock()
 	now := c.now()
 	e := c.entries[key]
 	if e != nil {
-		if res, ok := e.cachedResult(now); ok {
+		if force && !e.forcedAt.IsZero() && now.Sub(e.forcedAt) < repoSettingsForceMinInterval {
+			res := e.forcedRes
+			c.mu.Unlock()
+			c.record(ctx, outcomeCached)
+			return res
+		}
+		if res, ok := e.cachedResult(now); ok && !force {
 			c.mu.Unlock()
 			c.record(ctx, outcomeCached)
 			return res
@@ -165,6 +199,10 @@ func (c *repoSettingsLookup) resolve(ctx context.Context, ref RepoRef, key strin
 
 	c.mu.Lock()
 	res, outcome := c.applyLocked(ref, f, c.now())
+	if force {
+		e := c.entries[key]
+		e.forcedAt, e.forcedRes = c.now(), res
+	}
 	c.mu.Unlock()
 	c.record(ctx, outcome)
 	return res

@@ -406,3 +406,64 @@ func TestRepoSettings_PeekNeverFetchesAndReflectsCache(t *testing.T) {
 	_, ok = l.peek(RepoRef{})
 	assert.False(t, ok)
 }
+
+func TestRepoSettings_ForcedRefreshBypassesCacheOncePerInterval(t *testing.T) {
+	l, clk, hits := newRepoSettingsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		jsonOK(w, `{"allow_auto_merge":true}`)
+	})
+	ref := repoSettingsRef(t, "acme", "web", "")
+	forced := WithRepoSettingsRefresh(context.Background())
+
+	l.lookup(context.Background(), ref)
+	require.EqualValues(t, 1, atomic.LoadInt32(hits))
+	l.lookup(context.Background(), ref)
+	require.EqualValues(t, 1, atomic.LoadInt32(hits), "non-forced lookup must stay cached")
+
+	clk.advance(time.Second)
+	l.lookup(forced, ref)
+	assert.EqualValues(t, 2, atomic.LoadInt32(hits), "forced lookup bypasses a fresh cache")
+
+	clk.advance(repoSettingsForceMinInterval - time.Second)
+	l.lookup(forced, ref)
+	assert.EqualValues(t, 2, atomic.LoadInt32(hits), "repeat inside the min interval reuses the last forced result")
+
+	clk.advance(2 * time.Second)
+	l.lookup(forced, ref)
+	assert.EqualValues(t, 3, atomic.LoadInt32(hits), "after the interval a forced lookup fetches again")
+}
+
+func TestRepoSettings_ForcedRefreshFailureKeepsRetainedValueStale(t *testing.T) {
+	var fail atomic.Bool
+	l, _, _ := newRepoSettingsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, `{"allow_auto_merge":true}`)
+	})
+	ref := repoSettingsRef(t, "acme", "web", "")
+	l.lookup(context.Background(), ref)
+
+	fail.Store(true)
+	res := l.lookup(WithRepoSettingsRefresh(context.Background()), ref)
+
+	assert.Equal(t, RepoSettingsOK, res.Status)
+	assert.True(t, res.Stale)
+	allowed, ok := res.AutoMerge()
+	assert.True(t, allowed)
+	assert.True(t, ok)
+}
+
+func TestRepoSettings_ForcedRefreshStillCoalescesAndHonorsBreaker(t *testing.T) {
+	l, _, hits := newRepoSettingsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	forced := WithRepoSettingsRefresh(context.Background())
+	for i := 0; i < repoSettingsBreakerFails; i++ {
+		l.lookup(forced, repoSettingsRef(t, "acme", "r"+string(rune('a'+i)), ""))
+	}
+	before := atomic.LoadInt32(hits)
+	res := l.lookup(forced, repoSettingsRef(t, "acme", "other", ""))
+	assert.Equal(t, before, atomic.LoadInt32(hits), "open breaker blocks forced fetches too")
+	assert.Equal(t, "circuit_open", res.Reason)
+}

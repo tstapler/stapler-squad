@@ -59,6 +59,13 @@ export interface UseStuckBacklogItemsReturn {
    * server-side. Throws on failure so the form can show the message.
    */
   overrideClaimBlock: (itemId: string, reason: string) => Promise<void>;
+  /**
+   * Re-checks the repo auto-merge setting bypassing the server cache and
+   * resolves with the refreshed item (undefined if it is no longer listed).
+   * Does not touch `items`/`error`: the caller owns the per-line result, and
+   * a failed lookup is carried in the item's status, not thrown.
+   */
+  refreshAutoMerge: (itemId: string) => Promise<StuckBacklogItem | undefined>;
 }
 
 /**
@@ -202,6 +209,16 @@ function useStuckBacklogItemsImpl(
     [client, fetchItems]
   );
 
+  const refreshAutoMerge = useCallback(
+    async (itemId: string): Promise<StuckBacklogItem | undefined> => {
+      const res = await client.listStuckBacklogItems(
+        create(ListStuckBacklogItemsRequestSchema, { refreshAutoMerge: true })
+      );
+      return res.items.find((i) => i.itemId === itemId);
+    },
+    [client]
+  );
+
   return {
     items,
     isLoading,
@@ -213,6 +230,7 @@ function useStuckBacklogItemsImpl(
     bulkResetParkedRemediation,
     triggerRemediationNow,
     overrideClaimBlock,
+    refreshAutoMerge,
   };
 }
 
