@@ -2460,6 +2460,22 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		}
 	}
 
+	spawnErr := s.spawnPRFixSession(ctx, item, sessions, fixContext)
+	if spawnErr != nil {
+		s.rollbackFailedPRFixReopen(ctx, item, spawnErr)
+		return fmt.Errorf("spawn session: %w", spawnErr)
+	}
+
+	log.Info("[AutoReopenForPRFix] item → in_progress for PR fix session", "item", itemID)
+	return nil
+}
+
+// spawnPRFixSession hands a pr_pending item that was just reopened to a fresh
+// work session, with the PR failure context prepended to its notes for the
+// session prompt. The original notes are restored whether or not the spawn
+// succeeds.
+func (s *BacklogService) spawnPRFixSession(ctx context.Context, item *session.BacklogItemData, sessions []session.ItemSessionSummary, fixContext string) error {
+	itemID := item.ID
 	// Best-effort: sync the currently open PR's branch with main before handing the
 	// fix off to a new session. This is preventive rather than reactive — a CI
 	// failure caused by drift from main (rather than the PR's own diff) gets
@@ -2497,22 +2513,22 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	}, nil); noteErr != nil {
 		log.Warn("[AutoReopenForPRFix] restore notes failed", "item", itemID, "error", noteErr)
 	}
+	return spawnErr
+}
 
-	if spawnErr != nil {
-		// Roll back to pr_pending so the reconciler can retry.
-		if _, rollbackErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
-			log.Error("[AutoReopenForPRFix] rollback to pr_pending failed", "item", itemID, "error", rollbackErr)
-			// The caller below only ever learns about spawnErr — a rollback
-			// failure here leaves the item stranded at in_progress with no work
-			// session, same shape notifySpawnAndRollbackFailed was built for
-			// (BUG-030).
-			s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
-		}
-		return fmt.Errorf("spawn session: %w", spawnErr)
+// rollbackFailedPRFixReopen returns an item to pr_pending after the PR-fix
+// spawn failed, so the reconciler can retry.
+func (s *BacklogService) rollbackFailedPRFixReopen(ctx context.Context, item *session.BacklogItemData, spawnErr error) {
+	itemID := item.ID
+	// Roll back to pr_pending so the reconciler can retry.
+	if _, rollbackErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
+		log.Error("[AutoReopenForPRFix] rollback to pr_pending failed", "item", itemID, "error", rollbackErr)
+		// The caller below only ever learns about spawnErr — a rollback
+		// failure here leaves the item stranded at in_progress with no work
+		// session, same shape notifySpawnAndRollbackFailed was built for
+		// (BUG-030).
+		s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
 	}
-
-	log.Info("[AutoReopenForPRFix] item → in_progress for PR fix session", "item", itemID)
-	return nil
 }
 
 var errReviewInFlight = errors.New("a review for this item is already in flight")
