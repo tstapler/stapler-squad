@@ -326,3 +326,36 @@ func BenchmarkRepoCacheParallel(b *testing.B) {
 	})
 	b.ReportMetric(float64(c.ClockStats().CASRetries), "cas_retries")
 }
+
+func TestClockCore_ShouldReleaseHeldCount_WhenPopYieldPanicsInSweepOrCompact(t *testing.T) {
+	newCore := func() *clockCore[string, int] {
+		k := newClockCore[string, int]()
+		e := &clockEntry[string, int]{key: "a", size: 10}
+		k.index.Store("a", e)
+		k.bytes.Add(e.size)
+		k.ring.push(e)
+		return k
+	}
+	boom := func() { panic("injected") }
+	run := func(f func()) (recovered any) {
+		defer func() { recovered = recover() }()
+		f()
+		return nil
+	}
+
+	k := newCore()
+	if run(func() { k.sweep(0, nil, boom, &clockCounters{}) }) == nil {
+		t.Fatal("sweep did not panic through the injected yield")
+	}
+	if got := k.held.Load(); got != 0 {
+		t.Errorf("held=%d after a panicking sweep step, want 0", got)
+	}
+
+	k = newCore()
+	if run(func() { k.compactStep(boom, &clockCounters{}) }) == nil {
+		t.Fatal("compactStep did not panic through the injected yield")
+	}
+	if got := k.held.Load(); got != 0 {
+		t.Errorf("held=%d after a panicking compact step, want 0", got)
+	}
+}

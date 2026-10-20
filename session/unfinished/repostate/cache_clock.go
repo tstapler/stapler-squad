@@ -203,29 +203,38 @@ func (k *clockCore[K, V]) sweep(budget int64, protect *clockEntry[K, V], yield f
 	maxSteps := 3*k.ring.length() + 16
 	idle := 0
 	for steps := uint64(0); steps < maxSteps && k.bytes.Load() > budget; steps++ {
-		k.held.Add(1)
-		e, ok := k.ring.pop(&n.casRetries, yield)
-		if !ok {
-			k.held.Add(-1)
-			// Bailing here would leave the overshoot to nobody: entries other
-			// sweepers hold will be re-pushed or evicted, so wait for them.
-			// With none held, the bytes over budget are unpushed in-flight
-			// inserts whose owners sweep themselves.
-			if idle++; idle > maxIdleSweeps || (k.held.Load() == 0 && k.ring.length() == 0) {
-				return
-			}
-			runtime.Gosched()
-			steps--
+		if k.sweepStep(protect, yield, n) {
 			continue
 		}
-		n.handSteps.Add(1)
-		if e == protect && e.state.Load()&entryEvicted == 0 {
-			k.ring.push(e) // the entry being inserted is not its own victim
-		} else {
-			k.judge(e, yield, n)
+		// Bailing here would leave the overshoot to nobody: entries other
+		// sweepers hold will be re-pushed or evicted, so wait for them.
+		// With none held, the bytes over budget are unpushed in-flight
+		// inserts whose owners sweep themselves.
+		if idle++; idle > maxIdleSweeps || (k.held.Load() == 0 && k.ring.length() == 0) {
+			return
 		}
-		k.held.Add(-1)
+		runtime.Gosched()
+		steps--
 	}
+}
+
+// sweepStep pops and judges one entry, reporting false when the ring was empty
+// or a producer stalled. The deferred release keeps held balanced if pop or
+// judge panics, so a recovered panic cannot make later sweeps spin on held > 0.
+func (k *clockCore[K, V]) sweepStep(protect *clockEntry[K, V], yield func(), n *clockCounters) (popped bool) {
+	k.held.Add(1)
+	defer k.held.Add(-1)
+	e, ok := k.ring.pop(&n.casRetries, yield)
+	if !ok {
+		return false
+	}
+	n.handSteps.Add(1)
+	if e == protect && e.state.Load()&entryEvicted == 0 {
+		k.ring.push(e) // the entry being inserted is not its own victim
+	} else {
+		k.judge(e, yield, n)
+	}
+	return true
 }
 
 // judge applies the CLOCK decision to one entry the hand just claimed.
@@ -268,15 +277,23 @@ func (k *clockCore[K, V]) compact(yield func(), n *clockCounters) {
 		return
 	}
 	for steps := k.ring.length(); steps > 0 && k.ring.length() > live+clockChunkSlots; steps-- {
-		k.held.Add(1)
-		e, ok := k.ring.pop(&n.casRetries, yield)
-		if !ok {
-			k.held.Add(-1)
+		if !k.compactStep(yield, n) {
 			return
 		}
-		if e.state.Load()&entryEvicted == 0 {
-			k.ring.push(e)
-		}
-		k.held.Add(-1)
 	}
+}
+
+// compactStep re-appends one live entry (dead ones are dropped), reporting false
+// when the ring was empty. The deferred release keeps held balanced on a panic.
+func (k *clockCore[K, V]) compactStep(yield func(), n *clockCounters) (popped bool) {
+	k.held.Add(1)
+	defer k.held.Add(-1)
+	e, ok := k.ring.pop(&n.casRetries, yield)
+	if !ok {
+		return false
+	}
+	if e.state.Load()&entryEvicted == 0 {
+		k.ring.push(e)
+	}
+	return true
 }
