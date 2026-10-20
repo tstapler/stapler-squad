@@ -32,7 +32,6 @@ type proofEntry struct {
 // pendingSurface is a surface that has no proof yet. planned means the surface
 // does not exist in code yet and is allowed to be absent until its story lands.
 type pendingSurface struct {
-	story   string
 	planned bool
 }
 
