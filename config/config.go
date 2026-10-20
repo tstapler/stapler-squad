@@ -537,6 +537,10 @@ const HiddenSessionGateDefault = true
 // TymuxFeatureFlag.
 const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 
+// TriageGuidanceHaltDefault is the registry default, shared by the flag service
+// and EffectiveTriageGuidanceHaltEnabled.
+const TriageGuidanceHaltDefault = false
+
 // EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
 // halt and create a GuidanceRequest on ambiguity rather than guess. Callers
 // must read this fresh at the exact halt-decision instant, not cache it at
@@ -544,7 +548,7 @@ const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 // request/response RPC, so staleness at the decision point is the risk that
 // matters (mirrors EffectiveTymuxEnabled's live-read contract).
 func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, TriageGuidanceHaltDefault)
 }
 
 // DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
@@ -556,6 +560,10 @@ func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 // autonomous nudging as the default yet.
 const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
 
+// DiagnoseNudgeDefault is the registry default, shared by the flag service and
+// EffectiveDiagnoseNudgeEnabled.
+const DiagnoseNudgeDefault = false
+
 // EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
 // agent may actually perform a nudge write. Callers must read this fresh at
 // the exact write instant (diagnose_nudge_session's MCP handler), not cache
@@ -563,7 +571,7 @@ const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
 // decided to nudge before the flag flips off must still be blocked at the
 // write call site.
 func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, DiagnoseNudgeDefault)
 }
 
 // AutonomousStallNudgeFeatureFlag gates the in-process nudge the autonomous
