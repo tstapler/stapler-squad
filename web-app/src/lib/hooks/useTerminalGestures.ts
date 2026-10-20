@@ -645,7 +645,9 @@ export function useTerminalGestures(options: GestureOptions): void {
           const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
           if (optionsRef.current.isSgrMouseEncoding?.()) {
             // SGR (?1006h): \x1b[<0;col;rowM press, ...m release; no coordinate limit.
-            onSendData(`\x1b[<0;${Math.max(1, col)};${Math.max(1, row)}M\x1b[<0;${Math.max(1, col)};${Math.max(1, row)}m`);
+            const c = Math.max(1, col);
+            const r = Math.max(1, row);
+            onSendData(`\x1b[<0;${c};${r}M\x1b[<0;${c};${r}m`);
           } else {
             // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
             // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)

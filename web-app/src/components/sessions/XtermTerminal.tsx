@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useTerminalGestures, type GestureOptions } from "@/lib/hooks/useTerminalGestures";
 import { readScrollMode } from "@/lib/terminal/mouseTracking";
 import type { ScrollMode, ScrollOverride, TuiScrollPolicy } from "@/lib/terminal/scrollRouting";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
@@ -150,8 +150,8 @@ export function isSustainedMismatch(
   return Math.abs(actualPxPerCol - expectedPxPerCol) > tolerance;
 }
 
-// A whole onData chunk that is one SGR (\x1b[<b;x;yM/m) or X10 (\x1b[M + 3 bytes) mouse report.
-const MOUSE_REPORT_RE = /^\x1b\[(?:<\d+;\d+;\d+[Mm]|M[\s\S]{3})$/;
+// A whole onData chunk made of one or more SGR (\x1b[<b;x;yM/m) or X10 (\x1b[M + 3 bytes) mouse report.
+const MOUSE_REPORT_RE = /^(?:\x1b\[(?:<\d+;\d+;\d+[Mm]|M[\s\S]{3}))+$/;
 export const isMouseReport = (data: string): boolean => MOUSE_REPORT_RE.test(data);
 
 /** Settings that reach `useTerminalGestures` from TerminalOutput; changes apply on the next frame, no remount. */
@@ -179,16 +179,22 @@ export interface ScrollGestureProps {
 }
 
 /** Tracks DECSET/DECRST ?1006 (SGR mouse encoding), which xterm's public `modes` doesn't expose. */
-export function trackSgrMouseEncoding(terminal: Terminal, flag: { current: boolean }): { dispose(): void }[] {
+export function trackSgrMouseEncoding(terminal: Terminal, flag: { current: boolean }): IDisposable[] {
   const track = (enabled: boolean) => (params: (number | number[])[]) => {
     if (params.includes(1006)) flag.current = enabled;
     return false; // let xterm's own handler run
   };
+  const reset = () => {
+    flag.current = false;
+    return false;
+  };
   const parser = terminal.parser;
-  if (!parser) return [];
+  if (!parser) return []; // partial terminal mocks in tests
   return [
     parser.registerCsiHandler({ prefix: "?", final: "h" }, track(true)),
     parser.registerCsiHandler({ prefix: "?", final: "l" }, track(false)),
+    parser.registerEscHandler({ final: "c" }, reset), // RIS
+    parser.registerCsiHandler({ intermediates: "!", final: "p" }, reset), // DECSTR
   ];
 }
 
@@ -389,7 +395,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     onGestureActiveChange: scrollGesture?.onGestureActiveChange,
     isInputBusy: scrollGesture?.isInputBusy,
     mouseModeOverride: scrollGesture?.mouseModeOverride,
-    isSgrMouseEncoding: useCallback(() => sgrMouseEncodingRef.current, []),
+    isSgrMouseEncoding: () => sgrMouseEncodingRef.current,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
@@ -913,6 +919,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       // Setup event handlers using refs to avoid recreating terminal
+      sgrMouseEncodingRef.current = false; // new Terminal, no modes set yet
       const sgrDisposables = trackSgrMouseEncoding(terminal, sgrMouseEncodingRef);
       const dataDisposable = terminal.onData((data) => {
         if (mouseModeOverrideRef.current === 'none' && isMouseReport(data)) return;
