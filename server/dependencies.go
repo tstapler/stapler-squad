@@ -1959,8 +1959,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}()
 
+	// Unwired, GatedTransition answers in Off mode, so every transition would pass unchecked.
+	if !storage.TransitionGateWired() {
+		return nil, errors.New("workflow engine transition gate is not wired; refusing to start with unchecked transitions")
+	}
+
 	return &RuntimeDeps{
-		HeadlessPool:                   headlessPool,
+		HeadlessPool:                 headlessPool,
 		LLMSelector:                    llmSelector,
 		LLMClient:                      llmClient,
 		GeminiCaller:                   geminiCaller,
