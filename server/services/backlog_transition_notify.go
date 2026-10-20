@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -12,40 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// Denied-transition callers and reasons recorded on a transition_denied row.
-const (
-	transitionCallerDequeueClaim = "dequeue_claim"
-	deniedReasonConfigGraph      = "config_graph"
-	deniedReasonOperatorGate     = "operator_gate"
-)
-
-// classifyTransitionDenial maps an engine denial to its denied_reason. ok is
-// false for errors that are not engine denials (other gate errors, CAS races).
-func classifyTransitionDenial(err error) (reason string, ok bool) {
-	switch {
-	case errors.Is(err, session.ErrTransitionNotAllowed):
-		return deniedReasonConfigGraph, true
-	case errors.Is(err, session.ErrGateNotSatisfied):
-		return deniedReasonOperatorGate, true
-	}
-	return "", false
-}
-
-// notifyClaimDenied records an engine denial of the dequeue claim; a no-op for
-// errors classifyTransitionDenial does not recognise.
-func (s *BacklogService) notifyClaimDenied(ctx context.Context, item *session.BacklogItemData, from session.BacklogStatus, denyErr error) {
-	reason, ok := classifyTransitionDenial(denyErr)
-	if !ok {
-		return
-	}
-	s.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
-		Caller: transitionCallerDequeueClaim,
-		From:   string(from),
-		To:     string(session.BacklogStatusInProgress),
-		Reason: reason,
-	}, denyErr)
-}
 
 // notifyTransitionDenied makes a denied automatic transition visible: a
 // transition_denied stuck row, one progress comment and one notification,

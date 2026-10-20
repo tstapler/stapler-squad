@@ -238,12 +238,12 @@ var transitionCallers = []TransitionCallerSpec{
 		site(fileSessSync, "SyncLoop.SyncOne", 1)),
 
 	// System: storage-direct today. toStatus is assigned once (stIdea->stReady).
-	specUnchecked(CallerAutonomousComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileAutonomous, "AutonomousOrchestrationService.onAutonomousDriverComplete", 1)),
+	specUnchecked(CallerAutonomousComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileAutonomous, "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1)),
 	specUnchecked(CallerAutoReopenFailedReview, []SystemEdge{edge(stReview, stInProg)}, site(fileTriage, "BacklogService.AutoReopenAfterFailedReview", 1)),
 	specUnchecked(CallerAutoReopenForPRFix, []SystemEdge{edge(stPrPend, stInProg)}, site(fileTriage, "BacklogService.autoReopenForPRFix", 1)),
 	specUnchecked(CallerSpawnSessionAfterGates, []SystemEdge{edge(stReady, stInProg)}, site(fileTriage, "BacklogService.spawnSessionAfterGates", 1)),
 	specUnchecked(CallerRespawnTriage, []SystemEdge{edge(stQueued, stIdea)}, site(fileTriage, "BacklogService.respawnTriage", 1)),
-	specUnchecked(CallerMaybeTriggerTriage, []SystemEdge{edge(stIdea, stReady)}, site(fileTriage, "BacklogService.MaybeTriggerTriage", 1)),
+	specUnchecked(CallerMaybeTriggerTriage, []SystemEdge{edge(stIdea, stReady)}, site(fileTriage, "BacklogService.skipTriageForNewItem", 1)),
 	specUnchecked(CallerTriggerReReview, []SystemEdge{edge(stReview, stDone)}, site(fileTriage, "BacklogService.TriggerReReview", 1)),
 	specUnchecked(CallerTriageComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileTriggerTri, "BacklogService.TriggerTriage", 1)),
 	specUnchecked(CallerSessionExited, []SystemEdge{edge(stInProg, stReview), edge(stInProg, stDone)}, site(fileSessLife, "BacklogLifecycleListener.onSessionExited", 1)),
@@ -265,8 +265,8 @@ var transitionCallers = []TransitionCallerSpec{
 
 // exemptTransitionSites are the 3 rollbacks and 2 debug writes (ADR-007 D1).
 var exemptTransitionSites = []ExemptSite{
-	{CallSite{fileTriage, "BacklogService.AutoReopenAfterFailedReview", 1}, ExemptRollback, "restores review after a failed respawn"},
-	{CallSite{fileTriage, "BacklogService.autoReopenForPRFix", 1}, ExemptRollback, "restores pr_pending after a failed respawn"},
+	{CallSite{fileTriage, "BacklogService.rollbackFailedReopen", 1}, ExemptRollback, "restores review after a failed respawn"},
+	{CallSite{fileTriage, "BacklogService.rollbackFailedPRFixReopen", 1}, ExemptRollback, "restores pr_pending after a failed respawn"},
 	{CallSite{fileTriage, "BacklogService.claimAndSpawnCandidate", 1}, ExemptRollback, "restores the pre-claim status after a failed spawn"},
 	{CallSite{fileDebugMutate, "BacklogDebugMutateHandler.handleTransition", 1}, ExemptDebug, "operator-only debug endpoint"},
 	{CallSite{fileDebugMutate, "BacklogDebugMutateHandler.handleArchive", 1}, ExemptDebug, "operator-only debug endpoint"},

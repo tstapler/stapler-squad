@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,33 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-const (
-	denyNone int32 = iota
-	denyGraph
-	denyGate
-)
-
-// denyingClaimEngine denies only queued/ready -> in_progress, in the mode
-// currently stored, so one test can deny then allow without a restart.
-type denyingClaimEngine struct {
-	session.WorkflowEngine
-	mode atomic.Int32
-}
-
-func (e *denyingClaimEngine) CanTransition(from, to session.BacklogStatus, fb *session.StageConfigSnapshot) bool {
-	if to == session.BacklogStatusInProgress && e.mode.Load() == denyGraph {
-		return false
-	}
-	return e.WorkflowEngine.CanTransition(from, to, fb)
-}
-
-func (e *denyingClaimEngine) ValidateGates(in session.BacklogItemTransitionInput, to session.BacklogStatus, fb *session.StageConfigSnapshot) error {
-	if to == session.BacklogStatusInProgress && e.mode.Load() == denyGate {
-		return fmt.Errorf("%w: human_approval gate %q: unsatisfied", session.ErrGateNotSatisfied, "g1")
-	}
-	return e.WorkflowEngine.ValidateGates(in, to, fb)
-}
 
 func transitionDeniedRows(t *testing.T, svc *BacklogService, itemID string) []*sessionv1.StuckBacklogItem {
 	t.Helper()
@@ -86,13 +58,16 @@ func countDeniedNotifications(ch <-chan *events.Event) int {
 }
 
 func TestDequeueClaim_should_SurfaceTransitionDeniedOnceAndRecover_When_EngineDeniesThenAllows(t *testing.T) {
+	// A graph denial cannot reach the claim: queued->in_progress is a
+	// system-required edge, which a stage-config edit cannot disable.
 	cases := []struct {
 		name       string
-		mode       int32
+		deny       func(*systemGateHarness, *testing.T) (undo func())
 		wantReason string
 	}{
-		{"operator_gate", denyGate, "operator_gate"},
-		{"config_graph", denyGraph, "config_graph"},
+		{"operator_gate", func(h *systemGateHarness, t *testing.T) func() {
+			return h.blockWithGate(t, session.BacklogStatusQueued, session.BacklogStatusInProgress)
+		}, "operator_gate"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,9 +76,8 @@ func TestDequeueClaim_should_SurfaceTransitionDeniedOnceAndRecover_When_EngineDe
 			svc.claimDedupFlag = func() bool { return false }
 			itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 
-			engine := &denyingClaimEngine{WorkflowEngine: session.NewDefaultWorkflowEngine()}
-			engine.mode.Store(tc.mode)
-			svc.engine = engine
+			h := wireEnforcedGate(t, svc)
+			undo := tc.deny(h, t)
 			bus := events.NewEventBus(16)
 			svc.SetEventBus(bus)
 			ch, _ := bus.Subscribe(t.Context())
@@ -114,11 +88,11 @@ func TestDequeueClaim_should_SurfaceTransitionDeniedOnceAndRecover_When_EngineDe
 			assert.Equal(t, "queued", itemStatus(t, svc, itemID))
 			rows := transitionDeniedRows(t, svc, itemID)
 			require.Len(t, rows, 1)
-			assert.Equal(t, "dequeue_claim", rows[0].DeniedCaller)
+			assert.Equal(t, "claim_and_spawn", rows[0].DeniedCaller)
 			assert.Equal(t, "queued", rows[0].DeniedFrom)
 			assert.Equal(t, "in_progress", rows[0].DeniedTo)
 			assert.Equal(t, tc.wantReason, rows[0].DeniedReason)
-			note := fmt.Sprintf("automatic dequeue_claim denied: from=queued to=in_progress reason=%s", tc.wantReason)
+			note := fmt.Sprintf("automatic claim_and_spawn denied: from=queued to=in_progress reason=%s", tc.wantReason)
 			assert.Equal(t, 1, countDeniedNotes(t, svc, itemID, note))
 			assert.Equal(t, 1, countDeniedNotifications(ch))
 			assert.NotContains(t, logs.String(), "claim failed")
@@ -129,7 +103,7 @@ func TestDequeueClaim_should_SurfaceTransitionDeniedOnceAndRecover_When_EngineDe
 			assert.Len(t, transitionDeniedRows(t, svc, itemID), 1)
 			assert.NotContains(t, logs.String(), "claim failed")
 
-			engine.mode.Store(denyNone)
+			undo()
 			require.NoError(t, svc.DequeueNextQueuedItems(ctx))
 			assert.Equal(t, "in_progress", itemStatus(t, svc, itemID))
 			assert.Empty(t, transitionDeniedRows(t, svc, itemID), "row must clear once the claim succeeds")

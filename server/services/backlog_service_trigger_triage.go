@@ -272,6 +272,18 @@ func callTestTriageCompleteHook(itemID string) {
 	}
 }
 
+// triageResetError maps a failed ready->idea reset to the RPC error. A lost
+// compare-and-swap means a work session raced the re-triage; anything else is
+// an engine denial, returned to the operator as is.
+func triageResetError(itemID string, transErr error) error {
+	if errors.Is(transErr, session.ErrPreconditionFailed) {
+		log.Warn("[TriggerTriage] moved past ready before triage reset (race with work-session spawn); aborting re-triage", "item", itemID)
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", itemID))
+	}
+	return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot reset item %s to idea for re-triage: %w", itemID, transErr))
+}
+
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
 // Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
@@ -365,11 +377,11 @@ func (s *BacklogService) TriggerTriage(
 	// races with this re-triage doesn't drag the item backwards to idea.
 	if item.Status == string(session.BacklogStatusReady) {
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
-		if _, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, req.Msg.ItemId,
-			session.BacklogStatusIdea, precondition, session.TriggeredByUser); transErr != nil {
-			log.Warn("[TriggerTriage] moved past ready before triage reset (race with work-session spawn); aborting re-triage", "item", req.Msg.ItemId)
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", req.Msg.ItemId))
+		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: session.BacklogStatusIdea,
+			Precondition: precondition, TriggeredBy: session.TriggeredByUser,
+		}); transErr != nil {
+			return nil, triageResetError(req.Msg.ItemId, transErr)
 		}
 	}
 
@@ -862,8 +874,10 @@ func (s *BacklogService) TriggerTriage(
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.RawTransitionBacklogItemStatus(persistCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
-			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
+		if _, transErr := s.storage.GatedTransition(persistCtx, session.TransitionRequest{
+			Caller: session.CallerTriageComplete, ItemID: itemID, To: session.BacklogStatusReady,
+			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		}); transErr != nil {
 			log.Error("[TriggerTriage] status transition idea→ready failed", "item", itemID, "error", transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
 			statusAdvanced = false

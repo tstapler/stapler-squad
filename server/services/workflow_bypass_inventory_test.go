@@ -47,12 +47,35 @@ var bypassPrimitives = func() map[string]bool {
 	return m
 }()
 
+// gateEntryPoints are the Storage methods a migrated site calls instead of a
+// raw writer, mapped to the minimum argument count that tells them apart from
+// same-named methods elsewhere (tx.Rollback() takes none).
+var gateEntryPoints = map[string]int{
+	"GatedTransition": 0, "GatedArchive": 0, "GatedUnarchive": 0, "GatedSetPRAndTransition": 0,
+	"Rollback": 4, "DebugForce": 0,
+}
+
+func isStatusWriteCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if bypassPrimitives[sel.Sel.Name] {
+		return true
+	}
+	minArgs, gated := gateEntryPoints[sel.Sel.Name]
+	return gated && len(call.Args) >= minArgs
+}
+
 type bypassClass string
 
 const (
 	classEngineRouted bypassClass = "engine-routed"
 	classPending      bypassClass = "pending"
-	classExempt       bypassClass = "exempt"
+	// classGated sites call a Storage gate entry point (GatedTransition,
+	// Rollback, DebugForce, ...) under a registered caller.
+	classGated  bypassClass = "gated"
+	classExempt bypassClass = "exempt"
 )
 
 // bypassSite is one (file, function) holding `calls` primitive calls.
@@ -73,6 +96,10 @@ const (
 
 func engineRouted(file, fn, how string) bypassSite {
 	return bypassSite{file: file, fn: fn, calls: 1, class: classEngineRouted, reason: how}
+}
+
+func gated(file, fn string, calls int, how string) bypassSite {
+	return bypassSite{file: file, fn: fn, calls: calls, class: classGated, reason: how}
 }
 
 func pending(file, fn string, calls int, story string) bypassSite {
@@ -104,8 +131,6 @@ var bypassInventory = []bypassSite{
 	// Engine-routed: ask the WorkflowEngine today; re-pointed at the gate in Stories 1.5.5-1.5.7.
 	engineRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", "handler: CanTransition + ValidateGates before the write"),
 	engineRouted("server/services/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", "asks the engine before the write"),
-	engineRouted("server/services/backlog_service_triage.go", "BacklogService.transitionWithGuard", "engine check, shared by queue/dequeue/dispatch callers"),
-	engineRouted("server/services/backlog_service_sync.go", "BacklogService.AttachSessionToItem", "engine check before ->in_progress"),
 	engineRouted("session/backlog_sync.go", "SyncLoop.SyncOne", "engine check on the backward-sync target"),
 
 	// Pending, Story 1.5.5 (operator and agent writers).
@@ -119,19 +144,24 @@ var bypassInventory = []bypassSite{
 	pending("server/mcp/tools_backlog.go", "backlogHandlers.reportDuplicate", 1, "1.5.5c (ArchiveBacklogItem)"),
 	pending("server/mcp/tools_backlog_pr.go", "backlogHandlers.reportPRCreated", 1, "1.5.5c (SetBacklogItemPRAndTransition)"),
 
-	// Pending, Story 1.5.6 (system writers in server/services). Rollback sites move to gate.Rollback.
-	pending("server/services/autonomous_orchestration_service.go", "AutonomousOrchestrationService.onAutonomousDriverComplete", 1, "1.5.6a"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.AutoReopenAfterFailedReview", 2, "1.5.6b (transition) and 1.5.6d (rollback to gate.Rollback)"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.autoReopenForPRFix", 2, "1.5.6c (transition and rollback)"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.claimAndSpawnCandidate", 1, "1.5.6d (rollback to gate.Rollback)"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.spawnSessionAfterGates", 1, "1.5.6d"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.respawnTriage", 1, "1.5.6d"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.MaybeTriggerTriage", 1, "1.5.6d"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.TriggerReReview", 1, "1.5.6d"),
-	pending("server/services/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "1.5.6e"),
-	pending("server/services/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "1.5.6e"),
-	pending("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleTransition", 1, "1.5.6f (to DebugForce, exempt class debug)"),
-	pending("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleArchive", 1, "1.5.6f (to DebugForce, exempt class debug)"),
+	// Gated, Story 1.5.6 (system writers in server/services, the two operator triage writers,
+	// the rollbacks and the debug handler).
+	gated("server/services/autonomous_orchestration_service.go", "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1, "GatedTransition as autonomous_complete"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.transitionWithGuard", 1, "GatedTransition; caller derived from target and actor (queue, claim, Jules dispatch)"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.AutoReopenAfterFailedReview", 1, "GatedTransition as auto_reopen_after_failed_review"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.rollbackFailedReopen", 1, "gate.Rollback (exempt, counted)"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.autoReopenForPRFix", 1, "GatedTransition as auto_reopen_for_pr_fix"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.rollbackFailedPRFixReopen", 1, "gate.Rollback (exempt, counted)"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.claimAndSpawnCandidate", 1, "gate.Rollback (exempt, counted)"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.spawnSessionAfterGates", 1, "GatedTransition as spawn_session_after_gates (Unconditional)"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.respawnTriage", 1, "GatedTransition as respawn_triage"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.skipTriageForNewItem", 1, "GatedTransition as maybe_trigger_triage"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
+	gated("server/services/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
+	gated("server/services/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
+	gated("server/services/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
+	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
 
 	// Pending, Story 1.5.7 (system writers in session).
 	pending("session/backlog_lifecycle.go", "BacklogLifecycleListener.onSessionExited", 1, "1.5.7a"),
@@ -211,7 +241,7 @@ func scanBypassCalls(t *testing.T, root string) map[string]int {
 			if !ok {
 				return true
 			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && bypassPrimitives[sel.Sel.Name] {
+			if isStatusWriteCall(call) {
 				counts[rel+" "+name]++
 			}
 			return true
@@ -281,7 +311,7 @@ func TestWorkflowBypassInventory_EveryStatusWriteCallIsClassified(t *testing.T) 
 
 func TestWorkflowBypassInventory_EveryEntryHasClassAndReason(t *testing.T) {
 	for _, s := range bypassInventory {
-		assert.Contains(t, []bypassClass{classEngineRouted, classPending, classExempt}, s.class, s.key())
+		assert.Contains(t, []bypassClass{classEngineRouted, classPending, classExempt, classGated}, s.class, s.key())
 		assert.NotEmpty(t, strings.TrimSpace(s.reason), "%s lacks a reason", s.key())
 		assert.Positive(t, s.calls, s.key())
 		if s.class == classPending {
@@ -336,7 +366,7 @@ func TestWorkflowBypassInventory_EveryPendingAndEngineRoutedSiteIsRegistered(t *
 	var problems []string
 	covered := map[string]bool{}
 	for _, s := range bypassInventory {
-		inScope := s.class == classPending || s.class == classEngineRouted || s.file == delegateFile
+		inScope := s.class == classPending || s.class == classEngineRouted || s.class == classGated || s.file == delegateFile
 		if !inScope {
 			continue
 		}
