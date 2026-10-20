@@ -30,6 +30,8 @@ import (
 // bypassPrimitives are the six status writers (ADR-007 D1); a call is matched
 // by selector name on any receiver. The Raw/raw forms are the post-1.5.4 names;
 // "TransitionBacklogItemStatusWithNote" is the raw writer behind GatedReconcileStuck.
+// The Gated* entry points are counted too: a migrated site stays a registered
+// site (engine-routed through the gate) until Story 1.5.9a replaces this scan.
 var bypassPrimitives = func() map[string]bool {
 	m := map[string]bool{}
 	for _, n := range []string{
@@ -39,6 +41,7 @@ var bypassPrimitives = func() map[string]bool {
 		// ReconcileStuckItems has no Storage wrapper; GatedReconcileStuck is its only
 		// form and stays counted until Story 1.5.7a registers the caller.
 		"GatedReconcileStuck",
+		"GatedTransition", "GatedArchive", "GatedUnarchive", "GatedSetPRAndTransition",
 	} {
 		m[n] = true
 		m["Raw"+n] = true
@@ -75,6 +78,10 @@ func engineRouted(file, fn, how string) bypassSite {
 	return bypassSite{file: file, fn: fn, calls: 1, class: classEngineRouted, reason: how}
 }
 
+func gateRouted(file, fn string, calls int, how string) bypassSite {
+	return bypassSite{file: file, fn: fn, calls: calls, class: classEngineRouted, reason: how}
+}
+
 func pending(file, fn string, calls int, story string) bypassSite {
 	return bypassSite{file: file, fn: fn, calls: calls, class: classPending, reason: "migrate in Story " + story}
 }
@@ -99,25 +106,25 @@ var bypassInventory = []bypassSite{
 	exempt("session/transition_gate.go", "Storage.Rollback", 1, gateReason+": exempt entry point, counted"),
 	exempt("session/transition_gate.go", "Storage.DebugForce", 2, gateReason+": exempt entry point, counted (transition and archive)"),
 	exempt("server/mcp/tools_backlog_dependencies.go", "backlogHandlers.transitionBacklogItemStatus", 1, delegateReason),
-	exempt("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "notification action forwards the operator's click to the RPC handler, which routes through the engine; Story 1.5.5 registers it as an operator caller"),
 
 	// Engine-routed: ask the WorkflowEngine today; re-pointed at the gate in Stories 1.5.5-1.5.7.
-	engineRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", "handler: CanTransition + ValidateGates before the write"),
-	engineRouted("server/services/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", "asks the engine before the write"),
+	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", 1, "GatedTransition as operator_transition_rpc or mcp_transition_delegate, by context actor (Story 1.5.5a)"),
+	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
 	engineRouted("server/services/backlog_service_triage.go", "BacklogService.transitionWithGuard", "engine check, shared by queue/dequeue/dispatch callers"),
 	engineRouted("server/services/backlog_service_sync.go", "BacklogService.AttachSessionToItem", "engine check before ->in_progress"),
 	engineRouted("session/backlog_sync.go", "SyncLoop.SyncOne", "engine check on the backward-sync target"),
 
-	// Pending, Story 1.5.5 (operator and agent writers).
-	pending("server/services/backlog_service_lifecycle.go", "BacklogService.SubmitManualReview", 1, "1.5.5a"),
-	pending("server/services/backlog_service_lifecycle.go", "BacklogService.ArchiveBacklogItem", 1, "1.5.5b"),
-	pending("server/services/backlog_service_lifecycle.go", "BacklogService.UnarchiveBacklogItem", 1, "1.5.5b"),
-	pending("server/services/backlog_service_lifecycle.go", "BacklogService.UpdateBacklogItem", 1, "1.5.5b (PR association via SetBacklogItemPRAndTransition)"),
-	pending("server/mcp/tools_backlog.go", "backlogHandlers.requestReview", 2, "1.5.5c"),
-	pending("server/mcp/tools_backlog.go", "backlogHandlers.reportBlocked", 1, "1.5.5c"),
-	pending("server/mcp/tools_backlog.go", "backlogHandlers.resumeWork", 1, "1.5.5c"),
-	pending("server/mcp/tools_backlog.go", "backlogHandlers.reportDuplicate", 1, "1.5.5c (ArchiveBacklogItem)"),
-	pending("server/mcp/tools_backlog_pr.go", "backlogHandlers.reportPRCreated", 1, "1.5.5c (SetBacklogItemPRAndTransition)"),
+	// Gate-routed in Story 1.5.5 (operator and agent writers).
+	gateRouted("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
+	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.SubmitManualReview", 1, "GatedTransition as operator_submit_manual_review (Story 1.5.5a)"),
+	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.ArchiveBacklogItem", 1, "GatedArchive as operator_archive_rpc (Story 1.5.5b)"),
+	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.UnarchiveBacklogItem", 1, "GatedUnarchive as operator_unarchive_rpc (Story 1.5.5b)"),
+	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.UpdateBacklogItem", 1, "GatedSetPRAndTransition as operator_update_pr_association (Story 1.5.5b)"),
+	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.requestReview", 2, "GatedTransition as mcp_request_review, recovery reopen and the transition (Story 1.5.5c)"),
+	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.reportBlocked", 1, "GatedTransition as mcp_report_blocked (Story 1.5.5c)"),
+	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.resumeWork", 1, "GatedTransition as mcp_resume_work (Story 1.5.5c)"),
+	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.reportDuplicate", 1, "GatedArchive as mcp_report_duplicate (Story 1.5.5c)"),
+	gateRouted("server/mcp/tools_backlog_pr.go", "backlogHandlers.reportPRCreated", 1, "GatedSetPRAndTransition as mcp_report_pr_created (Story 1.5.5c)"),
 
 	// Pending, Story 1.5.6 (system writers in server/services). Rollback sites move to gate.Rollback.
 	pending("server/services/autonomous_orchestration_service.go", "AutonomousOrchestrationService.onAutonomousDriverComplete", 1, "1.5.6a"),

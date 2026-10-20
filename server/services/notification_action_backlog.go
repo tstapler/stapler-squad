@@ -89,6 +89,7 @@ func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, curre
 	if !stringIn(from, current) {
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
 	}
+	ctx = WithTransitionCaller(ctx, session.CallerOperatorNotificationAction)
 	_, err := b.Transitions.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId: d.ItemID, TargetStatus: target, ExpectedStatus: current, OverrideReason: d.Reason,
 	}))

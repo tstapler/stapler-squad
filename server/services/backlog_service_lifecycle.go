@@ -467,7 +467,15 @@ func (s *BacklogService) UpdateBacklogItem(
 		// it can no longer silently swap an already-tracked PR (including a
 		// merged one) with zero verification.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
-		if setErr := s.storage.RawSetBacklogItemPRAndTransition(ctx, updated, prURL, prNumber, note, nil); setErr != nil {
+		setErr := s.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
+			Caller:      session.CallerOperatorPRAssociation,
+			Observed:    updated,
+			TriggeredBy: session.TriggeredByUser,
+		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note})
+		if setErr != nil {
+			if isTransitionDenial(setErr) {
+				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")
+			}
 			if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("cannot associate PR: item %q already has PR #%d tracked (status pr_pending) — this manual override endpoint does not support reassigning an already-tracked PR to a different one (no GitHub verification is performed here); use report_pr_created from a work session instead: %w", req.Msg.ItemId, updated.PrNumber, setErr))
@@ -508,17 +516,21 @@ func (s *BacklogService) ArchiveBacklogItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	// Push work branches before archiving so changes are durable.
-	if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
-		s.commitAndPushItemWorktrees(ctx, sessions)
-	}
-
-	archived, err := s.storage.RawArchiveBacklogItem(ctx, req.Msg.ItemId, nil, session.TriggeredByUser, "")
+	// The gate decides first; work branches are then pushed before the write so
+	// changes are durable. A denied archive pushes nothing and cleans up nothing.
+	archived, err := s.storage.GatedArchive(ctx, session.TransitionRequest{
+		Caller:      session.CallerOperatorArchiveRPC,
+		ItemID:      req.Msg.ItemId,
+		TriggeredBy: session.TriggeredByUser,
+		BeforeCommit: func(ctx context.Context) error {
+			if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
+				s.commitAndPushItemWorktrees(ctx, sessions)
+			}
+			return nil
+		},
+	})
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to archive backlog item: %w", err))
+		return nil, transitionConnectError(err, req.Msg.ItemId, "archive backlog item")
 	}
 
 	// Best-effort: clean up git worktrees for work sessions on archive.
@@ -544,12 +556,13 @@ func (s *BacklogService) UnarchiveBacklogItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	unarchived, err := s.storage.RawUnarchiveBacklogItem(ctx, req.Msg.ItemId)
+	unarchived, err := s.storage.GatedUnarchive(ctx, session.TransitionRequest{
+		Caller:      session.CallerOperatorUnarchiveRPC,
+		ItemID:      req.Msg.ItemId,
+		TriggeredBy: session.TriggeredByUser,
+	})
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unarchive backlog item: %w", err))
+		return nil, transitionConnectError(err, req.Msg.ItemId, "unarchive backlog item")
 	}
 
 	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
@@ -835,6 +848,30 @@ func WithTransitionActor(ctx context.Context, actor string) context.Context {
 	return context.WithValue(ctx, transitionActorKey{}, actor)
 }
 
+type transitionCallerKey struct{}
+
+// WithTransitionCaller names the registered operator caller of an RPC that
+// another operator-facing component forwards to TransitionBacklogItemStatus.
+// resolveTransitionCaller honors only session.CallerOperatorNotificationAction,
+// and only for the user actor.
+func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) context.Context {
+	return context.WithValue(ctx, transitionCallerKey{}, caller)
+}
+
+// resolveTransitionCaller maps the request's actor to its registered caller:
+// the user actor is an operator; the agent actor, and any unknown value, is the
+// MCP delegate (class agent), so an unknown actor never gains the operator
+// override. Both context keys are unexported, so only in-process code sets them.
+func resolveTransitionCaller(ctx context.Context) session.TransitionCaller {
+	if transitionActorFromContext(ctx) != session.TriggeredByUser {
+		return session.CallerMCPTransitionDelegate
+	}
+	if c, ok := ctx.Value(transitionCallerKey{}).(session.TransitionCaller); ok && c == session.CallerOperatorNotificationAction {
+		return c
+	}
+	return session.CallerOperatorTransitionRPC
+}
+
 func transitionActorFromContext(ctx context.Context) string {
 	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
 		return a
@@ -865,6 +902,33 @@ func isFailedPreconditionGuardError(guardErr error) bool {
 	return false
 }
 
+// isTransitionDenial reports whether err is the engine refusing a transition
+// (graph, Configured gate or Default guard) rather than a write failure.
+func isTransitionDenial(err error) bool {
+	return errors.Is(err, session.ErrTransitionNotAllowed) ||
+		errors.Is(err, session.ErrGateNotSatisfied) ||
+		isFailedPreconditionGuardError(err)
+}
+
+// transitionConnectError maps a Gated* entry point's error to its RPC code:
+// NotFound for a missing item, Aborted for a lost compare-and-swap,
+// FailedPrecondition for a Default guard sentinel, InvalidArgument for a graph
+// or Configured-gate denial. what completes "failed to ...: %w" for the rest.
+// kibitzer:ignore primitive-obsession -- itemID and what are an id and a message fragment, not interchangeable values
+func transitionConnectError(err error, itemID, what string) error {
+	switch {
+	case ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound):
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", itemID))
+	case errors.Is(err, session.ErrPreconditionFailed):
+		return connect.NewError(connect.CodeAborted, err)
+	case isFailedPreconditionGuardError(err):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case isTransitionDenial(err):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s: %w", what, err))
+}
+
 // TransitionBacklogItemStatus moves an item through the status state machine.
 // +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
@@ -887,13 +951,6 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 
 	from := session.BacklogStatus(item.Status)
 	to := session.BacklogStatus(req.Msg.TargetStatus)
-	fallback := session.BuildStageConfigSnapshotFallback(item)
-
-	if !s.engine.CanTransition(from, to, fallback) {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("invalid transition from %q to %q", from, to))
-	}
-
 	// Gather the guard inputs (review verdict, unshipped code, unresolved
 	// blockers) so TransitionGuard can evaluate its business rules. A PrURL alone
 	// is not proof the code shipped, so buildGuardInput verifies the most recent
@@ -901,13 +958,6 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	guardInput, blockersErr := s.buildGuardInput(ctx, item, to, "TransitionBacklogItemStatus")
 	if blockersErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check unresolved blockers: %w", blockersErr))
-	}
-	guardInput.OverrideReason = req.Msg.OverrideReason
-	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
-		if isFailedPreconditionGuardError(guardErr) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
-		}
-		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)
 	}
 
 	var precondition *session.BacklogItemPrecondition
@@ -921,20 +971,31 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	// Push work branches before marking done so changes are durable before the
-	// status changes and the worktree is removed.
+	// The gate decides the graph edge, the Default guards and any Configured
+	// operator gate, then writes. For done, work branches are pushed after the
+	// decision and before the write so changes are durable before the status
+	// changes and the worktree is removed.
+	gateReq := session.TransitionRequest{
+		Caller:         resolveTransitionCaller(ctx),
+		ItemID:         req.Msg.ItemId,
+		Observed:       item,
+		To:             to,
+		Precondition:   precondition,
+		TriggeredBy:    triggeredBy,
+		OverrideReason: req.Msg.OverrideReason,
+		Guard:          &guardInput,
+	}
 	if to == session.BacklogStatusDone {
-		if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
-			s.commitAndPushItemWorktrees(ctx, sessions)
+		gateReq.BeforeCommit = func(ctx context.Context) error {
+			if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
+				s.commitAndPushItemWorktrees(ctx, sessions)
+			}
+			return nil
 		}
 	}
-
-	updated, err := s.storage.RawTransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, triggeredBy)
+	updated, err := s.storage.GatedTransition(ctx, gateReq)
 	if err != nil {
-		if errors.Is(err, session.ErrPreconditionFailed) {
-			return nil, connect.NewError(connect.CodeAborted, err)
-		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to transition backlog item: %w", err))
+		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 
@@ -1287,26 +1348,33 @@ func (s *BacklogService) OverrideVerdict(
 		if currentErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item for transition: %w", currentErr))
 		}
-		from := session.BacklogStatus(currentItem.Status)
-		if !s.engine.CanTransition(from, toStatus, session.BuildStageConfigSnapshotFallback(currentItem)) {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
-		}
 		// CAS-protected like every other transition write path (see
 		// TransitionBacklogItemStatus above) — a nil precondition here would
 		// let this unconditional write silently clobber a transition that
 		// happened concurrently between the GetBacklogItem read above and
 		// this write.
 		updatedAt := currentItem.UpdatedAt
-		precondition := &session.BacklogItemPrecondition{
-			ExpectedStatus:    string(from),
-			ExpectedUpdatedAt: &updatedAt,
-		}
-		updated, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
-		if transErr != nil {
-			log.ErrorLog().Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
-		} else {
+		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{ //nolint:silenttransition a denial is returned below; any other write failure is shown by the fallback reload, which returns the item's true post-transition state in the RPC response
+			Caller:   session.CallerOperatorOverrideVerdict,
+			ItemID:   itemID,
+			Observed: currentItem,
+			To:       toStatus,
+			Precondition: &session.BacklogItemPrecondition{
+				ExpectedStatus:    currentItem.Status,
+				ExpectedUpdatedAt: &updatedAt,
+			},
+			TriggeredBy: session.TriggeredByUser,
+			// The operator's required reason frees the verdict guards, as the
+			// verdict they just overrode would have blocked them.
+			OverrideReason: req.Msg.OverrideReason,
+		})
+		switch {
+		case transErr == nil:
 			updatedItem = updated
+		case isTransitionDenial(transErr):
+			return nil, transitionConnectError(transErr, itemID, "transition backlog item")
+		default:
+			log.ErrorLog().Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		}
 	}
 
@@ -1415,8 +1483,23 @@ func (s *BacklogService) SubmitManualReview(
 			if !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "SubmitManualReview") {
 				log.InfoLog().Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
 			} else {
-				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.RawTransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
+				// Observed is left unset so the gate re-reads the item: the
+				// verdict was just saved, and the guard input below already says
+				// PASS on main. That keeps the write's CAS on status alone.
+				guard := session.NewBacklogItemTransitionInput(item, session.BacklogStatusReview)
+				guard.OverallOutcome = overall
+				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+					Caller:       session.CallerOperatorManualReview,
+					ItemID:       req.Msg.ItemId,
+					To:           session.BacklogStatusDone,
+					Precondition: &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)},
+					TriggeredBy:  session.TriggeredByUser,
+					Guard:        &guard,
+				}); transErr != nil {
+					if isTransitionDenial(transErr) {
+						code := connect.CodeOf(transitionConnectError(transErr, req.Msg.ItemId, ""))
+						return nil, connect.NewError(code, fmt.Errorf("manual review verdict recorded, but the item was not moved to done: %w", transErr))
+					}
 					log.WarningLog().Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
 					// Same shape as TriggerReReview's PASS->done path: code is
 					// confirmed shipped to main but the item is left stuck in review.

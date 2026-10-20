@@ -83,6 +83,7 @@ type ExemptSite struct {
 
 const (
 	fileLifecycle    = "server/services/backlog_service_lifecycle.go"
+	fileNotifyAction = "server/services/notification_action_backlog.go"
 	fileTriage       = "server/services/backlog_service_triage.go"
 	fileTriggerTri   = "server/services/backlog_service_trigger_triage.go"
 	fileSync         = "server/services/backlog_service_sync.go"
@@ -110,6 +111,10 @@ const (
 	CallerOperatorPRAssociation   TransitionCaller = "operator_update_pr_association"
 	CallerOperatorTriggerTriage   TransitionCaller = "operator_trigger_triage"
 	CallerOperatorForceReset      TransitionCaller = "operator_force_reset"
+	// CallerOperatorNotificationAction is an operator's inline notification
+	// click (accept or rework), which reaches the transition handler with this
+	// caller instead of operator_transition_rpc.
+	CallerOperatorNotificationAction TransitionCaller = "operator_notification_action"
 
 	CallerMCPRequestReview   TransitionCaller = "mcp_request_review"
 	CallerMCPReportBlocked   TransitionCaller = "mcp_report_blocked"
@@ -213,13 +218,14 @@ var transitionCallers = []TransitionCallerSpec{
 	specOp(CallerOperatorPRAssociation, LegacyUnchecked, []SystemEdge{edge(stReview, stPrPend)}, site(fileLifecycle, "BacklogService.UpdateBacklogItem", 1)),
 	specOp(CallerOperatorTriggerTriage, LegacyUnchecked, []SystemEdge{edge(stReady, stIdea)}, site(fileTriggerTri, "BacklogService.TriggerTriage", 1)),
 	specOp(CallerOperatorForceReset, LegacyUnchecked, []SystemEdge{edge(stReview, stInProg)}, site(fileTriage, "BacklogService.forceResetItem", 1)),
+	specOp(CallerOperatorNotificationAction, LegacyEngine, []SystemEdge{edge(stReview, stDone), edge(stReview, stReady), edge(stPrPend, stReady)}, site(fileNotifyAction, "backlogDecider.transition", 1)),
 
 	// Agent. request_review's skip-stReview-gate path writes ->stDone from
 	// in_progress, an edge validTransitions lacks (system-required recovery group).
 	specAgent(CallerMCPRequestReview, []SystemEdge{
 		edge(stInProg, stReview), edge(stPrPend, stReview), edge(stInProg, stDone), edge(stPrPend, stDone), edge(stReview, stInProg),
 	}, site(fileMCPBacklog, "backlogHandlers.requestReview", 2)),
-	specAgent(CallerMCPReportBlocked, []SystemEdge{edge(stInProg, stReady), edge(stInProg, stReview), edge(stReview, stReady), edge(stReview, stReview)}, site(fileMCPBacklog, "backlogHandlers.reportBlocked", 1)),
+	specAgent(CallerMCPReportBlocked, []SystemEdge{edge(stInProg, stReady), edge(stInProg, stReview), edge(stReview, stReady)}, site(fileMCPBacklog, "backlogHandlers.reportBlocked", 1)),
 	specAgent(CallerMCPResumeWork, []SystemEdge{edge(stReady, stInProg)}, site(fileMCPBacklog, "backlogHandlers.resumeWork", 1)),
 	specAgent(CallerMCPReportDuplicate, archiveFromAny, site(fileMCPBacklog, "backlogHandlers.reportDuplicate", 1)),
 	specAgent(CallerMCPReportPRCreated, []SystemEdge{edge(stReview, stPrPend)}, site(fileMCPBacklogPR, "backlogHandlers.reportPRCreated", 1)),
@@ -278,10 +284,9 @@ var sharedGuardHelperSites = []CallSite{{fileTriage, "BacklogService.transitionW
 
 // knownOffGraphCallerEdges are caller bugs the audit tolerates until the named
 // migration story fixes the caller (ADR-007 D7: a caller bug is fixed in the
-// caller, not by growing the system-required set).
-var knownOffGraphCallerEdges = []KnownOffGraphEdge{
-	{CallerMCPReportBlocked, edge(stReview, stReview), "an escalated report_blocked from review re-targets review (tools_backlog.go reportBlocked, targetStatus); self-edge, fix in Task 1.5.5c"},
-}
+// caller, not by growing the system-required set). It is empty since Story
+// 1.5.5 fixed report_blocked's review->review.
+var knownOffGraphCallerEdges []KnownOffGraphEdge
 
 // KnownOffGraphEdge is a registered edge deliberately left out of the graph.
 type KnownOffGraphEdge struct {
