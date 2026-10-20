@@ -235,6 +235,7 @@ func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBac
 		PrUrl:               row.PrURL,
 		Context:             row.Context,
 		RemediationAttempts: row.RemediationAttempts,
+		DiagnoseNudgeCount:  row.DiagnoseNudgeCount,
 		PlanArtifactsPath:   row.PlanArtifactsPath,
 	}
 	if row.NextRemediationAt != nil {

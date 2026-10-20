@@ -2240,6 +2240,9 @@ message StuckBacklogItem {
   // auto_merge_checked_at is the time of the lookup attempt, set for every
   // status except UNSPECIFIED (including failed lookups, shown as "Last tried").
   google.protobuf.Timestamp auto_merge_checked_at = 22;
+  // diagnose_nudge_count is how many Diagnose & Nudge slots this open row has
+  // used (BacklogStuckState.DiagnoseNudgeCount); 0 when none.
+  int32 diagnose_nudge_count = 23;
 }
 
 // AutoMergeLookupStatus is the outcome of the per-repo auto-merge setting lookup.
