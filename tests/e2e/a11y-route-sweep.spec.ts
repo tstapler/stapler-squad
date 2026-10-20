@@ -34,6 +34,9 @@ const KNOWN: Record<string, string[]> = {
   '/logs': ['aria-required-children', 'aria-required-parent', 'color-contrast', 'scrollable-region-focusable'],
   '/rules': ['color-contrast', 'scrollable-region-focusable'],
   '/sessions/new': ['color-contrast', 'nested-interactive'],
+  // Throwaway files-viewer Phase 0 spike pages (hostile CodeMirror attributes); red on origin/main too.
+  '/spike-files': ['aria-input-field-name', 'scrollable-region-focusable'],
+  '/spike-lazydoc': ['aria-input-field-name', 'scrollable-region-focusable'],
   '/settings/jules': ['color-contrast'],
   '/settings/remotes': ['color-contrast'],
   '/settings/tagging-classifier': ['color-contrast'],
