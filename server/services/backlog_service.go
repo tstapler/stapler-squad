@@ -173,6 +173,7 @@ type BacklogService struct {
 	// (the default) skips the lookup so every item reports UNSPECIFIED.
 	repoSettings RepoSettingsLookup
 	engine       session.WorkflowEngine
+	engineStatus *WorkflowEngineStatusSource
 	// reviewGuard is the listener's process-wide review-spawn reservation, so
 	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
 	reviewGuard *session.ReviewSpawnGuard

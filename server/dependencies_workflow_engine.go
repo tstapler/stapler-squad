@@ -27,6 +27,8 @@ type WorkflowEngineWiring struct {
 	Recorder *session.ShadowLedgerRecorder
 	// Soak backs /actuator/workflow-engine.
 	Soak *WorkflowEngineSoakSource
+	// Status backs GetWorkflowEngineStatus; GateWired is filled by InjectTransitionGate.
+	Status *services.WorkflowEngineStatusSource
 }
 
 // newWorkflowEngineWiring builds the selector over def and cfgEngine (nil
@@ -59,8 +61,16 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 		soak.ConfigDiff = NewWorkflowEngineConfigDiff(entClient, cfgEngine)
 	}
 
+	status := &services.WorkflowEngineStatusSource{
+		ModeFor:          modes.ModeFor,
+		Ledger:           soak.Ledger,
+		ConfigDiff:       soak.ConfigDiff,
+		InvalidatorWired: func() bool { return cfgEngine != nil },
+		FallbackActive:   func() bool { return anyFallback(engine) },
+	}
+
 	logWorkflowEngineStartup(modes.Mode(), cfgEngine)
-	return &WorkflowEngineWiring{Engine: engine, Modes: modes, Recorder: recorder, Soak: soak}
+	return &WorkflowEngineWiring{Engine: engine, Modes: modes, Recorder: recorder, Soak: soak, Status: status}
 }
 
 // InjectTransitionGate wires the selector and the denial reporter into storage
@@ -70,8 +80,20 @@ func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, re
 	if err := storage.SetTransitionGate(w.Engine, reporter); err != nil {
 		return fmt.Errorf("inject transition gate: %w", err)
 	}
+	w.Status.GateWired = storage.TransitionGateWired
 	log.Info(transitionGateStartupLine(storage, reporter != nil, w.Modes))
 	return nil
+}
+
+// anyFallback reports whether the enforce composition has ever answered from
+// Default because the Configured engine was unusable.
+func anyFallback(e *session.SwitchableWorkflowEngine) bool {
+	for _, r := range []session.FallbackReason{session.FallbackCfgNil, session.FallbackCacheEmpty, session.FallbackLoadError} {
+		if e.FallbackTotal(r) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // transitionGateStartupLine is the line an operator greps for to confirm the

@@ -1192,6 +1192,60 @@ message ListStagesResponse {
   repeated BacklogStage items = 1;
 }
 
+// WorkflowEngineMode is the mode the selector applies to one caller class.
+enum WorkflowEngineMode {
+  WORKFLOW_ENGINE_MODE_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_MODE_OFF = 1;
+  WORKFLOW_ENGINE_MODE_SHADOW = 2;
+  WORKFLOW_ENGINE_MODE_ENFORCE = 3;
+}
+
+enum WorkflowEngineConfigProvenance {
+  WORKFLOW_ENGINE_CONFIG_PROVENANCE_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_CONFIG_PROVENANCE_SEEDED = 1;
+  WORKFLOW_ENGINE_CONFIG_PROVENANCE_EDITED = 2;
+}
+
+enum WorkflowEngineSoakVerdict {
+  WORKFLOW_ENGINE_SOAK_VERDICT_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_SOAK_VERDICT_READY = 1;
+  WORKFLOW_ENGINE_SOAK_VERDICT_NOT_READY = 2;
+  WORKFLOW_ENGINE_SOAK_VERDICT_NEEDS_OWNER_ACK = 3;
+  WORKFLOW_ENGINE_SOAK_VERDICT_UNAVAILABLE = 4;
+}
+
+enum WorkflowEngineReviewState {
+  WORKFLOW_ENGINE_REVIEW_STATE_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_REVIEW_STATE_UNAVAILABLE = 1;
+  WORKFLOW_ENGINE_REVIEW_STATE_NOT_DUE = 2;
+  WORKFLOW_ENGINE_REVIEW_STATE_OVERDUE = 3;
+  WORKFLOW_ENGINE_REVIEW_STATE_ENFORCED = 4;
+}
+
+message GetWorkflowEngineStatusRequest {}
+
+// ClassReadiness is the decision-time evidence for flipping one class.
+message ClassReadiness {
+  int64 divergence_24h = 1;
+  WorkflowEngineSoakVerdict soak_verdict = 2;
+  int64 stranded_item_count = 3;
+}
+
+message GetWorkflowEngineStatusResponse {
+  // class_modes is keyed by caller class: operator, agent, system.
+  map<string, WorkflowEngineMode> class_modes = 1;
+  int64 divergence_24h = 2;
+  WorkflowEngineConfigProvenance config_provenance = 3;
+  bool invalidator_wired = 4;
+  bool gate_wired = 5;
+  bool fallback_active = 6;
+  map<string, ClassReadiness> class_readiness = 7;
+  // review_due_at is unset when review_state is UNAVAILABLE.
+  google.protobuf.Timestamp review_due_at = 8;
+  bool review_overdue = 9;
+  WorkflowEngineReviewState review_state = 10;
+}
+
 message CreateStageTransitionRequest {
   string from_stage_slug = 1;
   string to_stage_slug = 2;
@@ -1683,6 +1737,10 @@ service BacklogService {
 
   // ListStages returns all stages, including disabled ones.
   rpc ListStages(ListStagesRequest) returns (ListStagesResponse) {}
+
+  // GetWorkflowEngineStatus reports each caller class's engine mode, shadow
+  // divergence, wiring health and flip-readiness evidence. Read-only.
+  rpc GetWorkflowEngineStatus(GetWorkflowEngineStatusRequest) returns (GetWorkflowEngineStatusResponse) {}
 
   // CreateStageTransition adds a new (from_stage, to_stage) edge, invoking
   // Epic 2.6's graph validator before committing.

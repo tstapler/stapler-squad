@@ -447,6 +447,16 @@ func earliestStart(l ShadowLedger, cl *ClassLedger) time.Time {
 	return earliest
 }
 
+// SoakReviewDueAt is the structured form of reviewNotice's date: the earliest
+// binary start plus SoakReviewAfter. ok is false when no start is recorded.
+func SoakReviewDueAt(l ShadowLedger) (due time.Time, ok bool) {
+	earliest := earliestStart(l, nil)
+	if earliest.IsZero() {
+		return time.Time{}, false
+	}
+	return earliest.Add(SoakReviewAfter), true
+}
+
 // reviewNotice is the dated forcing function (requirements Metric 6): advisory
 // only, it never changes a verdict or exit code.
 func reviewNotice(l ShadowLedger, p SoakParams) string {

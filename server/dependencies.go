@@ -1510,6 +1510,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
+	backlogSvc.SetWorkflowEngineStatusSource(workflowEngine.Status)
 	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
