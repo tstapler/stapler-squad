@@ -163,7 +163,7 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 // entry.headTreeCache above — both are entry-scoped fields protected by entry.mu).
 func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreePath string) gitignore.Matcher {
 	sig := rootGitignoreSig(worktreePath)
-	if entry.untrackedMatcherBuilt && entry.untrackedMatcherSig == sig && nestedIgnoresUnchanged(entry.untrackedMatcherNested) {
+	if entry.untrackedMatcherBuilt && entry.untrackedMatcherSig == sig && g.nestedIgnoresUnchanged(entry.untrackedMatcherNested) {
 		return entry.untrackedMatcher
 	}
 
@@ -172,7 +172,7 @@ func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreeP
 	// repoCache purely for memory pressure, with HEAD never having moved.
 	if cached, ok := g.matcherCache.Load(worktreePath); ok {
 		mc, _ := cached.(*matcherCacheEntry)
-		if mc != nil && mc.headTreeHash == entry.headTreeHash && mc.ignoreSig == sig && nestedIgnoresUnchanged(mc.nested) {
+		if mc != nil && mc.headTreeHash == entry.headTreeHash && mc.ignoreSig == sig && g.nestedIgnoresUnchanged(mc.nested) {
 			atomic.StoreInt64(&mc.accessedAtNs, time.Now().UnixNano())
 			entry.untrackedMatcher = mc.matcher
 			entry.untrackedMatcherSig = sig
@@ -208,10 +208,13 @@ type nestedIgnore struct {
 	sig  statSig
 }
 
-// nestedIgnoresUnchanged re-stats the recorded nested .gitignore files. A
-// matcher with none (the common case) costs nothing.
-func nestedIgnoresUnchanged(files []nestedIgnore) bool {
+// nestedIgnoresUnchanged re-stats the recorded nested .gitignore files, one
+// counted stat each, so a monorepo's cost shows in StatCalls. A matcher with none
+// (the common case) costs nothing. No DirtyGen shortcut: the directory watch is
+// blind to in-place edits (ADR-006), so only a stat can see one.
+func (g *GoGitVCSReader) nestedIgnoresUnchanged(files []nestedIgnore) bool {
 	for _, f := range files {
+		g.noteStat(f.path)
 		if sig, ok := statPathSig(f.path); !ok || sig != f.sig {
 			return false
 		}
