@@ -18,7 +18,7 @@ The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it rend
 | Key | Meaning |
 |---|---|
 | `flags` | normalized effective flags, including the dependent `scan_skip_prelude`, `scan_skip_dirty_gen` |
-| `shadow_verify_every` | sampler rate (1/N scans); 0 means off (every flag off) |
+| `shadow_verify_every` | sampler rate (1/N scans); 0 means off; the rate also reads 0 when every flag is off |
 | `scan_cycles_total`, `scan_cycle_seconds_sum` | completed scan tasks and their wall time |
 | `caches.{graph,reach,aheadbehind,behind,messages,diffmemo,index,untracked}` | `hits`, `misses`, `evictions`, `coalesced`, `bytes`, `entries`; `index` and `untracked` report only hits/misses (their skip counters) |
 | `repostates`, `repostate_bytes` | live shared `RepoState` count and summed bytes |
