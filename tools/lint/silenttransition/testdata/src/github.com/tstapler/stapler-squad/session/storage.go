@@ -40,7 +40,7 @@ type PRAssociation struct {
 
 type Storage struct{}
 
-// Pre-1.5.4 name, kept by the analyzer until Task 1.5.9a.
+// Pre-1.5.4 name: no longer a target (Task 1.5.9a); the fixture keeps it to prove that.
 func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	return nil, nil
 }

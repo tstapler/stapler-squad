@@ -5,10 +5,9 @@ package services
 // whole module with go/parser, so a new raw call anywhere (server/, session/,
 // server/mcp/, any other package) fails here unless it is classified.
 //
-// The pending class is a ratchet: it can only shrink. Epic 1.5 migrates a site,
-// then deletes its entry; a stale entry (no matching call, or a different call
-// count) fails. Story 1.5.7 migrated the last pending site, so no entry uses the
-// class now; Story 1.5.9a replaces the scan.
+// Story 1.5.9a removed the pending class: every site is gated, engine-routed or
+// exempt, and a stale entry (no matching call, or a different call count) fails.
+// workflow_bypass_strict_test.go holds the strict rules (a)-(d) on top of this scan.
 
 import (
 	"fmt"
@@ -32,7 +31,7 @@ import (
 // by selector name on any receiver. The Raw/raw forms are the post-1.5.4 names;
 // "TransitionBacklogItemStatusWithNote" is the raw writer behind GatedReconcileStuck.
 // The Gated* entry points are counted too: a migrated site stays a registered
-// site (engine-routed through the gate) until Story 1.5.9a replaces this scan.
+// site (gated, or engine-routed through the gate).
 var bypassPrimitives = func() map[string]bool {
 	m := map[string]bool{}
 	for _, n := range []string{
@@ -75,7 +74,6 @@ type bypassClass string
 
 const (
 	classEngineRouted bypassClass = "engine-routed"
-	classPending      bypassClass = "pending"
 	// classGated sites call a Storage gate entry point (GatedTransition,
 	// Rollback, DebugForce, ...) under a registered caller.
 	classGated  bypassClass = "gated"
@@ -87,7 +85,7 @@ type bypassSite struct {
 	file, fn string
 	calls    int
 	class    bypassClass
-	reason   string // pending: "migrate in Story 1.5.x"; exempt: why; engine-routed: how
+	reason   string // exempt: why; engine-routed and gated: how
 }
 
 func (s bypassSite) key() string { return s.file + " " + s.fn }
@@ -127,7 +125,7 @@ var bypassInventory = []bypassSite{
 	exempt("session/transition_gate.go", "Storage.DebugForce", 2, gateReason+": exempt entry point, counted (transition and archive)"),
 	exempt("server/mcp/tools_backlog_dependencies.go", "backlogHandlers.transitionBacklogItemStatus", 1, delegateReason),
 
-	// Engine-routed: ask the WorkflowEngine today; re-pointed at the gate in Stories 1.5.5-1.5.7.
+	// Engine-routed: operator handlers that reach the gate with a caller resolved at request time.
 	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", 1, "GatedTransition as operator_transition_rpc or mcp_transition_delegate, by context actor (Story 1.5.5a)"),
 	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
 
@@ -312,12 +310,9 @@ func TestWorkflowBypassInventory_EveryStatusWriteCallIsClassified(t *testing.T) 
 
 func TestWorkflowBypassInventory_EveryEntryHasClassAndReason(t *testing.T) {
 	for _, s := range bypassInventory {
-		assert.Contains(t, []bypassClass{classEngineRouted, classPending, classExempt, classGated}, s.class, s.key())
+		assert.Contains(t, []bypassClass{classEngineRouted, classExempt, classGated}, s.class, s.key())
 		assert.NotEmpty(t, strings.TrimSpace(s.reason), "%s lacks a reason", s.key())
 		assert.Positive(t, s.calls, s.key())
-		if s.class == classPending {
-			assert.True(t, strings.HasPrefix(s.reason, "migrate in Story 1.5."), "%s pending reason must name its migrating story: %q", s.key(), s.reason)
-		}
 	}
 }
 
@@ -373,15 +368,14 @@ func registryCallCounts() map[string]int {
 	return counts
 }
 
-// Story 1.5.1a: every site the inventory still has to migrate (and every
-// engine-routed one) maps to registry entries whose call counts add up, and the
-// registry names no site the inventory does not know.
-func TestWorkflowBypassInventory_EveryPendingAndEngineRoutedSiteIsRegistered(t *testing.T) {
+// Story 1.5.1a: every gated and engine-routed site maps to registry entries whose
+// call counts add up, and the registry names no site the inventory does not know.
+func TestWorkflowBypassInventory_EveryGatedAndEngineRoutedSiteIsRegistered(t *testing.T) {
 	got := registryCallCounts()
 	var problems []string
 	covered := map[string]bool{}
 	for _, s := range bypassInventory {
-		inScope := s.class == classPending || s.class == classEngineRouted || s.class == classGated || s.file == delegateFile
+		inScope := s.class == classEngineRouted || s.class == classGated || s.file == delegateFile
 		if !inScope {
 			continue
 		}
@@ -395,7 +389,7 @@ func TestWorkflowBypassInventory_EveryPendingAndEngineRoutedSiteIsRegistered(t *
 	}
 	for key := range got {
 		if !covered[key] {
-			problems = append(problems, fmt.Sprintf("registry names %s, which is not a pending or engine-routed inventory site", key))
+			problems = append(problems, fmt.Sprintf("registry names %s, which is not a gated or engine-routed inventory site", key))
 		}
 	}
 	sort.Strings(problems)
