@@ -721,3 +721,223 @@ func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
 		})
 	}
 }
+
+// --- Story 4.1.3: one declaration per flag default -------------------------------
+
+// dfltKnownLiteralSites are the call sites that still pass a bool literal to
+// GetFeatureFlagWithDefault for a registered flag. The literal agrees with the
+// registry today; the list is a ratchet, so a new literal fails the test.
+var dfltKnownLiteralSites = map[string]bool{
+	"server/changelog_handler.go|" + ChangelogFlagName:                       true,
+	"server/changelog_handler.go|" + UpdateCheckFlagName:                     true,
+	"server/services/guards_flag.go|" + hiddenSessionReadonlyGuardsFlagName:  true,
+	"server/services/hidden_question_reply.go|" + hiddenSessionReplyFlagName: true,
+	"server/services/lease_flag.go|" + terminalWriteLeaseFlagName:            true,
+	"github/client.go|" + githubGraphQLMigrationFlagName:                     true,
+	"github/http_client.go|" + githubPriorityAdmissionFlagName:               true,
+	"session/git_worktree_manager.go|" + worktreeChangeDetectionFlagName:     true,
+}
+
+// dfltKnownPlainReadDisagreements are plain GetFeatureFlag reads of a flag whose
+// registry default is true, so an unset flag reads false there and true elsewhere.
+// Changing the read is a behavior change and needs an owner decision.
+var dfltKnownPlainReadDisagreements = map[string]bool{
+	"session/instance_tmux.go|" + terminalResyncExecGateFastLaneFlagName: true,
+}
+
+type dfltFile struct {
+	path string
+	src  *ast.File
+	fset *token.FileSet
+}
+
+func dfltParseRepoSources(t *testing.T) []dfltFile {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	skip := map[string]bool{"node_modules": true, "web-app": true, "gen": true, ".git": true, "ent": true, "tests": true, "docs": true, "project_plans": true, ".claude": true, "tools": true}
+	var files []dfltFile
+	require.NoError(t, filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skip[d.Name()] && path != root {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		files = append(files, dfltFile{path: filepath.ToSlash(rel), src: f, fset: fset})
+		return nil
+	}))
+	return files
+}
+
+// dfltStringConsts maps every top-level string constant name to its value.
+func dfltStringConsts(files []dfltFile) map[string]string {
+	consts := map[string]string{}
+	for _, f := range files {
+		for _, decl := range f.src.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						if s, err := strconv.Unquote(lit.Value); err == nil {
+							consts[name.Name] = s
+						}
+					}
+				}
+			}
+		}
+	}
+	return consts
+}
+
+func dfltResolveFlag(e ast.Expr, consts map[string]string) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		s, err := strconv.Unquote(v.Value)
+		return s, err == nil
+	case *ast.Ident:
+		s, ok := consts[v.Name]
+		return s, ok
+	case *ast.SelectorExpr:
+		s, ok := consts[v.Sel.Name]
+		return s, ok
+	}
+	return "", false
+}
+
+func dfltRegistered(name string) (defaultValue, ok bool) {
+	for _, kf := range knownFeatureFlags {
+		if kf.name == name {
+			return kf.defaultValue, true
+		}
+	}
+	return false, false
+}
+
+// dfltDefaultViolations reports, for registered flags only: a bool literal that
+// disagrees with the registry, a bool literal not in dfltKnownLiteralSites (a second
+// declaration), and a plain GetFeatureFlag read of a default-on flag.
+func dfltDefaultViolations(files []dfltFile, consts map[string]string) []string {
+	var out []string
+	for _, f := range files {
+		ast.Inspect(f.src, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "GetFeatureFlag" && sel.Sel.Name != "GetFeatureFlagWithDefault") {
+				return true
+			}
+			name, resolved := dfltResolveFlag(call.Args[0], consts)
+			if !resolved {
+				return true
+			}
+			registry, registered := dfltRegistered(name)
+			if !registered {
+				return true
+			}
+			pos := f.fset.Position(call.Pos()).String()
+			key := f.path + "|" + name
+			if sel.Sel.Name == "GetFeatureFlag" {
+				if registry && !dfltKnownPlainReadDisagreements[key] {
+					out = append(out, pos+": plain GetFeatureFlag reads "+name+" as off when unset, but its registry default is on")
+				}
+				return true
+			}
+			if len(call.Args) != 2 {
+				return true
+			}
+			lit, ok := call.Args[1].(*ast.Ident)
+			if !ok || (lit.Name != "true" && lit.Name != "false") {
+				return true
+			}
+			switch {
+			case (lit.Name == "true") != registry:
+				out = append(out, pos+": literal "+lit.Name+" disagrees with the registry default of "+name)
+			case !dfltKnownLiteralSites[key]:
+				out = append(out, pos+": second declaration of the default of "+name+"; use featureFlagDefault or a config constant")
+			}
+			return true
+		})
+	}
+	return out
+}
+
+func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
+	withIsolatedStateDir(t)
+	cfg := config.LoadConfig()
+	rows := []struct {
+		flag     string
+		constant bool
+		reader   func(*config.Config) bool
+	}{
+		{config.TriageGuidanceHaltFeatureFlag, config.TriageGuidanceHaltDefault, config.EffectiveTriageGuidanceHaltEnabled},
+		{config.DiagnoseNudgeFeatureFlag, config.DiagnoseNudgeDefault, config.EffectiveDiagnoseNudgeEnabled},
+		{config.AutonomousStallNudgeFeatureFlag, config.AutonomousStallNudgeDefault, config.EffectiveAutonomousStallNudgeEnabled},
+		{config.HiddenSessionGateFeatureFlag, config.HiddenSessionGateDefault, nil},
+		{config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineShadowDefault, config.EffectiveWorkflowEngineShadow},
+		{config.WorkflowEngineEnforceFeatureFlag, config.WorkflowEngineEnforceDefault, config.EffectiveWorkflowEngineEnforce},
+		{config.WorkflowEngineEnforceAgentFeatureFlag, config.WorkflowEngineEnforceAgentDefault, config.EffectiveWorkflowEngineEnforceAgent},
+		{config.WorkflowEngineEnforceSystemFeatureFlag, config.WorkflowEngineEnforceSystemDefault, config.EffectiveWorkflowEngineEnforceSystem},
+	}
+	for _, r := range rows {
+		registry, ok := dfltRegistered(r.flag)
+		require.True(t, ok, "%s must be registered", r.flag)
+		require.Equal(t, r.constant, registry, "registry default of %s differs from its config constant", r.flag)
+		if r.reader != nil {
+			require.Equal(t, r.constant, r.reader(cfg), "reader of %s differs from its config constant", r.flag)
+		}
+	}
+	require.False(t, sddDefaultPipelineEnabled(), "sdd-default-pipeline stays off when unset")
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
+	require.True(t, sddDefaultPipelineEnabled())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, false))
+	require.False(t, sddDefaultPipelineEnabled(), "an explicit false still opts out")
+}
+
+func TestFlagDefaults_NoSecondDeclarationOrDisagreeingRead(t *testing.T) {
+	t.Parallel()
+	synth := func(src string) []dfltFile {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+		require.NoError(t, err)
+		return []dfltFile{{path: "x.go", src: f, fset: fset}}
+	}
+	// Scanner self-test: a disagreeing literal, a new agreeing literal and a plain
+	// read of a default-on flag all fail.
+	bad := synth(`package x
+const a = "programs:cli-flag-probe"
+const b = "terminal:resync-exec-gate-fast-lane"
+func f(c *C) {
+	c.GetFeatureFlagWithDefault(a, false)
+	c.GetFeatureFlagWithDefault(a, true)
+	c.GetFeatureFlag(b)
+}`)
+	require.Len(t, dfltDefaultViolations(bad, dfltStringConsts(bad)), 3)
+	good := synth(`package x
+const a = "programs:cli-flag-probe"
+func f(c *C) { c.GetFeatureFlagWithDefault(a, featureFlagDefault(a)) }`)
+	require.Empty(t, dfltDefaultViolations(good, dfltStringConsts(good)))
+
+	files := dfltParseRepoSources(t)
+	require.Empty(t, dfltDefaultViolations(files, dfltStringConsts(files)))
+}
