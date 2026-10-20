@@ -37,7 +37,7 @@ const mockAcknowledgeSessions = jest.fn().mockResolvedValue({ failed: [] });
 let mockSearchParams = new URLSearchParams();
 const mockReplace = jest.fn();
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ push: jest.fn(), replace: mockReplace, back: jest.fn(), forward: jest.fn() }),
   usePathname: () => "/",
   useSearchParams: () => mockSearchParams,

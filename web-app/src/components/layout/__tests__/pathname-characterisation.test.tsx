@@ -17,17 +17,20 @@ import { Navigation } from "@/components/ui/Navigation";
 
 let mockPathname = "/";
 
-jest.mock("next/navigation", () => ({
-  usePathname: () => mockPathname,
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
-}));
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, prefetch: _prefetch, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; prefetch?: boolean }) => (
-    <a href={href} {...rest}>{children}</a>
-  ),
-}));
-
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    navigation: () => ({
+      usePathname: () => mockPathname,
+      useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+    }),
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, prefetch: _prefetch, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; prefetch?: boolean }) => (
+        <a href={href} {...rest}>{children}</a>
+      ),
+    }),
+  }),
+);
 jest.mock("@/components/sessions/ReviewQueueNavBadge", () => ({ ReviewQueueNavBadge: () => null }));
 jest.mock("@/components/sessions/ApprovalNavBadge", () => ({ ApprovalNavBadge: () => null }));
 jest.mock("@/components/sessions/MemoryNavBadge", () => ({ MemoryNavBadge: () => null }));

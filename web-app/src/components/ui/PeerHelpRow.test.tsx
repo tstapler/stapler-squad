@@ -10,14 +10,18 @@ import { PeerHelpGroups } from "./ScheduledPromptsSection";
 import { MIN, NOW, makePeer, makeState } from "./__fixtures__/scheduledPromptsFixtures";
 import type { PeerHelpInfo } from "@/gen/session/v1/wake_trigger_pb";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
 jest.mock("@/lib/api/wakeTriggerApi", () => ({}));
 

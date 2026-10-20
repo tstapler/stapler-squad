@@ -8,7 +8,7 @@ const LAST_FOCUSED_KEY = "cockpit.lastFocusedWindowId";
 const mockReplace = jest.fn();
 let mockSearchParams = new URLSearchParams();
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockSearchParams,
   useRouter: () => ({ replace: mockReplace }),
 }));

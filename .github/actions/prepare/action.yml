@@ -21,6 +21,11 @@ runs:
       shell: bash
       run: cd web-app && bun install --frozen-lockfile
 
+    # The codemod verification commands use rg; install it rather than rely on the runner image shipping it.
+    - name: Ensure ripgrep
+      shell: bash
+      run: command -v rg >/dev/null || sudo apt-get install -y ripgrep
+
     # Pre-populate buf-action's own tool-cache lookup path (runner.tool_cache
     # == $RUNNER_TOOL_CACHE, what its tc.find()/tc.cacheFile() calls read and
     # write) so most runs skip the network download entirely. Cache the whole

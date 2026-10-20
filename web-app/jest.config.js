@@ -34,6 +34,8 @@ module.exports = {
         "^@/lib/api/guidanceApi$": "<rootDir>/src/__mocks__/guidanceApiMock.js",
         // Lazy-loading seam: jest uses the Next impl (suites mock next/dynamic); stale-chunk tests import impl.bun directly.
         "^@/lib/lazy/impl$": "<rootDir>/src/lib/lazy/impl.next.tsx",
+        // Navigation seam: only reached by suites that load the real facade; most mock "@/lib/nav" (jest.setup.js).
+        "^@/lib/nav/impl$": "<rootDir>/src/lib/nav/impl.next.tsx",
         // Path alias
         "^@/(.*)$": "<rootDir>/src/$1",
       },
