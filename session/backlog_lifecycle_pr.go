@@ -1514,7 +1514,21 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// ownership evidence is treated identically to a definitive mismatch
 		// — fail closed.
 		own := prOwnershipFor(lastWork, wt)
-		if matches, verifyErr := l.verifyPRBelongsToItem(ctx, item.RepoPath, own, item.PrNumber); verifyErr != nil || !matches {
+		matches, verifyErr := l.verifyPRBelongsToItem(ghCtx, item.RepoPath, own, item.PrNumber)
+		if verifyErr != nil && github.IsTransientRequestError(verifyErr) {
+			// A rate-limit/admission-control rejection means the ownership
+			// lookup was never sent — it says nothing about whether PR
+			// #item.PrNumber is actually this item's. Treating it as a
+			// negative verdict would call markMergedPRUnverified and
+			// permanently strand the item (that stuck state never
+			// auto-resolves without manual intervention), even though a
+			// later tick's retry would very likely succeed once headroom
+			// frees up. Retry next tick instead, exactly like the
+			// IsPRMerged check above.
+			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: ownership re-verification for merged PR #%d deferred (%v) — retrying next tick", item.ID, item.PrNumber, verifyErr)
+			return
+		}
+		if verifyErr != nil || !matches {
 			log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: merged PR #%d can't be verified as this item's — skipping auto-done transition (%s, verifyErr=%v, matched=%t; was it attached via report_pr_created's override_reason path?)", item.ID, item.PrNumber, own, verifyErr, matches)
 			l.markMergedPRUnverified(ctx, er, item, own, verifyErr)
 			return
