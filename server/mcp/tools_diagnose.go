@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -251,12 +252,13 @@ const declineToDiagnoseRemediation = "File a bug via create_backlog_item or post
 // just trusted from the dispatch prompt — a long-running diagnostic session
 // could otherwise call this tool after its own cap-eligibility snapshot went
 // stale (e.g. another dispatch nudged the same item in the meantime).
-func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, stuckReason string) *mcpgo.CallToolResult {
+func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, stuckReason, targetSessionID string) *mcpgo.CallToolResult {
 	allowed, disallowReason, gateErr := dh.storage.DiagnoseNudgeAllowed(ctx, itemID, domain.StuckReason(stuckReason))
 	if gateErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("check nudge eligibility: %v", gateErr), "")
 	}
 	if !allowed {
+		session.RecordNudgeOutcome(session.NudgeKindDiagnose, session.NudgeOutcomeSkippedCap, targetSessionID)
 		return errResult(ErrPermissionDenied, disallowReason, declineToDiagnoseRemediation)
 	}
 	return nil
@@ -331,6 +333,7 @@ func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, t
 		return errRes
 	}
 	if submitErr := session.SubmitContentWithEnter(ctx, target, lease, message); submitErr != nil {
+		recordDiagnoseWriteFailure(target, submitErr)
 		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), "")
 	}
 	return nil
@@ -344,7 +347,7 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 		return errResult(ErrPermissionDenied, diagnoseNudgeDisabledMessage, declineToDiagnoseRemediation), nil
 	}
 
-	if errRes := dh.checkNudgeCapForWrite(ctx, a.itemID, a.stuckReason); errRes != nil {
+	if errRes := dh.checkNudgeCapForWrite(ctx, a.itemID, a.stuckReason, a.targetSessionID); errRes != nil {
 		return errRes, nil
 	}
 
@@ -356,10 +359,21 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 	if errRes := dh.writeNudge(ctx, callerUUID, target, a.message); errRes != nil {
 		return errRes, nil
 	}
+	session.RecordNudgeOutcome(session.NudgeKindDiagnose, session.NudgeOutcomeDelivered, a.targetSessionID)
 
 	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, a.itemID, domain.StuckReason(a.stuckReason)); recErr != nil {
 		log.Warn("[diagnose_nudge_session] failed to record nudge attempt", "item", a.itemID, "session", a.targetSessionID, "err", recErr)
 	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf("Nudged session %s for item %s", a.targetSessionID, a.itemID)), nil
+}
+
+// recordDiagnoseWriteFailure counts a failed diagnose write; an uncertain
+// submit may still have reached the pane, so it is kept apart from "failed".
+func recordDiagnoseWriteFailure(target *session.Instance, err error) {
+	outcome := session.NudgeOutcomeFailed
+	if errors.Is(err, session.ErrNudgeSubmitUncertain) {
+		outcome = session.NudgeOutcomeUncertain
+	}
+	session.RecordNudgeOutcome(session.NudgeKindDiagnose, outcome, target.Snapshot().Title)
 }

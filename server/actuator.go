@@ -31,6 +31,14 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
 	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
 	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
+	s.mux.HandleFunc("/actuator/nudge-outcomes", handleActuatorNudgeOutcomes)
+}
+
+// handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
+// and the time of the first record (Story 4.1.2).
+func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(session.DefaultNudgeOutcomes().Snapshot())
 }
 
 // handleActuatorGitBackend serves the git backend shadow-soak counters and the mechanical flip
