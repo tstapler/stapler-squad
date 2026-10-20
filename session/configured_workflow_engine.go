@@ -354,7 +354,7 @@ func firstUnsatisfiedGateError(statuses []GateStatus) error {
 func (e *ConfiguredWorkflowEngine) evaluateGate(g resolvedGate, item BacklogItemTransitionInput) GateStatus {
 	switch g.Kind {
 	case GateKindStructural:
-		return evaluateStructuralGate(g, item)
+		return e.evaluateStructuralOrLatched(g, item)
 	case GateKindHumanApproval:
 		return e.evaluateHumanApprovalGate(g, item)
 	case GateKindAutomatedReview:
