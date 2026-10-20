@@ -5,6 +5,7 @@ import (
 	"errors"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
@@ -14,9 +15,12 @@ import (
 // a ctx.Err() call made by the named functions reports Canceled. That models a
 // cancellation landing between the failed graph walk and the legacy rerun
 // without any timing (the walk itself sees a live ctx and returns ErrFallback).
-type cancelAtFallbackCheck struct{ context.Context }
+type cancelAtFallbackCheck struct {
+	context.Context
+	hits *atomic.Int32 // times the injected cancellation fired
+}
 
-func (cancelAtFallbackCheck) Err() error {
+func (c cancelAtFallbackCheck) Err() error {
 	pc, _, _, ok := runtime.Caller(1)
 	if !ok {
 		return nil
@@ -24,6 +28,7 @@ func (cancelAtFallbackCheck) Err() error {
 	name := runtime.FuncForPC(pc).Name()
 	for _, f := range []string{"aheadBehindShared", "sharedHandled", "sharedErr"} {
 		if strings.Contains(name, f) {
+			c.hits.Add(1)
 			return context.Canceled
 		}
 	}
@@ -39,7 +44,11 @@ func tinyGraphReader(t *testing.T) (r *GoGitVCSReader, dir string) {
 
 func TestAheadBehind_ShouldReturnCtxError_WhenFallbackRacesCancellation(t *testing.T) {
 	r, dir := tinyGraphReader(t)
-	_, _, err := r.AheadBehind(cancelAtFallbackCheck{context.Background()}, dir, "base")
+	ctx := cancelAtFallbackCheck{context.Background(), new(atomic.Int32)}
+	_, _, err := r.AheadBehind(ctx, dir, "base")
+	if ctx.hits.Load() == 0 {
+		t.Fatal("injected cancellation never fired: the matched function names changed, update cancelAtFallbackCheck")
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled, not a rerun of the legacy walk", err)
 	}
@@ -47,7 +56,11 @@ func TestAheadBehind_ShouldReturnCtxError_WhenFallbackRacesCancellation(t *testi
 
 func TestCommitMessages_ShouldReturnCtxError_WhenFallbackRacesCancellation(t *testing.T) {
 	r, dir := tinyGraphReader(t)
-	_, err := r.CommitMessages(cancelAtFallbackCheck{context.Background()}, dir, "base", 5)
+	ctx := cancelAtFallbackCheck{context.Background(), new(atomic.Int32)}
+	_, err := r.CommitMessages(ctx, dir, "base", 5)
+	if ctx.hits.Load() == 0 {
+		t.Fatal("injected cancellation never fired: the matched function names changed, update cancelAtFallbackCheck")
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled, not a rerun of the legacy walk", err)
 	}

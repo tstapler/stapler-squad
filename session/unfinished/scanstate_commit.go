@@ -43,8 +43,9 @@ func (s *Scanner) fillCommittedState(ctx context.Context, result *ScanResult, re
 	}
 	// A cancelled compute left no committed state: recording the signature as scanned
 	// would make changedFirst and the sibling check treat it as done. A completed
-	// failure (e.g. no base ref) is still recorded, or enqueueRepo would rescan forever.
-	if haveSig && ctx.Err() == nil {
+	// failure (e.g. no base ref) is still recorded, or enqueueRepo would rescan forever,
+	// and a fully computed result stays valid if the cancel lands just after it.
+	if haveSig && (complete || ctx.Err() == nil) {
 		wrec.last.Store(&sig)
 		if complete {
 			wrec.committed.Store(&committedState{key: sig.committed(), ahead: ahead, behind: behind, messages: slices.Clone(result.AheadMessages), storedAt: s.now()})
