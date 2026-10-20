@@ -1728,6 +1728,13 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 // feature's concurrent-dequeue-claim test found the same race could
 // double-claim a single queued item between two dequeue sweeps (PR #199).
 func (r *EntRepository) rawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	return r.rawTransitionBacklogItemStatusWithNote(ctx, id, toStatus, precondition, triggeredBy, "")
+}
+
+// rawTransitionBacklogItemStatusWithNote is rawTransitionBacklogItemStatus that
+// also appends appendNote (when non-empty) to the item's Notes in the same
+// UPDATE, so the status, the note and the status event commit together.
+func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy, appendNote string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -1766,6 +1773,13 @@ func (r *EntRepository) rawTransitionBacklogItemStatus(ctx context.Context, id s
 	// on affected==0 below.
 	if toStatus == BacklogStatusDone && current.NextWorkflowID != nil {
 		setter = setter.SetChainedAt(now)
+	}
+	if appendNote != "" {
+		notes := current.Notes
+		if notes != "" {
+			notes += "\n"
+		}
+		setter = setter.SetNotes(notes + appendNote)
 	}
 	affected, err := setter.Save(ctx)
 	if err != nil {

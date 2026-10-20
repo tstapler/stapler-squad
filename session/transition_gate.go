@@ -4,8 +4,8 @@ package session
 // GatedTransition decides with the class-aware workflow engine and only then
 // calls the raw status writer, so no caller reaches the database without the
 // engine. Rollback and DebugForce are the counted, never-checked exempt entry
-// points. The other Gated* entry points (archive, unarchive, PR, reconcile)
-// land with Stories 1.5.4 to 1.5.7.
+// points. GatedArchive, GatedUnarchive, GatedSetPRAndTransition and
+// GatedReconcileStuck share GatedTransition's decision function.
 
 import (
 	"context"
@@ -175,6 +175,124 @@ func classifyGateDenial(err error) string {
 // operator denial returns the error only.
 func (s *Storage) GatedTransition(ctx context.Context, req TransitionRequest) (*BacklogItemData, error) {
 	return s.gated(ctx, req, s.writeGated)
+}
+
+// PRAssociation is the PR a GatedSetPRAndTransition call records on the item.
+type PRAssociation struct {
+	URL     string
+	Number  int
+	Summary string
+	// Guard is required to reassign an item already in pr_pending; see
+	// RawSetBacklogItemPRAndTransition.
+	Guard *PRReassignmentGuard
+}
+
+// pinTarget sets the target status a Gated* entry point owns, rejecting a
+// request that names a different one.
+func pinTarget(req *TransitionRequest, to BacklogStatus) error {
+	if req.To != "" && req.To != to {
+		return fmt.Errorf("%w: this entry point only moves to %q, not %q", ErrInvalidTransitionRequest, to, req.To)
+	}
+	req.To = to
+	return nil
+}
+
+// GatedArchive decides an archive (to=archived, from any status) with the same
+// decision function as GatedTransition. An already archived item decides on the
+// system-required archived->archived edge and, in Off and Shadow, is re-archived
+// as before. BeforeCommit runs after the allow and before the write; worktree
+// cleanup and link-session ending stay with the caller, after a successful
+// return.
+func (s *Storage) GatedArchive(ctx context.Context, req TransitionRequest) (*BacklogItemData, error) {
+	if err := pinTarget(&req, BacklogStatusArchived); err != nil {
+		return nil, err
+	}
+	return s.gated(ctx, req, s.writeGatedArchive)
+}
+
+func (s *Storage) writeGatedArchive(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
+	pre := gatePrecondition(req, spec, item)
+	return s.repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
+}
+
+// GatedUnarchive decides archived->idea. The raw writer is an unconditional
+// flip, so the request cannot carry ExpectedUpdatedAt or a Note.
+func (s *Storage) GatedUnarchive(ctx context.Context, req TransitionRequest) (*BacklogItemData, error) {
+	if err := pinTarget(&req, BacklogStatusIdea); err != nil {
+		return nil, err
+	}
+	if p := req.Precondition; p != nil && (p.ExpectedUpdatedAt != nil || p.Note != "") {
+		return nil, fmt.Errorf("%w: unarchive carries only an ExpectedStatus", ErrInvalidTransitionRequest)
+	}
+	return s.gated(ctx, req, s.writeGatedUnarchive)
+}
+
+func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, _ TransitionCallerSpec, _ *BacklogItemData) (*BacklogItemData, error) {
+	return s.repo.rawUnarchiveBacklogItem(ctx, req.ItemID)
+}
+
+// GatedSetPRAndTransition records pr on the item and moves it review->pr_pending
+// in one UPDATE after the engine allowed it. req.Observed is required and is the
+// only snapshot the write is pinned to; req.Precondition must be nil because the
+// write derives its own. A repeat of the recorded PR is a no-op, and a
+// reassignment (observed pr_pending) is a status-preserving field write that
+// PRReassignmentGuard, not the engine, decides (ADR-007 Decision 7).
+func (s *Storage) GatedSetPRAndTransition(ctx context.Context, req TransitionRequest, pr PRAssociation) error {
+	if _, ok := LookupTransitionCaller(req.Caller); !ok {
+		return fmt.Errorf("%w: %q", ErrUnregisteredTransitionCaller, req.Caller)
+	}
+	if err := pinTarget(&req, BacklogStatusPRPending); err != nil {
+		return err
+	}
+	observed := req.Observed
+	if observed == nil || req.Precondition != nil {
+		return fmt.Errorf("%w: a PR transition needs Observed and no Precondition", ErrInvalidTransitionRequest)
+	}
+	if observed.Status == string(BacklogStatusPRPending) {
+		return s.setPRAndTransition(ctx, observed, pr)
+	}
+	_, err := s.gated(ctx, req, func(ctx context.Context, _ TransitionRequest, _ TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
+		return nil, s.setPRAndTransition(ctx, item, pr)
+	})
+	return err
+}
+
+// reconcileStuckNote is appended to the item's Notes by GatedReconcileStuck.
+const reconcileStuckNote = "[auto] Transitioned to review: all work sessions ended."
+
+// GatedReconcileStuck moves every in_progress item whose work sessions have all
+// ended to review, each through the gate as CallerReconcileStuck. Atomicity is
+// per item: a denied or raced item is skipped (the gate reports the denial) and
+// never rolls back its siblings. It returns the number moved.
+func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
+	candidates, err := s.repo.FindStuckInProgressCandidates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	moved := 0
+	for _, c := range candidates {
+		_, err := s.gated(ctx, TransitionRequest{
+			Caller:       CallerReconcileStuck,
+			ItemID:       c.ID,
+			To:           BacklogStatusReview,
+			Precondition: &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "all work sessions ended"},
+			TriggeredBy:  TriggeredBySystem,
+		}, s.writeGatedReconcile)
+		switch {
+		case err == nil:
+			moved++
+		case errors.Is(err, ErrPreconditionFailed):
+			log.Debug("[GatedReconcileStuck] item moved concurrently, skipped", "item", c.ID)
+		default:
+			log.Warn("[GatedReconcileStuck] item not moved to review", "item", c.ID, "error", err)
+		}
+	}
+	return moved, nil
+}
+
+func (s *Storage) writeGatedReconcile(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
+	pre := gatePrecondition(req, spec, item)
+	return s.repo.rawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
 }
 
 // gateWriter performs the raw write once the engine allowed req.

@@ -1291,7 +1291,7 @@ func (l *BacklogLifecycleListener) runStuckDetector(name string, okNames, panick
 	fn()
 }
 
-// ReconcileStuck calls ReconcileStuckItems and logs the result.
+// ReconcileStuck calls GatedReconcileStuck and logs the result.
 // Intended to be called on a periodic ticker as a safety net for abnormal session exits.
 // No-op when the listener is disabled.
 func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
@@ -1299,15 +1299,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		return
 	}
 	er := l.storage.repo
-	n, err := er.ReconcileStuckItems(ctx)
+	n, err := l.storage.GatedReconcileStuck(ctx)
 	if err != nil {
-		log.Error("[BacklogLifecycle] ReconcileStuckItems error", "error", err)
+		log.Error("[BacklogLifecycle] ReconcileStuck error", "error", err)
 		return
 	}
 	if n > 0 {
-		log.Info("[BacklogLifecycle] ReconcileStuckItems: transitioned stuck items to review", "count", n)
+		log.Info("[BacklogLifecycle] ReconcileStuck: transitioned stuck items to review", "count", n)
 	} else {
-		log.Debug("[BacklogLifecycle] ReconcileStuckItems: no stuck items found")
+		log.Debug("[BacklogLifecycle] ReconcileStuck: no stuck items found")
 	}
 
 	// Re-spawn review gates for items stuck in "review" with no review session.

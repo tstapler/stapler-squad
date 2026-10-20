@@ -1165,6 +1165,14 @@ func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string,
 // guard is ignored (may be nil) when observed.Status is review — a
 // first-time recording never needs one.
 func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
+	return s.setPRAndTransition(ctx, observed, PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
+}
+
+// setPRAndTransition is the single-UPDATE write shared by
+// RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; the contract
+// is documented on the former.
+func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemData, pr PRAssociation) error {
+	prURL, prNumber, summary, guard := pr.URL, pr.Number, pr.Summary, pr.Guard
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}

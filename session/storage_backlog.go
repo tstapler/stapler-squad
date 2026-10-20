@@ -989,11 +989,10 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 
 // --- Reconciler ---
 
-// ReconcileStuckItems finds in_progress items whose all linked ItemSessions have ended,
-// and transitions them to review status. Returns the count of transitioned items.
-// All updates are wrapped in a single transaction so they succeed or fail atomically.
-func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
-	// Find in_progress items that have at least one item session, where none have nil ended_at.
+// FindStuckInProgressCandidates returns in_progress items that have at least one
+// item session and none still running. It only reads; Storage.GatedReconcileStuck
+// moves each one to review through the transition gate.
+func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]BacklogItemData, error) {
 	items, err := r.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusInProgress)),
@@ -1004,76 +1003,13 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 		).
 		All(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to query stuck items: %w", err)
+		return nil, fmt.Errorf("failed to query stuck items: %w", err)
 	}
-
-	if len(items) == 0 {
-		return 0, nil
-	}
-
-	tx, err := r.client.Tx(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	// toStatus is BacklogStatusReview for every item in this loop, so the
-	// snapshot fields are loop-invariant — resolve them once rather than
-	// re-querying per item.
-	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, tx.BacklogStage, tx.StageTransition, BacklogStatusReview)
-
-	var transitionedIDs []uuid.UUID
-	now := time.Now()
+	out := make([]BacklogItemData, 0, len(items))
 	for _, item := range items {
-		note := item.Notes
-		if note != "" {
-			note += "\n"
-		}
-		note += "[auto] Transitioned to review: all work sessions ended."
-		_, updateErr := tx.BacklogItem.UpdateOne(item).
-			SetStatus(string(BacklogStatusReview)).
-			SetUserModifiedStatusAt(now).
-			SetNotes(note).
-			Save(ctx)
-		if updateErr != nil {
-			continue
-		}
-		recordStatusEvent(ctx, statusEventInput{
-			evClient:                   tx.BacklogStatusEvent,
-			itemID:                     item.ID,
-			fromStatus:                 item.Status,
-			toStatus:                   string(BacklogStatusReview),
-			triggeredBy:                TriggeredBySystem,
-			stageNameSnapshot:          stageNameSnapshot,
-			allowedTransitionsSnapshot: allowedTransitionsSnapshot,
-		})
-		transitionedIDs = append(transitionedIDs, item.ID)
+		out = append(out, backlogItemToData(item))
 	}
-
-	if err = tx.Commit(); err != nil {
-		return 0, fmt.Errorf("failed to commit reconcile transaction: %w", err)
-	}
-
-	// Best-effort publish: this reconciler mutates status via a raw
-	// transaction rather than going through TransitionBacklogItemStatus, so
-	// without this it would silently bypass the live-event stream — exactly
-	// the "missed call site" failure mode requirements.md's Feasibility Risks
-	// section calls out for internal reconcilers that touch storage directly.
-	for _, id := range transitionedIDs {
-		updated, getErr := r.client.BacklogItem.Get(ctx, id)
-		if getErr != nil {
-			log.WarningLog().Printf("[EntRepository] ReconcileStuckItems: failed to reload item %s for publish: %v", id, getErr)
-			continue
-		}
-		result := backlogItemToData(updated)
-		r.publishItemChanged(ctx, &result, BacklogItemChange{
-			Kind:      ChangeStatusTransition,
-			OldStatus: string(BacklogStatusInProgress),
-			NewStatus: string(BacklogStatusReview),
-		})
-	}
-
-	return len(transitionedIDs), nil
+	return out, nil
 }
 
 // FindReviewItemsWithoutGate returns backlog items in "review" status that have
