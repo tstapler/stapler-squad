@@ -22,6 +22,8 @@ export interface AlertConfirmDialogProps {
    * focus a button on click, so the hook's "previously focused" can be body.
    */
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Lets the body move focus to Cancel without a global DOM query. */
+  cancelButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
 /**
@@ -42,11 +44,13 @@ export function AlertConfirmDialog({
   confirmDisabled = false,
   confirmDescribedById,
   returnFocusRef,
+  cancelButtonRef,
 }: AlertConfirmDialogProps) {
   const headingId = useId();
   const bodyId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
+  const ownCancelRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = cancelButtonRef ?? ownCancelRef;
 
   useDialogFocusTrap({ dialogRef, initialFocusRef: cancelRef, onEscape: onCancel });
 
