@@ -2,7 +2,7 @@
 
 import { createContext, forwardRef, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { MouseEvent, ReactNode } from "react";
-import { pushTrayEntryInHistory, replaceHashInHistory, replaceSearchInHistory } from "./history";
+import { pushHistoryMarkerInHistory, pushTrayEntryInHistory, replaceHashInHistory, replaceSearchInHistory } from "./history";
 import type { NavImpl, NavLinkProps, NavRouter, NavSearchParams, RedirectProps } from "./impl.types";
 import { normalizePathname } from "./normalize";
 
@@ -105,6 +105,7 @@ export function useReplaceSearch(): (search: string) => void {
 
 export const replaceHash = replaceHashInHistory;
 export const pushTrayEntry = pushTrayEntryInHistory;
+export const pushHistoryMarker = pushHistoryMarkerInHistory;
 
 export const memoryImpl = {
   useRouter,
@@ -115,4 +116,5 @@ export const memoryImpl = {
   useReplaceSearch,
   replaceHash,
   pushTrayEntry,
+  pushHistoryMarker,
 } satisfies NavImpl;
