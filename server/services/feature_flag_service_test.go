@@ -508,13 +508,12 @@ func TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer(t *tes
 
 // --- Story 1.5.2: ModeFor(class) over the class-to-flag table ------------------
 
-// TestModeFor_ComposesFourFlagsPerClass_AndDefaultsToShadow lands in full with
-// Task 1.5.8g; until then each task that registers a class's enforce flag adds
-// that class's rows here. The operator flag exists since Story 1.5.2, the agent
-// flag since Task 1.5.3c.
-func TestModeFor_ComposesFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
+// TestModeFor_ComposesFourFlagsPerClass_AndDefaultsToShadow covers every class's
+// enforce flag: operator (Story 1.5.2), agent (Task 1.5.3c), system (Task 1.5.8g).
+func TestModeFor_ComposesFourFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
 	t.Parallel()
 	shadow, enforce, enforceAgent := config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag, config.WorkflowEngineEnforceAgentFeatureFlag
+	enforceSystem := config.WorkflowEngineEnforceSystemFeatureFlag
 	set := func(flags map[string]bool) *config.Config { return &config.Config{FeatureFlags: flags} }
 
 	cases := []struct {
@@ -538,11 +537,19 @@ func TestModeFor_ComposesFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
 		// The operator flag must not leak into the agent class, nor the agent flag into the operator.
 		{"agent, operator enforce on", session.ClassAgent, set(map[string]bool{enforce: true}), session.ModeShadow},
 		{"operator, agent enforce on", session.ClassOperator, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
-		// A class with no registered enforce flag resolves from the shadow flag alone.
-		{"system, agent enforce on", session.ClassSystem, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
 		{"system, empty config", session.ClassSystem, set(nil), session.ModeShadow},
-		{"system, operator enforce on", session.ClassSystem, set(map[string]bool{enforce: true}), session.ModeShadow},
+		{"system, nil config", session.ClassSystem, nil, session.ModeShadow},
 		{"system, shadow off", session.ClassSystem, set(map[string]bool{shadow: false}), session.ModeOff},
+		{"system, enforce wins over shadow on", session.ClassSystem, set(map[string]bool{shadow: true, enforceSystem: true}), session.ModeEnforce},
+		{"system, enforce wins over shadow off", session.ClassSystem, set(map[string]bool{shadow: false, enforceSystem: true}), session.ModeEnforce},
+		{"system, shadow on enforce off", session.ClassSystem, set(map[string]bool{shadow: true, enforceSystem: false}), session.ModeShadow},
+		// No class's flag leaks into another.
+		{"system, agent enforce on", session.ClassSystem, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
+		{"system, operator enforce on", session.ClassSystem, set(map[string]bool{enforce: true}), session.ModeShadow},
+		{"agent, system enforce on", session.ClassAgent, set(map[string]bool{enforceSystem: true}), session.ModeShadow},
+		{"operator, system enforce on", session.ClassOperator, set(map[string]bool{enforceSystem: true}), session.ModeShadow},
+		// A class with no registered enforce flag resolves from the shadow flag alone.
+		{"unknown class, system enforce on", session.CallerClass("bogus"), set(map[string]bool{enforceSystem: true}), session.ModeShadow},
 	}
 	for _, tc := range cases {
 		require.Equal(t, tc.want, session.ModeForClassFlags(tc.class, tc.cfg), tc.name)
@@ -593,8 +600,11 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 	require.Equal(t, config.WorkflowEngineEnforceAgentFeatureFlag, agentName)
 	require.Equal(t, featureFlagDefault(agentName), agentDef, "table default equals the registry default")
 	require.False(t, agentDef, "the agent flag ships off")
-	_, _, ok = session.ClassEnforceFlag(session.ClassSystem)
-	require.False(t, ok, "the system flag is registered in Task 1.5.8g, not here")
+	systemName, systemDef, ok := session.ClassEnforceFlag(session.ClassSystem)
+	require.True(t, ok, "the system flag is registered in Task 1.5.8g")
+	require.Equal(t, config.WorkflowEngineEnforceSystemFeatureFlag, systemName)
+	require.Equal(t, featureFlagDefault(systemName), systemDef, "table default equals the registry default")
+	require.False(t, systemDef, "the system flag ships off")
 }
 
 func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
@@ -618,6 +628,27 @@ func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
 	clock.Advance(workflowEngineModeTTL + time.Millisecond)
 	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassAgent))
 	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassSystem), "the agent flag does not enforce the system class")
+
+	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceSystemFeatureFlag, true))
+	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassSystem))
+}
+
+func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionAnswer(t *testing.T) {
+	withIsolatedStateDir(t)
+	spec, ok := session.LookupTransitionCaller(session.CallerAutonomousComplete) // system, unchecked today
+	require.True(t, ok)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		clock := &modeTestClock{now: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+		svc := NewFeatureFlagService()
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, false))
+		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceSystemFeatureFlag, setting.(bool)))
+		sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
+		// idea->done has no edge: an unchecked system write is allowed until its class enforces.
+		return sel.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil)
+	}, true, false)
 }
 
 func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAnswer(t *testing.T) {

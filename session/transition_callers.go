@@ -93,6 +93,7 @@ const (
 	fileMCPBacklog   = "server/mcp/tools_backlog.go"
 	fileMCPBacklogPR = "server/mcp/tools_backlog_pr.go"
 	fileMCPDelegate  = "server/mcp/tools_backlog_dependencies.go"
+	fileRemediation  = "session/backlog_remediation.go"
 	fileSessLife     = "session/backlog_lifecycle.go"
 	fileSessLifeArch = "session/backlog_lifecycle_archive.go"
 	fileSessLifePR   = "session/backlog_lifecycle_pr.go"
@@ -286,8 +287,13 @@ var exemptTransitionSites = []ExemptSite{
 }
 
 // sharedGuardHelperSites hold the one primitive call that several registered
-// Origins reach (transitionWithGuard).
-var sharedGuardHelperSites = []CallSite{{fileTriage, "BacklogService.transitionWithGuard", 1}}
+// callers reach: transitionWithGuard, and the re-drive of a recorded denial,
+// which re-attempts the transition under the denied caller's own name (only
+// the redriveByWrite callers).
+var sharedGuardHelperSites = []CallSite{
+	{fileTriage, "BacklogService.transitionWithGuard", 1},
+	{fileRemediation, "Storage.redriveOne", 1},
+}
 
 // knownOffGraphCallerEdges are caller bugs the audit tolerates until the named
 // migration story fixes the caller (ADR-007 D7: a caller bug is fixed in the

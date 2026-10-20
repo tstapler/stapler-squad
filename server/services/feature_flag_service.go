@@ -383,6 +383,11 @@ var knownFeatureFlags = []struct {
 		defaultValue: config.WorkflowEngineEnforceAgentDefault,
 	},
 	{
+		name:         config.WorkflowEngineEnforceSystemFeatureFlag,
+		description:  "Workflow engine enforce (system class): the configured stage graph and operator gates decide status transitions made by the server itself (queue claim, triage completion, lifecycle sweeps, PR merge and archive, dispatch) instead of today's unchecked writes. A denial is reported once as a transition_denied stuck item, the held automation waits quietly, and the sweep finishes the transition once the gate is satisfied. Turn on only after the system class reads READY in make workflow-engine-soak-status. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceSystemDefault,
+	},
+	{
 		name:        filesEditingFlagName,
 		description: "Files editing: allow saving edits from the Files tab (WriteFile). Enforced server-side; hidden-session and archived-session guards still apply. Applies at once; global only. Default: off.",
 	},

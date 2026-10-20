@@ -163,6 +163,7 @@ var bypassInventory = []bypassSite{
 	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
 
 	// Gated, Story 1.5.7 (system writers in session).
+	gated("session/backlog_remediation.go", "Storage.redriveOne", 1, "GatedTransition as the recorded denied caller: autonomous_complete, maybe_trigger_triage or triage_complete (Story 1.5.8e)"),
 	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.onSessionExited", 1, "GatedTransition as lifecycle_session_exited"),
 	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.transitionBouncingItemToDone", 2, "GatedTransition as lifecycle_bouncing_to_done"),
 	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.ReconcileStuck", 1, "GatedReconcileStuck as lifecycle_reconcile_stuck"),

@@ -51,7 +51,7 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 		Ledger: func() (session.ShadowLedger, error) { return recorder.Snapshot(), nil },
 		AnyClassEnforced: func() bool {
 			cfg := loadConfig()
-			return config.EffectiveWorkflowEngineEnforce(cfg) || config.EffectiveWorkflowEngineEnforceAgent(cfg)
+			return config.EffectiveWorkflowEngineEnforce(cfg) || config.EffectiveWorkflowEngineEnforceAgent(cfg) || config.EffectiveWorkflowEngineEnforceSystem(cfg)
 		},
 	}
 	if dir != "" {

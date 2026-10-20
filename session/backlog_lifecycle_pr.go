@@ -263,6 +263,10 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		if item.PrNumber != 0 || item.RepoPath == "" {
 			continue
 		}
+		// The write is itself denied-and-retried; skipping saves the per-tick GitHub lookup.
+		if l.heldByTransitionDenial(ctx, &item, "orphaned_agent_pr") {
+			continue
+		}
 
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
@@ -1070,6 +1074,11 @@ func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context,
 		}
 		if row.ItemStatus != BacklogStatusReview {
 			continue // no longer applicable to this item's current state
+		}
+		// A retried push ends in the same denied review->pr_pending/done write, and
+		// would spend a backoff attempt and a git push per tick doing it.
+		if l.heldByTransitionDenial(ctx, &BacklogItemData{ID: row.ItemID, Status: string(row.ItemStatus)}, "push_failed") {
+			continue
 		}
 		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle, row.Context)
 	}

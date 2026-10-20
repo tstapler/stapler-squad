@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -104,4 +105,41 @@ func (s *BacklogService) resolveTransitionDeniedLogged(ctx context.Context, item
 	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonTransitionDenied); err != nil {
 		log.Warn("[resolveTransitionDeniedLogged] ResolveStuck failed", "item", itemID, "error", err)
 	}
+}
+
+// isEngineDenial reports whether err is the workflow engine refusing a
+// transition (graph or gate) rather than a write failure; the gate has already
+// reported such a denial for an agent or system caller.
+func isEngineDenial(err error) bool {
+	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, session.ErrGateNotSatisfied)
+}
+
+// heldByTransitionDenial is the one guard every spawn point calls (Story
+// 1.5.8): true, with a Debug line, while item's status has an open
+// transition_denied row the engine still refuses, so the automatic action
+// skips instead of churning a session for a transition that cannot happen.
+// A lifted denial is resolved here and the action proceeds. Periodic callers
+// treat the skip as success; the operator's "Retry now" asks
+// transitionDenialHoldError instead.
+func (s *BacklogService) heldByTransitionDenial(ctx context.Context, spawnPoint string, item *session.BacklogItemData) bool {
+	if s.storage == nil || !s.storage.TransitionDenialHolds(ctx, item) {
+		return false
+	}
+	log.Debug("["+spawnPoint+"] item waits on a denied transition, skipping", "item", item.ID, "status", item.Status)
+	return true
+}
+
+// transitionDenialHoldError returns session.ErrTransitionDeniedHold, naming the
+// denial, while itemID is held by an open denial; nil otherwise (including on
+// a read error: the action itself then decides, as before the denial existed).
+func (s *BacklogService) transitionDenialHoldError(ctx context.Context, itemID string) error {
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return nil
+	}
+	d, open, err := s.storage.OpenTransitionDenial(ctx, itemID, session.BacklogStatus(item.Status))
+	if err != nil || !open || !s.storage.TransitionDenialHolds(ctx, item) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s %s->%s denied (%s); satisfy the gate or re-enable the edge", session.ErrTransitionDeniedHold, d.Caller, d.From, d.To, d.Reason)
 }

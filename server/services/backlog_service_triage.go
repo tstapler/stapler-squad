@@ -844,6 +844,11 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if claimDedup && s.skipForForeignClaim(ctx, &item, claims) {
 			continue
 		}
+		// A held claim is skipped before it is attempted: no repeated claim
+		// failure and no head-of-line blocking (the next item still gets its turn).
+		if s.heldByTransitionDenial(ctx, "DequeueNextQueuedItems", &item) {
+			continue
+		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
 			spawned++
 			if claimDedup {
@@ -1994,6 +1999,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
+	if s.heldByTransitionDenial(ctx, "AutoReopenAfterFailedReview", item) {
+		return nil
+	}
 
 	// Iteration cap: count prior work sessions so we don't spin forever on a
 	// persistent FAIL verdict. Fail-safe: if the DB query errors we cannot know
@@ -2214,6 +2222,9 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		// us to it) — nothing to do.
 		return nil
 	}
+	if s.heldByTransitionDenial(ctx, "AutoRespawnAutonomousWork", item) {
+		return nil
+	}
 
 	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
 	if sessErr != nil {
@@ -2313,6 +2324,9 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
 		// Already moved on (a human acted manually, or another reconciler beat
 		// us to it) — nothing to remediate.
+		return nil
+	}
+	if s.heldByTransitionDenial(ctx, "RemediateStaleWorkSession", item) {
 		return nil
 	}
 
@@ -2430,6 +2444,9 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	}
 	if session.BacklogStatus(item.Status) != session.BacklogStatusPRPending {
 		return fmt.Errorf("item %s is not pr_pending (got %s)", itemID, item.Status)
+	}
+	if s.heldByTransitionDenial(ctx, "AutoReopenForPRFix", item) {
+		return nil
 	}
 
 	// Reuse the same iteration cap as the review rework cycle.
@@ -2605,6 +2622,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 		// human acted manually) — nothing to do.
 		return nil
 	}
+	if s.heldByTransitionDenial(ctx, "AutoRespawnReview", item) {
+		return nil
+	}
 
 	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
 	if sessErr != nil {
@@ -2699,6 +2719,9 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
+	}
+	if s.heldByTransitionDenial(ctx, "AutoRespawnTriage", item) {
+		return nil
 	}
 
 	if applyGate {
@@ -2981,9 +3004,22 @@ func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string
 		Caller: session.CallerMaybeTriggerTriage, ItemID: itemID, To: session.BacklogStatusReady,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); transErr != nil {
-		log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+		if isEngineDenial(transErr) {
+			// The gate reported the denial once under maybe_trigger_triage; the
+			// re-drive sweep advances the item when the gate is satisfied.
+			log.Debug("[MaybeTriggerTriage] skipped item waits on a denied idea->ready", "item", itemID, "error", transErr)
+		} else {
+			log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+		}
 	}
 	return true
+}
+
+// triageHeldByDenial reports whether itemID already has an open denied
+// transition from its status, so a creation-time triage trigger starts nothing.
+func (s *BacklogService) triageHeldByDenial(ctx context.Context, itemID string) bool {
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	return err == nil && s.heldByTransitionDenial(ctx, "MaybeTriggerTriage", item)
 }
 
 // MaybeTriggerTriage is the single "should this newly created item get
@@ -3006,6 +3042,9 @@ func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string
 // the client (e.g. CreateBacklogItemResponse.TriageTriggered).
 func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool {
 	if skipTriage || repoPath == "" || s.headlessPool == nil {
+		return false
+	}
+	if s.storage != nil && s.triageHeldByDenial(ctx, itemID) {
 		return false
 	}
 	if s.storage != nil && s.skipTriageForNewItem(ctx, itemID) {

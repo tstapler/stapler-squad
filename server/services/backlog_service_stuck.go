@@ -490,6 +490,11 @@ func (s *BacklogService) TriggerRemediationNow(
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("no automated remediation action is available for reason %q yet", reason))
 	}
 
+	// Checked before the attempt is recorded, so a held item spends none.
+	if holdErr := s.transitionDenialHoldError(ctx, req.Msg.ItemId); holdErr != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, holdErr)
+	}
+
 	justParked, err := s.storage.RecordManualRemediationAttempt(ctx, req.Msg.ItemId, reason)
 	if err != nil {
 		switch {
