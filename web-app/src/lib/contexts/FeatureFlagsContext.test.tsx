@@ -102,6 +102,26 @@ describe("readbackMismatch", () => {
   const f = (enabled: boolean, scopes: Array<{ scope: string; enabled: boolean }>) =>
     flag(enabled, scopes) as unknown as Parameters<typeof readbackMismatch>[1];
 
+  it("feature_flags_context_should_ignore_a_quiet_refresh_that_resolves_after_a_write_read_back", async () => {
+    const { result } = await setup(flag(false));
+    let resolveOld!: (v: unknown) => void;
+    mockGetFeatureFlags.mockReturnValueOnce(new Promise((r) => (resolveOld = r)));
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = result.current.refresh!({ quiet: true });
+    });
+    mockUpdateFeatureFlag.mockResolvedValue({ flag: flag(true) });
+    await act(() => result.current.setFlag(GATE, true));
+    expect(result.current.flagList[0].enabled).toBe(true);
+
+    await act(async () => {
+      resolveOld({ flags: [flag(false)] });
+      await refreshing;
+    });
+    expect(result.current.flagList[0].enabled).toBe(true);
+    expect(result.current.flags[GATE]).toBe(true);
+  });
+
   it("readbackMismatch_should_CheckEachMutationAgainstTheServerState", () => {
     expect(readbackMismatch({ mutation: "reset" }, f(false, []))).toBeNull();
     expect(readbackMismatch({ mutation: "set", scope: "global", enabled: true }, f(true, []))).toBeNull();

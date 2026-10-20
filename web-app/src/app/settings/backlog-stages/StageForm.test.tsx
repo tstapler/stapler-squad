@@ -259,6 +259,7 @@ describe("StageForm engine-mode surfaces (Story 1.3.2)", () => {
       lastCheckedAt: Date.now(),
       fallbackActive: false,
       invalidatorWired: true,
+      gateWired: true,
       review: null,
       flagRowId: "flag-row-backlog-workflow-engine-enforce",
       ...overrides,

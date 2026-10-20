@@ -52,7 +52,10 @@ export interface EngineModeView {
   lastCheckedAt: number | null;
   /** The running engine fell back to built-in rules (sticky until restart). */
   fallbackActive: boolean;
+  /** False when saved edits are not pushed to the running engine. */
   invalidatorWired: boolean;
+  /** False when the engine answered but has no gate: nothing is enforced whatever the flags say. */
+  gateWired: boolean;
   review: EngineReviewView | null;
   /** Feature-flag row for the first class not yet enforced (operators when all are). */
   flagRowId: string;
@@ -152,6 +155,7 @@ function viewFromStatus(resp: GetWorkflowEngineStatusResponse, stale: boolean, l
     lastCheckedAt,
     fallbackActive: resp.fallbackActive,
     invalidatorWired: resp.invalidatorWired,
+    gateWired: resp.gateWired,
     review: reviewFrom(resp),
     flagRowId: CLASS_FLAG_ROW[firstUnenforced],
   };
@@ -166,6 +170,7 @@ function emptyView(kind: "loading" | "unknown"): EngineModeView {
     lastCheckedAt: null,
     fallbackActive: false,
     invalidatorWired: true,
+    gateWired: true,
     review: null,
     flagRowId: CLASS_FLAG_ROW.operator,
   };
@@ -189,10 +194,18 @@ function classModePhrase(m: ClassMode): string {
   }
 }
 
+/** The server reports a floor, not a count, at or past this many differences. */
+export const DIVERGENCE_FLOOR = 200;
+
+/** "5" or "at least 200": the one spelling every surface (visual, banner, screen reader) uses. */
+export function differencesText(n: number): string {
+  return n >= DIVERGENCE_FLOOR ? `at least ${n}` : String(n);
+}
+
 function shadowDifferences(n: number | null): string {
   if (n === null) return "Difference count unavailable.";
   if (n === 0) return "No differences in the last 24h.";
-  return `${n} ${n === 1 ? "difference" : "differences"} in the last 24h.`;
+  return `${differencesText(n)} ${n === 1 ? "difference" : "differences"} in the last 24h.`;
 }
 
 export const FALLBACK_NOTE = "The engine fell back to the built-in rules after an error, so edits may not be applied.";
@@ -201,12 +214,24 @@ function fallbackAffectsClaim(v: EngineModeView): boolean {
   return v.fallbackActive && (v.kind === "enforced" || v.kind === "partial");
 }
 
+export const INVALIDATOR_NOTE = "Saved edits are not applied to the running engine until it restarts.";
+
+function invalidatorAffectsClaim(v: EngineModeView): boolean {
+  return !v.invalidatorWired && (v.kind === "enforced" || v.kind === "partial");
+}
+
+/** True when the banner may show the green "enforced" state. */
+export function isFullyConfirmedEnforced(v: EngineModeView): boolean {
+  return v.kind === "enforced" && !v.stale && !v.fallbackActive && v.invalidatorWired;
+}
+
 /** Mode sentence shown in the banner (without the Stale suffix). */
 export function bannerSentence(v: EngineModeView): string {
   switch (v.kind) {
     case "loading":
       return "Checking whether these settings are enforced...";
     case "unknown":
+      if (!v.gateWired) return "The workflow engine's gate is not wired, so nothing is enforced. Edits are saved but have no effect.";
       return "Couldn't determine whether these settings are enforced. Treat edits as not applied.";
     case "enforced":
       return "Enforced: edits here change which transitions and gates the backlog allows, for operators, agents and automation. Edges that automation relies on are fixed; their gates are editable.";
@@ -219,7 +244,7 @@ export function bannerSentence(v: EngineModeView): string {
   }
 }
 
-function lastCheckedAgo(v: EngineModeView): string | null {
+export function lastCheckedAgo(v: EngineModeView): string | null {
   if (!v.stale || v.lastCheckedAt === null) return null;
   return formatRelativeTime(v.lastCheckedAt).toLowerCase();
 }
@@ -231,6 +256,7 @@ export function bannerText(v: EngineModeView): string {
     bannerSentence(v),
     ago && `Last checked ${ago}; couldn't refresh.`,
     fallbackAffectsClaim(v) && FALLBACK_NOTE,
+    invalidatorAffectsClaim(v) && INVALIDATOR_NOTE,
   ]
     .filter(Boolean)
     .join(" ");
@@ -271,6 +297,7 @@ export function formReminder(v: EngineModeView): string {
     case "loading":
       return "Mode: checking...";
     case "unknown":
+      if (!v.gateWired) return "Mode: gate not wired. Nothing is enforced; saved edits have no effect.";
       return "Mode: couldn't be determined. Treat saved edits as not applied.";
     case "enforced":
       return fallbackAffectsClaim(v) ? `Mode: Enforced. ${FALLBACK_NOTE}` : "Mode: Enforced.";
@@ -286,7 +313,9 @@ export function formReminder(v: EngineModeView): string {
 /** Confirmation after a successful stage save; never claims enforcement for a class that is not enforced. */
 export function saveConfirmation(v: EngineModeView): string {
   let text: string;
-  if (v.stale || v.kind === "loading" || v.kind === "unknown") {
+  if (v.kind === "unknown" && !v.gateWired && !v.stale) {
+    text = "Saved. Not enforced: the engine's gate is not wired.";
+  } else if (v.stale || v.kind === "loading" || v.kind === "unknown") {
     text = "Saved. Couldn't confirm whether it is enforced.";
   } else if (v.kind === "enforced") {
     text = "Saved and enforced";

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -94,10 +94,17 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // A response may only land if no newer fetch has landed and no write has read back since it started.
+  const seq = useRef(0);
+  const minAcceptable = useRef(0);
+
   // quiet: a background re-read after a failed write must not turn a loaded list into a load failure.
   const fetchFlags = useCallback(async (opts?: { quiet?: boolean }) => {
+    const mine = ++seq.current;
     try {
       const res = await client.getFeatureFlags({});
+      if (mine < minAcceptable.current) return;
+      minAcceptable.current = mine;
       const map: Record<string, boolean> = {};
       const list: FeatureFlagMeta[] = [];
       for (const f of res.flags) {
@@ -150,6 +157,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
           throw new Error(`server read-back does not show the change for ${bad}`);
         }
       }
+      minAcceptable.current = ++seq.current;
       setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
       setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
       return { ok: true };

@@ -164,6 +164,8 @@ function FlagListSkeleton() {
   );
 }
 
+const ENGINE_MODE_SETTLE_MS = 1500;
+
 export default function FeaturesPage() {
   usePageView();
   const { flagList, isLoading, loadError, reload, refresh, setFlag } = useFeatureFlags();
@@ -179,6 +181,12 @@ export default function FeaturesPage() {
 
   const setStatus = useCallback((name: string, phase: RowPhase | undefined) => {
     setRowStatus((prev) => ({ ...prev, [name]: phase }));
+  }, []);
+
+  // The server's mode reader caches about 1s, so the first re-read can still show the old mode.
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (settleTimer.current) clearTimeout(settleTimer.current);
   }, []);
 
   const apply = useCallback(
@@ -197,7 +205,11 @@ export default function FeaturesPage() {
         ? ` ${enforcedCountAfter(flagListRef.current, flag.name, next)} of 3 caller classes enforced.`
         : "";
       setStatus(flag.name, { phase: "done", message: `${label} is now ${next ? "On" : "Off"}.${count}` });
-      if (isEngineModeFlag(flag.name)) void refetchEngine();
+      if (isEngineModeFlag(flag.name)) {
+        void refetchEngine();
+        if (settleTimer.current) clearTimeout(settleTimer.current);
+        settleTimer.current = setTimeout(() => void refetchEngine(), ENGINE_MODE_SETTLE_MS);
+      }
     },
     [setFlag, setStatus, refetchEngine],
   );

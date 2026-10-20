@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useId, useRef, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { AlertConfirmDialog } from "@/components/settings/AlertConfirmDialog";
-import type { CallerClass, ClassReadinessView } from "@/lib/hooks/useEngineModeStatus";
+import { differencesText, type CallerClass, type ClassReadinessView } from "@/lib/hooks/useEngineModeStatus";
 import {
   VERDICT_LABEL,
   evidenceAnnouncement,
@@ -14,13 +14,6 @@ import { ackCheckbox, ackLabel, dialogNote, evidenceNotClean, evidenceRegion, re
 
 export const ROLLOUT_CHECKLIST = "docs/how-to/flip-workflow-engine-enforcement.md";
 const ACK_LABEL = "I have reviewed this evidence and the rollout checklist";
-/** The server reports a floor, not a count, past this many differences. */
-const DIVERGENCE_FLOOR = 200;
-
-function differencesText(n: number): string {
-  return n >= DIVERGENCE_FLOOR ? `at least ${n}` : String(n);
-}
-
 function EvidenceLines({ readiness }: { readiness: ClassReadinessView }) {
   const bad = (flag: boolean) => (flag ? evidenceNotClean : undefined);
   return (
@@ -117,6 +110,8 @@ export function EnforceDialog({
   const hintId = useId();
   const ackRef = useRef<HTMLInputElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const [retryLoaded, setRetryLoaded] = useState(0);
   const hint = hintText(r);
   const running = r.recheck.phase === "running";
 
@@ -124,10 +119,15 @@ export function EnforceDialog({
     if (r.focusRequest === "ack") ackRef.current?.focus();
   }, [r.focusRequest]);
 
+  // Runs after the render that may have mounted the acknowledgement row.
+  useEffect(() => {
+    if (retryLoaded > 0) (ackRef.current ?? cancelRef.current)?.focus();
+  }, [retryLoaded]);
+
   const retryEvidence = async () => {
     if (r.retrying) return;
     if (await r.retryEvidence()) {
-      document.querySelector<HTMLElement>('[data-testid="alert-confirm-cancel"]')?.focus();
+      setRetryLoaded((n) => n + 1);
     } else {
       retryRef.current?.focus();
     }
@@ -144,6 +144,7 @@ export function EnforceDialog({
       confirmDisabled={!r.canEnforce || running || r.recheck.phase === "failed"}
       confirmDescribedById={hint ? hintId : undefined}
       returnFocusRef={returnFocusRef}
+      cancelButtonRef={cancelRef}
       onConfirm={() => void enforce()}
       onCancel={onCancel}
     >

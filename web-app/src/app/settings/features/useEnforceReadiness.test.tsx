@@ -12,7 +12,7 @@ import {
   WorkflowEngineSoakVerdict,
 } from "@/gen/session/v1/backlog_pb";
 import type { ClassReadinessView } from "@/lib/hooks/useEngineModeStatus";
-import { isClean, useEnforceReadiness, worseningOf } from "./useEnforceReadiness";
+import { evidenceAnnouncement, isClean, useEnforceReadiness, worseningOf } from "./useEnforceReadiness";
 
 const mockGetStatus = jest.fn();
 
@@ -57,6 +57,13 @@ describe("worseningOf / isClean", () => {
 
   it("counts evidence the operator never saw as a change", () => {
     expect(worseningOf(null, clean)).not.toBeNull();
+  });
+});
+
+describe("evidenceAnnouncement", () => {
+  it("says at least 200 for the capped count, matching the visible text", () => {
+    const r = { divergence24h: 200, verdict: "not_ready", strandedItemCount: 0 } as ClassReadinessView;
+    expect(evidenceAnnouncement(r, true)).toContain("at least 200 shadow differences");
   });
 });
 
@@ -106,6 +113,20 @@ describe("useEnforceReadiness", () => {
     expect(ok).toBe(true);
     expect(result.current.evidence.phase).toBe("loaded");
     expect(result.current.retrying).toBe(false);
+  });
+
+  it("clears an acknowledgement ticked on a failed load when the retry loads evidence that is not clean", async () => {
+    mockGetStatus.mockRejectedValueOnce(new Error("down"));
+    const { result } = renderHook(() => useEnforceReadiness("operator"));
+    await waitFor(() => expect(result.current.evidence.phase).toBe("failed"));
+    act(() => result.current.setAcknowledged(true));
+
+    mockGetStatus.mockResolvedValue(status(4n, V.NOT_READY));
+    await act(async () => {
+      await result.current.retryEvidence();
+    });
+    expect(result.current.acknowledged).toBe(false);
+    expect(result.current.canEnforce).toBe(false);
   });
 
   it("allows the write when the re-check is unchanged, with exactly one more RPC", async () => {

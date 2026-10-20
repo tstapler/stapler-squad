@@ -135,6 +135,15 @@ describe("EnforceDialog", () => {
     expect(screen.getByTestId("alert-confirm-cancel")).toHaveFocus();
   });
 
+  it("focuses the acknowledgement when a retry loads evidence that is not clean", async () => {
+    mockGetStatus.mockRejectedValueOnce(new Error("down"));
+    renderDialog();
+    const retry = await screen.findByTestId("feature-flag-enforce-evidence-retry");
+    mockGetStatus.mockResolvedValue(status(3n, V.NOT_READY));
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.getByTestId("feature-flag-enforce-ack")).toHaveFocus());
+  });
+
   it("calls onConfirm only after the re-check passes, and never on a disabled Enforce", async () => {
     mockGetStatus.mockResolvedValue(status(1n, V.READY));
     const { onConfirm } = renderDialog();

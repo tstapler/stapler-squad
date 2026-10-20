@@ -111,6 +111,22 @@ describe("StuckItemDetail", () => {
       expect(text()).toContain("(as of 30m ago, may be out of date)");
     });
 
+    it("stale OK value offers Retry when a refresh handler is wired", () => {
+      render(<StuckItemDetail item={okItem(true, 30 * 60 * 1000)} onRefreshAutoMerge={jest.fn()} />);
+      expect(screen.getByTestId("stuck-item-auto-merge-retry")).toBeInTheDocument();
+    });
+
+    it("a refresh that resolves undefined announces the item is no longer listed", async () => {
+      const onRefresh = jest.fn().mockResolvedValue(undefined);
+      render(<StuckItemDetail item={failedItem()} onRefreshAutoMerge={onRefresh} />);
+      fireEvent.click(screen.getByTestId("stuck-item-auto-merge-retry"));
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-auto-merge-status").textContent).toBe(
+          "Repo auto-merge check skipped: item no longer listed"
+        )
+      );
+    });
+
     it.each([
       [S.RATE_LIMITED, "rate limited"],
       [S.NO_PERMISSION, "no permission"],

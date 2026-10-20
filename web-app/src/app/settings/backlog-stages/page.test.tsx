@@ -75,6 +75,7 @@ function pgTestView(overrides: Partial<EngineModeView> = {}): EngineModeView {
     lastCheckedAt: Date.now(),
     fallbackActive: false,
     invalidatorWired: true,
+    gateWired: true,
     review: null,
     flagRowId: "flag-row-backlog-workflow-engine-enforce",
     ...overrides,

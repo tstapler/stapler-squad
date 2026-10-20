@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { bannerText, reviewLine } from "@/lib/hooks/useEngineModeStatus";
+import { bannerText, isFullyConfirmedEnforced, reviewLine } from "@/lib/hooks/useEngineModeStatus";
 import type { EngineModeView } from "@/lib/hooks/useEngineModeStatus";
 import * as styles from "./page.css";
 
@@ -13,7 +13,7 @@ export interface EngineModeBannerProps {
 
 function bannerStyle(view: EngineModeView): string {
   if (view.kind === "loading") return styles.bannerNeutral;
-  return view.kind === "enforced" && !view.stale && !view.fallbackActive ? styles.bannerSuccess : styles.bannerWarning;
+  return isFullyConfirmedEnforced(view) ? styles.bannerSuccess : styles.bannerWarning;
 }
 
 /**
@@ -34,9 +34,10 @@ export function EngineModeBanner({ view, onRetry }: EngineModeBannerProps) {
     lastResolvedTextRef.current = text;
   }, [resolved, text]);
 
-  const showRetry = view.kind === "unknown" || view.stale;
+  // An unwired gate is a definite answer from the server; retrying cannot change it.
+  const showRetry = (view.kind === "unknown" && view.gateWired) || view.stale;
   const showIcon = view.kind !== "loading";
-  const icon = view.kind === "enforced" && !view.stale && !view.fallbackActive ? "✓" : "⚠";
+  const icon = isFullyConfirmedEnforced(view) ? "✓" : "⚠";
 
   return (
     <div

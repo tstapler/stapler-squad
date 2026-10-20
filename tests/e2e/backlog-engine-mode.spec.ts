@@ -45,6 +45,8 @@ const SHADOW_COPY =
   "Shadow: edits are compared against the built-in rules but are not enforced. No differences in the last 24h.";
 const OFF_COPY = "Not in use: the built-in 9-stage workflow is active. Edits are saved but have no effect.";
 const UNKNOWN_COPY = "Couldn't determine whether these settings are enforced. Treat edits as not applied.";
+const GATE_UNWIRED_COPY =
+  "The workflow engine's gate is not wired, so nothing is enforced. Edits are saved but have no effect.";
 const LOADING_COPY = "Checking whether these settings are enforced...";
 const MIN_TARGET_PX = 44;
 const SCROLL_CLEARANCE_PX = 16;
@@ -56,7 +58,7 @@ const MODE_CASES = [
   { name: "Partly enforced", spec: PARTLY_SPEC, copy: PARTLY_COPY, icon: "⚠" },
   { name: "Shadow", spec: { modes: allModes("SHADOW") }, copy: SHADOW_COPY, icon: "⚠" },
   { name: "Off", spec: { modes: allModes("OFF") }, copy: OFF_COPY, icon: "⚠" },
-  { name: "Unknown", spec: { modes: allModes("SHADOW"), gateWired: false }, copy: UNKNOWN_COPY, icon: "⚠" },
+  { name: "Gate not wired", spec: { modes: allModes("SHADOW"), gateWired: false }, copy: GATE_UNWIRED_COPY, icon: "⚠" },
 ] as const;
 
 for (const vp of VIEWPORTS) {

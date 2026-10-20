@@ -454,7 +454,7 @@ for (const vp of VIEWPORTS) {
       });
       expect(label.height).toBeGreaterThanOrEqual(MIN_TARGET_PX);
       expect(label.width, "the label spans the dialog content width").toBeGreaterThanOrEqual(label.regionWidth - 2);
-      await page.getByText("I have reviewed this evidence and the rollout checklist").click();
+      await features.ack.locator("xpath=ancestor::label").click(); // the label's own hit area, not the input
       await expect(features.ack).toBeChecked();
 
       await quota.goto();
@@ -473,7 +473,7 @@ for (const vp of VIEWPORTS) {
       expect(heights.save).toBeGreaterThanOrEqual(MIN_TARGET_PX);
       expect(heights.revert).toBeGreaterThanOrEqual(MIN_TARGET_PX);
       await quota.gate.uncheck();
-      await page.getByText("Quota gate: Off").click(); // clicking the label text toggles the switch
+      await quota.gate.locator("xpath=ancestor::label").click(); // clicking the label toggles the switch
       await expect(quota.gate).toBeChecked();
     });
   });

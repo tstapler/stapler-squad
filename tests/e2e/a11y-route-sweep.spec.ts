@@ -44,6 +44,9 @@ const KNOWN: Record<string, string[]> = {
   '/workflows': ['color-contrast'],
 };
 
+/** Optional: sweep under one theme (stapler-theme key) instead of the default. */
+const THEME = process.env.A11Y_SWEEP_THEME;
+
 test.describe('Accessibility route sweep (WCAG 2.2 AA)', () => {
   test('sweep config keeps the WCAG 2.2 AA tag and the installed axe-core ships it', () => {
     expect(AXE_TAGS).toContain('wcag22aa');
@@ -53,6 +56,7 @@ test.describe('Accessibility route sweep (WCAG 2.2 AA)', () => {
   test.setTimeout(120_000);
   for (const route of ROUTES) {
     test(`no serious/critical violations on ${route}`, async ({ page }) => {
+      if (THEME) await page.addInitScript((t) => localStorage.setItem('stapler-theme', t), THEME);
       await page.goto(`${BASE_URL}${route}`, { waitUntil: 'load' });
       await page.locator('body').waitFor();
       const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
