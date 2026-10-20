@@ -1775,6 +1775,12 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
 		}
 	}
+	// The note is appended to the Notes read above; pin updated_at so a
+	// concurrent note edit makes the write lose (callers retry on
+	// ErrPreconditionFailed) instead of being overwritten.
+	if appendNote != "" && (precondition == nil || precondition.ExpectedUpdatedAt == nil) {
+		update = update.Where(backlogitem.UpdatedAtEQ(current.UpdatedAt))
+	}
 
 	now := time.Now()
 	setter := update.
