@@ -1318,6 +1318,66 @@ func (l *BacklogLifecycleListener) runStuckDetector(name string, okNames, panick
 	fn()
 }
 
+// heldByTransitionDenial is the detector-local form of the open-denial guard
+// (Story 1.5.8): true, with a Debug line, while item's status has an open
+// transition_denied row the engine still refuses. detector names the caller in
+// the log.
+func (l *BacklogLifecycleListener) heldByTransitionDenial(ctx context.Context, item *BacklogItemData, detector string) bool {
+	if !l.storage.TransitionDenialHolds(ctx, item) {
+		return false
+	}
+	log.Debug("[BacklogLifecycle] item waits on a denied transition, skipping", "detector", detector, "item", item.ID, "status", item.Status)
+	return true
+}
+
+// respawnReviewGatesWithoutGate is ReconcileStuck's inline review-gate respawn:
+// it spawns a gate for every review item that has none. It calls the
+// listener-local spawnReviewGate rather than a BacklogService spawn point, so
+// the open-denial guard (Story 1.5.8) lives here.
+func (l *BacklogLifecycleListener) respawnReviewGatesWithoutGate(ctx context.Context, er *EntRepository) {
+	items, gateErr := er.FindReviewItemsWithoutGate(ctx)
+	if gateErr != nil {
+		log.Error("[BacklogLifecycle] FindReviewItemsWithoutGate error", "error", gateErr)
+		return
+	}
+	for _, item := range items {
+		var workSession *ItemSessionSummary
+		if len(item.Edges.ItemSessions) > 0 {
+			s := itemSessionToSummary(item.Edges.ItemSessions[0])
+			workSession = &s
+		}
+		if workSession == nil {
+			log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
+			continue
+		}
+		itemData := backlogItemToData(item)
+		if l.heldByTransitionDenial(ctx, &itemData, "ReconcileStuckReviewGates") {
+			continue
+		}
+		log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
+		isCopy := *workSession
+		go func(itemCopy *BacklogItemData, isCopy ItemSessionSummary) {
+			select {
+			case l.reviewSem <- struct{}{}:
+			case <-l.shutdownCtx.Done():
+				return
+			}
+			defer func() { <-l.reviewSem }()
+			// itemCopy.Status is already "review" here (FindReviewItemsWithoutGate's
+			// query scope), so resolveReviewGateContext's to==BacklogStatusReview
+			// branch always applies — this always resolves to
+			// builtInReviewGateContext, routed through the same resolver as
+			// onSessionExited for a single source of truth rather than a second
+			// hardcoded reference to that variable.
+			gateContext, ok := l.resolveReviewGateContext(BacklogStatus(itemCopy.Status), BacklogStatusReview)
+			if !ok {
+				gateContext = builtInReviewGateContext
+			}
+			l.spawnReviewGate(gateContext, itemCopy, isCopy)
+		}(&itemData, isCopy)
+	}
+}
+
 // ReconcileStuck calls GatedReconcileStuck and logs the result.
 // Intended to be called on a periodic ticker as a safety net for abnormal session exits.
 // No-op when the listener is disabled.
@@ -1342,44 +1402,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// Scoped to this block only (not an early return) — PR-pending polling and staleness
 	// detection below must still run even when no review mechanism is configured.
 	if l.getSessionCreator() != nil {
-		items, gateErr := er.FindReviewItemsWithoutGate(ctx)
-		if gateErr != nil {
-			log.Error("[BacklogLifecycle] FindReviewItemsWithoutGate error", "error", gateErr)
-		} else {
-			for _, item := range items {
-				var workSession *ItemSessionSummary
-				if len(item.Edges.ItemSessions) > 0 {
-					s := itemSessionToSummary(item.Edges.ItemSessions[0])
-					workSession = &s
-				}
-				if workSession == nil {
-					log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
-					continue
-				}
-				log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
-				itemData := backlogItemToData(item)
-				isCopy := *workSession
-				go func(itemCopy *BacklogItemData, isCopy ItemSessionSummary) {
-					select {
-					case l.reviewSem <- struct{}{}:
-					case <-l.shutdownCtx.Done():
-						return
-					}
-					defer func() { <-l.reviewSem }()
-					// itemCopy.Status is already "review" here (FindReviewItemsWithoutGate's
-					// query scope), so resolveReviewGateContext's to==BacklogStatusReview
-					// branch always applies — this always resolves to
-					// builtInReviewGateContext, routed through the same resolver as
-					// onSessionExited for a single source of truth rather than a second
-					// hardcoded reference to that variable.
-					gateContext, ok := l.resolveReviewGateContext(BacklogStatus(itemCopy.Status), BacklogStatusReview)
-					if !ok {
-						gateContext = builtInReviewGateContext
-					}
-					l.spawnReviewGate(gateContext, itemCopy, isCopy)
-				}(&itemData, isCopy)
-			}
-		}
+		l.respawnReviewGatesWithoutGate(ctx, er)
 	}
 
 	// Self-heal pr_pending items whose pr_number is missing (0) despite having a
@@ -1394,6 +1417,12 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// Durable stuck-reason detectors, each panic-isolated (Story 2.1.5e) so one
 	// detector's panic cannot skip the others or merge detection below.
 	var okNames, panickedNames []string
+
+	// Re-drive recorded transition denials first, so an approved gate releases
+	// its item before the spawn-point guards below look at it (Story 1.5.8).
+	l.runStuckDetector("transition_denied_redrive", &okNames, &panickedNames, func() {
+		l.storage.RedriveTransitionDenials(ctx)
+	})
 
 	// Re-read each live work session's actual HEAD into its ItemSession row, so
 	// LastCommitSha means "the session's latest commit" rather than the value it
@@ -2295,6 +2324,8 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			// Commit-landed resolution is reconcileRepeatedNoopDispatch's
 			// else-branch (same-status, invisible to this sweep).
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonTransitionDenied:
+			resolve = !transitionDenialAnchored(row)
 		default:
 			// push_failed, rework_cap, multiple_reasons, and any future
 			// reason with no non-terminal anchor: stays open until the

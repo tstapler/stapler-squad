@@ -522,6 +522,10 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		if len(item.Edges.ItemSessions) == 0 {
 			continue
 		}
+		itemData := backlogItemToData(item)
+		if l.heldByTransitionDenial(ctx, &itemData, "unprocessed_review_verdict") {
+			continue // reprocessing the verdict would reopen or ship the item under the open denial
+		}
 		latest := item.Edges.ItemSessions[0] // most recent review-role session (query orders desc)
 
 		dead := latest.EndedAt != nil
