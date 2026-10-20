@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -569,4 +570,247 @@ func TestDebugForce_WritesAnyStatusUnchecked_AndCountsBypass(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, archived.ArchivedAt, "archive goes through the archive writer")
 	require.Equal(t, before+2, EngineBypassCount(CallerDebug))
+}
+
+// --- GatedArchive, GatedUnarchive, GatedSetPRAndTransition -------------------
+
+func TestGatedArchive_ArchivesFromAnyStatus_AndBeforeCommitRunsFirst(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, mode := range []EngineMode{ModeOff, ModeShadow, ModeEnforce} {
+		h := newGateHarness(t, mode)
+		item := h.newItem(t, BacklogStatusInProgress)
+		var statusInHook string
+		got, err := h.storage.GatedArchive(ctx, TransitionRequest{
+			Caller: CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser,
+			Precondition: &BacklogItemPrecondition{Note: "operator archived"},
+			BeforeCommit: func(context.Context) error { statusInHook = h.status(t, item.ID); return nil },
+		})
+		require.NoError(t, err, "mode %d", mode)
+		require.Equal(t, string(BacklogStatusInProgress), statusInHook, "the hook runs before the write")
+		require.Equal(t, string(BacklogStatusArchived), got.Status)
+		require.NotNil(t, got.ArchivedAt)
+		ev := lastEvent(t, h, item.ID)
+		require.Equal(t, string(BacklogStatusInProgress), ev.FromStatus)
+		require.NotNil(t, ev.Note)
+		require.Equal(t, "operator archived", *ev.Note)
+	}
+}
+
+func TestGatedArchive_AlreadyArchived_DecidesOnSystemRequiredEdgeAndRewrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, mode := range []EngineMode{ModeOff, ModeShadow, ModeEnforce} {
+		h := newGateHarness(t, mode)
+		item := h.newItem(t, BacklogStatusReady)
+		_, err := h.storage.GatedArchive(ctx, TransitionRequest{Caller: CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser})
+		require.NoError(t, err)
+
+		again, err := h.storage.GatedArchive(ctx, TransitionRequest{Caller: CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser})
+		require.NoError(t, err, "re-archive is allowed in mode %d", mode)
+		require.Equal(t, string(BacklogStatusArchived), again.Status)
+		require.Equal(t, string(BacklogStatusArchived), lastEvent(t, h, item.ID).FromStatus, "the second write is archived->archived")
+	}
+}
+
+func TestGatedArchive_BeforeCommitErrorAbortsAndWrongTargetIsRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	item := h.newItem(t, BacklogStatusReady)
+	boom := errors.New("push failed")
+	_, err := h.storage.GatedArchive(ctx, TransitionRequest{
+		Caller: CallerOperatorArchiveRPC, ItemID: item.ID,
+		BeforeCommit: func(context.Context) error { return boom },
+	})
+	require.ErrorIs(t, err, boom)
+	require.Equal(t, string(BacklogStatusReady), h.status(t, item.ID), "an aborted archive writes nothing")
+
+	_, err = h.storage.GatedArchive(ctx, TransitionRequest{Caller: CallerOperatorArchiveRPC, ItemID: item.ID, To: BacklogStatusDone})
+	require.ErrorIs(t, err, ErrInvalidTransitionRequest)
+}
+
+func TestGatedUnarchive_RestoresToIdea_AndRejectsRequestsTheRawWriterCannotHonor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	item := h.newItem(t, BacklogStatusReady)
+	_, err := h.storage.GatedArchive(ctx, TransitionRequest{Caller: CallerOperatorArchiveRPC, ItemID: item.ID})
+	require.NoError(t, err)
+
+	at := time.Now()
+	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID, Precondition: &BacklogItemPrecondition{ExpectedUpdatedAt: &at}})
+	require.ErrorIs(t, err, ErrInvalidTransitionRequest)
+	require.Equal(t, string(BacklogStatusArchived), h.status(t, item.ID))
+
+	got, err := h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID})
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusIdea), got.Status)
+	require.Nil(t, got.ArchivedAt)
+}
+
+func TestGatedSetPRAndTransition_RecordsPRInOneWrite_IsIdempotent_AndGuardsReassignment(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	item := h.newItem(t, BacklogStatusReview)
+	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	pr := PRAssociation{URL: "https://example.test/o/r/pull/7", Number: 7, Summary: "opened"}
+	req := TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: observed}
+	require.NoError(t, h.storage.GatedSetPRAndTransition(ctx, req, pr))
+
+	got, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusPRPending), got.Status)
+	require.Equal(t, 7, got.PrNumber)
+	require.Equal(t, pr.URL, got.PrURL)
+
+	// A retry of the same PR is a no-op success.
+	require.NoError(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: got}, pr))
+
+	// Reassigning to another PR is a field write that still needs the guard.
+	other := PRAssociation{URL: "https://example.test/o/r/pull/8", Number: 8, Summary: "moved"}
+	err = h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: got}, other)
+	require.ErrorIs(t, err, ErrPRReassignmentNotAllowed)
+	other.Guard = &PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
+	require.NoError(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: got}, other))
+	got, err = h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, 8, got.PrNumber)
+}
+
+func TestGatedSetPRAndTransition_DeniedByOperatorGate_WritesNothingAndReportsAgentCaller(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusReview, BacklogStatusPRPending, GateKindHumanApproval, nil)
+	item := h.newItem(t, BacklogStatusReview)
+	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	err = h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: observed},
+		PRAssociation{URL: "https://example.test/o/r/pull/9", Number: 9, Summary: "opened"})
+	require.ErrorIs(t, err, ErrGateNotSatisfied)
+
+	got, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReview), got.Status)
+	require.Zero(t, got.PrNumber, "the PR fields are not written on a denial")
+	calls := h.rep.snapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, CallerMCPReportPRCreated, calls[0].caller)
+	require.Equal(t, DeniedOperatorGate, calls[0].reason)
+}
+
+func TestGatedSetPRAndTransition_RejectsMissingObservedAndPrecondition(t *testing.T) {
+	t.Parallel()
+	h := newGateHarness(t, ModeEnforce)
+	ctx := context.Background()
+	item := h.newItem(t, BacklogStatusReview)
+	pr := PRAssociation{URL: "u", Number: 1}
+	require.ErrorIs(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, ItemID: item.ID}, pr), ErrInvalidTransitionRequest)
+	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.ErrorIs(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: observed, Precondition: &BacklogItemPrecondition{}}, pr), ErrInvalidTransitionRequest)
+}
+
+// --- GatedReconcileStuck -----------------------------------------------------
+
+// countingPublisher records ChangeStatusTransition publishes per item.
+type countingPublisher struct {
+	mu          sync.Mutex
+	transitions map[string][]BacklogItemChange
+}
+
+func (p *countingPublisher) PublishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+	if change.Kind != ChangeStatusTransition {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.transitions == nil {
+		p.transitions = map[string][]BacklogItemChange{}
+	}
+	p.transitions[item.ID] = append(p.transitions[item.ID], change)
+}
+
+func (p *countingPublisher) forItem(id string) []BacklogItemChange {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]BacklogItemChange(nil), p.transitions[id]...)
+}
+
+// newStuckInProgressItem is an in_progress item whose only work session ended.
+func (h *gateHarness) newStuckInProgressItem(t *testing.T) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+	item, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "stuck item", Status: string(BacklogStatusInProgress), Notes: "existing notes"})
+	require.NoError(t, err)
+	is, err := h.storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+	require.NoError(t, h.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now().Add(-time.Minute)))
+	return item
+}
+
+func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+	pub := &countingPublisher{}
+	h.storage.SetItemChangePublisher(pub)
+
+	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusInProgress, BacklogStatusReview, GateKindHumanApproval, nil)
+	approved := h.newStuckInProgressItem(t)
+	gated := h.newStuckInProgressItem(t)
+
+	edge, ok := h.cfg.cache.Get(BacklogStatusInProgress, BacklogStatusReview)
+	require.True(t, ok)
+	require.Len(t, edge.Gates, 1)
+	_, err := RecordGateApproval(ctx, NewEntGateSatisfactionRepository(h.repo.client), uuid.MustParse(approved.ID), edge.Gates[0].ID, "operator", true)
+	require.NoError(t, err)
+
+	moved, err := h.storage.GatedReconcileStuck(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, moved, "only the item whose gate is satisfied moves")
+
+	got, err := h.storage.GetBacklogItem(ctx, approved.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReview), got.Status)
+	require.Equal(t, "existing notes\n[auto] Transitioned to review: all work sessions ended.", got.Notes)
+	ev := lastEvent(t, h, approved.ID)
+	require.Equal(t, TriggeredBySystem, ev.TriggeredBy)
+	require.Equal(t, string(BacklogStatusInProgress), ev.FromStatus)
+	require.Equal(t, string(BacklogStatusReview), ev.ToStatus)
+	require.Len(t, got.StatusEvents, 1, "one status event for the moved item")
+	require.Equal(t, []BacklogItemChange{{Kind: ChangeStatusTransition, OldStatus: string(BacklogStatusInProgress), NewStatus: string(BacklogStatusReview)}}, pub.forItem(approved.ID),
+		"exactly one ChangeStatusTransition publish")
+
+	require.Equal(t, string(BacklogStatusInProgress), h.status(t, gated.ID), "the gated item is not moved")
+	require.Empty(t, pub.forItem(gated.ID))
+	calls := h.rep.snapshot()
+	require.Len(t, calls, 1, "the denial reaches the reporter, which owns the transition_denied stuck row")
+	require.Equal(t, gated.ID, calls[0].itemID)
+	require.Equal(t, CallerReconcileStuck, calls[0].caller)
+	require.Equal(t, DeniedOperatorGate, calls[0].reason)
+}
+
+func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenIdle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newGateHarness(t, ModeEnforce)
+
+	moved, err := h.storage.GatedReconcileStuck(ctx)
+	require.NoError(t, err)
+	require.Zero(t, moved)
+
+	item, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "running", Status: string(BacklogStatusInProgress)})
+	require.NoError(t, err)
+	_, err = h.storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+	moved, err = h.storage.GatedReconcileStuck(ctx)
+	require.NoError(t, err)
+	require.Zero(t, moved)
+	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
 }
