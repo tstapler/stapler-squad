@@ -372,7 +372,8 @@ export const dropZoneOverlay = style({
 });
 
 export const dropZoneLabel = style({
-  color: "#fff",
+  // White on the fixed dark scrim above, in every theme (textInverse flips to dark in dark themes).
+  color: "rgb(255, 255, 255)",
   fontSize: "1rem",
   fontWeight: 600,
   padding: "8px 16px",
