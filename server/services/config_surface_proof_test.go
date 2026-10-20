@@ -203,6 +203,9 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_BacklogFlag_ChangesBacklogRPCAnswer",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:backlog:conversation-view": {
+		exempt: "client-only: no Go reader; the web client gates the session monitor's conversation view on it (web-app/src/components/backlog/SessionMonitor.tsx:32, pinned by SessionMonitor_should_notCallConversationRpcOrShowHistory_When_conversationViewFlagOff in web-app/src/components/backlog/__tests__/SessionMonitor.test.tsx), and the server only persists and echoes the value through GetFeatureFlags",
+	},
 	"flag:backlog:completion-reviewer": {
 		testName:   "TestConfigSurfaceProof_CompletionReviewer_ChangesSubscriberGate",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -347,8 +350,8 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
-// edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 1
+// edit here. It reached 0 at Story 5.1.3 and must stay there.
+const pendingCeiling = 0
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -357,17 +360,7 @@ const pendingCeiling = 1
 var pendingSurfaces = buildPendingSurfaces()
 
 func buildPendingSurfaces() map[surfaceID]pendingSurface {
-	p := map[surfaceID]pendingSurface{}
-	add := func(story string, planned bool, ids ...surfaceID) {
-		for _, id := range ids {
-			p[id] = pendingSurface{story: story, planned: planned}
-		}
-	}
-	// `backlog:conversation-view` is registered but nothing reads it; kept
-	// pending until the owner decides to wire or remove it.
-	add("5.1.3", false,
-		"flag:backlog:conversation-view")
-	return p
+	return map[surfaceID]pendingSurface{}
 }
 
 func TestConfigSurfaceProofs_EveryRegisteredSurfaceHasEntry_WhenFieldsEnumerated(t *testing.T) {
