@@ -192,3 +192,14 @@ func TestTransitionCallers_ExemptSitesAreTheThreeRollbacksAndTwoDebugWrites(t *t
 	}
 	require.Equal(t, map[ExemptKind]int{ExemptRollback: 3, ExemptDebug: 2}, counts)
 }
+
+// The strict bypass inventory (server/services, Story 1.5.9a) accepts the
+// re-drive writer's computed Caller because it can only be one of these.
+func TestRedriveByWrite_OnlyNamesRegisteredSystemCallers(t *testing.T) {
+	require.NotEmpty(t, redriveByWrite)
+	for caller := range redriveByWrite {
+		spec, ok := LookupTransitionCaller(caller)
+		require.True(t, ok, "%s is not registered", caller)
+		require.Equal(t, ClassSystem, spec.Class, caller)
+	}
+}
