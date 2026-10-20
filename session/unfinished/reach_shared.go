@@ -40,6 +40,9 @@ func (g *GoGitVCSReader) reachMembership(ctx context.Context, entry *cachedRepo,
 			if err == nil {
 				return b, nil
 			}
+			if cerr := ctx.Err(); cerr != nil { // the legacy walk is uncancellable
+				return nil, cerr
+			}
 			if !errors.Is(err, repostate.ErrFallback) {
 				return nil, err
 			}
@@ -79,14 +82,30 @@ func (g *GoGitVCSReader) commitMessagesShared(ctx context.Context, entry *cached
 	defer src.done()
 	reach, err := rs.Reach(ctx, src, ord, repostate.ReachKey{Repo: repo, Base: base, Cap: maxReachableSetCommits})
 	if err != nil {
-		return nil, !errors.Is(err, repostate.ErrFallback), err
+		return nil, sharedHandled(ctx, err), sharedErr(ctx, err)
 	}
 	in := repostate.MessageInputs{Src: src, Ord: ord, Reach: reach, Line: commitFirstLine(entry)}
 	msgs, err = rs.CommitMessages(ctx, in, repostate.MessageKey{Repo: repo, Head: head, Base: base, Max: max, Cap: maxReachableSetCommits})
 	if err != nil {
-		return nil, !errors.Is(err, repostate.ErrFallback), err
+		return nil, sharedHandled(ctx, err), sharedErr(ctx, err)
 	}
 	return msgs, true, nil
+}
+
+// sharedHandled reports whether the shared path owns err: every non-fallback
+// error, and a fallback once ctx ended (the legacy rerun is uncancellable).
+func sharedHandled(ctx context.Context, err error) bool {
+	return !errors.Is(err, repostate.ErrFallback) || ctx.Err() != nil
+}
+
+// sharedErr is err, or ctx's error when a fallback raced with cancellation.
+func sharedErr(ctx context.Context, err error) error {
+	if errors.Is(err, repostate.ErrFallback) {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+	}
+	return err
 }
 
 // commitFirstLine reads a commit's first message line straight from the storer,

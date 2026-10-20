@@ -100,6 +100,9 @@ func (g *GoGitVCSReader) aheadBehindShared(ctx context.Context, entry *cachedRep
 	defer src.done()
 	ahead, behind, err := aheadBehindOnShared(ctx, rs, entry, src, ord, head, baseHash)
 	if errors.Is(err, repostate.ErrFallback) {
+		if cerr := ctx.Err(); cerr != nil { // the legacy walk is uncancellable
+			return 0, 0, cerr
+		}
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
 		return g.aheadBehindPlain(entry, key, head, baseHash)
