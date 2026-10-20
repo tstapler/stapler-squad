@@ -1749,6 +1749,21 @@ func (r *EntRepository) rawTransitionBacklogItemStatus(ctx context.Context, id s
 	return r.rawTransitionBacklogItemStatusWithNote(ctx, id, toStatus, precondition, triggeredBy, "")
 }
 
+// applyStatusPreconditionWhere folds a precondition's expected status and
+// updated_at into the UPDATE's WHERE clause.
+func applyStatusPreconditionWhere(update *ent.BacklogItemUpdate, precondition *BacklogItemPrecondition) *ent.BacklogItemUpdate {
+	if precondition == nil {
+		return update
+	}
+	if precondition.ExpectedStatus != "" {
+		update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
+	}
+	if precondition.ExpectedUpdatedAt != nil {
+		update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+	}
+	return update
+}
+
 // rawTransitionBacklogItemStatusWithNote is rawTransitionBacklogItemStatus that
 // also appends appendNote (when non-empty) to the item's Notes in the same
 // UPDATE, so the status, the note and the status event commit together.
@@ -1767,14 +1782,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 	}
 
 	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
-	if precondition != nil {
-		if precondition.ExpectedStatus != "" {
-			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
-		}
-		if precondition.ExpectedUpdatedAt != nil {
-			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
-		}
-	}
+	update = applyStatusPreconditionWhere(update, precondition)
 	// The note is appended to the Notes read above; pin updated_at so a
 	// concurrent note edit makes the write lose (callers retry on
 	// ErrPreconditionFailed) instead of being overwritten.
