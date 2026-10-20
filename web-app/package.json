@@ -19,7 +19,7 @@
     "lint:css": "stylelint 'src/**/*.css' --allow-empty-input",
     "lint:css-vars": "node scripts/check-css-vars.mjs",
     "test": "jest",
-    "test:codemods": "node --test scripts/__tests__/",
+    "test:codemods": "node --test \"scripts/__tests__/*.test.mjs\"",
     "test:watch": "jest --watch",
     "test:affected": "jest --changedSince=${BASE:-origin/main}",
     "test:e2e": "playwright test",
