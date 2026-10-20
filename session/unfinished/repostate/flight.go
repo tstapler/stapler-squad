@@ -60,7 +60,10 @@ func FlightCtx[T any](ctx context.Context, sf *singleflight.Group, key string, j
 		}
 		ledHere := state.Load() == flightRunning
 		if res.Err != nil {
-			if !ledHere && ctx.Err() == nil && isContextErr(res.Err) {
+			if !ledHere && isContextErr(res.Err) {
+				if cerr := ctx.Err(); cerr != nil {
+					return zero, false, cerr // not the leader's error, even when both were cancelled
+				}
 				continue
 			}
 			return zero, ledHere, res.Err
