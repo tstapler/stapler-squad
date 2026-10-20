@@ -11,7 +11,7 @@ const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 const ROUTES = [
   '/', '/account', '/backlog', '/backlog/board', '/config', '/errors', '/files', '/help',
   '/history', '/insights', '/logs', '/notifications', '/review-queue', '/rules',
-  '/settings', '/settings/backlog-sources', '/settings/backlog-stages', '/settings/defaults',
+  '/settings', '/settings/backlog-quota', '/settings/backlog-sources', '/settings/backlog-stages', '/settings/defaults',
   '/settings/features', '/settings/jules', '/settings/pipeline-modes', '/settings/remotes',
   '/settings/tagging-classifier', '/settings/unfinished', '/triggers', '/unfinished',
   '/workflows', '/sessions/new', '/sessions/import',
