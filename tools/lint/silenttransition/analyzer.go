@@ -69,9 +69,9 @@ var Analyzer = &analysis.Analyzer{
 // (or the session-bookkeeping a reconciliation sweep depends on) in sync with
 // side effects that have already happened.
 //
-// The pre-1.5.4 names stay until Task 1.5.9a removes the last caller.
+// The pre-1.5.4 unprefixed names are gone: no Storage method carries them, and
+// the inventory test (Story 1.5.9a) fails on any call to one.
 var targetMethods = map[string]bool{
-	"TransitionBacklogItemStatus":      true,
 	"UpdateItemSessionEnded":           true,
 	"RawTransitionBacklogItemStatus":   true,
 	"RawArchiveBacklogItem":            true,
