@@ -287,6 +287,9 @@ type Storage struct {
 	foreignClaims atomic.Pointer[ForeignClaimLookup]
 	// provenance builds the PR provenance comment; nil means no stamping.
 	provenance atomic.Pointer[PRProvenanceSource]
+	// gate is the engine and denial reporter GatedTransition decides with; nil
+	// means unwired and every caller gets the legacy (Off) answer.
+	gate atomic.Pointer[transitionGate]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
