@@ -746,6 +746,13 @@ describe("FeaturesPage — workflow engine rows", () => {
     expect(screen.getByTestId("workflow-engine-summary")).not.toHaveAttribute("role");
   });
 
+  it("does not claim enforcement the engine has not confirmed, and says so", async () => {
+    mockGetEngineStatus.mockResolvedValue(engineStatus(SHADOW_MODES));
+    mountPage(engineFlags({ op: true, agent: true, system: true }));
+    await waitFor(() => expect(screen.getByTestId("workflow-engine-summary")).toHaveTextContent("On, not yet confirmed by the engine"));
+    expect(screen.getByTestId("workflow-engine-summary").textContent).not.toMatch(/All 3 caller classes enforced/);
+  });
+
   it("says the mode is unavailable, not Off, when the status cannot be read", async () => {
     mockGetEngineStatus.mockRejectedValue(new Error("down"));
     mountPage(engineFlags());

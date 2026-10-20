@@ -10,6 +10,7 @@ import { routes } from "@/lib/routes";
 import {
   CALLER_CLASSES,
   FALLBACK_NOTE,
+  lastCheckedAgo,
   reviewLine,
   type CallerClass,
   type ClassMode,
@@ -150,7 +151,7 @@ export function isEngineModeFlag(flagName: string): boolean {
   return flagName === ENGINE_SHADOW_FLAG || isEngineEnforceFlag(flagName);
 }
 
-/** Per-class mode: the live flag decides "enforce"; the status only says shadow or off. */
+/** Per-class mode: "enforce" only when the flag is on AND the engine reports enforce; a flag the engine has not picked up yet falls back to the reported mode. */
 export function classModesFromFlags(view: EngineModeView, flagList: FeatureFlagMeta[]): Record<CallerClass, ClassMode> {
   const shadowOn = flagList.find((f) => f.name === ENGINE_SHADOW_FLAG)?.enabled ?? false;
   const modes = {} as Record<CallerClass, ClassMode>;
@@ -158,7 +159,7 @@ export function classModesFromFlags(view: EngineModeView, flagList: FeatureFlagM
     const flag = flagList.find((f) => f.name === ENGINE_ENFORCE_FLAGS[cls]);
     const reported = view.classes[cls];
     if (!flag) modes[cls] = "unknown";
-    else if (flag.enabled) modes[cls] = "enforce";
+    else if (flag.enabled && reported === "enforce") modes[cls] = "enforce";
     else modes[cls] = reported === "shadow" || reported === "off" ? reported : shadowOn ? "shadow" : "off";
   }
   return modes;
@@ -176,8 +177,26 @@ function partialClauses(modes: Record<CallerClass, ClassMode>): string {
   return [...byMode.entries()].map(([m, cs]) => `${namesOf(cs)} still ${m === "off" ? "off" : "in shadow"}`).join("; ");
 }
 
+function unconfirmedClasses(modes: Record<CallerClass, ClassMode>, flagList: FeatureFlagMeta[]): CallerClass[] {
+  return CALLER_CLASSES.filter((c) => modes[c] !== "enforce" && flagList.find((f) => f.name === ENGINE_ENFORCE_FLAGS[c])?.enabled);
+}
+
 /** Count and plain-words state of the three enforce flags; the wording matches the Stages banner (UX-39). */
 export function workflowEngineSummary(view: EngineModeView, flagList: FeatureFlagMeta[]): string {
+  const base = engineSummaryBase(view, flagList);
+  if (view.kind === "loading") return base;
+  const unconfirmed = unconfirmedClasses(classModesFromFlags(view, flagList), flagList);
+  const ago = lastCheckedAgo(view);
+  return [
+    base,
+    unconfirmed.length > 0 && `On, not yet confirmed by the engine: ${namesOf(unconfirmed)}.`,
+    ago && `Last checked ${ago}; couldn't refresh.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function engineSummaryBase(view: EngineModeView, flagList: FeatureFlagMeta[]): string {
   if (view.kind === "loading") return "Checking the engine status...";
   const modes = classModesFromFlags(view, flagList);
   if (view.kind === "unknown" || CALLER_CLASSES.some((c) => modes[c] === "unknown")) {

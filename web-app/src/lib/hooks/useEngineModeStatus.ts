@@ -244,7 +244,7 @@ export function bannerSentence(v: EngineModeView): string {
   }
 }
 
-function lastCheckedAgo(v: EngineModeView): string | null {
+export function lastCheckedAgo(v: EngineModeView): string | null {
   if (!v.stale || v.lastCheckedAt === null) return null;
   return formatRelativeTime(v.lastCheckedAt).toLowerCase();
 }
