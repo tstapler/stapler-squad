@@ -111,6 +111,11 @@ workflow-engine-soak-status: ## Print the workflow engine shadow-soak verdict pe
 	done; \
 	exit $$rc
 
+.PHONY: workflow-engine-replay
+workflow-engine-replay: ## Replay the caller registry against a COPY of the database: make workflow-engine-replay DB=<copy> (made with sqlite3 <live> ".backup <copy>"; a path inside ~/.stapler-squad is refused; exit 1 = a fixed agent/system edge is denied with no gate)
+	@test -n "$(DB)" || { echo "usage: make workflow-engine-replay DB=<path to a COPY of the database>" >&2; exit 2; }
+	@WORKFLOW_ENGINE_REPLAY_DB="$(DB)" go test ./session -run '^TestWorkflowEngineReplayCommand$$' -count=1 -v
+
 .PHONY: verify-manual-instance
 verify-manual-instance: ## Guarded manual instance for slot N (make verify-manual-instance N=1 [CHECK=1 for a dry run that starts nothing])
 	@test -n "$(N)" || (echo "usage: make verify-manual-instance N=<1-5> [CHECK=1]" && exit 2)
