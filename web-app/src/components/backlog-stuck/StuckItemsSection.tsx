@@ -96,6 +96,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
     bulkResetParkedRemediation,
     triggerRemediationNow,
     overrideClaimBlock,
+    refreshAutoMerge,
   } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan, getBacklogItem } =
     useBacklogService();
@@ -416,6 +417,7 @@ export function StuckItemsSection({ focusItemId }: StuckItemsSectionProps = {}) 
                       onOverrideClaimBlock={overrideClaimBlock}
                       onApprovePlan={handleApprovePlan}
                       onDiagnose={handleDiagnose}
+                      onRefreshAutoMerge={refreshAutoMerge}
                       focusItemId={focusItemId}
                     />
                   );

@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { AutoMergeLookupStatus, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 const mockUseStuckBacklogItems = jest.fn();
 const mockGetBacklogItem = jest.fn();
@@ -702,6 +702,31 @@ describe("StuckItemsSection", () => {
       rerender(<StuckItemsSection focusItemId="target-item" />);
 
       expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+    });
+  });
+
+  describe("auto-merge Retry wiring", () => {
+    it("renders Retry on a failed lookup, calls refreshAutoMerge with the item ID, and keeps focus on repeat failure", async () => {
+      const failed = makeItem({
+        autoMergeLookupStatus: AutoMergeLookupStatus.RATE_LIMITED,
+        autoMergeCheckedAt: timestampFromDate(new Date()),
+      });
+      const refreshAutoMerge = jest.fn().mockResolvedValue(failed);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [failed], refreshAutoMerge })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId("stuck-item"));
+
+      const btn = screen.getByTestId("stuck-item-auto-merge-retry");
+      btn.focus();
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+
+      expect(refreshAutoMerge).toHaveBeenCalledWith(failed.itemId);
+      expect(screen.getByTestId("stuck-item-auto-merge-retry")).toBe(btn);
+      expect(btn).toHaveFocus();
     });
   });
 });

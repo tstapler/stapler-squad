@@ -92,6 +92,9 @@ interface StuckItemProps {
    * control. Rejects on failure so the form can show the message.
    */
   onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
+  /** Re-checks repo auto-merge bypassing the cache; passed through to StuckItemDetail. */
+  // eslint-disable-next-line no-restricted-syntax -- see onApprovePlan's identical disable above
+  onRefreshAutoMerge?: (itemId: string) => Promise<StuckBacklogItem | undefined>;
   /**
    * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem) —
    * when it matches this card's item.itemId, scrolls the card into view. Expansion
@@ -160,6 +163,7 @@ export function StuckItem({
   onApprovePlan,
   onOverrideClaimBlock,
   onDiagnose,
+  onRefreshAutoMerge,
   focusItemId,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -428,6 +432,7 @@ export function StuckItem({
           reworkCapOverrideLoaded={reworkCapOverrideLoaded}
           onApprovePlan={onApprovePlan}
           onDiagnose={onDiagnose}
+          onRefreshAutoMerge={onRefreshAutoMerge}
         />
       )}
     </div>
