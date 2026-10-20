@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import Fuse from "fuse.js";
 import {
   detect,

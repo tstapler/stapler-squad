@@ -38,6 +38,7 @@ let mockSearchParams = new URLSearchParams();
 const mockReplace = jest.fn();
 
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useRouter: () => ({ push: jest.fn(), replace: mockReplace, back: jest.fn(), forward: jest.fn() }),
   usePathname: () => "/",
   useSearchParams: () => mockSearchParams,
@@ -1073,7 +1074,7 @@ describe("ReviewQueuePanel — exclude filters", () => {
 
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining(`priorityExclude=${Priority.URGENT}`),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     mockSearchParams = new URLSearchParams({ priorityExclude: String(Priority.URGENT) });
@@ -1129,7 +1130,7 @@ describe("ReviewQueuePanel — exclude filters", () => {
 
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining(`reasonExclude=${AttentionReason.ERROR_STATE}`),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     mockSearchParams = new URLSearchParams({ reasonExclude: String(AttentionReason.ERROR_STATE) });
@@ -1200,7 +1201,7 @@ describe("ReviewQueuePanel — exclude filters", () => {
 
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining("severityExclude=critical"),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     mockSearchParams = new URLSearchParams({ severityExclude: "critical" });
@@ -1256,7 +1257,7 @@ describe("ReviewQueuePanel — exclude filters", () => {
 
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining("tagExclude=backend"),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     mockSearchParams = new URLSearchParams({ tagExclude: "backend" });
@@ -1523,31 +1524,31 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
     fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining(`priority=${Priority.URGENT}`),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     fireEvent.click(screen.getByRole("button", { name: "bugfix (1)" }));
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining("category=bugfix"),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     fireEvent.click(screen.getByRole("button", { name: "backend (1)" }));
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining("tag=backend"),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "name" } });
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining("sort=name"),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
 
     fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining("group=program"),
-      expect.objectContaining({ scroll: false })
+      expect.objectContaining({ resetScroll: false })
     );
   });
 

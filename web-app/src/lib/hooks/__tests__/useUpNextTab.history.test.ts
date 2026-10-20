@@ -3,7 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useSearchParams } from "@/lib/nav";
 import { useUpNextTab } from "../useUpNextTab";
 
-jest.mock("@/lib/nav", () => ({ useSearchParams: jest.fn() }));
+jest.mock("@/lib/nav", () => ({ ...jest.requireActual("@/lib/nav/impl.memory"), useSearchParams: jest.fn() }));
 
 describe("useUpNextTab raw History use", () => {
   it("passes the existing history.state and the new ?tab= to replaceState", () => {

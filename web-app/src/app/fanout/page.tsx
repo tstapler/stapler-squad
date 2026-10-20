@@ -2,7 +2,7 @@
 // +feature: parallel-fanout
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "@/components/sessions/DiffViewer";

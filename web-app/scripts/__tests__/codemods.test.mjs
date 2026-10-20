@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { run as runProd } from "../codemods/next-nav-to-facade.mjs";
 import { run } from "../codemods/next-nav-to-facade-tests.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +41,29 @@ describe("next-nav-to-facade-tests", () => {
   it("leaves next/dynamic mocks alone", () => {
     const name = "untouched-dynamic.test.tsx";
     assert.equal(readFileSync(path.join(work, name), "utf8"), readFileSync(path.join(fixtures, "in", name), "utf8"));
+  });
+});
+
+describe("next-nav-to-facade (production)", () => {
+  const prodFixtures = path.join(codemods, "__fixtures__/next-nav-prod");
+  const work = path.join(scratch, "prod-tree");
+  cpSync(path.join(prodFixtures, "in"), work, { recursive: true });
+  const first = runProd([work]);
+  const second = runProd([work]);
+
+  it("is live: it rewrites translatable imports and lists the rest for manual edit", () => {
+    assert.deepEqual(first.changed.map((f) => path.basename(f)), ["aliased-link.tsx", "both.tsx", "multiline-existing.ts", "no-semicolons.tsx"]);
+    assert.deepEqual(first.manual.map((l) => path.basename(l.split(":")[0])), ["redirect-manual.tsx"]);
+  });
+
+  it("produces the expected output: merged specifiers, aliases kept, existing facade import reused", () => {
+    for (const name of filesIn(path.join(prodFixtures, "expected"))) {
+      assert.equal(readFileSync(path.join(work, name), "utf8"), readFileSync(path.join(prodFixtures, "expected", name), "utf8"), name);
+    }
+  });
+
+  it("is idempotent apart from the untranslatable import it keeps reporting", () => {
+    assert.deepEqual(second.changed, []);
   });
 });
 

@@ -3,8 +3,7 @@
 // +feature: up-next-tabs
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { Link, useReplaceSearch, useSearchParams } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
@@ -44,6 +43,7 @@ export function UnfinishedTab() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [secondsAgo, setSecondsAgo] = useState(0);
   const searchParams = useSearchParams();
+  const replaceSearch = useReplaceSearch();
   const { tab, setTab } = useUpNextTab();
   // Lifted here so the tab badge and the PRs panel share one WatchUserPRs stream.
   const gitHubPRs = useGitHubPRs();
@@ -140,12 +140,11 @@ export function UnfinishedTab() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete("item");
     params.set("tab", "stuck");
-    // history.replaceState, like useUpNextTab.setTab: router.replace hard-reloads the static export,
-    // which would drop the focus moved below.
-    window.history.replaceState(window.history.state, "", `?${params.toString()}`);
+    // Not router.replace: that hard-reloads the static export, which would drop the focus moved below.
+    replaceSearch(`?${params.toString()}`);
     setDismissedItemId(urlItemId);
     document.querySelector<HTMLElement>('[data-testid="up-next-panel-stuck"] h2')?.focus();
-  }, [searchParams, urlItemId]);
+  }, [searchParams, urlItemId, replaceSearch]);
 
   const prsDescription = attention.degraded
     ? `At least ${attention.count} PRs need attention. ${DEGRADED_ATTENTION_TEXT} ${PR_TAB_DESCRIPTION}`

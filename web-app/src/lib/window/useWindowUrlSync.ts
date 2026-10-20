@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { getLastFocusedWindowId, setLastFocusedWindowId } from "./windowPersistence";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
@@ -64,7 +64,7 @@ export function useWindowUrlSync(
       params.delete(WINDOW_PARAM);
     }
     const query = params.toString();
-    router.replace(query ? `/?${query}` : "/", { scroll: false });
+    router.replace(query ? `/?${query}` : "/", { resetScroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams identity changes every render; comparing paramWindowId/currentWindowId values is sufficient to avoid redundant replace calls
   }, [paramWindowId, currentWindowId, isRestored]);
 
@@ -73,7 +73,7 @@ export function useWindowUrlSync(
       setLastFocusedWindowId(id);
       const params = new URLSearchParams(searchParams.toString());
       params.set(WINDOW_PARAM, id);
-      router.replace(`/?${params.toString()}`, { scroll: false });
+      router.replace(`/?${params.toString()}`, { resetScroll: false });
     },
     [router, searchParams]
   );

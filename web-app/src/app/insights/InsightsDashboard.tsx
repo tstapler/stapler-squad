@@ -3,7 +3,7 @@
 
 import { useState, useMemo, useCallback, Suspense } from "react";
 import { lazyComponent } from "@/lib/lazy";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
 import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
 import { useBudgetThreshold } from "@/lib/hooks/useBudgetThreshold";

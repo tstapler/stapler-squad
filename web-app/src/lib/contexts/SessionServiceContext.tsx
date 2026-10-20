@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import {
   CreateSessionRequest,

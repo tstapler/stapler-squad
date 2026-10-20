@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { pushTrayEntry } from "@/lib/nav";
 
 interface Options {
   /** The panel is open and presented as a page/sheet that owns a history entry. */
@@ -27,9 +28,7 @@ export function usePanelHistory({ active, onBack, replace = false }: Options): {
 
   useEffect(() => {
     if (!active) return;
-    const state = { ...(window.history.state ?? {}), ssqTray: true };
-    if (replace) window.history.replaceState(state, "");
-    else window.history.pushState(state, "");
+    pushTrayEntry(replace);
     ownsEntry.current = !replace;
     const onPopState = () => {
       ownsEntry.current = false;

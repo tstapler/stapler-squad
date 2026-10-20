@@ -1,4 +1,5 @@
 // Pure helpers for the `/?session=<id>&tab=terminal&notification=<id>` deep link (Story 5.3).
+import type { NavSearchParams } from "@/lib/nav";
 
 export interface SessionDeepLinkParams {
   sessionId: string | null;
@@ -7,7 +8,7 @@ export interface SessionDeepLinkParams {
   notificationId: string | null;
 }
 
-export function parseSessionDeepLink(params: URLSearchParams): SessionDeepLinkParams {
+export function parseSessionDeepLink(params: NavSearchParams): SessionDeepLinkParams {
   return {
     sessionId: params.get("session"),
     tab: params.get("tab"),

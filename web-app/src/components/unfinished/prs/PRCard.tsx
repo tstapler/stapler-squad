@@ -2,7 +2,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import {
   LinkedSessionStatus,
   type LinkedSession,

@@ -2,8 +2,7 @@
 // +feature: session-summary-standalone-route
 
 import { Suspense } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { Link, useSearchParams } from "@/lib/nav";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { SessionSummaryPanel } from "@/components/sessions/SessionSummaryPanel";
 import * as styles from "./page.css";
