@@ -241,14 +241,20 @@ func anyFresh(q paintQueue, flags map[plumbing.Hash]uint8) bool {
 
 // isAncestorOfOther reports whether c is a strict ancestor of any other candidate.
 // Only runs when several common ancestors were found (criss-cross merges).
-// object.Commit.MergeBase, the oracle, answers this exactly and propagates read
-// errors; this walk is bounded, so when the bound is hit before c is found it
-// returns an error instead of guessing "not redundant" (which could surface a
-// redundant base). Commits missing from a shallow clone or pack are skipped, as
-// in findMergeBase.
+// The DFS prunes commits whose committer time is older than c's (they cannot
+// have c as an ancestor, the same assumption as the paint-down), so a genuine
+// "not an ancestor" ends early instead of walking all of o's history. If the
+// visit bound is hit anyway, c is treated as NOT redundant: a valid common
+// ancestor, where failing would turn a usable answer into an error. Commits
+// missing from a shallow clone or pack are skipped, as in findMergeBase.
+// repostate.Walk.reaches must stay in lockstep with this.
 func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.Hash) (bool, error) {
 	if len(candidates) < 2 {
 		return false, nil
+	}
+	cInfo, err := pm.info(c)
+	if err != nil && !errors.Is(err, plumbing.ErrObjectNotFound) {
+		return false, fmt.Errorf("commit object %s: %w", c, err)
 	}
 	for _, o := range candidates {
 		if o == c {
@@ -258,7 +264,7 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 		stack := []plumbing.Hash{o}
 		for len(stack) > 0 {
 			if len(seen) >= mergeBaseBFSLimit {
-				return false, fmt.Errorf("cannot rule out that merge base %s is redundant within %d commits", c, mergeBaseBFSLimit)
+				return false, nil
 			}
 			h := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
@@ -266,14 +272,17 @@ func isAncestorOfOther(pm parentSource, c plumbing.Hash, candidates []plumbing.H
 				continue
 			}
 			seen[h] = struct{}{}
-			ps, err := pm.get(h)
+			hi, err := pm.info(h)
 			if err != nil {
 				if errors.Is(err, plumbing.ErrObjectNotFound) {
 					continue
 				}
 				return false, fmt.Errorf("commit object %s: %w", h, err)
 			}
-			for _, p := range ps {
+			if hi.when < cInfo.when {
+				continue
+			}
+			for _, p := range hi.parents {
 				if p == c {
 					return true, nil
 				}

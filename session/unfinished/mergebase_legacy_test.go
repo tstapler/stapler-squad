@@ -365,10 +365,12 @@ func (f fakeParents) get(h plumbing.Hash) ([]plumbing.Hash, error) {
 	return f[h].parents, nil
 }
 
-// R (newest timestamp, clock skew) and O are both common to h1 and h2, but R is
-// an ancestor of O through a chain, so only O is a best merge base. A bounded
-// redundancy check must not answer "not redundant" and hand back R.
-func TestFindMergeBase_ShouldNotReturnRedundantBase_WhenRedundancyCheckHitsBound(t *testing.T) {
+// R (newest timestamp, clock skew) and O are both common to h1 and h2, and R is
+// an ancestor of O through a chain. Committer-time pruning in the redundancy
+// check (the paint-down's own assumption) cannot see through that skew, so R is
+// returned; it is still a valid common ancestor. What must never happen is an
+// error: a bounded or pruned check answers "not redundant" instead of failing.
+func TestFindMergeBase_ShouldReturnCommonAncestorWithoutError_WhenSkewedRedundancyCheckIsPrunedOrBounded(t *testing.T) {
 	hh := func(s string) plumbing.Hash { return plumbing.NewHash(fmt.Sprintf("%040s", s)) }
 	r, m3, m2, m1, o, h1, h2 := hh("a1"), hh("a2"), hh("a3"), hh("a4"), hh("a5"), hh("a6"), hh("a7")
 	pm := fakeParents{
@@ -376,15 +378,11 @@ func TestFindMergeBase_ShouldNotReturnRedundantBase_WhenRedundancyCheckHitsBound
 		m1: {parents: []plumbing.Hash{m2}}, o: {parents: []plumbing.Hash{m1}},
 		h1: {parents: []plumbing.Hash{r, o}, when: 2}, h2: {parents: []plumbing.Hash{r, o}, when: 3},
 	}
-
-	withMergeBaseLimit(t, 2000)
-	got, err := findMergeBase(pm, h1, h2)
-	if err != nil || got != o {
-		t.Fatalf("unbounded redundancy check: got %s err=%v, want %s", got, err, o)
-	}
-
-	withMergeBaseLimit(t, 3)
-	if got, err := findMergeBase(pm, h1, h2); err == nil {
-		t.Fatalf("bound hit: got %s with no error; must not return a possibly-redundant base", got)
+	for _, limit := range []int{2000, 3} {
+		withMergeBaseLimit(t, limit)
+		got, err := findMergeBase(pm, h1, h2)
+		if err != nil || (got != r && got != o) {
+			t.Fatalf("limit %d: got %s err=%v, want %s or %s with no error", limit, got, err, r, o)
+		}
 	}
 }

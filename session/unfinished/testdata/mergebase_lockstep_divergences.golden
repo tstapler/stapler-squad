@@ -1,4 +1,4 @@
-# old committed walk (39fa33a11) vs lockstep; 1213 cases evaluated, 220 diverge
+# old committed walk (39fa33a11) vs lockstep; 1213 cases evaluated, 219 diverge
 cap-linear-limit4 head=15 base=11 | legacy: mb=none ahead=- behind=- | lockstep: mb=8 ahead=4 behind=3
 crisscross-rev head=6 base=5 | legacy: mb=1 ahead=4 behind=4 | lockstep: mb=2 ahead=4 behind=4
 general-seed9005-limit4 head=14 base=4 | legacy: mb=2 ahead=4 behind=3 | lockstep: mb=4 ahead=4 behind=0
@@ -53,7 +53,6 @@ general-seed9078-limit2000 head=4 base=9 | legacy: mb=0 ahead=3 behind=5 | locks
 general-seed9078-limit4 head=4 base=9 | legacy: mb=0 ahead=3 behind=4 | lockstep: mb=2 ahead=3 behind=4
 general-seed9082-limit4 head=0 base=6 | legacy: mb=none ahead=- behind=- | lockstep: mb=0 ahead=0 behind=4
 general-seed9084-limit4 head=1 base=16 | legacy: mb=none ahead=- behind=- | lockstep: mb=1 ahead=0 behind=4
-general-seed9085-limit4 head=17 base=12 | legacy: mb=7 ahead=4 behind=4 | lockstep: mb=err ahead=- behind=-
 general-seed9086-limit4 head=17 base=5 | legacy: mb=none ahead=- behind=- | lockstep: mb=3 ahead=4 behind=1
 general-seed9089-limit4 head=12 base=1 | legacy: mb=0 ahead=4 behind=1 | lockstep: mb=1 ahead=4 behind=0
 general-seed9090-limit2000 head=16 base=13 | legacy: mb=1 ahead=7 behind=7 | lockstep: mb=5 ahead=5 behind=4
@@ -89,7 +88,7 @@ general-seed9141-limit2000 head=5 base=6 | legacy: mb=0 ahead=4 behind=5 | locks
 general-seed9144-limit2000 head=9 base=12 | legacy: mb=3 ahead=9 behind=10 | lockstep: mb=9 ahead=0 behind=5
 general-seed9149-limit4 head=15 base=10 | legacy: mb=0 ahead=4 behind=3 | lockstep: mb=3 ahead=4 behind=2
 general-seed9151-limit2000 head=17 base=18 | legacy: mb=3 ahead=10 behind=11 | lockstep: mb=11 ahead=8 behind=9
-general-seed9151-limit4 head=17 base=18 | legacy: mb=none ahead=- behind=- | lockstep: mb=err ahead=- behind=-
+general-seed9151-limit4 head=17 base=18 | legacy: mb=none ahead=- behind=- | lockstep: mb=11 ahead=4 behind=4
 general-seed9152-limit2000 head=2 base=17 | legacy: mb=1 ahead=2 behind=12 | lockstep: mb=2 ahead=0 behind=12
 general-seed9152-limit4 head=2 base=17 | legacy: mb=1 ahead=2 behind=4 | lockstep: mb=none ahead=- behind=-
 general-seed9153-limit2000 head=2 base=7 | legacy: mb=0 ahead=2 behind=3 | lockstep: mb=2 ahead=0 behind=3
