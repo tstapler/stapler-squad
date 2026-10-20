@@ -1778,3 +1778,34 @@ Adds `github/repo_settings_cache.go` (a cached-only, non-fetching peek `RepoSett
 
 - Task 3.1.3c shipped: `Files:` extended (dispatcher) with `web-app/src/components/backlog-stuck/StuckItem.tsx` and `StuckItemsSection.test.tsx`. Forced refresh is a context flag (`WithRepoSettingsRefresh`/`IsRepoSettingsRefresh` in `github/repo_settings_cache.go`): it skips cache freshness, keeps ETag revalidation, singleflight (separate key), 2s timeout and the host breaker; a 5s per-repo guard (`repoSettingsForceMinInterval`) makes repeated Retry clicks reuse the last forced result; a failed forced refresh keeps the earlier OK value as Stale. `ListStuckBacklogItems` honors `refresh_auto_merge`; `useStuckBacklogItems` exposes `refreshAutoMerge(itemId)`.
 - Not covered: the Section-level Retry test does not make the mocked refresh fail again (the repeat-failure focus case is covered in `StuckItemDetail.test.tsx`); the "failed refresh keeps Stale" server test only checks the proto mapping with a faked lookup.
+
+## Errata from W10, Story 1.5.3 (2026-10-19)
+
+- Built: `session/transition_gate.go` (`GatedTransition`, `Rollback`, `DebugForce`, `SetTransitionGate` errors on a nil engine or reporter, unwired gate behaves as Off and counts `workflow_engine_gate_unwired_total`), reporter adapter `(*BacklogService).TransitionDeniedReporter()`, `-enforce-agent` flag (`backlog:workflow-engine-enforce-agent`, default off), production now uses `FlagClassModeSource`. `Report` takes `(ctx, item, caller, from, to, reason, denyErr)` (plan said no ctx/err). Startup logs a second line `workflow engine gate: transition_gate=wired reporter=wired class_modes=...`. `pendingCeiling` 75 -> 74 (system flag still pending). Benchmarks: gate decision 120 ns Off / 347 ns Shadow / 212 ns Enforce, 0 allocs (ceiling 50 µs).
+- Files extended: `session/workflow_engine_selector.go` (agent row of `classEnforceFlags`), `server/dependencies_workflow_engine.go` (class-mode source swap, `InjectTransitionGate`, startup line), `server/services/workflow_bypass_inventory_test.go` (three exempt entries for the gate's own writers), new `server/services/backlog_transition_notify_test.go` and `session/transition_gate_bench_test.go`.
+- Idempotence of denial reports is the adapter's; the gate reports every agent/system denial. `MarkStuck` keeps one row per (item, reason), so a second caller on the same item overwrites the first caller's row context (Story 1.2.2 behavior, unchanged).
+- Story 1.4.1's runbook must say the agent flag needs the agent class acknowledged per `(caller, from, to)` `guard_new` edge before flipping.
+- The Story 3.1.4 preflight test used raw `exec.Command` and failed `make lint-custom` (norawexec); fixed by the dispatcher with `safeexec.CommandContext`. Dispatcher lesson: run `make lint-custom` on every merge, not only the complexity gate.
+
+## Overrun checkpoint (Task 1.5.3e), 2026-10-19: TRIGGER FIRED (usage not readable per story); W11 WAITS for the owner
+
+Actual usage is not readable in the table's unit. The only per-story figure available is each worker's `subagent_tokens` total from its completion notification (all tokens, no cache/output split, so not convertible to CU). Per-agent totals for W0-W3 (Stories 0.1.1 partly, 1.1.1, 1.1.2, 1.1.3, 5.1.1, 2.1.1, 2.1.2) were lost to a context compaction, so the cumulative sum cannot be computed; trigger (4) fires. Indicative only (tokens as reported vs table raw estimate; resumed workers summed):
+
+| Story | Reported tokens | Table raw est. | Ratio |
+|---|---|---|---|
+| 0.1.1 | 177k | 150k | 1.2x |
+| 4.1.4 | 269k | 610k | 0.4x |
+| 1.1.4 | 218k | 165k | 1.3x |
+| 2.1.3 | 185k | 55k | 3.4x (includes a 25-minute test hang caused by a double `RedirectLogger`) |
+| 1.2.1 | 183k | 165k | 1.1x |
+| 1.2.2 | 179k | 315k | 0.6x |
+| 3.1.1 | 125k | 315k | 0.4x |
+| 1.2.3 | 155k | 185k | 0.8x |
+| 3.1.2 | 231k | 130k | 1.8x (resumed once for a Files extension) |
+| 1.5.1 | 256k | 315k | 0.8x |
+| 3.1.3 (+3.1.3c, unsized) | 128k (+256k) | 185k | 0.7x (2.1x with 3.1.3c) |
+| 3.1.4 | 235k | 110k | 2.1x (resumed once) |
+| 1.5.2 | 529k | 370k | 1.4x (resumed once for Task 1.5.2d) |
+| 1.5.3 | 306k | 315k | 1.0x |
+
+Reading: individual stories vary widely, several small stories overran by more than 50% (2.1.3, 3.1.2, 3.1.4), mostly from Files-line stops that needed a resume or one test hang, while the large stories ran under or at estimate. These numbers exclude the dispatcher's own (this session's) verification cost, which the table's x1.75 multiplier is meant to cover and which is not measured here. Wrong estimate, not a surprise: recurring cause is stories whose `Files:` lines omit a file they need.
