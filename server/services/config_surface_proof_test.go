@@ -34,6 +34,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAnswer",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:backlog:workflow-engine-enforce-system": {
+		testName:   "TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionAnswer",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"proto.UpdateStageTransitionRequest.id": {
 		testName:   "TestConfigSurfaceProof_UpdateStageTransition_ChangesHandlerAnswer",
 		entrypoint: "BacklogService.UpdateStageTransition",
@@ -55,7 +59,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 76
+const pendingCeiling = 75
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -75,7 +79,6 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 		"quota.foreground_throttle_delay_seconds", "quota.manual_override_grace_minutes",
 		"quota.pause_below_headroom_pct", "quota.rate_limit_window_minutes",
 		"quota.resume_margin_pct")
-	add("5.1.2b", true, "flag:backlog:workflow-engine-enforce-system") // Story 1.5.8
 	add("5.1.2b", false, "proto.StuckBacklogItem.allow_auto_merge")
 	add("5.1.3", false,
 		"flag:agent_wake_triggers", "flag:askuserquestion_structured", "flag:background_activity_feed",
