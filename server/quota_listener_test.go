@@ -21,7 +21,7 @@ const (
 	getQuotaProcedurePath    = "/api" + sessionv1connect.QuotaServiceGetQuotaConfigProcedure
 )
 
-// engineWriteProcedures are the nine stage/edge/gate writes that change which
+// engineWriteProcedures are the stage/edge/gate/pipeline-mode writes and gate approval that change which
 // transitions the workflow engine allows (Task 2.1.1e).
 var engineWriteProcedures = []string{
 	"/api" + sessionv1connect.BacklogServiceCreateStageProcedure,
@@ -33,6 +33,10 @@ var engineWriteProcedures = []string{
 	"/api" + sessionv1connect.BacklogServiceCreateTransitionGateProcedure,
 	"/api" + sessionv1connect.BacklogServiceUpdateTransitionGateProcedure,
 	"/api" + sessionv1connect.BacklogServiceDeleteTransitionGateProcedure,
+	"/api" + sessionv1connect.BacklogServiceCreatePipelineModeProcedure,
+	"/api" + sessionv1connect.BacklogServiceUpdatePipelineModeProcedure,
+	"/api" + sessionv1connect.BacklogServiceDeletePipelineModeProcedure,
+	"/api" + sessionv1connect.BacklogServiceRecordGateApprovalProcedure,
 }
 
 func postJSON(h http.Handler, path, host, origin, body string) int {
@@ -48,7 +52,7 @@ func postJSON(h http.Handler, path, host, origin, body string) int {
 }
 
 func TestGuardedProcedures_ContainQuotaUpdateAndNineStageEdgeGateWrites_WithRebindingProfile_AndStillContainUpdateFeatureFlag(t *testing.T) {
-	require.Len(t, engineWriteProcedures, 9)
+	require.Len(t, engineWriteProcedures, 13)
 	for _, p := range append([]string{updateQuotaProcedurePath, updateFlagProcedurePath}, engineWriteProcedures...) {
 		prof, ok := guardedProcedures[p]
 		assert.True(t, ok, "%s must be in guardedProcedures", p)

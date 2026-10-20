@@ -58,6 +58,10 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 	"/api" + sessionv1connect.BacklogServiceCreateTransitionGateProcedure:  middleware.ProfileRebinding,
 	"/api" + sessionv1connect.BacklogServiceUpdateTransitionGateProcedure:  middleware.ProfileRebinding,
 	"/api" + sessionv1connect.BacklogServiceDeleteTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreatePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdatePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeletePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceRecordGateApprovalProcedure:    middleware.ProfileRebinding,
 }
 
 // writeFileBodyLimit caps a WriteFile body: 1 MiB of content grows to about 1.34 MiB as
