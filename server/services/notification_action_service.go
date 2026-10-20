@@ -88,6 +88,9 @@ type QuestionAnswer struct {
 	// Confirm is the operator's "Retry anyway": re-verify the dialog and write
 	// again although an earlier digit may already have landed.
 	Confirm bool
+	// ExpectedRoute is the route the dispatcher gated this call on; when set,
+	// the answer is STALE if the session's route has changed since.
+	ExpectedRoute *answerRoute
 }
 
 // GuidanceAnswerer answers a durable guidance request.
@@ -256,7 +259,7 @@ func (d *NotificationActionDispatcher) run(ctx context.Context, call ActionCall,
 	case flightFollower:
 		return flight.wait(ctx)
 	}
-	res, err := d.execute(ctx, call, caller, tier)
+	res, err := d.execute(ctx, call, caller, tier, route)
 	if err != nil || !cacheable(res.Outcome) {
 		d.cache.forget(flight, res)
 		return res, err
@@ -381,19 +384,19 @@ func boolField(b bool) string {
 }
 
 // execute audits and runs the delegate for the closed set of kinds.
-func (d *NotificationActionDispatcher) execute(ctx context.Context, call ActionCall, caller callerInfo, tier sessionv1.ActionTier) (ActionResult, error) {
+func (d *NotificationActionDispatcher) execute(ctx context.Context, call ActionCall, caller callerInfo, tier sessionv1.ActionTier, route answerRoute) (ActionResult, error) {
 	line := d.auditLine(call.Msg, caller)
 	if tier == sessionv1.ActionTier_ACTION_TIER_B {
 		if err := d.appendRequest(ctx, line); err != nil {
 			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "audit log unavailable, nothing sent"), nil
 		}
 	}
-	res, err := d.delegate(ctx, call.Msg)
+	res, err := d.delegate(ctx, call.Msg, route)
 	d.appendResult(line, res)
 	return res, err
 }
 
-func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv1.InvokeNotificationActionRequest) (ActionResult, error) {
+func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv1.InvokeNotificationActionRequest, route answerRoute) (ActionResult, error) {
 	p := m.GetParams()
 	switch m.GetActionKind() {
 	case sessionv1.ActionKind_ACTION_KIND_APPROVE, sessionv1.ActionKind_ACTION_KIND_DENY:
@@ -410,7 +413,7 @@ func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv
 		return res, err
 	case sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION:
 		res, err := d.questions.ReplyToQuestion(ctx, QuestionAnswer{
-			SessionID: m.GetSessionId(), QuestionID: m.GetTargetKey(), OptionLabel: p.GetAnswer(), ReplyID: m.GetIdempotencyKey(), Confirm: p.GetConfirm(),
+			SessionID: m.GetSessionId(), QuestionID: m.GetTargetKey(), OptionLabel: p.GetAnswer(), ReplyID: m.GetIdempotencyKey(), Confirm: p.GetConfirm(), ExpectedRoute: &route,
 		})
 		if err == nil && res.Outcome == sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED && d.resolver != nil {
 			d.resolver.ResolveQuestionNotifications(m.GetTargetKey())
