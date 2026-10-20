@@ -191,6 +191,8 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 3. Update protobuf definitions in `proto/session/v1/` if needed → `make proto-gen`
 4. Test with `make install-service`
 
+**New page:** also add a row to `web-app/src/app/route-meta.ts` (title and optional feature-flag `guard`); `route-meta.test.ts` fails with the fix instruction if it is missing or differs from the page's `metadata`. Gate a subtree with `<FeatureGuard>` in its layout. See `.claude/rules/nav-facade.md`.
+
 ### New Omnibar Capabilities
 Two registries must stay in sync — see `docs/reference/feature-testing-registry.md`:
 - **OmnibarAction union** (`types.ts` + `dispatch.ts` + `dispatch.test.ts`) for user-triggerable actions
