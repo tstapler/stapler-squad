@@ -79,6 +79,14 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_UpdateStageTransition_ChangesHandlerAnswer",
 		entrypoint: "BacklogService.UpdateStageTransition",
 	},
+	"proto.CreateTransitionGateRequest.stateful": {
+		testName:   "TestConfigSurfaceProof_CreateTransitionGate_Stateful_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.CreateTransitionGate",
+	},
+	"proto.UpdateTransitionGateRequest.stateful": {
+		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_Stateful_ChangesHandlerAnswer",
+		entrypoint: "BacklogService.UpdateTransitionGate",
+	},
 	"proto.CreateTransitionGateRequest.transition_id": {
 		testName:   "TestConfigSurfaceProof_CreateTransitionGate_ChangesHandlerAnswer",
 		entrypoint: "BacklogService.CreateTransitionGate",
@@ -340,7 +348,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 // pendingCeiling is len(pendingSurfaces). It only shrinks: lower it in the same
 // change that deletes pending lines, so the list cannot grow without a visible
 // edit here. It must reach 0 at Story 5.1.3.
-const pendingCeiling = 3
+const pendingCeiling = 1
 
 // pendingSurfaces lists every surface without a proof yet (ADR-006 ratchet).
 // planned:true marks a surface absent from the code until its story lands; the
@@ -355,14 +363,10 @@ func buildPendingSurfaces() map[surfaceID]pendingSurface {
 			p[id] = pendingSurface{story: story, planned: planned}
 		}
 	}
-	// The three surfaces below have no production reader, so no proof can exist
-	// and an exemption would not be true. Kept pending until the owner decides
-	// to wire or remove them: gate `stateful` is stored and copied into the
-	// cache (session/stage_config_cache.go:119) but never consulted, because
-	// isStatefulGateKind (session/configured_workflow_engine.go:247) decides by
-	// kind; `backlog:conversation-view` is registered but nothing reads it.
+	// `backlog:conversation-view` is registered but nothing reads it; kept
+	// pending until the owner decides to wire or remove it.
 	add("5.1.3", false,
-		"flag:backlog:conversation-view", "proto.CreateTransitionGateRequest.stateful", "proto.UpdateTransitionGateRequest.stateful")
+		"flag:backlog:conversation-view")
 	return p
 }
 
