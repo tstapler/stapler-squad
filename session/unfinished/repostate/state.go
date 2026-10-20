@@ -67,6 +67,7 @@ func (s *RepoState) Graph() *Graph {
 		return g
 	}
 	fresh := NewGraph(s.opts)
+	fresh.onReplace = func() { s.dropGraphDependents(fresh) }
 	if !s.graph.CompareAndSwap(nil, fresh) {
 		return s.graph.Load()
 	}
@@ -172,6 +173,16 @@ func (s *RepoState) Prune(severe bool) {
 			return
 		}
 		for _, p := range tier {
+			p.Drop()
+		}
+	}
+}
+
+// dropGraphDependents drops every TierGraph product except the graph itself, so
+// a rebuilt generation is not pinned by reach sets holding the old one.
+func (s *RepoState) dropGraphDependents(g *Graph) {
+	for _, p := range s.products.Load()[TierGraph] {
+		if p != Product(g) {
 			p.Drop()
 		}
 	}

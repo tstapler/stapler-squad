@@ -316,6 +316,7 @@ func (g *Generation) allocSide(n uint64) (uint64, error) {
 			start = (start | sideMask) + 1
 		}
 		if start+n > g.sideCap || start+n >= uint64(sideFlag) {
+			g.noteFull() // exhausted side arena is as stuck as a full row arena
 			return 0, ErrGraphFull
 		}
 		g.yield()
@@ -352,7 +353,16 @@ type Graph struct {
 	// rebuildEvery is the minimum age of a generation before a full arena may
 	// replace it; negative disables the rebuild.
 	rebuildEvery time.Duration
+	// quickRefills counts consecutive rebuilds whose generation filled again soon
+	// after becoming eligible; each doubles the required age (capped), so a repo
+	// larger than MaxGraphCommits stops refilling and falling back every interval.
+	quickRefills atomic.Uint32
+	// onReplace runs after a full-arena rebuild so id-relative products drop
+	// their pins on the replaced generation. Set before the graph is published.
+	onReplace func()
 }
+
+const maxRebuildBackoffShift = 6
 
 var _ Product = (*Graph)(nil)
 
@@ -396,17 +406,32 @@ func (g *Graph) successor(old *Generation) *Generation {
 	return next
 }
 
-// rebuildIfDue replaces a full generation that is at least rebuildEvery old, so
-// the arena does not stay full (every walk falling back) until something else
-// calls Drop. The CAS from the exact full generation makes it once-only: a
-// racing Drop or rebuild wins and this one does nothing. In-flight walks keep
-// the generation they loaded.
+// rebuildIfDue replaces a full generation that is old enough, so the arena does
+// not stay full (every walk falling back) until something else calls Drop. The
+// required age is rebuildEvery doubled per consecutive quick refill. The CAS from
+// the exact full generation makes it once-only: a racing Drop or rebuild wins and
+// this one does nothing. In-flight walks keep the generation they loaded.
 func (g *Graph) rebuildIfDue(full *Generation) {
-	if g.rebuildEvery < 0 || g.now().UnixNano()-full.born < int64(g.rebuildEvery) {
+	if g.rebuildEvery < 0 {
 		return
 	}
-	if g.gen.CompareAndSwap(full, g.successor(full)) {
-		g.stats.fullRebuild.V.Add(1)
+	streak := g.quickRefills.Load()
+	required := int64(g.rebuildEvery) << min(streak, maxRebuildBackoffShift)
+	age := g.now().UnixNano() - full.born
+	if age < required {
+		return
+	}
+	if !g.gen.CompareAndSwap(full, g.successor(full)) {
+		return
+	}
+	g.stats.fullRebuild.V.Add(1)
+	if age < required+int64(g.rebuildEvery) {
+		g.quickRefills.Store(min(streak+1, maxRebuildBackoffShift))
+	} else {
+		g.quickRefills.Store(0)
+	}
+	if g.onReplace != nil {
+		g.onReplace()
 	}
 }
 
@@ -423,6 +448,7 @@ func (g *Graph) Drop() {
 	for {
 		old := g.gen.Load()
 		if g.gen.CompareAndSwap(old, g.successor(old)) {
+			g.quickRefills.Store(0)
 			return
 		}
 	}
