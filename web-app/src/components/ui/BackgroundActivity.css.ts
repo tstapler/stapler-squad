@@ -251,6 +251,7 @@ export const rowTitleButton = style({
   textAlign: "left",
   cursor: "pointer",
   minHeight: "24px",
+  "@media": { "(pointer: coarse)": { minHeight: "44px" } },
   selectors: { "&:focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "2px" } },
 });
 
