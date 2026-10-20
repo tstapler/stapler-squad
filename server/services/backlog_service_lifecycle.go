@@ -147,10 +147,17 @@ func defaultPipelineModeForNewItem(requested *string) string {
 	if requested != nil {
 		return *requested
 	}
-	if !config.LoadConfig().GetFeatureFlag(sddDefaultPipelineFlagName) {
+	if !sddDefaultPipelineEnabled() {
 		return ""
 	}
 	return session.DefaultSDDPipelineModeSlug
+}
+
+// sddDefaultPipelineEnabled reads the flag with its registered default, so an
+// unset flag resolves the same way the Features page reports it.
+func sddDefaultPipelineEnabled() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(
+		sddDefaultPipelineFlagName, featureFlagDefault(sddDefaultPipelineFlagName))
 }
 
 // --- CreateBacklogItem ---
