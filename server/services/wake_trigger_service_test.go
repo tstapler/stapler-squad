@@ -374,7 +374,7 @@ func TestWakeTriggerService_ListWakeTriggers_should_ListExpiredRowAsMissed_When_
 	r := newWakeRig(t, false, wakes.LimitSettings{})
 	row := r.atWake(t, "owner-a", wakeNow.Add(-3*time.Hour), domain.WakeActionSteerText) // expired an hour ago
 	r.svc.deps.ExpireOverdue = func(ctx context.Context) error {
-		_, err := wakes.ExpireOverdue(ctx, r.storage, nil, wakeNow)
+		_, err := wakes.ExpireOverdue(ctx, r.storage, nil, nil, wakeNow)
 		return err
 	}
 
