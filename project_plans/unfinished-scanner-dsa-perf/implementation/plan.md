@@ -1782,12 +1782,12 @@ Deferred, with reason: none of the nine gaps; two choices are owner decisions by
 
 - Thread ctx through scanRepo/VCSReader into repostate walks (interface change, ~73 call sites; singleflight shares leader ctx) - deferred, walks bounded by mergeBaseBFSLimit.
 - Package-level flagsSnapshot/currentScanner injection.
-- Shadow oracle refcount.
-- Rate-limited Drop on ErrGraphFull.
+- DONE (cddb575d1): Shadow oracle refcount. `OracleBegin`/`OracleDone` count sampled runs; only the last release clears; `scanWorktree` defers the release.
+- DONE (a9de7ca87): Rate-limited rebuild on ErrGraphFull (`Options.GraphRebuildInterval`, default 5 min, CAS from the full generation; `graph_full_rebuilds_total`).
 - Comment-density sweep.
 - Split gogit_vcs_reader_diff.go, scanner_gitwatch.go and scanstate.go.
-- Nested (non-root) .gitignore edits between HEAD moves still leave the ignore matcher stale; only the root .gitignore stat signature keys the cache.
-- `repostate/state.go` `ObserveShallow`: the ordinal and stamp are published as a pair by two separate atomics (bump, then CAS of the stamp), so a concurrent observer still holding the old stamp can return the already-bumped ordinal. Narrow stale-verdict window; only forces an extra re-probe in the common case but is not strictly linearizable. Fix would publish ordinal and stamp in one atomic pointer.
+- DONE (ddb3c298b): Nested .gitignore edits now rebuild the matcher (recorded at build, re-stat on hit). Remaining limit: a nested .gitignore created after the build is unseen until the next rebuild.
+- `repostate/state.go` `ObserveShallow`: the ordinal and stamp are published as a pair by two separate atomics (bump, then CAS of the stamp), so a concurrent observer still holding the old stamp can return the already-bumped ordinal. Narrow stale-verdict window; only forces an extra re-probe in the common case but is not strictly linearizable. Fix would publish ordinal and stamp in one atomic pointer. DONE (0256a516f): one immutable `(stamp, ord)` pointer, single CAS.
 - Tree-overflow scope (`treewatch.go` `onTreeChange`) notes only worktrees already in `repoWorktrees`. A linked worktree not yet registered is unarmed, and `DirtyGen.Arm` resets `lastFullWalk`, so its first scan is a full walk anyway; no code change made. Revisit if a registered-but-unarmed path appears.
 - `.git/worktrees` created after the first watch: verified by `TestFsnotifyLoop_TierA_ShouldWatchWorktreesDir_WhenCreatedAfterFirstWatch` (a Create event on `.git/worktrees` re-runs `watchRepo`, which watches the dir and its admin children). It relies on that Create event reaching the `.git` watch; a lost event is covered by the overflow/error rescan path.
-- Merge-base redundancy check (`isAncestorOfOther`/`reaches`) now prunes by committer time, so under clock skew a skewed-newer ancestor can be returned instead of the true best base (always a valid common ancestor, never an error). Bound exhaustion answers "not redundant". No counter exists for bound hits yet.
+- Merge-base redundancy check (`isAncestorOfOther`/`reaches`) now prunes by committer time, so under clock skew a skewed-newer ancestor can be returned instead of the true best base (always a valid common ancestor, never an error). Bound exhaustion answers "not redundant". No counter exists for bound hits yet. DONE (10a01a50b): `mergebase_redundancy_unproven_total{bound,pruned_miss}` counts both walks; skew tests document the result.
