@@ -45,6 +45,13 @@ func RepoSettings(ctx context.Context, ref RepoRef) RepoSettingsResult {
 	return defaultRepoSettings.lookup(ctx, ref)
 }
 
+// RepoSettingsCached returns the cached repo settings without any network
+// call, breaker accounting or lookup counter. ok is false on a cold or
+// expired entry; callers that want a warm cache start RepoSettings themselves.
+func RepoSettingsCached(ref RepoRef) (RepoSettingsResult, bool) {
+	return defaultRepoSettings.peek(ref)
+}
+
 // RepoSettingsLookupCount reports how many default-client lookups ended with
 // outcome (success, cached, not_modified, rate_limited, no_permission,
 // not_found, failure, circuit_open).
@@ -110,6 +117,19 @@ func (c *repoSettingsLookup) lookup(ctx context.Context, ref RepoRef) RepoSettin
 	key := ref.repoKey()
 	v, _, _ := c.sf.Do(key, func() (any, error) { return c.resolve(ctx, ref, key), nil })
 	return v.(RepoSettingsResult)
+}
+
+func (c *repoSettingsLookup) peek(ref RepoRef) (RepoSettingsResult, bool) {
+	if !ref.IsValid() {
+		return RepoSettingsResult{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.entries[ref.repoKey()]
+	if e == nil {
+		return RepoSettingsResult{}, false
+	}
+	return e.cachedResult(c.now())
 }
 
 // resolve runs inside the singleflight, so it re-checks the cache: a caller
