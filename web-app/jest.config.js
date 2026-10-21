@@ -87,6 +87,30 @@ module.exports = {
       },
     },
     {
+      // Node-side tests of the Bun build. Bun-only behaviour runs in a pinned `bun`
+      // subprocess via runInBun; `*.bun.ts` scripts are not tests and are never collected.
+      // scripts/__tests__/*.test.mjs use node:test and run through `bun run test:codemods`.
+      displayName: "build",
+      preset: "ts-jest",
+      testEnvironment: "node",
+      roots: ["<rootDir>/build"],
+      testMatch: ["<rootDir>/build/**/__tests__/**/*.test.ts"],
+      testPathIgnorePatterns: ["/node_modules/", "/fixtures/"],
+      transform: {
+        "^.+\\.tsx?$": [
+          "ts-jest",
+          {
+            tsconfig: {
+              module: "commonjs",
+              moduleResolution: "node",
+              esModuleInterop: true,
+              types: ["node", "jest"],
+            },
+          },
+        ],
+      },
+    },
+    {
       // tests/e2e/ hosts the Playwright suite (many *.spec.ts files that
       // import '@playwright/test' and are NOT runnable under Jest), plus a
       // small number of plain Jest unit tests for the dev-mode harness
