@@ -3,7 +3,7 @@
 // +feature: ui:bundle-export
 
 import { useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { Modal, ModalContent, ModalTitle, ModalDescription, ModalFooter } from "@/components/ui/Modal";
 import { useExportBundle } from "@/lib/hooks/useExportBundle";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";

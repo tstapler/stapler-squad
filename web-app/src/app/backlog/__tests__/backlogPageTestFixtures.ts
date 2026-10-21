@@ -22,6 +22,7 @@ export function itemFixture(overrides: Record<string, unknown> = {}) {
 
 export function nextNavigationMock() {
   return {
+    ...jest.requireActual("@/lib/nav/impl.memory"),
     useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
     useSearchParams: () => new URLSearchParams(),
   };

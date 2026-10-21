@@ -1,8 +1,7 @@
 "use client";
 
 import React from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, usePathname } from "@/lib/nav";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useNavigation } from "@/lib/contexts/NavigationContext";
 import { NAV_PAGES, groupNavPages, NAV_GROUP_LABELS } from "@/lib/nav-pages";

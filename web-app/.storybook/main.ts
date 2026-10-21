@@ -65,6 +65,8 @@ const config: StorybookConfig = {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
       ...config.resolve.alias,
+      // Exact match, listed before "@": stories run on the in-memory nav fake, never on Next.
+      "@/lib/nav/impl$": path.resolve(__dirname, "../src/lib/nav/impl.memory.tsx"),
       "@": path.resolve(__dirname, "../src"),
     };
 

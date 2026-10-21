@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { timestampMs } from "@bufbuild/protobuf/wkt";
 import { AutoMergeLookupStatus, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";

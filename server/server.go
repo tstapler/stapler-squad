@@ -1441,6 +1441,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 }
 
+// getWebDistFS is a test seam so tests need not depend on a built web-app.
+var getWebDistFS = web.GetDistFS //nolint:gochecknoglobals
+
 // registerStaticRoutes mounts routes that are always registered regardless of
 // whether dependencies were successfully built (image upload, server-info, web UI).
 func registerStaticRoutes(srv *Server) {
@@ -1461,7 +1464,7 @@ func registerStaticRoutes(srv *Server) {
 	log.Info("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files
-	distFS, err := web.GetDistFS()
+	distFS, err := getWebDistFS()
 	if err != nil {
 		log.Error("Failed to load web UI filesystem", "err", err)
 	} else {

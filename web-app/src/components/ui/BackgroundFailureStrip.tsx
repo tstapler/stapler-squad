@@ -1,7 +1,7 @@
 // +feature: notification-background-activity
 "use client";
 
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import type { ActivityRow } from "@/lib/utils/backgroundActivity";
 import { action, failureStrip, failureStripItem } from "./BackgroundActivity.css";

@@ -1,7 +1,6 @@
 package unfinished
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // newTestStateStore creates a StateStore backed by a temp file.
@@ -230,26 +229,10 @@ func TestStateAISummaryCacheEvictsExpired(t *testing.T) {
 
 func TestComputeDiffHashSameOutput(t *testing.T) {
 	t.Parallel()
-	// Create a minimal git repo so `git diff HEAD` works.
-	dir := t.TempDir()
-
-	gitCmds := [][]string{
-		{"git", "-C", dir, "init"},
-		{"git", "-C", dir, "config", "user.email", "test@example.com"},
-		{"git", "-C", dir, "config", "user.name", "Test"},
-	}
-	for _, args := range gitCmds {
-		out, err := runCmd(args[0], args[1:]...)
-		require.NoError(t, err, "cmd %v failed: %s", args, out)
-	}
-
-	// Create and commit a file.
+	// Create a minimal git repo with one commit so a diff against HEAD works.
+	repo, dir := testrepo.NewRepo(t)
+	testrepo.Commit(t, repo, map[string]string{"hello.txt": "hello\n"}, "init", testrepo.Epoch)
 	filePath := filepath.Join(dir, "hello.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("hello\n"), 0644))
-	_, err := runCmd("git", "-C", dir, "add", ".")
-	require.NoError(t, err)
-	_, err = runCmd("git", "-C", dir, "commit", "-m", "init")
-	require.NoError(t, err)
 
 	// Modify the file (unstaged).
 	require.NoError(t, os.WriteFile(filePath, []byte("hello world\n"), 0644))
@@ -267,13 +250,6 @@ func TestComputeDiffHashSameOutput(t *testing.T) {
 	hash3, err := ComputeDiffHash(dir)
 	require.NoError(t, err)
 	assert.NotEqual(t, hash1, hash3, "different diff should produce different hash")
-}
-
-// runCmd is a test helper that runs a command and returns combined output.
-func runCmd(name string, args ...string) (string, error) {
-	cmd := safeexec.CommandContext(context.Background(), name, args...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
 }
 
 // ---- Scan result cache persistence (restart survival) ----------------------

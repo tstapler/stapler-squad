@@ -5,7 +5,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Sus
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { useAnalytics } from "@/lib/analytics";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { AppLink } from "@/components/ui/AppLink";

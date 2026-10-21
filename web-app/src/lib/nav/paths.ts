@@ -1,0 +1,54 @@
+/**
+ * Centralized route definitions for type-safe navigation (re-exported from `@/lib/routes`)
+ */
+
+export const routes = {
+  home: "/",
+  sessionCreate: "/?new=true",
+  reviewQueue: "/review-queue",
+  unfinished: "/unfinished",
+  rules: "/rules",
+  history: "/history",
+  logs: "/logs",
+  errors: "/errors",
+  config: "/config",
+  notifications: "/notifications",
+  settings: "/settings",
+  settingsDefaults: "/settings/defaults",
+  help: "/help",
+  changelog: "/changelog",
+  settingsUnfinished: "/settings/unfinished",
+  insights: "/insights",
+  settingsFeatures: "/settings/features",
+  settingsBacklogSources: "/settings/backlog-sources",
+  settingsBacklogStages: "/settings/backlog-stages",
+  settingsBacklogQuota: "/settings/backlog-quota",
+  settingsPipelineModes: "/settings/pipeline-modes",
+  settingsRemotes: "/settings/remotes",
+  settingsJules: "/settings/jules",
+  settingsTaggingClassifier: "/settings/tagging-classifier",
+  settingsLlmBackends: "/settings/llm-backends",
+  settingsBackgroundModels: "/settings/background-models",
+  backlog: "/backlog",
+  backlogBoard: "/backlog/board",
+  sessionsImport: "/sessions/import",
+  workflows: "/workflows",
+  triggers: "/triggers",
+  login: "/login",
+  account: "/account",
+  escapeAnalytics: "/analytics/escape",
+  files: "/files",
+  sessionDetail: (id: string) => `/?session=${id}`,
+  newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
+    const params = new URLSearchParams({ worktree: worktreePath, branch });
+    if (title) params.set("title", title);
+    return `/?${params.toString()}`;
+  },
+  unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
+  unfinishedTab: (tab: string) => `/unfinished?tab=${encodeURIComponent(tab)}`,
+} as const;
+
+export type Route = typeof routes;
+
+/** Static route paths only; the query-bearing helpers and `sessionCreate` are not routes. */
+export type RoutePath = Exclude<Extract<Route[keyof Route], string>, `${string}?${string}`>;

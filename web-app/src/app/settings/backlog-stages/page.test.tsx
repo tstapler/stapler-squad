@@ -12,7 +12,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import BacklogStagesPage from "./page";
 import { useBacklogStagesAdmin } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage } from "@/lib/hooks/useBacklogStages";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import { useEngineModeStatus } from "@/lib/hooks/useEngineModeStatus";
 import type { EngineModeView } from "@/lib/hooks/useEngineModeStatus";
 
@@ -27,7 +27,8 @@ jest.mock("@/lib/hooks/useBacklogStages", () => {
 // Overrides jest.setup.js's global next/navigation stub (which always
 // returns an empty URLSearchParams) so the ?editStage= tests below can
 // control what the page reads on mount.
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useSearchParams: jest.fn(() => new URLSearchParams()),
 }));
 const mockUseSearchParams = useSearchParams as jest.Mock;

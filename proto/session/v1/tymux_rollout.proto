@@ -29,6 +29,13 @@ service TymuxRolloutService {
   // effect immediately for sessions created after this call — no process
   // restart required. Mirrors SetStreamHubGlobalOverride exactly.
   rpc SetTymuxGlobalOverride(SetTymuxGlobalOverrideRequest) returns (TymuxRolloutStatus) {}
+
+  // ReplaceTymuxd stops the running tymuxd and starts the configured binary in
+  // its place — an upgrade or downgrade depending on which is newer (see
+  // TymuxdVersionInfo.direction). Refused with FAILED_PRECONDITION while
+  // sessions are live unless allow_interrupt_live_sessions is set, because
+  // each pane's process is respawned when its session is revived.
+  rpc ReplaceTymuxd(ReplaceTymuxdRequest) returns (TymuxRolloutStatus) {}
 }
 
 message GetTymuxRolloutStatusRequest {}
@@ -52,6 +59,32 @@ message TymuxRolloutStatus {
   // no restart required. Unset means no explicit override — the flag
   // defaults to false.
   optional bool global_override = 4;
+  // The running tymuxd compared with the binary stapler-squad would spawn.
+  // Populated by GetTymuxRolloutStatus and ReplaceTymuxd; unset on the other RPCs.
+  TymuxdVersionInfo daemon = 5;
+}
+
+enum TymuxdVersionDirection {
+  TYMUXD_VERSION_DIRECTION_UNSPECIFIED = 0; // a version could not be determined
+  TYMUXD_VERSION_DIRECTION_SAME = 1;
+  TYMUXD_VERSION_DIRECTION_UPGRADE = 2;     // the configured binary is newer than the running daemon
+  TYMUXD_VERSION_DIRECTION_DOWNGRADE = 3;   // the configured binary is older than the running daemon
+}
+
+message TymuxdVersionInfo {
+  // Whether a process is listening at the configured tymuxd address.
+  bool running = 1;
+  int32 pid = 2;
+  // Semver of the listening process; empty if undeterminable.
+  string running_version = 3;
+  // Semver of the binary stapler-squad would spawn (embedded or TYMUXD_BIN).
+  string installed_version = 4;
+  TymuxdVersionDirection direction = 5;
+}
+
+message ReplaceTymuxdRequest {
+  // Required to proceed when any session is live.
+  bool allow_interrupt_live_sessions = 1;
 }
 
 message CompleteTymuxRollbackRehearsalRequest {}

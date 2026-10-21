@@ -21,7 +21,7 @@ jest.mock("@/components/sessions/Omnibar", () => ({
 }));
 
 const mockPush = jest.fn();
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 

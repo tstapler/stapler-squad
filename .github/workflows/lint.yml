@@ -16,6 +16,8 @@ on:
       - 'web-app/package.json'
       - 'web-app/bun.lock'
       - 'web-app/jest.config.js'
+      - 'web-app/jest.setup.js'
+      - 'web-app/scripts/**'
       - 'tests/e2e/**'
       - '**.sh'
       - '!third_party/**'
@@ -37,6 +39,8 @@ on:
       - 'web-app/package.json'
       - 'web-app/bun.lock'
       - 'web-app/jest.config.js'
+      - 'web-app/jest.setup.js'
+      - 'web-app/scripts/**'
       - 'tests/e2e/**'
       - '**.sh'
       - '!third_party/**'
@@ -310,6 +314,11 @@ jobs:
       - name: Jest
         working-directory: web-app
         run: npx jest --ci --maxWorkers=4
+
+      # Codemod liveness tests (node --test, no Jest project yet); needs the pinned ast-grep from bun install.
+      - name: Codemod tests
+        working-directory: web-app
+        run: bun run test:codemods
 
       # jscpd (web-app/src duplication) — blocking (2026-08-24). Config lives in
       # web-app/.jscpd.json: minLines/minTokens tuned to 20/200 (empirically verified —

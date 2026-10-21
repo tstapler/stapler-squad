@@ -1889,6 +1889,34 @@ func TestLoadConfig_MalformedContextHealthBlockFallsBackToDefaults(t *testing.T)
 	assert.Equal(t, 3, cfg.ContextHealth.LoopRepeatThreshold)
 }
 
+// TestUnfinishedCachesConfig_ShouldDefaultToFlippedUnits_AndKeepConfigKeyAsOffSwitch
+// verifies the shipped rollback-unit defaults (only units whose own A/B passed
+// are on), that absent keys keep them, and that an explicit false turns one off.
+func TestUnfinishedCachesConfig_ShouldDefaultToFlippedUnits_AndKeepConfigKeyAsOffSwitch(t *testing.T) {
+	want := UnfinishedCaches{SharedCommitState: true, DiffCounter: true, ScanSkip: true, WatchWorktreeGitdirs: true}
+	assert.Equal(t, want, DefaultUnfinishedCaches())
+	assert.Equal(t, want, DefaultConfig().UnfinishedCaches)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+	cfg, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, cfg.UnfinishedCaches)
+
+	content := `{"unfinished_caches": {"scan_skip": false}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	cfg, err = LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, UnfinishedCaches{SharedCommitState: true, DiffCounter: true, WatchWorktreeGitdirs: true}, cfg.UnfinishedCaches, "absent keys keep their default")
+
+	content = `{"unfinished_caches": {"shared_commit_state": false, "diff_counter": false, "scan_skip": false, "watch_worktree_gitdirs": false}}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	cfg, err = LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, UnfinishedCaches{}, cfg.UnfinishedCaches, "explicit false is the off-switch")
+}
+
 func TestUpgradeLegacyLogRotation(t *testing.T) {
 	legacy := &Config{LogMaxSize: 10, LogMaxFiles: 5, LogMaxAge: 30}
 	upgradeLegacyLogRotation(legacy)

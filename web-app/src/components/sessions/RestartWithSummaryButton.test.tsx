@@ -26,7 +26,7 @@ jest.mock("@/lib/hooks/useSessionService", () => ({
 }));
 
 const pushMock = jest.fn();
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
 

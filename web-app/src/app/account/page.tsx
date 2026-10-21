@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { routes } from "@/lib/routes";
 import {

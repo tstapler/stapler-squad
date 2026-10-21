@@ -6,7 +6,7 @@ import { FeatureFlagsProvider, readbackMismatch, useFeatureFlags } from "./Featu
 const mockGetFeatureFlags = jest.fn();
 const mockUpdateFeatureFlag = jest.fn();
 
-jest.mock("next/navigation", () => ({ useRouter: () => ({ replace: jest.fn() }) }));
+jest.mock("@/lib/nav", () => ({ useRouter: () => ({ replace: jest.fn() }) }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({

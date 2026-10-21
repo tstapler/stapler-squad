@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- next/font goes away with this file in Story 9.1 (web-app-bun-build plan)
 import localFont from "next/font/local";
 
 // Fonts are vendored under ./fonts/ (SIL Open Font License 1.1 — see the

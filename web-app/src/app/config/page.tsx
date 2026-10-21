@@ -1,6 +1,6 @@
 // analytics-exempt
-import { redirect } from "next/navigation";
+import { Redirect } from "@/lib/nav";
 
 export default function ConfigEditorPage() {
-  redirect("/settings?tab=config-files");
+  return <Redirect to="/settings?tab=config-files" />;
 }

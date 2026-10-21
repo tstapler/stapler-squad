@@ -7,7 +7,7 @@
 // — same pattern as pipeline-modes/page.tsx.
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import { useBacklogStagesAdmin, isBuiltInStage } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage } from "@/lib/hooks/useBacklogStages";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";

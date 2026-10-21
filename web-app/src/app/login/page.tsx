@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { loginWithPasskey, registerPasskey } from "@/lib/auth/passkey";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import * as styles from "./login.css";
