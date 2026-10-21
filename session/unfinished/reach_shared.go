@@ -29,16 +29,19 @@ var (
 // graph; flag off, a non-gogitstore storer or any graph fallback (full arena,
 // severe pressure, a missing commit, which the legacy walk reports itself)
 // runs the legacy per-worktree set.
-func (g *GoGitVCSReader) reachMembership(entry *cachedRepo, worktreePath string, baseHash plumbing.Hash) (reachSet, error) {
+func (g *GoGitVCSReader) reachMembership(ctx context.Context, entry *cachedRepo, worktreePath string, baseHash plumbing.Hash) (reachSet, error) {
 	if rs := g.repoState(entry); rs != nil {
 		if keyer, ok := entry.repo.Storer.(commonDirKeyer); ok {
 			ord, shallow := g.observeShallow(entry, rs)
 			want := repostate.ReachKey{Repo: repostate.RepoKey(keyer.CommonDirKey()), Base: baseHash, Cap: maxReachableSetCommits}
 			src := newGraphSource(entry.repo.Storer, shallow)
-			b, err := rs.Reach(context.Background(), src, ord, want)
+			b, err := rs.Reach(ctx, src, ord, want)
 			src.done()
 			if err == nil {
 				return b, nil
+			}
+			if cerr := ctx.Err(); cerr != nil { // the legacy walk is uncancellable
+				return nil, cerr
 			}
 			if !errors.Is(err, repostate.ErrFallback) {
 				return nil, err
@@ -65,7 +68,7 @@ func repoKeyOf(entry *cachedRepo) (repostate.RepoKey, bool) {
 // message memos. handled is false when the flag is off, the storer has no
 // shared state, or the graph fell back (full arena, severe pressure, a missing
 // commit): the caller then runs the legacy phases, which report their own errors.
-func (g *GoGitVCSReader) commitMessagesShared(entry *cachedRepo, head, base plumbing.Hash, max int) (msgs []string, handled bool, err error) {
+func (g *GoGitVCSReader) commitMessagesShared(ctx context.Context, entry *cachedRepo, head, base plumbing.Hash, max int) (msgs []string, handled bool, err error) {
 	rs := g.repoState(entry)
 	if rs == nil {
 		return nil, false, nil
@@ -74,20 +77,35 @@ func (g *GoGitVCSReader) commitMessagesShared(entry *cachedRepo, head, base plum
 	if !ok {
 		return nil, false, nil
 	}
-	ctx := context.Background()
 	ord, shallow := g.observeShallow(entry, rs)
 	src := newGraphSource(entry.repo.Storer, shallow)
 	defer src.done()
 	reach, err := rs.Reach(ctx, src, ord, repostate.ReachKey{Repo: repo, Base: base, Cap: maxReachableSetCommits})
 	if err != nil {
-		return nil, !errors.Is(err, repostate.ErrFallback), err
+		return nil, sharedHandled(ctx, err), sharedErr(ctx, err)
 	}
 	in := repostate.MessageInputs{Src: src, Ord: ord, Reach: reach, Line: commitFirstLine(entry)}
 	msgs, err = rs.CommitMessages(ctx, in, repostate.MessageKey{Repo: repo, Head: head, Base: base, Max: max, Cap: maxReachableSetCommits})
 	if err != nil {
-		return nil, !errors.Is(err, repostate.ErrFallback), err
+		return nil, sharedHandled(ctx, err), sharedErr(ctx, err)
 	}
 	return msgs, true, nil
+}
+
+// sharedHandled reports whether the shared path owns err: every non-fallback
+// error, and a fallback once ctx ended (the legacy rerun is uncancellable).
+func sharedHandled(ctx context.Context, err error) bool {
+	return !errors.Is(err, repostate.ErrFallback) || ctx.Err() != nil
+}
+
+// sharedErr is err, or ctx's error when a fallback raced with cancellation.
+func sharedErr(ctx context.Context, err error) error {
+	if errors.Is(err, repostate.ErrFallback) {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+	}
+	return err
 }
 
 // commitFirstLine reads a commit's first message line straight from the storer,

@@ -1,6 +1,7 @@
 package repostate
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -168,51 +169,42 @@ func (c *RepoCache[K, V]) GetOrCompute(key K, fn func() (V, error)) (V, error) {
 	if v, ok := c.Get(key); ok {
 		return v, nil
 	}
-	return c.computeMiss(key, fn)
+	return c.computeMiss(context.Background(), key, fn)
 }
 
 // computeMiss is GetOrCompute for a caller that already saw a miss from Get
 // (so the miss is not counted twice and the hit path stays closure-free).
-func (c *RepoCache[K, V]) computeMiss(key K, fn func() (V, error)) (V, error) {
-	return c.computeMissKeep(key, fn, nil)
+func (c *RepoCache[K, V]) computeMiss(ctx context.Context, key K, fn func() (V, error)) (V, error) {
+	return c.computeMissKeep(ctx, key, fn, nil)
 }
 
 // computeMissKeep is computeMiss that skips the Put when keep (if non-nil)
 // reports false after fn ran, e.g. the value is pinned to a dropped generation.
-func (c *RepoCache[K, V]) computeMissKeep(key K, fn func() (V, error), keep func() bool) (V, error) {
-	var led bool // written by the flight goroutine, read after <-ch
-	ch := c.sf.DoChan(fmt.Sprint(key), func() (out any, doErr error) {
-		defer func() {
-			if r := recover(); r != nil {
-				doErr = fmt.Errorf("repostate compute panic: %v", r)
-			}
-		}()
-		// A caller can miss in Get, then reach DoChan after the previous flight
+// Waiting, cancellation and the retry of a follower whose leader was cancelled
+// are FlightCtx's; a failed or cancelled fn never reaches Put.
+func (c *RepoCache[K, V]) computeMissKeep(ctx context.Context, key K, fn func() (V, error), keep func() bool) (V, error) {
+	computed := false // set by this caller's own closure, read after FlightCtx returns
+	v, _, err := FlightCtx(ctx, &c.sf, fmt.Sprint(key), &c.joined, func() (V, error) {
+		// A caller can miss in Get, then reach the flight after the previous one
 		// already published: without this re-check it would build a second time.
 		if v, ok := c.peek(key); ok {
 			return v, nil
 		}
-		led = true
-		v, fnErr := fn()
-		if fnErr != nil {
-			return nil, fnErr
+		computed = true
+		v, err := fn()
+		if err != nil {
+			var zero V
+			return zero, err
 		}
 		if keep == nil || keep() {
 			c.Put(key, v)
 		}
 		return v, nil
 	})
-	// DoChan has registered this caller in the flight by now.
-	c.joined.Add(1)
-	r := <-ch
-	if !led {
+	if !computed && ctx.Err() == nil {
 		c.coalesced.Add(1)
 	}
-	if r.Err != nil {
-		var zero V
-		return zero, r.Err
-	}
-	return r.Val.(V), nil
+	return v, err
 }
 
 // Stats returns a snapshot of the counters.

@@ -70,6 +70,15 @@ type scanSkipState struct {
 	refs       refResolveCounters
 	// oracle is the lazily built legacy-path reader of the shadow-verify sampler.
 	oracle atomic.Pointer[GoGitVCSReader]
+	// oracleUsers counts sampled runs holding the oracle; -1 while the last
+	// releaser clears it (see OracleBegin/OracleDone).
+	oracleUsers atomic.Int32
+	// oracleGate is closed when the clear that set oracleUsers to -1 ends, waking
+	// OracleBegin waiters without spinning. A waiter that loads a stale (closed)
+	// gate just loops once more.
+	oracleGate atomic.Pointer[chan struct{}]
+	// clearOracle overrides the oracle's ClearCache (tests inject a panic).
+	clearOracle func(*GoGitVCSReader)
 
 	// passSF coalesces HasUncommittedPass callers; its result type differs
 	// from hasUncommittedSF's, so it needs its own group.
@@ -83,13 +92,17 @@ func (s *scanSkipState) now() time.Time {
 	return time.Now()
 }
 
-// effectiveFlags is this reader's flag view.
+// effectiveFlags is this reader's flag view; a reader nobody gave flags runs
+// with every rollback unit off.
 func (g *GoGitVCSReader) effectiveFlags() Flags {
 	if f := g.scanSkip.flags; f != nil {
 		return *f
 	}
-	return EffectiveFlags()
+	return Flags{}
 }
+
+// setFlags fixes the reader's flags. Call it before the reader is shared.
+func (g *GoGitVCSReader) setFlags(f Flags) { g.scanSkip.flags = &f }
 
 // ScanSkipStats returns the engagement counters.
 func (g *GoGitVCSReader) ScanSkipStats() ScanSkipStats {

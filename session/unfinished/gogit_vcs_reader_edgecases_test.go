@@ -6,6 +6,7 @@ package unfinished
 // are not a statement that the behaviour is right. Fixtures are go-git only.
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,7 +40,7 @@ func TestEdgeCase_Shallow_AheadBehind_ShouldWalkToBoundary(t *testing.T) {
 	testrepo.Shallow(t, repo, hashes[1])
 
 	g := &GoGitVCSReader{}
-	ahead, behind, err := g.AheadBehind(dir, "base")
+	ahead, behind, err := g.AheadBehind(context.Background(), dir, "base")
 	require.NoError(t, err)
 	assert.Equal(t, 2, ahead, "HEAD is two commits past the shallow boundary")
 	assert.Equal(t, 0, behind)
@@ -88,9 +89,9 @@ func TestEdgeCase_SymlinkedPath_ShouldShareOneRegistryEntry_ButTwoCommonDirStrin
 	require.NoError(t, os.Symlink(real, link))
 
 	g := &GoGitVCSReader{}
-	_, _, err := g.AheadBehind(real, "base")
+	_, _, err := g.AheadBehind(context.Background(), real, "base")
 	require.NoError(t, err)
-	_, _, err = g.AheadBehind(link, "base")
+	_, _, err = g.AheadBehind(context.Background(), link, "base")
 	require.NoError(t, err)
 
 	// gogitstore canonicalizes (EvalSymlinks) its registry key: one store,
@@ -119,7 +120,7 @@ func TestEdgeCase_UnbornBranch_ShouldReturnNilNil_AndAheadBehindErrorsUncached(t
 	require.NoError(t, err)
 	assert.Nil(t, hashes, "unborn HEAD is the documented (nil, nil) sentinel")
 
-	_, _, err = g.AheadBehind(dir, "main")
+	_, _, err = g.AheadBehind(context.Background(), dir, "main")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "head:")
 	_, cached := g.aheadBehindCache.Load(aheadBehindKey{worktree: dir, base: "main"})
@@ -224,7 +225,7 @@ func TestEdgeCase_BareRepo_ShouldFailToOpen(t *testing.T) {
 
 	_, err = g.ListWorktrees(dir)
 	require.Error(t, err)
-	_, _, err = g.AheadBehind(dir, "main")
+	_, _, err = g.AheadBehind(context.Background(), dir, "main")
 	require.Error(t, err)
 	assert.Empty(t, g.gogitstoreRegistry().RefCounts(), "a failed open registers nothing")
 }

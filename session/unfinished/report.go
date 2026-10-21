@@ -31,12 +31,15 @@ type Report struct {
 	DecodedCommitsTotal  int64                  `json:"decoded_commits_total"`
 	StatCallsTotal       int64                  `json:"stat_calls_total"`
 	StatCallsPerScan     int64                  `json:"stat_calls_per_scan"`
+	NanosForcedHashes    int64                  `json:"nanos_forced_hashes_total"`
 	RepoStates           int64                  `json:"repostates"`
 	RepoStateBytes       int64                  `json:"repostate_bytes"`
 	Caches               map[string]CacheReport `json:"caches"`
 	ReachBuilds          map[string]uint64      `json:"reach_builds"`
 	CASRetriesTotal      int64                  `json:"cas_retries_total"`
 	GraphFullFallbacks   uint64                 `json:"graph_full_fallbacks_total"`
+	GraphFullRebuilds    uint64                 `json:"graph_full_rebuilds_total"`
+	RedundancyUnproven   map[string]int64       `json:"mergebase_redundancy_unproven_total"`
 	GraphExtension       map[string]any         `json:"graph_extension"`
 	DirtyFullWalkTotal   map[string]int64       `json:"dirty_full_walk_total"`
 	ParityMismatchTotal  map[string]int64       `json:"parity_mismatch_total"`
@@ -46,11 +49,11 @@ type Report struct {
 	SignatureSkip        map[string]int64       `json:"signature_skip"`
 }
 
-// BuildReport snapshots every counter. With no reader or scanner registered
-// every number is 0 and the cache keys are still present.
-func BuildReport() Report {
-	in := collectRepostateInputs()
-	f := EffectiveFlags()
+// BuildReport snapshots every counter of s. A nil scanner reports every number
+// as 0 and still lists the cache keys.
+func BuildReport(s *Scanner) Report {
+	in := collectRepostateInputs(s)
+	f := s.flagsOrOff()
 	r := Report{
 		CommitParentsReader: commitParentsImpl,
 		Flags: map[string]bool{
@@ -65,12 +68,18 @@ func BuildReport() Report {
 		DecodedCommitsTotal: in.decoded,
 		StatCallsTotal:      in.statCalls,
 		StatCallsPerScan:    perScan(in.statCalls, ScanCyclesTotal()),
+		NanosForcedHashes:   in.nanosHashes,
 		RepoStates:          in.repoStates,
 		RepoStateBytes:      in.repoBytes,
 		Caches:              make(map[string]CacheReport, len(repostateCaches)+2),
 		ReachBuilds:         map[string]uint64{"scratch": in.reachBuilds.Scratch, "incremental": in.reachBuilds.Incremental},
 		CASRetriesTotal:     in.casRetries(),
 		GraphFullFallbacks:  in.graph.GraphFull,
+		GraphFullRebuilds:   in.graph.FullRebuild,
+		RedundancyUnproven: map[string]int64{
+			redundancyOutcomeNames[redundancyBound]:      in.redundancy[redundancyBound],
+			redundancyOutcomeNames[redundancyPrunedMiss]: in.redundancy[redundancyPrunedMiss],
+		},
 		GraphExtension: map[string]any{
 			"count": in.graphExt.Count, "over_100ms": in.graphExt.SlowOver100ms,
 			"seconds_sum": in.graphExt.Total.Seconds(),
@@ -102,7 +111,7 @@ func BuildReport() Report {
 		r.ParityMismatchTotal[field.String()] = in.parity.Mismatch[field]
 		r.ParityTransientTotal[field.String()] = in.parity.Transient[field]
 	}
-	if s := currentScanner.Load(); s != nil {
+	if s != nil {
 		r.ShadowVerifyEvery = s.shadowEvery()
 	}
 	return r
@@ -116,12 +125,12 @@ func cacheReport(c repostate.CacheStats) CacheReport {
 // LogStartup emits the single INFO line naming the parents reader, the
 // effective flags and the shadow-verify rate. Call it once at server startup;
 // never from the scan loop (hot-poll log rule).
-func LogStartup() { logStartup(log.Info) }
+func LogStartup(s *Scanner) { logStartup(s, log.Info) }
 
-func logStartup(info func(msg string, args ...any)) {
-	f := EffectiveFlags()
+func logStartup(s *Scanner, info func(msg string, args ...any)) {
+	f := s.flagsOrOff()
 	every := 0
-	if s := currentScanner.Load(); s != nil {
+	if s != nil {
 		every = s.shadowEvery()
 	}
 	info("unfinished scanner configured",

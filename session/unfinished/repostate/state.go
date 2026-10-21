@@ -39,7 +39,7 @@ type RepoState struct {
 	products atomic.Pointer[productSet]
 	closed   atomic.Bool
 	graph    atomic.Pointer[Graph]
-	shallow  atomic.Pointer[ShallowStamp]
+	shallow  atomic.Pointer[shallowState]
 	scratch  scratchPool
 	reach    atomic.Pointer[ReachCache]
 	memo     atomic.Pointer[productCaches]
@@ -53,6 +53,12 @@ type ShallowStamp struct {
 	MtimeNs int64
 }
 
+// shallowState is the immutable (stamp, ordinal) pair ObserveShallow publishes.
+type shallowState struct {
+	stamp ShallowStamp
+	ord   StampOrd
+}
+
 // Graph returns the commit graph, creating it (bounded by Options.MaxGraphCommits)
 // and registering it in TierGraph on first use. After Close it returns an
 // unregistered graph, so a late caller still has a working one.
@@ -61,6 +67,7 @@ func (s *RepoState) Graph() *Graph {
 		return g
 	}
 	fresh := NewGraph(s.opts)
+	fresh.onReplace = func() { s.dropGraphDependents(fresh) }
 	if !s.graph.CompareAndSwap(nil, fresh) {
 		return s.graph.Load()
 	}
@@ -72,28 +79,31 @@ func (s *RepoState) Graph() *Graph {
 // first observation or when `shallow` is absent).
 func (s *RepoState) ShallowStamp() ShallowStamp {
 	if p := s.shallow.Load(); p != nil {
-		return *p
+		return p.stamp
 	}
 	return ShallowStamp{}
 }
 
 // ObserveShallow records the current shallow stamp and returns the stamp
 // ordinal to walk under. A change bumps the graph's ordinal exactly once
-// (stale Truncated rows then re-probe lazily). The bump happens before the new
-// stamp is published, so any observer that sees the new stamp as current also
-// sees the bumped ordinal; a lost CAS costs one extra bump, which only forces
-// extra re-probes.
+// (stale Truncated rows then re-probe lazily). The stamp and its ordinal are
+// published as one immutable pair by a single CAS, so no observer can pair the
+// old stamp with the bumped ordinal (that would let Truncated rows written
+// under the old file state match the new one). A lost CAS costs one extra
+// bump, which only forces extra re-probes.
 func (s *RepoState) ObserveShallow(cur ShallowStamp) StampOrd {
 	g := s.Graph()
 	for {
 		old := s.shallow.Load()
 		gen := g.Load()
-		if old != nil && *old == cur {
-			return gen.StampOrd()
+		if old != nil && old.stamp == cur {
+			return old.ord
 		}
 		if old == nil { // first observation: nothing recorded under another stamp
-			if s.shallow.CompareAndSwap(old, &cur) {
-				return gen.StampOrd()
+			next := &shallowState{stamp: cur, ord: gen.StampOrd()}
+			gen.yield()
+			if s.shallow.CompareAndSwap(old, next) {
+				return next.ord
 			}
 			continue
 		}
@@ -101,7 +111,8 @@ func (s *RepoState) ObserveShallow(cur ShallowStamp) StampOrd {
 		for next := g.Load(); next != gen; next = g.Load() { // Drop swapped generations mid-bump
 			gen, ord = next, next.BumpStamp()
 		}
-		if s.shallow.CompareAndSwap(old, &cur) {
+		gen.yield()
+		if s.shallow.CompareAndSwap(old, &shallowState{stamp: cur, ord: ord}) {
 			return ord
 		}
 	}
@@ -162,6 +173,16 @@ func (s *RepoState) Prune(severe bool) {
 			return
 		}
 		for _, p := range tier {
+			p.Drop()
+		}
+	}
+}
+
+// dropGraphDependents drops every TierGraph product except the graph itself, so
+// a rebuilt generation is not pinned by reach sets holding the old one.
+func (s *RepoState) dropGraphDependents(g *Graph) {
+	for _, p := range s.products.Load()[TierGraph] {
+		if p != Product(g) {
 			p.Drop()
 		}
 	}

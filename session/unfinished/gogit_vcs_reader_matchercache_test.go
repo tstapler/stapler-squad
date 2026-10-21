@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetOrBuildUntrackedMatcher_SurvivesCachedRepoEviction_WhenHeadUnchanged(t *testing.T) {
@@ -110,4 +112,34 @@ func TestGetOrBuildUntrackedMatcher_Rebuilds_WhenRootGitignoreEditedWithoutHeadM
 	if !m.Match([]string{"another-ignored-dir"}, true) {
 		t.Error("rebuilt matcher does not honour the edited .gitignore")
 	}
+}
+
+// Only the root .gitignore's stat signature used to key the cached matcher, so
+// an edit to a nested .gitignore kept serving the old patterns until HEAD moved.
+func TestGetOrBuildUntrackedMatcher_Rebuilds_WhenNestedGitignoreEditedWithoutHeadMove(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "sub", ".gitignore")
+	require.NoError(t, os.MkdirAll(filepath.Dir(nested), 0o755))
+	require.NoError(t, os.WriteFile(nested, []byte("*.log\n"), 0o644))
+	g := &GoGitVCSReader{}
+	entry := &cachedRepo{}
+
+	m := g.getOrBuildUntrackedMatcher(entry, dir)
+	require.True(t, m.Match([]string{"sub", "a.log"}, false), "precondition: nested pattern applies")
+	require.False(t, m.Match([]string{"sub", "a.tmp"}, false))
+	g.getOrBuildUntrackedMatcher(entry, dir)
+	require.EqualValues(t, 1, atomic.LoadInt64(&g.gitignoreMatcherRebuilds), "unchanged nested file keeps the cache hit")
+
+	require.NoError(t, os.WriteFile(nested, []byte("*.log\n*.tmp\n"), 0o644)) // size changes, so the signature does
+	m = g.getOrBuildUntrackedMatcher(entry, dir)
+
+	assert.EqualValues(t, 2, atomic.LoadInt64(&g.gitignoreMatcherRebuilds), "nested edit must rebuild")
+	assert.True(t, m.Match([]string{"sub", "a.tmp"}, false), "rebuilt matcher carries the new nested pattern")
+
+	// A fresh cachedRepo is served from matcherCache, which must carry the same check.
+	require.NoError(t, os.WriteFile(nested, []byte("*.log\n"), 0o644))
+	m = g.getOrBuildUntrackedMatcher(&cachedRepo{}, dir)
+	assert.EqualValues(t, 3, atomic.LoadInt64(&g.gitignoreMatcherRebuilds))
+	assert.False(t, m.Match([]string{"sub", "a.tmp"}, false))
 }

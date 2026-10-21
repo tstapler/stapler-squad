@@ -10,18 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
-	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
-
-// useDiffCounter turns diff_counter on or off for the test and restores the
-// previous snapshot afterwards. Tests using it must not run in parallel.
-func useDiffCounter(t *testing.T, on bool) {
-	t.Helper()
-	prev := flagsSnapshot.Load()
-	t.Cleanup(func() { flagsSnapshot.Store(prev) })
-	SetFlags(config.UnfinishedCaches{DiffCounter: on})
-}
 
 // useDiffMemo installs a fresh process-wide memo whose clock reads `ahead`
 // past the real now. A backdated mtime (testrepo.Age) cannot change ctime, so
@@ -66,10 +56,9 @@ func writeAged(t *testing.T, path, content string) {
 }
 
 func TestFileDiffMemo_ShouldDoZeroBlobReadsAndDiffs_WhenFileUnchanged(t *testing.T) {
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	dir, _ := dirtyRepo(t)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{DiffCounter: true})
 	r.Track(t, dir)
 
 	first, err := r.diffShortstatUncached(dir)
@@ -104,10 +93,9 @@ func TestFileDiffMemo_ShouldDoZeroBlobReadsAndDiffs_WhenFileUnchanged(t *testing
 }
 
 func TestFileDiffMemo_ShouldNotEngage_WhenDiffCounterOff(t *testing.T) {
-	useDiffCounter(t, false)
 	memo := useDiffMemo(t, 0, time.Hour)
 	dir, _ := dirtyRepo(t)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: false}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)
@@ -151,22 +139,20 @@ func TestFileDiffMemo_ShouldMatchLegacyCounts_WhenDiffCounterOn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	useDiffCounter(t, false)
-	want, err := (&GoGitVCSReader{}).diffShortstatUncached(dir)
+	want, err := (readerWithFlags(Flags{DiffCounter: false}, &GoGitVCSReader{})).diffShortstatUncached(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"f0.txt", "f2.txt", "f3.txt", "staged.txt"} {
 		testrepo.Age(t, filepath.Join(dir, name), time.Hour) // keep the 2 s racy guard from bypassing the memo
 	}
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	defer func() {
 		if memo.counters().Hits == 0 {
 			t.Error("memo never hit: the second pass did not exercise it")
 		}
 	}()
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for pass := range 2 { // second pass exercises memo hits
 		got, err := r.diffShortstatUncached(dir)
 		if err != nil {
@@ -214,10 +200,9 @@ func TestFileDiffMemo_ShouldMiss_WhenSizeMtimeCtimeOrInodeChanges(t *testing.T) 
 }
 
 func TestFileDiffMemo_ShouldMiss_WhenEqualLengthEditRestoresMtime(t *testing.T) {
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	dir, path := dirtyRepo(t)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	first, err := r.diffShortstatUncached(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +240,6 @@ func TestFileDiffMemo_ShouldMiss_WhenEqualLengthEditRestoresMtime(t *testing.T) 
 }
 
 func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
-	useDiffCounter(t, true)
 	dir, path := dirtyRepo(t)
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -265,7 +249,7 @@ func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
 	storeTime := fi.ModTime().Add(time.Second)
 	memo := useDiffMemo(t, 0, 0)
 	memo.now = func() time.Time { return storeTime }
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)
@@ -278,11 +262,10 @@ func TestFileDiffMemo_ShouldNotTrust_WhenModifiedWithin2sOfStore(t *testing.T) {
 }
 
 func TestFileDiffMemo_ShouldBeDisabled_WhenCtimeUnavailable(t *testing.T) {
-	useDiffCounter(t, true)
 	memo := useDiffMemo(t, 0, time.Hour)
 	memo.stat = func(string) (fileStamp, bool) { return fileStamp{}, false } // the !unix build's behaviour
 	dir, _ := dirtyRepo(t)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{DiffCounter: true}, &GoGitVCSReader{})
 	for range 2 {
 		if _, err := r.diffShortstatUncached(dir); err != nil {
 			t.Fatal(err)
@@ -317,5 +300,68 @@ func TestFileDiffMemo_ShouldStayUnderBudgetAndCountEvictions_When10000Files(t *t
 	m.m.Range(func(k FileDiffMemoKey, _ EditCounts) bool { sum += entryBytes(k); return true })
 	if sum != m.bytes.Load() {
 		t.Errorf("byte accounting drifted: tracked %d, actual %d", m.bytes.Load(), sum)
+	}
+}
+
+// A same-size rewrite inside the second the index entry was recorded keeps the
+// truncated mtime equal, and a later index rewrite (go-git does not smudge racy
+// entries) pushes indexMtime past it. Only the nanosecond part tells them apart.
+func TestUnstagedTargetList_ShouldFlagSameSizeRewrite_WhenOnlyNanosecondsDiffer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	recorded := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
+	if err := os.WriteFile(path, []byte("bbbb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, recorded.Add(700*time.Microsecond), recorded.Add(700*time.Microsecond)); err != nil {
+		t.Fatal(err)
+	}
+	m := indexMeta{
+		name:       "f.txt",
+		indexHash:  plumbing.ComputeHash(plumbing.BlobObject, []byte("aaaa")),
+		size:       4,
+		modifiedAt: recorded,
+	}
+	got := (&GoGitVCSReader{}).unstagedTargetList(dir, []indexMeta{m}, recorded.Add(10*time.Second), nil)
+	if len(got) != 1 || got[0].name != "f.txt" {
+		t.Fatalf("targets = %+v, want f.txt flagged as changed", got)
+	}
+
+	// Same bytes as the index, only the mtime moved within the second: not a change.
+	if err := os.WriteFile(path, []byte("aaaa"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, recorded.Add(700*time.Microsecond), recorded.Add(700*time.Microsecond)); err != nil {
+		t.Fatal(err)
+	}
+	if got := (&GoGitVCSReader{}).unstagedTargetList(dir, []indexMeta{m}, recorded.Add(10*time.Second), nil); len(got) != 0 {
+		t.Fatalf("targets = %+v, want none for identical content", got)
+	}
+}
+
+// A file whose nanoseconds differ from the index but is otherwise stat-clean and
+// outside the racy window is hashed every scan; that cost is counted.
+func TestUnstagedTargetList_ShouldCountForcedHashes_WhenOnlyNanosMoved(t *testing.T) {
+	dir := t.TempDir()
+	recorded := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
+	write := func(name string, nanos time.Duration) indexMeta {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("aaaa"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := recorded.Add(nanos)
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		return indexMeta{name: name, indexHash: plumbing.ComputeHash(plumbing.BlobObject, []byte("aaaa")), size: 4, modifiedAt: recorded}
+	}
+	moved := write("moved.txt", 700*time.Microsecond)
+	same := write("same.txt", 0) // identical nanoseconds: no hash forced
+	g := &GoGitVCSReader{}
+	for scan := 1; scan <= 2; scan++ {
+		g.unstagedTargetList(dir, []indexMeta{moved, same}, recorded.Add(10*time.Second), nil)
+		if got := g.NanosForcedHashes(); got != int64(scan) {
+			t.Fatalf("scan %d: forced hashes = %d, want %d (moved.txt only)", scan, got, scan)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package unfinished_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ func BenchmarkAheadBehind(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/%dcommits", nr.name, n), func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
-					_, _, _ = nr.r.AheadBehind(repo.path, repo.base)
+					_, _, _ = nr.r.AheadBehind(context.Background(), repo.path, repo.base)
 				}
 			})
 		}
@@ -90,7 +91,7 @@ func BenchmarkCommitMessages(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/%dcommits", nr.name, n), func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
-					_, _ = nr.r.CommitMessages(repo.path, repo.base, 20)
+					_, _ = nr.r.CommitMessages(context.Background(), repo.path, repo.base, 20)
 				}
 			})
 		}
@@ -167,7 +168,7 @@ func BenchmarkFullScanCycle(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
 					_, _ = nr.r.HasUncommitted(repo.path)
-					_, _, _ = nr.r.AheadBehind(repo.path, repo.base)
+					_, _, _ = nr.r.AheadBehind(context.Background(), repo.path, repo.base)
 					_, _ = nr.r.DiffShortstat(repo.path)
 				}
 			})
@@ -185,14 +186,14 @@ func BenchmarkCommitMessages_ColdThenWarm(b *testing.B) {
 			r := &unfinished.GoGitVCSReader{}
 
 			// Cold call: populates reachableSetCache and commitMessagesCache.
-			if _, err := r.CommitMessages(repo.path, repo.base, 20); err != nil {
+			if _, err := r.CommitMessages(context.Background(), repo.path, repo.base, 20); err != nil {
 				b.Fatalf("cold call failed: %v", err)
 			}
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				_, _ = r.CommitMessages(repo.path, repo.base, 20)
+				_, _ = r.CommitMessages(context.Background(), repo.path, repo.base, 20)
 			}
 
 			// Post-bench assertion: warm path (commitMessagesCache hit) must not
@@ -201,7 +202,7 @@ func BenchmarkCommitMessages_ColdThenWarm(b *testing.B) {
 			//   2. sync.Map.Load boxing the key and value into interface{} (~2 allocs)
 			// Any value >> 4 indicates the O(N) reachable-set walk is happening.
 			allocs := testing.AllocsPerRun(100, func() {
-				_, _ = r.CommitMessages(repo.path, repo.base, 20)
+				_, _ = r.CommitMessages(context.Background(), repo.path, repo.base, 20)
 			})
 			if allocs > 4 {
 				b.Errorf("CommitMessages warm path: got %.0f allocs, want ≤4 (no graph walk)", allocs)
@@ -247,7 +248,7 @@ func BenchmarkMultiWorktreeAheadBehind(b *testing.B) {
 			for b.Loop() {
 				for _, p := range paths {
 					r.InvalidateWorktree(p)
-					if _, _, err := r.AheadBehind(p, "base"); err != nil {
+					if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -270,7 +271,7 @@ func BenchmarkReachableSetShared(b *testing.B) {
 	for b.Loop() {
 		for _, p := range paths {
 			r.ForgetWorktree(p)
-			if _, err := r.CommitMessages(p, "base", 20); err != nil {
+			if _, err := r.CommitMessages(context.Background(), p, "base", 20); err != nil {
 				b.Fatal(err)
 			}
 		}

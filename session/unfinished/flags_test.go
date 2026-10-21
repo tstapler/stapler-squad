@@ -46,23 +46,29 @@ func TestEffectiveFlags_ShouldForceDependentOff_WhenDependencyOffAndWarnOnce(t *
 	}
 }
 
-func TestFlags_ShouldBeAllOff_WhenSnapshotUnsetOrConfigEmpty(t *testing.T) {
-	prev := flagsSnapshot.Load()
-	t.Cleanup(func() { flagsSnapshot.Store(prev) })
-	flagsSnapshot.Store(nil)
-	assert.Equal(t, Flags{}, EffectiveFlags())
-	SetFlags(config.UnfinishedCaches{})
-	assert.Equal(t, Flags{}, EffectiveFlags())
+func TestFlags_ShouldBeAllOff_WhenConfigEmptyOrScannerBuiltWithoutFlags(t *testing.T) {
+	assert.Equal(t, Flags{}, FlagsFromConfig(config.UnfinishedCaches{}))
+	assert.Equal(t, Flags{}, NewScanner(nil, nil).flags)
+	assert.Equal(t, Flags{}, (&GoGitVCSReader{}).effectiveFlags())
+	assert.Equal(t, Flags{}, (*Scanner)(nil).flagsOrOff())
 }
 
 func TestFlags_ShouldBeRestartOnly_WhenConfigChangesAfterStartup(t *testing.T) {
-	prev := flagsSnapshot.Load()
-	t.Cleanup(func() { flagsSnapshot.Store(prev) })
 	cfg := config.UnfinishedCaches{DiffCounter: true}
-	SetFlags(cfg)
+	s := NewScanner(nil, nil, WithFlags(FlagsFromConfig(cfg)))
 	cfg.DiffCounter = false // a later config edit or reload
 	cfg.SharedCommitState = true
-	assert.Equal(t, Flags{DiffCounter: true}, EffectiveFlags(), "snapshot changes only through SetFlags")
+	assert.Equal(t, Flags{DiffCounter: true}, s.flags, "flags change only by building a new Scanner")
+	assert.Equal(t, Flags{DiffCounter: true}, s.reader.(*GoGitVCSReader).effectiveFlags(), "the built-in reader adopts the scanner's flags")
+}
+
+func TestFlags_ShouldNotLeakBetweenScanners_WhenBuiltInAnyOrder(t *testing.T) {
+	on := NewScanner(nil, nil, WithFlags(Flags{ScanSkip: true, ScanSkipPrelude: true}))
+	off := NewScanner(nil, nil)
+	assert.True(t, on.preludeEnabled(), "a later flagless scanner must not change an earlier one's view")
+	assert.False(t, off.preludeEnabled())
+	assert.True(t, BuildReport(on).Flags["scan_skip"])
+	assert.False(t, BuildReport(off).Flags["scan_skip"])
 }
 
 func TestFlags_ShouldNotBeExpired_WhenRemoveByDateHasPassed(t *testing.T) {

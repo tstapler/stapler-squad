@@ -4,7 +4,7 @@ The scanner's shared caches sit behind four rollback-unit flags. A unit's defaul
 `config.DefaultUnfinishedCaches` (`config/config.go`) after its own manual A/B passes (`baseline.md`,
 "S2 A/B"); today all four are on (`scan_skip` last, after the round-2 A/B showed engagement). The config key is the off-switch: an absent
 key keeps the default, an explicit `false` disables the unit (`session/unfinished/flags.go:24`). Flags are read once at startup, so every
-change below needs a restart (`SetFlags`, `session/unfinished/flags.go:72`, called from `server/dependencies.go`).
+change below needs a restart (`FlagsFromConfig` in `session/unfinished/flags.go`, handed to `NewScanner` via `WithFlags` in `server/dependencies.go`).
 
 ## Read the counters (no OpenTelemetry needed)
 
@@ -13,7 +13,7 @@ curl -s localhost:8543/actuator/unfinished-scanner | jq .
 ```
 
 The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it renders
-`unfinished.BuildReport()` (`session/unfinished/report.go`), built from atomics with no lock. Keys:
+`unfinished.BuildReport(scanner)` (`session/unfinished/report.go`), built from atomics with no lock. Keys:
 
 | Key | Meaning |
 |---|---|
@@ -27,8 +27,10 @@ The handler is `handleActuatorUnfinishedScanner` (`server/actuator.go`); it rend
 | `shadow_verify` | `sampled`, `skipped_pressure`, `oracle_errors` |
 | `dirty_full_walk_total` | forced full walks by reason |
 | `scan_skip`, `signature_skip` | index-cache and untracked-directory engagement; signature `checks`, `hits`, `misses` |
-| `stat_calls_total`, `stat_calls_per_scan` | file stats issued by the scan loop |
-| `reach_builds`, `cas_retries_total`, `graph_full_fallbacks_total`, `graph_extension` | build kinds, arena/CLOCK contention, plain-walk fallbacks, walks that extended the graph (`over_100ms` slow ones) |
+| `stat_calls_total`, `stat_calls_per_scan` | file stats issued by the scan loop, including one per recorded nested `.gitignore` on every matcher-cache hit (a monorepo with thousands adds that many per hit; no DirtyGen shortcut exists because the watch is blind to in-place edits, ADR-006) |
+| `nanos_forced_hashes_total` | content hashes forced only by a sub-second mtime mismatch on a stat-clean file outside the racy window. A count that grows by roughly the same amount every scan means the filesystem reports different nanoseconds than the index recorded (bind mount, virtiofs, NFS); counted, not capped, because skipping the hash would change the dirty verdict |
+| `reach_builds`, `cas_retries_total`, `graph_full_fallbacks_total`, `graph_full_rebuilds_total`, `graph_extension` | build kinds, arena/CLOCK contention, plain-walk fallbacks, full arenas replaced (at most once per `GraphRebuildInterval`, default 5 min, per repo; the wait doubles, up to 64x, after each rebuild whose generation filled again within one further interval, so a repo with more commits than `MaxGraphCommits` backs off to hours; the rebuild also drops the repo's reach cache so the old arena is collectable; an exhausted side arena counts as full too), walks that extended the graph (`over_100ms` slow ones) |
+| `mergebase_redundancy_unproven_total{bound,pruned_miss}` (series `unfinished.repostate.mergebase_redundancy_unproven_total{outcome}`) | merge-base redundancy checks (`isAncestorOfOther` plain walk and `reaches` id walk, summed) that answered "not redundant" without finding the candidate: `bound` = the visit bound ran out, `pruned_miss` = the search ended after skipping commits older than the candidate. Both are where a skewed committer clock can leave a redundant (still valid, not best) base; a sustained rate points at clock skew or very deep criss-cross history |
 
 The same series are exported as `unfinished.repostate.*` OTel instruments
 (`session/unfinished/metrics_repostate.go`, catalog `repostateCatalog`) when telemetry is on. They are

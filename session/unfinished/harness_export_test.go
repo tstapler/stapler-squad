@@ -22,8 +22,11 @@ type CountingReader struct {
 	stats  atomic.Int64
 }
 
-func NewCountingReader() *CountingReader {
+func NewCountingReader(flags ...Flags) *CountingReader {
 	c := &CountingReader{GoGitVCSReader: &GoGitVCSReader{}}
+	if len(flags) > 0 {
+		c.setFlags(flags[0])
+	}
 	c.statFn = func(string) { c.stats.Add(1) }
 	return c
 }
@@ -95,3 +98,9 @@ func (c *CountingReader) ResolveHeadTreeCold(tb testing.TB, path string) {
 
 // DivergedWorktrees is divergedWorktrees for external-package benchmarks.
 func DivergedWorktrees(tb testing.TB, w int) []string { return divergedWorktrees(tb, w) }
+
+// readerWithFlags gives g the rollback-unit flags f and returns it.
+func readerWithFlags(f Flags, g *GoGitVCSReader) *GoGitVCSReader {
+	g.setFlags(f)
+	return g
+}

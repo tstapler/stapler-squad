@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
@@ -160,7 +163,7 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 // entry.headTreeCache above — both are entry-scoped fields protected by entry.mu).
 func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreePath string) gitignore.Matcher {
 	sig := rootGitignoreSig(worktreePath)
-	if entry.untrackedMatcherBuilt && entry.untrackedMatcherSig == sig {
+	if entry.untrackedMatcherBuilt && entry.untrackedMatcherSig == sig && g.nestedIgnoresUnchanged(entry.untrackedMatcherNested) {
 		return entry.untrackedMatcher
 	}
 
@@ -169,10 +172,11 @@ func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreeP
 	// repoCache purely for memory pressure, with HEAD never having moved.
 	if cached, ok := g.matcherCache.Load(worktreePath); ok {
 		mc, _ := cached.(*matcherCacheEntry)
-		if mc != nil && mc.headTreeHash == entry.headTreeHash && mc.ignoreSig == sig {
+		if mc != nil && mc.headTreeHash == entry.headTreeHash && mc.ignoreSig == sig && g.nestedIgnoresUnchanged(mc.nested) {
 			atomic.StoreInt64(&mc.accessedAtNs, time.Now().UnixNano())
 			entry.untrackedMatcher = mc.matcher
 			entry.untrackedMatcherSig = sig
+			entry.untrackedMatcherNested = mc.nested
 			entry.untrackedMatcherBuilt = true
 			return entry.untrackedMatcher
 		}
@@ -180,17 +184,62 @@ func (g *GoGitVCSReader) getOrBuildUntrackedMatcher(entry *cachedRepo, worktreeP
 
 	atomic.AddInt64(&g.gitignoreMatcherRebuilds, 1)
 	var m gitignore.Matcher
-	if patterns, ignErr := gitignore.ReadPatterns(osfs.New(worktreePath), nil); ignErr == nil {
+	rec := &ignoreRecorder{Filesystem: osfs.New(worktreePath), root: worktreePath}
+	if patterns, ignErr := gitignore.ReadPatterns(rec, nil); ignErr == nil {
 		m = gitignore.NewMatcher(patterns)
 	}
 	entry.untrackedMatcher = m
 	entry.untrackedMatcherSig = sig
+	entry.untrackedMatcherNested = rec.nested
 	entry.untrackedMatcherBuilt = true
 	g.matcherCache.Store(worktreePath, &matcherCacheEntry{
 		matcher:      m,
 		headTreeHash: entry.headTreeHash,
 		ignoreSig:    sig,
+		nested:       rec.nested,
 		accessedAtNs: time.Now().UnixNano(),
 	})
 	return m
+}
+
+// nestedIgnore is one non-root .gitignore the matcher was built from.
+type nestedIgnore struct {
+	path string // absolute, so a re-check joins nothing
+	sig  statSig
+}
+
+// nestedIgnoresUnchanged re-stats the recorded nested .gitignore files, one
+// counted stat each, so a monorepo's cost shows in StatCalls. A matcher with none
+// (the common case) costs nothing. No DirtyGen shortcut: the directory watch is
+// blind to in-place edits (ADR-006), so only a stat can see one.
+func (g *GoGitVCSReader) nestedIgnoresUnchanged(files []nestedIgnore) bool {
+	for _, f := range files {
+		g.noteStat(f.path)
+		if sig, ok := statPathSig(f.path); !ok || sig != f.sig {
+			return false
+		}
+	}
+	return true
+}
+
+// ignoreRecorder records every non-root .gitignore that ReadPatterns opens, so
+// the matcher build needs no second walk. The signature is taken before the
+// open: an edit racing the read then reads as changed on the next check.
+type ignoreRecorder struct {
+	billy.Filesystem
+	root   string
+	nested []nestedIgnore
+}
+
+func (r *ignoreRecorder) Open(name string) (billy.File, error) {
+	if name != ".gitignore" && path.Base(name) == ".gitignore" {
+		abs := filepath.Join(r.root, filepath.FromSlash(name))
+		sig, ok := statPathSig(abs)
+		f, err := r.Filesystem.Open(name)
+		if err == nil && ok {
+			r.nested = append(r.nested, nestedIgnore{path: abs, sig: sig})
+		}
+		return f, err
+	}
+	return r.Filesystem.Open(name)
 }
