@@ -81,6 +81,13 @@ func TestAnalysisCache_ShouldCancelPass_When_LastWaiterLeavesAndNotCacheOwned(t 
 		go func() { _, err := c.Await(ctx, k, run); errs <- err }()
 	}
 	<-started
+	// started only proves waiter 1 registered; cancelling before waiter 2 joins would drop the entry.
+	analysisEventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		e, ok := c.entries[k]
+		return ok && e.waiters == 2
+	})
 	cancel1()
 	require.ErrorIs(t, <-errs, context.Canceled)
 	s, _ := c.State(k)
