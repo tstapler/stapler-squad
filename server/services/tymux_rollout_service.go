@@ -3,9 +3,12 @@ package services
 import (
 	"context"
 
+	"errors"
+
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -19,11 +22,31 @@ import (
 // The global default is the "tymux" feature flag (config.TymuxFeatureFlag,
 // off by default) — SetTymuxGlobalOverride sets or clears that flag live
 // from the browser, no restart required.
-type TymuxRolloutService struct{}
+type TymuxRolloutService struct {
+	// detectDaemon and replaceDaemon are seams so tests need no real daemon.
+	detectDaemon  func(context.Context, tymux.DaemonConfig) tymux.DaemonVersionInfo
+	replaceDaemon func(ctx context.Context, cfg tymux.DaemonConfig, allowInterrupt bool) (tymux.DaemonVersionInfo, error)
+}
 
 // NewTymuxRolloutService creates a TymuxRolloutService.
 func NewTymuxRolloutService() *TymuxRolloutService {
-	return &TymuxRolloutService{}
+	return &TymuxRolloutService{detectDaemon: tymux.DetectDaemonVersions, replaceDaemon: tymux.ReplaceDaemon}
+}
+
+var tymuxdDirections = map[tymux.VersionDirection]sessionv1.TymuxdVersionDirection{
+	tymux.VersionSame:      sessionv1.TymuxdVersionDirection_TYMUXD_VERSION_DIRECTION_SAME,
+	tymux.VersionUpgrade:   sessionv1.TymuxdVersionDirection_TYMUXD_VERSION_DIRECTION_UPGRADE,
+	tymux.VersionDowngrade: sessionv1.TymuxdVersionDirection_TYMUXD_VERSION_DIRECTION_DOWNGRADE,
+}
+
+func daemonVersionProto(info tymux.DaemonVersionInfo) *sessionv1.TymuxdVersionInfo {
+	return &sessionv1.TymuxdVersionInfo{
+		Running:          info.Running,
+		Pid:              int32(info.PID), // #nosec G115 -- pids fit in int32
+		RunningVersion:   info.RunningVersion,
+		InstalledVersion: info.InstalledVersion,
+		Direction:        tymuxdDirections[info.Direction], // zero value (UNSPECIFIED) for unknown
+	}
 }
 
 // status builds the current TymuxRolloutStatus from live config — shared by
@@ -65,7 +88,29 @@ func (s *TymuxRolloutService) GetTymuxRolloutStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetTymuxRolloutStatusRequest],
 ) (*connect.Response[sessionv1.TymuxRolloutStatus], error) {
-	return connect.NewResponse(s.status()), nil
+	status := s.status()
+	status.Daemon = daemonVersionProto(s.detectDaemon(ctx, tymux.ResolveDaemonConfig()))
+	return connect.NewResponse(status), nil
+}
+
+// ReplaceTymuxd stops the running tymuxd and starts the configured binary in its
+// place (an upgrade or downgrade), refusing while sessions are live unless the
+// caller opts in.
+// +api: tymux-rollout:replace-daemon
+func (s *TymuxRolloutService) ReplaceTymuxd(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ReplaceTymuxdRequest],
+) (*connect.Response[sessionv1.TymuxRolloutStatus], error) {
+	after, err := s.replaceDaemon(ctx, tymux.ResolveDaemonConfig(), req.Msg.GetAllowInterruptLiveSessions())
+	if errors.Is(err, tymux.ErrLiveSessionsWouldBeInterrupted) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	status := s.status()
+	status.Daemon = daemonVersionProto(after)
+	return connect.NewResponse(status), nil
 }
 
 // CompleteTymuxRollbackRehearsal records that the tymux backend's rollback

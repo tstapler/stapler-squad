@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // newIsolatedTymuxRolloutService creates a TymuxRolloutService backed by a
@@ -17,7 +20,64 @@ import (
 func newIsolatedTymuxRolloutService(t *testing.T) *TymuxRolloutService {
 	t.Helper()
 	withIsolatedStateDir(t)
-	return NewTymuxRolloutService()
+	s := NewTymuxRolloutService()
+	// No real lsof/ss/exec probes in unit tests; version-specific tests override these.
+	s.detectDaemon = func(context.Context, tymux.DaemonConfig) tymux.DaemonVersionInfo { return tymux.DaemonVersionInfo{} }
+	s.replaceDaemon = func(context.Context, tymux.DaemonConfig, bool) (tymux.DaemonVersionInfo, error) {
+		return tymux.DaemonVersionInfo{}, errors.New("replaceDaemon not stubbed")
+	}
+	return s
+}
+
+func TestGetTymuxRolloutStatus_ReportsDaemonVersions(t *testing.T) {
+	s := newIsolatedTymuxRolloutService(t)
+	s.detectDaemon = func(context.Context, tymux.DaemonConfig) tymux.DaemonVersionInfo {
+		return tymux.DaemonVersionInfo{Running: true, PID: 99, RunningVersion: "1.3.0", InstalledVersion: "1.2.0", Direction: tymux.VersionDowngrade}
+	}
+
+	resp, err := s.GetTymuxRolloutStatus(context.Background(), connect.NewRequest(&sessionv1.GetTymuxRolloutStatusRequest{}))
+
+	require.NoError(t, err)
+	d := resp.Msg.GetDaemon()
+	assert.True(t, d.GetRunning())
+	assert.Equal(t, int32(99), d.GetPid())
+	assert.Equal(t, "1.3.0", d.GetRunningVersion())
+	assert.Equal(t, "1.2.0", d.GetInstalledVersion())
+	assert.Equal(t, sessionv1.TymuxdVersionDirection_TYMUXD_VERSION_DIRECTION_DOWNGRADE, d.GetDirection())
+}
+
+func TestReplaceTymuxd_MapsOutcomes(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantCode  connect.Code
+		wantError bool
+	}{
+		{"ok", nil, 0, false},
+		{"live sessions", fmt.Errorf("%w (2 live)", tymux.ErrLiveSessionsWouldBeInterrupted), connect.CodeFailedPrecondition, true},
+		{"other failure", errors.New("boom"), connect.CodeInternal, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newIsolatedTymuxRolloutService(t)
+			var gotAllow bool
+			s.replaceDaemon = func(_ context.Context, _ tymux.DaemonConfig, allow bool) (tymux.DaemonVersionInfo, error) {
+				gotAllow = allow
+				return tymux.DaemonVersionInfo{Running: true, RunningVersion: "1.3.0"}, tc.err
+			}
+
+			resp, err := s.ReplaceTymuxd(context.Background(), connect.NewRequest(&sessionv1.ReplaceTymuxdRequest{AllowInterruptLiveSessions: true}))
+
+			assert.True(t, gotAllow, "the opt-in flag must reach the replace call")
+			if tc.wantError {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantCode, connect.CodeOf(err))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "1.3.0", resp.Msg.GetDaemon().GetRunningVersion())
+		})
+	}
 }
 
 // TestGetTymuxRolloutStatus_GlobalEnvVarAlwaysFalse is a regression guard:
