@@ -23,12 +23,9 @@ const KNOWN: Record<string, string[]> = {
   '/changelog': ['color-contrast', 'definition-list'], // #1112
   '/login': ['color-contrast'], // #1112
   '/resolve': ['color-contrast'], // #1112
-  '/settings/backlog-sources': ['document-title'], // #1112
   '/test/escape-codes': ['label', 'select-name'], // #1112
   '/test/terminal-stress': ['color-contrast', 'select-name'], // #1112
   '/account': ['color-contrast'],
-  '/backlog': ['document-title'],
-  '/backlog/board': ['document-title'],
   '/help': ['color-contrast'],
   '/history': ['color-contrast'],
   '/logs': ['aria-required-children', 'aria-required-parent', 'color-contrast', 'scrollable-region-focusable'],

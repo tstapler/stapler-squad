@@ -209,10 +209,13 @@ export function useFeatureFlag(name: string): boolean {
 export function RequireFeatureFlag({
   flag,
   redirectTo = "/",
+  fallback = null,
   children,
 }: {
   flag: string;
   redirectTo?: string;
+  /** Rendered instead of `children` while loading or when the flag is off; must carry no gated content. */
+  fallback?: ReactNode;
   children: ReactNode;
 }) {
   const { flags, isLoading } = useFeatureFlags();
@@ -224,7 +227,6 @@ export function RequireFeatureFlag({
     }
   }, [isLoading, flags, flag, redirectTo, router]);
 
-  if (isLoading) return null;
-  if (!flags[flag]) return null;
+  if (isLoading || !flags[flag]) return <>{fallback}</>;
   return <>{children}</>;
 }

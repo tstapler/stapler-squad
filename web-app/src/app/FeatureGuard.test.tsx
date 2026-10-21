@@ -8,6 +8,7 @@ const mockGetFeatureFlags = jest.fn();
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
+  usePathname: () => "/changelog/",
 }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect", () => ({
@@ -48,5 +49,13 @@ describe("FeatureGuard", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/"));
     expect(mockReplace).toHaveBeenCalledTimes(1);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("keeps the route's <title> while flags load, without rendering any guarded content", async () => {
+    mockGetFeatureFlags.mockReturnValue(new Promise(() => {}));
+    const { container } = renderGuard("changelog");
+    await waitFor(() => expect(document.title).toBe("Stapler Squad Sessions"));
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("guarded")).not.toBeInTheDocument();
   });
 });
