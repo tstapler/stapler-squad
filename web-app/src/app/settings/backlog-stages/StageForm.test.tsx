@@ -222,6 +222,16 @@ describe("StageForm", () => {
     expect(rows[0]).toHaveTextContent("2 (human approval, automated review)");
   });
 
+  it("moves focus into the form on open: the slug when creating, the name when editing (the slug is immutable)", async () => {
+    const { unmount } = render(<StageForm stage={null} allStages={[STAGE_A, STAGE_B]} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("stage-form-slug")).toHaveFocus();
+    unmount();
+    render(<StageForm stage={STAGE_A} allStages={[STAGE_A, STAGE_B]} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("stage-form-name")).toHaveFocus();
+    expect(screen.getByTestId("stage-form")).toHaveAttribute("aria-busy", "true");
+    await waitFor(() => expect(screen.getByTestId("stage-form")).toHaveAttribute("aria-busy", "false"));
+  });
+
   it("a built-in stage's Delete button is disabled with an explanatory tooltip", async () => {
     render(<StageForm stage={STAGE_A} allStages={[STAGE_A, STAGE_B]} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
 

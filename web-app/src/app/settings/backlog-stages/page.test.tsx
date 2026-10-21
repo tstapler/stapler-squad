@@ -153,6 +153,17 @@ describe("BacklogStagesPage engine-mode banner (Story 1.3.2)", () => {
     expect(mockRefetchEngineMode).toHaveBeenCalledTimes(1);
   });
 
+  it("closing the form returns focus to the Edit button that opened it", async () => {
+    mockListStages.mockResolvedValue([makeStage({ id: "1", slug: "idea", name: "Idea" })]);
+    render(<BacklogStagesPage />);
+    await waitFor(() => expect(screen.getByTestId("backlog-stage-row-idea")).toBeInTheDocument());
+    const edit = screen.getByTestId("backlog-stage-edit-idea");
+    edit.focus();
+    fireEvent.click(edit);
+    fireEvent.click(screen.getByText("stub-save"));
+    expect(screen.getByTestId("backlog-stage-edit-idea")).toHaveFocus();
+  });
+
   it("Retry on the banner refetches the status", async () => {
     mockListStages.mockResolvedValue([]);
     mockUseEngineModeStatus.mockReturnValue({ view: pgTestView({ kind: "unknown" }), refetch: mockRefetchEngineMode });

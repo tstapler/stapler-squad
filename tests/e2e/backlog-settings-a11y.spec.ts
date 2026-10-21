@@ -296,9 +296,15 @@ for (const vp of VIEWPORTS) {
       obscured.push(...(await tabToTestId(page, "backlog-stage-edit-idea")));
       await page.keyboard.press("Enter");
       await expect(stages.form).toBeVisible();
+      // The form opens above the list: focus must follow it, not stay on a button it pushed below the fold.
+      await expect(stages.form.getByTestId("stage-form-name")).toBeFocused();
+      // Its transitions, graph and liveness sections load after mount and grow it; walk the settled form.
+      await expect(stages.form).toHaveAttribute("aria-busy", "false");
+      await expect(stages.form.getByText("Loading liveness overrides…")).toHaveCount(0);
       obscured.push(...(await tabToTestId(page, "stage-form-cancel")));
       await page.keyboard.press("Enter");
       await expect(stages.form).toHaveCount(0);
+      await expect(page.getByTestId("backlog-stage-edit-idea")).toBeFocused();
 
       // Features: toggle a flag, then open and escape the enforce dialog.
       await features.goto();

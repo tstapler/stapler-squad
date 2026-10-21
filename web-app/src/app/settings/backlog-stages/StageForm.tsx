@@ -111,6 +111,8 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
   const [removedTransitionIds, setRemovedTransitionIds] = useState<string[]>([]);
   const [allTransitions, setAllTransitions] = useState<StageTransition[]>([]);
   const [pipelineModes, setPipelineModes] = useState<PipelineMode[]>([]);
+  // False until the mount-time load settles: those sections grow the form, so tests and AT can wait on it.
+  const [loaded, setLoaded] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -123,6 +125,13 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
   const [submitting, setSubmitting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // The form opens above the list, so focus must move into it: left on the opener, it is pushed
+  // below the fold (and further as the form's async sections load).
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    firstFieldRef.current?.focus();
+  }, []);
 
   const nextKeyRef = useRef(0);
   const newRowKey = useCallback(() => `new-${nextKeyRef.current++}`, []);
@@ -149,6 +158,8 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
         }
       } catch (err) {
         if (!cancelled) setError(errorMessage(err));
+      } finally {
+        if (!cancelled) setLoaded(true);
       }
     })();
     return () => {
@@ -344,7 +355,7 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
   const deleteTooltip = builtIn ? "Built-in stage — disable it instead of deleting." : undefined;
 
   return (
-    <form className={styles.form} onSubmit={handleSubmit} data-testid="stage-form">
+    <form className={styles.form} onSubmit={handleSubmit} aria-busy={!loaded} data-testid="stage-form">
       {error && (
         <div className={styles.errorMessage} role="alert" data-testid="stage-form-error">
           {error}
@@ -387,6 +398,7 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
           disabled={Boolean(stage)}
+          ref={stage ? undefined : firstFieldRef}
           placeholder="design-review"
           data-testid="stage-form-slug"
         />
@@ -403,6 +415,7 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
           className={styles.input}
           value={name}
           onChange={(e) => setName(e.target.value)}
+          ref={stage ? firstFieldRef : undefined}
           placeholder="Design Review"
           data-testid="stage-form-name"
         />

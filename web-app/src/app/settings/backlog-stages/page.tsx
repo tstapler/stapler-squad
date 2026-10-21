@@ -86,17 +86,25 @@ function BacklogStagesPageInner() {
     editStageAppliedRef.current = true;
   }, [loading, stages, searchParams]);
 
+  const openerRef = useRef<HTMLElement | null>(null);
+  const rememberOpener = useCallback(() => {
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+  }, []);
+
   const handleNewStage = useCallback(() => {
+    rememberOpener();
     setSaveStatus("");
     setEditingStage(null);
     setCreating(true);
-  }, []);
+  }, [rememberOpener]);
 
   const handleEditStage = useCallback((stage: BacklogStage) => {
+    rememberOpener();
     setSaveStatus("");
     setCreating(false);
     setEditingStage(stage);
-  }, []);
+  }, [rememberOpener]);
 
   const closeForm = useCallback(() => {
     setCreating(false);
@@ -156,6 +164,13 @@ function BacklogStagesPageInner() {
   );
 
   const formOpen = creating || editingStage !== null;
+
+  // Closing returns focus to the control that opened the form (when it still exists).
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasOpenRef.current && !formOpen && openerRef.current?.isConnected) openerRef.current.focus();
+    wasOpenRef.current = formOpen;
+  }, [formOpen]);
 
   return (
     <>
