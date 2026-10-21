@@ -9,6 +9,9 @@
     "@vanilla-extract/css",
     "@ast-grep/cli"
   ],
+  "overrides": {
+    "eval": "0.1.8"
+  },
   "scripts": {
     "preinstall": "node -e \"if(!(process.env.npm_config_user_agent||'').startsWith('bun/')){console.error('Use bun install (bun@1.4.3); npm, yarn and pnpm are not supported in web-app/. See docs/how-to/use-bun-in-web-app.md');process.exit(1)}\"",
     "dev": "next dev --port ${PORT:-3001} --hostname localhost",
@@ -19,7 +22,10 @@
     "lint:css": "stylelint 'src/**/*.css' --allow-empty-input",
     "lint:css-vars": "node scripts/check-css-vars.mjs",
     "test": "jest",
-    "test:codemods": "node --test \"scripts/__tests__/*.test.mjs\"",
+    "test:build": "jest --selectProjects build --no-coverage",
+    "oracle:ve": "bun build/oracle/ve-oracle.ts",
+    "verify:eval-patch": "bun scripts/verify-eval-patch.mjs",
+    "test:codemods":"node --test \"scripts/__tests__/*.test.mjs\"",
     "test:watch": "jest --watch",
     "test:affected": "jest --changedSince=${BASE:-origin/main}",
     "test:e2e": "playwright test",
@@ -146,7 +152,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vanilla-extract/css": "^1.20.1",
+    "@vanilla-extract/css": "1.21.3",
+    "@vanilla-extract/integration": "8.0.11",
     "@vanilla-extract/next-plugin": "^2.5.1",
     "axe-core": "4.10.3",
     "eslint": "^9",
@@ -170,5 +177,8 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "wait-on": "^8.0.1"
+  },
+  "patchedDependencies": {
+    "eval@0.1.8": "patches/eval@0.1.8.patch"
   }
 }

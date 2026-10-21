@@ -42,6 +42,7 @@
   ],
   "exclude": [
     "node_modules",
+    "build/**",
     "src/gen/session/v1/session_connect.ts"
   ]
 }
