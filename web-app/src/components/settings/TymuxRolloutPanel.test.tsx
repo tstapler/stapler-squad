@@ -1,5 +1,7 @@
 import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { Code, ConnectError } from "@connectrpc/connect";
+import { TymuxdVersionDirection } from "@/gen/session/v1/tymux_rollout_pb";
 import { TymuxRolloutPanel } from "./TymuxRolloutPanel";
 
 jest.mock("@/lib/analytics", () => ({
@@ -13,9 +15,11 @@ const mockClient = {
   setTymuxSessionOverride: jest.fn(),
   setTymuxGlobalOverride: jest.fn(),
   restartSession: jest.fn(),
+  replaceTymuxd: jest.fn(),
 };
 
 jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
   createClient: jest.fn(() => mockClient),
 }));
 
@@ -175,5 +179,53 @@ describe("TymuxRolloutPanel", () => {
       backendOverride: "tmux",
     });
     await waitFor(() => expect(screen.getByText(/Failed to migrate "My Canary" to tmux/)).toBeInTheDocument());
+  });
+
+  describe("tymuxd version", () => {
+    const upgradeAvailable = {
+      ...emptyStatus(),
+      daemon: { running: true, pid: 42, runningVersion: "1.3.0", installedVersion: "1.4.0", direction: TymuxdVersionDirection.UPGRADE },
+    };
+
+    it("shows running vs configured versions and offers replacement when they differ", async () => {
+      mockClient.getTymuxRolloutStatus.mockResolvedValue(upgradeAvailable);
+      render(<TymuxRolloutPanel />);
+
+      await waitFor(() => expect(screen.getByTestId("tymuxd-version")).toHaveTextContent("1.3.0"));
+      expect(screen.getByTestId("tymuxd-version")).toHaveTextContent("1.4.0");
+      expect(screen.getByTestId("tymuxd-version")).toHaveTextContent("an upgrade is available");
+      expect(screen.getByTestId("tymuxd-replace")).toBeEnabled();
+    });
+
+    it("hides the replace button when versions match", async () => {
+      mockClient.getTymuxRolloutStatus.mockResolvedValue({
+        ...emptyStatus(),
+        daemon: { running: true, pid: 42, runningVersion: "1.3.0", installedVersion: "1.3.0", direction: TymuxdVersionDirection.SAME },
+      });
+      render(<TymuxRolloutPanel />);
+
+      await waitFor(() => expect(screen.getByTestId("tymuxd-version")).toHaveTextContent("up to date"));
+      expect(screen.queryByTestId("tymuxd-replace")).not.toBeInTheDocument();
+    });
+
+    it("asks for confirmation when live sessions block the replace, then retries with the opt-in", async () => {
+      mockClient.getTymuxRolloutStatus.mockResolvedValue(upgradeAvailable);
+      mockClient.replaceTymuxd
+        .mockRejectedValueOnce(new ConnectError("2 live", Code.FailedPrecondition))
+        .mockResolvedValueOnce({
+          ...emptyStatus(),
+          daemon: { running: true, pid: 43, runningVersion: "1.4.0", installedVersion: "1.4.0", direction: TymuxdVersionDirection.SAME },
+        });
+      render(<TymuxRolloutPanel />);
+
+      await waitFor(() => screen.getByTestId("tymuxd-replace"));
+      fireEvent.click(screen.getByTestId("tymuxd-replace"));
+      await waitFor(() => screen.getByTestId("tymuxd-replace-anyway"));
+      expect(mockClient.replaceTymuxd).toHaveBeenLastCalledWith({ allowInterruptLiveSessions: false });
+
+      fireEvent.click(screen.getByTestId("tymuxd-replace-anyway"));
+      await waitFor(() => expect(screen.getByTestId("tymuxd-version")).toHaveTextContent("up to date"));
+      expect(mockClient.replaceTymuxd).toHaveBeenLastCalledWith({ allowInterruptLiveSessions: true });
+    });
   });
 });

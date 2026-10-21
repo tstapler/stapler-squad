@@ -1,9 +1,9 @@
 /** Characterises the raw replaceState call in useUpNextTab before it moves behind the nav facade. */
 import { act, renderHook } from "@testing-library/react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import { useUpNextTab } from "../useUpNextTab";
 
-jest.mock("next/navigation", () => ({ useSearchParams: jest.fn() }));
+jest.mock("@/lib/nav", () => ({ ...jest.requireActual("@/lib/nav/impl.memory"), useSearchParams: jest.fn() }));
 
 describe("useUpNextTab raw History use", () => {
   it("passes the existing history.state and the new ?tab= to replaceState", () => {

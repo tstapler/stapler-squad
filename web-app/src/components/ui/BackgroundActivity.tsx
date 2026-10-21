@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import {
   isExceptionState,

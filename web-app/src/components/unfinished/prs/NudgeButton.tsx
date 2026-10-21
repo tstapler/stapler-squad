@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { NudgeOutcome } from "@/gen/session/v1/github_user_pb";
 import { LinkedSessionStatus, type UserPR } from "@/gen/session/v1/types_pb";
 import { prAttention } from "@/lib/unfinished/prAttention";

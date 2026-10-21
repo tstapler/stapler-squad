@@ -8,10 +8,10 @@ package unfinished
 // pluggable-gitstore.md for the underlying mechanism.
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // TestPerRepoObjectCacheSize_IsSmallerThanGoGitDefault guards the actual
@@ -55,8 +55,7 @@ func TestGogitstoreRegistry_SameInstanceAcrossCalls(t *testing.T) {
 func TestOpenRepoEntry_TwoWorktreesOfSameRepo_ShareOneIndexParse(t *testing.T) {
 	t.Parallel()
 	mainRepo := initRepoInternal(t)
-	linkedPath := filepath.Join(filepath.Dir(mainRepo), "linked-worktree-gogitstore")
-	gitRunInternal(t, mainRepo, "worktree", "add", linkedPath, "-b", "gogitstore-feature")
+	linkedPath := testrepo.NewLinkedWorktree(t, mainRepo, "linked-worktree-gogitstore", "gogitstore-feature")
 
 	g := &GoGitVCSReader{}
 

@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { usePageView } from "@/lib/analytics/usePageView";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
 import { SessionType } from "@/gen/session/v1/types_pb";

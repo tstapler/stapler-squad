@@ -4,7 +4,8 @@ import { useUnsavedChangesGuard } from "./useUnsavedChangesGuard";
 
 const replace = jest.fn();
 const push = jest.fn();
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav"),
   useRouter: () => ({ replace, push }),
 }));
 
@@ -62,7 +63,7 @@ describe("useUnsavedChangesGuard", () => {
     const { rerender } = render(<Harness dirty={false} />);
     rerender(<Harness dirty />);
     expect(pushState).toHaveBeenCalledTimes(1);
-    expect(pushState).toHaveBeenCalledWith({ ssqLeaveGuard: true }, "", window.location.href);
+    expect(pushState).toHaveBeenCalledWith({ ssqLeaveGuard: true }, "");
   });
 
   it("Back opens the dialog; Keep editing re-arms; a second Back re-opens it; Discard completes the Back", () => {

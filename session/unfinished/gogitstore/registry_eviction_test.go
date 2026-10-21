@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -52,9 +51,6 @@ func seedFakeStore(reg *Registry, key string, unusedSinceNs int64) *SharedObject
 // --- (a) never evict while refcount > 0 -----------------------------------
 
 func TestRegistry_Prune_should_neverEvict_When_RefCountNonzero(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	mainRepo := filepath.Join(dir, "main")
 	buildPackedFixture(t, mainRepo, 20)
@@ -98,9 +94,6 @@ func TestRegistry_Prune_should_neverEvict_When_RefCountNonzero(t *testing.T) {
 // --- (b) becomes evictable once refcount drops to zero ---------------------
 
 func TestRegistry_Prune_should_evict_When_RefCountZero_AndPastTTL(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	mainRepo := filepath.Join(dir, "main")
 	buildPackedFixture(t, mainRepo, 20)
@@ -154,17 +147,12 @@ func TestRegistry_Prune_should_evict_When_RefCountZero_AndPastTTL(t *testing.T) 
 // evictable once all 3 have released it. This specifically exercises
 // counting (refcount 3 → 2 → 1 → 0), not just a binary in-use check.
 func TestRegistry_ThreeWorktreesOfOneRepo_OnlyFullyReleasedStoreIsEvicted(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	mainRepo := filepath.Join(dir, "main")
 	buildPackedFixture(t, mainRepo, 20)
 
-	wt1 := filepath.Join(dir, "wt1")
-	wt2 := filepath.Join(dir, "wt2")
-	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", "wt1-branch", wt1, "main")
-	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", "wt2-branch", wt2, "main")
+	wt1 := addWorktree(t, mainRepo, filepath.Join(dir, "wt1"), "wt1-branch")
+	wt2 := addWorktree(t, mainRepo, filepath.Join(dir, "wt2"), "wt2-branch")
 
 	reg := &Registry{CacheMaxSize: 1} // tiny budget: maximize eviction pressure
 	withRegistryHeapPressure(t, registrySevereMemoryPressureThreshold+1)
@@ -363,9 +351,6 @@ func TestRegistry_Prune_should_LRUTrimZeroRefcountStores_When_OverBudget(t *test
 // pinned store is never removed from the registry and its refcount never
 // drops below 1.
 func TestRegistry_ConcurrentOpenClose_NeverEvictsInUseStore(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	if testing.Short() {
 		// Builds two 30-commit packed fixtures via buildPackedFixture (the same
 		// slow git-subprocess-heavy helper gogitstore_test.go's -short guards
@@ -646,9 +631,6 @@ func (c *countingFs) allClosedWithSuffix(suffix string) bool {
 // embedded *filesystem.Storage), so leaving it nil is deliberate, not an
 // oversight.
 func TestPackHandleCache_ReusesOpenHandleAcrossReads_AndClosesOnRelease(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	mainRepo := filepath.Join(dir, "main")
 	buildPackedFixture(t, mainRepo, 80)
@@ -697,9 +679,6 @@ func TestPackHandleCache_ReusesOpenHandleAcrossReads_AndClosesOnRelease(t *testi
 // re-introducing the cross-worktree handle-sharing race the design doc's
 // §4.1 explicitly rejects.
 func TestPackHandleCache_DifferentWorktrees_DoNotShareOneHandle(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	dir := t.TempDir()
 	mainRepo := filepath.Join(dir, "main")
 	buildPackedFixture(t, mainRepo, 80)
@@ -754,7 +733,7 @@ func firstPackedHashes(t *testing.T, store *SharedObjectStore, n int) []plumbing
 			hashes = append(hashes, e.Hash)
 		}
 		_ = it.Close()
-		break // buildPackedFixture's `git gc --aggressive` produces one pack
+		break // buildPackedFixture's repack produces one pack
 	}
 	return hashes
 }
@@ -763,9 +742,6 @@ func firstPackedHashes(t *testing.T, store *SharedObjectStore, n int) []plumbing
 // a decoded-object cache hit must not touch the loose-object directory (it used
 // to Lstat+Open the loose path first, then return the cached object anyway).
 func TestEncodedObject_CachedHit_DoesNotProbeLooseObjectPath(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	mainRepo := filepath.Join(t.TempDir(), "main")
 	buildPackedFixture(t, mainRepo, 80)
 	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(mainRepo)
@@ -802,9 +778,6 @@ func TestEncodedObject_CachedHit_DoesNotProbeLooseObjectPath(t *testing.T) {
 // not-found, and one that has dropped out of the pack index (pruned/repacked
 // away) is not-found too rather than served from the cache.
 func TestEncodedObject_CachedHit_KeepsNotFoundSemantics(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 	mainRepo := filepath.Join(t.TempDir(), "main")
 	buildPackedFixture(t, mainRepo, 80)
 	_, commonFs, _, commonDirAbs, err := resolveGitFilesystems(mainRepo)

@@ -1,7 +1,7 @@
 "use client";
 // analytics-exempt
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { useEffect, Suspense } from "react";
 
 function RedirectContent() {

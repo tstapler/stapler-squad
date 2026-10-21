@@ -2,7 +2,7 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import { AppLink } from "./AppLink";
 
-// next/link wrapper with prefetch disabled by default.
+// Facade Link; Storybook aliases the nav impl to the in-memory fake.
 const meta: Meta<typeof AppLink> = {
   component: AppLink,
   title: "UI/AppLink",
@@ -17,7 +17,4 @@ export const LongLabel: Story = {
       <AppLink href="/history">A very long link label that has to wrap across several lines in a narrow column</AppLink>
     </div>
   ),
-};
-export const WithPrefetch: Story = {
-  render: () => <AppLink href="/review-queue" prefetch>Review queue (prefetch enabled)</AppLink>,
 };

@@ -6,7 +6,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fixtures = () => require("./omnibarTestFixtures");
 
-jest.doMock("next/navigation", () => fixtures().mockNextNavigationModule());
+jest.doMock("@/lib/nav", () => fixtures().mockNextNavigationModule());
 jest.doMock("@/lib/contexts/ThemeContext", () => fixtures().mockThemeContextModule());
 jest.doMock("@/lib/config", () => fixtures().mockConfigModule());
 jest.doMock("@/lib/hooks/usePathCompletions", () => fixtures().mockUsePathCompletionsModule());

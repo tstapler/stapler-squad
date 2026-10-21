@@ -5,7 +5,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fixtures = () => require("./backlogPageTestFixtures");
 
-jest.doMock("next/navigation", () => fixtures().nextNavigationMock());
+jest.doMock("@/lib/nav", () => fixtures().nextNavigationMock());
 jest.doMock("@/lib/analytics", () => fixtures().analyticsMock());
 jest.doMock("@/lib/analytics/usePageView", () => fixtures().usePageViewMock());
 jest.doMock("@/components/backlog/BacklogItemDetail", () => fixtures().backlogItemDetailMock());

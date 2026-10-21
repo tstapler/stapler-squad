@@ -5,7 +5,7 @@ import { PiDisableWarningDialog } from "@/components/settings/PiDisableWarningDi
 import { PI_SUPPORT_FLAG_NAME } from "@/lib/constants/programs";
 import { GateStatusLine } from "./GateStatusLine";
 import { GateKindOverrides, type OverrideMode } from "./GateKindOverrides";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { routes } from "@/lib/routes";
 import {
   CALLER_CLASSES,

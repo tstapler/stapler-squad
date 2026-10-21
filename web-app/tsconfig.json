@@ -25,6 +25,9 @@
       "@/lib/lazy/impl": [
         "./src/lib/lazy/impl.next.tsx"
       ],
+      "@/lib/nav/impl": [
+        "./src/lib/nav/impl.next.tsx"
+      ],
       "@/*": [
         "./src/*"
       ]

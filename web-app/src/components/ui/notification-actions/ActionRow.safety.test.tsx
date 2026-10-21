@@ -51,7 +51,7 @@ const DELAY = 3_000;
 const rework = "action-backlog_decision-rework";
 const accept = "action-backlog_decision-accept";
 const pathname = { current: "/" };
-jest.mock("next/navigation", () => ({ usePathname: () => pathname.current }));
+jest.mock("@/lib/nav", () => ({ usePathname: () => pathname.current }));
 
 describe("Task 2.10c: commit delay with Undo (UX-AC63)", () => {
   beforeEach(() => {

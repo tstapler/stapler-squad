@@ -15,7 +15,8 @@ import { render, screen } from "@testing-library/react";
 import SessionSummaryPage from "../page";
 
 const mockUseSearchParams = jest.fn();
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useSearchParams: () => mockUseSearchParams(),
 }));
 

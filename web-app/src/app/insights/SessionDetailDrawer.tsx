@@ -3,7 +3,7 @@
 
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import {

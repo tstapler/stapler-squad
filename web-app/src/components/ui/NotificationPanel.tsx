@@ -3,7 +3,7 @@
 
 import { resetBellPos } from "@/lib/utils/deckSettings";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";

@@ -13,7 +13,7 @@
  *   /test/layout-overlap?mode=rq      — review-queue page modal
  */
 
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import { Suspense } from "react";
 
 const HEADER_HEIGHT = "4rem"; // mirrors --header-height in globals.css

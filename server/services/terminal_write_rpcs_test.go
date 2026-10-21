@@ -37,6 +37,7 @@ var notTerminalWriteReasons = map[string]string{
 	"HandoffSummaryService.TriggerHandoffSummary":  `restart with a handoff summary goes through Instance.Restart, pinned by the lifecycle caller test`,
 	"GuidanceRequestService.AnswerGuidanceRequest": `stores an answer for the triage pipeline; types into no pane`,
 	"HeadlessService.RunHeadlessCall":              `headless call, no pane`,
+	"TymuxRolloutService.ReplaceTymuxd":            `restarts the tymuxd process; panes are revived by the daemon, nothing is typed`,
 }
 
 // notTerminalWriteRPCs lists every other RPC, per service.
@@ -140,7 +141,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"GetSessionSummary", "RegenerateSessionSummary",
 	},
 	"TymuxRolloutService": {
-		"CompleteTymuxRollbackRehearsal", "GetTymuxRolloutStatus", "SetTymuxGlobalOverride",
+		"CompleteTymuxRollbackRehearsal", "GetTymuxRolloutStatus", "ReplaceTymuxd", "SetTymuxGlobalOverride",
 		"SetTymuxSessionOverride",
 	},
 	"UnfinishedWorkService": {

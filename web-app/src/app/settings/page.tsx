@@ -2,7 +2,7 @@
 
 // analytics-exempt
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { Link, useSearchParams } from "@/lib/nav";
 import * as Tabs from "@radix-ui/react-tabs";
 import { GlobalDefaultsForm } from "@/components/settings/GlobalDefaultsForm";
 import { ProfilesManager } from "@/components/settings/ProfilesManager";
@@ -20,7 +20,6 @@ import { usePageView } from "@/lib/analytics/usePageView";
 import { useOnboardingContext } from "@/lib/contexts/OnboardingContext";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { routes } from "@/lib/routes";
-import Link from "next/link";
 import * as styles from "./settings.css";
 
 function SettingsPageInner() {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { bannerText, isFullyConfirmedEnforced, reviewLine } from "@/lib/hooks/useEngineModeStatus";
 import type { EngineModeView } from "@/lib/hooks/useEngineModeStatus";
 import * as styles from "./page.css";

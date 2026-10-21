@@ -8,7 +8,7 @@ const LAST_FOCUSED_KEY = "cockpit.lastFocusedWindowId";
 const mockReplace = jest.fn();
 let mockSearchParams = new URLSearchParams();
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockSearchParams,
   useRouter: () => ({ replace: mockReplace }),
 }));
@@ -48,7 +48,7 @@ describe("useWindowUrlSync", () => {
 
     expect(result.current.currentWindowId).toBe("win-2");
     expect(mockReplace).toHaveBeenCalledTimes(1);
-    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("window=win-2"), { scroll: false });
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("window=win-2"), { resetScroll: false });
   });
 
   it("useWindowUrlSync_should_selfHealToFirstWindowAndCorrectUrl_When_paramNamesWindowClosedByAnotherTab", () => {
@@ -59,7 +59,7 @@ describe("useWindowUrlSync", () => {
 
     expect(result.current.currentWindowId).toBe("win-1");
     expect(mockReplace).toHaveBeenCalledTimes(1);
-    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("window=win-1"), { scroll: false });
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("window=win-1"), { resetScroll: false });
   });
 
   it("useWindowUrlSync_should_navigateUrlOnlyWithoutDispatchingAction_When_switchToWindowIsCalled", () => {
@@ -76,7 +76,7 @@ describe("useWindowUrlSync", () => {
     const [url, opts] = mockReplace.mock.calls[0];
     expect(url).toContain("window=win-2");
     expect(url).toContain("session=abc");
-    expect(opts).toEqual({ scroll: false });
+    expect(opts).toEqual({ resetScroll: false });
     expect(localStorage.getItem(LAST_FOCUSED_KEY)).toBe("win-2");
     expect(dispatchSpy).not.toHaveBeenCalled();
   });

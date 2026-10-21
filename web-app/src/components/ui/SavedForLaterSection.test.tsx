@@ -3,14 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { SavedForLaterSection } from "./SavedForLaterSection";
 import { makeGuidanceRow } from "./__fixtures__/notificationFixtures";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 
 const saved = (over = {}) =>
   makeGuidanceRow({ id: "g1", source: "agent_mcp", status: "answered", answer: "Redis", deliveryState: "saved_for_later", deliveryRoute: "resume", sessionUuid: "uuid-1", ...over });

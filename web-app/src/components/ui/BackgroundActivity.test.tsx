@@ -8,14 +8,18 @@ import { formatClockTime } from "./OfflineBanner";
 import { resetReviewedMarksForTests } from "@/lib/hooks/useReviewedMarks";
 import { makeBackgroundRow, makeElevenStopped, makeHiddenSession, makeStoppedSessions } from "./__fixtures__/notificationFixtures";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [k: string]: unknown }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 
 const exceptionRow = (over: Parameters<typeof makeBackgroundRow>[0] = {}): ActivityRow => {
   const ex = makeBackgroundRow(over);

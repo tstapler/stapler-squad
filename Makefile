@@ -74,6 +74,7 @@ ifneq ($(wildcard .tool-versions),)
 		asdf install; \
 	fi
 endif
+	@which rg >/dev/null 2>&1 || { which brew >/dev/null 2>&1 && brew install ripgrep; } || echo "⚠️  ripgrep (rg) not found; codemod verification commands in project_plans use it"
 	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which bun >/dev/null 2>&1; then \
 		touch $(ASDF_STAMP); \
 	else \
@@ -666,6 +667,7 @@ test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for pac
 
 test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
 	cd web-app && BASE=$(or $(BASE),origin/main) bun run test:affected
+	cd web-app && bun run test:codemods
 
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
@@ -839,6 +841,9 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
 	go install github.com/mibk/dupl@latest
 	go install gotest.tools/gotestsum@v1.13.0
+	@echo "Checking web-app codemod tooling (ast-grep is a pinned web-app devDependency; never use the shadow-utils sg)..."
+	@which rg >/dev/null 2>&1 || (echo "❌ ripgrep (rg) missing: brew install ripgrep" && exit 1)
+	@cd web-app && bun install --frozen-lockfile >/dev/null && node_modules/.bin/ast-grep --version
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis

@@ -1,6 +1,6 @@
 "use client";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { tooltipContent, tooltipArrow, tooltipLink } from "./Tooltip.css";
 
 type Side = "top" | "right" | "bottom" | "left";

@@ -5,14 +5,18 @@ import { NotificationItem } from "./NotificationItem";
 import { makeApprovalDescriptors, makeNotification } from "./__fixtures__/notificationFixtures";
 import { invokeMock, respondWith } from "./__fixtures__/actionRowHarness";
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
-}));
+jest.mock("@/lib/nav", () =>
+  require("@/lib/nav/testing-mock").navMockFromNext({
+    link: () => ({
+      __esModule: true,
+      default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
+        <a href={href} {...props}>
+          {children}
+        </a>
+      ),
+    }),
+  }),
+);
 jest.mock("@/lib/api/notificationActionApi", () => ({ invokeNotificationAction: jest.fn() }));
 let inlineOn = true;
 jest.mock("@/lib/hooks/useFeatureFlagValue", () => ({

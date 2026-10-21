@@ -4,7 +4,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";

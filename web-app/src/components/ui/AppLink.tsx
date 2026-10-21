@@ -1,1 +1,1 @@
-export { NavLink as AppLink } from "@/lib/navigation/NavLink";
+export { Link as AppLink } from "@/lib/nav";

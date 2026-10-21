@@ -283,6 +283,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"CompleteTymuxRollbackRehearsal": "tymux-rollout:complete-rehearsal",
 	"SetTymuxSessionOverride":        "tymux-rollout:set-session-override",
 	"SetTymuxGlobalOverride":         "tymux-rollout:set-global-override",
+	"ReplaceTymuxd":                  "tymux-rollout:replace-daemon",
 	// Approval rules RPCs
 	"BulkUpsertRules":       "approval:bulk-upsert-rules",
 	"ExportRules":           "approval:export-rules",

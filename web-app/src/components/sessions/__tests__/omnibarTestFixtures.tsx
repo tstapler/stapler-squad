@@ -36,6 +36,7 @@ export const mockUseAliases = jest.fn();
 
 export function mockNextNavigationModule() {
   return {
+    ...jest.requireActual("@/lib/nav/impl.memory"),
     usePathname: jest.fn(),
     useRouter: jest.fn(() => ({ push: jest.fn(), replace: jest.fn() })),
   };

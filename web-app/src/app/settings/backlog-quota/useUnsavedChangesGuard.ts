@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { pushHistoryMarker, useRouter } from "@/lib/nav";
 
 type PendingLeave = { kind: "back" } | { kind: "link"; href: string };
 
@@ -12,7 +12,6 @@ export interface UnsavedChangesGuard {
   discard: () => void;
 }
 
-const SENTINEL = { ssqLeaveGuard: true };
 
 function isPlainSameOriginNavigation(a: HTMLAnchorElement, e: MouseEvent): boolean {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return false;
@@ -42,7 +41,7 @@ export function useUnsavedChangesGuard({
   dirtyRef.current = dirty;
 
   const arm = useCallback(() => {
-    window.history.pushState(SENTINEL, "", window.location.href);
+    pushHistoryMarker("ssqLeaveGuard", true);
     armedRef.current = true;
   }, []);
 

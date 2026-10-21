@@ -2,7 +2,7 @@
 
 // analytics-exempt
 import { Suspense, useState, useEffect, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "@/lib/nav";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type Fuse from "fuse.js";

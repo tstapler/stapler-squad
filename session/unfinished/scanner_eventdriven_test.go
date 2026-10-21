@@ -486,3 +486,44 @@ func TestScanner_startTreeWatch_should_watchReposAddedBeforeStart(t *testing.T) 
 	assert.Equal(t, []string{"/r/early"}, fw.added)
 	assert.Equal(t, 2*time.Minute, func() time.Duration { s.tickInterval = time.Minute; return s.backstopInterval() }())
 }
+
+// A tree event must mark DirtyGen synchronously, before the debounce flush, so a
+// scan_skip clean verdict cannot be served after it.
+func TestScanner_onTreeChange_should_forceFullWalkImmediately_When_DebounceStillPending(t *testing.T) {
+	t.Parallel()
+	_, dir := trackedRepo(t, map[string]string{"a.txt": "a\n"})
+	g, _ := dirtyGenReader()
+	g.ArmDirty(dir)
+	rescan(t, g, dir)
+	rescan(t, g, dir)
+	require.False(t, g.dirtyGenFor(dir).Peek().FullWalk, "precondition: armed and clean, caches trusted")
+
+	s := &Scanner{scanQueue: make(chan scanTask, 50), reader: g, fsDebounce: time.Hour}
+	s.onTreeChange(context.Background(), dir, gitEventRepoRoot)
+
+	assert.Empty(t, s.scanQueue, "the debounced flush has not fired")
+	dec := g.dirtyGenFor(dir).Peek()
+	assert.True(t, dec.FullWalk || dec.DirtyHint, "tree event invalidated the clean verdict before the debounce elapsed")
+
+	decodes := g.ScanSkipStats().IndexDecodes
+	rescan(t, g, dir)
+	assert.Greater(t, g.ScanSkipStats().IndexDecodes, decodes, "the next scan refreshed the index cache instead of trusting it")
+}
+
+func TestScanner_onTreeChange_should_overflowEveryWorktree_When_ScopeIsAll(t *testing.T) {
+	t.Parallel()
+	_, repo := trackedRepo(t, map[string]string{"a.txt": "a\n"})
+	_, linked := trackedRepo(t, map[string]string{"b.txt": "b\n"})
+	g, _ := dirtyGenReader()
+	g.ArmDirty(repo)
+	g.ArmDirty(linked)
+	rescan(t, g, repo)
+	rescan(t, g, linked)
+
+	s := &Scanner{scanQueue: make(chan scanTask, 50), reader: g, fsDebounce: time.Hour}
+	s.indexRepoWorktree(repo, linked)
+	s.onTreeChange(context.Background(), repo, gitEventAllWorktrees)
+
+	assert.True(t, g.dirtyGenFor(repo).Peek().FullWalk)
+	assert.True(t, g.dirtyGenFor(linked).Peek().FullWalk)
+}

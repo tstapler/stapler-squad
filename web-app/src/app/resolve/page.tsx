@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useState, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { usePageView } from "@/lib/analytics/usePageView";
 import {
   DeepLinkErrorBanner,
