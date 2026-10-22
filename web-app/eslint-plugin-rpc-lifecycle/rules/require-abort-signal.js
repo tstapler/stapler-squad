@@ -76,7 +76,7 @@ module.exports = {
     // Deliberately NOT AST-based (no getCommentsBefore/parent-walk): that
     // approach worked under plain espree in manual testing but silently
     // failed to find an otherwise-correctly-placed exempt comment when
-    // linted for real via `next lint` (@typescript-eslint/parser) — the two
+    // linted for real via `eslint` (@typescript-eslint/parser) — the two
     // parsers attach comments to different node boundaries for the same
     // source text. Scanning raw comments by line number sidesteps parser-
     // specific comment/node attachment entirely.
