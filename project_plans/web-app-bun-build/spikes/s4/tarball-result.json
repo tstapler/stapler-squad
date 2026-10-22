@@ -1,0 +1,67 @@
+[
+  {
+    "spec": "react-router@7.18.4",
+    "version": "7.18.4",
+    "optionalDependencies": null,
+    "dependencies": {
+      "cookie": "^1.0.1",
+      "set-cookie-parser": "^2.6.0"
+    },
+    "hostPrefixedSources": [],
+    "remoteSourceDependencies": [],
+    "installScripts": [],
+    "localOnlyHooksPresent": [],
+    "allScripts": {
+      "build": "wireit",
+      "watch": "tsup --watch & tsup --config tsup.config.rsc.ts --watch",
+      "typecheck": "tsc"
+    },
+    "deprecated": null,
+    "onBannedList": false,
+    "pass": true
+  },
+  {
+    "spec": "cookie@1.1.1",
+    "version": "1.1.1",
+    "optionalDependencies": null,
+    "dependencies": null,
+    "hostPrefixedSources": [],
+    "remoteSourceDependencies": [],
+    "installScripts": [],
+    "localOnlyHooksPresent": [
+      "prepare",
+      "prepublishOnly"
+    ],
+    "allScripts": {
+      "bench": "vitest bench",
+      "build": "ts-scripts build",
+      "format": "ts-scripts format",
+      "prepare": "ts-scripts install",
+      "prepublishOnly": "npm run build",
+      "specs": "ts-scripts specs",
+      "test": "ts-scripts test"
+    },
+    "deprecated": null,
+    "onBannedList": false,
+    "pass": true
+  },
+  {
+    "spec": "set-cookie-parser@2.7.2",
+    "version": "2.7.2",
+    "optionalDependencies": null,
+    "dependencies": null,
+    "hostPrefixedSources": [],
+    "remoteSourceDependencies": [],
+    "installScripts": [],
+    "localOnlyHooksPresent": [],
+    "allScripts": {
+      "lint": "eslint . --ignore-pattern '!.eslintrc.js'",
+      "test": "npm run lint && mocha",
+      "autofix": "npm run lint -- --fix",
+      "precommit": "npm test"
+    },
+    "deprecated": null,
+    "onBannedList": false,
+    "pass": true
+  }
+]

@@ -1,0 +1,737 @@
+{
+  "router": "react-router@7.18.4",
+  "chromium": "145.0.7632.6",
+  "base": "http://127.0.0.1:62875",
+  "matching": {
+    "routesTested": 44,
+    "coldLoadsPlainAndSlash": 88,
+    "mismatches": [],
+    "settingsH1": {
+      "/settings": "Settings",
+      "/settings/": "Settings"
+    },
+    "clientSlash": {
+      "pathname": "/settings/",
+      "h1": "Settings",
+      "rrLocation": "/settings/"
+    },
+    "notFound": "Not found",
+    "pageErrors": []
+  },
+  "titles": {
+    "initialTitle": "Stapler Squad Sessions",
+    "afterClientNavToHistory": "History - Stapler Squad",
+    "wanted": "History - Stapler Squad",
+    "announcerReadsTitleAfterCommit": [
+      "History - Stapler Squad"
+    ],
+    "layoutEffectTitlesPerNav": [
+      "Stapler Squad Sessions",
+      "History - Stapler Squad"
+    ],
+    "routesWalked": 44,
+    "titleMismatches": [],
+    "trailingSlashClientNavTitle": "History - Stapler Squad",
+    "titleElements": [
+      {
+        "parent": "HEAD",
+        "text": "History - Stapler Squad"
+      },
+      {
+        "parent": "HEAD",
+        "text": "boot"
+      }
+    ]
+  },
+  "prototypeScroll": [
+    {
+      "scroll": "window",
+      "restoration": false,
+      "keep": false,
+      "before": {
+        "win": 1200,
+        "main": 0
+      },
+      "afterForward": {
+        "win": 1200,
+        "main": 0
+      },
+      "afterBack": {
+        "win": 1200,
+        "main": 0
+      }
+    },
+    {
+      "scroll": "window",
+      "restoration": true,
+      "keep": false,
+      "before": {
+        "win": 1200,
+        "main": 0
+      },
+      "afterForward": {
+        "win": 0,
+        "main": 0
+      },
+      "afterBack": {
+        "win": 1200,
+        "main": 0
+      }
+    },
+    {
+      "scroll": "main",
+      "restoration": false,
+      "keep": false,
+      "before": {
+        "win": 0,
+        "main": 1200
+      },
+      "afterForward": {
+        "win": 0,
+        "main": 1200
+      },
+      "afterBack": {
+        "win": 0,
+        "main": 300
+      }
+    },
+    {
+      "scroll": "main",
+      "restoration": true,
+      "keep": false,
+      "before": {
+        "win": 0,
+        "main": 1200
+      },
+      "afterForward": {
+        "win": 0,
+        "main": 1200
+      },
+      "afterBack": {
+        "win": 0,
+        "main": 300
+      }
+    },
+    {
+      "scroll": "window",
+      "restoration": true,
+      "keep": true,
+      "before": {
+        "win": 1200,
+        "main": 0
+      },
+      "afterForward": {
+        "win": 1200,
+        "main": 0
+      },
+      "afterBack": {
+        "win": 1200,
+        "main": 0
+      }
+    }
+  ],
+  "pushReplaceMatrix": [
+    {
+      "label": "router.push -> navigate(to)",
+      "before": "/unfinished?tab=a",
+      "after": "/history",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "router.replace -> navigate(to,{replace:true})",
+      "before": "/unfinished?tab=a",
+      "after": "/history",
+      "historyLengthDelta": 0,
+      "kind": "replace/no-new-entry"
+    },
+    {
+      "label": "Link default (different URL)",
+      "before": "/",
+      "after": "/history",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "Link replace (different URL)",
+      "before": "/",
+      "after": "/history",
+      "historyLengthDelta": 0,
+      "kind": "replace/no-new-entry"
+    },
+    {
+      "label": "Link to the SAME url (default)",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished?tab=a",
+      "historyLengthDelta": 0,
+      "kind": "replace/no-new-entry"
+    },
+    {
+      "label": "navigate(sameUrl) push",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished?tab=a",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "navigate('?tab=b') search-only push",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished?tab=b",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "ReplaceSearch -> navigate('?tab=b',{replace:true})",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished?tab=b",
+      "historyLengthDelta": 0,
+      "kind": "replace/no-new-entry"
+    },
+    {
+      "label": "navigate('#x') hash-only",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished#x",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "setSearchParams default",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished?tab=b",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "setSearchParams {replace:true}",
+      "before": "/unfinished?tab=a",
+      "after": "/unfinished?tab=b",
+      "historyLengthDelta": 0,
+      "kind": "replace/no-new-entry"
+    },
+    {
+      "label": "<Redirect> = <Navigate to> default (navigate to /__redir; 2 = redirect pushed, 1 = replaced it)",
+      "before": "/",
+      "after": "/history",
+      "historyLengthDelta": 2,
+      "kind": "other"
+    },
+    {
+      "label": "<Redirect> = <Navigate to replace> (navigate to /__redir-replace)",
+      "before": "/",
+      "after": "/history",
+      "historyLengthDelta": 1,
+      "kind": "push"
+    },
+    {
+      "label": "back() -> navigate(-1)",
+      "before": "/history",
+      "after": "/",
+      "historyLengthDelta": 0,
+      "kind": "traverse (length unchanged, index -1)"
+    }
+  ],
+  "searchParams": {
+    "initialTab": "a",
+    "rawReplace": {
+      "locationSearch": "?tab=b",
+      "useSearchParamsTab": "a",
+      "rrRouterStateSearch": "?tab=a",
+      "historyLengthDelta": 0
+    },
+    "replaceSearchAfterRaw": {
+      "useSearchParamsTab": "b",
+      "locationSearch": "?tab=b",
+      "historyLengthDelta": 0
+    },
+    "replaceSearchClean": {
+      "useSearchParamsTab": "b",
+      "locationSearch": "?tab=b",
+      "historyLengthDelta": 0
+    }
+  },
+  "foreignState": {
+    "stateAfterLoad": {
+      "idx": 0
+    },
+    "afterMarkReplace": {
+      "idx": 0,
+      "ssqTray": true
+    },
+    "afterRRPush": {
+      "state": {
+        "usr": null,
+        "key": "qw3x519d",
+        "idx": 1
+      }
+    },
+    "afterBack": {
+      "state": {
+        "idx": 0,
+        "ssqTray": true
+      },
+      "markerRetained": true
+    },
+    "afterRRReplaceOnMarkedEntry": {
+      "state": {
+        "usr": null,
+        "key": "sfjvb2n0",
+        "idx": 0
+      },
+      "markerRetained": false
+    },
+    "afterRRReplaceThenRemerge": {
+      "state": {
+        "usr": null,
+        "key": "y267lqul",
+        "idx": 0,
+        "ssqTray": true
+      }
+    },
+    "rawTrayPushBackForward": {
+      "pre": {
+        "len": 3,
+        "idx": 0
+      },
+      "pushed": {
+        "len": 3,
+        "state": {
+          "usr": null,
+          "key": "y267lqul",
+          "idx": 0,
+          "ssqTray": true
+        },
+        "rrPath": "/unfinished?tab=d"
+      },
+      "back": {
+        "state": {
+          "usr": null,
+          "key": "y267lqul",
+          "idx": 0,
+          "ssqTray": true
+        },
+        "url": "?tab=d",
+        "rrSearch": "?tab=d",
+        "tab": "d"
+      },
+      "fwd": {
+        "state": {
+          "usr": null,
+          "key": "y267lqul",
+          "idx": 0,
+          "ssqTray": true
+        },
+        "markerRetained": true,
+        "rrSearch": "?tab=d"
+      }
+    }
+  },
+  "trayEntryClean": {
+    "s0_load": {
+      "len": 2,
+      "state": {
+        "idx": 0
+      },
+      "url": "/unfinished?tab=a",
+      "rr": "/unfinished?tab=a",
+      "rrAction": "POP",
+      "renders": 1
+    },
+    "s1_afterRawTrayPush": {
+      "len": 3,
+      "state": {
+        "idx": 0,
+        "ssqTray": true
+      },
+      "url": "/unfinished?tab=a",
+      "rr": "/unfinished?tab=a",
+      "rrAction": "POP",
+      "renders": 1
+    },
+    "s2_afterBack": {
+      "len": 3,
+      "state": {
+        "idx": 0
+      },
+      "url": "/unfinished?tab=a",
+      "rr": "/unfinished?tab=a",
+      "rrAction": "POP",
+      "renders": 1
+    },
+    "s3_afterForward": {
+      "len": 3,
+      "state": {
+        "idx": 0,
+        "ssqTray": true
+      },
+      "url": "/unfinished?tab=a",
+      "rr": "/unfinished?tab=a",
+      "rrAction": "POP",
+      "renders": 1
+    },
+    "s4_afterRRPushOnTray": {
+      "len": 4,
+      "state": {
+        "usr": null,
+        "key": "o6wjnbdn",
+        "idx": 1
+      },
+      "url": "/history",
+      "rr": "/history",
+      "rrAction": "PUSH",
+      "renders": 2
+    },
+    "s5_afterBackToTray": {
+      "len": 4,
+      "state": {
+        "idx": 0,
+        "ssqTray": true
+      },
+      "url": "/unfinished?tab=a",
+      "rr": "/unfinished?tab=a",
+      "rrAction": "POP",
+      "renders": 3
+    }
+  },
+  "guardParity": {
+    "guards": [
+      {
+        "path": "/backlog",
+        "flag": "backlog"
+      },
+      {
+        "path": "/backlog/board",
+        "flag": "backlog"
+      },
+      {
+        "path": "/changelog",
+        "flag": "changelog"
+      },
+      {
+        "path": "/settings/backlog-sources",
+        "flag": "backlog"
+      }
+    ],
+    "rows": [
+      {
+        "guardPath": "/backlog",
+        "flag": "backlog",
+        "enabled": true,
+        "via": "client-nav",
+        "early": {
+          "path": "/backlog",
+          "mainText": 41,
+          "h1": "Page /backlog",
+          "len": 3
+        },
+        "late": {
+          "path": "/backlog",
+          "mainText": 41,
+          "h1": "Page /backlog",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/backlog",
+        "flag": "backlog",
+        "enabled": true,
+        "via": "cold-load",
+        "early": {
+          "path": "/backlog",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/backlog",
+          "mainText": 41,
+          "h1": "Page /backlog",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/backlog",
+        "flag": "backlog",
+        "enabled": false,
+        "via": "client-nav",
+        "early": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/backlog",
+        "flag": "backlog",
+        "enabled": false,
+        "via": "cold-load",
+        "early": {
+          "path": "/backlog",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/backlog/board",
+        "flag": "backlog",
+        "enabled": true,
+        "via": "client-nav",
+        "early": {
+          "path": "/backlog/board",
+          "mainText": 47,
+          "h1": "Page /backlog/board",
+          "len": 3
+        },
+        "late": {
+          "path": "/backlog/board",
+          "mainText": 47,
+          "h1": "Page /backlog/board",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/backlog/board",
+        "flag": "backlog",
+        "enabled": true,
+        "via": "cold-load",
+        "early": {
+          "path": "/backlog/board",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/backlog/board",
+          "mainText": 47,
+          "h1": "Page /backlog/board",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/backlog/board",
+        "flag": "backlog",
+        "enabled": false,
+        "via": "client-nav",
+        "early": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/backlog/board",
+        "flag": "backlog",
+        "enabled": false,
+        "via": "cold-load",
+        "early": {
+          "path": "/backlog/board",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/changelog",
+        "flag": "changelog",
+        "enabled": true,
+        "via": "client-nav",
+        "early": {
+          "path": "/changelog",
+          "mainText": 43,
+          "h1": "Page /changelog",
+          "len": 3
+        },
+        "late": {
+          "path": "/changelog",
+          "mainText": 43,
+          "h1": "Page /changelog",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/changelog",
+        "flag": "changelog",
+        "enabled": true,
+        "via": "cold-load",
+        "early": {
+          "path": "/changelog",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/changelog",
+          "mainText": 43,
+          "h1": "Page /changelog",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/changelog",
+        "flag": "changelog",
+        "enabled": false,
+        "via": "client-nav",
+        "early": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/changelog",
+        "flag": "changelog",
+        "enabled": false,
+        "via": "cold-load",
+        "early": {
+          "path": "/changelog",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/settings/backlog-sources",
+        "flag": "backlog",
+        "enabled": true,
+        "via": "client-nav",
+        "early": {
+          "path": "/settings/backlog-sources",
+          "mainText": 58,
+          "h1": "Page /settings/backlog-sources",
+          "len": 3
+        },
+        "late": {
+          "path": "/settings/backlog-sources",
+          "mainText": 58,
+          "h1": "Page /settings/backlog-sources",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/settings/backlog-sources",
+        "flag": "backlog",
+        "enabled": true,
+        "via": "cold-load",
+        "early": {
+          "path": "/settings/backlog-sources",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/settings/backlog-sources",
+          "mainText": 58,
+          "h1": "Page /settings/backlog-sources",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 0
+      },
+      {
+        "guardPath": "/settings/backlog-sources",
+        "flag": "backlog",
+        "enabled": false,
+        "via": "client-nav",
+        "early": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 3
+        },
+        "historyLengthDeltaFromBefore": 1,
+        "replaceCalls": 1
+      },
+      {
+        "guardPath": "/settings/backlog-sources",
+        "flag": "backlog",
+        "enabled": false,
+        "via": "cold-load",
+        "early": {
+          "path": "/settings/backlog-sources",
+          "mainText": 0,
+          "h1": null,
+          "len": 2
+        },
+        "late": {
+          "path": "/",
+          "mainText": 34,
+          "h1": "Page /",
+          "len": 2
+        },
+        "historyLengthDeltaFromBefore": null,
+        "replaceCalls": 1
+      }
+    ]
+  }
+}
