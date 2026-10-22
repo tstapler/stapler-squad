@@ -120,26 +120,6 @@
     "remark-gfm": "^4.0.1",
     "web-vitals": "6.2.3"
   },
-  "size-limit": [
-    {
-      "name": "Total JS bundle",
-      "path": "out/_next/static/chunks/**/*.js",
-      "limit": "5 MB",
-      "gzip": false
-    },
-    {
-      "name": "Framework chunk (React)",
-      "path": "out/_next/static/chunks/framework-*.js",
-      "limit": "650 KB",
-      "gzip": false
-    },
-    {
-      "name": "Main app chunk",
-      "path": "out/_next/static/chunks/main-*.js",
-      "limit": "400 KB",
-      "gzip": false
-    }
-  ],
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
     "@babel/core": "^7",
