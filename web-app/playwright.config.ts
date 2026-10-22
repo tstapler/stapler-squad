@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { parseWebBuildMode } from '../scripts/dev-stack/web-build-mode';
 
 /**
  * Playwright configuration for terminal stress tests.
@@ -16,6 +17,10 @@ import { defineConfig, devices } from '@playwright/test';
 // Use a fixed port for consistency between webServer and tests
 // Can be overridden with TEST_PORT environment variable
 const TEST_PORT = process.env.TEST_PORT || '3333';
+
+// WEB_BUILD=bun must not shell out to `next dev` (Story 5.8); the single parseWebBuildMode owner (Story 5.7).
+const webServerCommand =
+  parseWebBuildMode(process.env) === 'bun' ? `env PORT=${TEST_PORT} bun build/dev.ts` : `npx next dev --port ${TEST_PORT}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -79,7 +84,7 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   /* Use webpack mode (not turbopack) for protobuf .js import compatibility */
   webServer: {
-    command: `npx next dev --port ${TEST_PORT}`,
+    command: webServerCommand,
     url: `http://localhost:${TEST_PORT}`,
     reuseExistingServer: process.env.TEST_REUSE_SERVER === '1' || !process.env.CI,
     timeout: 120 * 1000,

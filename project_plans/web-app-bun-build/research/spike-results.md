@@ -198,6 +198,77 @@ Read from the real built Next app in the ManualInstance (not inferred): `<next-r
 - Not measured: Next-side push/replace deltas, Next-side tray-marker behaviour, Next's scroll behaviour for inner scrollers.
 - `bun audit` / npm advisory endpoint unavailable (timeouts); advisory screening relied on the GitHub advisory DB.
 
+## Gate S2: `bun dev` with the real app, including React Fast Refresh
+
+Run date: 2026-10-22. Supersedes this file's earlier "Not measured: Fast Refresh, dev server (S2)..." line (the "Not measured" section above is left as originally written per this update's append-only scope). Host: Linux (Manjaro) only; **macOS: unverified**. Base: this branch (`feat/web-bun-dev-server`, PR 5a `49005ecbb` + PR 6a `c7d385890` merged, plus Story 5.6/5.8's own `web-app/build/dev.ts`, `dev-server.ts`, `build/plugins/dev.ts`, `src/theme-boot.ts`). Bun 1.4.3. Backend: a ManualInstance built from this branch (`STAPLER_SQUAD_INSTANCE=claude-s2-62875`, `STAPLER_SQUAD_TMUX_SOCKET=ssq-s2-62875`, `PORT=62876`, backlog feature flag enabled). Dev server: `PORT=62875 NEXT_PUBLIC_API_URL=http://127.0.0.1:62876/api bun web-app/build/dev.ts`. Chromium via Playwright (`tests/e2e/node_modules/playwright-core@1.56.1`). Ports: 62875/62876 only; `:8543` untouched. Driver scripts: `project_plans/web-app-bun-build/spikes/s2/s2.mjs` (route sweep) and `.../spikes/s2/hmr.mjs` (fastrefresh/csstoken/overlay/memory) — both throwaway, not part of the shipped build.
+
+### Verdict table
+
+| Criterion | Verdict | Evidence |
+|---|---|---|
+| All 42+ routes load, zero console errors | **AMBER** | section S2-routes: 44/44 `ROUTE_META` paths render (landmark present, HTTP 200, 0 uncaught page exceptions); 43/44 have no console error beyond one pre-existing, non-Bun Redux serializability warning; 1/44 (`/notifications`) has one additional pre-existing 404. Neither residual is Bun- or dev-server-specific (app/backend-data-shape issues, reproduced on every route load regardless of bundler) |
+| Fast Refresh keeps state (3 stateful pages) | **AMBER** | section S2-fastrefresh: 1 of 3 preserves state (terminal-stress preset `<select>`); 2 of 3 lose it (SessionList's filters-panel/show-archived toggle, Omnibar's input text). In all 3, Bun live-swaps the module with **zero full page reloads** — this is "live reload without state-preserving Fast Refresh" exactly, not a crash or a full-reload fallback |
+| theme-contract.css.ts / shared-token-file edit updates dependants without manual reload, else full-reload fallback recorded | **PASS** | section S2-csstoken: Bun's own dev HMR re-requests and live-swaps the compiled CSS of an edited `.css.ts` into the already-rendered page, confirmed in under 150ms with zero full reloads (standalone `bun build/dev.ts`); the content-hash memo (Story 5.1) is sufficient and the full-reload fallback is **not** needed by default (`VeCompiler.fullReloadOnCssTsChange` flipped from `true` to `false`). One spontaneous reload was observed in the same check run through the full dev-stack (real backend + router) whose trigger is not yet isolated — recorded, does not change the verdict since both of the AC's actual requirements (2s budget, no *manual* reload) hold either way |
+| public/ files served | **PASS** | `push-sw.js`, nested `icons/*.svg` served at root paths with correct content type (`build/__tests__/dev-fetch.test.ts`, and manually via `curl` against the real server) |
+| Cross-origin API calls succeed with NEXT_PUBLIC_API_URL | **PASS** | section S2-routes: `ListSessions`/`WatchSessions`/etc. from `http://localhost:62875` to `http://127.0.0.1:62876/api` succeed (CORS preflight passes once `STAPLER_SQUAD_EXTRA_ORIGINS` names the frontend origin by exact host:port) |
+| Type-error and runtime-error overlays appear and clear | **PASS** | section S2-overlay: a syntax error shows Bun's native overlay naming the file and clears on revert; a render-time throw is caught by the app's `ErrorBoundary` ("Something went wrong") and the app recovers after reload |
+| `madge` import-cycle count | **informational** | 12 cycles repo-wide (`madge --circular --ts-config tsconfig.json src/main.tsx`, 1332 files). `Omnibar.tsx` (a page that lost Fast Refresh state) sits on 2 of them (`Omnibar.tsx -> OmnibarCreationPanel.tsx`, `Omnibar.tsx -> lib/omnibar/parseSlashCommand.ts`); `SessionList.tsx` (also lost state) sits on 0 — cycles do not fully explain the state loss |
+| 200 edits keep RSS under 1.5 GB, no crash | **PASS** | section S2-memory: dev server RSS 291.5 MB before -> 290.1 MB after 200 rapid edits to one file (effectively flat), process alive throughout, 0 crashes |
+
+**Overall: AMBER**, driven by the Fast Refresh criterion. This matches the plan's own pre-built "Amber S2" row (`plan.md`'s Flagged-choices table: "Accept live reload without state-preserving Fast Refresh, or fire T1"); T1 (Vite 8 fallback) fires only on an S2 **red**, which this is not — routes render, 0 uncaught exceptions, live reload works, and the CSS-dependant criterion is a clean PASS. Owner call on whether AMBER is acceptable for cutover (owner: Tyler, per plan).
+
+### S2-routes
+
+44 `ROUTE_META` paths loaded cold via `s2.mjs routes` (not 42; same discrepancy S4 already recorded). All 44: HTTP 200, a `<h1>`/`main`/`[role=main]` landmark present, 0 `pageerror` events. Console-error census across all 44 (`distinct.mjs` tally, deduped by message prefix):
+- 44/44: `A non-serializable value was detected in {an action,the state}, in the path: payload.averageAgeSeconds / reviewQueue.reviewQueue.averageAgeSeconds. Value: 0n` (Redux Toolkit's dev-only serializability middleware flagging a proto `int64` field; `src/lib/store/reviewQueueSlice.ts`, `src/gen/session/v1/types_pb.ts`). INFERRED not Bun-specific: this is a frontend/backend data-shape interaction (a BigInt proto field reaching the Redux store) independent of the bundler; not verified side-by-side against `next dev` in this run (time-boxed), but the mechanism (Redux Toolkit's `isSerializable` check) does not consult `WEB_BUILD` or the bundler at all.
+- 1/44 (`/notifications`): one additional `Failed to load resource: 404 @ .../SessionService/GetSession` — a stale/seeded session id referenced by notification data on a fresh instance with no real sessions; also not Bun-specific.
+- Before the two fixes below (see S2-fixes), the same sweep additionally showed, on every route: a CORS preflight failure (wrong `STAPLER_SQUAD_EXTRA_ORIGINS` host literal in the probe's own setup, not a server defect — fixed by using the exact `localhost`/`[::1]` form the browser sends), a 405 on `/api/client-logs` (no route registered for it), and, on `/test/terminal-stress` only, `Failed to resolve dynamic import '...@xterm/xterm/css/xterm.css'` from a module-scope `require()` CSS import. All three are recorded in S2-fixes below as PRE-EXISTING-ISH gaps this PR closes, not residual S2 findings.
+
+### S2-fastrefresh
+
+Method: open a page, set a real piece of component-local `useState` via the UI, append a comment-only line to the component's source file via `fs.writeFileSync` (not a value change — isolates "does the HMR module swap preserve state" from "does the new code also work"), wait 2s, re-read the state. `page.on("load")` counted across the whole run (0 throughout all 3 cases: no full navigation ever occurred).
+
+| Page | State probed | File edited | Preserved? | Full reload? |
+|---|---|---|---|---|
+| Session list (`/`) | "Show Archived" checkbox + filters panel open | `src/components/sessions/SessionList.tsx` | **No** — toggle unreachable after edit (panel closed, `filtersOpen` reset) | No |
+| Omnibar (global overlay, `Ctrl+K`) | search input text (`s2-hmr-canary`) | `src/components/sessions/Omnibar.tsx` | **No** — input value empty after edit | No |
+| `/test/terminal-stress` preset selector (embeds a real `@xterm/xterm` `Terminal` instance — substituted for "session terminal pane": creating a live tmux-backed session was out of scope for this probe, recorded here rather than silently claimed) | `<select>` value (`ASCII_60FPS`) | `src/app/test/terminal-stress/page.tsx` | **Yes** — value unchanged after edit | No |
+
+Bun's own dev-server log corroborates: `Reloaded in Nms: <file>` for each edit, never a full-page request. Omnibar.tsx is on 2 of the repo's 12 `madge --circular` cycles (see verdict table); SessionList.tsx is on 0 — the state loss there has no cycle explanation found in this run.
+
+### S2-csstoken
+
+The plan's AC names `src/styles/theme-contract.css.ts`, but that file is `createThemeContract` placeholders only (no literal values — its own header comment says so); the literal per-theme colour values live in `src/styles/theme.css.ts` (also what `build/config.ts`'s `themeFile` points at). Both were tested:
+- `theme-contract.css.ts` + a comment-only append: Bun logs `Reloaded in 6ms: src/styles/theme-contract.css.ts`, 0 full reloads. Nothing to visibly verify (no literal value in the file).
+- `theme.css.ts`: `cleanTheme.color.textPrimary` changed from `#e2e8f0` to `#ff00ff`. `getComputedStyle()` on `.page`'s element (`src/app/page.css.ts`'s `color: vars.color.textPrimary`) read the new value (`rgb(255, 0, 255)`) **100ms** after the edit, with 0 full reloads (Bun logs `Reloaded in 21ms: src/styles/theme.css.ts`).
+
+This directly contradicts the plan's pessimistic default assumption ("Bun's `onLoad` has no `addWatchFile`... a memo only makes a *re-requested* dependant correct") for this bundler/version: Bun 1.4.3's `development.hmr` **does** re-request and live-swap a changed `.css.ts`'s compiled CSS into already-open pages. Consequence: `VeCompiler.fullReloadOnCssTsChange` (`build/plugins/vanilla-extract.ts`) defaults to `false` (was `true`), and `build/dev.ts`'s SSE-based full-reload broadcaster now only engages when `WEB_DEV_HMR=0` (HMR fully off).
+
+Re-run through the full dev-stack (`tests/e2e/dev-mode-hmr.spec.ts`, a real backend + `scripts/dev-stack/launch.ts`-spawned `bun build/dev.ts`, `/settings`'s `<h1>`): the colour update is reproduced (within 2s, no manual reload — gate S2's literal wording), but one spontaneous `page.on('load')` event was observed around the edit in that fuller environment, where the standalone measurement above saw none. It is not this app's own reload code (`dev-server.ts`'s SSE hub is never created while HMR is on, per the flip above, confirmed by code inspection) and was not isolated further inside this PR's time budget — the spec records the count as a Playwright annotation (`reload-count`) rather than failing on it, since the AC's two actual requirements (2s budget, no *manual* reload) both hold. Flagged for follow-up, not blocking S2's AMBER-not-RED verdict.
+
+### S2-overlay
+
+Both on `/test/terminal-stress`, introduced then reverted:
+- **Type/syntax error** (an unterminated string literal): Bun's native overlay (the `bun-hmr` custom element) appears, names the file (`src/app/test/terminal-stress/page.tsx`) and the error (`Unterminated string literal`), and clears within 1.2s of the revert.
+- **Runtime throw** (`throw new Error("s2-runtime-canary")` at the top of the render): caught by the app's own `ErrorBoundary` ("Something went wrong" / "Error Details" / "Retry"), not by Bun's overlay — an allowed outcome per the AC's wording ("Bun's overlay **or** the app's ErrorBoundary"). After a manual reload following the revert, the page recovers (the preset selector is back).
+
+### S2-memory
+
+200 edits to `src/app/test/terminal-stress/page.tsx` (`fs.writeFileSync`, ~60ms apart) while the page was open. Dev server process RSS (`/proc/<pid>/status`, `VmRSS`): 291.5 MB before -> 290.1 MB after (no growth; within host-noise). Process alive throughout (`kill -0` equivalent via a repeat `/proc` read), 0 crashes, 0 restarts needed.
+
+### S2-fixes (code changes made to reach the above, not residual findings)
+
+- **CORS/client-logs/xterm (routing and app bugs, not dev-server design gaps)**: `STAPLER_SQUAD_EXTRA_ORIGINS` must name the exact `host:port` the browser sends (`localhost` and `[::1]` are different origins to the backend's CORS check) — a probe-setup correction, not a server fix. `/api/client-logs` had no route on the dev server at all (the app's `clientLogShipper.ts` posts same-origin `/api/client-logs`, same as production where the Go binary serves both); `build/dev-server.ts` now forwards it to `NEXT_PUBLIC_API_URL` when set (`clientLogsHandler`), else answers 204 so it never shows as a 405 in the console. `src/app/test/terminal-stress/page.tsx` imported `@xterm/xterm/css/xterm.css` via a runtime `require()` inside a `typeof window !== 'undefined'` guard (an SSR-avoidance pattern Bun's bundler cannot resolve for a CSS specifier at runtime); moved to a static top-level `import` (matching `XtermTerminal.tsx`'s existing pattern) — this bug also affects the production Bun build (Story 5.2+), since the page is in the real route table.
+- **Port-in-use detection**: `Bun.serve` binds `SO_REUSEPORT`-style instead of throwing `EADDRINUSE` when another *Bun* listener already holds the port, so `assertPortFree` (`dev-server.ts`) probes with a real TCP connect before binding, rather than relying on the bind call to fail.
+
+### Limits of this run
+
+- macOS unverified (Fast Refresh, Bun's CSS HMR behaviour, and the overlay are all plausibly platform-independent, but not run there).
+- The Redux `averageAgeSeconds` warning was not verified side-by-side against `next dev` in this run (time-boxed); it is INFERRED non-Bun-specific from the mechanism (a dev-only Redux Toolkit middleware), not confirmed by a parallel measurement.
+- Fast Refresh was probed via a comment-only source edit on 3 pages, not via every possible edit shape (e.g. a hook added/removed, a prop type change) or every page in the route table; `SessionList.tsx`'s state loss has no `madge`-visible cycle explanation and was not root-caused further (out of scope for this PR — Bun's own React-refresh integration, not something `web-app/build/` controls).
+- "Session terminal pane" was approximated by `/test/terminal-stress` (a real `@xterm/xterm` `Terminal` instance, no live backend session) rather than a tmux-backed session, to stay inside the PR's time budget; this is recorded explicitly rather than claimed as the literal page.
+- `madge` was run via `bunx madge` (not added as a `web-app` devDependency); re-running needs network access to resolve the package the first time.
+
 ## Gate S3: 42 lazy routes — size, CSS ordering, memory (plan Story 0.4)
 
 Run date: 2026-10-21. Base: `origin/main` `c7d385890` (PR 4 React Router, PR 5a Bun build pipeline, PR 6a flat ESLint config all merged — superseding the S3 prototype scaffolding used by earlier spikes; this gate measures the **real** `web-app/src/main.tsx` entry built by the **real** `web-app/build/build.ts`, not a generated stand-in). Host: Linux (Manjaro), 24 CPUs, 61 GB RAM; **macOS: unverified**. Bun 1.4.3, Node 26.8.1. Host load average ranged 1.7–30 across the run (other agent sessions sharing the host), noted per measurement below; wall-clock numbers are indicative, not canonical. Backend: a ManualInstance on port 62873 (`STAPLER_SQUAD_INSTANCE=s3-gate`, `STAPLER_SQUAD_TMUX_SOCKET=ssq-s3-gate`), empty (no sessions). `:8543` untouched throughout.
