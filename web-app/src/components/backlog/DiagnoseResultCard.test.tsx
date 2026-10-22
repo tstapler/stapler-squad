@@ -21,6 +21,17 @@ describe("DiagnoseResultCard", () => {
     expect(screen.getByText("checked in on this")).toBeInTheDocument();
   });
 
+  it("shows no card when the note is empty (hidden state; no loading state applies to a static note)", () => {
+    render(<DiagnoseResultCard message="" />);
+    expect(screen.queryByTestId("diagnose-result-card")).not.toBeInTheDocument();
+  });
+
+  it("keeps the unparsed text visible as the raw view when parsing fails", () => {
+    const msg = "Diagnosis result: {\"outcome\": 1}";
+    render(<DiagnoseResultCard message={msg} />);
+    expect(screen.getByText(msg)).toBeInTheDocument();
+  });
+
   it("falls back to plain text when the outcome token is malformed", () => {
     const msg = "Diagnosis result: not an outcome\n\nbody";
     expect(parseDiagnosisNote(msg)).toBeNull();
