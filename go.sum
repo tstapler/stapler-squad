@@ -369,6 +369,8 @@ github.com/tstapler/tymux/clients/go v0.1.0 h1:i40LPoN10KErZ7gSDUa8nl+fcgTHEXhGr
 github.com/tstapler/tymux/clients/go v0.1.0/go.mod h1:PsxzFJ9nfAnxozPJJ54QqZPolwmyWw34JJ/78x6PHp0=
 github.com/tstapler/tymux/clients/go v0.1.1-0.20261018004533-4f517c47d2ec h1:RsAYBIjBpGmPc3lIo5LZOkE79w8cyC0pnWHoUrXlYfU=
 github.com/tstapler/tymux/clients/go v0.1.1-0.20261018004533-4f517c47d2ec/go.mod h1:PsxzFJ9nfAnxozPJJ54QqZPolwmyWw34JJ/78x6PHp0=
+github.com/tstapler/tymux/clients/go v0.1.1-0.20261020224721-9971ef7489a9 h1:3i4gwPr3OCDpn0KyVEmWHmzUS5FDhfg4R8Qyyn+MNaw=
+github.com/tstapler/tymux/clients/go v0.1.1-0.20261020224721-9971ef7489a9/go.mod h1:PsxzFJ9nfAnxozPJJ54QqZPolwmyWw34JJ/78x6PHp0=
 github.com/vbatts/tar-split v0.12.2 h1:w/Y6tjxpeiFMR47yzZPlPj/FcPLpXbTUi/9H7d3CPa4=
 github.com/vbatts/tar-split v0.12.2/go.mod h1:eF6B6i6ftWQcDqEn3/iGFRFRo8cBIMSJVOpnNdfTMFA=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
