@@ -89,6 +89,10 @@ bench-diff.txt
 benchmark_results.txt
 bench-otel-*.txt
 /web-app/out/
+# Bun build (WEB_BUILD=bun): per-PID temp output, stats, and the last-built-mode stamp
+/web-app/.out-tmp-*
+/web-app/.build/
+/web-app/.web-build-mode
 /server/web/dist/
 
 # Build artifacts

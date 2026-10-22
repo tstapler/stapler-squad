@@ -1,0 +1,8 @@
+@font-face {
+  font-family: "Inter";
+  src: url("/_next/static/media/inter-variable.woff2") format("woff2");
+  font-display: swap;
+}
+:root {
+  --font-inter: "Inter", system-ui, sans-serif;
+}

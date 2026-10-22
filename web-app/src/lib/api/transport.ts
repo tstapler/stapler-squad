@@ -52,7 +52,8 @@ export function getKeepaliveConnectTransport(): Transport {
       baseUrl: getApiBaseUrl(),
       defaultTimeoutMs: DEFAULT_RPC_TIMEOUT_MS,
       interceptors: [createAuthInterceptor()],
-      fetch: (input, init) => fetch(input, { ...init, keepalive: true }),
+      // Cast: Bun's global fetch type also requires `preconnect`, which a wrapper cannot provide (tsconfig.bun.json).
+      fetch: ((input, init) => fetch(input, { ...init, keepalive: true })) as typeof fetch,
     });
   }
   return _keepaliveTransport;

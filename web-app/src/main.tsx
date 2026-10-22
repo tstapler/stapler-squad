@@ -1,8 +1,9 @@
-// Entry of the Bun build; dead code until PR 5a selects it. Mirrors Next's persistent root layout: RootShell sits
-// inside the router (its hooks need it) and outlives every navigation. The html theme class, FOUC script and
-// fonts that layout.tsx emits belong to index.html and the build, not to this file.
+// Entry of the Bun build (WEB_BUILD=bun). Mirrors Next's persistent root layout: RootShell sits inside the
+// router (its hooks need it) and outlives every navigation. The html theme class and FOUC script that
+// layout.tsx emits are injected into index.html by build/html.ts, not here.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "./app/fonts.css";
 import "./app/globals.css";
 import "@/styles/globalEffects.css";
 import { NotFound } from "@/app/NotFound";

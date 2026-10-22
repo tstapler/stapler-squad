@@ -1,0 +1,26 @@
+[
+  {
+    "path": "push-sw.js",
+    "reason": "Push-notification service worker; src/lib/hooks/usePushNotifications.ts registers it after login, so an authenticated fetch is enough"
+  },
+  {
+    "path": "push-sw-logic.js",
+    "reason": "Logic module loaded by push-sw.js; fetched by the same authenticated browser"
+  },
+  {
+    "path": "manifest.json",
+    "reason": "PWA manifest; nothing links it today (plan decision D4), so no unauthenticated page requests it"
+  },
+  {
+    "path": "icons/*",
+    "reason": "PWA and notification icons; not referenced by /login, shown only after login and in push notifications"
+  },
+  {
+    "path": "logo.svg",
+    "reason": "Brand logo; not referenced by /login or any source file, served from public/ for authenticated use"
+  },
+  {
+    "path": "docs/*.md",
+    "reason": "Help documents public/docs/*.md, fetched by the authenticated in-app docs viewer"
+  }
+]
