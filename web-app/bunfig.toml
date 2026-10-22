@@ -1,2 +1,5 @@
 [install]
 linker = "isolated"
+
+# Packages younger than 3 days (seconds) are not installable: a malicious publish is usually pulled within hours.
+minimumReleaseAge = 259200
