@@ -210,6 +210,12 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_CompletionReviewer_ChangesSubscriberGate",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:backlog-review-results-panel": {
+		exempt: "client-only: no Go reader; the web client gates the formatted review verdict panel on it (web-app/src/components/backlog/ReviewVerdictPanel.tsx:10), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:backlog-triage-results-panel": {
+		exempt: "client-only: no Go reader; the web client gates the formatted triage results panel on it (web-app/src/components/backlog/TriageResultPanel.tsx:10, web-app/src/components/backlog/detail/PlanningSection.tsx:19), and the server only persists and echoes the value through GetFeatureFlags",
+	},
 	"flag:backlog:sdd-default-pipeline": {
 		testName:   "TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
