@@ -696,8 +696,8 @@ export const cleanTheme = createTheme(vars, {
     // accentBg/accentHover: rgb of `primary` (#5457ef); keep in sync (overlayContrastTokens.test.ts).
     accentBg: "rgba(84,87,239,0.1)",
     accentHover: "rgba(84,87,239,0.2)",
-    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
-    accentText: "#6366f1",
+    // accentText: #6366f1 measured 4.22:1 on background #0f1117 (axe, /analytics/escape tab); #818cf8 = ~6.4:1.
+    accentText: "#818cf8",
 
     inputBackground: "#161b22",
     inputText: "#e2e8f0",

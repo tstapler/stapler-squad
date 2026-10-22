@@ -235,6 +235,7 @@ export default function EscapeCodesTestPage() {
             <h2>Code Selector</h2>
             <div className={styles.filters}>
               <select
+                aria-label="Filter by category"
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value as EscapeCategory | 'all')}
                 className={styles.select}
@@ -248,6 +249,7 @@ export default function EscapeCodesTestPage() {
               </select>
 
               <select
+                aria-label="Filter by priority"
                 value={selectedPriority}
                 onChange={(e) => setSelectedPriority(e.target.value as TestPriority | 'all')}
                 className={styles.select}
@@ -292,6 +294,7 @@ export default function EscapeCodesTestPage() {
                 <div className={styles.codeHeader}>
                   <input
                     type="checkbox"
+                    aria-label={`Select ${code.humanReadable}`}
                     checked={selectedCodes.has(code.code)}
                     onChange={() => toggleCodeSelection(code.code)}
                     onClick={(e) => e.stopPropagation()}
@@ -341,8 +344,9 @@ export default function EscapeCodesTestPage() {
             <h2>Test Controls</h2>
 
             <div className={styles.controlGroup}>
-              <label>Frame Rate (FPS)</label>
+              <label htmlFor="escape-fps-select">Frame Rate (FPS)</label>
               <select
+                id="escape-fps-select"
                 value={frameRate}
                 onChange={(e) => setFrameRate(Number(e.target.value))}
                 disabled={testState.isRunning}
@@ -355,8 +359,9 @@ export default function EscapeCodesTestPage() {
             </div>
 
             <div className={styles.controlGroup}>
-              <label>Test Pattern</label>
+              <label htmlFor="escape-pattern-select">Test Pattern</label>
               <select
+                id="escape-pattern-select"
                 value={testPattern}
                 onChange={(e) => setTestPattern(e.target.value as TestPattern)}
                 disabled={testState.isRunning}

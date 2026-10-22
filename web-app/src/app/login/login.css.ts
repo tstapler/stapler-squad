@@ -54,7 +54,7 @@ export const button = style({
   marginTop: "0.5rem",
   width: "100%",
   padding: "0.75rem 1.5rem",
-  background: vars.color.primary,
+  background: vars.color.primaryDark,
   color: vars.color.primaryText,
   border: "none",
   borderRadius: "8px",
