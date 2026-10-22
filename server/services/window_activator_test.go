@@ -125,6 +125,24 @@ func TestIsBlockedBundleID(t *testing.T) {
 	}
 }
 
+func TestIsBlockedTarget_ByAppName(t *testing.T) {
+	t.Parallel()
+	for _, n := range []string{"Music", "music", " TV ", "Photos"} {
+		assert.True(t, isBlockedTarget("", n), n)
+	}
+	assert.False(t, isBlockedTarget("", "Terminal"))
+	assert.False(t, isBlockedTarget("com.microsoft.VSCode", "Music"), "bundle ID takes precedence")
+}
+
+func TestLaunchServicesActivator_AcceptsUnderscoreBundleID(t *testing.T) {
+	t.Parallel()
+	var calls []recordedCall
+	a := &launchServicesActivator{run: fakeRunner(&calls, map[string]result{
+		"/usr/bin/lsappinfo": {out: "ASN:0x0-0x1: \n"},
+	})}
+	require.NoError(t, a.Activate(context.Background(), "com.example.My_App", ""))
+}
+
 type stubActivator struct {
 	called bool
 	err    error

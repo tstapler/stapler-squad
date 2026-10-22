@@ -31,12 +31,26 @@ var nonDeveloperBundleIDs = map[string]struct{}{
 	"com.apple.podcasts": {},
 }
 
+// nonDeveloperAppNames covers requests that carry only an app name (no bundle ID).
+var nonDeveloperAppNames = map[string]struct{}{
+	"music": {}, "tv": {}, "photos": {}, "podcasts": {},
+}
+
 func isBlockedBundleID(bundleID string) bool {
 	_, blocked := nonDeveloperBundleIDs[bundleID]
 	return blocked
 }
 
-var bundleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
+// isBlockedTarget applies the media-app blocklist to whichever identifier the request carries.
+func isBlockedTarget(bundleID, appName string) bool {
+	if bundleID != "" {
+		return isBlockedBundleID(bundleID)
+	}
+	_, blocked := nonDeveloperAppNames[strings.ToLower(strings.TrimSpace(appName))]
+	return blocked
+}
+
+var bundleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type commandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 

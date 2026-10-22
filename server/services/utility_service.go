@@ -345,11 +345,15 @@ func (us *UtilityService) FocusWindow(
 		}), nil
 	}
 
-	if isBlockedBundleID(bundleID) {
-		log.Info("FocusWindow skipped for non-developer app", "bundle", bundleID)
+	if isBlockedTarget(bundleID, appName) {
+		blockedTarget := bundleID
+		if blockedTarget == "" {
+			blockedTarget = appName
+		}
+		log.Info("FocusWindow skipped for non-developer app", "bundle", bundleID, "app", appName)
 		return connect.NewResponse(&sessionv1.FocusWindowResponse{
 			Success:  false,
-			Message:  fmt.Sprintf("Focus Window is not supported for %q (not a developer app)", bundleID),
+			Message:  fmt.Sprintf("Focus Window is not supported for %q (not a developer app)", blockedTarget),
 			Platform: platform,
 		}), nil
 	}

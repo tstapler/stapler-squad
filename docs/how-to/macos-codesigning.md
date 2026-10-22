@@ -93,7 +93,7 @@ This resets all TCC grants for `com.stapler-squad`. Use during development to re
 1. Run `make install-service`
 2. Open System Settings → Privacy & Security → Full Disk Access
 3. Enable the toggle for `stapler-squad`
-4. Trigger FocusWindow in the UI to re-approve Apple Events for each target app
+4. Re-run your workflow; Focus Window no longer needs an Apple Events grant
 
 ## How it works
 
