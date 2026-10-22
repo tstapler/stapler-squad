@@ -11,7 +11,5 @@
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>stapler-squad uses Apple Events to bring your editor or browser to the foreground when you click Focus Window.</string>
 </dict>
 </plist>

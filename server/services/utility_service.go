@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -235,11 +234,12 @@ func parseLogLine(line string) (parsedLogLine, bool) {
 type UtilityService struct {
 	approvalStore     *ApprovalStore
 	reviewQueuePoller *session.ReviewQueuePoller
+	activator         WindowActivator
 }
 
 // NewUtilityService creates a UtilityService with the given dependencies.
 func NewUtilityService(approvalStore *ApprovalStore) *UtilityService {
-	return &UtilityService{approvalStore: approvalStore}
+	return &UtilityService{approvalStore: approvalStore, activator: newLaunchServicesActivator()}
 }
 
 // SetReviewQueuePoller sets the review queue poller (late-wired).
@@ -309,7 +309,8 @@ func (us *UtilityService) GetLogs(
 }
 
 // FocusWindow activates a window for the specified application.
-// Uses AppleScript on macOS to bring the application to front.
+// Uses Launch Services (lsappinfo + open) on macOS, which raises no per-app
+// Automation (Apple Events) consent dialog.
 func (us *UtilityService) FocusWindow(
 	ctx context.Context,
 	req *connect.Request[sessionv1.FocusWindowRequest],
@@ -344,35 +345,20 @@ func (us *UtilityService) FocusWindow(
 		}), nil
 	}
 
-	// Try to activate the window using AppleScript
-	var script string
-	if bundleID != "" {
-		// Prefer bundle ID for more reliable activation
-		script = fmt.Sprintf(`tell application id "%s" to activate`, bundleID)
-	} else {
-		// Fallback to app name
-		script = fmt.Sprintf(`tell application "%s" to activate`, appName)
+	if isBlockedBundleID(bundleID) {
+		log.Info("FocusWindow skipped for non-developer app", "bundle", bundleID)
+		return connect.NewResponse(&sessionv1.FocusWindowResponse{
+			Success:  false,
+			Message:  fmt.Sprintf("Focus Window is not supported for %q (not a developer app)", bundleID),
+			Platform: platform,
+		}), nil
 	}
 
-	// Execute AppleScript
-	cmd := safeexec.CommandContext(ctx, "osascript", "-e", script)
-	output, err := cmd.CombinedOutput()
-	outputStr := string(output)
+	if err := us.activator.Activate(ctx, bundleID, appName); err != nil {
+		log.Warn("failed to activate window", "bundle", bundleID, "app", appName, "err", err)
 
-	if err != nil {
-		log.Warn("failed to activate window", "bundle", bundleID, "app", appName, "err", err, "output", outputStr)
-
-		// Check for common permission-related errors
 		message := fmt.Sprintf("failed to activate window: %v", err)
-		if strings.Contains(outputStr, "not allowed") ||
-			strings.Contains(outputStr, "permission") ||
-			strings.Contains(outputStr, "accessibility") ||
-			strings.Contains(outputStr, "System Events") {
-			message = "Permission denied. Please grant Accessibility permissions: " +
-				"System Preferences > Security & Privacy > Privacy > Accessibility. " +
-				"Add Terminal (or your terminal app) to the list."
-		} else if strings.Contains(outputStr, "Application isn't running") ||
-			strings.Contains(outputStr, "Can't get application") {
+		if errors.Is(err, ErrAppNotRunning) {
 			targetApp := bundleID
 			if targetApp == "" {
 				targetApp = appName

@@ -38,12 +38,13 @@ After `make install-service`, run:
 make verify-codesign
 ```
 
+Focus Window uses Launch Services (`lsappinfo` + `open`), not Apple Events, so macOS shows no per-app "would like to access…" dialog and no Automation entitlement is needed. Signing still keeps other TCC grants (e.g. file access) stable across rebuilds; without `make setup-codesign` those may re-prompt after each rebuild.
+
 Pass criteria:
 - `Authority=StaplerSquadDev` in the Code Signature section
 - `Identifier=com.stapler-squad` in the Code Signature section
 - DR section contains `anchor H"<cert-sha1>"` or `anchor trusted` (cert-anchored, not `cdhash`)
 - `CFBundleIdentifier => "com.stapler-squad"` in the Embedded Info.plist section
-- `com.apple.security.automation.apple-events` in the Entitlements section
 
 ## Exporting the cert for backup
 
