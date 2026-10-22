@@ -61,6 +61,15 @@ async function installMocks(page: Page) {
 
 /** Every WCAG 2.2 AA violation on the page as `rule (impact): nodes, e.g. target - why`. */
 async function axeViolations(page: Page): Promise<string[]> {
+  // Axe samples colours mid-fade otherwise (a selected row's 0.15s transition reads as #bababa on #f6f6f6).
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
   const result = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
   return result.violations
     .map(
