@@ -2,22 +2,26 @@
 // analytics-exempt
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import {
+import type {
   TestConfig,
-  TEST_PRESETS,
   GeneratorFrame,
-  RenderMetrics,
+  RenderMetrics} from '@/lib/test-generators';
+import {
+  TEST_PRESETS,
   createGenerator,
 } from '@/lib/test-generators';
+// A static top-level CSS import (matching XtermTerminal.tsx) rather than the runtime require() below:
+// Bun's bundler cannot resolve a require() of a CSS file at runtime (it only sees .js/.ts specifiers there).
+import '@xterm/xterm/css/xterm.css';
 
 // Dynamically import xterm to avoid SSR issues
-type TerminalType = import('@xterm/xterm').Terminal;
-type FitAddonType = import('@xterm/addon-fit').FitAddon;
-type WebglAddonType = import('@xterm/addon-webgl').WebglAddon;
+import type { Terminal as TerminalType } from '@xterm/xterm';
+import type { FitAddon as FitAddonType } from '@xterm/addon-fit';
+import type { WebglAddon as WebglAddonType } from '@xterm/addon-webgl';
 
-let Terminal: typeof import('@xterm/xterm').Terminal | undefined;
-let FitAddon: typeof import('@xterm/addon-fit').FitAddon | undefined;
-let WebglAddon: typeof import('@xterm/addon-webgl').WebglAddon | undefined;
+let Terminal: typeof TerminalType | undefined;
+let FitAddon: typeof FitAddonType | undefined;
+let WebglAddon: typeof WebglAddonType | undefined;
 
 if (typeof window !== 'undefined') {
   const XTermModule = require('@xterm/xterm');
@@ -26,7 +30,6 @@ if (typeof window !== 'undefined') {
   Terminal = XTermModule.Terminal;
   FitAddon = FitAddonModule.FitAddon;
   WebglAddon = WebglAddonModule.WebglAddon;
-  require('@xterm/xterm/css/xterm.css');
 }
 
 // Test status
@@ -435,7 +438,7 @@ export default function TerminalStressTestPage() {
           </select>
         </div>
 
-        {/* Action buttons */}
+        {/* Action buttons: dev-only stress-test harness, not user-facing product UI (analytics-exempt per button). */}
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
             onClick={startTest}
@@ -451,6 +454,7 @@ export default function TerminalStressTestPage() {
               cursor: status === 'running' ? 'not-allowed' : 'pointer',
             }}
           >
+            {/* analytics-exempt */}
             {status === 'running' ? 'Running...' : 'Start Test'}
           </button>
           <button
@@ -467,6 +471,7 @@ export default function TerminalStressTestPage() {
               cursor: status !== 'running' ? 'not-allowed' : 'pointer',
             }}
           >
+            {/* analytics-exempt */}
             Stop
           </button>
           <button
@@ -481,6 +486,7 @@ export default function TerminalStressTestPage() {
               cursor: 'pointer',
             }}
           >
+            {/* analytics-exempt */}
             Reset
           </button>
           <button
@@ -496,6 +502,7 @@ export default function TerminalStressTestPage() {
               cursor: renderMetrics.framesRendered === 0 ? 'not-allowed' : 'pointer',
             }}
           >
+            {/* analytics-exempt */}
             Export JSON
           </button>
         </div>

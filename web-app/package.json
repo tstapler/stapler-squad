@@ -15,7 +15,7 @@
     "preinstall": "node -e \"if(!(process.env.npm_config_user_agent||'').startsWith('bun/')){console.error('Use bun install (bun@1.4.3); npm, yarn and pnpm are not supported in web-app/. See docs/how-to/use-bun-in-web-app.md');process.exit(1)}\"",
     "dev": "if [ \"$WEB_BUILD\" = bun ]; then bun run dev:bun; else bun run dev:next; fi",
     "dev:next": "next dev --port ${PORT:-3001} --hostname localhost",
-    "dev:bun": "echo 'The Bun dev server lands in PR 5b; use WEB_BUILD=next for now.' >&2; exit 1",
+    "dev:bun": "bun build/dev.ts",
     "build": "if [ \"$WEB_BUILD\" = bun ]; then bun run build:bun; else bun run build:next; fi",
     "build:next": "next build",
     "build:bun": "bun build/build.ts",

@@ -113,10 +113,13 @@ module.exports = {
           ) {
             return true;
           }
-          // Comment form: {/* analytics-exempt */} → JSXEmptyExpression with leading comment
+          // Comment form: {/* analytics-exempt */} → a JSXEmptyExpression's range IS the comment's range (the
+          // comment is its only content), so getCommentsBefore(child.expression) never finds it — nothing is
+          // "before" a node that the comment itself occupies. getCommentsInside(child) looks inside the
+          // JSXExpressionContainer instead, which is where the comment actually lives.
           if (child.expression.type === "JSXEmptyExpression") {
-            const comments = context.getSourceCode().getCommentsBefore(child.expression);
-            if (comments.some((c) => c.value.trim() === " analytics-exempt" || c.value.trim() === "analytics-exempt")) {
+            const comments = context.getSourceCode().getCommentsInside(child);
+            if (comments.some((c) => c.value.trim() === "analytics-exempt")) {
               return true;
             }
           }
