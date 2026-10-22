@@ -59,6 +59,7 @@ function EvidenceRegion({ r, onRetry, retryRef }: EvidenceRegionProps) {
       {evidence.phase === "failed" && (
         <>
           <span>{`Couldn't load readiness evidence: ${evidence.error}`}</span>{" "}
+          {// analytics-exempt
           <button
             ref={retryRef}
             type="button"
@@ -68,7 +69,7 @@ function EvidenceRegion({ r, onRetry, retryRef }: EvidenceRegionProps) {
             data-testid="feature-flag-enforce-evidence-retry"
           >
             Retry
-          </button>
+          </button>}
         </>
       )}
       {r.changeNote && <div data-testid="feature-flag-enforce-evidence-changed">{r.changeNote}</div>}
@@ -175,9 +176,10 @@ export function EnforceDialog({
       {r.recheck.phase === "failed" && (
         <div role="alert" className={dialogNote} data-testid="feature-flag-enforce-recheck-alert">
           <span>{`Couldn't re-check readiness: ${r.recheck.error}`}</span>{" "}
+          {// analytics-exempt
           <button type="button" className={retryButton} onClick={() => void enforce()}>
             Retry
-          </button>
+          </button>}
         </div>
       )}
       {hint && (

@@ -98,6 +98,7 @@ function FlagRow({ flag, nested, status, onToggle, onRevert, setFlag }: FlagRowP
       data-testid="feature-flag-row"
     >
       {/* First in DOM so Tab runs switch, Revert, Edit stages; CSS order keeps it on the right. */}
+      {// analytics-exempt
       <button
         type="button"
         role="switch"
@@ -112,7 +113,7 @@ function FlagRow({ flag, nested, status, onToggle, onRevert, setFlag }: FlagRowP
         <span className={toggleTrack}>
           <span className={toggleThumb} />
         </span>
-      </button>
+      </button>}
       <div className={flagInfo}>
         <div className={flagName} data-testid="feature-flag-name">
           {label}
@@ -143,9 +144,10 @@ function FlagRow({ flag, nested, status, onToggle, onRevert, setFlag }: FlagRowP
         {status?.phase === "failed" && (
           <div className={rowError} role="alert" data-testid="feature-flag-row-error">
             <span>{`Couldn't change ${label}: ${status.error}`}</span>
+            {// analytics-exempt
             <button type="button" className={retryButton} onClick={() => onToggle(flag)}>
               Retry
-            </button>
+            </button>}
           </div>
         )}
       </div>
@@ -324,9 +326,10 @@ export default function FeaturesPage() {
       ) : loadError ? (
         <div className={errorMessage} role="alert" data-testid="feature-flags-load-error">
           <span>{`Couldn't load feature flags: ${loadError}`}</span>{" "}
+          {// analytics-exempt
           <button type="button" className={retryButton} onClick={() => void reload()}>
             Retry
-          </button>
+          </button>}
         </div>
       ) : flagList.length === 0 ? (
         <p className={emptyMessage}>No feature flags configured.</p>

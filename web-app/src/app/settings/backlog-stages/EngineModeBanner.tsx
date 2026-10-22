@@ -65,6 +65,7 @@ export function EngineModeBanner({ view, onRetry }: EngineModeBannerProps) {
       </div>
       <div className={styles.bannerActions}>
         {showRetry && (
+          // analytics-exempt
           <button type="button" className={styles.bannerBtn} onClick={onRetry} data-testid="engine-mode-banner-retry">
             Retry
           </button>

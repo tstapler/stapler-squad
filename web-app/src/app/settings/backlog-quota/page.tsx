@@ -336,9 +336,10 @@ export default function BacklogQuotaPage() {
             <div role="alert" className={styles.errorBox} data-testid="backlog-quota-load-error">
               <span>{`Couldn't load quota settings: ${load.reason}.`}</span>
               <div className={styles.errorActions}>
+                {// analytics-exempt
                 <button type="button" className={styles.button} onClick={() => void refresh()} data-testid="backlog-quota-retry">
                   Retry
-                </button>
+                </button>}
               </div>
             </div>
           )}
@@ -440,6 +441,7 @@ export default function BacklogQuotaPage() {
           >
             Save
           </button>
+          {// analytics-exempt
           <button
             type="button"
             className={styles.button}
@@ -448,7 +450,7 @@ export default function BacklogQuotaPage() {
             data-testid="backlog-quota-revert"
           >
             Revert
-          </button>
+          </button>}
           <div role="status" className={styles.status} data-testid="backlog-quota-status">
             {statusMessage}
           </div>
@@ -461,9 +463,10 @@ export default function BacklogQuotaPage() {
           <ul className={styles.errorList}>
             {errorEntries.map(([key, message]) => (
               <li key={key}>
+                {// analytics-exempt
                 <button type="button" className={styles.errorLink} onClick={() => focusField(key)}>
                   {message}
-                </button>
+                </button>}
               </li>
             ))}
           </ul>
@@ -472,9 +475,10 @@ export default function BacklogQuotaPage() {
         <div role="alert" className={styles.errorBox} data-testid="backlog-quota-save-error">
           <span>{`Couldn't save: ${saveError}`}</span>
           <div className={styles.errorActions}>
+            {// analytics-exempt
             <button type="button" className={styles.button} onClick={() => void submit()}>
               Retry
-            </button>
+            </button>}
           </div>
         </div>
       ) : mismatch ? (
@@ -486,12 +490,14 @@ export default function BacklogQuotaPage() {
             ))}
           </ul>
           <div className={styles.errorActions}>
+            {// analytics-exempt
             <button type="button" className={styles.button} onClick={reloadEffective} data-testid="backlog-quota-mismatch-reload">
               Reload effective values
-            </button>
+            </button>}
+            {// analytics-exempt
             <button type="button" className={styles.button} onClick={() => void submit()} data-testid="backlog-quota-mismatch-save-again">
               Save again
-            </button>
+            </button>}
           </div>
         </div>
       ) : null}

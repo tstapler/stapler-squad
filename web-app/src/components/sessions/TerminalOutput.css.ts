@@ -362,7 +362,7 @@ export const terminal = style({
 export const dropZoneOverlay = style({
   position: "absolute",
   inset: 0,
-  zIndex: 20,
+  zIndex: zIndex.terminalBanner,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -395,7 +395,7 @@ export const loadingOverlay = style({
   alignItems: "center",
   justifyContent: "center",
   gap: "1rem",
-  zIndex: 10,
+  zIndex: zIndex.raised,
   backdropFilter: "blur(2px)",
 });
 
@@ -426,7 +426,7 @@ export const unavailableOverlay = style({
   alignItems: "center",
   justifyContent: "center",
   gap: "0.5rem",
-  zIndex: 10,
+  zIndex: zIndex.raised,
 });
 
 export const unavailableIcon = style({
@@ -456,7 +456,7 @@ export const resizingOverlay = style({
   alignItems: "center",
   justifyContent: "center",
   pointerEvents: "none",
-  zIndex: 5,
+  zIndex: zIndex.terminalDim,
 });
 
 const resizeSpin = keyframes({
@@ -541,7 +541,7 @@ export const reconnectingBanner = style({
   top: vars.space["2"],
   left: "50%",
   transform: "translateX(-50%)",
-  zIndex: 20,
+  zIndex: zIndex.terminalBanner,
   padding: `${vars.space["1"]} ${vars.space["4"]}`,
   borderRadius: "9999px",
   background: vars.color.modalBackground,
@@ -558,7 +558,7 @@ export const hardFailedBanner = style({
   top: vars.space["2"],
   left: "50%",
   transform: "translateX(-50%)",
-  zIndex: 20,
+  zIndex: zIndex.terminalBanner,
   display: "flex",
   alignItems: "center",
   gap: vars.space["2"],

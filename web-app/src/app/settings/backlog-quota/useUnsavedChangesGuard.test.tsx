@@ -18,8 +18,10 @@ function Harness({ dirty, savePending = false }: { dirty: boolean; savePending?:
       <a href="https://example.org/x" data-testid="external">external</a>
       {guard.promptOpen && (
         <div data-testid="prompt">
-          <button onClick={guard.keepEditing}>Keep editing</button>
-          <button onClick={guard.discard}>Discard</button>
+          {// analytics-exempt
+          <button onClick={guard.keepEditing}>Keep editing</button>}
+          {// analytics-exempt
+          <button onClick={guard.discard}>Discard</button>}
         </div>
       )}
     </div>

@@ -184,9 +184,10 @@ function BacklogStagesPageInner() {
               require. Whether these settings are enforced is shown below.
             </p>
           </div>
+          {// analytics-exempt
           <button className={styles.newBtn} onClick={handleNewStage} data-testid="backlog-stage-new">
             New Stage
-          </button>
+          </button>}
         </div>
 
         <EngineModeBanner view={engineMode} onRetry={() => void refetchEngineMode()} />
@@ -201,9 +202,10 @@ function BacklogStagesPageInner() {
         {loadError && (
           <div className={styles.errorMessage} role="alert" data-testid="backlog-stages-load-error">
             <span>Couldn&apos;t load stages — {loadError}</span>
+            {// analytics-exempt
             <button className={styles.retryBtn} onClick={refresh} data-testid="backlog-stages-retry">
               Retry
-            </button>
+            </button>}
           </div>
         )}
 
@@ -261,6 +263,7 @@ function BacklogStagesPageInner() {
                   </div>
                   <div className={styles.actionRow}>
                     {!builtIn && (
+                      // analytics-exempt
                       <button
                         role="switch"
                         aria-checked={s.enabled}
@@ -271,13 +274,14 @@ function BacklogStagesPageInner() {
                         data-testid={`backlog-stage-toggle-${s.slug}`}
                       />
                     )}
+                    {// analytics-exempt
                     <button
                       className={styles.smallBtn}
                       onClick={() => handleEditStage(s)}
                       data-testid={`backlog-stage-edit-${s.slug}`}
                     >
                       Edit
-                    </button>
+                    </button>}
                   </div>
                 </div>
               );

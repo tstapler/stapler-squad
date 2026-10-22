@@ -17,8 +17,8 @@ describe("NAV_PAGES", () => {
 describe("groupNavPages", () => {
   it("groupNavPages_should_placeItemsInCorrectBucket_When_givenFullNavPages", () => {
     const groups = groupNavPages(NAV_PAGES);
-    const workItems = groups.get("work")!;
-    const automationItems = groups.get("automation")!;
+    const workItems = groups.get("work") ?? [];
+    const automationItems = groups.get("automation") ?? [];
     expect(workItems.some((p) => p.label === "Sessions")).toBe(true);
     expect(automationItems.some((p) => p.label === "Workflows")).toBe(true);
     expect(automationItems.some((p) => p.label === "Rules")).toBe(true);

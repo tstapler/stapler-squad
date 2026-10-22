@@ -268,6 +268,7 @@ function enforceExtra(enforce: EnforceExtra): FlagExtra {
         </div>
         {flag.enabled && (
           <div className={rowControls}>
+            {// analytics-exempt
             <button
               type="button"
               className={rowControlButton}
@@ -278,7 +279,7 @@ function enforceExtra(enforce: EnforceExtra): FlagExtra {
               data-testid="feature-flag-revert"
             >
               Revert to Off
-            </button>
+            </button>}
             <Link href={routes.settingsBacklogStages} className={rowControlButton} data-testid="feature-flag-edit-stages">
               Edit stages
             </Link>

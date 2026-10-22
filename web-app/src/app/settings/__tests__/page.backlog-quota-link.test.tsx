@@ -30,7 +30,9 @@ describe("Backlog Quota navigation", () => {
   });
 
   it("registers a flagExtras link on the backlog flag row", () => {
-    render(<>{FLAG_EXTRAS.backlog.renderExtras!({ flag: {} as never, pending: false, setFlag: jest.fn() })}</>);
+    const renderExtras = FLAG_EXTRAS.backlog.renderExtras;
+    if (!renderExtras) throw new Error("backlog flag has no renderExtras");
+    render(<>{renderExtras({ flag: {} as never, pending: false, setFlag: jest.fn() })}</>);
     expect(screen.getByTestId("feature-flag-quota-link")).toHaveAttribute("href", routes.settingsBacklogQuota);
   });
 });

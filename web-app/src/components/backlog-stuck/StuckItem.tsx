@@ -24,7 +24,50 @@ import {
 } from "./useStuckItemCardActions";
 import * as styles from "./StuckItem.css";
 
-interface StuckItemProps {
+/** Per-card operator actions and deep-link focus; split out to keep StuckItemProps within the props-count limit. */
+interface StuckItemActionProps {
+  /**
+   * Operator "Retry now" escape hatch (TriggerRemediationNow RPC) — omitted
+   * disables the retry control entirely. Rejects (throws) when the row is
+   * already parked or has no wired remediation action; the caller (this
+   * component) surfaces that as inline error text rather than the parent
+   * needing to know the specific failure shape.
+   */
+  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  /**
+   * Approves the item's plan (ApprovePlan RPC) — omitted disables the
+   * approve control entirely. Rejects (throws) on failure, mirroring
+   * onTriggerRemediationNow above, so the specific backend error message
+   * reaches the caller instead of being swallowed.
+   */
+  onApprovePlan?: (itemId: string) => Promise<void>;
+  /**
+   * Dispatches a "Diagnose & Nudge" agent for this item (backlog item
+   * 68964304). Omitted disables the control entirely. Resolves with the
+   * dispatched diagnostic session's UUID so StuckItemDetail can link to it
+   * directly (the session is hidden from the main list by design — this
+   * link is otherwise the only way to find it). Rejects (throws) on
+   * failure, mirroring onApprovePlan above. Passed straight through to
+   * StuckItemDetail.
+   */
+  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<string>;
+  /**
+   * Overrides another host's claim on a BLOCKED_BY_CLAIM item (OverrideClaimBlock
+   * RPC) with an audit-logged reason of >= 5 characters. Omitted hides the
+   * control. Rejects on failure so the form can show the message.
+   */
+  onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
+  /** Re-checks repo auto-merge bypassing the cache; passed through to StuckItemDetail. */
+  onRefreshAutoMerge?: (itemId: string) => Promise<StuckBacklogItem | undefined>;
+  /**
+   * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem) —
+   * when it matches this card's item.itemId, scrolls the card into view. Expansion
+   * is driven by the parent (StuckItemsSection) via isExpanded, not by this prop.
+   */
+  focusItemId?: string;
+}
+
+interface StuckItemProps extends StuckItemActionProps {
   item: StuckBacklogItem;
   isExpanded: boolean;
   onToggleExpand: () => void;
@@ -56,51 +99,6 @@ interface StuckItemProps {
    * Passed straight through to StuckItemDetail.
    */
   reworkCapOverrideLoaded?: boolean;
-  /**
-   * Operator "Retry now" escape hatch (TriggerRemediationNow RPC) — omitted
-   * disables the retry control entirely. Rejects (throws) when the row is
-   * already parked or has no wired remediation action; the caller (this
-   * component) surfaces that as inline error text rather than the parent
-   * needing to know the specific failure shape.
-   */
-  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
-  /**
-   * Approves the item's plan (ApprovePlan RPC) — omitted disables the
-   * approve control entirely. Rejects (throws) on failure, mirroring
-   * onTriggerRemediationNow above, so the specific backend error message
-   * reaches the caller instead of being swallowed.
-   */
-  // StuckItemProps was already over the 12-prop threshold before this field (pre-existing);
-  // grouping into a sub-interface is a larger refactor out of scope for the Diagnose &
-  // Nudge feature this file also needed touching for. Tracked as follow-up debt, not
-  // newly introduced by this diff.
-  onApprovePlan?: (itemId: string) => Promise<void>; // eslint-disable-line no-restricted-syntax
-  /**
-   * Dispatches a "Diagnose & Nudge" agent for this item (backlog item
-   * 68964304). Omitted disables the control entirely. Resolves with the
-   * dispatched diagnostic session's UUID so StuckItemDetail can link to it
-   * directly (the session is hidden from the main list by design — this
-   * link is otherwise the only way to find it). Rejects (throws) on
-   * failure, mirroring onApprovePlan above. Passed straight through to
-   * StuckItemDetail.
-   */
-  // eslint-disable-next-line no-restricted-syntax -- see onApprovePlan's identical disable above
-  onDiagnose?: (itemId: string, reason: StuckReason) => Promise<string>;
-  /**
-   * Overrides another host's claim on a BLOCKED_BY_CLAIM item (OverrideClaimBlock
-   * RPC) with an audit-logged reason of >= 5 characters. Omitted hides the
-   * control. Rejects on failure so the form can show the message.
-   */
-  onOverrideClaimBlock?: (itemId: string, reason: string) => Promise<void>;
-  /** Re-checks repo auto-merge bypassing the cache; passed through to StuckItemDetail. */
-  // eslint-disable-next-line no-restricted-syntax -- see onApprovePlan's identical disable above
-  onRefreshAutoMerge?: (itemId: string) => Promise<StuckBacklogItem | undefined>;
-  /**
-   * itemId from the `/unfinished?item=<itemId>` deep link (routes.unfinishedItem) —
-   * when it matches this card's item.itemId, scrolls the card into view. Expansion
-   * is driven by the parent (StuckItemsSection) via isExpanded, not by this prop.
-   */
-  focusItemId?: string; // eslint-disable-line no-restricted-syntax -- see onApprovePlan's disable above
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -300,6 +298,7 @@ export function StuckItem({
             </button>
           )}
           {canOverrideClaim && (
+            // analytics-exempt
             <button
               type="button"
               className={`${styles.retryBtn} ${styles.retryBtnAlwaysOn}`}

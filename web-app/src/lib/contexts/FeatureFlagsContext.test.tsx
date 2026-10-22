@@ -108,7 +108,9 @@ describe("readbackMismatch", () => {
     mockGetFeatureFlags.mockReturnValueOnce(new Promise((r) => (resolveOld = r)));
     let refreshing!: Promise<void>;
     act(() => {
-      refreshing = result.current.refresh!({ quiet: true });
+      const refresh = result.current.refresh;
+      if (!refresh) throw new Error("refresh missing from context");
+      refreshing = refresh({ quiet: true });
     });
     mockUpdateFeatureFlag.mockResolvedValue({ flag: flag(true) });
     await act(() => result.current.setFlag(GATE, true));

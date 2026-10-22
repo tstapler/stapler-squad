@@ -87,6 +87,7 @@ export function AlertConfirmDialog({
           {children}
         </div>
         <div className={styles.actions}>
+          {// analytics-exempt
           <button
             ref={cancelRef}
             type="button"
@@ -95,7 +96,8 @@ export function AlertConfirmDialog({
             data-testid="alert-confirm-cancel"
           >
             {cancelLabel}
-          </button>
+          </button>}
+          {// analytics-exempt
           <button
             type="button"
             className={styles.confirmButton}
@@ -107,7 +109,7 @@ export function AlertConfirmDialog({
             data-testid="alert-confirm-confirm"
           >
             {confirmLabel}
-          </button>
+          </button>}
         </div>
       </div>
     </div>

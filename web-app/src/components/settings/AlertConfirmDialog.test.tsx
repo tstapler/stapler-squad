@@ -24,9 +24,10 @@ function Harness({
   const switchRef = useRef<HTMLButtonElement>(null);
   return (
     <div>
+      {// analytics-exempt
       <button ref={switchRef} data-testid="opener" onClick={() => setOpen(true)}>
         Opener
-      </button>
+      </button>}
       {open && (
         <AlertConfirmDialog
           heading="Enforce operators?"

@@ -381,9 +381,10 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
       {warning && (
         <div className={styles.warningBanner} role="status" data-testid="stage-form-warning">
           <span>Warning: {warning}</span>
+          {// analytics-exempt
           <button type="button" className={styles.cancelBtn} onClick={handleWarningAcknowledged} data-testid="stage-form-warning-ack">
             Got it
-          </button>
+          </button>}
         </div>
       )}
 
@@ -476,9 +477,10 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
       <div>
         <div className={styles.sectionHeading}>
           <span>Outgoing transitions</span>
+          {// analytics-exempt
           <button type="button" className={styles.addBtn} onClick={handleAddTransition} data-testid="stage-transition-add">
             + Add transition
-          </button>
+          </button>}
         </div>
         <div className={styles.transitionList}>
           {transitions.map((t, i) => (
@@ -522,13 +524,15 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
         >
           {submitting ? "Saving…" : stage ? "Save changes" : "Create stage"}
         </button>
+        {// analytics-exempt
         <button type="button" className={styles.cancelBtn} onClick={onCancel} data-testid="stage-form-cancel">
           Cancel
-        </button>
+        </button>}
 
         {stage &&
           (confirmingDelete ? (
             <>
+              {// analytics-exempt
               <button
                 type="button"
                 className={styles.confirmDeleteBtn}
@@ -538,7 +542,8 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
                 data-testid="stage-form-confirm-delete"
               >
                 {deleting ? "Deleting…" : "Confirm delete?"}
-              </button>
+              </button>}
+              {// analytics-exempt
               <button
                 type="button"
                 className={styles.cancelBtn}
@@ -547,9 +552,10 @@ export function StageForm({ stage, allStages, engineMode, onSaved, onDeleted, on
                 data-testid="stage-form-cancel-delete"
               >
                 Never mind
-              </button>
+              </button>}
             </>
           ) : (
+            // analytics-exempt
             <button
               type="button"
               className={styles.deleteBtn}

@@ -53,7 +53,8 @@ jest.mock("./StageForm", () => ({
     <div data-testid="stage-form-stub">
       {stage ? `editing:${stage.slug}` : "creating"}
       <span data-testid="stage-form-stub-mode">{engineMode?.kind}</span>
-      <button onClick={() => onSaved(stage)}>stub-save</button>
+      {// analytics-exempt
+      <button onClick={() => onSaved(stage)}>stub-save</button>}
     </div>
   ),
 }));

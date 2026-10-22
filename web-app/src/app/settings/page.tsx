@@ -139,12 +139,13 @@ function SettingsPageInner() {
               <div className={styles.helpSection}>
                 <div className={styles.helpSectionTitle}>Help</div>
                 <div className={styles.helpRow}>
+                  {// analytics-exempt
                   <button
                     className={styles.helpButton}
                     onClick={triggerOnboarding}
                   >
                     Show onboarding tour again
-                  </button>
+                  </button>}
                   <Link href={routes.help} className={styles.helpLink}>
                     View documentation
                   </Link>

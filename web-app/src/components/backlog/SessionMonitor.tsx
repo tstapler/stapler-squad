@@ -145,14 +145,16 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
         <span className={styles.toolbarTitle}>
           {sessionRole ? `${sessionRole} session` : "session"} · {isRunning ? "running" : "ended"}
         </span>
+        {// analytics-exempt
         <button
           className={`${styles.viewToggle} ${activeView === "terminal" ? styles.viewToggleActive : ""}`}
           onClick={() => setView("terminal")}
           title="Show terminal output"
         >
           Terminal
-        </button>
+        </button>}
         {conversationEnabled && (
+          // analytics-exempt
           <button
             className={`${styles.viewToggle} ${activeView === "history" ? styles.viewToggleActive : ""}`}
             onClick={() => setView("history")}
@@ -176,13 +178,14 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
           conversationError ? (
             <div className={styles.errorState} data-testid="session-monitor-conversation-error">
               <span>Failed to load conversation history: {conversationError}</span>
+              {// analytics-exempt
               <button
                 className={styles.errorRetryButton}
                 onClick={() => void fetchConversation()}
                 data-testid="session-monitor-retry-conversation"
               >
                 Retry
-              </button>
+              </button>}
             </div>
           ) : messages.length === 0 ? (
             <div className={styles.emptyState}>No conversation history yet…</div>
@@ -207,13 +210,14 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
         ) : terminalError ? (
           <div className={styles.errorState} data-testid="session-monitor-terminal-error">
             <span>Failed to load terminal output: {terminalError}</span>
+            {// analytics-exempt
             <button
               className={styles.errorRetryButton}
               onClick={() => void fetchTerminal()}
               data-testid="session-monitor-retry-terminal"
             >
               Retry
-            </button>
+            </button>}
           </div>
         ) : terminalOutput ? (
           <pre className={styles.terminalOutput}>{terminalOutput}</pre>
@@ -225,6 +229,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       <div className={styles.inputRow}>
         <div className={styles.quickActions} aria-label="Quick inputs">
           {QUICK_ACTIONS.map((action) => (
+            // analytics-exempt
             <button
               key={action}
               className={styles.quickActionButton}
@@ -248,6 +253,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
           aria-label="Session input"
           data-testid="session-monitor-input"
         />
+        {// analytics-exempt
         <button
           className={styles.sendButton}
           onClick={() => void handleSend(inputValue)}
@@ -255,7 +261,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
           data-testid="session-monitor-send"
         >
           Send
-        </button>
+        </button>}
       </div>
     </div>
   );

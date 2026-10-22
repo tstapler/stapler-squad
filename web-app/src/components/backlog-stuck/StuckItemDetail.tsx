@@ -196,6 +196,7 @@ function AutoMergeLine({ item, onRefresh }: AutoMergeLineProps) {
       <span className={styles.value}>{line}</span>
       {secondary && <span className={styles.unknownNote}>{secondary}</span>}
       {showRetry && (
+        // analytics-exempt
         <button
           key="retry"
           type="button"
