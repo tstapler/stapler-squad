@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { GutterMarkType } from "@/lib/utils/parseDiff";
 import { WindowedFile } from "@/lib/files/windowedFile";
 import { useWindowedState } from "@/lib/files/useWindowedState";
 import { bucketBytes } from "@/lib/files/analytics/events";
@@ -22,6 +23,8 @@ export interface WindowedFileViewProps {
   /** The per-device Accessible view: pages come from the same windowed file through `read(lines)`. */
   accessible?: boolean;
   dirty?: boolean;
+  /** Diff marks by absolute file line; drawn as gutter bars and line tints. */
+  gutterMarks?: Map<number, GutterMarkType>;
   /** Changes when the file must be read again (stale-banner Reload). */
   reloadKey?: number;
   onReady?: (handle: ReadViewHandle) => void;
@@ -46,7 +49,7 @@ function bridgeHandle(editor: CodeEditorHandle, file: WindowedFile): ReadViewHan
 }
 
 /** A windowed (T1/T2) file in Read mode: CodeMirror over a lazy document that loads line windows on demand. */
-export function WindowedFileView({ sessionId, path, source, language, accessible = false, dirty = false, reloadKey, onReady, onDemoted }: WindowedFileViewProps) {
+export function WindowedFileView({ sessionId, path, source, language, accessible = false, dirty = false, gutterMarks, reloadKey, onReady, onDemoted }: WindowedFileViewProps) {
   const transport = useFileTransport();
   const latency = useOpenLatency();
   const [current, setCurrent] = useState<{ file: WindowedFile; id: number } | null>(null);
@@ -77,13 +80,15 @@ export function WindowedFileView({ sessionId, path, source, language, accessible
   return (
     <>
       <LargeFileStates file={file} state={state} />
-      <WindowedEditor key={current?.id} file={file} path={path} language={language} startLine={source.windowStartLine} onReady={onReady} />
+      <WindowedEditor key={current?.id} file={file} path={path} gutterMarks={gutterMarks} language={language} startLine={source.windowStartLine} onReady={onReady} />
     </>
   );
 }
 
-function WindowedEditor({ file, path, language, startLine, onReady }: { file: WindowedFile; path: string; language: string; startLine: number; onReady?: (handle: ReadViewHandle) => void }) {
+function WindowedEditor({ file, path, language, startLine, gutterMarks, onReady }: { file: WindowedFile; path: string; language: string; startLine: number; gutterMarks?: Map<number, GutterMarkType>; onReady?: (handle: ReadViewHandle) => void }) {
   useEffect(() => () => file.detach(), [file]);
+  // Marks set before attach seed the first buffer; later changes rebuild it in place.
+  useEffect(() => { void file.setGutterMarks(gutterMarks); }, [file, gutterMarks]);
   return (
     <CodeEditor
       content=""
