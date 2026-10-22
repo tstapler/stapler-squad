@@ -9,12 +9,14 @@
  *  - the Up Next tab change uses history.replaceState, so it adds no history entry and scroll is untouched.
  */
 import { test, expect } from '@playwright/test';
+import { isBunBuild } from './helpers/web-build';
 import { AppShellPage } from './pages/AppShellPage';
 import { measureScrollPolicy } from './pages/BaselineProbes';
 import { UpNextPage } from './pages/UpNextPage';
 import baseline from './fixtures/next-baseline.json';
 
 const SCROLL_OFFSET = 40;
+const SCROLL_TOLERANCE_PX = 2;
 
 test.describe('scroll policy (Next baseline)', () => {
   test('forward nav, Back and hash nav match the recorded Next values', async ({ page }) => {
@@ -51,5 +53,23 @@ test.describe('scroll policy (Next baseline)', () => {
     await expect(page).toHaveURL(/[?&]tab=queue/);
     expect(await page.evaluate(() => history.length)).toBe(historyLength);
     expect(await shell.scrollTop()).toBe(before);
+  });
+});
+
+test.describe('scroll policy (Bun only, UX G8)', () => {
+  test.skip(!isBunBuild(), 'ScrollPolicy.tsx restores position on POP; Next remounts the page at 0 instead (baselined above)');
+
+  // KNOWN GAP, found verifying this story against a real Bun build: ScrollPolicy.tsx's POP branch
+  // (src/lib/nav/ScrollPolicy.tsx) calls restore() with the position saved under the current
+  // location.key, but observed backScrollTop is 0, not the saved offset, on every run (verified
+  // with a real mouse-wheel scroll, not just a scripted scrollTop write, so this isn't a
+  // test-harness timing artifact). Needs an issue filed and a fix outside PR 7b's file set before
+  // this can be un-marked. test.fail() keeps the gap visible (and tracked as a red flag) instead
+  // of asserting a policy that does not hold.
+  test.fail();
+  test('Back restores the previous scroll position (within 2px), unlike the recorded Next baseline', async ({ page }) => {
+    const observed = await measureScrollPolicy(page);
+    expect(observed.scrolledTo, 'the long page really scrolled').toBeGreaterThan(0);
+    expect(Math.abs(observed.backScrollTop - observed.scrolledTo)).toBeLessThanOrEqual(SCROLL_TOLERANCE_PX);
   });
 });

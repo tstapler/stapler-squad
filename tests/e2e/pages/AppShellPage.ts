@@ -37,6 +37,18 @@ export class AppShellPage {
     await this.page.goto(`${BASE_URL}${path}`, { waitUntil: "domcontentloaded" });
   }
 
+  /**
+   * Same-document navigation via history.pushState + a synthetic popstate, for routes with no
+   * reachable in-app link (e.g. the legacy /config redirect target) or to exercise a second
+   * navigation in sequence without a fresh page load discarding page-held state like a MutationObserver.
+   */
+  async clientNavigate(path: string) {
+    await this.page.evaluate((p) => {
+      history.pushState({}, "", p);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, path);
+  }
+
   /** Drawer nav link by visible label; includeHidden because the drawer is aria-hidden on some routes. */
   navLink(label: string | RegExp): Locator {
     return this.drawerNav.getByRole("link", { name: label, includeHidden: true }).first();
@@ -98,7 +110,11 @@ export class AppShellPage {
 
   async scrollTo(top: number): Promise<void> {
     await this.page.evaluate(
-      `(() => { const s = ${AppShellPage.SCROLLER}; if (s.el) s.el.scrollTop = ${top}; else scrollTo(0, ${top}); })()`,
+      // Setting scrollTop queues the native 'scroll' event asynchronously (browser-scheduled, not
+      // this tick), which can race a script's own position-recording listener against an
+      // immediately-following navigation; dispatching one synchronously makes a scripted scroll
+      // behave like the many scroll events a real drag/wheel gesture fires, deterministically.
+      `(() => { const s = ${AppShellPage.SCROLLER}; if (s.el) { s.el.scrollTop = ${top}; s.el.dispatchEvent(new Event('scroll', { bubbles: true })); } else scrollTo(0, ${top}); })()`,
     );
   }
 

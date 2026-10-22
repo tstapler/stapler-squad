@@ -16,6 +16,7 @@
     "build/**/*.tsx",
     "scripts/verify-eval-patch.mjs",
     "src/main.tsx",
+    "src/theme-boot.ts",
     "src/lib/nav/impl.next.tsx",
     "src/lib/nav/impl.router.tsx",
     "src/lib/lazy/impl.next.tsx",

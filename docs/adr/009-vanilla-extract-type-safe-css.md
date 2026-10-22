@@ -28,7 +28,7 @@ Any solution must:
 - Provide **TypeScript type safety** for CSS property values, not just class names
 - Support **design tokens** as a first-class concept with typed references
 - Be **zero-runtime** and compatible with React Server Components
-- Be **compatible with Next.js 15 App Router** and `output: "export"` (static site)
+- Be **compatible with Next.js 15 App Router** and `output: "export"` (static site). *Amended by project web-app-bun-build: the Bun build compiles `.css.ts` through the same plugin family with the `eval` patch (`docs/how-to/patch-vanilla-extract-eval.md`), so Next compatibility is required only until the Next build is removed (PR 9).*
 - Support **gradual migration** — existing CSS Modules continue working during transition
 
 ### Options Considered
@@ -112,7 +112,7 @@ Adopt **vanilla-extract** as the CSS authoring standard for new components and t
 
 - Dynamic styles (e.g. `background: props.color` where color is a runtime value) cannot be expressed directly. Must use CSS custom properties as a bridge: pass the value as an inline style custom property, consume it via `var()` in the `.css.ts` file.
 - `.css.ts` files cannot use runtime values at style creation time — all variants must be pre-declared. This is a feature for design system work but a friction point for highly dynamic one-off styles.
-- Turbopack (used in `next dev --turbopack`) support in `@vanilla-extract/next-plugin` is available from v1.3+ but is newer than the webpack integration. If dev-mode issues arise, fall back to `next dev` (without `--turbopack`) while the plugin matures.
+- Turbopack (used in `next dev --turbopack`) support in `@vanilla-extract/next-plugin` is available from v1.3+ but is newer than the webpack integration. If dev-mode issues arise, fall back to `next dev` (without `--turbopack`) while the plugin matures (Next mode (removed in PR 9)).
 - Build setup is slightly more complex than plain CSS Modules (requires `@vanilla-extract/next-plugin` in `next.config.ts`).
 
 ### Migration Strategy
