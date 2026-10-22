@@ -3,3 +3,8 @@ linker = "isolated"
 
 # Packages younger than 3 days (seconds) are not installable: a malicious publish is usually pulled within hours.
 minimumReleaseAge = 259200
+
+# Dev server only (build/dev.ts); build.ts passes the same plugins to Bun.build itself.
+[serve.static]
+plugins = ["./build/plugins/dev.ts"]
+env = "NEXT_PUBLIC_*"

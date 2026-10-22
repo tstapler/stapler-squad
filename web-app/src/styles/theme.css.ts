@@ -131,6 +131,7 @@ export const lightTheme = createTheme(vars, {
     logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
 
     gitModified: "#d97706", gitAdded: "#16a34a", gitDeleted: "#dc2626",
+    gitModifiedBg: "rgba(217,119,6,0.12)", gitAddedBg: "rgba(22,163,74,0.12)", gitDeletedBg: "rgba(220,38,38,0.12)",
     gitRenamed: "#2563eb", gitUntracked: "#6b7280", gitConflict: "#c026d3",
 
     glowPrimary: "rgba(0,112,243,0.4)",
@@ -239,6 +240,7 @@ export const darkTheme = createTheme(vars, {
     logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
 
     gitModified: "#d97706", gitAdded: "#16a34a", gitDeleted: "#dc2626",
+    gitModifiedBg: "rgba(217,119,6,0.15)", gitAddedBg: "rgba(22,163,74,0.15)", gitDeletedBg: "rgba(220,38,38,0.15)",
     gitRenamed: "#2563eb", gitUntracked: "#6b7280", gitConflict: "#c026d3",
 
     glowPrimary: "rgba(45,156,219,0.4)",
@@ -349,6 +351,7 @@ export const matrixTheme = createTheme(vars, {
     logOnDark: "#00ff41", logOnAmber: "#000000", logLive: "#00ff41",
 
     gitModified: "#ccaa00", gitAdded: "#00ff41", gitDeleted: "#ff3333",
+    gitModifiedBg: "rgba(204,170,0,0.15)", gitAddedBg: "rgba(0,255,65,0.15)", gitDeletedBg: "rgba(255,51,51,0.15)",
     gitRenamed: "#00aaff", gitUntracked: "#00802b", gitConflict: "#ff00ff",
 
     glowPrimary: "rgba(0,255,65,0.5)",
@@ -467,6 +470,7 @@ export const cyberpunk77Theme = createTheme(vars, {
     logOnDark: "#ffffff", logOnAmber: "#0d0d1a", logLive: "#00ff9f",
 
     gitModified: "#ffd700", gitAdded: "#00ff9f", gitDeleted: "#ff2d78",
+    gitModifiedBg: "rgba(255,215,0,0.15)", gitAddedBg: "rgba(0,255,159,0.15)", gitDeletedBg: "rgba(255,45,120,0.15)",
     gitRenamed: "#00d4ff", gitUntracked: "#9d4edd", gitConflict: "#ff0099",
 
     glowPrimary: "rgba(255,45,120,0.5)",
@@ -585,6 +589,7 @@ export const wh40kTheme = createTheme(vars, {
     logOnDark: "#fcee09", logOnAmber: "#0d0b00", logLive: "#c0a020",
 
     gitModified: "#c0a020", gitAdded: "#5a7a3a", gitDeleted: "#8b1a1a",
+    gitModifiedBg: "rgba(192,160,32,0.15)", gitAddedBg: "rgba(90,122,58,0.15)", gitDeletedBg: "rgba(139,26,26,0.15)",
     gitRenamed: "#1a4a8b", gitUntracked: "#786858", gitConflict: "#7a3a5a",
 
     glowPrimary: "rgba(192,160,32,0.4)",
@@ -706,6 +711,7 @@ export const cleanTheme = createTheme(vars, {
     logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
 
     gitModified: "#d97706", gitAdded: "#16a34a", gitDeleted: "#dc2626",
+    gitModifiedBg: "rgba(217,119,6,0.15)", gitAddedBg: "rgba(22,163,74,0.15)", gitDeletedBg: "rgba(220,38,38,0.15)",
     gitRenamed: "#4f46e5", gitUntracked: "#6b7280", gitConflict: "#c026d3",
 
     glowPrimary: "rgba(99,102,241,0.3)",

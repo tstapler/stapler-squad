@@ -286,6 +286,48 @@ jobs:
             web-app/.build/stats-minified.json
           if-no-files-found: warn
 
+      # The Go auth-exemption walk (built-assets-guard) tests exactly what would be embedded.
+      - name: Upload built out/
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build-bun-out
+          path: web-app/out
+          if-no-files-found: error
+          retention-days: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # built-assets-guard: every file of the Bun build must be auth-exempt or on the public
+  # allowlist (server/middleware/built_assets_test.go). REQUIRE_BUILT_OUT makes a missing
+  # artifact a failure instead of a skip. Not in web-build-gate's needs: it joins by variable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  built-assets-guard:
+    name: Go auth-exemption walk of the Bun build
+    runs-on: ubuntu-latest
+    needs: web-build-smoke-bun
+    if: always() && needs.web-build-smoke-bun.result == 'success'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Generate protobuf and ent code
+        uses: ./.github/actions/prepare-stub
+
+      - name: Download built out/
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build-bun-out
+          path: web-app/out
+
+      - name: Walk every built file against the auth exemption
+        env:
+          REQUIRE_BUILT_OUT: '1'
+        run: go test ./server/middleware -run 'TestBuiltAssets' -count=1 -v
+
   # ─────────────────────────────────────────────────────────────────────────────
   # web-build-gate: the only check meant for branch protection. Membership comes from the
   # repository variable WEB_BUILD_GATE_MEMBERS (see web-app/scripts/ci/web-build-gate.mjs),
@@ -309,6 +351,88 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
           MEMBERS: ${{ vars.WEB_BUILD_GATE_MEMBERS }}
         run: node web-app/scripts/ci/web-build-gate.mjs
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # storybook-build: non-blocking (not in web-build-gate's needs:). Storybook stays on
+  # react-webpack5 (ADR-002); this catches a story or nav-facade change that breaks it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  storybook-build:
+    name: storybook build (non-blocking)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Storybook-relevant changes
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          if echo "$CHANGED" | grep -qE '^web-app/src/.*\.stories\.tsx$|^web-app/\.storybook/|^web-app/src/lib/nav/|^web-app/package\.json$|^web-app/bun\.lock$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Bun
+        if: steps.detect.outputs.relevant == 'true'
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.relevant == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up buf
+        if: steps.detect.outputs.relevant == 'true'
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      - name: Install dependencies and generate protobuf code
+        if: steps.detect.outputs.relevant == 'true'
+        run: |
+          cd web-app && bun install --frozen-lockfile
+          cd .. && buf generate proto
+
+      - name: Build Storybook
+        if: steps.detect.outputs.relevant == 'true'
+        working-directory: web-app
+        run: bun run build-storybook
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # web-supply-chain: the install must resolve the same screened tree twice, with no
+  # github: source, banned version or no-op trustedDependencies entry (Story 6.10).
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-supply-chain:
+    name: web-app install and dependency screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install (frozen)
+        working-directory: web-app
+        run: bun install --frozen-lockfile
+
+      # bun#44713: a first plain install after a lockfile edit can still rewrite it.
+      - name: Lockfile is stable across repeated installs
+        working-directory: web-app
+        run: |
+          bun install
+          bun install
+          git diff --exit-code -- bun.lock
+
+      - name: Dependency screen
+        working-directory: web-app
+        run: bun run check:dependency-screen
 
   # ─────────────────────────────────────────────────────────────────────────────
   # test-affected: the PR-time Go test gate -- only the packages transitively

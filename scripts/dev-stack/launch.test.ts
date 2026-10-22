@@ -10,6 +10,7 @@ import {
   reconcileStaleManifest,
   reapOrphanedChildren,
   getManifestPath,
+  frontendSpawnPlan,
   DevStackManifest,
 } from "./launch";
 
@@ -107,6 +108,37 @@ afterAll(async () => {
       await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Story 5.8: WEB_BUILD-aware frontend spawn (mocked, no real process started)
+// ---------------------------------------------------------------------------
+
+describe("frontendSpawnPlan: WEB_BUILD selects the dev-stack frontend command", () => {
+  const config = { instance: "x", backendPort: 1, frontendPort: 62875, apiBaseUrl: "http://localhost:1/api" };
+
+  it("WEB_BUILD unset or next spawns next dev with --port/--hostname, unchanged", () => {
+    for (const env of [{}, { WEB_BUILD: "next" }]) {
+      const plan = frontendSpawnPlan(config, env);
+      expect(plan.command).toMatch(/node_modules[/\\].bin[/\\]next$/);
+      expect(plan.args).toEqual(["dev", "--port", "62875", "--hostname", "localhost"]);
+      expect(plan.env.PORT).toBeUndefined();
+      expect(plan.env.NEXT_PUBLIC_API_URL).toBe(config.apiBaseUrl);
+    }
+  });
+
+  it("WEB_BUILD=bun spawns bun build/dev.ts with PORT set, never next", () => {
+    const plan = frontendSpawnPlan(config, { WEB_BUILD: "bun" });
+    expect(plan.command).toBe("bun");
+    expect(plan.args).toEqual(["build/dev.ts"]);
+    expect(plan.cwd).toMatch(/web-app$/);
+    expect(plan.env.PORT).toBe("62875");
+    expect(plan.env.NEXT_PUBLIC_API_URL).toBe(config.apiBaseUrl);
+  });
+
+  it("an invalid WEB_BUILD throws naming the allowed values (parseWebBuildMode is the single owner)", () => {
+    expect(() => frontendSpawnPlan(config, { WEB_BUILD: "vite" })).toThrow(/WEB_BUILD must be one of/);
+  });
 });
 
 // ---------------------------------------------------------------------------

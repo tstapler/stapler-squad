@@ -253,6 +253,14 @@ var knownFeatureFlags = []struct {
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
 	{
+		name:        "backlog-triage-results-panel",
+		description: "Show a formatted 'Triage Results' panel (priority, tasks with estimates, suggestions, raw-JSON toggle) on the backlog item detail view. Default: off.",
+	},
+	{
+		name:        "backlog-review-results-panel",
+		description: "Show a formatted 'Review Results' panel (overall outcome, per-criterion rows with evidence, raw-JSON toggle) on the backlog item detail view. Default: off.",
+	},
+	{
 		name:        blockApprovalOnCIFailureFlagName,
 		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
 	},

@@ -31,6 +31,8 @@ export const FEATURE_META: Record<string, { label: string }> = {
   "programs:cli-flag-probe": { label: "Program flag discovery (check binary and read --help)" },
   "pi-support": { label: "pi coding agent" },
   "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
+  "backlog-triage-results-panel": { label: "Backlog: formatted triage results panel" },
+  "backlog-review-results-panel": { label: "Backlog: formatted review results panel" },
   "review:block-approval-on-ci-failure": { label: "Block Approve when CI is failing" },
   "terminal:resync-visibility-scope": { label: "Terminal resync: scope to visible terminal" },
   "terminal:resync-correlation-id": { label: "Terminal resync: correlation IDs" },

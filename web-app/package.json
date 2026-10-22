@@ -6,7 +6,6 @@
   "trustedDependencies": [
     "@swc/core",
     "esbuild",
-    "@vanilla-extract/css",
     "@ast-grep/cli"
   ],
   "overrides": {
@@ -16,7 +15,7 @@
     "preinstall": "node -e \"if(!(process.env.npm_config_user_agent||'').startsWith('bun/')){console.error('Use bun install (bun@1.4.3); npm, yarn and pnpm are not supported in web-app/. See docs/how-to/use-bun-in-web-app.md');process.exit(1)}\"",
     "dev": "if [ \"$WEB_BUILD\" = bun ]; then bun run dev:bun; else bun run dev:next; fi",
     "dev:next": "next dev --port ${PORT:-3001} --hostname localhost",
-    "dev:bun": "echo 'The Bun dev server lands in PR 5b; use WEB_BUILD=next for now.' >&2; exit 1",
+    "dev:bun": "bun build/dev.ts",
     "build": "if [ \"$WEB_BUILD\" = bun ]; then bun run build:bun; else bun run build:next; fi",
     "build:next": "next build",
     "build:bun": "bun build/build.ts",
@@ -121,26 +120,6 @@
     "remark-gfm": "^4.0.1",
     "web-vitals": "6.2.3"
   },
-  "size-limit": [
-    {
-      "name": "Total JS bundle",
-      "path": "out/_next/static/chunks/**/*.js",
-      "limit": "5 MB",
-      "gzip": false
-    },
-    {
-      "name": "Framework chunk (React)",
-      "path": "out/_next/static/chunks/framework-*.js",
-      "limit": "650 KB",
-      "gzip": false
-    },
-    {
-      "name": "Main app chunk",
-      "path": "out/_next/static/chunks/main-*.js",
-      "limit": "400 KB",
-      "gzip": false
-    }
-  ],
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
     "@babel/core": "^7",
@@ -154,7 +133,6 @@
     "@storybook/addon-a11y": "^8.6.18",
     "@storybook/addon-essentials": "^8.6.18",
     "@storybook/addon-themes": "^8.6.18",
-    "@storybook/nextjs": "^8.6.18",
     "@storybook/react": "^8.6.18",
     "@storybook/react-webpack5": "^8.6.18",
     "@swc/core": "^1.15.33",

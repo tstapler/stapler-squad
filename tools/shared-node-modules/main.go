@@ -66,6 +66,10 @@ func optionsFromEnv(webAppDir string) (Options, error) {
 // bunInstall installs into target. It runs bun from webAppDir and passes --cwd because
 // version managers like asdf resolve the pinned Bun from the working directory's
 // .tool-versions, which the shared store directory does not have (the shim exits 126).
+// When target is webAppDir itself (the plain-install and pre-existing-node_modules-verify
+// paths in Run), --cwd is omitted: cmd.Dir already puts bun there, and Bun resolves --cwd
+// relative to its own process cwd, so passing both doubled the path (web-app/web-app) and
+// failed with ENOENT.
 func bunInstall(webAppDir, target string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -75,7 +79,11 @@ func bunInstall(webAppDir, target string) error {
 }
 
 func bunInstallCmd(ctx context.Context, webAppDir, target string) *exec.Cmd {
-	cmd := safeexec.CommandContext(ctx, "bun", "install", "--frozen-lockfile", "--cwd", target)
+	args := []string{"install", "--frozen-lockfile"}
+	if target != webAppDir {
+		args = append(args, "--cwd", target)
+	}
+	cmd := safeexec.CommandContext(ctx, "bun", args...)
 	cmd.Dir = webAppDir
 	cmd.Env = envWithout(os.Environ(), "npm_config_user_agent")
 	return cmd
