@@ -1063,7 +1063,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
 ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
-	cd web-app && npx next lint
+	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
 	cd tools/scanner && go test ./...

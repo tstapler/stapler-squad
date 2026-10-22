@@ -52,8 +52,8 @@ if ! skip storybook; then
 fi
 
 if ! skip eslint; then
-  rules=$(ESLINT_USE_FLAT_CONFIG=false ./node_modules/.bin/eslint --print-config src/lib/nav/index.ts 2>/dev/null | grep -cE '"(analytics|rpc-lifecycle)/')
-  if ./node_modules/.bin/next lint --dir src/lib/nav >"${TMPDIR:-/tmp}/s0-eslint.log" 2>&1 && [[ $rules -gt 0 ]]; then
+  rules=$(./node_modules/.bin/eslint --print-config src/lib/nav/index.ts 2>/dev/null | grep -cE '"(analytics|rpc-lifecycle)/')
+  if ./node_modules/.bin/eslint src/lib/nav >"${TMPDIR:-/tmp}/s0-eslint.log" 2>&1 && [[ $rules -gt 0 ]]; then
     report PASS eslint "file: plugins loaded ($rules plugin rules in the resolved config), src/lib/nav clean"
   else
     report FAIL eslint "plugins loaded: $rules rules; see ${TMPDIR:-/tmp}/s0-eslint.log"
