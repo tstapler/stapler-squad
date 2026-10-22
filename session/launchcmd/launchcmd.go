@@ -21,6 +21,9 @@ const MaxArgBytes = 128 * 1024
 // ErrArgTooLarge reports an argument that cannot be passed as a single argv entry.
 var ErrArgTooLarge = errors.New("launchcmd: argument exceeds MAX_ARG_STRLEN")
 
+// ErrRequiresShell reports a command containing RawShell text.
+var ErrRequiresShell = errors.New("launchcmd: command requires a shell")
+
 // LaunchCommand is the sealed set of launch forms; switch on the concrete type.
 type LaunchCommand interface {
 	// ShellString renders the command for a backend that runs it through a shell.
@@ -28,7 +31,7 @@ type LaunchCommand interface {
 	isLaunchCommand()
 }
 
-// Arg is one argv entry: Literal, Flag, or FileContents.
+// Arg is one argv entry: Literal, Word, Flag, FileContents, or RawShell.
 type Arg interface {
 	shellWord() string
 	isArg()
@@ -47,9 +50,10 @@ type FileContents string
 // Flag never needs quoting.
 type Flag struct{ name string }
 
-var flagPattern = regexp.MustCompile(`^--?[A-Za-z0-9][A-Za-z0-9_-]*$`)
+var flagPattern = regexp.MustCompile(`^(--|--?[A-Za-z0-9][A-Za-z0-9_-]*)$`)
 
-// NewFlag validates name as a bare option ("-p", "--resume").
+// NewFlag validates name as a bare option ("-p", "--resume") or the "--"
+// end-of-options separator.
 func NewFlag(name string) (Flag, error) {
 	if !flagPattern.MatchString(name) {
 		return Flag{}, fmt.Errorf("launchcmd: %q is not a valid flag name", name)
@@ -69,13 +73,34 @@ func MustFlag(name string) Flag {
 // Name returns the flag text.
 func (f Flag) Name() string { return f.name }
 
+// Word is an argv entry taken verbatim that a shell may see unquoted when it
+// is plain (letters, digits and _@%+=:,./-), and quoted otherwise. Either way
+// the process receives exactly this string; only the shell text differs.
+type Word string
+
+// RawShell is shell text standing for a single word that cannot be expressed
+// as a plain string (for example "$HOME/bin/claude"). Its presence means the
+// command needs a shell: see ExecCommand.RequiresShell.
+type RawShell string
+
 func (Literal) isArg()      {}
+func (Word) isArg()         {}
 func (FileContents) isArg() {}
 func (Flag) isArg()         {}
+func (RawShell) isArg()     {}
+
+var plainWordPattern = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
 func (l Literal) shellWord() string      { return Quote(string(l)) }
 func (f FileContents) shellWord() string { return `"$(cat ` + Quote(string(f)) + `)"` }
 func (f Flag) shellWord() string         { return f.name }
+func (r RawShell) shellWord() string     { return string(r) }
+func (w Word) shellWord() string {
+	if plainWordPattern.MatchString(string(w)) {
+		return string(w)
+	}
+	return Quote(string(w))
+}
 
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -101,12 +126,31 @@ func (e EnvVar) Key() string { return e.key }
 type ExecCommand struct {
 	Env  []EnvVar
 	Argv []Arg
+	// StderrAppend, when set, is a file the process's stderr is appended to.
+	StderrAppend string
+}
+
+// RequiresShell reports whether any argument is RawShell text, so the command
+// cannot be exec'd without a shell.
+func (c ExecCommand) RequiresShell() bool {
+	for _, a := range c.Argv {
+		if _, raw := a.(RawShell); raw {
+			return true
+		}
+	}
+	return false
+}
+
+// With returns a copy of c with args appended to Argv.
+func (c ExecCommand) With(args ...Arg) ExecCommand {
+	c.Argv = append(append([]Arg(nil), c.Argv...), args...)
+	return c
 }
 
 func (ExecCommand) isLaunchCommand() {}
 
-// ShellString renders `KEY='v' prog arg ...`. Flags are emitted bare, every
-// other word single-quoted.
+// ShellString renders `KEY='v' prog arg ... 2>>'log'`. Flags and plain Words
+// are emitted bare, every other word single-quoted.
 func (c ExecCommand) ShellString() string {
 	words := make([]string, 0, len(c.Env)+len(c.Argv))
 	for _, e := range c.Env {
@@ -115,17 +159,26 @@ func (c ExecCommand) ShellString() string {
 	for _, a := range c.Argv {
 		words = append(words, a.shellWord())
 	}
+	if c.StderrAppend != "" {
+		words = append(words, "2>>"+Quote(c.StderrAppend))
+	}
 	return strings.Join(words, " ")
 }
 
 // Program returns Argv[0]'s text, and false if Argv is empty or its first
-// entry is not a Literal.
+// entry is not a plain string.
 func (c ExecCommand) Program() (string, bool) {
 	if len(c.Argv) == 0 {
 		return "", false
 	}
-	lit, ok := c.Argv[0].(Literal)
-	return string(lit), ok
+	switch v := c.Argv[0].(type) {
+	case Literal:
+		return string(v), true
+	case Word:
+		return string(v), true
+	default:
+		return "", false
+	}
 }
 
 // ReadFile loads a FileContents argument.
@@ -138,6 +191,9 @@ type ReadFile func(path string) ([]byte, error)
 func (c ExecCommand) Args(read ReadFile) ([]string, error) {
 	if len(c.Argv) == 0 {
 		return nil, errors.New("launchcmd: empty argv")
+	}
+	if c.RequiresShell() {
+		return nil, ErrRequiresShell
 	}
 	out := make([]string, 0, len(c.Argv)-1)
 	for _, a := range c.Argv[1:] {
@@ -154,6 +210,8 @@ func resolve(a Arg, read ReadFile) (string, error) {
 	var s string
 	switch v := a.(type) {
 	case Literal:
+		s = string(v)
+	case Word:
 		s = string(v)
 	case Flag:
 		s = v.name

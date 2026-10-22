@@ -175,11 +175,11 @@ func TestShellScript(t *testing.T) {
 
 func TestConstructorsRejectInvalidInput(t *testing.T) {
 	t.Parallel()
-	for _, bad := range []string{"", "resume", "--", "--a b", "--a;b", "-", "--$x", "--é"} {
+	for _, bad := range []string{"", "resume", "---", "--a b", "--a;b", "-", "--$x", "--é"} {
 		_, err := NewFlag(bad)
 		assert.Error(t, err, "flag %q", bad)
 	}
-	for _, good := range []string{"-p", "--resume", "--allowedTools", "--mcp-config"} {
+	for _, good := range []string{"-p", "--", "--resume", "--allowedTools", "--mcp-config"} {
 		_, err := NewFlag(good)
 		assert.NoError(t, err, "flag %q", good)
 	}
@@ -196,4 +196,86 @@ func TestConstructorsRejectInvalidInput(t *testing.T) {
 		assert.Error(t, err, "uuid %q", bad)
 	}
 	assert.Panics(t, func() { MustFlag("bad flag") })
+}
+
+func TestParseProgram_ResolvesQuotingLikeAShell(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		in      string
+		env     map[string]string
+		argv    []string
+		needsSh bool
+	}{
+		{name: "bare", in: "claude", argv: []string{"claude"}},
+		{name: "flags", in: "claude --model sonnet", argv: []string{"claude", "--model", "sonnet"}},
+		{name: "double quoted", in: `claude --append-system-prompt "a b"`, argv: []string{"claude", "--append-system-prompt", "a b"}},
+		{name: "single quoted", in: `claude -p 'it is'`, argv: []string{"claude", "-p", "it is"}},
+		{name: "escaped space", in: `claude a\ b`, argv: []string{"claude", "a b"}},
+		{name: "env prefix", in: `ANTHROPIC_BASE_URL=http://x:1 claude`, env: map[string]string{"ANTHROPIC_BASE_URL": "http://x:1"}, argv: []string{"claude"}},
+		{name: "env wrapper", in: "env -u VAR claude", argv: []string{"env", "-u", "VAR", "claude"}},
+		{name: "variable", in: "$HOME/bin/claude", needsSh: true},
+		{name: "quoted variable", in: `claude "$HOME"`, needsSh: true},
+		{name: "command substitution", in: "claude $(cat x)", needsSh: true},
+		{name: "glob", in: "claude *.md", needsSh: true},
+		{name: "tilde", in: "~/bin/claude", needsSh: true},
+		{name: "brace", in: "claude {a,b}", needsSh: true},
+		{name: "pipe", in: "claude | tee x", needsSh: true},
+		{name: "second command", in: "claude; touch /tmp/pwned", needsSh: true},
+		{name: "and chain", in: "cd x && claude", needsSh: true},
+		{name: "redirect", in: "claude 2>/dev/null", needsSh: true},
+		{name: "background", in: "claude &", needsSh: true},
+		{name: "syntax error", in: `claude "unterminated`, needsSh: true},
+		{name: "empty", in: "", needsSh: true},
+		{name: "only env", in: "A=1", needsSh: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseProgram(tc.in)
+			if tc.needsSh {
+				assert.ErrorIs(t, err, ErrNeedsShell)
+				return
+			}
+			require.NoError(t, err)
+			wantEnv := map[string]string{}
+			for _, e := range got.Env {
+				wantEnv[e.Key()] = e.Value
+			}
+			assert.Equal(t, orEmpty(tc.env), wantEnv)
+			args, err := got.Args(nil)
+			require.NoError(t, err)
+			prog, ok := got.Program()
+			require.True(t, ok)
+			assert.Equal(t, tc.argv, append([]string{prog}, args...))
+			// What a real shell makes of the original text agrees.
+			assert.Equal(t, shellArgv(t, tc.in), shellArgv(t, got.ShellString()))
+		})
+	}
+}
+
+func orEmpty(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
+}
+
+func TestWord_QuotesOnlyWhenNeeded(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "--model", exec1(Word("--model")).ShellString())
+	assert.Equal(t, "/usr/bin/claude", exec1(Word("/usr/bin/claude")).ShellString())
+	assert.Equal(t, `'a b'`, exec1(Word("a b")).ShellString())
+	assert.Equal(t, `'$HOME'`, exec1(Word("$HOME")).ShellString())
+	assert.Equal(t, `''`, exec1(Word("")).ShellString())
+}
+
+func TestRawShellAndStderr(t *testing.T) {
+	t.Parallel()
+	cmd := ExecCommand{Argv: []Arg{RawShell("$HOME/bin/claude"), Word("-x")}, StderrAppend: "/tmp/it's.log"}
+	assert.True(t, cmd.RequiresShell())
+	assert.Equal(t, `$HOME/bin/claude -x 2>>'/tmp/it'\''s.log'`, cmd.ShellString())
+	_, err := cmd.Args(nil)
+	assert.ErrorIs(t, err, ErrRequiresShell)
+	assert.False(t, exec1(Word("p")).RequiresShell())
 }
