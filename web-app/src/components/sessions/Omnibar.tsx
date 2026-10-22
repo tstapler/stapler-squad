@@ -73,8 +73,7 @@ import {
   shortcutsBacklogButton,
   error as errorClass,
 } from "./Omnibar.css";
-import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
-import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
+import { lazyComponent } from "@/lib/lazy";
 import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
@@ -100,6 +99,31 @@ import type {
 const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
 const EMPTY_PRESETS: LauncherPresetEntry[] = [];
 const EMPTY_REMOTES: RemoteOption[] = [];
+
+// Lazy-load the backlog chat-compose/intent-review subtree. The app shell renders
+// <Omnibar> on every route (src/app/Providers.tsx), so a static import of either
+// component here would put their shared dependency, BacklogItemForm.tsx — and
+// through it react-markdown/remark-gfm — in the Initial JS chunk, even though these
+// views only render once the user actually drafts a backlog item from the omnibar.
+const backlogComposeLoading = () => (
+  <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
+    Loading…
+  </div>
+);
+const BacklogItemIntentReview = lazyComponent(
+  () =>
+    import("@/components/backlog/BacklogItemIntentReview").then((m) => ({
+      default: m.BacklogItemIntentReview,
+    })),
+  { loading: backlogComposeLoading },
+);
+const BacklogComposeWidget = lazyComponent(
+  () =>
+    import("@/components/backlog/BacklogComposeWidget").then((m) => ({
+      default: m.BacklogComposeWidget,
+    })),
+  { loading: backlogComposeLoading },
+);
 
 interface OmnibarProps {
   isOpen: boolean;

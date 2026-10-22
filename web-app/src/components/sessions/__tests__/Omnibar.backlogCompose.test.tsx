@@ -126,7 +126,11 @@ describe("Omnibar compose mode", () => {
 
     fireEvent.click(screen.getByTestId("mock-create-backlog"));
 
-    expect(screen.getByTestId("backlog-compose-textarea")).toHaveValue("fix the flaky login test");
+    // BacklogComposeWidget is lazy-loaded (see Omnibar.tsx); the very first render in a
+    // test file suspends until the chunk resolves, so this first assertion must await it.
+    // Later tests in this file hit the same lazy() instance already resolved and can use
+    // the synchronous getByTestId as before.
+    expect(await screen.findByTestId("backlog-compose-textarea")).toHaveValue("fix the flaky login test");
     expect(screen.getByLabelText("Describe the work")).toBeInTheDocument();
   });
 
