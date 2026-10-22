@@ -1974,7 +1974,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	return &RuntimeDeps{
-		HeadlessPool:                 headlessPool,
+		HeadlessPool:                   headlessPool,
 		LLMSelector:                    llmSelector,
 		LLMClient:                      llmClient,
 		GeminiCaller:                   geminiCaller,

@@ -6,7 +6,11 @@
   "protoFile": "proto/session/v1/quota.proto",
   "markerFound": true,
   "handlerFile": "server/services/quota_settings_service.go",
-  "tested": false,
-  "testIds": [],
+  "tested": true,
+  "testIds": [
+    "TestUpdateQuotaConfig_PersistsAndReportsProactive_WhenEnabledWithBudget",
+    "TestUpdateQuotaConfig_UpperBounds",
+    "TestUpdateQuotaConfig_NilSettings_InvalidArgument"
+  ],
   "lastModified": "2026-10-18T01:09:52.736043562-07:00"
 }

@@ -112,7 +112,7 @@ print_plan
 precheck_ports
 
 pid=""
-# shellcheck disable=SC2329 # invoked via trap
+# shellcheck disable=SC2317,SC2329 # invoked via trap; older shellcheck reports SC2317
 teardown() {
 	local rc=$?
 	trap - EXIT INT TERM

@@ -155,9 +155,9 @@ func (s *svc) oldNameNotWatched(ctx context.Context, itemID string) {
 
 // BAD-DISCARD: a bare call and blank-assigned errors are flagged.
 func (s *svc) badDiscarded(ctx context.Context, itemID string) {
-	s.storage.UpdateItemSessionEnded(ctx, itemID, 0) // want `error from UpdateItemSessionEnded is discarded`
-	_ = s.storage.UpdateItemSessionEnded(ctx, itemID, 0) // want `error from UpdateItemSessionEnded is discarded`
-	_, _ = s.storage.RawTransitionBacklogItemStatus(ctx, itemID, "done", nil, "system") // want `error from RawTransitionBacklogItemStatus is discarded`
+	s.storage.UpdateItemSessionEnded(ctx, itemID, 0)                                                                           // want `error from UpdateItemSessionEnded is discarded`
+	_ = s.storage.UpdateItemSessionEnded(ctx, itemID, 0)                                                                       // want `error from UpdateItemSessionEnded is discarded`
+	_, _ = s.storage.RawTransitionBacklogItemStatus(ctx, itemID, "done", nil, "system")                                        // want `error from RawTransitionBacklogItemStatus is discarded`
 	_, _ = s.storage.GatedTransition(ctx, session.TransitionRequest{Caller: session.CallerOperatorArchiveRPC, ItemID: itemID}) // want `error from GatedTransition is discarded`
 }
 
