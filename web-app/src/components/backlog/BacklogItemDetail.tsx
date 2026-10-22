@@ -64,6 +64,8 @@ import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
+import { TriageResultPanel } from "./TriageResultPanel";
+import { ReviewVerdictPanel } from "./ReviewVerdictPanel";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import { GateBlockingSection } from "./GateBlockingSection";
@@ -1704,6 +1706,18 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
         {/* Planning record — read-only triage result for items past idea status */}
         <PlanningSection item={item} />
+
+        {/* Formatted triage/review results — each self-gates on its own feature flag
+            and self-hides when its data is absent. */}
+        <TriageResultPanel
+          triageResult={item.triageResult}
+          priority={item.priority}
+          loading={item.triageStatus === "running"}
+        />
+        <ReviewVerdictPanel
+          verdict={item.linkedSessions.filter((s) => s.role === "review" && s.reviewVerdict).at(-1)?.reviewVerdict}
+          loading={item.status === "review" && !item.linkedSessions.some((s) => s.role === "review" && s.reviewVerdict)}
+        />
 
         {/* Triage failed banner — generalized 2026-08-03
             (docs/tasks/backlog-feature-improvement.md, item be676dab) from
