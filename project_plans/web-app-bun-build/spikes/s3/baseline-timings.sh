@@ -75,7 +75,7 @@ if [[ " $PHASES " == *" concurrent "* ]]; then
     done
     wait "${pids[@]}"
     for k in 1 2 3; do echo "{\"mode\":\"bun-build-concurrent3\",\"temp\":\"warm\",\"run\":$i,\"slot\":$k,\"res\":$(cat "$SCRATCH/conc-$i-$k.json")}" >> "$OUT"; done
-    echo "concurrent round $i: $(cat "$SCRATCH"/conc-$i-*.json | tr '\n' ' ')"
+    echo "concurrent round $i: $(cat "$SCRATCH"/conc-"$i"-*.json | tr '\n' ' ')"
   done
 fi
 
