@@ -185,6 +185,14 @@ jobs:
       - name: Verify proto bindings were generated
         run: test -f web-app/src/gen/session/v1/session_pb.ts
 
+      # Storybook's webpackFinal requires babel-loader/presets directly; under
+      # bunfig's isolated linker an undeclared transitive dep fails here.
+      - name: Build Storybook
+        working-directory: web-app
+        env:
+          STORYBOOK_DISABLE_TELEMETRY: '1'
+        run: bun run build-storybook
+
   # ─────────────────────────────────────────────────────────────────────────────
   # test-affected: the PR-time Go test gate -- only the packages transitively
   # affected by this PR's changed .go files (scripts/test-affected.py's
