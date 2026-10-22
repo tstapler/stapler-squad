@@ -185,6 +185,23 @@ describe("useWindowShortcuts", () => {
     unmount();
   });
 
+  it("o opens the window overview and disarms", () => {
+    const onOverviewRequest = jest.fn();
+    const { unmount } = renderHook(() =>
+      useWindowShortcuts(windows, win1.id, jest.fn(), jest.fn(), onOverviewRequest)
+    );
+
+    pressAltW();
+    pressKey("o");
+    expect(onOverviewRequest).toHaveBeenCalledTimes(1);
+
+    // Sequence consumed: a later bare "o" does nothing.
+    pressKey("o");
+    expect(onOverviewRequest).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
   it("Escape disarms without taking any action", () => {
     const switchToWindow = jest.fn();
     const onRenameRequest = jest.fn();
