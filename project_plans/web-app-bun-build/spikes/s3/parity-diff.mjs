@@ -84,7 +84,15 @@ async function newPage(browser, base, viewport, route) {
   page.on("requestfinished", () => pending.n--);
   page.on("requestfailed", () => pending.n--);
   page.__pending = pending;
-  await page.addInitScript(() => localStorage.setItem("stapler-theme", "clean"));
+  await page.addInitScript(() => {
+    localStorage.setItem("stapler-theme", "clean");
+    // Suppress the first-run onboarding tour (useOnboarding.ts fires it ~800ms after mount on any
+    // session lacking this key): a long enough walk/settle otherwise crosses that timer, opening a
+    // real Radix Dialog whose DismissableLayer legitimately locks `body` with `pointer-events: none`
+    // until dismissed (confirmed restored correctly on Escape) — same precondition as
+    // tests/e2e/terminal-stress/helpers.ts's setupStressTestPage. See spike-results.md's "### 10".
+    localStorage.setItem("stapler-squad:onboarded", "true");
+  });
   await page.goto(base + (route === "/" ? "/" : route + "/"), { waitUntil: "load" });
   await page.waitForSelector("#main-content", { timeout: 10000 }).catch(() => {});
   await page.evaluate(pageHelpers);

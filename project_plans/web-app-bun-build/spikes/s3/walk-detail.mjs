@@ -31,7 +31,13 @@ const pageHelpers = () => {
   };
 };
 
+// Suppress the first-run onboarding tour (see parity-diff.mjs's newPage): otherwise the walk's own
+// elapsed time crosses useOnboarding.ts's 800ms timer, opening a real Radix Dialog that legitimately
+// locks `body` with `pointer-events: none` for as long as it stays open and unexplored-dismissed.
+const suppressOnboarding = (page) => page.addInitScript(() => localStorage.setItem("stapler-squad:onboarded", "true"));
+
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+await suppressOnboarding(page);
 await page.goto(bunBase + "/", { waitUntil: "load" });
 await page.evaluate(pageHelpers);
 for (const route of order) {
@@ -46,6 +52,7 @@ const walked = await page.evaluate(() => window.__ssq.snap());
 await page.context().close();
 
 const page2 = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+await suppressOnboarding(page2);
 const finalRoute = order[order.length - 1];
 await page2.goto(bunBase + (finalRoute === "/" ? "/" : finalRoute + "/"), { waitUntil: "load" });
 await page2.evaluate(pageHelpers);
