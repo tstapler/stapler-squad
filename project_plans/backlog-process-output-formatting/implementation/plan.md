@@ -281,3 +281,13 @@ The Activity list renderer (`BacklogActivityList.tsx` or equivalent) detects the
 - One shared `ResultPanel.css.ts` instead of per-panel CSS files.
 - Flag names are the hyphenated names from the acceptance criteria (`backlog-triage-results-panel`, `backlog-review-results-panel`), not the `backlog:` namespace used by some siblings.
 - `DiagnoseResultCard` is deliberately ungated (falls back to plain text for non-diagnosis notes); the criteria define flags only for the triage and review panels.
+
+## sdd:6-verify pass 2 (2026-10-22)
+
+Reviewers: React/CSS idiom (no MUST FIX), architecture (no BLOCKER), refactor candidates. Resolved in this pass:
+- Legacy `PlanningSection` rendered the same triage data as `TriageResultPanel`; it now hides when `backlog-triage-results-panel` is on.
+- Review skeleton no longer spins for a review-status item with no review session; `BacklogResultPanels` shows it only while a review session is running, and computes `latestReviewVerdict` once.
+- Inline skeleton widths moved to `skeletonShort`/`skeletonMedium`; unused `meta` style removed.
+- Criterion 10 now covers both panels at 320px: new debug seed `/api/debug/backlog/seed-review-verdict` lets `tests/e2e/backlog-result-panels-mobile.spec.ts` render the review panel.
+
+Deferred (non-blocking, noted): shared panel-shell/test-contract extraction (jscpd at 0.05% vs 0.14% gate); stricter per-element malformed-data validation; `Criterion N` is 1-based in the panel but the older gate label shows the raw index; flag naming is hyphenated per the acceptance criteria rather than the `ns:name` convention; Go-side pin test for the "Diagnosis result: " producer format.

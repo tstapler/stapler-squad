@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,6 +116,7 @@ func (h *BacklogDebugSeedHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/backlog/seed-queued", h.handleSeedQueued)
 	mux.HandleFunc("/api/debug/backlog/seed-headless-triage-session", h.handleSeedHeadlessTriageSession)
 	mux.HandleFunc("/api/debug/backlog/seed-work-item-session", h.handleSeedWorkItemSession)
+	mux.HandleFunc("/api/debug/backlog/seed-review-verdict", h.handleSeedReviewVerdict)
 	mux.HandleFunc("/api/debug/backlog/seed-work-session-with-worktree", h.handleSeedWorkSessionWithWorktree)
 	mux.HandleFunc("/api/debug/backlog/seed-jules-work-session", h.handleSeedJulesWorkSession)
 }
@@ -459,6 +461,53 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWrite
 		ItemID:    item.ID,
 		SessionID: itemSession.SessionUUID,
 	}); err != nil {
+		log.Error("backlog debug seed: encode response failed", "err", err)
+	}
+}
+
+// handleSeedReviewVerdict creates a backlog item with a linked "review"
+// ItemSession and a PARTIAL ReviewVerdict (one long-evidence criterion), so e2e
+// can render the ReviewVerdictPanel without running a real review.
+func (h *BacklogDebugSeedHandler) handleSeedReviewVerdict(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePostWithStorage(w, r) {
+		return
+	}
+	req, ok := decodeJSONBody[seedWorkItemSessionRequest](w, r)
+	if !ok {
+		return
+	}
+	status, ok := requireTitleAndDefaultStatus(w, req.Title, req.Status)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	item, ok := h.createSimpleBacklogItem(w, ctx, req.Title, status)
+	if !ok {
+		return
+	}
+	perCriterion, err := json.Marshal([]map[string]any{
+		{"criterionIndex": 0, "outcome": "PASS", "evidence": "evidence-" + strings.Repeat("x", 200)},
+		{"criterionIndex": 1, "outcome": "PARTIAL", "evidence": "no viewport verification"},
+	})
+	if err != nil {
+		writeInternalError(w, "backlog debug seed: marshal per-criterion failed", "failed to marshal verdict", err)
+		return
+	}
+	itemSession, err := h.storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "e2e-review-" + uuid.New().String(),
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewOutcomePartial,
+		PerCriterion:   string(perCriterion),
+		Summary:        "Seeded verdict for e2e.",
+	})
+	if err != nil {
+		writeInternalError(w, "backlog debug seed: create review item session failed", "failed to create item session", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(seedWorkItemSessionResponse{ItemID: item.ID, SessionID: itemSession.SessionUUID}); err != nil {
 		log.Error("backlog debug seed: encode response failed", "err", err)
 	}
 }

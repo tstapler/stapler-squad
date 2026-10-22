@@ -34,7 +34,7 @@ export function ReviewVerdictPanel({ verdict, loading }: ReviewVerdictPanelProps
   if (loading) {
     return (
       <section className={styles.container} aria-busy="true" aria-label="Review Results" data-testid="review-verdict-skeleton">
-        <div className={styles.skeletonLine} style={{ width: "40%" }} />
+        <div className={styles.skeletonShort} />
         <div className={styles.skeletonLine} />
       </section>
     );

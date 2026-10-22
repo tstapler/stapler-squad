@@ -24,8 +24,6 @@ export const header = style({
 
 export const title = style({ margin: 0, fontSize: vars.fontSize.base, fontWeight: 600 });
 
-export const meta = style({ display: "flex", flexWrap: "wrap", gap: vars.space["2"], color: vars.color.textMuted });
-
 export const badge = style({
   fontSize: vars.fontSize.xs,
   padding: `2px ${vars.space["2"]}`,
@@ -88,3 +86,6 @@ export const skeletonLine = style({
   animation: `${pulse} 1.4s ease-in-out infinite`,
   "@media": { "(prefers-reduced-motion: reduce)": { animation: "none" } },
 });
+
+export const skeletonShort = style([skeletonLine, { width: "40%" }]);
+export const skeletonMedium = style([skeletonLine, { width: "70%" }]);

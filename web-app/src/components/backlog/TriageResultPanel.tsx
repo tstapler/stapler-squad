@@ -28,9 +28,9 @@ export function TriageResultPanel({ triageResult, priority, loading }: TriageRes
   if (loading) {
     return (
       <section className={styles.container} aria-busy="true" aria-label="Triage Results" data-testid="triage-result-skeleton">
-        <div className={styles.skeletonLine} style={{ width: "40%" }} />
+        <div className={styles.skeletonShort} />
         <div className={styles.skeletonLine} />
-        <div className={styles.skeletonLine} style={{ width: "70%" }} />
+        <div className={styles.skeletonMedium} />
       </section>
     );
   }
