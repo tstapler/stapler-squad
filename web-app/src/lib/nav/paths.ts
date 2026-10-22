@@ -50,5 +50,52 @@ export const routes = {
 
 export type Route = typeof routes;
 
-/** Static route paths only; the query-bearing helpers and `sessionCreate` are not routes. */
-export type RoutePath = Exclude<Extract<Route[keyof Route], string>, `${string}?${string}`>;
+/** Every `page.tsx` under src/app, one literal each; `route-meta.test.ts` fails when this list drifts from the directory. */
+export const ROUTE_PATHS = [
+  "/",
+  "/account",
+  "/analytics/escape",
+  "/backlog",
+  "/backlog/board",
+  "/changelog",
+  "/config",
+  "/debug/escape-codes",
+  "/errors",
+  "/fanout",
+  "/files",
+  "/help",
+  "/history",
+  "/insights",
+  "/insights/session-detail",
+  "/login",
+  "/logs",
+  "/notifications",
+  "/resolve",
+  "/review-queue",
+  "/rules",
+  "/sessions/import",
+  "/sessions/new",
+  "/sessions/summary",
+  "/settings",
+  "/settings/background-models",
+  "/settings/backlog-sources",
+  "/settings/backlog-stages",
+  "/settings/defaults",
+  "/settings/features",
+  "/settings/jules",
+  "/settings/llm-backends",
+  "/settings/pipeline-modes",
+  "/settings/remotes",
+  "/settings/tagging-classifier",
+  "/settings/unfinished",
+  "/spike-files",
+  "/spike-lazydoc",
+  "/test/escape-codes",
+  "/test/layout-overlap",
+  "/test/terminal-stress",
+  "/triggers",
+  "/unfinished",
+  "/workflows",
+] as const;
+
+export type RoutePath = (typeof ROUTE_PATHS)[number];

@@ -158,6 +158,21 @@ type SessionService struct {
 	// Wired into each Instance via SetWorktreeSpawnReservation in wireCallbacks.
 	inFlightWorktreeSpawns sync.Map
 
+	// inFlightConversationClaims claims a conversation UUID (-> conversationClaim) for
+	// conversationClaimTTL, closing the counterpart TOCTOU race Story 1.4.2's
+	// ConversationOwnedByOtherLiveSession check alone cannot: that check only sees a
+	// sibling once it is IsBackendProcessAlive(), so two sessions concurrently cold-
+	// restoring into the same project directory can both run DetectByPath, both see
+	// the same "most recently modified" candidate as unowned (neither is alive yet),
+	// and both adopt it -- multiple live `claude --resume <uuid>` processes fighting
+	// over one transcript. Unlike inFlightWorktreeSpawns, there is no good single
+	// place to release this deterministically (the claiming instance's own
+	// IsBackendProcessAlive() becoming true, which would make the release moot, can
+	// itself race the claim's reader), so entries expire on read instead of being
+	// explicitly released. Wired into each Instance via SetConversationOwnershipGuard
+	// in wireCallbacks.
+	inFlightConversationClaims sync.Map
+
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
 	searchSvc       *SearchService

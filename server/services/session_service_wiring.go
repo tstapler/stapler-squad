@@ -328,11 +328,16 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	// prevents tryExtractConversationUUID's DetectByPath fallback from silently
 	// attributing another live session's conversation UUID to this instance.
 	inst.SetConversationOwnershipGuard(func(candidateUUID, path string) (string, bool) {
-		return s.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{
+		if ownerUUID, owned := s.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{
 			selfUUID:         inst.UUID,
 			conversationUUID: candidateUUID,
 			path:             path,
-		})
+		}); owned {
+			return ownerUUID, true
+		}
+		// Closes the TOCTOU race the live-sibling check above can't: see
+		// inFlightConversationClaims' doc comment on SessionService.
+		return s.claimConversationUUID(candidateUUID, inst.UUID)
 	})
 	if analyticsStore := s.GetAnalyticsStore(); analyticsStore != nil {
 		// Guard against the typed-nil-interface gotcha: passing a nil *AnalyticsStore
