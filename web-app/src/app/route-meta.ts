@@ -5,6 +5,8 @@
  * the row here.
  */
 
+import type { RoutePath } from "@/lib/nav/paths";
+
 export type GuardFlag = "backlog" | "changelog";
 
 export interface RouteMetaEntry {
@@ -21,7 +23,7 @@ export const NOT_FOUND_META = {
   title: "Page not found - Stapler Squad",
 } as const;
 
-export const ROUTE_META: Record<string, RouteMetaEntry> = {
+export const ROUTE_META: Record<RoutePath, RouteMetaEntry> = {
   "/": { title: ROOT_TITLE },
   "/account": { title: "Account - Stapler Squad" },
   "/analytics/escape": { title: "Escape Analytics - Stapler Squad" },
@@ -67,3 +69,13 @@ export const ROUTE_META: Record<string, RouteMetaEntry> = {
   "/unfinished": { title: "Up Next - Stapler Squad" },
   "/workflows": { title: "Workflows - Stapler Squad" },
 };
+
+/** Row for a pathname that may not be a route (an unknown URL), without the `RoutePath` narrowing. */
+export function routeMetaFor(pathname: string): RouteMetaEntry | undefined {
+  return Object.prototype.hasOwnProperty.call(ROUTE_META, pathname) ? ROUTE_META[pathname as RoutePath] : undefined;
+}
+
+/** Title for a normalised pathname; unknown paths get the not-found title. */
+export function titleForPath(pathname: string): string {
+  return routeMetaFor(pathname)?.title ?? NOT_FOUND_META.title;
+}

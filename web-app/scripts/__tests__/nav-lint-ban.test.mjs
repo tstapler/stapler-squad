@@ -45,6 +45,26 @@ describe("navigation facade lint ban", () => {
     });
   }
 
+  it("allows the router entry only from src/main.tsx and tests", async () => {
+    const source = 'import { createAppRouter } from "@/lib/nav/entry";\nexport const x = createAppRouter;\n';
+    assert.equal(banned(await messages(source, "src/app/routes.tsx")).length, 1);
+    assert.equal(banned(await messages(source, "src/components/Example.tsx")).length, 1);
+    assert.deepEqual(banned(await messages(source, "src/main.tsx")), []);
+    assert.deepEqual(banned(await messages(source, "src/lib/nav/__tests__/entry.test.tsx")), []);
+  });
+
+  it("still bans react-router in src/main.tsx and src/app/routes.tsx", async () => {
+    const source = 'import { Outlet } from "react-router";\nexport const x = Outlet;\n';
+    assert.equal(banned(await messages(source, "src/main.tsx")).length, 1);
+    assert.equal(banned(await messages(source, "src/app/routes.tsx")).length, 1);
+  });
+
+  it("src/main.tsx, entry.tsx and routes.tsx lint clean with no new exclusion", async () => {
+    const results = await eslint.lintFiles(["src/main.tsx", "src/lib/nav/entry.tsx", "src/app/routes.tsx"]);
+    const errors = results.flatMap((r) => r.messages.filter((m) => m.severity === 2).map((m) => `${r.filePath}: ${m.ruleId}: ${m.message}`));
+    assert.deepEqual(errors, []);
+  });
+
   it("flags raw history.pushState/replaceState outside lib/nav, but not inside it or in tests", async () => {
     const source = 'export const go = () => { window.history.replaceState(null, "", "?a=b"); window.history.pushState({}, ""); };\n';
     assert.equal(rawHistory(await messages(source, "src/lib/hooks/example.ts")).length, 2);

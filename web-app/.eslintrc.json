@@ -215,6 +215,27 @@
                 "group": ["next", "next/*", "react-router", "react-router-dom"],
                 "allowTypeImports": true,
                 "message": "Import useRouter, usePathname, useSearchParams, Link and Redirect from @/lib/nav. Rewrite existing imports with: node web-app/scripts/codemods/next-nav-to-facade.mjs <file-or-dir>."
+              },
+              {
+                "group": ["@/lib/nav/entry", "**/nav/entry"],
+                "message": "The router entry is for src/main.tsx only; app code imports @/lib/nav."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/main.tsx"],
+      "rules": {
+        "@typescript-eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["next", "next/*", "react-router", "react-router-dom"],
+                "allowTypeImports": true,
+                "message": "main.tsx reaches the router only through @/lib/nav/entry."
               }
             ]
           }
