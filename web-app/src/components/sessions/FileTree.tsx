@@ -9,7 +9,7 @@ import { getFileIcon } from "@/lib/utils/fileIcons";
 import { truncateMiddle } from "@/lib/utils/truncateMiddle";
 import type { LineStats } from "@/lib/utils/gitStatus";
 import {
-  container, loading as loadingClass, error as errorClass, retryButton, empty,
+  container, empty,
   node as nodeClass, selected, keyboardFocused, nodeInner, icon as iconClass, name as nameClass, ignored,
   symlinkBadge, statusBadge, spinner, inlineError,
   searchContainer, searchInput, toolbar, toolbarButton, toolbarLabel,
@@ -17,6 +17,7 @@ import {
   searchOverlay, lineStats as lineStatsClass, lineStatsAdd, lineStatsDel,
 } from "./FileTree.css";
 import { vars } from "@/styles/theme.css";
+import { WaitState, usePendingDelay } from "./files/PendingState";
 
 // ---- Data model ----
 
@@ -833,41 +834,24 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     [] // treeRef and lastGRef are refs — stable, no deps needed
   );
 
+  const retryRoot = () => {
+    setRootLoading(true);
+    setRootError(null);
+    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
+      .then((response) => setDirContents(new Map([[".", (response.files || []).map(fileNodeToTreeNode)]])))
+      .catch((err) => setRootError(err instanceof Error ? err.message : "Failed to load files"))
+      .finally(() => setRootLoading(false));
+  };
+  const showTreePending = usePendingDelay(rootLoading);
+
   if (rootLoading) {
-    return (
-      <div className={container}>
-        <div className={loadingClass}>
-          <span className={spinner} />
-          Loading files…
-        </div>
-      </div>
-    );
+    return <div className={container}>{showTreePending && <WaitState kind="tree" />}</div>;
   }
 
   if (rootError) {
     return (
       <div className={container}>
-        <div className={errorClass}>
-          <span>⚠ {rootError}</span>
-          <button
-            className={retryButton}
-            onClick={() => {
-              setRootLoading(true);
-              setRootError(null);
-              fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
-                .then((response) => {
-                  const nodes = (response.files || []).map(fileNodeToTreeNode);
-                  setDirContents(new Map([[".", nodes]]));
-                })
-                .catch((err) => {
-                  setRootError(err instanceof Error ? err.message : "Failed to load files");
-                })
-                .finally(() => setRootLoading(false));
-            }}
-          >
-            Retry
-          </button>
-        </div>
+        <WaitState kind="tree" failure={{ reason: "rpc_error", actions: [{ label: "Retry", onClick: retryRoot }] }} />
       </div>
     );
   }

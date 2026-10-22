@@ -24,6 +24,11 @@ export const hitTarget = style({
     transition: "opacity 0.15s",
   },
   selectors: {
+    "&:focus-visible::after": {
+      opacity: 1,
+      width: "3px",
+      background: vars.color.inputFocusBorder,
+    },
     "&:hover::after": {
       opacity: 1,
     },

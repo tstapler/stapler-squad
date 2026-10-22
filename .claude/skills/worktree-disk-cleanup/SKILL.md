@@ -163,7 +163,7 @@ sessions') work.
 `~/.stapler-squad/shared-node-modules/<hash>/node_modules` (see
 `scripts/shared-node-modules.sh` and
 `docs/explanation/package-management-evaluation.md`) rather than a full
-per-worktree install — one directory per distinct `pnpm-lock.yaml` +
+per-worktree install — one directory per distinct `bun.lock` (+ `bunfig.toml`) +
 local `file:`-dependency content, shared by every worktree whose
 `web-app/` currently hashes to it. Removing a worktree in Step 4 does not
 clean these up; run this step after Step 4 so a hash's last referencing

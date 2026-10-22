@@ -2,7 +2,7 @@ package gogitstore
 
 import (
 	"cmp"
-	"runtime"
+	"runtime/metrics"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -55,10 +55,24 @@ const (
 // pressure deterministically without needing to actually allocate gigabytes
 // — see gogit_vcs_reader_memory_test.go's withHeapInUse for the pattern this
 // mirrors.
+//
+// It reads runtime/metrics rather than runtime.ReadMemStats: ReadMemStats
+// stops the world, and under Registry.mu that was 57% of the scanner's
+// measured mutex delay (baseline.md, SG6). heap/objects + heap/unused is the
+// same quantity as MemStats.HeapInuse, read without stopping the world.
 var readHeapInUse = func() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return m.HeapInuse
+	samples := [2]metrics.Sample{
+		{Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/memory/classes/heap/unused:bytes"},
+	}
+	metrics.Read(samples[:])
+	var total uint64
+	for _, s := range samples {
+		if s.Value.Kind() == metrics.KindUint64 {
+			total += s.Value.Uint64()
+		}
+	}
+	return total
 }
 
 // Registry hands out one *SharedObjectStore per commondir, so every
@@ -196,11 +210,23 @@ func (r *Registry) acquire(commonDirAbs string, commonFs billy.Filesystem) *Shar
 // gogit_vcs_reader.go's approxBytesPerCachedRepo, but derived from this
 // Registry's own configured CacheMaxSize rather than a flat constant, since
 // that is the one real, caller-controlled knob affecting a store's size.
+//
+// The estimate also includes the average Extension.Bytes() across live
+// stores. Callers must hold r.mu (Bytes runs under it; see Extension's
+// callback contract); single-goroutine test calls are exempt.
 func (r *Registry) approxBytesPerStore() int64 {
+	base := int64(cache.DefaultMaxSize)
 	if r.CacheMaxSize > 0 {
-		return r.CacheMaxSize
+		base = r.CacheMaxSize
 	}
-	return int64(cache.DefaultMaxSize)
+	if len(r.stores) == 0 {
+		return base
+	}
+	var ext int64
+	for _, s := range r.stores {
+		ext += s.extensionBytes()
+	}
+	return base + ext/int64(len(r.stores))
 }
 
 // effectiveBudgetBytes returns the current byte budget for this Registry,
@@ -294,6 +320,7 @@ func (r *Registry) pruneLocked() {
 		if unusedSince != 0 && unusedSince < cutoff {
 			delete(r.stores, k)
 			s.stopPackWatch() // no-op for non-mmap stores; see mmapwatch.go
+			s.closeExtension()
 			continue
 		}
 		candidates = append(candidates, candidate{k, unusedSince})
@@ -315,6 +342,7 @@ func (r *Registry) pruneLocked() {
 		key := candidates[i].key
 		if s, ok := r.stores[key]; ok {
 			s.stopPackWatch() // no-op for non-mmap stores; see mmapwatch.go
+			s.closeExtension()
 		}
 		delete(r.stores, key)
 	}
@@ -365,4 +393,22 @@ func (r *Registry) RefCounts() map[string]int32 {
 		out[k] = s.RefCount()
 	}
 	return out
+}
+
+// ExtensionsDo calls fn for each live store's extension (stores without one
+// are skipped). The list is copied under r.mu; fn runs outside it, so fn may
+// call back into the Registry. An extension may be closed by a concurrent
+// prune while fn runs; fn must tolerate that.
+func (r *Registry) ExtensionsDo(fn func(Extension)) {
+	r.mu.Lock()
+	exts := make([]Extension, 0, len(r.stores))
+	for _, s := range r.stores {
+		if p := s.ext.Load(); p != nil {
+			exts = append(exts, *p)
+		}
+	}
+	r.mu.Unlock()
+	for _, e := range exts {
+		fn(e)
+	}
 }

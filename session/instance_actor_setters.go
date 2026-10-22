@@ -81,6 +81,19 @@ func (i *Instance) SetMCPServerURLProvider(fn func() string) {
 	i.mcpServerURLProvider.Store(&fn)
 }
 
+// SetMCPProofProvider installs the process-wide source of per-session MCP
+// proofs (ADR-007 rule 0), wired from server because session cannot import
+// server/services. Process-wide rather than per instance so every launch path
+// (create, resume, restart) sees it without per-call-site wiring; nil, or a
+// provider returning ok=false, means no proof is emitted.
+func SetMCPProofProvider(fn func(sessionUUID string) (headerValue string, ok bool)) {
+	if fn == nil {
+		mcpProofProvider.Store(nil)
+		return
+	}
+	mcpProofProvider.Store(&fn)
+}
+
 // ---- CreationProgress ------------------------------------------------------------
 
 func setCreationProgressLocked(s *instanceState, msg string) {

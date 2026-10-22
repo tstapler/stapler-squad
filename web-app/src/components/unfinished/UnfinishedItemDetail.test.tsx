@@ -6,7 +6,7 @@ import { UnfinishedItemDetail } from "./UnfinishedItemDetail";
 
 const pushMock = jest.fn();
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useRouter: jest.fn(() => ({ push: pushMock })),
 }));
 

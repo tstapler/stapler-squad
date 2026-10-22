@@ -42,7 +42,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"testing"
@@ -113,9 +112,6 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 		runTruncHelper(t, false /* setPanicOnFault */)
 		return
 	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
-	}
 
 	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection", "GOGITSTORE_TRUNC_HELPER=1")
 	if result.Outcome == crashSubprocessTimedOut {
@@ -170,9 +166,6 @@ func TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection(t *testin
 	if os.Getenv("GOGITSTORE_TRUNC_HELPER") == "1" {
 		runTruncHelper(t, true /* setPanicOnFault */)
 		return
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git binary not available")
 	}
 
 	result := runBoundedCrashSubprocess(t, "TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection", "GOGITSTORE_TRUNC_HELPER=1")

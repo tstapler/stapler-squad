@@ -110,10 +110,39 @@
   },
   "overrides": [
     {
+      "files": ["src/components/sessions/**/*.ts", "src/components/sessions/**/*.tsx", "src/lib/files/**/*.ts", "src/lib/files/**/*.tsx"],
+      "excludedFiles": ["src/lib/files/analytics/**", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": { "analytics/no-direct-files-track": "error" }
+    },
+    {
       "files": ["**/*.ts", "**/*.tsx"],
       "rules": {
         "@typescript-eslint/no-non-null-assertion": "warn",
         "@typescript-eslint/consistent-type-imports": "warn"
+      }
+    },
+    {
+      "files": ["src/components/sessions/**/*.ts", "src/components/sessions/**/*.tsx", "src/lib/files/**/*.ts", "src/lib/files/**/*.tsx"],
+      "excludedFiles": [
+        "src/components/sessions/files/engine/**",
+        "src/components/sessions/files/extensions/**",
+        "**/__tests__/**",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spike.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@codemirror/*", "@replit/codemirror-vim", "@lezer/*", "codemirror"],
+                "message": "ADR-036: import the EditorEngine/Highlighter/MergeSurface ports from files/engine; CodeMirror stays inside files/engine/ and files/extensions/."
+              }
+            ]
+          }
+        ]
       }
     },
     {
@@ -152,6 +181,7 @@
     },
     {
       "files": ["src/lib/**/*.ts", "src/lib/**/*.tsx", "src/app/**/*.ts", "src/app/**/*.tsx"],
+      "excludedFiles": ["src/lib/nav/**"],
       "rules": {
         "no-restricted-syntax": [
           "warn",
@@ -161,6 +191,39 @@
           }
         ]
       }
+    },
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "excludedFiles": ["src/lib/nav/**", "**/*.test.*", "**/*.spec.*", "**/__tests__/**"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          { "property": "pushState", "message": "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav." },
+          { "property": "replaceState", "message": "Raw History calls bypass the router. Use useReplaceSearch, replaceHash or pushTrayEntry from @/lib/nav." }
+        ]
+      }
+    },
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "excludedFiles": ["src/lib/nav/**", "src/lib/lazy/**", "**/*.test.*", "**/*.spec.*", "**/__tests__/**"],
+      "rules": {
+        "@typescript-eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["next", "next/*", "react-router", "react-router-dom"],
+                "allowTypeImports": true,
+                "message": "Import useRouter, usePathname, useSearchParams, Link and Redirect from @/lib/nav. Rewrite existing imports with: node web-app/scripts/codemods/next-nav-to-facade.mjs <file-or-dir>."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**"],
+      "rules": { "no-restricted-syntax": "off" }
     }
   ]
 }

@@ -14,8 +14,10 @@ on:
       - 'web-app/**.tsx'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/bun.lock'
       - 'web-app/jest.config.js'
+      - 'web-app/jest.setup.js'
+      - 'web-app/scripts/**'
       - 'tests/e2e/**'
       - '**.sh'
       - '!third_party/**'
@@ -35,8 +37,10 @@ on:
       - 'web-app/**.tsx'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/pnpm-lock.yaml'
+      - 'web-app/bun.lock'
       - 'web-app/jest.config.js'
+      - 'web-app/jest.setup.js'
+      - 'web-app/scripts/**'
       - 'tests/e2e/**'
       - '**.sh'
       - '!third_party/**'
@@ -65,17 +69,13 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
 
       # web-lint's Jest tests jest.mock() modules under web-app/src/gen/ — module
       # resolution needs the file to exist even for a mocked import. That requires
@@ -84,7 +84,7 @@ jobs:
       # required — see the original lint.yml's "Ordering bug history" comment).
       - name: Install web-app dependencies
         working-directory: web-app
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - uses: ./.github/actions/prepare-stub
         with:
@@ -105,11 +105,14 @@ jobs:
   proto-breaking:
     name: Proto breaking changes
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      # Full-history fetch (fetch-depth: 0) pulls every backlog/* branch and
+      # intermittently ate the whole job budget; buf only needs the tip of main.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      - name: Fetch origin/main (tip only)
+        run: git fetch --depth=1 origin '+refs/heads/main:refs/remotes/origin/main'
 
       - name: Set up buf
         uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
@@ -141,6 +144,11 @@ jobs:
       # string instead of referencing needs.prepare.outputs.artifact-name.
       - name: Guard against stray "generated-files" literal
         run: tools/ci/check-generated-files-literal.sh
+
+      # Fails when go.mod's tymux client pin and the Makefile's TYMUX_VERSION
+      # point at different tymux commits.
+      - name: Check tymux client/daemon pin agreement
+        run: tools/ci/check-tymux-pin.sh
 
   go-lint:
     name: Go lint
@@ -284,17 +292,13 @@ jobs:
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
           filter: blob:none
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.27.0
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
-          cache-dependency-path: web-app/pnpm-lock.yaml
 
       # Generated code is gitignored, not committed (see #445) — produced once by
       # lint-prepare and downloaded here so Jest/tsc/ESLint resolve gen/ imports.
@@ -305,11 +309,16 @@ jobs:
 
       - name: Install web-app dependencies
         working-directory: web-app
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Jest
         working-directory: web-app
         run: npx jest --ci --maxWorkers=4
+
+      # Codemod liveness tests (node --test, no Jest project yet); needs the pinned ast-grep from bun install.
+      - name: Codemod tests
+        working-directory: web-app
+        run: bun run test:codemods
 
       # jscpd (web-app/src duplication) — blocking (2026-08-24). Config lives in
       # web-app/.jscpd.json: minLines/minTokens tuned to 20/200 (empirically verified —
@@ -323,7 +332,7 @@ jobs:
       # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
       - name: jscpd (web-app duplication)
         working-directory: web-app
-        run: pnpm run lint:duplicates
+        run: bun run lint:duplicates
 
       # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
       # this is this job's longest-running step. The whole original step body is wrapped
@@ -384,7 +393,7 @@ jobs:
 
       - name: CSS lint (stylelint + undefined variable check)
         working-directory: web-app
-        run: pnpm run lint:css
+        run: bun run lint:css
 
       - name: Validate feature catalog (typed feature registry)
         working-directory: web-app
@@ -392,4 +401,4 @@ jobs:
           # 1. TypeScript compile check on the features catalog — catches unknown FeatureId references
           node_modules/.bin/tsc --noEmit --project tsconfig.node.json
           # 2. Runtime catalog validation — catches features with empty testIds
-          pnpm run validate-catalog
+          bun run validate-catalog

@@ -1,0 +1,49 @@
+
+  ┃                                                                                                                                                                                 Running echo hi in bash
+  ┃  Use the bash tool to run: echo hi                                                                                                                                              ses_ead52fb0fffePdMkFRK07G8MS5
+  ┃
+                                                                                                                                                                                    Context
+     </think>                                                                                                                                                                       0 tokens
+                                                                                                                                                                                    0% used
+     $ echo hi                                                                                                                                                                      $0.00 spent
+
+     ▣  Build · Big Pickle                                                                                                                                                          MCP
+                                                                                                                                                                                    • echo Connected
+
+                                                                                                                                                                                    LSP
+                                                                                                                                                                                    LSPs are disabled
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                                                      ⬖ Getting started                ✕
+
+                                                                                                                                                                                        OpenCode includes free models
+                                                                                                                                                                                        so you can start immediately.
+
+                                                                                                                                                                                        Connect from 75+ providers to
+                                                                                                                                                                                        use other models, including
+  ┃                                                                                                                                                                                     Claude, GPT, Gemini etc
+  ┃  △ Permission required
+  ┃    # Shell command                                                                                                                                                                  Connect provider        /connect
+  ┃
+  ┃  $ echo hi
+  ┃                                                                                                                                                                                 ~/.cache/ssq-e2e-tmp/nam/tmp/probe/oc-
+  ┃                                                                                                                                                                                 proj
+  ┃   Allow once   Allow always   Reject                                                                                           ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃                                                                                                                                                                                 • OpenCode 1.18.30
+

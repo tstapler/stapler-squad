@@ -15,7 +15,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { LocalFileBrowser, serveUrl } from "./LocalFileBrowser";
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => new URLSearchParams("path=/home/user"),
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));

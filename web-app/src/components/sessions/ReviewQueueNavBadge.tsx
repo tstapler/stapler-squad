@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
 import { NotificationSound } from "@/lib/utils/notifications";

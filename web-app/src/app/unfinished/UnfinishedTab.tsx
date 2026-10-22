@@ -3,8 +3,7 @@
 // +feature: up-next-tabs
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { Link, useReplaceSearch, useSearchParams } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
@@ -16,6 +15,7 @@ import {
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
+import { stringParam } from "@/lib/nav/search-params";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
 import { UnfinishedRepoGroup } from "@/components/unfinished/UnfinishedRepoGroup";
 import { GitHubPRsSection } from "@/components/unfinished/GitHubPRsSection";
@@ -43,6 +43,7 @@ export function UnfinishedTab() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [secondsAgo, setSecondsAgo] = useState(0);
   const searchParams = useSearchParams();
+  const replaceSearch = useReplaceSearch();
   const { tab, setTab } = useUpNextTab();
   // Lifted here so the tab badge and the PRs panel share one WatchUserPRs stream.
   const gitHubPRs = useGitHubPRs();
@@ -51,7 +52,7 @@ export function UnfinishedTab() {
   const { items: stuckItems, lastFetched: stuckLastFetched } = useStuckBacklogItems();
   // routes.unfinishedItem(itemId) deep link — pre-expands/filters the
   // matching Stuck Backlog Items card (see StuckItemsSection's focusItemId).
-  const urlItemId = searchParams.get("item") ?? undefined;
+  const urlItemId = stringParam(searchParams, "item");
   // history.replaceState does not always re-render useSearchParams on the static export, so
   // "Show all stuck items" records the item it dismissed instead of waiting for the URL to update.
   const [dismissedItemId, setDismissedItemId] = useState<string | undefined>();
@@ -139,12 +140,11 @@ export function UnfinishedTab() {
     const params = new URLSearchParams(searchParams.toString());
     params.delete("item");
     params.set("tab", "stuck");
-    // history.replaceState, like useUpNextTab.setTab: router.replace hard-reloads the static export,
-    // which would drop the focus moved below.
-    window.history.replaceState(window.history.state, "", `?${params.toString()}`);
+    // Not router.replace: that hard-reloads the static export, which would drop the focus moved below.
+    replaceSearch(`?${params.toString()}`);
     setDismissedItemId(urlItemId);
     document.querySelector<HTMLElement>('[data-testid="up-next-panel-stuck"] h2')?.focus();
-  }, [searchParams, urlItemId]);
+  }, [searchParams, urlItemId, replaceSearch]);
 
   const prsDescription = attention.degraded
     ? `At least ${attention.count} PRs need attention. ${DEGRADED_ATTENTION_TEXT} ${PR_TAB_DESCRIPTION}`

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, type RefObject } from "react";
+import { usePanelHistory } from "./usePanelHistory";
 
 interface Options {
   isOpen: boolean;
@@ -38,31 +39,7 @@ export function useTrayDismissal({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [isOpen, trayRef, close]);
 
-  const closeRef = useRef(close);
-  closeRef.current = close;
-  const ownsHistoryEntry = useRef(false);
-  // A navigation that closes the sheet must not also history.back(): that pops the page it
-  // just opened. The tray's own entry is left behind instead.
-  const releaseHistoryEntry = useRef(() => {
-    ownsHistoryEntry.current = false;
-  }).current;
-  useEffect(() => {
-    if (!isSheet || !isOpen) return;
-    window.history.pushState({ ...(window.history.state ?? {}), ssqTray: true }, "");
-    ownsHistoryEntry.current = true;
-    const onPopState = () => {
-      ownsHistoryEntry.current = false;
-      closeRef.current();
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-      if (ownsHistoryEntry.current) {
-        ownsHistoryEntry.current = false;
-        window.history.back();
-      }
-    };
-  }, [isSheet, isOpen]);
+  const { releaseHistoryEntry } = usePanelHistory({ active: isSheet && isOpen, onBack: close });
 
   useEffect(() => {
     if (!modal) return;

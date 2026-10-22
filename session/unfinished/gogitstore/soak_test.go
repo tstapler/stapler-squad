@@ -35,7 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -96,9 +95,6 @@ func countOpenFDs() (n int, ok bool) {
 }
 
 func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
-	if _, err := exec.LookPath("git"); err != nil {
-		b.Skip("git binary not available")
-	}
 
 	// This does a fixed ~soakDuration of real work per call, not per b.N --
 	// it isn't a throughput microbenchmark the harness should recalibrate.
@@ -230,10 +226,9 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 		}(w)
 	}
 
-	// Repacker goroutine: periodically commits + real `git gc --aggressive`
-	// repacks, cycling through every repo, exercising refreshIndexes/retire
+	// Repacker goroutine: periodically commits + go-git repacks, cycling through every repo, exercising refreshIndexes/retire
 	// under real concurrent load throughout the soak — not just once, the
-	// way most of this package's other tests do. Uses runGitCmd/
+	// way most of this package's other tests do. Uses repackErr/
 	// commitFileNoT (mmap_stage2_test.go), the goroutine-safe helpers that
 	// return errors instead of calling *testing.T methods.
 	var repackWG sync.WaitGroup
@@ -252,7 +247,7 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 			marker := "soak-marker-" + strconv.Itoa(i) + ".txt"
 			if err := commitFileNoT(repo.mainDir, marker, "soak\n", "soak commit "+strconv.Itoa(i)); err != nil {
 				repackErrors.Add(1)
-			} else if err := runGitCmd(repo.mainDir, "gc", "-q", "--aggressive"); err != nil {
+			} else if err := repackErr(repo.mainDir); err != nil {
 				repackErrors.Add(1)
 			} else {
 				repackCount.Add(1)

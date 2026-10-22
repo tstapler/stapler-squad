@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { useSessionDetail, useSessionTurnTimeline } from "@/lib/hooks/useInsightsService";
 import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { SessionDetailContent } from "../SessionDetailContent";

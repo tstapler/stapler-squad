@@ -28,15 +28,16 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/native"
+	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
 )
 
 // initRepoInternal mirrors initRepo from vcsreader_test.go for white-box tests.
 //
 // Uses go-git directly rather than shelling out — see
 // the `prefer-go-git-over-subshells` skill.
-func initRepoInternal(t *testing.T) string {
+func initRepoInternal(t testing.TB) string {
 	t.Helper()
 	raw := t.TempDir()
 	dir, err := filepath.EvalSymlinks(raw)
@@ -67,16 +68,39 @@ func initRepoInternal(t *testing.T) string {
 	return dir
 }
 
-func gitRunInternal(t *testing.T, dir string, args ...string) {
+func openInternal(t testing.TB, dir string) *git.Repository {
 	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+	repo, err := native.OpenRepo(dir)
+	if err != nil {
+		t.Fatalf("PlainOpen(%s): %v", dir, err)
+	}
+	return repo
+}
+
+// stageInternal stages paths (relative to dir; "." stages everything) with go-git.
+func stageInternal(t testing.TB, dir string, paths ...string) {
+	t.Helper()
+	wt, err := openInternal(t, dir).Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	for _, p := range paths {
+		if _, err := wt.Add(p); err != nil {
+			t.Fatalf("Add(%s): %v", p, err)
+		}
+	}
+}
+
+// commitInternal commits the current index on HEAD with go-git.
+func commitInternal(t testing.TB, dir, msg string) {
+	t.Helper()
+	wt, err := openInternal(t, dir).Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	sig := testrepo.Signature(time.Now())
+	if _, err := wt.Commit(msg, &git.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		t.Fatalf("Commit(%q): %v", msg, err)
 	}
 }
 
@@ -197,8 +221,8 @@ func TestGoGitVCSReader_DiffShortstat_largeModifiedTrackedFile_countedButNotDiff
 	if err := os.WriteFile(filepath.Join(repo, "large.txt"), []byte(largeContent), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, repo, "add", "large.txt")
-	gitRunInternal(t, repo, "commit", "-m", "add large file")
+	stageInternal(t, repo, "large.txt")
+	commitInternal(t, repo, "add large file")
 
 	// Modify it (unstaged change): append more lines so both HEAD and WT exceed the limit.
 	modifiedContent := largeContent + strings.Repeat("y\n", 600)
@@ -283,7 +307,7 @@ func TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers(t *test
 	for i := range workers {
 		go func(idx int) {
 			defer wg.Done()
-			a, b, err := r.AheadBehind(dir, "main")
+			a, b, err := r.AheadBehind(context.Background(), dir, "main")
 			results[idx] = result{a, b, err}
 		}(i)
 	}
@@ -349,7 +373,7 @@ func TestGoGitVCSReader_AheadBehind_InvalidPath_ReturnsError(t *testing.T) {
 	// Use a non-existent path — openRepoEntry returns error, not panic,
 	// but confirms the caller handles Do errors without crashing.
 	r := &GoGitVCSReader{}
-	_, _, err := r.AheadBehind("/nonexistent/path/guaranteed-missing", "main")
+	_, _, err := r.AheadBehind(context.Background(), "/nonexistent/path/guaranteed-missing", "main")
 	if err == nil {
 		t.Fatal("expected error from non-existent repo, got nil")
 	}
@@ -393,15 +417,15 @@ func TestGoGitVCSReader_HasUncommitted_CacheHitReturnsCachedValue(t *testing.T) 
 // sentinels — so observing the sentinels proves reuse.
 func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(t *testing.T) {
 	dir := initRepoInternal(t)
-	gitRunInternal(t, dir, "checkout", "-b", "feature")
+	testrepo.Checkout(t, openInternal(t, dir), "feature", true)
 	if err := os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("feature\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, dir, "add", "feature.txt")
-	gitRunInternal(t, dir, "commit", "-m", "diverge from main")
+	stageInternal(t, dir, "feature.txt")
+	commitInternal(t, dir, "diverge from main")
 
 	r := &GoGitVCSReader{}
-	ahead, behind, err := r.AheadBehind(dir, "main")
+	ahead, behind, err := r.AheadBehind(context.Background(), dir, "main")
 	if err != nil {
 		t.Fatalf("cold call: %v", err)
 	}
@@ -409,19 +433,18 @@ func TestGoGitVCSReader_AheadBehind_ReusesResultOnExpiredTTLWhenHashesUnchanged(
 		t.Fatal("test setup did not diverge HEAD from base — real (ahead, behind) is (0, 0)")
 	}
 
-	cacheKey := dir + "\x00" + "main"
-	v, ok := r.aheadBehindCache.Load(cacheKey)
+	cacheKey := aheadBehindKey{worktree: dir, base: "main"}
+	entry, ok := r.aheadBehindCache.Load(cacheKey)
 	if !ok {
 		t.Fatal("cold call did not populate aheadBehindCache")
 	}
-	entry := v.(aheadBehindEntry)
 	const sentinelAhead, sentinelBehind = 999, 888
 	entry.ahead = sentinelAhead
 	entry.behind = sentinelBehind
 	entry.expiry = time.Now().Add(-time.Second) // force TTL-expired path
 	r.aheadBehindCache.Store(cacheKey, entry)
 
-	gotAhead, gotBehind, err := r.AheadBehind(dir, "main")
+	gotAhead, gotBehind, err := r.AheadBehind(context.Background(), dir, "main")
 	if err != nil {
 		t.Fatalf("warm call: %v", err)
 	}
@@ -577,8 +600,8 @@ func TestGoGitVCSReader_DiffShortstat_headTreeCache_invalidatesOnNewCommit(t *te
 	if err := os.WriteFile(readme, []byte("hello\nworld\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, repo, "add", "README.md")
-	gitRunInternal(t, repo, "commit", "-m", "add world line")
+	stageInternal(t, repo, "README.md")
+	commitInternal(t, repo, "add world line")
 
 	// Revert the working tree to the OLD content — relative to the NEW HEAD,
 	// this is a 1-line deletion. A stale cache stuck on the old HEAD (where
@@ -755,8 +778,8 @@ func TestGoGitVCSReader_HasUncommitted_headTreeCache_invalidatesOnNewCommit(t *t
 	if err := os.WriteFile(readme, []byte("AAA\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, repo, "add", "README.md")
-	gitRunInternal(t, repo, "commit", "-m", "AAA")
+	stageInternal(t, repo, "README.md")
+	commitInternal(t, repo, "AAA")
 
 	r := &GoGitVCSReader{}
 	dirty, err := r.HasUncommitted(repo)
@@ -781,8 +804,8 @@ func TestGoGitVCSReader_HasUncommitted_headTreeCache_invalidatesOnNewCommit(t *t
 	if err := os.WriteFile(readme, []byte("BBB\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, repo, "add", "README.md")
-	gitRunInternal(t, repo, "commit", "-m", "BBB")
+	stageInternal(t, repo, "README.md")
+	commitInternal(t, repo, "BBB")
 
 	// Stage a revert to the OLD content ("AAA\n") — a real staged change
 	// relative to the NEW HEAD ("BBB\n"), but one a stale commit1-era
@@ -791,7 +814,7 @@ func TestGoGitVCSReader_HasUncommitted_headTreeCache_invalidatesOnNewCommit(t *t
 	if err := os.WriteFile(readme, []byte("AAA\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, repo, "add", "README.md")
+	stageInternal(t, repo, "README.md")
 
 	r.hasUncommittedCache.Delete(repo) // bypass HasUncommitted's own 30s TTL cache
 
@@ -822,8 +845,8 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 		if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
-		gitRunInternal(t, repo, "add", ".")
-		gitRunInternal(t, repo, "commit", "-m", fmt.Sprintf("commit %d", i))
+		stageInternal(t, repo, ".")
+		commitInternal(t, repo, fmt.Sprintf("commit %d", i))
 	}
 	// Total history: 6 commits.
 
@@ -861,8 +884,8 @@ func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
 		if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
-		gitRunInternal(t, repo, "add", ".")
-		gitRunInternal(t, repo, "commit", "-m", fmt.Sprintf("commit %d", i))
+		stageInternal(t, repo, ".")
+		commitInternal(t, repo, fmt.Sprintf("commit %d", i))
 	}
 	// Total history: 6 commits (1 stop commit + 5 more reachable from HEAD).
 
@@ -891,7 +914,7 @@ func TestCountCommitsTo_StopsAtBoundOnDeeplyDivergedBranch(t *testing.T) {
 	mergeBaseBFSLimit = 3
 	defer func() { mergeBaseBFSLimit = origLimit }()
 
-	n, err := countCommitsTo(gitRepo, head.Hash(), stop)
+	n, err := countCommitsTo(newParentMemo(gitRepo), head.Hash(), stop)
 	if err != nil {
 		t.Fatalf("countCommitsTo: %v", err)
 	}
@@ -948,8 +971,7 @@ func TestLcsLength_CapsAtMaxLines(t *testing.T) {
 func TestWorktreeGitDir_LinkedWorktree_ResolvesPerWorktreeGitdir(t *testing.T) {
 	mainRepo := initRepoInternal(t)
 
-	linkedPath := filepath.Join(filepath.Dir(mainRepo), "linked-worktree")
-	gitRunInternal(t, mainRepo, "worktree", "add", linkedPath, "-b", "feature-branch")
+	linkedPath := testrepo.NewLinkedWorktree(t, mainRepo, "linked-worktree", "feature-branch")
 
 	got := worktreeGitDir(linkedPath)
 
@@ -1026,8 +1048,8 @@ func TestCachedReachableSet_ReusedWhileBaseUnchanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "next.txt"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	gitRunInternal(t, repo, "add", ".")
-	gitRunInternal(t, repo, "commit", "-m", "move base")
+	stageInternal(t, repo, ".")
+	commitInternal(t, repo, "move base")
 	second := headHash()
 	set3, err := r.cachedReachableSet(entry, repo, second)
 	if err != nil {
@@ -1066,8 +1088,8 @@ func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing
 	for _, p := range []string{repo, linked} {
 		r.diffStatCache.Store(p, diffStatEntry{expiry: time.Now().Add(time.Hour)})
 		r.hasUncommittedCache.Store(p, hasUncommittedEntry{expiry: time.Now().Add(time.Hour)})
-		r.aheadBehindCache.Store(p+"\x00main", aheadBehindEntry{expiry: time.Now().Add(time.Hour)})
-		r.commitMessagesCache.Store(p+"\x00main\x005", commitMessagesEntry{expiry: time.Now().Add(time.Hour)})
+		r.aheadBehindCache.Store(aheadBehindKey{worktree: p, base: "main"}, aheadBehindEntry{expiry: time.Now().Add(time.Hour)})
+		r.commitMessagesCache.Store(commitMessagesKey{worktree: p, base: "main", max: 5}, commitMessagesEntry{expiry: time.Now().Add(time.Hour)})
 		r.reachableSetCache.Store(p, reachableSetEntry{})
 	}
 	r.diffStatCache.Store("/other/worktree", diffStatEntry{expiry: time.Now().Add(time.Hour)})
@@ -1081,8 +1103,8 @@ func TestScannerInvalidateRepo_EvictsReaderCachesButKeepsReachableSet(t *testing
 	if n := count(&r.diffStatCache); n != 1 {
 		t.Errorf("diffStatCache holds %d entries, want only the unrelated worktree's", n)
 	}
-	for name, m := range map[string]*sync.Map{"hasUncommitted": &r.hasUncommittedCache, "aheadBehind": &r.aheadBehindCache, "commitMessages": &r.commitMessagesCache} {
-		if n := count(m); n != 0 {
+	for name, n := range map[string]int{"hasUncommitted": count(&r.hasUncommittedCache), "aheadBehind": r.aheadBehindCache.Len(), "commitMessages": r.commitMessagesCache.Len()} {
+		if n != 0 {
 			t.Errorf("%sCache holds %d entries after invalidateRepo, want 0", name, n)
 		}
 	}

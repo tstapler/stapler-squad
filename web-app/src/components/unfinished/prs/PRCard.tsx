@@ -2,7 +2,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import {
   LinkedSessionStatus,
   type LinkedSession,
@@ -11,7 +11,10 @@ import {
 import { prAttention, type PRAttention } from "@/lib/unfinished/prAttention";
 import { prKey } from "@/lib/unfinished/prOrdering";
 import type { NudgeClient } from "@/lib/hooks/useNudgePR";
+import type { PRActionClient } from "@/lib/hooks/usePRActions";
 import { NudgeButton } from "./NudgeButton";
+import { PRActionBar } from "./PRActionBar";
+import { PRExpandedInfo } from "./PRExpandedInfo";
 import * as styles from "./PRCard.css";
 
 const cx = (...names: string[]) => names.join(" ");
@@ -131,9 +134,12 @@ interface PRCardProps {
   nudgeClient?: NudgeClient;
   /** Called when the server reports nothing left to fix, so the owner can refetch PR data. */
   onNothingToFix?: () => void;
+  /** Test seam for the merge/close/draft RPCs; defaults to the shared Connect client. */
+  actionClient?: PRActionClient;
 }
 
-export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFix }: PRCardProps) {
+export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFix, actionClient }: PRCardProps) {
+  const [gone, setGone] = useState(false);
   const a = prAttention(pr);
   const sessions = linkedSessionsOf(pr);
   const conflictChip = a.mergeConflict
@@ -141,6 +147,8 @@ export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFi
     : a.conflictUnknown && !pr.isDraft && !a.needsAttention
       ? "? conflict"
       : null;
+
+  if (gone) return null;
 
   return (
     <div className={styles.prCard} data-testid="github-pr-card" data-pr-key={prKey(pr)}>
@@ -188,6 +196,7 @@ export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFi
           </span>
         )}
       </div>
+      {pr.detailsLoaded && <PRExpandedInfo pr={pr} />}
       {a.needsAttention && !a.nudgeable && a.changesRequested && (
         <p className={styles.changesRequestedNote}>
           A reviewer asked for changes. Open the PR on GitHub to read them; no automatic request is
@@ -242,6 +251,15 @@ export function PRCard({ pr, showHostAccount = false, nudgeClient, onNothingToFi
           </>
         )}
       </div>
+      <PRActionBar
+        pr={pr}
+        client={actionClient}
+        onGone={() => {
+          setGone(true);
+          onNothingToFix?.();
+        }}
+        onChanged={onNothingToFix}
+      />
     </div>
   );
 }

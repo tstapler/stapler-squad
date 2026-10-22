@@ -25,7 +25,7 @@ export const emptyState = style({
 
 export const emptyHint = style({
   fontSize: vars.fontSize.sm,
-  opacity: 0.6,
+  color: vars.color.textSecondary,
   margin: 0,
 });
 
@@ -77,6 +77,7 @@ export const breadcrumbSegment = style({
   cursor: "pointer",
   padding: 0,
   font: "inherit",
+  "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px" } },
 });
 
 export const breadcrumbCurrent = style({
@@ -113,6 +114,7 @@ export const wrapToggleButton = style({
   border: `1px solid ${vars.color.borderColor}`,
   background: "transparent",
   cursor: "pointer",
+  "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px", justifyContent: "center" } },
   ":hover": {
     color: vars.color.textPrimary,
     backgroundColor: vars.color.hoverBackground,
@@ -123,28 +125,6 @@ export const wrapToggleButtonActive = style({
   color: vars.color.primary,
   borderColor: vars.color.primary,
 });
-
-export const codeMirrorEditor = style({
-  height: "100%",
-});
-
-globalStyle(`${codeMirrorEditor} .cm-editor`, {
-  height: "100%",
-  fontSize: 13,
-});
-
-globalStyle(`${codeMirrorEditor} .cm-changeGutter`, {
-  width: 4,
-});
-
-const gutterMarker = style({
-  width: 4,
-  height: "100%",
-});
-
-export const gutterMarkerAdd = style([gutterMarker, { background: vars.color.gitAdded }]);
-export const gutterMarkerDelete = style([gutterMarker, { background: vars.color.gitDeleted }]);
-export const gutterMarkerModify = style([gutterMarker, { background: vars.color.gitModified }]);
 
 export const binaryPlaceholder = style({
   display: "flex",
@@ -183,6 +163,7 @@ export const downloadButton = style({
   color: vars.color.textSecondary,
   border: `1px solid ${vars.color.borderColor}`,
   marginLeft: "auto",
+  "@media": { "(pointer: coarse)": { minHeight: "44px", minWidth: "44px", justifyContent: "center" } },
   ":hover": {
     color: vars.color.textPrimary,
     backgroundColor: vars.color.hoverBackground,

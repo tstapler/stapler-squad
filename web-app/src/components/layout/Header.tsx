@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/lib/nav";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
 import { MemoryNavBadge } from "@/components/sessions/MemoryNavBadge";

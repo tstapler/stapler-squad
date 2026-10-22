@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
 import { FlagMutation, SessionService } from "@/gen/session/v1/session_pb";
@@ -59,6 +59,8 @@ interface FeatureFlagsContextValue {
   isLoading: boolean;
   error: string | null;
   setFlag: (name: string, change: boolean | FlagChange) => Promise<void>;
+  /** Re-reads GetFeatureFlags without flipping isLoading back on. */
+  refresh?: () => Promise<void>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
@@ -67,6 +69,7 @@ const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
   isLoading: true,
   error: null,
   setFlag: async () => {},
+  refresh: async () => {},
 });
 
 export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
@@ -91,6 +94,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       }
       setFlags(map);
       setFlagList(list);
+      setError(null);
     } catch {
       setError("Failed to load feature flags");
     } finally {
@@ -130,14 +134,15 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
+      // Re-read first: a successful fetch clears the error, and this one must outlive it.
+      await fetchFlags();
       setError("Failed to update feature flag");
-      void fetchFlags();
     }
   }, [client, fetchFlags]);
 
   const value = useMemo(
-    () => ({ flags, flagList, isLoading, error, setFlag }),
-    [flags, flagList, isLoading, error, setFlag]
+    () => ({ flags, flagList, isLoading, error, setFlag, refresh: fetchFlags }),
+    [flags, flagList, isLoading, error, setFlag, fetchFlags]
   );
 
   return (

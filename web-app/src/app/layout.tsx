@@ -1,16 +1,7 @@
 import type { Metadata, Viewport } from "next";
-import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
-import { AuthProvider } from "@/lib/contexts/AuthContext";
-import { Providers } from "./Providers";
-import { NotificationPanel } from "@/components/ui/NotificationPanel";
-import { TrayErrorBoundary } from "@/components/ui/TrayErrorBoundary";
-import { TmuxVersionMismatchBanner } from "@/components/system/TmuxVersionMismatchBanner";
-import { ForkPressureStatusBanner } from "@/components/system/ForkPressureStatusBanner";
-import { ViewportProvider } from "@/components/providers/ViewportProvider";
-import { CockpitShell } from "@/components/layout/CockpitShell";
+import { RootShell } from "./RootShell";
 import { matrixTheme, cyberpunk77Theme, wh40kTheme, cleanTheme, lightTheme, darkTheme } from "@/styles/theme.css";
 import { jetbrainsMono, rajdhani, cinzel, inter } from "./fonts";
-import { mainContent } from "./layout.css";
 import "./globals.css";
 import "@/styles/globalEffects.css";
 
@@ -59,25 +50,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: foucScript }} />
       </head>
       <body>
-        <ViewportProvider>
-          <ErrorBoundary>
-            <AuthProvider>
-              <Providers>
-                <CockpitShell>
-                  <a href="#main-content" className="skip-link">Skip to main content</a>
-                  <main id="main-content" className={mainContent}>
-                    <TmuxVersionMismatchBanner />
-                    <ForkPressureStatusBanner />
-                    {children}
-                  </main>
-                  <TrayErrorBoundary>
-                    <NotificationPanel />
-                  </TrayErrorBoundary>
-                </CockpitShell>
-              </Providers>
-            </AuthProvider>
-          </ErrorBoundary>
-        </ViewportProvider>
+        <RootShell>{children}</RootShell>
       </body>
     </html>
   );

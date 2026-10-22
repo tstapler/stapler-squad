@@ -43,6 +43,23 @@ func TestAuth_should_AllowOnlySingleSegmentGenericWebhookPost(t *testing.T) {
 		assert.NotEqual(t, http.StatusOK, code)
 	}
 }
+func TestAuth_should_ExemptOnlyPreLoginAssetPaths_When_NoSession(t *testing.T) {
+	for _, tc := range []struct {
+		path   string
+		exempt bool
+	}{
+		{"/login", true},
+		{"/_next/static/chunks/a-1.js", true},
+		{"/auth/x", true},
+		{"/health", true},
+		{"/favicon.ico", true},
+		{"/assets/a.js", false},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		assert.Equal(t, tc.exempt, isExempt(req), "isExempt(%s)", tc.path)
+	}
+}
+
 func TestAuth_should_ExemptClaimGossipEndpoints_When_PeerHasNoPasskeySession(t *testing.T) {
 	code, reached := serveThroughAuth(http.MethodPost, session.ClaimAdvertisementEndpointPath)
 	assert.True(t, reached)

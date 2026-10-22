@@ -37,8 +37,14 @@ type NotificationService struct {
 	storage                 session.InstanceStore
 	deliveryGate            *deliverygate.Gate // optional: unversioned-request counter and stats RPC
 	statsFileStatus         func() deliverygate.StatsFileStatus
-	auditSink               *AuditSink       // optional: prune apply refuses without it
-	pruneNow                func() time.Time // injected clock; nil means time.Now
+	auditSink               *AuditSink         // optional: prune apply refuses without it
+	pruneNow                func() time.Time   // injected clock; nil means time.Now
+	descriptors             *DescriptorBuilder // optional: inline action descriptors on history pages
+}
+
+// SetDescriptorBuilder wires the inline-action descriptor assembly (ADR-002).
+func (ns *NotificationService) SetDescriptorBuilder(b *DescriptorBuilder) {
+	ns.descriptors = b
 }
 
 // SetDeliveryGate wires the delivery gate used for legacy-check and
@@ -246,6 +252,9 @@ func (ns *NotificationService) GetNotificationHistory(
 	protoRecords := make([]*sessionv1.NotificationHistoryRecord, 0, len(records))
 	for _, r := range records {
 		protoRecords = append(protoRecords, recordToProto(r))
+	}
+	if ns.descriptors != nil {
+		ns.descriptors.Annotate(ctx, protoRecords, ListenerClassFrom(ctx))
 	}
 
 	// Calculate hasMore based on offset + limit vs total

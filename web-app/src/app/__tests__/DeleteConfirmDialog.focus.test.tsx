@@ -28,7 +28,7 @@ if (typeof performance.mark !== "function") {
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
 
-jest.mock("next/navigation", () => ({
+jest.mock("@/lib/nav", () => ({
   useSearchParams: () => ({ get: () => null }),
   useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));

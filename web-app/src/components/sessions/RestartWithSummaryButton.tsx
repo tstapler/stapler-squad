@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/nav";
 import { ConnectError, Code } from "@connectrpc/connect";
 import { useHandoffSummary, isGenerating } from "@/lib/hooks/useHandoffSummary";
 import { HandoffSummaryStatus } from "@/gen/session/v1/handoff_summary_pb";

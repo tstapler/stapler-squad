@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/lib/nav";
 import { DrawerNav } from "./DrawerNav";
 import { BottomNav } from "./BottomNav";
 import { KeyboardShortcutOverlay } from "@/components/ui/KeyboardShortcutOverlay";

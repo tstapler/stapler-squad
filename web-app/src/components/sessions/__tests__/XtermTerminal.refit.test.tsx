@@ -64,6 +64,8 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
+const SGR_MOVE_REPORT = "\x1b[<35;51;21M";
+
 async function mount(props: Partial<XtermTerminalProps> = {}) {
   const ref = React.createRef<XtermTerminalHandle>();
   const utils = render(<XtermTerminal ref={ref} {...props} />);
@@ -468,6 +470,26 @@ describe("scroll settings wiring (Stories 1.2.5e / 1.2.5g)", () => {
     await mount({ onData });
     hook.mock.calls[hook.mock.calls.length - 1][0].onSendData("x");
     expect(onData).toHaveBeenCalledWith("x");
+  });
+
+  it("XtermTerminal_should_DropNativeMouseReports_When_MouseModeOverrideIsNone", async () => {
+    const onData = jest.fn();
+    await mount({ onData, scrollGesture: { mouseModeOverride: "none" } });
+    const terminal = created.terminals[created.terminals.length - 1];
+    const xtermOnData = terminal.onData.mock.calls[0][0] as (d: string) => void;
+    xtermOnData(SGR_MOVE_REPORT);
+    xtermOnData("\x1b[M #R");
+    expect(onData).not.toHaveBeenCalled();
+    xtermOnData("ls\r");
+    expect(onData).toHaveBeenCalledWith("ls\r");
+  });
+
+  it("XtermTerminal_should_ForwardNativeMouseReports_When_MouseModeOverrideIsAny", async () => {
+    const onData = jest.fn();
+    await mount({ onData, scrollGesture: { mouseModeOverride: "any" } });
+    const terminal = created.terminals[created.terminals.length - 1];
+    (terminal.onData.mock.calls[0][0] as (d: string) => void)(SGR_MOVE_REPORT);
+    expect(onData).toHaveBeenCalledWith(SGR_MOVE_REPORT);
   });
 
   it("XtermTerminal_should_SetDataGestureScrollAttribute", async () => {

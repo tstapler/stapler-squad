@@ -121,9 +121,15 @@ func reserveLoopbackAddr(t *testing.T) string {
 // reserveLoopbackAddr).
 func startLiveTymuxd(t *testing.T, bin, xdgStateHome, addr string) *liveTymuxd {
 	t.Helper()
+	// Short dir: a unix socket path must fit sun_path (~108 bytes), which t.TempDir() can exceed.
+	sockDir, err := os.MkdirTemp("", "tx")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(),
 		"TYMUXD_ADDR="+addr,
+		"TYMUXD_SOCKET_PATH="+filepath.Join(sockDir, "d.sock"), // else it collides with the live daemon's socket lock
 		"XDG_STATE_HOME="+xdgStateHome,
 		"RUST_LOG=warn",
 	)
@@ -239,4 +245,23 @@ func TestBackendTymux_DaemonRestart_RevivesWithFreshProcess_SurfacedDistinctly(t
 	pidAfter := extractPID(t, after)
 
 	assert.NotEqual(t, pidBefore, pidAfter, "the revived pane must be a fresh process (different PID), never the original")
+}
+
+// TestTymuxGRPCSession_LiveTymuxd_StartRunsCommandWithArgs guards BUG-113: a launch
+// command with arguments must reach the pane as that program, not a bare $SHELL.
+func TestTymuxGRPCSession_LiveTymuxd_StartRunsCommandWithArgs(t *testing.T) {
+	bin := findTymuxdBinary(t)
+	daemon := startLiveTymuxd(t, bin, t.TempDir(), reserveLoopbackAddr(t))
+	defer daemon.stop(t)
+
+	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon.addr))
+	// Repeats because output printed before the standing Attach stream opens isn't captured.
+	sess.SetCommand("while :; do echo launched-with args; sleep 0.2; done")
+	require.NoError(t, sess.Start(t.TempDir()))
+	defer sess.Close()
+
+	wait.RequireEventually(t, func() bool {
+		content, err := sess.CapturePaneContentRaw()
+		return err == nil && strings.Contains(content, "launched-with args")
+	}, 5*time.Second, 100*time.Millisecond, "pane never showed the launch command's output")
 }

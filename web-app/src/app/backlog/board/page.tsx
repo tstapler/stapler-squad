@@ -3,7 +3,7 @@
 // +feature: backlog:board-page
 
 import { useState, useCallback, useRef, useEffect, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import { BacklogBoard } from "@/components/backlog/BacklogBoard";
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";

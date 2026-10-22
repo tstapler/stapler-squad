@@ -342,9 +342,9 @@ func TestIsOneShot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{Title: "test", Tags: tc.tags}
-			got := isOneShot(inst)
+			got := IsOneShot(inst)
 			if got != tc.want {
-				t.Errorf("isOneShot(%v) = %v, want %v", tc.tags, got, tc.want)
+				t.Errorf("IsOneShot(%v) = %v, want %v", tc.tags, got, tc.want)
 			}
 		})
 	}

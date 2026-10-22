@@ -211,7 +211,7 @@ func TestPruneApply_ShouldAppendKindPruneAuditLineBeforeDeleteAndRejectRebinding
 
 func TestPruneApply_ShouldReturnInternalWithNoDeleteAndNoBackup_WhenAuditAppendFails(t *testing.T) {
 	h := newPruneHarness(t, storyRows(), []string{"h1", "h2"}, []string{"v1"})
-	h.mfs.failWrite = errDiskFull
+	h.mfs.setFailWrite(errDiskFull)
 
 	_, err := h.prune(true, false)
 

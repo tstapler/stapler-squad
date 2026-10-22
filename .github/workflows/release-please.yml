@@ -54,7 +54,7 @@ jobs:
           ref: ${{ needs.release-please.outputs.tag_name }}
           fetch-depth: 0
 
-      # Was five hand-duplicated steps here (pnpm/node/buf/web-build) that
+      # Was five hand-duplicated steps here (bun/node/buf/web-build) that
       # had drifted from .github/actions/prepare's own copy of the same
       # sequence by missing one step entirely — ent ORM code generation.
       # session/ent/*.go is gitignored and only exists after that step (see

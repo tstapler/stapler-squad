@@ -82,6 +82,35 @@ export class InsightsPage {
     });
   }
 
+  /**
+   * Count-agnostic variant of `mockGetInsightsSummary` for a fail-then-succeed Retry flow: every
+   * request fails until `release()` is called, then every request succeeds. Unlike a response
+   * queue it does not depend on how many times the page's mount effect fires (twice under Next's
+   * StrictMode dev build, once under a build without it).
+   */
+  async mockGetInsightsSummaryFailingUntilReleased(
+    failure: { errorMessage: string },
+    success: MockInsightsSummaryResponse,
+  ): Promise<{ release: () => void }> {
+    let released = false;
+    await this.page.route("**/session.v1.InsightsService/GetInsightsSummary", async (route) => {
+      if (!released) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "unknown", message: failure.errorMessage }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(buildInsightsSummaryResponse(success.body ?? {})),
+      });
+    });
+    return { release: () => { released = true; } };
+  }
+
   // ---------------------------------------------------------------------
   // Findings panel (design/ux.md B1)
   // ---------------------------------------------------------------------
