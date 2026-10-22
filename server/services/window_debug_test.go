@@ -46,7 +46,7 @@ func TestFocusWindow_NonDarwinPlatform(t *testing.T) {
 	}))
 
 	// On Linux the call succeeds at the RPC level but reports Success=false.
-	// On macOS (developer machine), osascript may or may not fail — either
+	// On macOS (developer machine), the activator may report not-running — either
 	// outcome is acceptable; the important invariant is no panic and no
 	// internal error code.
 	if err != nil {
