@@ -46,8 +46,10 @@ const (
 	outDirFail
 )
 
-// classifyOutDir decides what a missing or empty out/ means: locally the test skips,
-// in CI (require) it fails so a mis-wired build step cannot pass silently.
+// classifyOutDir decides what a missing or empty out/ means: it skips unless the
+// caller opted into requiring a built out/ (REQUIRE_BUILT_OUT=1, set only by the
+// dedicated built-assets-guard job that builds it first), so this test can also run
+// in Go test jobs that never build web-app/out (every job sets CI=true, not just that one).
 func classifyOutDir(dir string, inCI bool) (outDirOutcome, string) {
 	entries, err := os.ReadDir(dir)
 	if err == nil && len(entries) > 0 {
@@ -75,7 +77,7 @@ func builtOutDir(t *testing.T, inCI bool) string {
 }
 
 func requireBuiltOut() bool {
-	return os.Getenv("CI") != "" || os.Getenv("REQUIRE_BUILT_OUT") == "1"
+	return os.Getenv("REQUIRE_BUILT_OUT") == "1"
 }
 
 func loadAllowlist(t *testing.T) []allowlistEntry {
