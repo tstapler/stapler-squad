@@ -1,0 +1,3186 @@
+{
+  "base": "http://localhost:62871",
+  "chromium": "145.0.7632.6",
+  "announcer": {
+    "initial": {
+      "hostTag": "NEXT-ROUTE-ANNOUNCER",
+      "shadow": true,
+      "ariaLive": "assertive",
+      "role": "alert",
+      "text": "",
+      "outerHTML": "<div aria-live=\"assertive\" id=\"__next-route-announcer__\" role=\"alert\" style=\"position: absolute; border: 0px; height: 1px; margin: -1px; padding: 0px; width: 1px; clip: rect(0px, 0px, 0px, 0px); overflow: hidden; white-space: nowrap; overflow-wrap: normal;\"></div>"
+    },
+    "afterClientNavToHistory": {
+      "hostTag": "NEXT-ROUTE-ANNOUNCER",
+      "shadow": true,
+      "ariaLive": "assertive",
+      "role": "alert",
+      "text": "History - Stapler Squad",
+      "outerHTML": "<div aria-live=\"assertive\" id=\"__next-route-announcer__\" role=\"alert\" style=\"position: absolute; border: 0px; height: 1px; margin: -1px; padding: 0px; width: 1px; clip: rect(0px, 0px, 0px, 0px); overflow: hidden; white-space: nowrap; overflow-wrap: normal;\">History - Stapler Squad</div>"
+    },
+    "mutationEvents": [
+      {
+        "text": "History - Stapler Squad",
+        "title": "History - Stapler Squad"
+      }
+    ],
+    "chunksContainingId": 1,
+    "hits": [
+      {
+        "url": "/_next/static/chunks/6737-8a2e11fcf4e11202.js",
+        "snippet": "ouncer\", ({\n    enumerable: true,\n    get: function() {\n        return AppRouterAnnouncer;\n    }\n}));\nconst _react = __webpack_require__(17391);\nconst _reactdom = __webpack_require__(16382);\nconst ANNOUNCER_TYPE = 'next-route-announcer';\nconst ANNOUNCER_ID = '__next-route-announcer__';\nfunction getAnnouncerNode() {\n    var _existingAnnouncer_shadowRoot;\n    const existingAnnouncer = document.getElementsByName(ANNOUNC"
+      }
+    ]
+  },
+  "scrollRows": [
+    {
+      "vp": "1280x800",
+      "path": "/",
+      "finalPath": "/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div[data-testid=session-list-scroll].s1bun59",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/account",
+      "finalPath": "/account",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5421,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/analytics/escape",
+      "finalPath": "/analytics/escape",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5513,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/backlog",
+      "finalPath": "/backlog",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/backlog/board",
+      "finalPath": "/backlog/board",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/changelog",
+      "finalPath": "/changelog",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content._18c0q0w6",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5264,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/config",
+      "finalPath": "/settings/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content._5jp6iw0",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5264,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/debug/escape-codes",
+      "finalPath": "/debug/escape-codes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "auto",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "auto",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6000,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/errors",
+      "finalPath": "/errors",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5232,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/fanout",
+      "finalPath": "/fanout",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5232,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/files",
+      "finalPath": "/files",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/help",
+      "finalPath": "/help",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main._12am4kx5",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/history",
+      "finalPath": "/history",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div.",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5920,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div.",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/insights",
+      "finalPath": "/insights",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5248,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/insights/session-detail",
+      "finalPath": "/insights/session-detail",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5232,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/login",
+      "finalPath": "/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div[data-testid=session-list-scroll].s1bun59",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/logs",
+      "finalPath": "/logs",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div[data-testid=virtuoso-scroller].",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5248,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/notifications",
+      "finalPath": "/notifications",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5216,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/resolve",
+      "finalPath": "/resolve",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5401,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/review-queue",
+      "finalPath": "/review-queue",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/rules",
+      "finalPath": "/rules",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content.ya4cca1",
+          "div.qc5sjgj",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5936,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content.ya4cca1",
+          "div.qc5sjgj",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/sessions/import",
+      "finalPath": "/sessions/import",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5436,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/sessions/new",
+      "finalPath": "/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div[data-testid=session-list-scroll].s1bun59",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7",
+          "ul#omnibar-result-listbox.eozqt80"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7",
+          "ul#omnibar-result-listbox.eozqt80"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/sessions/summary",
+      "finalPath": "/sessions/summary",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5248,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings",
+      "finalPath": "/settings",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content._5jp6iw0",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5264,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/background-models",
+      "finalPath": "/settings/background-models",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 944,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6944,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/backlog-sources",
+      "finalPath": "/settings/backlog-sources",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5532,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/backlog-stages",
+      "finalPath": "/settings/backlog-stages",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 12,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6012,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/defaults",
+      "finalPath": "/settings/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content._5jp6iw0",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5264,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/features",
+      "finalPath": "/settings/features",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "main#main-content._2zurle0",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5264,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/jules",
+      "finalPath": "/settings/jules",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5896,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/llm-backends",
+      "finalPath": "/settings/llm-backends",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 1579,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 7579,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/pipeline-modes",
+      "finalPath": "/settings/pipeline-modes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5440,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/remotes",
+      "finalPath": "/settings/remotes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5248,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/tagging-classifier",
+      "finalPath": "/settings/tagging-classifier",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5613,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/settings/unfinished",
+      "finalPath": "/settings/unfinished",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5572,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/spike-files",
+      "finalPath": "/spike-files",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div.cm-scroller",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5847,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div.cm-scroller",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/spike-lazydoc",
+      "finalPath": "/spike-lazydoc",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div.cm-scroller",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5789,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div.cm-scroller",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/test/escape-codes",
+      "finalPath": "/test/escape-codes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div._8867twc",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5200,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/test/layout-overlap",
+      "finalPath": "/test/layout-overlap",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6000,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/test/terminal-stress",
+      "finalPath": "/test/terminal-stress",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 187,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6187,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/triggers",
+      "finalPath": "/triggers",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5936,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/unfinished",
+      "finalPath": "/unfinished",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div._1jxj7lz0",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5232,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "1280x800",
+      "path": "/workflows",
+      "finalPath": "/workflows",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 800,
+        "viewportH": 800,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5936,
+        "overflowingScrollers": [
+          "ul._13kc7ex3",
+          "div#tray-segment-panel[data-testid=tray-scroll]._4gxdcn7"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/",
+      "finalPath": "/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/account",
+      "finalPath": "/account",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5463,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/analytics/escape",
+      "finalPath": "/analytics/escape",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5540,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/backlog",
+      "finalPath": "/backlog",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._14wkqs5a",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/backlog/board",
+      "finalPath": "/backlog/board",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/changelog",
+      "finalPath": "/changelog",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "main#main-content._18c0q0w6",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5274,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/config",
+      "finalPath": "/settings/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "main#main-content._5jp6iw0",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5306,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/debug/escape-codes",
+      "finalPath": "/debug/escape-codes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 86,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6086,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/errors",
+      "finalPath": "/errors",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5274,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/fanout",
+      "finalPath": "/fanout",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5274,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/files",
+      "finalPath": "/files",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "aside[data-testid=file-browser-entry-list]._56igjle",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/help",
+      "finalPath": "/help",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "main._12am4kx5",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/history",
+      "finalPath": "/history",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6006,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/insights",
+      "finalPath": "/insights",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5290,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/insights/session-detail",
+      "finalPath": "/insights/session-detail",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5274,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/login",
+      "finalPath": "/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/logs",
+      "finalPath": "/logs",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5290,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/notifications",
+      "finalPath": "/notifications",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5250,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/resolve",
+      "finalPath": "/resolve",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5443,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/review-queue",
+      "finalPath": "/review-queue",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/rules",
+      "finalPath": "/rules",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 30,
+        "overflowingScrollers": [
+          "main#main-content.ya4cca1",
+          "div.qc5sjgj",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6030,
+        "overflowingScrollers": [
+          "main#main-content.ya4cca1",
+          "div.qc5sjgj",
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/sessions/import",
+      "finalPath": "/sessions/import",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5584,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/sessions/new",
+      "finalPath": "/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh",
+          "ul#omnibar-result-listbox.eozqt80"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh",
+          "ul#omnibar-result-listbox.eozqt80"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/sessions/summary",
+      "finalPath": "/sessions/summary",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5290,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings",
+      "finalPath": "/settings",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "main#main-content._5jp6iw0",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5306,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/background-models",
+      "finalPath": "/settings/background-models",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 1036,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 7036,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/backlog-sources",
+      "finalPath": "/settings/backlog-sources",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5591,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/backlog-stages",
+      "finalPath": "/settings/backlog-stages",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 174,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6174,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/defaults",
+      "finalPath": "/settings/",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "main#main-content._5jp6iw0",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5306,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/features",
+      "finalPath": "/settings/features",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "main#main-content._2zurle0",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5306,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/jules",
+      "finalPath": "/settings/jules",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5971,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/llm-backends",
+      "finalPath": "/settings/llm-backends",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 1970,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 7970,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/pipeline-modes",
+      "finalPath": "/settings/pipeline-modes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5618,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/remotes",
+      "finalPath": "/settings/remotes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5290,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/tagging-classifier",
+      "finalPath": "/settings/tagging-classifier",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5688,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/settings/unfinished",
+      "finalPath": "/settings/unfinished",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5648,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/spike-files",
+      "finalPath": "/spike-files",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div.cm-scroller",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5963,
+        "overflowingScrollers": [
+          "div.cm-scroller",
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/spike-lazydoc",
+      "finalPath": "/spike-lazydoc",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div.cm-scroller",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5934,
+        "overflowingScrollers": [
+          "div.cm-scroller",
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/test/escape-codes",
+      "finalPath": "/test/escape-codes",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5242,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/test/layout-overlap",
+      "finalPath": "/test/layout-overlap",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 86,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6086,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/test/terminal-stress",
+      "finalPath": "/test/terminal-stress",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 229,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6229,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/triggers",
+      "finalPath": "/triggers",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 30,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6030,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/unfinished",
+      "finalPath": "/unfinished",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 0,
+        "overflowingScrollers": [
+          "div._1jxj7lz0",
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 5274,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    },
+    {
+      "vp": "390x844",
+      "path": "/workflows",
+      "finalPath": "/workflows",
+      "natural": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 30,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      },
+      "withTall": {
+        "windowScrollable": 0,
+        "windowMovedBy400": 0,
+        "htmlOverflow": "auto",
+        "bodyOverflow": "hidden",
+        "bodyHeight": 758,
+        "viewportH": 844,
+        "mainOverflow": "hidden",
+        "mainScrollable": 6030,
+        "overflowingScrollers": [
+          "div._8c7jyjh"
+        ]
+      }
+    }
+  ],
+  "guardRows": [
+    {
+      "guardPath": "/backlog",
+      "flag": "backlog",
+      "enabled": true,
+      "via": "client-nav",
+      "early": {
+        "path": "/backlog/",
+        "mainText": 228,
+        "len": 3
+      },
+      "late": {
+        "path": "/backlog/",
+        "mainText": 444,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/backlog",
+      "flag": "backlog",
+      "enabled": true,
+      "via": "cold-load",
+      "early": {
+        "path": "/backlog",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/backlog",
+        "mainText": 444,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/backlog",
+      "flag": "backlog",
+      "enabled": false,
+      "via": "client-nav",
+      "early": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/backlog",
+      "flag": "backlog",
+      "enabled": false,
+      "via": "cold-load",
+      "early": {
+        "path": "/backlog",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/backlog/board",
+      "flag": "backlog",
+      "enabled": true,
+      "via": "client-nav",
+      "early": {
+        "path": "/backlog/board/",
+        "mainText": 163,
+        "len": 3
+      },
+      "late": {
+        "path": "/backlog/board/",
+        "mainText": 210,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/backlog/board",
+      "flag": "backlog",
+      "enabled": true,
+      "via": "cold-load",
+      "early": {
+        "path": "/backlog/board",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/backlog/board",
+        "mainText": 210,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/backlog/board",
+      "flag": "backlog",
+      "enabled": false,
+      "via": "client-nav",
+      "early": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/backlog/board",
+      "flag": "backlog",
+      "enabled": false,
+      "via": "cold-load",
+      "early": {
+        "path": "/backlog/board",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/changelog",
+      "flag": "changelog",
+      "enabled": true,
+      "via": "client-nav",
+      "early": {
+        "path": "/changelog/",
+        "mainText": 1454,
+        "len": 3
+      },
+      "late": {
+        "path": "/changelog/",
+        "mainText": 1454,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/changelog",
+      "flag": "changelog",
+      "enabled": true,
+      "via": "cold-load",
+      "early": {
+        "path": "/changelog",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/changelog",
+        "mainText": 1454,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/changelog",
+      "flag": "changelog",
+      "enabled": false,
+      "via": "client-nav",
+      "early": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/changelog",
+      "flag": "changelog",
+      "enabled": false,
+      "via": "cold-load",
+      "early": {
+        "path": "/changelog",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/settings/backlog-sources",
+      "flag": "backlog",
+      "enabled": true,
+      "via": "client-nav",
+      "early": {
+        "path": "/settings/backlog-sources/",
+        "mainText": 310,
+        "len": 3
+      },
+      "late": {
+        "path": "/settings/backlog-sources/",
+        "mainText": 310,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/settings/backlog-sources",
+      "flag": "backlog",
+      "enabled": true,
+      "via": "cold-load",
+      "early": {
+        "path": "/settings/backlog-sources",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/settings/backlog-sources",
+        "mainText": 310,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    },
+    {
+      "guardPath": "/settings/backlog-sources",
+      "flag": "backlog",
+      "enabled": false,
+      "via": "client-nav",
+      "early": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 3
+      },
+      "historyLengthDeltaFromBefore": 1,
+      "getFeatureFlagsCalls": 0
+    },
+    {
+      "guardPath": "/settings/backlog-sources",
+      "flag": "backlog",
+      "enabled": false,
+      "via": "cold-load",
+      "early": {
+        "path": "/settings/backlog-sources",
+        "mainText": 0,
+        "len": 2
+      },
+      "late": {
+        "path": "/",
+        "mainText": 1223,
+        "len": 2
+      },
+      "historyLengthDeltaFromBefore": null,
+      "getFeatureFlagsCalls": 2
+    }
+  ]
+}
