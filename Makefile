@@ -582,7 +582,7 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	STAPLER_SQUAD_USE_CONTROL_MODE=false \
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
-# Isolated backend + next-dev DevStack for manual testing (Epic 3.2,
+# Isolated backend + next-dev DevStack (Next mode (removed in PR 9)) for manual testing (Epic 3.2,
 # scripts/dev-stack/launch.ts). Distinct from `make preview` (which runs the
 # built Go binary alone against the static-exported web UI) — this spins up
 # BOTH a backend and a real `next dev` on separately allocated ports, wired

@@ -28,3 +28,8 @@ The "Initial JS" number is new, with no Next baseline; it is set from the S3 spi
 
 - The Initial JS ceiling is no longer set from the Bun build alone: Story 0.4d measures Next per-route first-load JS and today's 5 MB Total JS gate status; the ceiling is the measured Bun value x 1.05 and must not exceed the largest Next first-load x 1.10, otherwise the result is AMBER and the owner decides (Story 5.9).
 - Moving Total JS from 5 MB to 6,349,052 B is recorded as a relaxation or a correction with numbers, and needs the owner's decision in Story 0.6 (Story 6.4).
+
+## Amendments (Story 6.4, PR 6b)
+
+- Total JS is now 6,349,052 B (`web-app/build/budgets.json`), enforced by `verify-output` and by the surviving `web-app/.size-limit.json` over `out/_next/static/**/*.js`. The duplicate `size-limit` key in `web-app/package.json` and the `framework-*`/`main-*` entries are deleted. `.size-limit.json` is plain JSON and cannot import `budgets.json`, so `size-limit-zero-match.test.mjs` fails if the two numbers drift.
+- Relaxation or correction: UNDETERMINED. Task 0.4d (does today's 5 MB gate pass on the Next build?) was never measured and the owner's Story 0.6 decision is not recorded in `research/spike-results.md`. What is known: the old entry set `"gzip": false` without `"brotli": false`, and with `@size-limit/file` 11 that measures brotli size (observed on the Bun minified build: the same files report 1.54 MB brotlied versus 5.68 MB raw), so the old "5 MB" number was a brotli number and 6,349,052 B is a raw-bytes number. The new config sets `"brotli": false`, so it compares raw bytes against the raw-bytes cap. Record the Next measurement and the owner's decision here when known.
