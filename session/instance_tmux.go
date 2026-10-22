@@ -65,12 +65,11 @@ type launchCommandBuilder interface {
 	// Build returns the full launch command for i. resumeSessionID is
 	// buildLaunchCommand's claudeSessionID parameter passed through — only
 	// claudeLaunchBuilder uses it; piLaunchBuilder reads i.piSession instead.
-	Build(i *Instance, base, resumeSessionID string) string
-	// StderrRedirect returns the shell redirect suffix (e.g. " 2>>'<path>'")
-	// to append so this program's stderr doesn't reach the visible pane, or
-	// "" to leave stderr alone. Must redirect to a real file, never
-	// /dev/null -- see piLaunchBuilder.StderrRedirect's doc comment.
-	StderrRedirect(i *Instance) string
+	Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand
+	// StderrLog returns the file this program's stderr is appended to so it
+	// doesn't reach the visible pane, or "" to leave stderr alone. Must be a
+	// real file, never /dev/null -- see piLaunchBuilder.StderrLog's doc comment.
+	StderrLog(i *Instance) string
 }
 
 // launchBuilders is the ordered, stateless set of builders buildLaunchCommand
@@ -90,7 +89,7 @@ type claudeLaunchBuilder struct{}
 
 func (b *claudeLaunchBuilder) Matches(program string) bool { return isClaude(program) }
 
-func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
+func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
 	// AutoApprove is injected inside buildClaudeCommand, before the trailing
 	// "--" prompt separator -- see that function's comment for why appending
 	// it here (after the separator) would be silently swallowed as inert
@@ -98,14 +97,14 @@ func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) s
 	return i.buildClaudeCommand(base, resumeSessionID)
 }
 
-func (b *claudeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+func (b *claudeLaunchBuilder) StderrLog(i *Instance) string { return "" }
 
 // piLaunchBuilder implements launchCommandBuilder for the pi binary.
 type piLaunchBuilder struct{}
 
 func (b *piLaunchBuilder) Matches(program string) bool { return isPi(program) }
 
-func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
+func (b *piLaunchBuilder) Build(i *Instance, base, _ string) launchcmd.ExecCommand {
 	i.piSessionMu.Lock()
 	var piSessionID string
 	if i.piSession != nil {
@@ -115,7 +114,7 @@ func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
 	return i.buildPiCommand(base, piSessionID)
 }
 
-// StderrRedirect keeps pi's stderr out of the visible pane -- pi writes a
+// StderrLog keeps pi's stderr out of the visible pane -- pi writes a
 // harmless per-project trust-gate diagnostic there on every launch (confirmed
 // empirically: the session still reaches "Working..." right after) with
 // nothing else in this pipeline able to distinguish it from pi's real TUI
@@ -124,13 +123,13 @@ func (b *piLaunchBuilder) Build(i *Instance, base, _ string) string {
 // silently vanishing. Returns "" (no redirect) if the log path can't be
 // resolved, since a resolution failure here means the whole app's logging is
 // already broken -- failing open to visibility, not silently to /dev/null.
-func (b *piLaunchBuilder) StderrRedirect(i *Instance) string {
+func (b *piLaunchBuilder) StderrLog(i *Instance) string {
 	path, err := piStderrLogPath(i)
 	if err != nil {
 		log.ForSession(i.Title).Warn("could not resolve pi stderr log path; leaving stderr unredirected", "err", err)
 		return ""
 	}
-	return " 2>>" + shellQuote(path)
+	return path
 }
 
 // piStderrLogPath returns the path to a plain-text file (distinct from the
@@ -155,54 +154,57 @@ type opencodeLaunchBuilder struct{}
 
 func (b *opencodeLaunchBuilder) Matches(program string) bool { return isOpencode(program) }
 
-func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
-	parts := []string{i.opencodeMCPEnvPrefix() + base}
+func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
+	if env, ok := i.opencodeMCPEnv(); ok {
+		cmd.Env = append([]launchcmd.EnvVar{env}, cmd.Env...)
+	}
 	if resumeSessionID != "" {
-		parts = append(parts, "--session", shellQuote(resumeSessionID))
+		cmd = cmd.With(launchcmd.MustFlag("--session"), launchcmd.Literal(resumeSessionID))
 	}
 	if i.AutoYes {
-		parts = append(parts, "--auto")
+		cmd = cmd.With(flagAuto)
 	}
-	return strings.Join(parts, " ")
+	return cmd
 }
 
-func (b *opencodeLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+func (b *opencodeLaunchBuilder) StderrLog(i *Instance) string { return "" }
 
 // agyLaunchBuilder implements launchCommandBuilder for Antigravity (agy).
 type agyLaunchBuilder struct{}
 
 func (b *agyLaunchBuilder) Matches(program string) bool { return isAgy(program) }
 
-func (b *agyLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
-	parts := []string{base}
+func (b *agyLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
 	if resumeSessionID != "" {
-		parts = append(parts, "--resume", shellQuote(resumeSessionID))
+		cmd = cmd.With(flagResume, launchcmd.Literal(resumeSessionID))
 	}
 	if i.AutoYes {
-		parts = append(parts, "--auto")
+		cmd = cmd.With(flagAuto)
 	}
-	return strings.Join(parts, " ")
+	return cmd
 }
 
-func (b *agyLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+func (b *agyLaunchBuilder) StderrLog(i *Instance) string { return "" }
 
 // geminiLaunchBuilder implements launchCommandBuilder for Gemini CLI.
 type geminiLaunchBuilder struct{}
 
 func (b *geminiLaunchBuilder) Matches(program string) bool { return isGemini(program) }
 
-func (b *geminiLaunchBuilder) Build(i *Instance, base, resumeSessionID string) string {
-	parts := []string{base}
+func (b *geminiLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
 	if resumeSessionID != "" {
-		parts = append(parts, "--resume", shellQuote(resumeSessionID))
+		cmd = cmd.With(flagResume, launchcmd.Literal(resumeSessionID))
 	}
 	if i.AutoYes {
-		parts = append(parts, "--auto")
+		cmd = cmd.With(flagAuto)
 	}
-	return strings.Join(parts, " ")
+	return cmd
 }
 
-func (b *geminiLaunchBuilder) StderrRedirect(i *Instance) string { return "" }
+func (b *geminiLaunchBuilder) StderrLog(i *Instance) string { return "" }
 
 // isOpencode reports whether the program command invokes the opencode binary.
 func isOpencode(program string) bool {
@@ -351,6 +353,12 @@ func (i *Instance) currentLaunchCommand() string {
 // type's doc comment); a program none of them recognizes is shell-quoted and
 // run as-is, with AutoApprove's yolo-flag lookup as the only adjustment.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
+	return i.launchCommand(claudeSessionID).ShellString()
+}
+
+// launchCommand is buildLaunchCommand's typed form: the same command as data,
+// so a backend that can exec directly never has to re-parse a quoted string.
+func (i *Instance) launchCommand(claudeSessionID string) launchcmd.ExecCommand {
 	// One Snapshot() read: SetProgram mutates Program under i.mu, so two raw reads
 	// could observe different values (.claude/rules/instance-lock-free-reads.md).
 	snap := i.Snapshot()
@@ -373,7 +381,7 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	cmd := i.buildBaseLaunchCommand(program, claudeSessionID, matched)
 	cmd = appendLaunchExtras(cmd, cliFlags, i.ExtraArgs)
 	if matched != nil {
-		cmd = cmd + matched.StderrRedirect(i)
+		cmd.StderrAppend = matched.StderrLog(i)
 	}
 	return cmd
 }
@@ -393,18 +401,18 @@ func matchLaunchBuilder(program string) launchCommandBuilder {
 // ExtraArgs, and StderrRedirect are appended: matched.Build's output, or --
 // when no builder recognizes program -- the default shell-quote-and-run-as-is
 // path with AutoApprove's yolo-flag lookup.
-func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, matched launchCommandBuilder) string {
+func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, matched launchCommandBuilder) launchcmd.ExecCommand {
 	if matched != nil {
 		return matched.Build(i, program, claudeSessionID)
 	}
-	// shellQuoteFields (not one whole-string shellQuote) preserves legitimate multi-word
-	// Program values like "sleep 300" that rely on shell word-splitting, while still
-	// preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of "true; touch
-	// /tmp/pwned" -- from terminating the command and injecting a second one.
-	cmd := shellQuoteFields(program)
+	// Each whitespace-separated token is one literal argument (not one whole-string
+	// Literal), preserving legitimate multi-word Program values like "sleep 300" while
+	// still preventing a metacharacter-bearing token -- e.g. a preset's argv[0] of
+	// "true; touch /tmp/pwned" -- from terminating the command and injecting a second one.
+	cmd := launchcmd.ExecCommand{Argv: literalFields(program)}
 	if i.AutoApprove {
 		if flag := yoloFlagFor(program); flag != "" {
-			cmd = cmd + " " + flag
+			cmd = cmd.With(launchcmd.Word(flag))
 			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", program, "flag", flag)
 		}
 	}
@@ -412,19 +420,42 @@ func (i *Instance) buildBaseLaunchCommand(program, claudeSessionID string, match
 }
 
 // appendLaunchExtras appends cliFlags and each extraArgs element to cmd.
-func appendLaunchExtras(cmd, cliFlags string, extraArgs []string) string {
-	if flags := shellQuoteFields(cliFlags); flags != "" {
-		cmd = cmd + " " + flags
-	}
-	// ExtraArgs elements are appended after CLIFlags, each independently shell-quoted as one
-	// unit — never whitespace-split — so a multi-word element (e.g. a remote-exec fragment
-	// like "cd ~/repo && exec claude") survives intact instead of being re-split into several
-	// argv positions.
+func appendLaunchExtras(cmd launchcmd.ExecCommand, cliFlags string, extraArgs []string) launchcmd.ExecCommand {
+	cmd = cmd.With(literalFields(cliFlags)...)
+	// ExtraArgs elements are each one argument -- never whitespace-split -- so a
+	// multi-word element (e.g. a remote-exec fragment like "cd ~/repo && exec claude")
+	// survives intact instead of being re-split into several argv positions.
 	for _, a := range extraArgs {
-		cmd = cmd + " " + shellQuote(a)
+		cmd = cmd.With(launchcmd.Literal(a))
 	}
 	return cmd
 }
+
+// literalFields splits s on whitespace into one Literal per token.
+func literalFields(s string) []launchcmd.Arg {
+	fields := strings.Fields(s)
+	args := make([]launchcmd.Arg, len(fields))
+	for k, f := range fields {
+		args[k] = launchcmd.Literal(f)
+	}
+	return args
+}
+
+// programCommand turns a configured program string into the command's program
+// and leading arguments. Text that is more than plain words (an expansion, a
+// glob) stays as one RawShell word so a shell still interprets it as before.
+func programCommand(program string) launchcmd.ExecCommand {
+	cmd, err := launchcmd.ParseProgram(program)
+	if err != nil {
+		return launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.RawShell(program)}}
+	}
+	return cmd
+}
+
+var (
+	flagResume = launchcmd.MustFlag("--resume")
+	flagAuto   = launchcmd.MustFlag("--auto")
+)
 
 // shellQuote POSIX-single-quotes s for safe interpolation into a shell command
 // string. tmux launches the assembled command through a shell, and Go's %q
@@ -435,30 +466,16 @@ func shellQuote(s string) string {
 	return launchcmd.Quote(s)
 }
 
-// shellQuoteFields splits s on whitespace and shell-quotes each resulting token
-// independently, joining them back with single spaces. Used wherever a caller-supplied
-// string must be safe against embedded shell metacharacters while still preserving
-// multi-word values that rely on ordinary shell word-splitting (e.g. cli_flags,
-// or a plainProgram value like "sleep 300"). Returns "" for an empty/whitespace-only s.
-func shellQuoteFields(s string) string {
-	fields := strings.Fields(s)
-	quoted := make([]string, len(fields))
-	for i, f := range fields {
-		quoted[i] = shellQuote(f)
-	}
-	return strings.Join(quoted, " ")
-}
-
 // buildClaudeCommand assembles the full claude invocation with all instance flags.
 // It is only called via claudeLaunchBuilder.Build, which already proved the
 // program is claude (Matches), so no isClaude guard is needed here.
-func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
-	parts := []string{base}
+func (i *Instance) buildClaudeCommand(base, claudeSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
 	if claudeSessionID != "" {
 		// claudeSessionID traces back to the client-supplied resume_id RPC field
-		// (CreateSessionRequest) with no format validation, so it needs the same
-		// shell-quoting as the other interpolated flag values.
-		parts = append(parts, "--resume", shellQuote(claudeSessionID))
+		// (CreateSessionRequest) with no format validation; as a Literal it is
+		// quoted (shell) or passed untouched (exec), never interpreted.
+		cmd = cmd.With(flagResume, launchcmd.Literal(claudeSessionID))
 	}
 	// Load the provider once and reuse it below -- calling resolveMCPServerURL()
 	// then separately re-Load()ing would race against a concurrent
@@ -469,7 +486,7 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	mcpURL := i.resolveMCPServerURLFrom(provider)
 	if mcpURL != "" {
 		flag, val := i.claudeMCPConfigArgs(mcpURL)
-		parts = append(parts, flag, val)
+		cmd = cmd.With(flag, val)
 	} else if provider != nil {
 		// Provider is wired but resolved empty (and so did the Snapshot()
 		// fallback) -- every session-scoped MCP tool call will hard-fail
@@ -478,28 +495,28 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		// WireInstanceCallbacks runs) is not logged: expected, not a failure.
 		log.Error("claude launch: MCP server URL unresolved, session will not be able to call session-scoped MCP tools", "session", i.Title, "program", i.Program)
 	}
-	if flag, val := i.claudeSettingsEnvOverrideArgs(); flag != "" {
-		parts = append(parts, flag, val)
+	if flag, val, ok := i.claudeSettingsEnvOverrideArgs(); ok {
+		cmd = cmd.With(flag, val)
 	}
 	if i.AppendSystemPrompt != "" {
-		parts = append(parts, "--append-system-prompt", shellQuote(i.AppendSystemPrompt))
+		cmd = cmd.With(launchcmd.MustFlag("--append-system-prompt"), launchcmd.Literal(i.AppendSystemPrompt))
 	}
 	if i.AllowedTools != "" {
-		parts = append(parts, "--allowedTools", shellQuote(i.AllowedTools))
+		cmd = cmd.With(launchcmd.MustFlag("--allowedTools"), launchcmd.Literal(i.AllowedTools))
 	}
-	parts = i.appendClaudePermissionFlags(parts, base)
-	parts = i.appendClaudeOutputAndPromptFlags(parts, claudeSessionID)
-	return strings.Join(parts, " ")
+	cmd = i.appendClaudePermissionFlags(cmd, base)
+	return i.appendClaudeOutputAndPromptFlags(cmd, claudeSessionID)
 }
 
 // appendClaudePermissionFlags appends the PermissionMode/AutoYes/AutoApprove
 // permission-bypass flags to parts.
-func (i *Instance) appendClaudePermissionFlags(parts []string, base string) []string {
+func (i *Instance) appendClaudePermissionFlags(cmd launchcmd.ExecCommand, base string) launchcmd.ExecCommand {
+	flagPermissionMode := launchcmd.MustFlag("--permission-mode")
 	if i.PermissionMode != "" {
-		parts = append(parts, "--permission-mode", shellQuote(i.PermissionMode))
+		cmd = cmd.With(flagPermissionMode, launchcmd.Literal(i.PermissionMode))
 	}
 	if i.AutoYes {
-		parts = append(parts, "--permission-mode", PermissionModeBypassPermissions)
+		cmd = cmd.With(flagPermissionMode, launchcmd.Word(PermissionModeBypassPermissions))
 	}
 	if i.AutoApprove {
 		// Must be appended here, before the "--" prompt separator emitted by
@@ -512,25 +529,25 @@ func (i *Instance) appendClaudePermissionFlags(parts []string, base string) []st
 		// line without error (both bypass in the same direction; harmless if
 		// both are set).
 		if flag := yoloFlagFor(base); flag != "" {
-			parts = append(parts, flag)
+			cmd = cmd.With(launchcmd.Word(flag))
 			log.ForSession(i.Title).Debug("auto-approve flag injected", "program", i.Program, "flag", flag)
 		}
 	}
-	return parts
+	return cmd
 }
 
 // appendClaudeOutputAndPromptFlags appends OneShot's output-format flags and,
 // when applicable, the trailing "-- <prompt>" positional argument.
-func (i *Instance) appendClaudeOutputAndPromptFlags(parts []string, claudeSessionID string) []string {
+func (i *Instance) appendClaudeOutputAndPromptFlags(cmd launchcmd.ExecCommand, claudeSessionID string) launchcmd.ExecCommand {
 	if i.OneShot {
-		parts = append(parts, "-p", "--output-format", "json")
+		cmd = cmd.With(launchcmd.MustFlag("-p"), launchcmd.MustFlag("--output-format"), launchcmd.Word("json"))
 	}
 	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) {
 		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
 		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
-		parts = append(parts, "--", i.promptArg())
+		cmd = cmd.With(launchcmd.MustFlag("--"), i.promptArg())
 	}
-	return parts
+	return cmd
 }
 
 // buildPiCommand assembles the pi invocation, injecting the resume flag when a
@@ -540,14 +557,14 @@ func (i *Instance) appendClaudeOutputAndPromptFlags(parts []string, claudeSessio
 // context. When piSessionID is empty this is a no-op — base is returned
 // unmodified, matching buildClaudeCommand's "no session data means no flag"
 // behavior — not an error.
-func (i *Instance) buildPiCommand(base, piSessionID string) string {
-	parts := []string{base}
+func (i *Instance) buildPiCommand(base, piSessionID string) launchcmd.ExecCommand {
+	cmd := programCommand(base)
 	if piSessionID != "" {
 		// piSessionID traces back to persisted PiSessionData with no format
-		// validation, so it needs the same shell-quoting as claudeSessionID.
-		parts = append(parts, "--session", shellQuote(piSessionID))
+		// validation; as a Literal it is never interpreted, like claudeSessionID.
+		cmd = cmd.With(launchcmd.MustFlag("--session"), launchcmd.Literal(piSessionID))
 	}
-	return strings.Join(parts, " ")
+	return cmd
 }
 
 // promptArg returns the shell syntax used to supply i.Prompt as the trailing
@@ -578,26 +595,26 @@ func promptFileDir() string {
 	return dir
 }
 
-func (i *Instance) promptArg() string {
+func (i *Instance) promptArg() launchcmd.Arg {
 	if len(i.Prompt) < maxInlinePromptBytes {
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	f, err := os.CreateTemp(promptFileDir(), "prompt-*.txt")
 	if err != nil {
 		log.Warn("promptArg: failed to create temp file for large prompt, embedding inline", "err", err, "promptBytes", len(i.Prompt))
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	path := f.Name()
 	if _, writeErr := f.WriteString(i.Prompt); writeErr != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
 		log.Warn("promptArg: failed to write temp prompt file, embedding inline", "err", writeErr, "promptBytes", len(i.Prompt))
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	if closeErr := f.Close(); closeErr != nil {
 		_ = os.Remove(path)
 		log.Warn("promptArg: failed to close temp prompt file, embedding inline", "err", closeErr, "promptBytes", len(i.Prompt))
-		return shellQuote(i.Prompt)
+		return launchcmd.Literal(i.Prompt)
 	}
 	i.promptFilePath.Store(&path)
 	// This timer is a fallback safety net, not the primary cleanup path:
@@ -615,7 +632,7 @@ func (i *Instance) promptArg() string {
 			log.Warn("promptArg: failed to clean up temp prompt file", "path", path, "err", rmErr)
 		}
 	}()
-	return fmt.Sprintf(`"$(cat %s)"`, shellQuote(path))
+	return launchcmd.FileContents(path)
 }
 
 // cleanupPromptFile removes the most recently created temp-file-backed prompt
@@ -641,7 +658,7 @@ func (i *Instance) cleanupPromptFile() {
 // When the local API token exists (require_local_auth), the config carries an
 // Authorization header and is written to a 0600 file whose path is passed instead
 // of the JSON, so the token never appears in the process's argv.
-func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
+func (i *Instance) claudeMCPConfigArgs(mcpURL string) (launchcmd.Flag, launchcmd.Literal) {
 	dir, err := config.GetConfigDir()
 	if err != nil {
 		dir = ""
@@ -655,7 +672,7 @@ func (i *Instance) claudeMCPConfigArgs(mcpURL string) (string, string) {
 
 // claudeMCPConfigArgsWithToken adds the session's MCP proof (when a provider is
 // wired) to the credentials; see claudeMCPConfigArgsWithCredentials.
-func (i *Instance) claudeMCPConfigArgsWithToken(mcpURL, configDir, token string) (string, string) {
+func (i *Instance) claudeMCPConfigArgsWithToken(mcpURL, configDir, token string) (launchcmd.Flag, launchcmd.Literal) {
 	return i.claudeMCPConfigArgsWithCredentials(mcpURL, configDir, mcpCredentials{Token: token, Proof: i.mcpProofHeaderValue()})
 }
 
@@ -733,17 +750,17 @@ func (i *Instance) buildExtraEnv() []string {
 // by key rather than replacing the file wholesale -- only the specific env
 // var keys set here are overridden, everything else in settings.json still
 // applies. Returns ("", "") when there is nothing to override.
-func (i *Instance) claudeSettingsEnvOverrideArgs() (string, string) {
+func (i *Instance) claudeSettingsEnvOverrideArgs() (launchcmd.Flag, launchcmd.Literal, bool) {
 	envVars := i.resolveExtraEnvVars()
 	if len(envVars) == 0 {
-		return "", ""
+		return launchcmd.Flag{}, "", false
 	}
 	payload, err := json.Marshal(map[string]map[string]string{"env": envVars})
 	if err != nil {
 		log.Warn("claudeSettingsEnvOverrideArgs: failed to marshal settings override, custom env vars won't override settings.json", "session", i.Title, "err", err)
-		return "", ""
+		return launchcmd.Flag{}, "", false
 	}
-	return "--settings", shellQuote(string(payload))
+	return launchcmd.MustFlag("--settings"), launchcmd.Literal(payload), true
 }
 
 // applyLaunchEnv forwards the VNC display and CDP env to the backend before Start.

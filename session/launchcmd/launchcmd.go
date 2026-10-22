@@ -126,8 +126,19 @@ func (e EnvVar) Key() string { return e.key }
 type ExecCommand struct {
 	Env  []EnvVar
 	Argv []Arg
+	// StdinFile, when set, is a file whose contents are the process's stdin.
+	// It carries input too large for argv, where a shell would use a heredoc
+	// or `< file`. A file, not an inline heredoc: no delimiter to collide
+	// with, and the command line stays short.
+	StdinFile string
 	// StderrAppend, when set, is a file the process's stderr is appended to.
 	StderrAppend string
+}
+
+// HasRedirects reports whether the command needs stdin or stderr wired to a
+// file, which a backend must either support natively or run through a shell.
+func (c ExecCommand) HasRedirects() bool {
+	return c.StdinFile != "" || c.StderrAppend != ""
 }
 
 // RequiresShell reports whether any argument is RawShell text, so the command
@@ -149,7 +160,7 @@ func (c ExecCommand) With(args ...Arg) ExecCommand {
 
 func (ExecCommand) isLaunchCommand() {}
 
-// ShellString renders `KEY='v' prog arg ... 2>>'log'`. Flags and plain Words
+// ShellString renders `KEY='v' prog arg ... <'in' 2>>'log'`. Flags and plain Words
 // are emitted bare, every other word single-quoted.
 func (c ExecCommand) ShellString() string {
 	words := make([]string, 0, len(c.Env)+len(c.Argv))
@@ -158,6 +169,9 @@ func (c ExecCommand) ShellString() string {
 	}
 	for _, a := range c.Argv {
 		words = append(words, a.shellWord())
+	}
+	if c.StdinFile != "" {
+		words = append(words, "<"+Quote(c.StdinFile))
 	}
 	if c.StderrAppend != "" {
 		words = append(words, "2>>"+Quote(c.StderrAppend))

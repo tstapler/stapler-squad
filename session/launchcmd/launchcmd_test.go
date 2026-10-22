@@ -279,3 +279,30 @@ func TestRawShellAndStderr(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRequiresShell)
 	assert.False(t, exec1(Word("p")).RequiresShell())
 }
+
+func TestStdinFile_RendersAsRedirectAndRoundTripsThroughARealShell(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	in := filepath.Join(dir, "it's input.txt")
+	body := strings.Repeat("line with 'quotes', $VARS and `ticks`\n", 50000) // ~1.9MB, far past MAX_ARG_STRLEN
+	require.NoError(t, os.WriteFile(in, []byte(body), 0o600))
+
+	cmd := ExecCommand{Argv: []Arg{Literal("cat")}, StdinFile: in}
+	assert.True(t, cmd.HasRedirects())
+	assert.False(t, cmd.RequiresShell(), "a redirect is a backend capability, not RawShell text")
+
+	out, err := safeexec.CommandContext(context.Background(), "/bin/sh", "-c", cmd.ShellString()).Output()
+	require.NoError(t, err)
+	assert.Equal(t, body, string(out), "stdin must arrive byte-identical, however large")
+
+	args, err := cmd.Args(nil)
+	require.NoError(t, err)
+	assert.Empty(t, args, "the input never enters argv")
+}
+
+func TestRedirects_OrderIsStdinThenStderr(t *testing.T) {
+	t.Parallel()
+	cmd := ExecCommand{Argv: []Arg{Word("p")}, StdinFile: "/in", StderrAppend: "/err"}
+	assert.Equal(t, `p <'/in' 2>>'/err'`, cmd.ShellString())
+	assert.False(t, exec1(Word("p")).HasRedirects())
+}
