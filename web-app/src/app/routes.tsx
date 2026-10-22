@@ -36,6 +36,7 @@ export const routeTable = {
   "/sessions/summary": { load: () => import("./sessions/summary/page") },
   "/settings": { load: () => import("./settings/page") },
   "/settings/background-models": { load: () => import("./settings/background-models/page") },
+  "/settings/backlog-quota": { load: () => import("./settings/backlog-quota/page") },
   "/settings/backlog-sources": { load: () => import("./settings/backlog-sources/page") },
   "/settings/backlog-stages": { load: () => import("./settings/backlog-stages/page") },
   "/settings/defaults": { redirect: "/settings", keepQuery: false },

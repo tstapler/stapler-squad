@@ -78,6 +78,7 @@ export const ROUTE_PATHS = [
   "/sessions/summary",
   "/settings",
   "/settings/background-models",
+  "/settings/backlog-quota",
   "/settings/backlog-sources",
   "/settings/backlog-stages",
   "/settings/defaults",

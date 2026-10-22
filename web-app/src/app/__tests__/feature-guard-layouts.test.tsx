@@ -54,7 +54,7 @@ describe.each(cases)("%s", (_file, flag, path, Layout) => {
     const { container } = renderLayout(Layout);
 
     expect(container).toBeEmptyDOMElement();
-    expect(document.head.querySelector("title")?.textContent).toBe(ROUTE_META[path].title);
+    expect(document.head.querySelector("title")?.textContent).toBe((ROUTE_META as Record<string, { title: string }>)[path].title);
     expect(mockReplace).not.toHaveBeenCalled();
 
     await act(async () => { resolve({ flags: [{ name: flag, enabled: true, scopes: [] }] }); });

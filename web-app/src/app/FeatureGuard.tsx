@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { usePathname } from "@/lib/nav";
 import { RequireFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
-import { ROUTE_META, type GuardFlag } from "./route-meta";
+import { ROUTE_META, type GuardFlag, type RouteMetaEntry } from "./route-meta";
 
 /**
  * Renders nothing gated while flags load, and `router.replace("/")` once if `flag` is off.
@@ -16,7 +16,7 @@ import { ROUTE_META, type GuardFlag } from "./route-meta";
  */
 export function FeatureGuard({ flag, children }: { flag: GuardFlag; children: ReactNode }) {
   const pathname = usePathname();
-  const title = ROUTE_META[pathname.replace(/(.)\/$/, "$1")]?.title;
+  const title = (ROUTE_META as Record<string, RouteMetaEntry | undefined>)[pathname.replace(/(.)\/$/, "$1")]?.title;
   return (
     <RequireFeatureFlag flag={flag} fallback={title ? <title>{title}</title> : null}>
       {children}
