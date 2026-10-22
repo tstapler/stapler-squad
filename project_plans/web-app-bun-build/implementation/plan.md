@@ -1840,6 +1840,26 @@ Every risk in `research/pitfalls.md` (R1-R13), `research/architecture.md` §11 (
 ## Amendments
 *(Filled by Story 0.6 if a spike gate is not PASS; empty at plan approval.)*
 
+### PR 4 amendments (gate S4 findings; `research/spike-results.md` on `docs/gate-s4-react-router`)
+
+1. **44 routes, not 42.** `find src/app -name page.tsx` and `ROUTE_META` both give 44. `RoutePath` (`src/lib/nav/paths.ts`) is now the 44-literal `ROUTE_PATHS` tuple; `ROUTE_META` is `Record<RoutePath, ...>` and `routeTable` `satisfies Record<RoutePath, RouteDef>`, so a missing key fails `tsc`. Wherever Stories 4.3 and 7.14 say 42, read 44.
+2. **Story 4.3: guarded paths are four, not three.** `/backlog`, `/backlog/board` (guard `backlog`), `/changelog`, `/settings/backlog-sources`. `FeatureGuard` delegates to `RequireFeatureFlag`; `routes.tsx` wraps by `RouteMeta.guard` and stores no flag of its own.
+3. **Story 4.2 and 4.3: redirects.** `<Redirect>` passes `replace` (RR's `<Navigate>` pushes by default; gate S4 row 4), and `RouteDef` redirects are route `loader`s that throw `redirect()`, so the redirecting URL never commits (no extra history entry, one announcement). `useRouter().replace` always passes `{replace:true}`; any call site that meant "replace" must say so.
+4. **Story 4.2: `useReplaceSearch`.** It navigates with `{replace:true}` and then re-merges foreign top-level `history.state` keys (an RR replace rewrites state to `{usr,key,idx}` and drops `ssqTray`; gate S4 row 6). Raw `replaceState` is not observed by RR, so only the router impl's version updates `useSearchParams` (gate S4 row 5).
+5. **Story 4.2: `usePathname`** normalises the trailing slash itself (RR keeps `/x/` in `pathname`; gate S4 row 1). Next client navigations produce `/backlog/`, RR keeps `/backlog`; the e2e baselines in 7a/7b must not assert the slash.
+6. **Story 4.4: title.** The title is a root-rendered `<title>` fed by `titleFor`; no `useEffect` fallback (gate S4 row 2). `index.html` (Story 5.4) must ship **no** static `<title>`: a static one is not replaced and leaves two `<title>` elements.
+7. **Story 4.6 is rewritten (replaces the single-container ACs of Stories 4.6 and 7.12).** Gate S4 row 3: the window never scrolls and `<ScrollRestoration>` only manages `window`, so it is not used. Scrolling happens in per-page inner elements (16 of 44 routes at 1280 px on an empty instance, a lower bound) and in a shell `div` at 390 px. `ScrollPolicy` therefore records `scrollTop` of every element that fires a scroll event, keyed by `location.key` and an element descriptor (id, else tag/sibling-index path), and:
+   - *Given* a forward navigation to a new normalised pathname, *Then* `window` and every scroller seen so far are reset to 0, unless the navigation carried `preventScrollReset`.
+   - *Given* Back or Forward to an entry with recorded positions and a different pathname, *Then* each recorded scroller found by descriptor is restored, retried every 50 ms for up to 1.5 s while a lazy page grows the content, and the retry stops at the first wheel, touch or key input.
+   - *Given* a search-only or hash-only change, *Then* nothing moves.
+   - *Given* the tray entry (`pushTrayEntry`), *Then* Back closes the tray, the route and RR's render count do not change, and `ssqTray` is on the earlier entry again after Forward (jsdom test over `createBrowserRouter`).
+   Story 7.12's "the scroll container recorded by S4 (window or `<main>`)" becomes "the inner scrollers listed by the S4 probe"; its "within 2 px" is a new behaviour, not parity (Next's own Back behaviour for inner scrollers was not measured).
+8. **Story 4.5: announcer.** Next's built announcer is `aria-live="assertive"` / `role="alert"` (VERIFIED by S4); the Bun announcer stays polite. To make "exactly one announcement" hold for page-level redirects, the announcer waits 100 ms after a pathname change before reading `document.title`, and clears the text 1 s after announcing.
+9. **Story 4.1: supply-chain gate placement.** `check-dependency-screen.test.mjs` is a `node:test` file in `web-app/scripts/__tests__/` (the path in the story's Files line, run by `bun run test:codemods`), not a `build`-project Jest test. Install scripts are not in `bun.lock`, so the script reads them from installed manifests (the isolated store's `name@version[+hash]` directories) and says so by skipping packages that are not installed.
+10. **Story 4.7: file names.** The contract is `__tests__/nav-contract.tsx` (it contains JSX). Data-router suites import `__tests__/fetch-globals.ts` first: jest-environment-jsdom has no `Request`/`Response`/`Headers`, and Node's `Request` rejects a jsdom `AbortSignal`, so all five are borrowed from the outer realm.
+11. **`impl.memory` `Link`** now leaves same-page `#hash` hrefs to the browser, matching the other two implementations (found by the contract suite).
+12. **Not done in PR 4, still owed:** fonts and the theme-class FOUC script that `layout.tsx` emits (Story 5.4 / PR 5a), and the Playwright checks for the focus ring and the reduced-motion skeleton (Stories 7.x; Jest covers the source rules only).
+
 ---
 
 ## Repair log
