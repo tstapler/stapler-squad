@@ -319,11 +319,30 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 		Command: program,
 		Args:    args,
 		Cwd:     dir,
+		Env:     paneColorEnv(),
 	}))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
 	return s.cacheFromSession(resp.Msg)
+}
+
+// paneColorEnv returns the TERM/COLORTERM overrides CreateSessionRequest.Env
+// layers over tymuxd's own environment. stapler-squad normally runs headless
+// under systemd with no TERM set at all, which tymuxd then passes straight
+// through to the pane's shell — the shell sees no TERM, assumes a dumb
+// terminal, and never emits ANSI/SGR color codes. Mirrors
+// tmux.go's buildAttachCommand, which solves the identical problem for the
+// classic tmux backend.
+func paneColorEnv() map[string]string {
+	env := make(map[string]string, 2)
+	if os.Getenv("TERM") == "" {
+		env["TERM"] = "xterm-256color"
+	}
+	if os.Getenv("COLORTERM") == "" {
+		env["COLORTERM"] = "truecolor"
+	}
+	return env
 }
 
 // shellMetachars are the characters that make a launch command more than a

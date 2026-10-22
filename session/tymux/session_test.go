@@ -168,6 +168,48 @@ func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
 	}
 }
 
+// captureCreateSessionRequest returns a *fakeTransport whose CreateSession
+// records the request it received into *got and replies with a live,
+// single-pane session rooted at dir.
+func captureCreateSessionRequest(dir string, got **v1.CreateSessionRequest) *fakeTransport {
+	return &fakeTransport{
+		createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			*got = req.Msg
+			return connect.NewResponse(fakeSession("sess-1", "pane-1", dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+	}
+}
+
+func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
+	const wantColorterm = "truecolor"
+	tests := []struct {
+		name          string
+		term          string
+		colorterm     string
+		wantTerm      string
+		wantColorterm string
+	}{
+		{"both unset: injects defaults", "", "", "xterm-256color", wantColorterm},
+		{"TERM already set: left alone", "screen-256color", "", "", wantColorterm},
+		{"COLORTERM already set: left alone", "", wantColorterm, "xterm-256color", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TERM", tc.term)
+			t.Setenv("COLORTERM", tc.colorterm)
+			dir := t.TempDir()
+			var gotReq *v1.CreateSessionRequest
+			sess := NewTymuxGRPCSession(captureCreateSessionRequest(dir, &gotReq))
+
+			require.NoError(t, sess.Start(dir))
+
+			require.NotNil(t, gotReq)
+			assert.Equal(t, tc.wantTerm, gotReq.GetEnv()["TERM"])
+			assert.Equal(t, tc.wantColorterm, gotReq.GetEnv()["COLORTERM"])
+		})
+	}
+}
+
 func TestTymuxGRPCSession_Start_RejectsMissingWorkDir(t *testing.T) {
 	sess := NewTymuxGRPCSession(&fakeTransport{})
 
