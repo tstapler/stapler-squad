@@ -274,3 +274,10 @@ The Activity list renderer (`BacklogActivityList.tsx` or equivalent) detects the
 3. **Risk:** `DiagnoseResultCard` prefix parsing is fragile if the activity note format ever changes. Mitigation documented in requirements as "open question" — for now, parse defensively and fall back to plain text.
 4. **Risk:** Two new `.css.ts` files for Triage and Review panels share nearly identical card layout tokens. May trip jscpd. Mitigation: extract a shared `ResultPanel.css.ts` with shared `containerStyle` / `headerStyle` exported from a common file; individual panel files import and extend it.
 5. **Gap:** No mention of `route-meta.ts` for the feature — confirmed not needed (no new pages), documented in Phase 9.
+
+## Implementation deviations (recorded at sdd:6-verify)
+
+- No zod schema file or `useTriageResult`/`useReviewVerdict` hooks: the panels take props already mapped by `useBacklogService.ts`, so Phase 1 proto work and those hooks were unnecessary. Malformed-data fallback is kept for defense in depth.
+- One shared `ResultPanel.css.ts` instead of per-panel CSS files.
+- Flag names are the hyphenated names from the acceptance criteria (`backlog-triage-results-panel`, `backlog-review-results-panel`), not the `backlog:` namespace used by some siblings.
+- `DiagnoseResultCard` is deliberately ungated (falls back to plain text for non-diagnosis notes); the criteria define flags only for the triage and review panels.

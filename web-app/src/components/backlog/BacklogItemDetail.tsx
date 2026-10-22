@@ -65,7 +65,7 @@ import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
 import { TriageResultPanel } from "./TriageResultPanel";
-import { ReviewVerdictPanel } from "./ReviewVerdictPanel";
+import { ReviewVerdictPanel, latestReviewVerdict } from "./ReviewVerdictPanel";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import { GateBlockingSection } from "./GateBlockingSection";
@@ -1715,8 +1715,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           loading={item.triageStatus === "running"}
         />
         <ReviewVerdictPanel
-          verdict={item.linkedSessions.filter((s) => s.role === "review" && s.reviewVerdict).at(-1)?.reviewVerdict}
-          loading={item.status === "review" && !item.linkedSessions.some((s) => s.role === "review" && s.reviewVerdict)}
+          verdict={latestReviewVerdict(item.linkedSessions)}
+          loading={item.status === "review" && !latestReviewVerdict(item.linkedSessions)}
         />
 
         {/* Triage failed banner — generalized 2026-08-03

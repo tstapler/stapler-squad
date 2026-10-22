@@ -62,4 +62,9 @@ describe("TriageResultPanel", () => {
     expect(screen.getByText("Triage result could not be displayed.")).toBeInTheDocument();
     expect(screen.getByTestId("triage-raw-json")).toBeInTheDocument();
   });
+
+  it("falls back instead of throwing when tasks is not an array", () => {
+    render(<TriageResultPanel triageResult={{ summary: "s", suggestions: [], tasks: "oops" } as unknown as TriageResult} />);
+    expect(screen.getByText("Triage result could not be displayed.")).toBeInTheDocument();
+  });
 });

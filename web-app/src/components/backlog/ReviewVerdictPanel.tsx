@@ -15,6 +15,11 @@ export interface ReviewVerdictPanelProps {
   loading?: boolean;
 }
 
+/** Verdict of the most recent review session that has one (linkedSessions is oldest-first). */
+export function latestReviewVerdict(sessions: LinkedSession[]): LinkedSession["reviewVerdict"] | undefined {
+  return sessions.filter((s) => s.role === "review" && s.reviewVerdict).at(-1)?.reviewVerdict;
+}
+
 function outcomeBadge(outcome: string | undefined): string {
   const o = (outcome ?? "").toUpperCase();
   if (o === "PASS") return styles.badgePass;

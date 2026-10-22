@@ -18,7 +18,7 @@ export interface TriageResultPanelProps {
 }
 
 function isMalformed(r: TriageResult): boolean {
-  return typeof r.summary !== "string" || !Array.isArray(r.suggestions ?? []);
+  return typeof r.summary !== "string" || !Array.isArray(r.suggestions ?? []) || !Array.isArray(r.tasks ?? []);
 }
 
 export function TriageResultPanel({ triageResult, priority, loading }: TriageResultPanelProps) {
