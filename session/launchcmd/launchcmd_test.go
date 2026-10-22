@@ -71,8 +71,10 @@ func TestExecCommand_ShellString_ShellParsesBackToTheSameArgv(t *testing.T) {
 		"`whoami`", "a;b", "a && b", "a|b", "a>b", "*", "~", "#comment", "!", "line1\nline2", "héllo ✓",
 		"true; touch /tmp/pwned", "-n", "--",
 	}
-	args := []Arg{Literal("prog")}
-	want := []string{"prog"}
+	args := make([]Arg, 0, len(hostile)+3)
+	args = append(args, Literal("prog"))
+	want := make([]string, 0, len(hostile)+3)
+	want = append(want, "prog")
 	for _, h := range hostile {
 		args = append(args, Literal(h))
 		want = append(want, h)
