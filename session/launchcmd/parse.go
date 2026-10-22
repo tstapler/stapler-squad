@@ -71,19 +71,7 @@ func parseAssigns(assigns []*syntax.Assign) ([]EnvVar, error) {
 // literals; anything a shell would expand makes it ErrNeedsShell.
 func plainWord(w *syntax.Word) (string, error) {
 	for _, part := range w.Parts {
-		switch p := part.(type) {
-		case *syntax.Lit:
-			if strings.ContainsAny(p.Value, "*?[~") {
-				return "", ErrNeedsShell
-			}
-		case *syntax.SglQuoted:
-		case *syntax.DblQuoted:
-			for _, inner := range p.Parts {
-				if _, lit := inner.(*syntax.Lit); !lit {
-					return "", ErrNeedsShell
-				}
-			}
-		default:
+		if !plainPart(part) {
 			return "", ErrNeedsShell
 		}
 	}
@@ -95,4 +83,24 @@ func plainWord(w *syntax.Word) (string, error) {
 		return "", ErrNeedsShell
 	}
 	return fields[0], nil
+}
+
+// plainPart reports whether a word part is a literal, a single-quoted string,
+// or a double-quoted string containing only literals.
+func plainPart(part syntax.WordPart) bool {
+	switch p := part.(type) {
+	case *syntax.Lit:
+		return !strings.ContainsAny(p.Value, "*?[~")
+	case *syntax.SglQuoted:
+		return true
+	case *syntax.DblQuoted:
+		for _, inner := range p.Parts {
+			if _, lit := inner.(*syntax.Lit); !lit {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
