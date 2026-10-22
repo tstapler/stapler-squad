@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -438,6 +440,88 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 
 		assert.False(t, owned, "a no-longer-live sibling must not block adoption")
 	})
+}
+
+// TestClaimConversationUUID_should_BlockSecondClaimant_When_FirstClaimIsInFlight
+// is the regression test for the TOCTOU race ConversationOwnedByOtherLiveSession
+// alone cannot close: two sessions concurrently cold-restoring into the same
+// project directory can both run DetectByPath and both see the same "most
+// recently modified" candidate as unowned, since neither is IsBackendProcessAlive()
+// yet. claimConversationUUID closes that gap with its own atomic claim.
+func TestClaimConversationUUID_should_BlockSecondClaimant_When_FirstClaimIsInFlight(t *testing.T) {
+	t.Parallel()
+	const uuid = "550e8400-e29b-41d4-a716-446655440000"
+	svc := &SessionService{}
+
+	ownerUUID, claimed := svc.claimConversationUUID(uuid, "first-instance")
+	require.False(t, claimed, "the first claimant must win an uncontested claim")
+	assert.Empty(t, ownerUUID)
+
+	ownerUUID, claimed = svc.claimConversationUUID(uuid, "second-instance")
+	require.True(t, claimed, "a second instance racing the same candidate while the first claim is in flight must be blocked")
+	assert.Equal(t, "first-instance", ownerUUID)
+}
+
+// TestClaimConversationUUID_should_AllowReentry_When_SameInstanceClaimsAgain covers
+// a retried Start() (e.g. after a transient spawn failure) re-resolving the same
+// candidate: the instance must not be blocked by its own earlier claim.
+func TestClaimConversationUUID_should_AllowReentry_When_SameInstanceClaimsAgain(t *testing.T) {
+	t.Parallel()
+	const uuid = "550e8400-e29b-41d4-a716-446655440001"
+	svc := &SessionService{}
+
+	_, claimed := svc.claimConversationUUID(uuid, "self-instance")
+	require.False(t, claimed)
+
+	_, claimed = svc.claimConversationUUID(uuid, "self-instance")
+	assert.False(t, claimed, "re-claiming a UUID this same instance already holds must not block itself")
+}
+
+// TestClaimConversationUUID_should_AllowTakeover_When_PriorClaimExpired covers the
+// failure mode a permanent claim would create: an instance that claimed a UUID but
+// never went alive (Start() errored before spawning) must not strand it forever.
+func TestClaimConversationUUID_should_AllowTakeover_When_PriorClaimExpired(t *testing.T) {
+	t.Parallel()
+	const uuid = "550e8400-e29b-41d4-a716-446655440002"
+	svc := &SessionService{}
+	svc.inFlightConversationClaims.Store(uuid, conversationClaim{
+		instanceUUID: "stale-instance",
+		claimedAt:    time.Now().Add(-conversationClaimTTL - time.Second),
+	})
+
+	ownerUUID, claimed := svc.claimConversationUUID(uuid, "new-instance")
+
+	assert.False(t, claimed, "an expired claim must not block a new claimant")
+	assert.Empty(t, ownerUUID)
+}
+
+// TestClaimConversationUUID_should_LetExactlyOneWin_When_ManyGoroutinesRaceTheSameUUID
+// is the concurrency-level proof: run under -race, many goroutines claiming the same
+// UUID simultaneously must produce exactly one winner, mirroring the real
+// concurrent-cold-restore scenario this guards against.
+func TestClaimConversationUUID_should_LetExactlyOneWin_When_ManyGoroutinesRaceTheSameUUID(t *testing.T) {
+	t.Parallel()
+	const uuid = "550e8400-e29b-41d4-a716-446655440003"
+	const racers = 50
+	svc := &SessionService{}
+
+	var wg sync.WaitGroup
+	var wins atomic.Int32
+	start := make(chan struct{})
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			<-start
+			if _, claimed := svc.claimConversationUUID(uuid, fmt.Sprintf("racer-%d", n)); !claimed {
+				wins.Add(1)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), wins.Load(), "exactly one goroutine must win the claim")
 }
 
 // --------------------------------------------------------------------------
