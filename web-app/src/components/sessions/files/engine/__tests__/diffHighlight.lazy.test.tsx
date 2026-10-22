@@ -19,7 +19,9 @@ describe("diff marks in a lazy (windowed) document", () => {
     const buffer = await engine.createBuffer({ doc: "", lazy: { lineCount: 1000 }, gutterMarks: marks, config });
     const handle = engine.mount(host, { buffer, ...config });
     handle.provideRange({ startLine: 500, endLine: 540 }, file.fetch(499, 41).join("\n"));
-    const state = EditorView.findFromDOM(host)!.state;
+    const view = EditorView.findFromDOM(host);
+    if (!view) throw new Error("editor view not mounted");
+    const state = view.state;
 
     const tinted = Array.from({ length: state.doc.lines }, (_, i) => i + 1).filter((n) => markAtDocLine(state, marks, n));
     expect(tinted).toHaveLength(1);

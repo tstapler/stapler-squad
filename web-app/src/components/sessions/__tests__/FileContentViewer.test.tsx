@@ -138,6 +138,11 @@ jest.mock("@lezer/highlight", () => {
 // ---------------------------------------------------------------------------
 
 /** A fake CodeMirror BlockInfo/EditorView pair that reports a fixed line number. */
+function must<T>(v: T | null | undefined, what: string): T {
+  if (v == null) throw new Error(`expected ${what}`);
+  return v;
+}
+
 function fakeViewForLine(lineNumber: number) {
   // field() undefined = not a lazy (gap-table) document, so doc lines are file lines.
   return { state: { doc: { lineAt: () => ({ number: lineNumber }) }, field: () => undefined } };
@@ -177,7 +182,7 @@ describe("FileContentViewer — CodeMirror rendering", () => {
     await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
     // The gutter is always constructed but reports no marks when there's no diff.
     expect(capturedGutterConfig).not.toBeNull();
-    expect(capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
+    expect(must(capturedGutterConfig, "gutter config").lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
   });
 
   it("uses CodeMirror with a gutter marker when the file has a diff", async () => {
@@ -201,11 +206,11 @@ describe("FileContentViewer — CodeMirror rendering", () => {
 
     // The gutter's lineMarker callback should mark line 1 as "modify" and
     // return null for an untouched line.
-    const marker = capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 });
+    const marker = must(capturedGutterConfig, "gutter config").lineMarker(fakeViewForLine(1), { from: 0 });
     expect(marker).not.toBeNull();
-    expect(marker!.toDOM().className).toBe("gutterMarkerModify");
+    expect(must(marker, "gutter marker").toDOM().className).toBe("gutterMarkerModify");
 
-    const noMark = capturedGutterConfig!.lineMarker(fakeViewForLine(3), { from: 0 });
+    const noMark = must(capturedGutterConfig, "gutter config").lineMarker(fakeViewForLine(3), { from: 0 });
     expect(noMark).toBeNull();
   });
 
@@ -229,7 +234,7 @@ describe("FileContentViewer — CodeMirror rendering", () => {
     await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
     // The gutter is always constructed but reports no marks for an uncovered file.
     expect(capturedGutterConfig).not.toBeNull();
-    expect(capturedGutterConfig!.lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
+    expect(must(capturedGutterConfig, "gutter config").lineMarker(fakeViewForLine(1), { from: 0 })).toBeNull();
   });
 });
 
@@ -256,7 +261,7 @@ describe("FileContentViewer — vim keybindings", () => {
     await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
     expect(capturedKeymapBindings).not.toBeNull();
 
-    const keys = capturedKeymapBindings!.map((b) => b.key);
+    const keys = must(capturedKeymapBindings, "keymap bindings").map((b) => b.key);
     expect(keys).toEqual(
       expect.arrayContaining([
         "h", "l", "j", "k", "0", "$", "g", "G",
@@ -278,7 +283,7 @@ describe("FileContentViewer — vim keybindings", () => {
     render(<FileContentViewer sessionId="s1" filePath="src/foo.txt" baseUrl="http://x" />);
     await waitFor(() => expect(mockEditorViewCtor).toHaveBeenCalled());
 
-    const gBinding = capturedKeymapBindings!.find((b) => b.key === "g");
+    const gBinding = must(capturedKeymapBindings, "keymap bindings").find((b) => b.key === "g");
     expect(gBinding).toBeDefined();
 
     const { cursorDocStart } = jest.requireMock("@codemirror/commands") as { cursorDocStart: jest.Mock };
@@ -288,13 +293,13 @@ describe("FileContentViewer — vim keybindings", () => {
 
     // First "g" press: no prior press recorded, so this should be a no-op
     // (returns true without invoking cursorDocStart).
-    const firstResult = gBinding!.run(fakeView);
+    const firstResult = must(gBinding, "g binding").run(fakeView);
     expect(firstResult).toBe(true);
     expect(cursorDocStart).not.toHaveBeenCalled();
 
     // Second "g" press immediately after: should be treated as "gg" and
     // jump to the document start.
-    const secondResult = gBinding!.run(fakeView);
+    const secondResult = must(gBinding, "g binding").run(fakeView);
     expect(secondResult).toBe(true);
     expect(cursorDocStart).toHaveBeenCalledWith(fakeView);
   });

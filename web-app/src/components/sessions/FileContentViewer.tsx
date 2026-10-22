@@ -118,6 +118,8 @@ function Breadcrumb({ path, onSegmentClick, downloadUrl, openUrl, wrapLines, onT
                 {seg}
               </span>
             ) : (
+              // Breadcrumb navigation is presentational, no tracked event.
+              // analytics-exempt
               <button
                 className={breadcrumbSegment}
                 onClick={onSegmentClick ? () => onSegmentClick(segPath) : undefined}
@@ -132,6 +134,8 @@ function Breadcrumb({ path, onSegmentClick, downloadUrl, openUrl, wrapLines, onT
         );
       })}
       {onToggleWrap && (
+        // View-only wrap toggle, no tracked event.
+        // analytics-exempt
         <button
           className={[wrapToggleButton, wrapLines ? wrapToggleButtonActive : ""].filter(Boolean).join(" ")}
           onClick={onToggleWrap}

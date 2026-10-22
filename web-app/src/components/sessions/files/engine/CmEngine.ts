@@ -247,7 +247,10 @@ class CmHandle implements EngineHandle {
     const lazy = src.text === undefined ? { lineCount: src.lineCount ?? 0 } : undefined;
     void this.createBuffer({ doc: src.text ?? "", lazy }).then((b) => {
       this.setBuffer(b);
-      this.whenIdle(() => this.lazy?.setFetcher(src.fetch ? (r) => src.fetch!(r) : null));
+      this.whenIdle(() => {
+        const fetchRange = src.fetch?.bind(src);
+        this.lazy?.setFetcher(fetchRange ?? null);
+      });
     });
   }
 
