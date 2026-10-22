@@ -255,6 +255,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent, r
             language={detectLanguage(filePath)}
             accessible={accessible}
             dirty={dirty}
+            gutterMarks={gutterMarks.size > 0 ? gutterMarks : undefined}
             reloadKey={reloadKey}
             onReady={onEditorReady && ((handle) => onEditorReady(handle, filePath))}
             onDemoted={() => setDemoted(true)}

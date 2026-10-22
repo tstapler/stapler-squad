@@ -12,6 +12,7 @@ import type {
   HitRange, LineRange, ModeConfig, PendingEdits, ScrollSnapshot, VirtualDoc,
 } from "./EditorEngine";
 import { loadCodemirrorLang } from "./languages";
+import { diffHighlightExtension } from "./diffHighlight";
 import { legacyVimKeymap } from "./legacyKeymap";
 import { cmTheme } from "./cmTheme";
 import { changesToEdits } from "./pendingEdits";
@@ -123,6 +124,7 @@ export class CmEngine implements EditorEngine {
       cmTheme,
       legacyVimKeymap(),
       changeGutter,
+      diffHighlightExtension(marks),
       this.comps.readOnly.of(mode.readOnly),
       this.comps.wrap.of(mode.wrap),
       this.comps.label.of(mode.label),

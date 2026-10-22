@@ -35,3 +35,7 @@ const gutterMarker = style({
 export const gutterMarkerAdd = style([gutterMarker, { background: vars.color.gitAdded }]);
 export const gutterMarkerDelete = style([gutterMarker, { background: vars.color.gitDeleted }]);
 export const gutterMarkerModify = style([gutterMarker, { background: vars.color.gitModified }]);
+
+export const lineBackgroundAdd = style({ backgroundColor: vars.color.gitAddedBg });
+export const lineBackgroundDelete = style({ backgroundColor: vars.color.gitDeletedBg });
+export const lineBackgroundModify = style({ backgroundColor: vars.color.gitModifiedBg });

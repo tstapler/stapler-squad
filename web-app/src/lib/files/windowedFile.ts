@@ -3,6 +3,7 @@
 import type { CodeEditorHandle } from "@/components/sessions/CodeEditor";
 import type { LineRange } from "@/components/sessions/files/engine/EditorEngine";
 import { Rejected, type FileRef, type FileTransportPort, type ReadResult } from "@/lib/files/transport/fileTransport";
+import type { GutterMarkType } from "@/lib/utils/parseDiff";
 import { lineCountOf } from "./windowedSource";
 
 /** Lines per window; matches the engine's chunk size so a demanded gap is one request. */
@@ -64,6 +65,8 @@ export class WindowedFile {
   private readonly life = new AbortController();
   private engine: WindowedEngine | null = null;
   private language = "text";
+  /** Diff marks by absolute file line; the lazy document keeps absolute line numbers, so they apply as-is. */
+  private gutterMarks: Map<number, GutterMarkType> | undefined;
   private queue: LineRange[] = [];
   private running = 0;
   private jumpCtl: AbortController | null = null;
@@ -156,7 +159,7 @@ export class WindowedFile {
   private async swapBuffer(): Promise<void> {
     const e = this.engine;
     if (!e) return;
-    const state = await e.createBufferState({ doc: "", language: this.language, lazy: { lineCount: this.state.lineCount } });
+    const state = await e.createBufferState({ doc: "", language: this.language, gutterMarks: this.gutterMarks, lazy: { lineCount: this.state.lineCount } });
     if (this.engine === e) e.setBufferState(state);
   }
 
@@ -170,6 +173,19 @@ export class WindowedFile {
       endLine -= 1;
     }
     this.engine.provideRange({ startLine: r.range.startLine, endLine }, text);
+  }
+
+  /** Applies new diff marks; once the document is open it is rebuilt around the viewport's top line. */
+  async setGutterMarks(marks: Map<number, GutterMarkType> | undefined): Promise<void> {
+    if (this.gutterMarks === marks) return;
+    this.gutterMarks = marks;
+    const e = this.engine;
+    if (!e || !this.state.opened) return;
+    const top = e.getViewport().startLine;
+    await this.swapBuffer();
+    if (this.engine !== e) return;
+    this.provide(await this.read(top, "around", WINDOW_LINES));
+    if (this.engine === e) e.gotoLine(top);
   }
 
   /** The editor went away (view swap or unmount): stop feeding it. */
