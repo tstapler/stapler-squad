@@ -6,14 +6,18 @@
 import React from "react";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
+import { ROUTE_META } from "../route-meta";
 import BacklogLayout from "../backlog/layout";
 import BacklogSourcesSettingsLayout from "../settings/backlog-sources/layout";
 import ChangelogLayout from "../changelog/layout";
 
 const mockReplace = jest.fn();
+let mockPathname = "/";
 const mockGetFeatureFlags = jest.fn();
 
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
+  usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
@@ -21,10 +25,10 @@ jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({ getFeatureFlags: mockGetFeatureFlags }),
 }));
 
-const cases: Array<[string, string, React.ComponentType<{ children: React.ReactNode }>]> = [
-  ["backlog/layout.tsx", "backlog", BacklogLayout],
-  ["settings/backlog-sources/layout.tsx", "backlog", BacklogSourcesSettingsLayout],
-  ["changelog/layout.tsx", "changelog", ChangelogLayout],
+const cases: Array<[string, string, string, React.ComponentType<{ children: React.ReactNode }>]> = [
+  ["backlog/layout.tsx", "backlog", "/backlog", BacklogLayout],
+  ["settings/backlog-sources/layout.tsx", "backlog", "/settings/backlog-sources", BacklogSourcesSettingsLayout],
+  ["changelog/layout.tsx", "changelog", "/changelog", ChangelogLayout],
 ];
 
 function renderLayout(Layout: React.ComponentType<{ children: React.ReactNode }>) {
@@ -37,8 +41,9 @@ function renderLayout(Layout: React.ComponentType<{ children: React.ReactNode }>
   );
 }
 
-describe.each(cases)("%s", (_file, flag, Layout) => {
+describe.each(cases)("%s", (_file, flag, path, Layout) => {
   beforeEach(() => {
+    mockPathname = path;
     mockReplace.mockClear();
     mockGetFeatureFlags.mockReset();
   });
@@ -49,6 +54,7 @@ describe.each(cases)("%s", (_file, flag, Layout) => {
     const { container } = renderLayout(Layout);
 
     expect(container).toBeEmptyDOMElement();
+    expect(document.head.querySelector("title")?.textContent).toBe(ROUTE_META[path].title);
     expect(mockReplace).not.toHaveBeenCalled();
 
     await act(async () => { resolve({ flags: [{ name: flag, enabled: true, scopes: [] }] }); });
