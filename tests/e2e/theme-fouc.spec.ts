@@ -6,11 +6,13 @@
  * distinct from `clean` (the default with no storage) rather than by name.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { isBunBuild } from './helpers/web-build';
 import { AppShellPage } from './pages/AppShellPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 const THEMES = ['matrix', 'cyberpunk77', 'wh40k', 'clean', 'light', 'dark'] as const;
 const DARK_THEMES = ['matrix', 'cyberpunk77', 'wh40k', 'dark'] as const;
+const FONT_VARS = ['--font-jetbrains-mono', '--font-rajdhani', '--font-cinzel', '--font-inter'];
 
 interface FirstPaintFacts {
   classes: string[];
@@ -113,5 +115,53 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
     expect(stale.classes.join(' ')).toBe(clean.classes.join(' '));
     await expect(new AppShellPage(page).main).toBeVisible();
     await context.close();
+  });
+});
+
+test.describe('theme FOUC prevention (Bun only, UX G10)', () => {
+  test.skip(!isBunBuild(), 'Next vendors fonts via next/font/local classes; Bun vendors them as global --font-* custom properties (app/fonts.css)');
+
+  test('--font-* variables resolve under every theme (globals, never removed by the boot script)', async ({ browser }) => {
+    for (const theme of THEMES) {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await new AppShellPage(page).skipOnboarding();
+      await page.addInitScript((t) => localStorage.setItem('stapler-theme', t), theme);
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => document.readyState === 'complete');
+      for (const name of FONT_VARS) {
+        const value = await page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n), name);
+        expect(value.trim(), `${name} under ${theme}`).not.toBe('');
+      }
+      await context.close();
+    }
+  });
+
+  test('the theme stylesheet is a render-blocking <link> in <head>, before any module script', async ({ page }) => {
+    const response = await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    const html = await response!.text();
+    const headMatch = html.match(/<head>([\s\S]*?)<\/head>/);
+    expect(headMatch, 'document has a <head>').toBeTruthy();
+    const head = headMatch![1];
+    const linkIndex = head.search(/<link[^>]+rel="stylesheet"/);
+    const scriptIndex = head.search(/<script[^>]+type="module"/);
+    expect(linkIndex, 'stylesheet <link> present in <head>').toBeGreaterThan(-1);
+    expect(scriptIndex, 'module <script> present in <head>').toBeGreaterThan(-1);
+    expect(linkIndex, 'stylesheet precedes the module script').toBeLessThan(scriptIndex);
+  });
+
+  test('a throwing localStorage degrades to clean with no uncaught error', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'localStorage', {
+        get() {
+          throw new Error('blocked');
+        },
+      });
+    });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await expect(new AppShellPage(page).main).toBeVisible();
+    expect(pageErrors).toEqual([]);
   });
 });

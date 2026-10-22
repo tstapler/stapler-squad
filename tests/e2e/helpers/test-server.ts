@@ -5,6 +5,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { SessionClient } from './session-client';
+import { webBuildMode } from './web-build';
 
 const execPromise = promisify(exec);
 
@@ -215,6 +216,8 @@ export class TestServer {
     // `npx playwright` leaves npm_config_user_agent=npm/..., which web-app's bun-only
     // preinstall guard rejects when make triggers `bun install`.
     const { npm_config_user_agent: _npmUserAgent, ...makeEnv } = process.env;
+    // The Makefile seam reads WEB_BUILD; set it explicitly so a typo fails here, not as a silent Next build.
+    makeEnv.WEB_BUILD = webBuildMode();
     await execPromise('make stapler-squad', { cwd: projectRoot, env: makeEnv });
     console.log('✅ Binary up to date');
 
