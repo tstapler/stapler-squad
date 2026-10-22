@@ -79,6 +79,24 @@ test("storybook-build and web-supply-chain exist in build.yml and stay out of th
   assert.doesNotMatch(gate, /storybook-build|web-supply-chain/);
 });
 
+test("web-lint and go-lint pin checkout to the PR head, not the stale default merge ref", () => {
+  // actions/checkout defaults to GitHub's synthetic refs/pull/N/merge for pull_request
+  // events, which tracks main's CURRENT tip independently of base.sha (captured once, at
+  // the PR's last push). Once main advances past base.sha, each job's `git diff
+  // base.sha...HEAD` silently widens to include every file from every PR merged to main
+  // in between — surfaced 2026-10-22 as unrelated pre-existing warnings failing an
+  // unrelated PR (#1144). Each job's checkout step must pin `ref:` to the actual head SHA.
+  const lines = read(".github/workflows/lint.yml").split("\n");
+  for (const job of ["web-lint", "go-lint"]) {
+    const start = lines.findIndex((l) => l === `  ${job}:`);
+    assert.ok(start !== -1, job);
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((l) => /^ {2}[a-zA-Z_-]+:\s*$/.test(l));
+    const body = rest.slice(0, end === -1 ? rest.length : end).join("\n");
+    assert.match(body, /ref:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha\s*\|\|\s*github\.sha\s*\}\}/, job);
+  }
+});
+
 function existsSyncSafe(rel) {
   try {
     readFileSync(path.join(root, rel));
