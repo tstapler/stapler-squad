@@ -1,6 +1,6 @@
 // Run by `bun run test:codemods` (node --test). actionlint covers syntax in `make lint-workflows`; this covers intent.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -60,6 +60,23 @@ test("Lighthouse has one config, served by the Go server, covering a nested deep
   for (const route of ["/review-queue", "/settings/jules"]) assert.ok(cfg.includes(`localhost:${LIVE_PORT}${route}`), route);
   assert.equal(existsSyncSafe("web-app/lighthouserc.json"), false);
   assert.doesNotMatch(read(".github/workflows/ux-analysis.yml"), /serve@14/);
+});
+
+test("no workflow uses pull_request_target, and every setup-bun is pinned by SHA", () => {
+  for (const dir of [".github/workflows", ".github/actions/setup-bun"]) {
+    for (const f of readdirSync(path.join(root, dir)).filter((n) => /\.ya?ml$/.test(n))) {
+      const text = read(`${dir}/${f}`);
+      assert.doesNotMatch(text, /^\s*pull_request_target\s*:/m, `${dir}/${f}`);
+      for (const m of text.matchAll(/uses:\s*oven-sh\/setup-bun@(\S+)/g)) assert.match(m[1], /^[0-9a-f]{40}$/, `${dir}/${f}`);
+    }
+  }
+});
+
+test("storybook-build and web-supply-chain exist in build.yml and stay out of the gate's needs", () => {
+  const build = read(".github/workflows/build.yml");
+  for (const job of ["storybook-build", "web-supply-chain"]) assert.match(build, new RegExp(`^  ${job}:`, "m"));
+  const gate = build.match(/^ {2}web-build-gate:[\s\S]*?needs: \[([^\]]*)\]/m)[1];
+  assert.doesNotMatch(gate, /storybook-build|web-supply-chain/);
 });
 
 function existsSyncSafe(rel) {

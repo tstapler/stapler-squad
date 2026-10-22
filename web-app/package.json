@@ -6,7 +6,6 @@
   "trustedDependencies": [
     "@swc/core",
     "esbuild",
-    "@vanilla-extract/css",
     "@ast-grep/cli"
   ],
   "overrides": {
@@ -133,7 +132,6 @@
     "@storybook/addon-a11y": "^8.6.18",
     "@storybook/addon-essentials": "^8.6.18",
     "@storybook/addon-themes": "^8.6.18",
-    "@storybook/nextjs": "^8.6.18",
     "@storybook/react": "^8.6.18",
     "@storybook/react-webpack5": "^8.6.18",
     "@swc/core": "^1.15.33",

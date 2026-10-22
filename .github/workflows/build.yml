@@ -311,6 +311,88 @@ jobs:
         run: node web-app/scripts/ci/web-build-gate.mjs
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # storybook-build: non-blocking (not in web-build-gate's needs:). Storybook stays on
+  # react-webpack5 (ADR-002); this catches a story or nav-facade change that breaks it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  storybook-build:
+    name: storybook build (non-blocking)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Storybook-relevant changes
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          if echo "$CHANGED" | grep -qE '^web-app/src/.*\.stories\.tsx$|^web-app/\.storybook/|^web-app/src/lib/nav/|^web-app/package\.json$|^web-app/bun\.lock$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Bun
+        if: steps.detect.outputs.relevant == 'true'
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.relevant == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up buf
+        if: steps.detect.outputs.relevant == 'true'
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      - name: Install dependencies and generate protobuf code
+        if: steps.detect.outputs.relevant == 'true'
+        run: |
+          cd web-app && bun install --frozen-lockfile
+          cd .. && buf generate proto
+
+      - name: Build Storybook
+        if: steps.detect.outputs.relevant == 'true'
+        working-directory: web-app
+        run: bun run build-storybook
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # web-supply-chain: the install must resolve the same screened tree twice, with no
+  # github: source, banned version or no-op trustedDependencies entry (Story 6.10).
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-supply-chain:
+    name: web-app install and dependency screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install (frozen)
+        working-directory: web-app
+        run: bun install --frozen-lockfile
+
+      # bun#44713: a first plain install after a lockfile edit can still rewrite it.
+      - name: Lockfile is stable across repeated installs
+        working-directory: web-app
+        run: |
+          bun install
+          bun install
+          git diff --exit-code -- bun.lock
+
+      - name: Dependency screen
+        working-directory: web-app
+        run: bun run check:dependency-screen
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # test-affected: the PR-time Go test gate -- only the packages transitively
   # affected by this PR's changed .go files (scripts/test-affected.py's
   # go-list-based dependency graph), instead of test-tmux/test-rest's full
