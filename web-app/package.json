@@ -134,6 +134,10 @@
   ],
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
+    "@babel/core": "^7",
+    "@babel/preset-env": "^7.29.3",
+    "@babel/preset-react": "^7.28.5",
+    "@babel/preset-typescript": "^7.28.5",
     "@bufbuild/protoc-gen-es": "^2.11.0",
     "@chromatic-com/storybook": "^3.2.7",
     "@playwright/test": "^1.57.0",
@@ -156,6 +160,7 @@
     "@vanilla-extract/integration": "8.0.11",
     "@vanilla-extract/next-plugin": "^2.5.1",
     "axe-core": "4.10.3",
+    "babel-loader": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
     "eslint-plugin-analytics": "file:./eslint-plugin-analytics",
