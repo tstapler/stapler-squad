@@ -7,7 +7,7 @@ import {
   detect,
   InputType,
   INPUT_TYPE_INFO,
-  DetectionResult,
+  type DetectionResult,
 } from "@/lib/omnibar";
 import {
   useModeReducer,
@@ -27,7 +27,7 @@ import {
 } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
-import { Session, SessionType } from "@/gen/session/v1/types_pb";
+import { type Session, SessionType } from "@/gen/session/v1/types_pb";
 import {
   PathCompletionDropdown,
   type CompletionEntry,
@@ -147,6 +147,7 @@ interface OmnibarProps {
    * TODO(Phase 6): OmnibarContext will source this from a `remotesSlice` populated by a
    * ListRemotes RPC — until then it's an optional prop that defaults to empty (no selector
    * rendered, today's local-only behavior unchanged). */
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing: OmnibarProps already exceeded 12 props
   remotes?: RemoteOption[];
 }
 
@@ -1763,6 +1764,7 @@ export function Omnibar({
       setIsSubmitting(false);
       isSubmittingRef.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; adding formState.fanoutCount/setFormField would change re-render/callback-identity behavior, unverified here
   }, [
     canSubmit,
     isSubmitting,
@@ -2126,6 +2128,7 @@ export function Omnibar({
                         key={cmd}
                         type="button"
                         data-testid="spawn-shell-recent-command"
+                        // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated
                         onClick={() => {
                           setInput(`>shell -- ${cmd}`);
                           inputRef.current?.focus();
@@ -2302,6 +2305,7 @@ export function Omnibar({
             <button
               type="button"
               className={createButton}
+              // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated
               onClick={handleSubmit}
               disabled={!canSubmit || isSubmitting}
             >

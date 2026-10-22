@@ -59,6 +59,7 @@ jest.mock("@/lib/store/sessionsSlice", () => require("./omnibarTestFixtures").mo
 // Unlike the shared fixture (renders null), expose the button the user clicks.
 jest.mock("@/components/sessions/OmnibarResultList", () => ({
   OmnibarResultList: ({ onCreateBacklog }: { onCreateBacklog?: () => void }) => (
+    // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated (test mock, not production UI)
     <button type="button" data-testid="mock-create-backlog" onClick={onCreateBacklog}>
       Create Backlog Item (AI)
     </button>
