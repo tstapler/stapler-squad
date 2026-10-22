@@ -20,9 +20,11 @@ import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import type { PaneAction } from "@/lib/pane/paneTypes";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 import type { WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
+import { WindowOverview } from "@/components/window/WindowOverview";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -173,7 +175,29 @@ function HomeContent() {
     },
     [windows]
   );
-  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
+  const [windowOverviewOpen, setWindowOverviewOpen] = useState(false);
+  const toggleWindowOverview = useCallback(() => setWindowOverviewOpen((open) => !open), []);
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest, toggleWindowOverview);
+
+  // Hover preview + overview read the latest windows/sessions through refs so the
+  // memoized WindowTabStrip needn't re-render on every pane change.
+  const windowsRef = useRef(windows);
+  windowsRef.current = windows;
+  const getWindows = useCallback(() => windowsRef.current, []);
+  const paneSessionsRef = useRef(paneSessions);
+  paneSessionsRef.current = paneSessions;
+  const getSessionTitle = useCallback(
+    (sessionId: string) => paneSessionsRef.current.find((s) => s.id === sessionId)?.title,
+    []
+  );
+  useShortcut("window.overview", {
+    key: "o",
+    code: "KeyO",
+    modifiers: { alt: true },
+    label: "Window overview",
+    context: "global",
+    action: toggleWindowOverview,
+  });
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback(
     (sessionId: string): Session | undefined => findSessionByIdIn(sessions, sessionId),
@@ -567,7 +591,19 @@ function HomeContent() {
               if (id === currentWindow.id && next) switchToWindow(next);
             }}
             onRename={renameWindow}
+            getWindows={getWindows}
+            getSessionTitle={getSessionTitle}
+            onOpenOverview={() => setWindowOverviewOpen(true)}
           />
+          {windowOverviewOpen && (
+            <WindowOverview
+              windows={windows}
+              currentWindowId={currentWindow.id}
+              getSessionTitle={getSessionTitle}
+              onSwitch={switchToWindow}
+              onClose={() => setWindowOverviewOpen(false)}
+            />
+          )}
           {lookup ? (
             <SessionUnavailableCard
               variant={lookup.status === "failed" ? "failed" : "unavailable"}

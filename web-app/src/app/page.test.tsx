@@ -194,6 +194,7 @@ describe("HomeContent multi-window wiring", () => {
       windows,
       "win-1",
       mockSwitchToWindow,
+      expect.any(Function),
       expect.any(Function)
     );
   });
