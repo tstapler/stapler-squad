@@ -19,7 +19,7 @@ type extensionHolder interface {
 // nil when shared_commit_state is off (the extension slot is then never
 // touched) or the entry's storer is not a gogitstore one.
 func (g *GoGitVCSReader) repoState(entry *cachedRepo) *repostate.RepoState {
-	if !EffectiveFlags().SharedCommitState {
+	if !g.effectiveFlags().SharedCommitState {
 		return nil
 	}
 	h, ok := entry.repo.Storer.(extensionHolder)

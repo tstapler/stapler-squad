@@ -1,8 +1,6 @@
 package unfinished
 
 import (
-	"sync/atomic"
-
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -63,24 +61,14 @@ func normalizeFlags(c config.UnfinishedCaches) (Flags, []string) {
 	return f, warns
 }
 
-// flagsSnapshot is read on every call and replaced only at startup by
-// SetFlags; nil means every flag is off.
-var flagsSnapshot atomic.Pointer[Flags]
-
-// SetFlags normalizes cfg and publishes it as the effective flags. Call it
-// once at startup; changes take effect on restart only.
-func SetFlags(cfg config.UnfinishedCaches) {
+// FlagsFromConfig normalizes cfg into the immutable Flags a Scanner is built
+// with (WithFlags), logging one warning per violated dependency. Flags are
+// restart-only: the server calls this once at startup and later config edits
+// never reach a running Scanner.
+func FlagsFromConfig(cfg config.UnfinishedCaches) Flags {
 	f, warns := normalizeFlags(cfg)
 	for _, w := range warns {
 		log.Warn(w)
 	}
-	flagsSnapshot.Store(&f)
-}
-
-// EffectiveFlags returns the published snapshot (all off before SetFlags).
-func EffectiveFlags() Flags {
-	if f := flagsSnapshot.Load(); f != nil {
-		return *f
-	}
-	return Flags{}
+	return f
 }

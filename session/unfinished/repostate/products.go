@@ -143,7 +143,7 @@ func (s *RepoState) AheadBehind(ctx context.Context, src ParentsSource, ord Stam
 	if r, ok := m.ab.Get(key); ok {
 		return r, nil
 	}
-	return m.ab.computeMiss(key, func() (ABResult, error) { return s.computeAheadBehind(ctx, m, src, ord, key) })
+	return m.ab.computeMiss(ctx, key, func() (ABResult, error) { return s.computeAheadBehind(ctx, m, src, ord, key) })
 }
 
 func (s *RepoState) computeAheadBehind(ctx context.Context, m *productCaches, src ParentsSource, ord StampOrd, key ABKey) (ABResult, error) {
@@ -163,7 +163,7 @@ func (s *RepoState) computeAheadBehind(ctx context.Context, m *productCaches, sr
 	bk := BehindKey{Repo: key.Repo, Base: key.Base, MergeBase: mb, Cap: key.Cap, Shallow: key.Shallow}
 	behind, ok := m.behind.Get(bk)
 	if !ok {
-		behind, err = m.behind.computeMiss(bk, func() (int, error) { return w.CountCommitsTo(key.Base, mb) })
+		behind, err = m.behind.computeMiss(ctx, bk, func() (int, error) { return w.CountCommitsTo(key.Base, mb) })
 		if err != nil {
 			return ABResult{}, err
 		}
@@ -201,7 +201,7 @@ func (s *RepoState) CommitMessages(ctx context.Context, in MessageInputs, want M
 	if v, ok := m.messages.Get(key); ok {
 		return v, nil
 	}
-	return m.messages.computeMiss(key, func() ([]string, error) { return s.computeMessages(ctx, m, in, key) })
+	return m.messages.computeMiss(ctx, key, func() ([]string, error) { return s.computeMessages(ctx, m, in, key) })
 }
 
 func (s *RepoState) computeMessages(ctx context.Context, m *productCaches, in MessageInputs, key MessageKey) ([]string, error) {
@@ -260,7 +260,7 @@ func (m *productCaches) messageLine(h plumbing.Hash, repo RepoKey, line LineFunc
 	subject, ok := m.lines.Get(k)
 	if !ok {
 		var err error
-		if subject, err = m.lines.computeMiss(k, func() (string, error) { return line(h) }); err != nil {
+		if subject, err = m.lines.computeMiss(context.Background(), k, func() (string, error) { return line(h) }); err != nil {
 			return "", err
 		}
 	}

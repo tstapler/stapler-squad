@@ -522,7 +522,7 @@ func TestSoakStatus_AckFilePostedWithTheRequest_AcknowledgesPerClass_AndBadFileI
 func TestHandleActuatorUnfinishedScanner_ShouldServeCounterJSON_WithoutTelemetry(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	handleActuatorUnfinishedScanner(rec, httptest.NewRequest(http.MethodGet, "/actuator/unfinished-scanner", nil))
+	handleActuatorUnfinishedScanner(nil)(rec, httptest.NewRequest(http.MethodGet, "/actuator/unfinished-scanner", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)

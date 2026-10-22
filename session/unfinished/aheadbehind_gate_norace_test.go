@@ -11,12 +11,11 @@ import (
 // nothing. Phase 1 (ref resolution, shallow stat) is excluded by construction:
 // the walk starts from known hashes.
 func TestAheadBehindFrom_ShouldAllocZeroAndDecodeZero_WhenGraphPrimedWithCallerScratch(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, h := divergedClocked(t, 2500, 3, 2)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	r.Track(t, dir)
 	assertRefsBalanced(t, r.GoGitVCSReader)
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	rs := assertSharedPathEngaged(t, r.GoGitVCSReader, dir)

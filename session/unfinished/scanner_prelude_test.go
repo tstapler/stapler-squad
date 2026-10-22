@@ -38,14 +38,14 @@ func newPreludeReader() *preludeReader {
 	return &preludeReader{GoGitVCSReader: g}
 }
 
-func (r *preludeReader) AheadBehind(wt, base string) (int, int, error) {
+func (r *preludeReader) AheadBehind(ctx context.Context, wt, base string) (int, int, error) {
 	r.full.Add(1)
-	return r.GoGitVCSReader.AheadBehind(wt, base)
+	return r.GoGitVCSReader.AheadBehind(ctx, wt, base)
 }
 
-func (r *preludeReader) AheadBehindResolved(wt, base string, head, baseHash plumbing.Hash) (int, int, error) {
+func (r *preludeReader) AheadBehindResolved(ctx context.Context, wt, base string, head, baseHash plumbing.Hash) (int, int, error) {
 	r.resolved.Add(1)
-	return r.GoGitVCSReader.AheadBehindResolved(wt, base, head, baseHash)
+	return r.GoGitVCSReader.AheadBehindResolved(ctx, wt, base, head, baseHash)
 }
 
 // preludeRepo is a main repo (branch main, 3 commits) plus linked worktrees.
@@ -75,7 +75,7 @@ func TestBurst_ShouldResolveBaseOnceAndEachHeadOnce_WhenFourWorktrees(t *testing
 	}
 	s := NewScannerWithReader(nil, nil, r)
 
-	s.scanRepo(p.mainDir, true)
+	s.scanRepo(context.Background(), p.mainDir, true)
 
 	got := r.RefResolveStats()
 	assert.Equal(t, RefResolveStats{Snapshots: 1, BaseResolves: 1, HeadResolves: 4, ShallowStats: 1}, got,
@@ -97,7 +97,7 @@ func TestBurst_ShouldNotBuildSnapshot_WhenPreludeFlagOff(t *testing.T) {
 	r.scanSkip.flags = &off
 	s := NewScannerWithReader(nil, nil, r)
 
-	s.scanRepo(p.mainDir, true)
+	s.scanRepo(context.Background(), p.mainDir, true)
 
 	assert.Zero(t, r.RefResolveStats().Snapshots)
 	assert.EqualValues(t, 3, r.full.Load(), "legacy phase 1 per worktree")
@@ -122,7 +122,7 @@ func TestRefSnapshot_ShouldRebuild_WhenGitEventArrivesBetweenBursts(t *testing.T
 	assert.Nil(t, s.burstSnapshot(p.mainDir), "event drops the snapshot")
 	assert.EqualValues(t, 1, s.ScanStateStats().SnapshotsDropped)
 
-	_, _, err := s.aheadBehind(s.burstSnapshot(p.mainDir), p.mainDir, "main")
+	_, _, err := s.aheadBehind(context.Background(), s.burstSnapshot(p.mainDir), p.mainDir, "main")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, r.full.Load(), "no snapshot: the reader's full call resolves refs itself")
 
@@ -206,7 +206,7 @@ func (*pressuredReader) UnderSeverePressure() bool { return true }
 // scanResultFor force-scans repoPath and returns worktree wt's result.
 func scanResultFor(t *testing.T, s *Scanner, repoPath, wt string) ScanResult {
 	t.Helper()
-	for _, res := range s.scanRepo(repoPath, true) {
+	for _, res := range s.scanRepo(context.Background(), repoPath, true) {
 		if res.WorktreePath == wt {
 			return res
 		}

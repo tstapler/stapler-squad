@@ -29,7 +29,7 @@ const deadlockDeadline = 30 * time.Second
 // cannot pass vacuously on the legacy path. It returns the repo's RepoState.
 func assertSharedPathEngaged(tb testing.TB, g *GoGitVCSReader, path string) *repostate.RepoState {
 	tb.Helper()
-	if !EffectiveFlags().SharedCommitState {
+	if !g.effectiveFlags().SharedCommitState {
 		tb.Fatal("shared_commit_state is off: the test would exercise the legacy path")
 	}
 	entry, err := g.openRepoEntry(path)
@@ -139,14 +139,13 @@ func clockedWorktrees(tb testing.TB, w int) []string {
 }
 
 func TestAheadBehind_ShouldDecodeNoMoreThanLegacyAndLockstep_WhenCold2500LinearW1(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, h := divergedClocked(t, 2500, 3, 2)
 	legacy, lockstep := legacyStackDecodes(t, dir, h.Head, h.Base), lockstepDecodes(t, dir, h.Head, h.Base)
 
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	r.Track(t, dir)
 	assertRefsBalanced(t, r.GoGitVCSReader)
-	ahead, behind, err := r.AheadBehind(dir, "base")
+	ahead, behind, err := r.AheadBehind(context.Background(), dir, "base")
 	if err != nil || ahead != 3 || behind != 2 {
 		t.Fatalf("AheadBehind = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
@@ -175,12 +174,11 @@ func TestG1Gate_ShouldFail_WhenLegacyStackWalkIsWiredAsNew(t *testing.T) {
 }
 
 func TestAheadBehind_ShouldDecodeOnce_WhenThreeWorktreesShareHeadAndBase(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 3)
 	repoHead, repoBase := headAndBase(t, paths[0])
 	legacyW1 := legacyStackDecodes(t, paths[0], repoHead, repoBase)
-	w1 := coldAheadBehindDecodes(t, paths[:1])
-	w3 := coldAheadBehindDecodes(t, paths)
+	w1 := coldAheadBehindDecodes(t, Flags{SharedCommitState: true}, paths[:1])
+	w3 := coldAheadBehindDecodes(t, Flags{SharedCommitState: true}, paths)
 	t.Logf("G2 shared head and base: DecodeCount shared W=1=%d W=3=%d, committed-old W=1=%d", w1, w3, legacyW1)
 	if w3 > legacyW1 {
 		t.Errorf("DecodeCount(new, W=3) = %d, want <= DecodeCount(committed-old, W=1) = %d", w3, legacyW1)
@@ -205,15 +203,14 @@ func headAndBase(tb testing.TB, dir string) (head, base plumbing.Hash) {
 }
 
 func TestAheadBehind_ShouldDecodeWTimes_WhenSharedCommitStateFlagOff(t *testing.T) {
-	withSharedCommitState(t, false)
 	paths := clockedWorktrees(t, 3)
-	w1 := coldAheadBehindDecodes(t, paths[:1])
-	w3 := coldAheadBehindDecodes(t, paths)
+	w1 := coldAheadBehindDecodes(t, Flags{SharedCommitState: false}, paths[:1])
+	w3 := coldAheadBehindDecodes(t, Flags{SharedCommitState: false}, paths)
 	if w3 < 3*w1 {
 		t.Errorf("flag off: DecodeCount W=3 = %d, want >= 3 x W=1 = %d (legacy decodes per worktree)", w3, 3*w1)
 	}
-	r := &GoGitVCSReader{}
-	if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
+	r := readerWithFlags(Flags{SharedCommitState: false}, &GoGitVCSReader{})
+	if _, _, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := r.repoStateTotals(); n != 0 {
@@ -243,20 +240,19 @@ func distinctTipWorktrees(t *testing.T, depth int) (paths []string, tips []plumb
 }
 
 func TestAheadBehind_ShouldDecodeExactlyDistinct_WhenWalksSequencedByLatches(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths, tips, _, base := distinctTipWorktrees(t, 2500)
 	var oracleSum int64
 	for _, tip := range tips {
 		oracleSum += legacyStackDecodes(t, paths[0], tip, base)
 	}
 
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
 	assertRefsBalanced(t, r.GoGitVCSReader)
 	for _, p := range paths {
-		if _, _, err := r.AheadBehind(p, "base"); err != nil {
+		if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -274,9 +270,8 @@ func TestAheadBehind_ShouldDecodeExactlyDistinct_WhenWalksSequencedByLatches(t *
 }
 
 func TestAheadBehind_ShouldBoundDecodes_WhenThreeDistinctTipsRace(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths, _, _, _ := distinctTipWorktrees(t, 2500)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
@@ -284,7 +279,7 @@ func TestAheadBehind_ShouldBoundDecodes_WhenThreeDistinctTipsRace(t *testing.T) 
 	jobs := make([]func(), len(paths))
 	for i, p := range paths {
 		jobs[i] = func() {
-			if _, _, err := r.AheadBehind(p, "base"); err != nil {
+			if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 				t.Errorf("AheadBehind %s: %v", p, err)
 			}
 		}
@@ -323,26 +318,25 @@ func runWithDeadline(deadline time.Duration, jobs ...func()) (hung bool) {
 }
 
 func TestAheadBehind_ShouldNotDeadlock_WhenThreeWorktreesAndCommitMessagesRunConcurrentlyUnderRace(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 3)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, r)
 	jobs := make([]func(), 0, 2+len(paths)-1)
 	jobs = append(jobs,
 		func() {
-			if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
+			if _, _, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil {
 				t.Errorf("AheadBehind: %v", err)
 			}
 		},
 		func() {
-			if _, err := r.CommitMessages(paths[0], "base", 20); err != nil {
+			if _, err := r.CommitMessages(context.Background(), paths[0], "base", 20); err != nil {
 				t.Errorf("CommitMessages: %v", err)
 			}
 		},
 	)
 	for _, p := range paths[1:] {
 		jobs = append(jobs, func() {
-			if _, _, err := r.AheadBehind(p, "base"); err != nil {
+			if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 				t.Errorf("AheadBehind %s: %v", p, err)
 			}
 		})
@@ -369,9 +363,8 @@ func (s lockingSource) Parents(ctx context.Context, h plumbing.Hash) ([]plumbing
 }
 
 func TestDeadlockHarness_ShouldDetectHang_WhenAdapterTakesEntryMuInsideWalk(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, h := divergedClocked(t, 40, 3, 2)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, r)
 	entry, err := r.openRepoEntry(dir)
 	if err != nil {
@@ -383,7 +376,7 @@ func TestDeadlockHarness_ShouldDetectHang_WhenAdapterTakesEntryMuInsideWalk(t *t
 	entry.mu.Lock()
 	src := lockingSource{inner: newGraphSource(entry.repo.Storer, false), mu: &entry.mu}
 	hung := runWithDeadline(200*time.Millisecond, func() {
-		_, _, _ = aheadBehindOnGraph(rs, src, 0, h.Head, h.Base)
+		_, _, _ = aheadBehindOnGraph(context.Background(), rs, src, 0, h.Head, h.Base)
 	})
 	entry.mu.Unlock() // releases the leaked goroutine
 	if !hung {
@@ -392,9 +385,8 @@ func TestDeadlockHarness_ShouldDetectHang_WhenAdapterTakesEntryMuInsideWalk(t *t
 }
 
 func TestGraphSource_ShouldTakeNoEntryMu_WhenReadingParents(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, h := divergedClocked(t, 40, 3, 2)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, r)
 	entry, err := r.openRepoEntry(dir)
 	if err != nil {
@@ -422,16 +414,15 @@ func (closedStorer) EncodedObject(plumbing.ObjectType, plumbing.Hash) (plumbing.
 }
 
 func TestGraphSource_ShouldTreatClosedStorerAsFallback_WhenStorerClosedMidFill(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, h := divergedClocked(t, 40, 3, 2)
-	r := &GoGitVCSReader{}
+	r := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{})
 	assertRefsBalanced(t, r)
 	entry, err := r.openRepoEntry(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rs := r.repoState(entry)
-	_, _, abErr := aheadBehindOnGraph(rs, newGraphSource(closedStorer{}, false), 0, h.Head, h.Base)
+	_, _, abErr := aheadBehindOnGraph(context.Background(), rs, newGraphSource(closedStorer{}, false), 0, h.Head, h.Base)
 	if !isFallback(abErr) || !errors.Is(abErr, errStoreClosed) {
 		t.Fatalf("err = %v, want a fallback error wrapping the storer failure", abErr)
 	}
@@ -439,7 +430,7 @@ func TestGraphSource_ShouldTreatClosedStorerAsFallback_WhenStorerClosedMidFill(t
 		t.Errorf("%d rows published from a failed read, want none (claims must roll back)", got)
 	}
 	// The same failure through the reader reruns the plain walk, which reads the live repo.
-	if ahead, behind, err := r.AheadBehind(dir, "base"); err != nil || ahead != 3 || behind != 2 {
+	if ahead, behind, err := r.AheadBehind(context.Background(), dir, "base"); err != nil || ahead != 3 || behind != 2 {
 		t.Errorf("AheadBehind after a failed graph walk = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
 }
@@ -447,11 +438,10 @@ func TestGraphSource_ShouldTreatClosedStorerAsFallback_WhenStorerClosedMidFill(t
 func isFallback(err error) bool { return errors.Is(err, repostate.ErrFallback) }
 
 func TestShallowStamp_ShouldStatOncePerColdCallAndBumpOrdinal_WhenShallowFileChanges(t *testing.T) {
-	withSharedCommitState(t, true)
 	repo, dir, h := divergedClocked(t, 40, 3, 2)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	assertRefsBalanced(t, r.GoGitVCSReader)
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.StatCount(); got != 1 {
@@ -462,7 +452,7 @@ func TestShallowStamp_ShouldStatOncePerColdCallAndBumpOrdinal_WhenShallowFileCha
 
 	testrepo.Shallow(t, repo, h.Fork) // writes <commondir>/shallow
 	r.aheadBehindCache.Range(func(k aheadBehindKey, _ aheadBehindEntry) bool { r.aheadBehindCache.Delete(k); return true })
-	if _, _, err := r.AheadBehind(dir, "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), dir, "base"); err != nil {
 		t.Fatal(err)
 	}
 	if after := rs.Graph().Load().StampOrd(); after == before {
@@ -488,7 +478,7 @@ func TestStartupHerd_ShouldDecodeLEOracleTotal_WhenSixReposThreeWorktreesOpenTog
 		jobs := make([]func(), len(paths))
 		for i, p := range paths {
 			jobs[i] = func() {
-				if _, _, err := r.AheadBehind(p, "base"); err != nil {
+				if _, _, err := r.AheadBehind(context.Background(), p, "base"); err != nil {
 					t.Errorf("AheadBehind %s: %v", p, err)
 				}
 			}
@@ -503,15 +493,13 @@ func TestStartupHerd_ShouldDecodeLEOracleTotal_WhenSixReposThreeWorktreesOpenTog
 		}
 	}
 
-	withSharedCommitState(t, false)
-	legacy := NewCountingReader()
+	legacy := NewCountingReader(Flags{SharedCommitState: false})
 	track(legacy)
 	herd(legacy)
 	legacyTotal := legacy.DecodeCount()
 	legacy.ClearCache()
 
-	withSharedCommitState(t, true)
-	shared := NewCountingReader()
+	shared := NewCountingReader(Flags{SharedCommitState: true})
 	track(shared)
 	assertRefsBalanced(t, shared.GoGitVCSReader)
 	herd(shared)
@@ -533,18 +521,17 @@ func TestStartupHerd_ShouldDecodeLEOracleTotal_WhenSixReposThreeWorktreesOpenTog
 }
 
 func TestAheadBehind_ShouldStayWithinG2AndBalanceRefs_When52000CommitsAnd24Worktrees(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, h := divergedClocked(t, 52000, 3, 2)
 	paths := append([]string{dir}, testrepo.LinkedWorktrees(t, dir, 23)...)
 	legacyW1 := legacyStackDecodes(t, dir, h.Head, h.Base)
 
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
 	assertRefsBalanced(t, r.GoGitVCSReader)
 	for _, p := range paths {
-		if ahead, behind, err := r.AheadBehind(p, "base"); err != nil || ahead != 3 || behind != 2 {
+		if ahead, behind, err := r.AheadBehind(context.Background(), p, "base"); err != nil || ahead != 3 || behind != 2 {
 			t.Fatalf("AheadBehind %s = (%d, %d, %v), want (3, 2, nil)", p, ahead, behind, err)
 		}
 	}

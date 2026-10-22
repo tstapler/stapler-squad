@@ -17,6 +17,10 @@ type Options struct {
 	// holder to publish before decoding the commit itself without publishing;
 	// zero means defaultClaimWait.
 	ClaimWait time.Duration
+	// GraphRebuildInterval is the minimum age of a graph generation before a
+	// full arena may be replaced by a fresh one; zero means 5 minutes, negative
+	// disables the rebuild.
+	GraphRebuildInterval time.Duration
 	// ReachBudgetBytes bounds the repository's cached reach sets; zero means
 	// defaultReachBudgetBytes.
 	ReachBudgetBytes int64
@@ -24,6 +28,8 @@ type Options struct {
 	// memos; zero means the per-memo defaults.
 	ProductBudgetBytes int64
 }
+
+const defaultGraphRebuildInterval = 5 * time.Minute
 
 func (o Options) now() time.Time {
 	if o.Clock == nil {

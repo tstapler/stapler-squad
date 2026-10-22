@@ -3,6 +3,7 @@ package unfinished
 import (
 	"cmp"
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/unfinished/gogitstore"
+	"github.com/tstapler/stapler-squad/session/unfinished/repostate"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -347,13 +349,17 @@ type cachedRepo struct {
 	// Rebuilt when HEAD moves AND a .gitignore file actually changed
 	// (resolveHeadTreeHashes clears untrackedMatcherBuilt in that case,
 	// checked via gitignoreEntriesChanged), or when the root .gitignore's stat
-	// signature differs (an uncommitted edit). Nested .gitignore edits between
-	// HEAD moves stay stale. Guarded by mu, same as the fields above.
+	// signature or any nested .gitignore it read differs (an uncommitted
+	// edit). A nested .gitignore created after the build stays unseen until the
+	// next rebuild. Guarded by mu, same as the fields above.
 	untrackedMatcherBuilt bool
 	untrackedMatcher      gitignore.Matcher
 	// untrackedMatcherSig is the root .gitignore signature untrackedMatcher was
 	// built from, so an uncommitted edit also forces a rebuild.
 	untrackedMatcherSig ignoreSig
+	// untrackedMatcherNested are the non-root .gitignore files untrackedMatcher
+	// read, with their signatures taken before the read.
+	untrackedMatcherNested []nestedIgnore
 }
 
 // gogitstoreCloser is implemented by storage.Storer values that hold a
@@ -616,6 +622,11 @@ type GoGitVCSReader struct {
 	// feeding stat_calls_per_scan; atomic, so it is safe on the hot path.
 	statCalls atomic.Int64
 
+	// nanosForcedHashes counts content hashes forced only by a sub-second mtime
+	// mismatch (nanosMoved) on a file outside the racy window; it climbs every scan
+	// on filesystems whose nanoseconds differ from the index (bind mounts, NFS).
+	nanosForcedHashes atomic.Int64
+
 	// scanSkip holds the scan_skip rollback unit's caches (index, untracked
 	// dirs, DirtyGen) and its clock/flag test seams; see scanskip_state.go.
 	scanSkip scanSkipState
@@ -630,6 +641,7 @@ type matcherCacheEntry struct {
 	matcher      gitignore.Matcher
 	headTreeHash plumbing.Hash
 	ignoreSig    ignoreSig
+	nested       []nestedIgnore
 	accessedAtNs int64
 }
 
@@ -829,6 +841,15 @@ func sfDo[T any](sf *singleflight.Group, key string, fn func() (T, error)) (T, e
 	return val.(T), nil
 }
 
+// sfDoCtx is sfDo for a computation that honours ctx; see repostate.FlightCtx for
+// who waits on what and how a cancelled leader is kept from failing its followers.
+// fn must not cache a result when it fails, so a cancelled flight stores nothing.
+// joined, if non-nil, counts callers once registered in a flight (tests).
+func sfDoCtx[T any](ctx context.Context, sf *singleflight.Group, key string, joined *atomic.Int64, fn func() (T, error)) (T, error) {
+	v, _, err := repostate.FlightCtx(ctx, sf, key, joined, fn)
+	return v, err
+}
+
 // sfDoJoined is sfDo with a flight-registration counter: joined is incremented
 // once the caller is registered in the flight, so tests can wait for every
 // caller to join before releasing a blocked computation.
@@ -996,22 +1017,28 @@ func gitignoreEntriesChanged(old, newer map[string]plumbing.Hash) bool {
 // Strategy (no subprocess): find the merge base with a BFS over each side,
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
-func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
+func (g *GoGitVCSReader) AheadBehind(ctx context.Context, worktreePath, base string) (int, int, error) {
 	cacheKey := aheadBehindKey{worktree: worktreePath, base: base}
 	if e, ok := g.aheadBehindCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
 		return e.ahead, e.behind, nil
 	}
+	return g.aheadBehindFlight(ctx, cacheKey)
+}
 
+// aheadBehindFlight is AheadBehind past its TTL cache check: it re-resolves
+// refs and computes, coalescing concurrent callers.
+func (g *GoGitVCSReader) aheadBehindFlight(ctx context.Context, cacheKey aheadBehindKey) (int, int, error) {
+	worktreePath, base := cacheKey.worktree, cacheKey.base
 	type abResult struct{ ahead, behind int }
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
-	result, err := sfDo(&g.aheadBehindSF, worktreePath+"\x00"+base, func() (abResult, error) {
+	result, err := sfDoCtx(ctx, &g.aheadBehindSF, worktreePath+"\x00"+base, nil, func() (abResult, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
 		}
 
-		ahead, behind, abErr := g.aheadBehindCompute(entry, cacheKey)
+		ahead, behind, abErr := g.aheadBehindCompute(ctx, entry, cacheKey)
 		return abResult{ahead, behind}, abErr
 	})
 	if err != nil {
@@ -1020,7 +1047,7 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 	return result.ahead, result.behind, nil
 }
 
-func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+func (g *GoGitVCSReader) CommitMessages(ctx context.Context, worktreePath, base string, max int) ([]string, error) {
 	cacheKey := commitMessagesKey{worktree: worktreePath, base: base, max: max}
 	if e, ok := g.commitMessagesCache.Load(cacheKey); ok && time.Now().Before(e.expiry) {
 		return e.msgs, nil
@@ -1029,7 +1056,7 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 	// After the cache check: the guard allocates, and a hit must stay alloc-free.
 	defer g.guardInvalidation(worktreePath)()
 	sfKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
-	msgs, err := sfDo(&g.commitMessagesSF, sfKey, func() ([]string, error) {
+	msgs, err := sfDoCtx(ctx, &g.commitMessagesSF, sfKey, nil, func() ([]string, error) {
 		entry, openErr := g.openRepoEntry(worktreePath)
 		if openErr != nil {
 			return nil, openErr
@@ -1044,7 +1071,7 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 
 		// Shared path: reach bitset plus hash-keyed message memos on the shared
 		// id graph. A graph fallback continues on the legacy phases below.
-		if msgs, handled, sharedErr := g.commitMessagesShared(entry, headHash, baseHash, max); handled {
+		if msgs, handled, sharedErr := g.commitMessagesShared(ctx, entry, headHash, baseHash, max); handled {
 			if sharedErr != nil {
 				return nil, sharedErr
 			}
@@ -1055,7 +1082,7 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
 		// only on a cache miss, so repeated calls within the TTL window skip the
 		// O(N) walk entirely and return the cached map without touching the mutex.
-		baseReachable, reachErr := g.reachMembership(entry, worktreePath, baseHash)
+		baseReachable, reachErr := g.reachMembership(ctx, entry, worktreePath, baseHash)
 		if reachErr != nil {
 			return nil, reachErr
 		}

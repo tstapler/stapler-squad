@@ -108,7 +108,7 @@ func (g *Generation) fillClaimed(ctx context.Context, id uint32, word *atomic.Ui
 		return dst[:base], 0, Pending, err
 	}
 	if err := g.writePayload(id, dst[base:], when); err != nil {
-		g.stats.graphFull.V.Add(1)
+		g.noteFull()
 		return dst[:base], 0, Pending, err
 	}
 	g.yield()

@@ -1291,19 +1291,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		statePath := filepath.Join(configDir, "unfinished_state.json")
 		unfinishedStateStore, _ = unfinished.NewStateStore(statePath)
 		if unfinishedStateStore != nil {
+			var unfinishedFlags unfinished.Flags // all off without a config
 			if cfg != nil {
-				unfinished.SetFlags(cfg.UnfinishedCaches) // restart-only, read once
+				unfinishedFlags = unfinished.FlagsFromConfig(cfg.UnfinishedCaches) // restart-only, read once
 			}
-			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
+			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore, unfinished.WithFlags(unfinishedFlags))
 			// The shadow-verify sampler arms itself at its default rate when any rollback
 			// unit is on (Scanner.shadowEvery); the env var overrides it. The startup line
 			// reports the effective rate.
 			applyShadowVerifyEnv(unfinishedScanner, os.Getenv)
-			unfinished.LogStartup()
+			unfinished.LogStartup(unfinishedScanner)
 			unfinishedWatchDirWatcher = unfinished.NewWatchDirWatcher(unfinishedScanner, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage, unfinishedWatchDirWatcher)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)
-			if err := unfinished.RegisterMetrics(); err != nil {
+			if err := unfinished.RegisterMetrics(unfinishedScanner); err != nil {
 				log.Warn("failed to register unfinished OTel metrics", "err", err)
 			}
 

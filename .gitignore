@@ -93,6 +93,8 @@ bench-otel-*.txt
 
 # Build artifacts
 build/
+# web-app/build/ holds tracked Bun build sources and tests, not output
+!/web-app/build/
 
 # Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
 # so its contents don't need ignore rules).

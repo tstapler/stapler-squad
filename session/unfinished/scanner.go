@@ -148,7 +148,9 @@ type scanTask struct {
 
 // Scanner is the central coordinator for the unfinished-work background scan.
 type Scanner struct {
-	reader       VCSReader
+	reader VCSReader
+	// flags is the restart-only rollback-unit snapshot, fixed at construction.
+	flags        Flags
 	scanQueue    chan scanTask
 	resultStore  sync.Map // map[string]ScanResult  (key = repoPath+"|"+branch)
 	repoSet      sync.Map // map[string]bool (tracked repo paths, from any source)
@@ -255,14 +257,21 @@ type Scanner struct {
 	mu deadlock.RWMutex
 }
 
+// ScannerOption configures NewScanner and NewScannerWithReader.
+type ScannerOption func(*Scanner)
+
+// WithFlags sets the rollback-unit flags. Without it every flag is off. A
+// *GoGitVCSReader that has no flags of its own adopts them.
+func WithFlags(f Flags) ScannerOption { return func(s *Scanner) { s.flags = f } }
+
 // NewScanner constructs a Scanner. Call Start(ctx) to begin background processing.
-func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
-	return NewScannerWithReader(eventBus, stateStore, &GoGitVCSReader{})
+func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore, opts ...ScannerOption) *Scanner {
+	return NewScannerWithReader(eventBus, stateStore, &GoGitVCSReader{}, opts...)
 }
 
 // NewScannerWithReader constructs a Scanner with an explicit VCSReader.
 // Used in tests to inject a fake or alternative implementation.
-func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader) *Scanner {
+func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader, opts ...ScannerOption) *Scanner {
 	// Register the real reader for debug introspection (see currentReader's
 	// doc comment) — a no-op for fake/test readers that don't match the type.
 	if gg, ok := reader.(*GoGitVCSReader); ok {
@@ -283,9 +292,14 @@ func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, 
 		maintenanceTickInterval: 1 * time.Minute,
 		fsDebounce:              fsnotifyDebounce,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if gg, ok := reader.(*GoGitVCSReader); ok && gg.scanSkip.flags == nil {
+		gg.setFlags(s.flags)
+	}
 	s.autoSpiderEnabled.Store(true)
-	currentScanner.Store(s)
-	s.gitwatch.watchWorktreeGitdirs = EffectiveFlags().WatchWorktreeGitdirs
+	s.gitwatch.watchWorktreeGitdirs = s.flags.WatchWorktreeGitdirs
 	return s
 }
 
@@ -606,7 +620,7 @@ func (s *Scanner) worker(ctx context.Context) {
 				return
 			}
 			started := s.now()
-			results := s.scanRepo(task.repoPath, task.force)
+			results := s.scanRepo(ctx, task.repoPath, task.force)
 			s.publishResults(results)
 			recordScanCycle()
 			recordScanCycleDuration(s.now().Sub(started))
@@ -616,7 +630,7 @@ func (s *Scanner) worker(ctx context.Context) {
 }
 
 // scanRepo enumerates all worktrees in the given repo root and scans each one.
-func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
+func (s *Scanner) scanRepo(ctx context.Context, repoPath string, force bool) []ScanResult {
 	worktrees, err := s.reader.ListWorktrees(repoPath)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -647,7 +661,10 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 		if wt.Branch == "" {
 			continue
 		}
-		result := s.scanWorktree(wt, defaultBranch, repoPath, force)
+		result := s.scanWorktree(ctx, wt, defaultBranch, repoPath, force)
+		if ctx.Err() != nil {
+			return nil // shutting down: the partial scan is neither published nor cached
+		}
 		if result.Status == ScanResultStatusOK && !result.IsUnfinished() {
 			// Worktree went clean (e.g. the only uncommitted file was deleted) —
 			// remove any stale entry left in resultStore. Mirrors the CleanWorktree
@@ -665,7 +682,7 @@ func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 }
 
 // scanWorktree produces a ScanResult for a single git worktree.
-func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, force bool) ScanResult {
+func (s *Scanner) scanWorktree(ctx context.Context, wt WorktreeInfo, defaultBranch, repoPath string, force bool) ScanResult {
 	result := ScanResult{
 		RepoPath:      repoPath,
 		Branch:        wt.Branch,
@@ -703,6 +720,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	}
 
 	shadow := s.beginShadow(repoPath, wt.Path)
+	defer shadow.release()
 
 	uncommitted, pass, err := s.hasUncommitted(wt.Path)
 	if err != nil {
@@ -721,7 +739,10 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, 
 	result.HasUncommitted = uncommitted
 
 	if defaultBranch != "" {
-		s.fillCommittedState(&result, repoPath, wt.Path, defaultBranch)
+		s.fillCommittedState(ctx, &result, repoPath, wt.Path, defaultBranch)
+		if ctx.Err() != nil {
+			return result // cancelled mid-walk: zero counts must not reach the cache
+		}
 	}
 
 	// Skip when uncommitted is false: DiffShortstat re-derives the identical

@@ -41,8 +41,8 @@ func (o Options) logf(format string, args ...any) {
 	fmt.Fprintf(o.Log, "shared-node-modules: "+format+"\n", args...)
 }
 
-// Run links <WebAppDir>/node_modules at a shared install keyed by bun.lock, bunfig.toml and
-// the content of every local file: dependency (bun.lock records those with no content
+// Run links <WebAppDir>/node_modules at a shared install keyed by bun.lock, bunfig.toml,
+// patches/ and the content of every local file: dependency (bun.lock records those with no content
 // digest, so the lockfile alone would let a worktree that edited one serve another's
 // stale copy). The Bun isolated tree uses relative symlinks, so it stays valid after being
 // moved or symlinked elsewhere.
@@ -69,6 +69,7 @@ func Run(o Options) error {
 	if err != nil {
 		return err
 	}
+	deps = withPatchesDir(o.WebAppDir, deps)
 
 	if exists(filepath.Join(nm, ".modules.yaml")) && !isSymlink(nm) {
 		// A pnpm-built tree is the wrong layout to adopt; drop it and install fresh.
@@ -198,6 +199,15 @@ func localFileDeps(webAppDir string) ([]string, error) {
 	}
 	sort.Strings(dirs)
 	return dirs, nil
+}
+
+// withPatchesDir adds patches/ (bun patch output) to the hashed and seeded trees: a patch
+// edit must not be served an install built from the old one.
+func withPatchesDir(webAppDir string, deps []string) []string {
+	if exists(filepath.Join(webAppDir, "patches")) {
+		return append(deps, "patches")
+	}
+	return deps
 }
 
 // contentKey hashes bun.lock, bunfig.toml (when present) plus every file under each local dependency directory.

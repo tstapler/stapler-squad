@@ -134,13 +134,12 @@ func TestIDWalk_ShouldKeepBFSOrder_WhenDFSAndBFSDifferAtCap(t *testing.T) {
 }
 
 func TestIDWalk_ShouldFallBackToPlainWalkWithSameResult_WhenErrGraphFullMidWalk(t *testing.T) {
-	withSharedCommitState(t, true)
 	_, dir, _ := testrepo.Diverged(t, 40, 3, 2)
 	const wantA, wantB = 3, 2
 
-	r := &GoGitVCSReader{repoStateMaxGraphCommits: 8}
+	r := readerWithFlags(Flags{SharedCommitState: true}, &GoGitVCSReader{repoStateMaxGraphCommits: 8})
 	assertRefsBalanced(t, r)
-	gotA, gotB, err := r.AheadBehind(dir, "base")
+	gotA, gotB, err := r.AheadBehind(context.Background(), dir, "base")
 	if err != nil {
 		t.Fatalf("AheadBehind with a tiny graph: %v", err)
 	}

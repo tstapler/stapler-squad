@@ -32,7 +32,7 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
 	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
 	s.mux.HandleFunc("/actuator/nudge-outcomes", handleActuatorNudgeOutcomes)
-	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner)
+	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
 }
 
 // handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
@@ -45,9 +45,11 @@ func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 // handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
 // from atomics, so soak decisions need neither OpenTelemetry nor a profile
 // (docs/how-to/tune-unfinished-scanner-caches.md).
-func handleActuatorUnfinishedScanner(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(unfinished.BuildReport())
+func handleActuatorUnfinishedScanner(s *unfinished.Scanner) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(unfinished.BuildReport(s))
+	}
 }
 
 // handleActuatorGitBackend serves the git backend shadow-soak counters and the mechanical flip

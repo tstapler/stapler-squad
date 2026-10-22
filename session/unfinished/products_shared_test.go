@@ -1,25 +1,25 @@
 package unfinished
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
 )
 
 func TestAheadBehind_ShouldHitSharedMemoWithNoWalk_WhenSecondWorktreeSameHeadAndBase(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 2)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
-	if ahead, behind, err := r.AheadBehind(paths[0], "base"); err != nil || ahead != 3 || behind != 2 {
+	if ahead, behind, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil || ahead != 3 || behind != 2 {
 		t.Fatalf("W1 AheadBehind = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
 	rs := assertSharedPathEngaged(t, r.GoGitVCSReader, paths[0])
 	decodes, graphBefore := r.DecodeCount(), rs.Graph().CacheStats()
 
-	if ahead, behind, err := r.AheadBehind(paths[1], "base"); err != nil || ahead != 3 || behind != 2 {
+	if ahead, behind, err := r.AheadBehind(context.Background(), paths[1], "base"); err != nil || ahead != 3 || behind != 2 {
 		t.Fatalf("W2 AheadBehind = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
 	if got := r.DecodeCount() - decodes; got != 0 {
@@ -34,17 +34,16 @@ func TestAheadBehind_ShouldHitSharedMemoWithNoWalk_WhenSecondWorktreeSameHeadAnd
 }
 
 func TestAheadBehind_ShouldWalkPerWorktree_WhenSharedCommitStateFlagOffControl(t *testing.T) {
-	withSharedCommitState(t, false)
 	paths := clockedWorktrees(t, 2)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: false})
 	for _, p := range paths {
 		r.Track(t, p)
 	}
-	if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil {
 		t.Fatal(err)
 	}
 	first := r.DecodeCount()
-	if _, _, err := r.AheadBehind(paths[1], "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), paths[1], "base"); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.DecodeCount() - first; got == 0 {
@@ -60,11 +59,10 @@ func TestAheadBehind_ShouldWalkPerWorktree_WhenSharedCommitStateFlagOffControl(t
 }
 
 func TestAheadBehind_ShouldOnlyRerunPhase1_WhenHashesUnchangedAfterTTL(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 1)
-	r := NewCountingReader()
+	r := NewCountingReader(Flags{SharedCommitState: true})
 	r.Track(t, paths[0])
-	if _, _, err := r.AheadBehind(paths[0], "base"); err != nil {
+	if _, _, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil {
 		t.Fatal(err)
 	}
 	rs := assertSharedPathEngaged(t, r.GoGitVCSReader, paths[0])
@@ -77,7 +75,7 @@ func TestAheadBehind_ShouldOnlyRerunPhase1_WhenHashesUnchangedAfterTTL(t *testin
 	r.aheadBehindCache.Store(key, e)
 	decodes, graphBefore := r.DecodeCount(), rs.Graph().CacheStats()
 
-	if ahead, behind, err := r.AheadBehind(paths[0], "base"); err != nil || ahead != 3 || behind != 2 {
+	if ahead, behind, err := r.AheadBehind(context.Background(), paths[0], "base"); err != nil || ahead != 3 || behind != 2 {
 		t.Fatalf("after TTL = (%d, %d, %v), want (3, 2, nil)", ahead, behind, err)
 	}
 	if got := r.DecodeCount() - decodes; got != 0 {
@@ -89,9 +87,8 @@ func TestAheadBehind_ShouldOnlyRerunPhase1_WhenHashesUnchangedAfterTTL(t *testin
 }
 
 func TestCommitMessages_ShouldDecodeEachAheadCommitOnce_WhenThreeWorktreesShareMemos(t *testing.T) {
-	withSharedCommitState(t, true)
 	paths := clockedWorktrees(t, 3)
-	r, shared, _ := coldCommitMessages(t, paths)
+	r, shared, _ := coldCommitMessages(t, Flags{SharedCommitState: true}, paths)
 	entry, err := r.openRepoEntry(paths[0])
 	if err != nil {
 		t.Fatal(err)

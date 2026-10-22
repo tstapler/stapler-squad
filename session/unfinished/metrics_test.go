@@ -22,7 +22,7 @@ import (
 // observable gauge were registered with a description/unit OTel rejects.
 func TestRegisterMetrics_NoError(t *testing.T) {
 	t.Parallel()
-	if err := RegisterMetrics(); err != nil {
+	if err := RegisterMetrics(nil); err != nil {
 		t.Fatalf("RegisterMetrics: %v", err)
 	}
 }
@@ -108,6 +108,8 @@ func expectedSeriesKeys() []string {
 			for f := range numParityFields {
 				keys = append(keys, fmt.Sprintf("%s{%s}", spec.name, f))
 			}
+		case "outcome":
+			keys = append(keys, spec.name+"{bound}", spec.name+"{pruned_miss}")
 		case "kind":
 			keys = append(keys, spec.name+"{scratch}", spec.name+"{incremental}")
 		case "impl":
@@ -148,26 +150,30 @@ func TestMetrics_ShouldExportAllRepostateSeriesAsZero_WhenFlagOffOrRepoStateUnal
 func TestMetrics_ShouldExposeFillLostCasDecodeReprobeRollbackAndCasRetries(t *testing.T) {
 	t.Parallel()
 	in := newRepostateInputs()
-	in.graph = repostate.GraphStats{FillLostCAS: 1, FillLostDecode: 2, Reprobe: 3, Rollback: 4, CASRetries: 5, GraphFull: 6}
+	in.graph = repostate.GraphStats{FillLostCAS: 1, FillLostDecode: 2, Reprobe: 3, Rollback: 4, CASRetries: 5, GraphFull: 6, FullRebuild: 14}
 	in.caches["graph"] = repostate.CacheStats{Hits: 7, Misses: 8, Evictions: 9, Coalesced: 10, Entries: 11, Bytes: 12}
 	in.parity.Mismatch[parityShortstat] = 13
+	in.redundancy = [numRedundancyOutcomes]int64{redundancyBound: 15, redundancyPrunedMiss: 16}
 
 	series := collectSeries(t, func() repostateInputs { return in })
 
 	want := map[string]int64{
-		"fill_lost_cas_total":              1,
-		"fill_lost_decode_total":           2,
-		"reprobe_total":                    3,
-		"fill_rollback_total":              4,
-		"cas_retries_total":                5,
-		"graph_full_fallbacks_total":       6,
-		"cache_hits_total{graph}":          7,
-		"cache_misses_total{graph}":        8,
-		"cache_evictions_total{graph}":     9,
-		"cache_coalesced_total{graph}":     10,
-		"cache_entries{graph}":             11,
-		"cache_bytes{graph}":               12,
-		"parity_mismatch_total{shortstat}": 13,
+		"fill_lost_cas_total":                              1,
+		"fill_lost_decode_total":                           2,
+		"reprobe_total":                                    3,
+		"fill_rollback_total":                              4,
+		"cas_retries_total":                                5,
+		"graph_full_fallbacks_total":                       6,
+		"graph_full_rebuilds_total":                        14,
+		"cache_hits_total{graph}":                          7,
+		"cache_misses_total{graph}":                        8,
+		"cache_evictions_total{graph}":                     9,
+		"cache_coalesced_total{graph}":                     10,
+		"cache_entries{graph}":                             11,
+		"cache_bytes{graph}":                               12,
+		"parity_mismatch_total{shortstat}":                 13,
+		"mergebase_redundancy_unproven_total{bound}":       15,
+		"mergebase_redundancy_unproven_total{pruned_miss}": 16,
 	}
 	for k, v := range want {
 		assert.EqualValues(t, v, series[k], k)

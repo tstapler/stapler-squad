@@ -38,7 +38,10 @@ type repostateInputs struct {
 	internerSize int64
 	reachBuilds  repostate.ReachStats
 	statCalls    int64
+	nanosHashes  int64
 	graphExt     OpDurationStats
+	// redundancy sums both merge-base walks' redundancy-check outcomes.
+	redundancy [numRedundancyOutcomes]int64
 }
 
 func newRepostateInputs() repostateInputs {
@@ -57,11 +60,29 @@ type (
 	graphEpocher      interface{ Load() *repostate.Generation }
 )
 
-// collectRepostateInputs reads the live reader and scanner; with neither (or
+// goGitReader is the scanner's reader when it is the go-git one, else nil.
+// Safe on a nil Scanner.
+func (s *Scanner) goGitReader() *GoGitVCSReader {
+	if s == nil {
+		return nil
+	}
+	r, _ := s.reader.(*GoGitVCSReader)
+	return r
+}
+
+// flagsOrOff is the scanner's flags, all off for a nil Scanner.
+func (s *Scanner) flagsOrOff() Flags {
+	if s == nil {
+		return Flags{}
+	}
+	return s.flags
+}
+
+// collectRepostateInputs reads s's reader and s itself; with no scanner (or
 // with shared_commit_state off) the result is all zero.
-func collectRepostateInputs() repostateInputs {
+func collectRepostateInputs(s *Scanner) repostateInputs {
 	in := newRepostateInputs()
-	if r := currentReader.Load(); r != nil {
+	if r := s.goGitReader(); r != nil {
 		in.repoStates, in.repoBytes = r.repoStateTotals()
 		r.forEachRepoState(func(rs *repostate.RepoState) {
 			in.addGraph(rs)
@@ -69,12 +90,17 @@ func collectRepostateInputs() repostateInputs {
 		})
 		in.skip = r.ScanSkipStats()
 		in.statCalls = r.StatCalls()
+		in.nanosHashes = r.NanosForcedHashes()
 	}
 	in.graphExt = GraphExtensionDurations()
 	m := DiffMemoStats()
 	in.caches["diffmemo"] = repostate.CacheStats{Hits: m.Hits, Misses: m.Misses, Evictions: m.Evictions}
 	in.decoded = DecodedCommitsTotal()
-	if s := currentScanner.Load(); s != nil {
+	in.redundancy = [numRedundancyOutcomes]int64{
+		redundancyBound:      mergeBaseRedundancyTotal[redundancyBound].Load() + int64(in.graph.RedundancyBound),           //nolint:gosec // counters never approach int64
+		redundancyPrunedMiss: mergeBaseRedundancyTotal[redundancyPrunedMiss].Load() + int64(in.graph.RedundancyPrunedMiss), //nolint:gosec // counters never approach int64
+	}
+	if s != nil {
 		in.scan = s.ScanStateStats()
 		in.parity = s.ParityStats()
 	}
@@ -97,6 +123,7 @@ func (in *repostateInputs) addGraph(rs *repostate.RepoState) {
 	in.graph.Rollback += st.Rollback
 	in.graph.CASRetries += st.CASRetries
 	in.graph.GraphFull += st.GraphFull
+	in.graph.FullRebuild += st.FullRebuild
 	if cs, ok := any(g).(graphCacheStatser); ok {
 		c := cs.CacheStats()
 		cur := in.caches["graph"]
@@ -171,9 +198,9 @@ func DecodedCommitsTotal() int64 { return decodedCommitsTotal.Load() }
 
 // cycleCounters are the two process-wide counters the scan-cycle debug line
 // reports as per-Burst deltas.
-func cycleCounters() (decodes, graphRows int64) {
+func (s *Scanner) cycleCounters() (decodes, graphRows int64) {
 	decodes = DecodedCommitsTotal()
-	if r := currentReader.Load(); r != nil {
+	if r := s.goGitReader(); r != nil {
 		in := newRepostateInputs()
 		r.forEachRepoState(func(rs *repostate.RepoState) { in.addGraph(rs) })
 		graphRows = in.caches["graph"].Misses
@@ -226,6 +253,7 @@ var repostateCatalog = []seriesSpec{
 	{"cache_bytes", "Bytes held per repostate cache", "cache", kindGauge},
 	{"cache_entries", "Entries held per repostate cache", "cache", kindGauge},
 	{"graph_full_fallbacks_total", "Walks that fell back to the plain walk because the graph arena was full", "", kindCounter},
+	{"graph_full_rebuilds_total", "Full graph arenas replaced by a fresh generation (rate-limited)", "", kindCounter},
 	{"fill_lost_cas_total", "Graph row fills that lost the CAS race", "", kindCounter},
 	{"fill_lost_decode_total", "Graph row fills whose decode was discarded after losing", "", kindCounter},
 	{"reprobe_total", "Truncated graph rows re-probed after a ShallowStamp change", "", kindCounter},
@@ -249,6 +277,7 @@ var repostateCatalog = []seriesSpec{
 	{"shadow_verify_oracle_errors_total", "Oracle reads that failed (comparisons that did not happen)", "", kindCounter},
 	{"parity_mismatch_total", "Stable disagreements between the new path and the legacy oracle", "field", kindCounter},
 	{"parity_transient_total", "Disagreements discarded because the oracle disagreed with itself", "field", kindCounter},
+	{"mergebase_redundancy_unproven_total", "Merge-base redundancy checks that answered not-redundant without finding the candidate, by why (visit bound or pruned miss), plain and id walks summed", "outcome", kindCounter},
 	{"reach_builds_total", "Reach sets built, by how (scratch walk or incremental extension)", "kind", kindCounter},
 	{"stat_calls_total", "File stats issued by the scan loop", "", kindCounter},
 	{"stat_calls_per_scan", "File stats per completed scan cycle (integer mean since start)", "", kindGauge},
@@ -278,6 +307,7 @@ func (in repostateInputs) points() []seriesPoint {
 	}
 	g := in.graph
 	add("graph_full_fallbacks_total", "", int64(g.GraphFull))  //nolint:gosec // counters never approach int64
+	add("graph_full_rebuilds_total", "", int64(g.FullRebuild)) //nolint:gosec // counters never approach int64
 	add("fill_lost_cas_total", "", int64(g.FillLostCAS))       //nolint:gosec // counters never approach int64
 	add("fill_lost_decode_total", "", int64(g.FillLostDecode)) //nolint:gosec // counters never approach int64
 	add("reprobe_total", "", int64(g.Reprobe))                 //nolint:gosec // counters never approach int64
@@ -303,10 +333,14 @@ func (in repostateInputs) points() []seriesPoint {
 		add("parity_mismatch_total", f.String(), in.parity.Mismatch[f])
 		add("parity_transient_total", f.String(), in.parity.Transient[f])
 	}
+	for o := range numRedundancyOutcomes {
+		add("mergebase_redundancy_unproven_total", redundancyOutcomeNames[o], in.redundancy[o])
+	}
 	add("reach_builds_total", "scratch", int64(in.reachBuilds.Scratch))         //nolint:gosec // counters never approach int64
 	add("reach_builds_total", "incremental", int64(in.reachBuilds.Incremental)) //nolint:gosec // counters never approach int64
 	add("stat_calls_total", "", in.statCalls)
 	add("stat_calls_per_scan", "", perScan(in.statCalls, ScanCyclesTotal()))
+	add("nanos_forced_hashes_total", "", in.nanosHashes)
 	add("graph_extension_total", "", in.graphExt.Count)
 	add("graph_extension_over_100ms_total", "", in.graphExt.SlowOver100ms)
 	add("commit_parents_reader", "stock", 1)
@@ -379,6 +413,10 @@ func (g *GoGitVCSReader) noteStat(rel string) {
 		g.statFn(rel)
 	}
 }
+
+// NanosForcedHashes returns the content hashes forced only by a sub-second mtime
+// mismatch since process start.
+func (g *GoGitVCSReader) NanosForcedHashes() int64 { return g.nanosForcedHashes.Load() }
 
 // StatCalls returns the file stats issued by the scan loop since process start.
 func (g *GoGitVCSReader) StatCalls() int64 { return g.statCalls.Load() }

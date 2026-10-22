@@ -248,3 +248,23 @@ func TestBunfigChangesTheKey(t *testing.T) {
 
 	assert.NotEqual(t, ka, kb, "linker settings change the tree layout, so they must change the key")
 }
+
+func TestPatchContentChangesTheKeyAndIsSeeded(t *testing.T) {
+	a, b := fixture(t, "lock", "rule"), fixture(t, "lock", "rule")
+	for _, d := range []string{a, b} {
+		require.NoError(t, os.MkdirAll(filepath.Join(d, "patches"), 0o755))
+	}
+	write(t, filepath.Join(a, "patches", "eval@0.1.8.patch"), "patch 1")
+	write(t, filepath.Join(b, "patches", "eval@0.1.8.patch"), "patch 2")
+
+	ka, err := contentKey(a, withPatchesDir(a, nil))
+	require.NoError(t, err)
+	kb, err := contentKey(b, withPatchesDir(b, nil))
+	require.NoError(t, err)
+	assert.NotEqual(t, ka, kb, "a patch edit must not reuse an install built from the old patch")
+
+	h := newHarness(t)
+	_, err = h.run(a, false)
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(linkTarget(t, a), "..", "patches", "eval@0.1.8.patch"), "bun install in the shared dir needs the patch file")
+}

@@ -4,6 +4,7 @@ package unfinished
 // metric definitions every gate in this package is expressed in.
 
 import (
+	"context"
 	"io"
 	"strconv"
 	"sync/atomic"
@@ -141,14 +142,14 @@ func divergedWorktrees(tb testing.TB, w int) []string {
 
 // coldAheadBehindDecodes runs one cold AheadBehind per worktree on a fresh
 // reader and returns the DecodeCount it caused.
-func coldAheadBehindDecodes(t *testing.T, paths []string) int64 {
+func coldAheadBehindDecodes(t *testing.T, flags Flags, paths []string) int64 {
 	t.Helper()
-	r := NewCountingReader()
+	r := NewCountingReader(flags)
 	for _, p := range paths {
 		r.Track(t, p)
 	}
 	for _, p := range paths {
-		ahead, behind, err := r.AheadBehind(p, "base")
+		ahead, behind, err := r.AheadBehind(context.Background(), p, "base")
 		if err != nil {
 			t.Fatalf("AheadBehind %s: %v", p, err)
 		}
@@ -164,8 +165,8 @@ func coldAheadBehindDecodes(t *testing.T, paths []string) int64 {
 // gap visible until gate G2 replaces it.
 func TestDecodeCount_ShouldRecordWTimesBaseline_WhenThreeWorktreesShareOneRepo(t *testing.T) {
 	paths := divergedWorktrees(t, 3)
-	w1 := coldAheadBehindDecodes(t, paths[:1])
-	w3 := coldAheadBehindDecodes(t, paths)
+	w1 := coldAheadBehindDecodes(t, Flags{}, paths[:1])
+	w3 := coldAheadBehindDecodes(t, Flags{}, paths)
 	t.Logf("legacy baseline, shared head and base, 2500-commit trunk, 3 ahead / 2 behind: DecodeCount W=1 = %d, W=3 = %d", w1, w3)
 	if w1 == 0 {
 		t.Fatal("DecodeCount W=1 is 0: the counting storer is not on the walk path")

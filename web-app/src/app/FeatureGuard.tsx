@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/lib/nav";
 import { RequireFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { ROUTE_META, type GuardFlag } from "./route-meta";
 

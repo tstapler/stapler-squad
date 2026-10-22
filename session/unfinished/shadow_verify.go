@@ -132,7 +132,7 @@ func (s *Scanner) readerFlags() Flags {
 	if v, ok := s.reader.(flagView); ok {
 		return v.effectiveFlags()
 	}
-	return EffectiveFlags()
+	return s.flags
 }
 
 // oracleReader is the optional VCSReader capability that runs the legacy
@@ -144,7 +144,9 @@ type oracleReader interface {
 	OracleCommitMessages(worktreePath, base string, limit int) ([]string, error)
 	OracleHasUncommitted(worktreePath string) (bool, error)
 	OracleDiffShortstat(worktreePath string) (DiffStat, error)
-	// OracleDone releases the oracle's memory after a sampled scan.
+	// OracleBegin registers a sampled run; each must be matched by one OracleDone.
+	OracleBegin()
+	// OracleDone releases one run; the last one releases the oracle's memory.
 	OracleDone()
 }
 
@@ -153,6 +155,7 @@ type shadowRun struct {
 	s      *Scanner
 	oracle oracleReader
 	repo   string
+	done   atomic.Bool
 }
 
 // beginShadow decides whether this scan is sampled. A sampled scan evicts the
@@ -176,7 +179,16 @@ func (s *Scanner) beginShadow(repoPath, worktreePath string) *shadowRun {
 	if inv, ok := s.reader.(worktreeInvalidator); ok {
 		inv.InvalidateWorktree(worktreePath)
 	}
+	oracle.OracleBegin()
 	return &shadowRun{s: s, oracle: oracle, repo: repoPath}
+}
+
+// release gives the oracle back once; Nil-safe and idempotent so scanWorktree
+// can defer it on every exit path (finish releases earlier on success).
+func (r *shadowRun) release() {
+	if r != nil && r.done.CompareAndSwap(false, true) {
+		r.oracle.OracleDone()
+	}
 }
 
 // verdict is the outcome of comparing the new path with the oracle.
@@ -216,7 +228,7 @@ func (r *shadowRun) finish(result *ScanResult, base string) {
 	if r == nil {
 		return
 	}
-	defer r.oracle.OracleDone()
+	defer r.release()
 	wt := result.WorktreePath
 	if base != "" {
 		r.verifyAheadBehind(result, wt, base)

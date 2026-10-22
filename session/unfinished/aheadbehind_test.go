@@ -1,6 +1,7 @@
 package unfinished
 
 import (
+	"context"
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo"
@@ -30,7 +31,7 @@ func TestAheadBehindFrom_ShouldMatchAheadBehind_WhenParentMemoIsTheSource(t *tes
 	if err != nil || ahead != cmAhead || behind != cmBehind {
 		t.Fatalf("aheadBehindFrom = (%d, %d, %v), want (%d, %d, nil)", ahead, behind, err, cmAhead, cmBehind)
 	}
-	gotA, gotB, err := r.AheadBehind(dir, "base")
+	gotA, gotB, err := r.AheadBehind(context.Background(), dir, "base")
 	if err != nil || gotA != ahead || gotB != behind {
 		t.Fatalf("AheadBehind = (%d, %d, %v), want (%d, %d, nil)", gotA, gotB, err, ahead, behind)
 	}

@@ -4,6 +4,7 @@ package unfinished
 // are sampled is a function of the seed, never of timing.
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"sync"
@@ -52,6 +53,7 @@ func (f *oracleFake) OracleHasUncommitted(string) (bool, error) {
 	return f.oracleDirty, nil
 }
 func (f *oracleFake) OracleDiffShortstat(string) (DiffStat, error) { return DiffStat{}, nil }
+func (f *oracleFake) OracleBegin()                                 {}
 func (f *oracleFake) OracleDone()                                  {}
 
 // newShadowScanner returns a scanner that samples every scan and records debug lines.
@@ -202,7 +204,7 @@ func TestShadowVerify_ShouldReportNoMismatch_WhenRealNewPathsMatchLegacy(t *test
 	s := NewScannerWithReader(nil, nil, r)
 	s.shadow.intn = func(int) int { return 0 }
 
-	results := s.scanRepo(p.mainDir, true)
+	results := s.scanRepo(context.Background(), p.mainDir, true)
 
 	var got ScanResult
 	for _, res := range results {
@@ -217,4 +219,77 @@ func TestShadowVerify_ShouldReportNoMismatch_WhenRealNewPathsMatchLegacy(t *test
 	assert.Equal(t, [numParityFields]int64{}, st.Mismatch)
 	assert.Equal(t, [numParityFields]int64{}, st.Transient)
 	assert.Zero(t, st.OracleErrors, "every oracle read answered: the comparison was not vacuous")
+}
+
+// Two overlapping sampled runs share one oracle: the first Done must not close
+// the repo handles the second still reads; only the last Done clears.
+func TestShadowOracle_ShouldClearOnlyOnLastRelease_WhenRunsOverlap(t *testing.T) {
+	t.Parallel()
+	p := newPreludeRepo(t, 1)
+	g := newPreludeReader()
+
+	g.OracleBegin()
+	g.OracleBegin()
+	_, err := g.OracleHasUncommitted(p.wts[0])
+	require.NoError(t, err)
+	oracle := g.scanSkip.oracle.Load()
+	require.NotNil(t, oracle)
+	require.EqualValues(t, 1, atomic.LoadInt64(&oracle.repoCacheSize), "precondition: oracle holds a handle")
+
+	g.OracleDone()
+	assert.EqualValues(t, 1, atomic.LoadInt64(&oracle.repoCacheSize), "first release must keep the handle the other run reads")
+	_, err = g.OracleHasUncommitted(p.wts[0])
+	assert.NoError(t, err, "the surviving run still gets answers")
+
+	g.OracleDone()
+	assert.Zero(t, atomic.LoadInt64(&oracle.repoCacheSize), "last release clears")
+	g.OracleDone() // unbalanced: no-op, no panic
+	assert.Zero(t, g.scanSkip.oracleUsers.Load())
+}
+
+func oracleWithClear(clear func(*GoGitVCSReader)) *GoGitVCSReader {
+	g := &GoGitVCSReader{}
+	g.scanSkip.oracle.Store(&GoGitVCSReader{})
+	g.scanSkip.clearOracle = clear
+	return g
+}
+
+// A panicking ClearCache used to leave oracleUsers at -1 forever, so every later
+// OracleBegin waited for a release that never came.
+func TestShadowOracle_ShouldResetCounter_WhenClearPanics(t *testing.T) {
+	t.Parallel()
+	g := oracleWithClear(func(*GoGitVCSReader) { panic("clear failed") })
+	g.OracleBegin()
+	require.Panics(t, g.OracleDone)
+	require.Zero(t, g.scanSkip.oracleUsers.Load(), "the reset must survive the panic")
+
+	g.OracleBegin() // returns instead of waiting on a counter stuck at -1
+	assert.EqualValues(t, 1, g.scanSkip.oracleUsers.Load())
+}
+
+// A run that begins while the last releaser clears waits for the clear to end.
+func TestShadowOracle_ShouldBlockBegin_UntilClearFinishes(t *testing.T) {
+	t.Parallel()
+	inClear, release := make(chan struct{}), make(chan struct{})
+	var cleared atomic.Bool
+	g := oracleWithClear(func(*GoGitVCSReader) {
+		close(inClear)
+		<-release
+		cleared.Store(true)
+	})
+	g.OracleBegin()
+	releaser := make(chan struct{})
+	go func() { defer close(releaser); g.OracleDone() }()
+	<-inClear
+
+	started, begun := make(chan struct{}), make(chan bool)
+	go func() {
+		close(started)
+		g.OracleBegin()
+		begun <- cleared.Load()
+	}()
+	<-started
+	close(release)
+	assert.True(t, <-begun, "Begin returned before the clear finished")
+	<-releaser
 }
