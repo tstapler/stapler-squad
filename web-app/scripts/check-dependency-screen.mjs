@@ -1,6 +1,6 @@
-// Supply-chain screen for the router dependency (Story 4.1). Reads bun.lock (JSONC) and fails on a banned
-// version anywhere in the lockfile, or on a git/github source, optionalDependencies or install script in the
-// closure of the watched roots. Install scripts are not in the lockfile, so they are read from installed manifests.
+// Supply-chain screen (Stories 4.1, 6.10). Reads bun.lock (JSONC) and fails on a banned version or a
+// git/github source anywhere in the lockfile, on a trustedDependencies entry with no install script, or on
+// optionalDependencies or an install script in the closure of the watched roots. Install scripts are not in the lockfile, so they are read from installed manifests.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +62,20 @@ export function screen(lock, { roots = WATCHED_ROOTS, readManifest = () => null 
     }
   }
 
+  for (const entry of entries.values()) {
+    if (REMOTE_SOURCE.test(entry.spec)) problems.push(`${entry.spec} comes from a git/github/http source`);
+  }
+
+  // A trusted package without an install script is a standing grant that does nothing today and runs code if one appears.
+  for (const name of lock.trustedDependencies ?? []) {
+    for (const entry of [...entries.values()].filter((e) => e.name === name)) {
+      const manifest = readManifest(entry.name, entry.version);
+      if (manifest && !INSTALL_SCRIPTS.some((script) => manifest.scripts?.[script])) {
+        problems.push(`${entry.spec} is in trustedDependencies but has no install script`);
+      }
+    }
+  }
+
   const resolve = (name, parentKey) => entries.get(`${parentKey}/${name}`) ?? entries.get(name);
   const seen = new Map();
   const queue = [];
@@ -75,7 +89,6 @@ export function screen(lock, { roots = WATCHED_ROOTS, readManifest = () => null 
     const entry = queue.pop();
     if (seen.has(entry.key)) continue;
     seen.set(entry.key, entry.spec);
-    if (REMOTE_SOURCE.test(entry.spec)) problems.push(`${entry.spec} comes from a git/github/http source`);
     const optional = Object.keys(entry.meta.optionalDependencies ?? {});
     if (optional.length > 0) problems.push(`${entry.spec} declares optionalDependencies: ${optional.join(", ")}`);
     const scripts = readManifest(entry.name, entry.version)?.scripts ?? {};

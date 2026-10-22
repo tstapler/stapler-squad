@@ -68,4 +68,24 @@ describe("check-dependency-screen", () => {
   it("fails when the watched root is absent", () => {
     assert.match(run([["cookie", "cookie@1.1.1", {}]]).stderr, /react-router is not in the lockfile/);
   });
+
+  it("flags a github source anywhere in the lockfile, not only in the router closure", () => {
+    const r = run([...CLEAN, ["left-pad", "left-pad@github:evil/left-pad#abc", {}]]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /left-pad@github:evil\/left-pad#abc comes from a git\/github\/http source/);
+  });
+
+  it("flags a trustedDependencies entry whose installed manifest has no install script", () => {
+    const lock = { ...parseBunLock(lockText(CLEAN)), trustedDependencies: ["cookie"] };
+    const manifests = { cookie: { scripts: { test: "x" } } };
+    const problems = (m) => screen(lock, { readManifest: (name) => m[name] ?? null }).problems.join("\n");
+    assert.match(problems(manifests), /cookie@1\.1\.1 is in trustedDependencies but has no install script/);
+    assert.equal(problems({ cookie: { scripts: { postinstall: "node x.js" } } }).includes("trustedDependencies"), false);
+    assert.equal(problems({}).includes("trustedDependencies"), false, "an uninstalled package cannot be judged");
+  });
+
+  it("keeps the committed trustedDependencies free of packages with no install script", () => {
+    const r = spawnSync("node", [script], { encoding: "utf8" });
+    assert.doesNotMatch(r.stderr, /trustedDependencies/);
+  });
 });
