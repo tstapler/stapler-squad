@@ -17,3 +17,33 @@ PR 8 has not merged yet, so no soak window has started and none of the dated fie
 **Stop-loss principle:** the dual-build tax (two CI cells, aliases, conditionals in tests) must not become permanent. If PR 9 has not merged by D+45, the owner decides in writing — recorded as a new entry in this file — between finishing PR 9 and reverting to Next outright. Epics 1, 2c, 2d, and 7a remain valuable under Next either way, so a stop-loss revert at D+45 does not waste that work.
 
 <!-- Next entry: owner's lengthen/shorten decisions, actual Soak dates, T3 occurrences, and the dated-reminder links, appended here once PR 8 merges. -->
+
+## Story 8.5: Restart-safety precondition (Task 8.5a)
+
+**Date**: 2026-10-22
+**Command (read-only; never restarted, stopped, or otherwise touched the live service)**:
+
+```
+$ systemctl --user cat stapler-squad | grep -- --tmux-keep-server
+ExecStart=/home/tstapler/Programming/stapler-squad/stapler-squad --remote-access --tmux-keep-server --profile --profile-port 6060
+```
+
+**Result**: present. The deployed systemd user unit's `ExecStart` already
+includes `--tmux-keep-server` (shipped by #180 /
+`docs/explanation/tmux-keep-server-on-restart.md`), so a restart via `make
+install-service` does not tear down the tmux server or any live session.
+
+Per the acceptance criteria: since the flag is present, no explicit decision
+to accept session loss is required and Story 8.2 is not blocked on this
+precondition. Owner: Tyler Stapler (tystapler@gmail.com). No change made to
+the live deployment; this is a read-only observation.
+
+The `install-service` Makefile preflight (Task 8.5d) now also enforces this
+check at build time, independent of this manual record — see
+`docs/how-to/rollback-web-build.md`.
+
+**Tasks 8.5c and 8.5e** (required-check removal command rehearsal; rollback
+flip rehearsal on a ManualInstance) both ran successfully with real command
+output — see `docs/how-to/rollback-web-build.md` for the full transcripts
+and timings rather than duplicating them here. Neither touched `:8543` or
+any live tmux session.
