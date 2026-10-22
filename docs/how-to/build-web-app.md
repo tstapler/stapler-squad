@@ -32,3 +32,33 @@ Stages, in order: `guard` (the vanilla-extract `eval` patch is applied), `clean`
 | `make dev-stack` | `next dev` | unchanged until PR 5b |
 
 `bunx tsc -p tsconfig.bun.json --noEmit` type-checks the Bun side; it also includes the `impl.next` files the Bun build does not select, and the base `tsconfig.json` includes the router implementation, so a signature drift in either shows up in one of the two.
+
+## Variables
+
+| Variable | Values | Effect |
+|---|---|---|
+| `WEB_BUILD` | `next` (default), `bun` | Picks the bundler for `make web-build` and `bun run build`. Anything else fails the Makefile. |
+| `WEB_MINIFY` | `0`, `1` | `make` passes `0` by default (the cutover build ships unminified, ADR-004). `bun build/build.ts` run directly minifies unless `0`. Byte budgets are enforced only for minified output. |
+| `WEB_DEV_HMR` | `0`, `1` | Hot reload of the Bun dev server. The server itself arrives in PR 5b; the flag is documented here so the name is reserved. |
+
+## Ports
+
+The Bun dev server uses `62875` from the manual dev port block in `CLAUDE.md`. It binds to `localhost` only. Never point it at the live instance's port.
+
+## Debug build
+
+Build into a scratch directory, minified, with the budget check, without touching `web-app/out`:
+
+```bash
+cd web-app
+bun build/build.ts --out .build/out-min --stats .build/stats-minified.json
+```
+
+Source maps are emitted next to each chunk (`sourcemap: "linked"`). The stage that failed is named in the error.
+
+## Checks that guard the output
+
+- `verify-output` (inside the build) and `server/middleware/built_assets_test.go` both walk every file in `web-app/out` against the auth exemption. Run the Go side locally with `REQUIRE_BUILT_OUT=1 go test ./server/middleware -run TestBuiltAssets` after a build; without `out/` it skips unless `CI` or `REQUIRE_BUILT_OUT=1` is set.
+- `web-app/.size-limit.json` caps Total JS at the number in `web-app/build/budgets.json`; `bunx size-limit` checks it against `out/_next/static/**/*.js`.
+- `bun run check:dependency-screen` fails on a banned version, a `github:` source, or a `trustedDependencies` entry whose package has no install script.
+- The vanilla-extract `eval` patch: `docs/how-to/patch-vanilla-extract-eval.md`.
