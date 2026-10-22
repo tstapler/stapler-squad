@@ -1,5 +1,5 @@
 // Static server with the Go handler's SPA semantics (server/middleware/static.go): path.Clean, existing file wins, else index.html.
-// Usage: bun serve.ts [root] [port]   (ports 62875+ only; never :8543)
+// Usage: bun serve.ts [root] [port]   (ports 62875+ only; never the live instance port)
 import { existsSync, statSync } from "node:fs";
 import { posix } from "node:path";
 
