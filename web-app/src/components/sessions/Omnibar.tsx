@@ -7,7 +7,7 @@ import {
   detect,
   InputType,
   INPUT_TYPE_INFO,
-  DetectionResult,
+  type DetectionResult,
 } from "@/lib/omnibar";
 import {
   useModeReducer,
@@ -27,7 +27,7 @@ import {
 } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
-import { Session, SessionType } from "@/gen/session/v1/types_pb";
+import { type Session, SessionType } from "@/gen/session/v1/types_pb";
 import {
   PathCompletionDropdown,
   type CompletionEntry,
@@ -73,8 +73,7 @@ import {
   shortcutsBacklogButton,
   error as errorClass,
 } from "./Omnibar.css";
-import { BacklogItemIntentReview } from "@/components/backlog/BacklogItemIntentReview";
-import { BacklogComposeWidget } from "@/components/backlog/BacklogComposeWidget";
+import { lazyComponent } from "@/lib/lazy";
 import { OmnibarBacklogButton } from "./OmnibarBacklogButton";
 import { useBacklogService, type BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useBacklogCreationNotifier } from "@/lib/hooks/useBacklogCreationNotifier";
@@ -101,6 +100,31 @@ const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
 const EMPTY_PRESETS: LauncherPresetEntry[] = [];
 const EMPTY_REMOTES: RemoteOption[] = [];
 
+// Lazy-load the backlog chat-compose/intent-review subtree. The app shell renders
+// <Omnibar> on every route (src/app/Providers.tsx), so a static import of either
+// component here would put their shared dependency, BacklogItemForm.tsx — and
+// through it react-markdown/remark-gfm — in the Initial JS chunk, even though these
+// views only render once the user actually drafts a backlog item from the omnibar.
+const backlogComposeLoading = () => (
+  <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
+    Loading…
+  </div>
+);
+const BacklogItemIntentReview = lazyComponent(
+  () =>
+    import("@/components/backlog/BacklogItemIntentReview").then((m) => ({
+      default: m.BacklogItemIntentReview,
+    })),
+  { loading: backlogComposeLoading },
+);
+const BacklogComposeWidget = lazyComponent(
+  () =>
+    import("@/components/backlog/BacklogComposeWidget").then((m) => ({
+      default: m.BacklogComposeWidget,
+    })),
+  { loading: backlogComposeLoading },
+);
+
 interface OmnibarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -123,6 +147,7 @@ interface OmnibarProps {
    * TODO(Phase 6): OmnibarContext will source this from a `remotesSlice` populated by a
    * ListRemotes RPC — until then it's an optional prop that defaults to empty (no selector
    * rendered, today's local-only behavior unchanged). */
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing: OmnibarProps already exceeded 12 props
   remotes?: RemoteOption[];
 }
 
@@ -1739,6 +1764,7 @@ export function Omnibar({
       setIsSubmitting(false);
       isSubmittingRef.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pre-existing; adding formState.fanoutCount/setFormField would change re-render/callback-identity behavior, unverified here
   }, [
     canSubmit,
     isSubmitting,
@@ -2102,6 +2128,7 @@ export function Omnibar({
                         key={cmd}
                         type="button"
                         data-testid="spawn-shell-recent-command"
+                        // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated
                         onClick={() => {
                           setInput(`>shell -- ${cmd}`);
                           inputRef.current?.focus();
@@ -2278,6 +2305,7 @@ export function Omnibar({
             <button
               type="button"
               className={createButton}
+              // eslint-disable-next-line analytics/require-on-click -- pre-existing, unrelated
               onClick={handleSubmit}
               disabled={!canSubmit || isSubmitting}
             >
