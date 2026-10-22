@@ -277,6 +277,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
@@ -333,6 +334,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
@@ -515,6 +517,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
@@ -589,6 +592,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
