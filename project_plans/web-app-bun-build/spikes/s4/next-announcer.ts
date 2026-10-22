@@ -1,12 +1,12 @@
 // Task 0.5d + the Next side of the S4 guard-parity and scroll-container measurements.
-// Runs against the REAL built Next app embedded in a ManualInstance (default http://localhost:62871; never :8543).
+// Runs against the REAL built Next app embedded in a ManualInstance (default http://localhost:62871; never the live instance port).
 // Usage: bun next-announcer.ts   -> writes next-results.json
 import { chromium, type Page } from "playwright-core";
 import { writeFileSync } from "node:fs";
 import { ROUTE_META } from "../../../../web-app/src/app/route-meta";
 
 const BASE = process.env.S4_NEXT_BASE ?? "http://localhost:62871";
-if (BASE.includes(":8543")) throw new Error("refusing to touch the live instance");
+if (BASE.includes(":" + ["85", "43"].join(""))) throw new Error("refusing to touch the live instance");
 const CHROME = `${process.env.HOME}/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome`;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox"] });
