@@ -159,8 +159,15 @@ jobs:
       # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
       # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
       # see that step's comment for why.
+      #
+      # ref: pins the checkout to the PR's actual head commit, not GitHub's synthetic
+      # refs/pull/N/merge (actions/checkout's default for pull_request events, which tracks
+      # main's current tip independently of base.sha) — see web-lint's identical comment
+      # for the full failure mode this avoids (PR #1144's gofmt diff below has the same bug
+      # shape as web-lint's file-scoped ESLint diff).
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
@@ -282,8 +289,17 @@ jobs:
       # doesn't have that parent commit's object, so `git cat-file -e` on it
       # always failed, BASE_SHA stayed empty, and the script silently fell
       # through to an unscoped full-repo scan on every push to main.
+      #
+      # ref: pins the checkout to the PR's actual head commit. Without it, actions/checkout
+      # defaults to GitHub's synthetic refs/pull/N/merge for pull_request events -- a merge
+      # of the PR head into main's CURRENT tip, which moves independently of BASE_SHA
+      # (captured once, at the PR's last push/sync). Once main has advanced past BASE_SHA,
+      # `git diff BASE_SHA...HEAD` picks up every file from every PR merged to main in
+      # between, not just this PR's own diff -- surfaced 2026-10-22 as unrelated
+      # pre-existing warnings in files this PR never touched (see PR #1144's CI history).
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
