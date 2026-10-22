@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -431,7 +432,7 @@ func appendLaunchExtras(cmd, cliFlags string, extraArgs []string) string {
 // expansion. Single quotes do: the only special case is a literal single
 // quote, escaped by closing the quoted string, emitting \', and reopening.
 func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return launchcmd.Quote(s)
 }
 
 // shellQuoteFields splits s on whitespace and shell-quotes each resulting token
