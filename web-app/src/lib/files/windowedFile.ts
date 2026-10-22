@@ -65,7 +65,7 @@ export class WindowedFile {
   private readonly life = new AbortController();
   private engine: WindowedEngine | null = null;
   private language = "text";
-  /** Diff marks by absolute file line; the lazy document keeps absolute line numbers, so they apply as-is. */
+  /** Diff marks by absolute file line; the engine maps document lines to file lines through the gap table. */
   private gutterMarks: Map<number, GutterMarkType> | undefined;
   private queue: LineRange[] = [];
   private running = 0;
@@ -159,7 +159,13 @@ export class WindowedFile {
   private async swapBuffer(): Promise<void> {
     const e = this.engine;
     if (!e) return;
-    const state = await e.createBufferState({ doc: "", language: this.language, gutterMarks: this.gutterMarks, lazy: { lineCount: this.state.lineCount } });
+    // Marks may change while the buffer builds; rebuild until the buffer carries the current ones.
+    let marks: Map<number, GutterMarkType> | undefined;
+    let state;
+    do {
+      marks = this.gutterMarks;
+      state = await e.createBufferState({ doc: "", language: this.language, gutterMarks: marks, lazy: { lineCount: this.state.lineCount } });
+    } while (marks !== this.gutterMarks && this.engine === e);
     if (this.engine === e) e.setBufferState(state);
   }
 
@@ -182,10 +188,18 @@ export class WindowedFile {
     const e = this.engine;
     if (!e || !this.state.opened) return;
     const top = e.getViewport().startLine;
-    await this.swapBuffer();
-    if (this.engine !== e) return;
-    this.provide(await this.read(top, "around", WINDOW_LINES));
-    if (this.engine === e) e.gotoLine(top);
+    const anchor = this.anchor;
+    try {
+      await this.swapBuffer();
+      if (this.engine !== e) return;
+      const r = await this.read(top, "around", WINDOW_LINES);
+      if (this.engine !== e) return;
+      this.provide(r);
+      // A jump that started meanwhile owns the viewport.
+      if (this.jumpCtl === null && this.anchor === anchor) e.gotoLine(top);
+    } catch (err) {
+      if (!aborted(err)) this.fail(err);
+    }
   }
 
   /** The editor went away (view swap or unmount): stop feeding it. */

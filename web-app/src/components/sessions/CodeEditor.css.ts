@@ -36,6 +36,8 @@ export const gutterMarkerAdd = style([gutterMarker, { background: vars.color.git
 export const gutterMarkerDelete = style([gutterMarker, { background: vars.color.gitDeleted }]);
 export const gutterMarkerModify = style([gutterMarker, { background: vars.color.gitModified }]);
 
-export const lineBackgroundAdd = style({ backgroundColor: vars.color.gitAddedBg });
-export const lineBackgroundDelete = style({ backgroundColor: vars.color.gitDeletedBg });
-export const lineBackgroundModify = style({ backgroundColor: vars.color.gitModifiedBg });
+// A gradient layer, not backgroundColor: it composes over the theme's opaque .cm-activeLine background instead of losing to it.
+const tint = (c: string) => ({ backgroundImage: `linear-gradient(${c}, ${c})` });
+export const lineBackgroundAdd = style(tint(vars.color.gitAddedBg));
+export const lineBackgroundDelete = style(tint(vars.color.gitDeletedBg));
+export const lineBackgroundModify = style(tint(vars.color.gitModifiedBg));

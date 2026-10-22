@@ -21,7 +21,7 @@
 - `CmEngine.createBuffer()` at line 109 reads `init.gutterMarks` and passes it to the `gutter()` closure; the gutter bar rendering is complete.
 - `FileContentViewer.tsx:222-225, 401` wires `buildGutterMarks()` output to `CodeEditor`.
 - Theme tokens `gitAdded`, `gitDeleted`, `gitModified` exist in all 6 themes (`theme.css.ts:133, 241, 351, 469, 587, 708`).
-- The gap-line lazy controller preserves absolute line numbers (verified: `cm6LazyDoc/gapTable.ts` translates between gap-adjusted and absolute positions; `lineAt().number` returns absolute in gap-line mode).
+- CORRECTED in verify: the gap-line lazy document does NOT keep absolute line numbers (one placeholder line per unloaded gap, `cm6LazyDoc/gapTable.ts`). Marks are mapped through `absLineOfDocLine` and placeholders are skipped (`diffHighlight.ts` `markAtDocLine`), covered by `diffHighlight.lazy.test.tsx`.
 
 ### What is INFERRED (requires implementation to verify):
 

@@ -57,7 +57,7 @@ jest.mock("@codemirror/view", () => {
       return { __keymap: bindings };
     }),
   };
-  const Decoration = { none: {}, mark: () => ({ range: () => ({}) }), set: () => ({}) };
+  const Decoration = { none: {}, mark: () => ({ range: () => ({}) }), line: () => ({ range: () => ({}) }), set: () => ({}) };
   class WidgetType {}
   const ViewPlugin = { fromClass: () => ({}) };
   const lineNumbers = () => ({});
@@ -139,7 +139,8 @@ jest.mock("@lezer/highlight", () => {
 
 /** A fake CodeMirror BlockInfo/EditorView pair that reports a fixed line number. */
 function fakeViewForLine(lineNumber: number) {
-  return { state: { doc: { lineAt: () => ({ number: lineNumber }) } } };
+  // field() undefined = not a lazy (gap-table) document, so doc lines are file lines.
+  return { state: { doc: { lineAt: () => ({ number: lineNumber }) }, field: () => undefined } };
 }
 
 const SMALL_CONTENT = "a\nb\nc\nd\ne";
