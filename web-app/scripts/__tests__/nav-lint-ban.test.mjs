@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { LegacyESLint } from "eslint/use-at-your-own-risk";
+import { ESLint } from "eslint";
 
 const webApp = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const eslint = new LegacyESLint({ cwd: webApp, useEslintrc: true });
+const eslint = new ESLint({ cwd: webApp });
 
 async function messages(code, file) {
   const [result] = await eslint.lintText(code, { filePath: path.join(webApp, file) });

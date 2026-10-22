@@ -281,10 +281,7 @@ jobs:
       # resolve github.event.before -- a shallow (default depth-1) checkout
       # doesn't have that parent commit's object, so `git cat-file -e` on it
       # always failed, BASE_SHA stayed empty, and the script silently fell
-      # through to an unscoped `npx next lint` full-repo scan every push to
-      # main. `next lint` exits 1 on ANY warning (not just errors), and the
-      # repo carries ~1450 pre-existing ones, so that fallback always failed
-      # -- this is why "Lint" had been red on main since at least 2026-08-28.
+      # through to an unscoped full-repo scan on every push to main.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -342,15 +339,10 @@ jobs:
         working-directory: web-app
         run: |
           run_eslint() {
-            # Only lint files changed by this push/PR — avoids surfacing the repo's ~1450
-            # pre-existing warnings (found 2026-08-25: this file's OLD "falls back to full
-            # scan on push" comment claimed pre-existing warnings wouldn't block push, but
-            # `next lint` (unlike raw eslint) exits 1 on ANY warning, not just errors — so
-            # every direct push to main had been failing this check silently for at least
-            # 6 commits before anyone noticed, since push events never got the PR path's
-            # file-scoped treatment). Push events now diff against github.event.before (the
-            # commit before this push) using the same file-scoped `next lint --file` call
-            # the PR path already uses — PRs and pushes share one code path below.
+            # Only lint files changed by this push/PR, failing on any warning there — so the
+            # repo's ~1450 pre-existing warnings do not block unrelated changes. Push events
+            # diff against github.event.before (the commit before this push); PRs and
+            # pushes share one code path below.
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             if [ -z "$BASE_SHA" ]; then
               CANDIDATE="${{ github.event.before }}"
@@ -377,15 +369,20 @@ jobs:
                 echo "No TS/TSX files changed — skipping ESLint"
                 exit 0
               fi
-              # Build --file args (one per changed file)
-              FILE_FLAGS=""
+              # Any warning in a changed file fails (--max-warnings 0, scripts/eslint-gate.sh).
+              # Files deleted by the diff are dropped; eslint errors on a missing path.
+              FILES=()
               while IFS= read -r f; do
-                [ -n "$f" ] && FILE_FLAGS="$FILE_FLAGS --file $f"
+                [ -n "$f" ] && [ -f "$f" ] && FILES+=("$f")
               done <<< "$CHANGED"
-              # shellcheck disable=SC2086
-              npx next lint $FILE_FLAGS
+              if [ "${#FILES[@]}" -eq 0 ]; then
+                echo "Changed TS/TSX files were all deleted — skipping ESLint"
+                exit 0
+              fi
+              bash scripts/eslint-gate.sh "${FILES[@]}"
             else
-              npx next lint
+              # Whole-repo run: errors fail, the ~1450 pre-existing warnings do not.
+              bun run lint:eslint
             fi
           }
           export -f run_eslint
