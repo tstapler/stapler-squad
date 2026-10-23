@@ -43,7 +43,7 @@ export const newBtn = style({
   cursor: "pointer",
   border: `1px solid ${vars.color.primary}`,
   background: vars.color.primary,
-  color: vars.color.textInverse,
+  color: vars.color.onPrimaryFill,
   fontWeight: 500,
   ":hover": {
     background: vars.color.primaryHover,
@@ -66,10 +66,6 @@ export const listItem = style({
   borderRadius: vars.radii.sm,
 });
 
-export const listItemDisabled = style({
-  opacity: 0.6,
-});
-
 export const listItemInfo = style({
   display: "flex",
   flexDirection: "column",
@@ -84,10 +80,18 @@ export const listItemNameRow = style({
   gap: vars.space["2"],
 });
 
+// Not `opacity`: dimming the whole row pushed its secondary text below 4.5:1 in both themes.
+export const listItemDisabled = style({
+  borderStyle: "dashed",
+});
+
 export const listItemName = style({
   fontSize: vars.fontSize.sm,
   fontWeight: 600,
   color: vars.color.textPrimary,
+  selectors: {
+    [`${listItemDisabled} &`]: { color: vars.color.textSecondary },
+  },
 });
 
 export const listItemSlug = style({
@@ -101,7 +105,7 @@ export const badge = style({
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   borderRadius: vars.radii.full,
   background: vars.color.borderColor,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
 });
 
 export const listItemMeta = style({

@@ -50,6 +50,7 @@ export const ROUTE_META: Record<RoutePath, RouteMetaEntry> = {
   "/sessions/summary": { title: ROOT_TITLE },
   "/settings": { title: SETTINGS_TITLE },
   "/settings/background-models": { title: "Background Models - Settings - Stapler Squad" },
+  "/settings/backlog-quota": { title: SETTINGS_TITLE },
   "/settings/backlog-sources": { title: "Backlog Sources - Settings - Stapler Squad", guard: "backlog" },
   "/settings/backlog-stages": { title: SETTINGS_TITLE },
   "/settings/defaults": { title: SETTINGS_TITLE },

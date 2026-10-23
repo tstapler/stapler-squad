@@ -103,7 +103,7 @@ func TestSelfHealStuck_should_resolveRepeatedNoopDispatch_When_ItemLeavesReviewA
 	require.NoError(t, err)
 	require.True(t, blocked, "row stays open while item is still in review")
 
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived,
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived,
 		&BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview)}, TriggeredBySystem)
 	require.NoError(t, err)
 	listener.selfHealStuck(ctx, er)

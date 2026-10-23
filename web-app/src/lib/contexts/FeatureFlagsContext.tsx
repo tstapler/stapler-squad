@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useRouter } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -53,14 +53,22 @@ export function readbackMismatch(change: FlagChange, flag: FeatureFlag): string 
   return entry?.enabled === change.enabled ? null : change.scope;
 }
 
+/** Outcome of a setFlag call; a failure carries the reason shown in the flag's row. */
+export type SetFlagResult = { ok: true } | { ok: false; error: string };
+
 interface FeatureFlagsContextValue {
   flags: Record<string, boolean>;
   flagList: FeatureFlagMeta[];
   isLoading: boolean;
+  /** Last failure of any kind (load or update); consumers that need to tell them apart use loadError. */
   error: string | null;
-  setFlag: (name: string, change: boolean | FlagChange) => Promise<void>;
+  /** Reason the flag list could not be loaded, or null. Cleared by reload(). */
+  loadError: string | null;
+  /** Re-fetches the flag list, showing the loading state. */
+  reload: () => Promise<void>;
+  setFlag: (name: string, change: boolean | FlagChange) => Promise<SetFlagResult>;
   /** Re-reads GetFeatureFlags without flipping isLoading back on. */
-  refresh?: () => Promise<void>;
+  refresh?: (opts?: { quiet?: boolean }) => Promise<void>;
 }
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
@@ -68,7 +76,9 @@ const FeatureFlagsContext = createContext<FeatureFlagsContextValue>({
   flagList: [],
   isLoading: true,
   error: null,
-  setFlag: async () => {},
+  loadError: null,
+  reload: async () => {},
+  setFlag: async () => ({ ok: true }),
   refresh: async () => {},
 });
 
@@ -77,15 +87,24 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const [flagList, setFlagList] = useState<FeatureFlagMeta[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const client = useMemo(
     () => createClient(SessionService, getConnectTransport()),
     []
   );
 
-  const fetchFlags = useCallback(async () => {
+  // A response may only land if no newer fetch has landed and no write has read back since it started.
+  const seq = useRef(0);
+  const minAcceptable = useRef(0);
+
+  // quiet: a background re-read after a failed write must not turn a loaded list into a load failure.
+  const fetchFlags = useCallback(async (opts?: { quiet?: boolean }) => {
+    const mine = ++seq.current;
     try {
       const res = await client.getFeatureFlags({});
+      if (mine < minAcceptable.current) return;
+      minAcceptable.current = mine;
       const map: Record<string, boolean> = {};
       const list: FeatureFlagMeta[] = [];
       for (const f of res.flags) {
@@ -95,8 +114,10 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
       setFlags(map);
       setFlagList(list);
       setError(null);
-    } catch {
+      setLoadError(null);
+    } catch (err) {
       setError("Failed to load feature flags");
+      if (!opts?.quiet) setLoadError(err instanceof Error ? err.message : "request failed");
     } finally {
       setIsLoading(false);
     }
@@ -104,9 +125,15 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { fetchFlags(); }, [fetchFlags]);
 
+  const reload = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    await fetchFlags();
+  }, [fetchFlags]);
+
   // The displayed state is always the server's read-back, never an optimistic
   // value: a failed or ignored change leaves the previous state and re-reads it.
-  const setFlag = useCallback(async (name: string, change: boolean | FlagChange) => {
+  const setFlag = useCallback(async (name: string, change: boolean | FlagChange): Promise<SetFlagResult> => {
     const req =
       typeof change === "boolean"
         ? { name, enabled: change }
@@ -130,19 +157,22 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
           throw new Error(`server read-back does not show the change for ${bad}`);
         }
       }
+      minAcceptable.current = ++seq.current;
       setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
       setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
+      return { ok: true };
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
       // Re-read first: a successful fetch clears the error, and this one must outlive it.
-      await fetchFlags();
+      await fetchFlags({ quiet: true });
       setError("Failed to update feature flag");
+      return { ok: false, error: err instanceof Error ? err.message : "request failed" };
     }
   }, [client, fetchFlags]);
 
   const value = useMemo(
-    () => ({ flags, flagList, isLoading, error, setFlag, refresh: fetchFlags }),
-    [flags, flagList, isLoading, error, setFlag, fetchFlags]
+    () => ({ flags, flagList, isLoading, error, loadError, reload, setFlag, refresh: fetchFlags }),
+    [flags, flagList, isLoading, error, loadError, reload, setFlag, fetchFlags]
   );
 
   return (
@@ -179,10 +209,13 @@ export function useFeatureFlag(name: string): boolean {
 export function RequireFeatureFlag({
   flag,
   redirectTo = "/",
+  fallback = null,
   children,
 }: {
   flag: string;
   redirectTo?: string;
+  /** Rendered instead of `children` while loading or when the flag is off; must carry no gated content. */
+  fallback?: ReactNode;
   children: ReactNode;
 }) {
   const { flags, isLoading } = useFeatureFlags();
@@ -194,7 +227,6 @@ export function RequireFeatureFlag({
     }
   }, [isLoading, flags, flag, redirectTo, router]);
 
-  if (isLoading) return null;
-  if (!flags[flag]) return null;
+  if (isLoading || !flags[flag]) return <>{fallback}</>;
   return <>{children}</>;
 }

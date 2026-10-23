@@ -23,29 +23,26 @@ const KNOWN: Record<string, string[]> = {
   '/changelog': ['color-contrast', 'definition-list'], // #1112
   '/login': ['color-contrast'], // #1112
   '/resolve': ['color-contrast'], // #1112
-  '/settings/backlog-sources': ['document-title'], // #1112
   '/test/escape-codes': ['label', 'select-name'], // #1112
   '/test/terminal-stress': ['color-contrast', 'select-name'], // #1112
   '/account': ['color-contrast'],
-  '/backlog': ['document-title'],
-  '/backlog/board': ['document-title'],
-  '/config': ['color-contrast'],
   '/help': ['color-contrast'],
   '/history': ['color-contrast'],
   '/logs': ['aria-required-children', 'aria-required-parent', 'color-contrast', 'scrollable-region-focusable'],
   '/rules': ['color-contrast', 'scrollable-region-focusable'],
   '/sessions/new': ['color-contrast', 'nested-interactive'],
-  '/settings': ['color-contrast'],
-  '/settings/backlog-stages': ['color-contrast'],
-  '/settings/defaults': ['color-contrast'],
-  '/settings/features': ['color-contrast'],
+  // Throwaway files-viewer Phase 0 spike pages (hostile CodeMirror attributes); red on origin/main too.
+  '/spike-files': ['aria-input-field-name', 'scrollable-region-focusable'],
+  '/spike-lazydoc': ['aria-input-field-name', 'scrollable-region-focusable'],
   '/settings/jules': ['color-contrast'],
-  '/settings/pipeline-modes': ['color-contrast'],
   '/settings/remotes': ['color-contrast'],
   '/settings/tagging-classifier': ['color-contrast'],
   '/unfinished': ['color-contrast', 'nested-interactive'],
   '/workflows': ['color-contrast'],
 };
+
+/** Optional: sweep under one theme (stapler-theme key) instead of the default. */
+const THEME = process.env.A11Y_SWEEP_THEME;
 
 test.describe('Accessibility route sweep (WCAG 2.2 AA)', () => {
   test('sweep config keeps the WCAG 2.2 AA tag and the installed axe-core ships it', () => {
@@ -56,6 +53,7 @@ test.describe('Accessibility route sweep (WCAG 2.2 AA)', () => {
   test.setTimeout(120_000);
   for (const route of ROUTES) {
     test(`no serious/critical violations on ${route}`, async ({ page }) => {
+      if (THEME) await page.addInitScript((t) => localStorage.setItem('stapler-theme', t), THEME);
       await page.goto(`${BASE_URL}${route}`, { waitUntil: 'load' });
       await page.locator('body').waitFor();
       const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();

@@ -43,6 +43,12 @@ func (d *Discovery) OnSessionChange(callback func(*DiscoveredSession, bool)) {
 
 // Scan searches for active ssq-mux sockets and returns discovered sessions.
 func (d *Discovery) Scan() ([]*DiscoveredSession, error) {
+	return d.scanContext(context.Background())
+}
+
+// scanContext is Scan, abandoned (leaving known sessions untouched) once ctx is done, so a
+// socket that accepts but never sends metadata can't hold up shutdown for the probe timeout.
+func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, error) {
 	// Find all potential socket files
 	pattern := filepath.Join(os.TempDir(), "ssq-mux-*.sock")
 	matches, err := filepath.Glob(pattern)
@@ -55,6 +61,9 @@ func (d *Discovery) Scan() ([]*DiscoveredSession, error) {
 	currentPaths := make(map[string]bool)
 
 	for _, socketPath := range matches {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		currentPaths[socketPath] = true
 
 		// Check if we already know about this session
@@ -70,8 +79,11 @@ func (d *Discovery) Scan() ([]*DiscoveredSession, error) {
 		}
 
 		// Try to connect and get metadata
-		meta, err := probeSocket(socketPath)
+		meta, err := probeSocketContext(ctx, socketPath)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			// Socket exists but can't connect - might be stale
 			continue
 		}
@@ -195,14 +207,14 @@ func (d *Discovery) StartPolling(ctx context.Context, interval time.Duration) <-
 		defer ticker.Stop()
 
 		// Initial scan
-		_, _ = d.Scan()
+		_, _ = d.scanContext(ctx)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, _ = d.Scan()
+				_, _ = d.scanContext(ctx)
 			}
 		}
 	}()
@@ -212,15 +224,25 @@ func (d *Discovery) StartPolling(ctx context.Context, interval time.Duration) <-
 
 // probeSocket connects to a socket and retrieves metadata.
 func probeSocket(socketPath string) (*SessionMetadata, error) {
-	// Connect with timeout
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	return probeSocketContext(context.Background(), socketPath)
+}
+
+// probeSocketContext probes socketPath, aborting the dial or metadata read when ctx is done.
+func probeSocketContext(ctx context.Context, socketPath string) (*SessionMetadata, error) {
+	dialCtx, cancelDial := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelDial()
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(dialCtx, "unix", socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
-	// Set read timeout
+	// Set read timeout, then arrange for ctx cancellation to expire it (order matters: this
+	// deadline must not overwrite the cancellation one).
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Unix(1, 0)) })
+	defer stop()
 
 	// Read the initial metadata message
 	msg, err := DecodeMessage(conn)

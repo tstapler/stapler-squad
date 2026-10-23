@@ -7,7 +7,47 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
+
+// TransitionDenial is the structured payload of a StuckReasonTransitionDenied
+// row, persisted in the row's context string so no schema change is needed.
+type TransitionDenial struct {
+	Caller, From, To, Reason string
+}
+
+const transitionDeniedPrefix = "transition denied: "
+
+// FormatTransitionDeniedContext renders d plus free-text detail as
+// "transition denied: caller=.. from=.. to=.. denied_reason=..; <detail>".
+func FormatTransitionDeniedContext(d TransitionDenial, detail string) string {
+	return fmt.Sprintf("%scaller=%s from=%s to=%s denied_reason=%s; %s", transitionDeniedPrefix, d.Caller, d.From, d.To, d.Reason, detail)
+}
+
+// ParseTransitionDeniedContext inverts FormatTransitionDeniedContext; ok is
+// false for any context it did not produce.
+func ParseTransitionDeniedContext(ctx string) (d TransitionDenial, ok bool) {
+	rest, found := strings.CutPrefix(ctx, transitionDeniedPrefix)
+	if !found {
+		return d, false
+	}
+	head, _, _ := strings.Cut(rest, ";")
+	for _, kv := range strings.Fields(head) {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "caller":
+			d.Caller = v
+		case "from":
+			d.From = v
+		case "to":
+			d.To = v
+		case "denied_reason":
+			d.Reason = v
+		}
+	}
+	return d, d.Caller != "" && d.From != "" && d.To != "" && d.Reason != ""
+}
 
 // BacklogStatus represents the lifecycle state of a backlog item. The type
 // is open, not a closed enum: the 9 constants below are its built-in subset,
@@ -277,6 +317,12 @@ const (
 	// (session/backlog_lifecycle.go) as a backstop once the item leaves review
 	// for any other reason.
 	StuckReasonVerdictUndelivered StuckReason = "verdict_undelivered"
+	// StuckReasonTransitionDenied: an automated caller (today the dequeue
+	// claim) was denied by the workflow engine (graph or operator gate), which
+	// would otherwise only Warn on every sweep. The row's context carries
+	// structured caller/from/to/denied_reason (FormatTransitionDeniedContext);
+	// the same caller clears it on its next successful claim.
+	StuckReasonTransitionDenied StuckReason = "transition_denied"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -306,6 +352,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonRepeatedNoopDispatch,
 	StuckReasonMergedPRUnverified,
 	StuckReasonVerdictUndelivered,
+	StuckReasonTransitionDenied,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -318,7 +365,7 @@ func (r StuckReason) IsValid() bool {
 		StuckReasonRespawnBlockedActive, StuckReasonLikelyFlaky, StuckReasonBlockedByDependency,
 		StuckReasonMultipleReasons, StuckReasonBounceCapExhausted, StuckReasonSteerFailed,
 		StuckReasonGateTimeout, StuckReasonBlockedByClaim, StuckReasonWorktreeInconsistent, StuckReasonRepeatedNoopDispatch,
-		StuckReasonMergedPRUnverified, StuckReasonVerdictUndelivered:
+		StuckReasonMergedPRUnverified, StuckReasonVerdictUndelivered, StuckReasonTransitionDenied:
 		return true
 	}
 	return false
@@ -628,6 +675,8 @@ var (
 	ErrCodeNotOnMain                = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
 	ErrUnresolvedBlockers           = errors.New("item has one or more blockers that have not reached done")
 	ErrVerdictClearRequiredForReady = errors.New("item has a recorded PASS verdict; provide override_reason to send it back to ready anyway")
+	// ErrTransitionNotAllowed: the workflow engine's graph has no enabled edge for the requested transition.
+	ErrTransitionNotAllowed = errors.New("transition not allowed by the workflow graph")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.

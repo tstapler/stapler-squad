@@ -5541,7 +5541,7 @@ func TestWaitForBacklogEvent_ReturnsImmediatelyWhenItemAlreadyArchived(t *testin
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}
@@ -7563,7 +7563,7 @@ func TestResumeWork_PreconditionFailedOnConcurrentTransition(t *testing.T) {
 		}
 		// Simulate another actor (e.g. the dequeuer) transitioning the item
 		// out of ready between this read and resumeWork's own CAS write.
-		_, transErr := storage.TransitionBacklogItemStatus(fnCtx, itemID, session.BacklogStatusInProgress,
+		_, transErr := storage.RawTransitionBacklogItemStatus(fnCtx, itemID, session.BacklogStatusInProgress,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByAgent)
 		require.NoError(t, transErr)
 		return item, nil

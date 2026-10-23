@@ -1,9 +1,10 @@
 // +feature: backlog-diagnose-nudge
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link } from "@/lib/nav";
-import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { timestampMs } from "@bufbuild/protobuf/wkt";
+import { AutoMergeLookupStatus, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { routes } from "@/lib/routes";
 import { useAnalytics } from "@/lib/analytics";
 import { resolveReworkCapOverride } from "@/lib/backlog/formatReworkCapOverride";
@@ -49,14 +50,169 @@ interface StuckItemDetailProps {
    * onApprovePlan above.
    */
   onDiagnose?: (itemId: string, reason: StuckReason) => Promise<string>;
+  /**
+   * Re-checks the repo auto-merge setting bypassing the server cache
+   * (ListStuckBacklogItems with refreshAutoMerge) and resolves with the
+   * refreshed item. Omitted hides the Retry button.
+   */
+  onRefreshAutoMerge?: (itemId: string) => Promise<StuckBacklogItem | undefined>;
 }
 
-/** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
- * unset ("not fetched / unknown", never treated as "disabled") whenever the
- * server's best-effort fetch hasn't populated it. */
-function autoMergeLine(allowAutoMerge: boolean | undefined): string {
-  if (allowAutoMerge === undefined) return "Repo auto-merge: unknown";
-  return `Repo auto-merge: ${allowAutoMerge ? "on" : "off"} (allow_auto_merge: ${allowAutoMerge})`;
+const AUTO_MERGE_TTL_MS = 10 * 60 * 1000; // mirrors github.repoSettingsTTL
+const TICK_MS = 30_000;
+
+const FAILURE_REASON: Partial<Record<AutoMergeLookupStatus, string>> = {
+  [AutoMergeLookupStatus.RATE_LIMITED]: "rate limited",
+  [AutoMergeLookupStatus.NO_PERMISSION]: "no permission",
+  [AutoMergeLookupStatus.NOT_FOUND]: "repo not found",
+  [AutoMergeLookupStatus.ERROR]: "lookup error",
+};
+
+/** Repo settings URL (host, owner, repo) from the PR URL, or null when not derivable. */
+function repoSettingsUrl(prUrl: string): string | null {
+  try {
+    const u = new URL(prUrl);
+    const [owner, repo] = u.pathname.split("/").filter(Boolean);
+    if (!/^https?:$/.test(u.protocol) || !owner || !repo) return null;
+    return `${u.origin}/${owner}/${repo}/settings`;
+  } catch {
+    return null;
+  }
+}
+
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+interface AutoMergeLineProps {
+  item: StuckBacklogItem;
+  /** Re-checks bypassing the cache; resolves with the refreshed item. Omitted hides Retry. */
+  onRefresh?: (itemId: string) => Promise<StuckBacklogItem | undefined>;
+}
+
+/** Repo auto-merge status line (Story 3.1.3): one honest state per lookup status. */
+function AutoMergeLine({ item, onRefresh }: AutoMergeLineProps) {
+  const now = useNow(TICK_MS);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [fresh, setFresh] = useState<StuckBacklogItem | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [announce, setAnnounce] = useState("");
+  const focusContainerNext = useRef(false);
+  useEffect(() => setFresh(null), [item]);
+
+  const current = fresh ?? item;
+  const status = current.autoMergeLookupStatus;
+  const failed = status in FAILURE_REASON;
+  const checkedMs = current.autoMergeCheckedAt ? timestampMs(current.autoMergeCheckedAt) : null;
+  const ago = checkedMs === null ? null : formatAgo(current.autoMergeCheckedAt, now);
+  const stale =
+    status === AutoMergeLookupStatus.OK && checkedMs !== null && now - checkedMs > AUTO_MERGE_TTL_MS;
+  const showRetry = !!onRefresh && (failed || stale || checking);
+
+  // Success unmounts Retry; hand focus to the line container so it never falls to body.
+  useEffect(() => {
+    if (focusContainerNext.current && !showRetry) {
+      focusContainerNext.current = false;
+      containerRef.current?.focus();
+    }
+  });
+
+  if (status === AutoMergeLookupStatus.UNSPECIFIED) return null;
+
+  async function retry() {
+    if (!onRefresh || checking) return;
+    setChecking(true);
+    setAnnounce("Checking repo auto-merge");
+    try {
+      const next = await onRefresh(item.itemId);
+      const ok = next?.autoMergeLookupStatus === AutoMergeLookupStatus.OK;
+      focusContainerNext.current = ok;
+      if (next) setFresh(next);
+      setAnnounce(
+        !next
+          ? "Repo auto-merge check skipped: item no longer listed"
+          : ok
+            ? "Repo auto-merge check succeeded"
+            : "Repo auto-merge check failed again",
+      );
+    } catch {
+      setAnnounce("Repo auto-merge check failed again");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const settingsUrl = repoSettingsUrl(item.prUrl);
+
+  let line: string;
+  let secondary: React.ReactNode = null;
+  if (checking) {
+    line = "Repo auto-merge: checking...";
+  } else if (failed) {
+    line = `Repo auto-merge: couldn't check (${FAILURE_REASON[status]})`;
+    if (ago) secondary = `Last tried ${ago}.`;
+  } else if (current.allowAutoMerge === false) {
+    line = "Repo auto-merge: not allowed on this repo";
+    secondary = (
+      <>
+        Merge this PR by hand, or enable Allow auto-merge in the repo settings.
+        {settingsUrl && (
+          <>
+            {" "}
+            <a
+              className={`${styles.prLink} ${styles.touchLink}`}
+              href={settingsUrl}
+              target="_blank"
+              rel="noopener"
+              data-testid="stuck-item-auto-merge-settings-link"
+            >
+              Open repo settings (opens in new tab)
+            </a>
+          </>
+        )}
+      </>
+    );
+  } else if (current.allowAutoMerge === true) {
+    line = "Repo auto-merge: allowed";
+    secondary = "GitHub setting only. Branch protection or required checks can still block it.";
+  } else {
+    return null;
+  }
+  if (stale && !checking && ago) line += ` (as of ${ago}, may be out of date)`;
+
+  return (
+    <div
+      ref={containerRef}
+      tabIndex={-1}
+      className={styles.autoMerge}
+      aria-busy={checking}
+      data-testid="stuck-item-auto-merge"
+    >
+      <span className={styles.value}>{line}</span>
+      {secondary && <span className={styles.unknownNote}>{secondary}</span>}
+      {showRetry && (
+        // analytics-exempt
+        <button
+          key="retry"
+          type="button"
+          className={styles.overrideButton}
+          aria-disabled={checking}
+          onClick={() => void retry()}
+          data-testid="stuck-item-auto-merge-retry"
+        >
+          {checking ? "Checking..." : "Retry"}
+        </button>
+      )}
+      <span role="status" className={styles.srOnly} data-testid="stuck-item-auto-merge-status">
+        {announce}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -86,6 +242,7 @@ export function StuckItemDetail({
   reworkCapOverrideLoaded = false,
   onApprovePlan,
   onDiagnose,
+  onRefreshAutoMerge,
 }: StuckItemDetailProps) {
   const { track } = useAnalytics();
   const unknown = isPrStatusUnknown(item);
@@ -352,12 +509,7 @@ export function StuckItemDetail({
 
       {isPrReady && (
         <div className={styles.row}>
-          <span
-            className={`${item.allowAutoMerge === undefined ? styles.unknownNote : styles.value}`}
-            data-testid="stuck-item-auto-merge"
-          >
-            {autoMergeLine(item.allowAutoMerge)}
-          </span>
+          <AutoMergeLine item={item} onRefresh={onRefreshAutoMerge} />
         </div>
       )}
 

@@ -76,7 +76,7 @@ func (s *BacklogService) GetBacklogItem(
 				is.EndedAt == nil &&
 				strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix) &&
 				time.Since(is.CreatedAt) > maxTriageSessionAge {
-				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now)
+				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now) //nolint:silenttransition ended-at bookkeeping on a read-side stale-triage sweep; the next sweep retries
 				is.EndedAt = &now
 			}
 		}
