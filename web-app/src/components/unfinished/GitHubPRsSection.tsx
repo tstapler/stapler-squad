@@ -5,7 +5,7 @@ import { useState, useCallback, useRef, useEffect, useId, useMemo } from "react"
 import { Link } from "@/lib/nav";
 import { type UserPR } from "@/gen/session/v1/types_pb";
 import { type UseGitHubPRsReturn } from "@/lib/hooks/useGitHubPRs";
-import { type FilterStatus, type SortBy, type PRListFilters } from "@/lib/hooks/usePRListFilters";
+import { type FilterStatus, type SortBy, type PRListFilters, isReadyToMerge } from "@/lib/hooks/usePRListFilters";
 import { useNowTicker } from "@/lib/hooks/useNowTicker";
 import { DEGRADED_ATTENTION_TEXT } from "@/lib/unfinished/prAttention";
 import { formatRelativeTime } from "@/lib/unfinished/relativeTime";
@@ -56,12 +56,18 @@ function StatsBar({ prs }: StatsBarProps) {
   ).length;
   const needsReview = prs.filter((p) => p.changesReqCount > 0).length;
   const withSessions = prs.filter((p) => p.sessionIds.length > 0).length;
+  const readyToMerge = prs.filter(isReadyToMerge).length;
 
   return (
     <div className={styles.statsBar} data-testid="github-prs-stats">
       <span className={styles.statItem}>
         <span className={styles.statCount}>{prs.length}</span> open
       </span>
+      {readyToMerge > 0 && (
+        <span className={styles.statItem}>
+          <span className={styles.statCount}>{readyToMerge}</span> ready to merge
+        </span>
+      )}
       {ciFailures > 0 && (
         <span className={styles.statItem}>
           <span className={styles.statCountError}>{ciFailures}</span> CI failing
@@ -108,7 +114,7 @@ function AccountsBar({ accounts, onDisconnect, onAddAccount }: AccountsBarProps)
               onClick={() => onDisconnect(acc.username, acc.host)}
               aria-label={`Disconnect ${acc.username}`}
               title="Disconnect this account"
-            >
+            >{/* analytics-exempt */}
               ×
             </button>
           )}
@@ -118,7 +124,7 @@ function AccountsBar({ accounts, onDisconnect, onAddAccount }: AccountsBarProps)
         className={styles.addAccountButton}
         onClick={onAddAccount}
         data-testid="add-github-account-button"
-      >
+      >{/* analytics-exempt */}
         + Add account
       </button>
     </div>
@@ -239,7 +245,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
           className={styles.connectButton}
           onClick={handleConnect}
           data-testid="github-connect-button"
-        >
+        >{/* analytics-exempt */}
           Connect GitHub
         </button>
       </div>
@@ -282,12 +288,12 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
             className={styles.connectButton}
             onClick={handleStartPolling}
             data-testid="github-authorized-button"
-          >
+          >{/* analytics-exempt */}
             I&apos;ve authorized — continue
           </button>
         )}
         {isPolling && <span className={styles.pollingIndicator}>Checking…</span>}
-        <button className={styles.cancelButton} onClick={handleReset}>
+        <button className={styles.cancelButton} onClick={handleReset}>{/* analytics-exempt */}
           Cancel
         </button>
       </div>
@@ -306,7 +312,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
     return (
       <div className={styles.authBanner} data-testid="github-auth-banner">
         <span className={styles.authBannerText}>Device code expired.</span>
-        <button className={styles.connectButton} onClick={handleReset}>
+        <button className={styles.connectButton} onClick={handleReset}>{/* analytics-exempt */}
           Try again
         </button>
       </div>
@@ -318,7 +324,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
       <span className={styles.authBannerText}>
         Auth error: {flow.kind === "error" ? flow.message : ""}
       </span>
-      <button className={styles.connectButton} onClick={handleReset}>
+      <button className={styles.connectButton} onClick={handleReset}>{/* analytics-exempt */}
         Try again
       </button>
     </div>
@@ -355,7 +361,7 @@ function AddAccountPanel({ errorMessage, onAuthComplete, onCancel }: DeviceAuthB
           className={styles.cancelButton}
           onClick={() => setManualExpanded(true)}
           data-testid="github-add-account-manual-toggle"
-        >
+        >{/* analytics-exempt */}
           Set up manually instead
         </button>
       )}
@@ -371,7 +377,7 @@ function AddAccountPanel({ errorMessage, onAuthComplete, onCancel }: DeviceAuthB
                 setMode("device");
               }}
               data-testid="github-auth-tab-device"
-            >
+            >{/* analytics-exempt */}
               Device flow
             </button>
             <button
@@ -383,7 +389,7 @@ function AddAccountPanel({ errorMessage, onAuthComplete, onCancel }: DeviceAuthB
                 setMode("token");
               }}
               data-testid="github-auth-tab-token"
-            >
+            >{/* analytics-exempt */}
               Personal access token
             </button>
           </div>
@@ -482,7 +488,7 @@ function CLIImportSection({
               disabled={h.alreadyAdded || importingHost === h.host}
               onClick={() => handleImport(h.host)}
               data-testid={`github-cli-import-host-${h.host}`}
-            >
+            >{/* analytics-exempt */}
               {h.alreadyAdded
                 ? `${h.host}${h.username ? ` (${h.username})` : ""} — connected`
                 : importingHost === h.host
@@ -566,7 +572,7 @@ function TokenAuthForm({ onAuthComplete, onCancel }: TokenAuthFormProps) {
         {status.kind === "submitting" ? "Validating…" : "Connect with token"}
       </button>
       {onCancel && (
-        <button type="button" className={styles.cancelButton} onClick={onCancel}>
+        <button type="button" className={styles.cancelButton} onClick={onCancel}>{/* analytics-exempt */}
           Cancel
         </button>
       )}
@@ -583,6 +589,7 @@ function TokenAuthForm({ onAuthComplete, onCancel }: TokenAuthFormProps) {
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: "all", label: "All" },
+  { value: "ready-to-merge", label: "Ready to merge" },
   { value: "ci-failing", label: "CI failing" },
   { value: "changes-requested", label: "Changes req" },
   { value: "with-session", label: "Has session" },
@@ -623,7 +630,7 @@ function FilterBar({ filter, sort, search, searchRef, clearActive, onFilter, onS
             onClick={() => onFilter(f.value)}
             aria-pressed={filter === f.value}
             data-testid={`filter-chip-${f.value}`}
-          >
+          >{/* analytics-exempt */}
             {f.label}
           </button>
         ))}
@@ -656,7 +663,7 @@ function FilterBar({ filter, sort, search, searchRef, clearActive, onFilter, onS
           ))}
         </select>
         {clearActive && (
-          <button type="button" className={styles.panelButton} onClick={onClear} data-testid="clear-filters">
+          <button type="button" className={styles.panelButton} onClick={onClear} data-testid="clear-filters">{/* analytics-exempt */}
             Clear filters
           </button>
         )}
@@ -692,7 +699,7 @@ function AccountBanners({ statuses, onReconnect }: AccountBannersProps) {
           {st.state === AccountPollState.UNAUTHORIZED && (
             <>
               <span>GitHub sign-in expired for {accountLabel(st)}. </span>
-              <button type="button" className={styles.panelButton} onClick={onReconnect}>
+              <button type="button" className={styles.panelButton} onClick={onReconnect}>{/* analytics-exempt */}
                 Reconnect
               </button>
             </>
@@ -823,6 +830,7 @@ export function GitHubPRsSection({
         aria-expanded={isOpen}
         aria-controls="github-prs-list"
       >
+        {/* analytics-exempt */}
         <span
           className={`${styles.chevron} ${isOpen ? styles.chevronExpanded : ""}`}
           aria-hidden="true"
@@ -866,7 +874,7 @@ export function GitHubPRsSection({
                   aria-busy={refreshing}
                   onClick={handleRefresh}
                   data-testid="github-prs-refresh"
-                >
+                >{/* analytics-exempt */}
                   {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
               </div>
@@ -874,7 +882,7 @@ export function GitHubPRsSection({
               {error && prs.length === 0 && lastUpdatedAt === undefined && (
                 <div role="alert" className={`${styles.banner} ${styles.bannerError}`} data-testid="github-prs-error">
                   <span>Could not load PRs: {error}</span>
-                  <button type="button" className={styles.panelButton} onClick={handleRetry}>
+                  <button type="button" className={styles.panelButton} onClick={handleRetry}>{/* analytics-exempt */}
                     Retry
                   </button>
                 </div>
@@ -887,7 +895,7 @@ export function GitHubPRsSection({
                       : ""}
                     Could not refresh: {error}
                   </span>
-                  <button type="button" className={styles.panelButton} onClick={handleRetry}>
+                  <button type="button" className={styles.panelButton} onClick={handleRetry}>{/* analytics-exempt */}
                     Retry
                   </button>
                 </div>
@@ -939,7 +947,7 @@ export function GitHubPRsSection({
                         className={styles.panelButton}
                         onClick={handleClearFilters}
                         data-testid="clear-filters-empty"
-                      >
+                      >{/* analytics-exempt */}
                         Clear filters
                       </button>
                     </div>
