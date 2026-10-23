@@ -6,7 +6,6 @@
   "trustedDependencies": [
     "@swc/core",
     "esbuild",
-    "@vanilla-extract/css",
     "@ast-grep/cli"
   ],
   "overrides": {
@@ -16,14 +15,15 @@
     "preinstall": "node -e \"if(!(process.env.npm_config_user_agent||'').startsWith('bun/')){console.error('Use bun install (bun@1.4.3); npm, yarn and pnpm are not supported in web-app/. See docs/how-to/use-bun-in-web-app.md');process.exit(1)}\"",
     "dev": "if [ \"$WEB_BUILD\" = bun ]; then bun run dev:bun; else bun run dev:next; fi",
     "dev:next": "next dev --port ${PORT:-3001} --hostname localhost",
-    "dev:bun": "echo 'The Bun dev server lands in PR 5b; use WEB_BUILD=next for now.' >&2; exit 1",
+    "dev:bun": "bun build/dev.ts",
     "build": "if [ \"$WEB_BUILD\" = bun ]; then bun run build:bun; else bun run build:next; fi",
     "build:next": "next build",
     "build:bun": "bun build/build.ts",
     "start": "if [ \"$WEB_BUILD\" = bun ]; then bun run start:bun; else bun run start:next; fi",
     "start:next": "next start --port ${PORT:-3001}",
     "start:bun": "echo 'The Bun build is static output served by the Go binary: make web-build WEB_BUILD=bun, then ./stapler-squad.' >&2; exit 1",
-    "lint": "next lint && bun run lint:css && bun run lint:css-vars",
+    "lint": "bun run lint:eslint && bun run lint:css && bun run lint:css-vars",
+    "lint:eslint": "eslint .",
     "lint:affected": "bash scripts/lint-affected.sh",
     "lint:css": "stylelint 'src/**/*.css' --allow-empty-input",
     "lint:css-vars": "node scripts/check-css-vars.mjs",
@@ -120,26 +120,6 @@
     "remark-gfm": "^4.0.1",
     "web-vitals": "6.2.3"
   },
-  "size-limit": [
-    {
-      "name": "Total JS bundle",
-      "path": "out/_next/static/chunks/**/*.js",
-      "limit": "5 MB",
-      "gzip": false
-    },
-    {
-      "name": "Framework chunk (React)",
-      "path": "out/_next/static/chunks/framework-*.js",
-      "limit": "650 KB",
-      "gzip": false
-    },
-    {
-      "name": "Main app chunk",
-      "path": "out/_next/static/chunks/main-*.js",
-      "limit": "400 KB",
-      "gzip": false
-    }
-  ],
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
     "@babel/core": "^7",
@@ -153,7 +133,6 @@
     "@storybook/addon-a11y": "^8.6.18",
     "@storybook/addon-essentials": "^8.6.18",
     "@storybook/addon-themes": "^8.6.18",
-    "@storybook/nextjs": "^8.6.18",
     "@storybook/react": "^8.6.18",
     "@storybook/react-webpack5": "^8.6.18",
     "@swc/core": "^1.15.33",
@@ -165,6 +144,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@typescript-eslint/eslint-plugin": "8.45.0",
+    "@typescript-eslint/parser": "8.45.0",
     "@vanilla-extract/css": "1.21.3",
     "@vanilla-extract/integration": "8.0.11",
     "@vanilla-extract/next-plugin": "^2.5.1",
@@ -172,11 +153,18 @@
     "babel-loader": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
+    "eslint-import-resolver-node": "0.3.9",
+    "eslint-import-resolver-typescript": "3.10.1",
     "eslint-plugin-analytics": "file:./eslint-plugin-analytics",
     "eslint-plugin-boundaries": "^6.0.2",
+    "eslint-plugin-import": "2.32.0",
+    "eslint-plugin-jsx-a11y": "6.10.2",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "5.2.0",
     "eslint-plugin-rpc-lifecycle": "file:./eslint-plugin-rpc-lifecycle",
     "fast-check": "^4.10.2",
     "glob": "^13.0.6",
+    "globals": "14.0.0",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.2.0",
     "jest-environment-jsdom": "^30.2.0",

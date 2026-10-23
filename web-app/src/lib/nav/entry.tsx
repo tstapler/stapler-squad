@@ -1,4 +1,4 @@
-// The one place that builds the React Router tree. Only src/main.tsx and tests may import it (.eslintrc.json),
+// The one place that builds the React Router tree. Only src/main.tsx and tests may import it (eslint.config.mjs),
 // and index.ts does not re-export it, so the Next build never bundles react-router.
 import {
   createContext,

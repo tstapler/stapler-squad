@@ -64,6 +64,7 @@ import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
+import { BacklogResultPanels } from "./BacklogResultPanels";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import { GateBlockingSection } from "./GateBlockingSection";
@@ -1706,6 +1707,8 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
 
         {/* Planning record — read-only triage result for items past idea status */}
         <PlanningSection item={item} />
+
+        <BacklogResultPanels item={item} />
 
         {/* Triage failed banner — generalized 2026-08-03
             (docs/tasks/backlog-feature-improvement.md, item be676dab) from
