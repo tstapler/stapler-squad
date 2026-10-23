@@ -173,6 +173,7 @@ function ViewerToolbar({ name, url, openLabel = "Open in new tab", onClose, extr
 
 // react-markdown without rehype-raw already escapes raw HTML; links must not tab-nap.
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+  if (href?.startsWith("#")) return <a href={href}>{children}</a>;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer">
       {children}
@@ -296,6 +297,8 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
                   onClick={() => setShowRaw((v) => !v)}
                   className={styles.externalButton}
                   data-testid="file-browser-viewer-toggle-raw"
+                  aria-pressed={showRaw}
+                  title={showRaw ? "Show rendered markdown" : "Show raw source"}
                 >
                   {showRaw ? "Rendered" : "Raw"}
                 </button>
@@ -541,7 +544,7 @@ export function LocalFileBrowser() {
 
         <div className={styles.viewer}>
           {selectedEntry ? (
-            <FileViewer entry={selectedEntry} onClose={() => setSelectedEntry(null)} />
+            <FileViewer key={selectedEntry.path} entry={selectedEntry}onClose={() => setSelectedEntry(null)} />
           ) : (
             <div className={styles.viewerEmpty}>
               <FolderOpen size={40} />
