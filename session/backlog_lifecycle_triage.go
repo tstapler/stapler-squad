@@ -371,6 +371,12 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			}
 
 			if isIdea {
+				// An open transition_denied from idea means triage finished and its
+				// idea->ready write is waiting on the engine (Story 1.5.8): not an
+				// orphan, so do not mark it or retry triage.
+				if l.heldByTransitionDenial(ctx, &item, "orphaned_triage") {
+					continue
+				}
 				// Shape 2: already ended, item still in idea. Nothing to tombstone —
 				// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
 				// EndReason carries classifyHeadlessCallError's bucket
@@ -454,6 +460,10 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx contex
 		}
 		if row.ItemStatus != BacklogStatusIdea && row.ItemStatus != BacklogStatusQueued {
 			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea/queued
+		}
+		// Checked before RemediationDue so a held item does not spend backoff attempts.
+		if l.heldByTransitionDenial(ctx, &BacklogItemData{ID: row.ItemID, Status: string(row.ItemStatus)}, "orphaned_triage_remediation") {
+			continue
 		}
 		l.retryOrphanedTriageWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
 	}

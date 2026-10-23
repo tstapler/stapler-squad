@@ -1,7 +1,7 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { AutoMergeLookupStatus, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 
@@ -37,29 +37,180 @@ function reworkCapDetail(currentReworkCapOverride: number | undefined) {
 }
 
 describe("StuckItemDetail", () => {
-  describe("StuckItemDetail_should_showAutoMergeUnknownAndRenderRest_When_SettingFetchFailed", () => {
-    it("shows 'unknown' when allowAutoMerge is undefined, and still renders the rest of the detail", () => {
-      render(<StuckItemDetail item={makeItem({ allowAutoMerge: undefined })} />);
-      expect(screen.getByTestId("stuck-item-auto-merge").textContent).toMatch(
-        /Repo auto-merge: unknown/
-      );
+  describe("repo auto-merge line (Story 3.1.3)", () => {
+    const S = AutoMergeLookupStatus;
+    const ago = (ms: number) => timestampFromDate(new Date(Date.now() - ms));
+    const okItem = (allow: boolean, checkedMsAgo = 1000) =>
+      makeItem({
+        allowAutoMerge: allow,
+        autoMergeLookupStatus: S.OK,
+        autoMergeCheckedAt: ago(checkedMsAgo),
+      });
+    const failedItem = (overrides: Partial<StuckBacklogItem> = {}) =>
+      makeItem({
+        autoMergeLookupStatus: S.RATE_LIMITED,
+        autoMergeCheckedAt: ago(2 * 60 * 1000),
+        ...overrides,
+      });
+    const text = () => screen.getByTestId("stuck-item-auto-merge").textContent ?? "";
+
+    it("omits the line for UNSPECIFIED and never says 'unknown'", () => {
+      render(<StuckItemDetail item={makeItem({ autoMergeLookupStatus: S.UNSPECIFIED })} />);
+      expect(screen.queryByTestId("stuck-item-auto-merge")).not.toBeInTheDocument();
       expect(screen.getByTestId("stuck-item-why")).toBeInTheDocument();
-      expect(screen.getByTestId("stuck-item-last-check")).toBeInTheDocument();
       expect(screen.getByTestId("stuck-item-pr-link")).toBeInTheDocument();
     });
 
-    it("shows 'off' when allowAutoMerge is explicitly false", () => {
-      render(<StuckItemDetail item={makeItem({ allowAutoMerge: false })} />);
-      expect(screen.getByTestId("stuck-item-auto-merge").textContent).toMatch(
-        /Repo auto-merge: off/
+    it("OK+false: neutral copy, guidance and a noopener new-tab settings link", () => {
+      render(<StuckItemDetail item={okItem(false)} />);
+      expect(text()).toContain("Repo auto-merge: not allowed on this repo");
+      expect(text()).toContain(
+        "Merge this PR by hand, or enable Allow auto-merge in the repo settings."
+      );
+      const link = screen.getByTestId("stuck-item-auto-merge-settings-link");
+      expect(link).toHaveAttribute("href", "https://github.com/tstapler/stapler-squad/settings");
+      expect(link.getAttribute("rel")).toContain("noopener");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link.textContent).toMatch(/\(opens in new tab\)$/);
+      expect(text()).not.toMatch(/unknown|allow_auto_merge:/);
+    });
+
+    it("OK+false on a GitHub Enterprise PR links to that host", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({
+            ...okItem(false),
+            prUrl: "https://ghe.example.com/acme/web/pull/7",
+          })}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-auto-merge-settings-link")).toHaveAttribute(
+        "href",
+        "https://ghe.example.com/acme/web/settings"
       );
     });
 
-    it("shows 'on' when allowAutoMerge is explicitly true", () => {
-      render(<StuckItemDetail item={makeItem({ allowAutoMerge: true })} />);
-      expect(screen.getByTestId("stuck-item-auto-merge").textContent).toMatch(
-        /Repo auto-merge: on/
+    it("OK+false without a derivable repo URL omits the link and keeps the guidance", () => {
+      render(<StuckItemDetail item={makeItem({ ...okItem(false), prUrl: "", prNumber: 0 })} />);
+      expect(screen.queryByTestId("stuck-item-auto-merge-settings-link")).not.toBeInTheDocument();
+      expect(text()).toContain(
+        "Merge this PR by hand, or enable Allow auto-merge in the repo settings."
       );
+    });
+
+    it("OK+true: allowed with the branch-protection caveat", () => {
+      render(<StuckItemDetail item={okItem(true)} />);
+      expect(text()).toContain("Repo auto-merge: allowed");
+      expect(text()).toContain(
+        "GitHub setting only. Branch protection or required checks can still block it."
+      );
+    });
+
+    it("stale OK value shows 'as of', may be out of date", () => {
+      render(<StuckItemDetail item={okItem(true, 30 * 60 * 1000)} />);
+      expect(text()).toContain("(as of 30m ago, may be out of date)");
+    });
+
+    it("stale OK value offers Retry when a refresh handler is wired", () => {
+      render(<StuckItemDetail item={okItem(true, 30 * 60 * 1000)} onRefreshAutoMerge={jest.fn()} />);
+      expect(screen.getByTestId("stuck-item-auto-merge-retry")).toBeInTheDocument();
+    });
+
+    it("a refresh that resolves undefined announces the item is no longer listed", async () => {
+      const onRefresh = jest.fn().mockResolvedValue(undefined);
+      render(<StuckItemDetail item={failedItem()} onRefreshAutoMerge={onRefresh} />);
+      fireEvent.click(screen.getByTestId("stuck-item-auto-merge-retry"));
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-auto-merge-status").textContent).toBe(
+          "Repo auto-merge check skipped: item no longer listed"
+        )
+      );
+    });
+
+    it.each([
+      [S.RATE_LIMITED, "rate limited"],
+      [S.NO_PERMISSION, "no permission"],
+      [S.NOT_FOUND, "repo not found"],
+      [S.ERROR, "lookup error"],
+    ])("failed status %s shows reason, Last tried and Retry", (status, reason) => {
+      render(
+        <StuckItemDetail item={failedItem({ autoMergeLookupStatus: status })} onRefreshAutoMerge={jest.fn()} />
+      );
+      expect(text()).toContain(`Repo auto-merge: couldn't check (${reason})`);
+      expect(text()).toContain("Last tried 2m ago.");
+      expect(text()).not.toMatch(/unknown|allow_auto_merge:/);
+      expect(screen.getByTestId("stuck-item-auto-merge-retry")).toBeInTheDocument();
+    });
+
+    it("omits 'Last tried' when the timestamp is absent", () => {
+      render(<StuckItemDetail item={failedItem({ autoMergeCheckedAt: undefined })} />);
+      expect(text()).not.toContain("Last tried");
+    });
+
+    it("hides Retry when no refresh handler is wired", () => {
+      render(<StuckItemDetail item={failedItem()} />);
+      expect(screen.queryByTestId("stuck-item-auto-merge-retry")).not.toBeInTheDocument();
+    });
+
+    it("recomputes 'Last tried' on a 30s tick", () => {
+      jest.useFakeTimers();
+      try {
+        render(<StuckItemDetail item={failedItem({ autoMergeCheckedAt: ago(10 * 1000) })} />);
+        expect(text()).toContain("Last tried just now.");
+        act(() => {
+          jest.advanceTimersByTime(60 * 1000);
+        });
+        expect(text()).toContain("Last tried 1m ago.");
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("repeat failure: same Retry element, still focused, checking state is busy", async () => {
+      let resolve!: (v: StuckBacklogItem) => void;
+      const onRefresh = jest.fn(() => new Promise<StuckBacklogItem>((r) => (resolve = r)));
+      render(<StuckItemDetail item={failedItem()} onRefreshAutoMerge={onRefresh} />);
+      const btn = screen.getByTestId("stuck-item-auto-merge-retry");
+      btn.focus();
+      fireEvent.click(btn);
+      expect(onRefresh).toHaveBeenCalledWith(failedItem().itemId);
+      expect(text()).toContain("Repo auto-merge: checking...");
+      expect(screen.getByTestId("stuck-item-auto-merge")).toHaveAttribute("aria-busy", "true");
+      expect(btn).toHaveAttribute("aria-disabled", "true");
+      expect(btn.textContent).toBe("Checking...");
+      await act(async () => {
+        resolve(failedItem({ autoMergeCheckedAt: ago(0) }));
+      });
+      expect(screen.getByTestId("stuck-item-auto-merge-retry")).toBe(btn);
+      expect(btn).toHaveFocus();
+      expect(btn.textContent).toBe("Retry");
+      expect(text()).toContain("Last tried just now.");
+      expect(screen.getByTestId("stuck-item-auto-merge-status").textContent).toBe(
+        "Repo auto-merge check failed again"
+      );
+    });
+
+    it("success: Retry unmounts and focus moves to the line container", async () => {
+      const onRefresh = jest.fn().mockResolvedValue(okItem(false));
+      render(<StuckItemDetail item={failedItem()} onRefreshAutoMerge={onRefresh} />);
+      const btn = screen.getByTestId("stuck-item-auto-merge-retry");
+      btn.focus();
+      fireEvent.click(btn);
+      await waitFor(() =>
+        expect(screen.queryByTestId("stuck-item-auto-merge-retry")).not.toBeInTheDocument()
+      );
+      expect(text()).toContain("Repo auto-merge: not allowed on this repo");
+      expect(screen.getByTestId("stuck-item-auto-merge")).toHaveFocus();
+    });
+
+    it("rejected refresh keeps the failed line and Retry", async () => {
+      const onRefresh = jest.fn().mockRejectedValue(new Error("boom"));
+      render(<StuckItemDetail item={failedItem()} onRefreshAutoMerge={onRefresh} />);
+      fireEvent.click(screen.getByTestId("stuck-item-auto-merge-retry"));
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-auto-merge-retry").textContent).toBe("Retry")
+      );
+      expect(text()).toContain("couldn't check (rate limited)");
     });
   });
 

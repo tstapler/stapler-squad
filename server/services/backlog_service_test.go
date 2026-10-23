@@ -1620,7 +1620,7 @@ func TestRejectPlan_ClearsExistingApproval(t *testing.T) {
 
 	// Move the item to ready so the spawn-gate precondition check below is the
 	// planning gate itself, not the earlier status gate.
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
@@ -2499,7 +2499,7 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	// TransitionBacklogItemStatus above already moved the item to "ready"; put it back
 	// to "in_progress" the way a real reopen scenario would leave it (dead session, but
 	// item still shows as actively worked).
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Before the fix, this would fail with CodeAlreadyExists forever.
@@ -2551,7 +2551,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2624,7 +2624,7 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2662,7 +2662,7 @@ func TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPendin
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2709,7 +2709,7 @@ func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_Activ
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	var (
@@ -2801,7 +2801,7 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -2907,7 +2907,7 @@ func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorSession.ID, endedAt))
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -4728,7 +4728,7 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	require.NoError(t, trigErr)
 
 	// Move the item off 'idea' while the delayed headless call is still in flight.
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 	release()
 

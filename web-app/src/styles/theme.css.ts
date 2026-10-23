@@ -203,7 +203,7 @@ export const darkTheme = createTheme(vars, {
     primaryHover: "#3ba9e6",
     primaryActive: "#52b9f0",
     primaryDark: "#1a7fc1",
-    primaryText: "#ffffff",
+    primaryText: "#0a0a0a", /* was #ffffff — 3.04:1 on #2d9cdb fails WCAG AA; #0a0a0a = 6.50:1 */
     onPrimaryFill: "#0a0a0a",
     onSuccessFill: "#0a0a0a",
     onErrorFill: "#0a0a0a",
@@ -696,8 +696,8 @@ export const cleanTheme = createTheme(vars, {
     // accentBg/accentHover: rgb of `primary` (#5457ef); keep in sync (overlayContrastTokens.test.ts).
     accentBg: "rgba(84,87,239,0.1)",
     accentHover: "rgba(84,87,239,0.2)",
-    // accentText: #6366f1 measured 4.22:1 on background #0f1117 (axe, /analytics/escape tab); #818cf8 = ~6.4:1.
-    accentText: "#818cf8",
+    // accentText: was #6366f1 — 4.22:1 on the #0f1117 page fails WCAG AA; #7c83f7 = 5.79:1.
+    accentText: "#7c83f7",
 
     inputBackground: "#161b22",
     inputText: "#e2e8f0",

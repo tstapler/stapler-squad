@@ -22,7 +22,7 @@ export const row = style({
 });
 
 export const label = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontWeight: 600,
   minWidth: "90px",
   flexShrink: 0,
@@ -49,7 +49,7 @@ export const prLink = style({
 });
 
 export const unknownNote = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontStyle: "italic",
 });
 
@@ -109,6 +109,36 @@ export const overrideUnlimitedButton = style({
 });
 
 export const overrideStatus = style({
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontSize: vars.fontSize.xs,
+});
+
+export const autoMerge = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: vars.space["2"],
+  minWidth: 0,
+  overflowWrap: "anywhere",
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.primary}`,
+    outlineOffset: "2px",
+  },
+});
+
+// Padded to a 44px tap target; inline-flex so it wraps instead of truncating at 360px.
+export const touchLink = style({
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "44px",
+  padding: `${vars.space["2"]} 0`,
+});
+
+export const srOnly = style({
+  position: "absolute",
+  width: "1px",
+  height: "1px",
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
 });

@@ -20,7 +20,9 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { StageForm } from "./StageForm";
+import type { EngineModeView } from "@/lib/hooks/useEngineModeStatus";
 import { useBacklogStagesAdmin } from "@/lib/hooks/useBacklogStages";
 import type { BacklogStage, StageTransition } from "@/lib/hooks/useBacklogStages";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
@@ -220,6 +222,16 @@ describe("StageForm", () => {
     expect(rows[0]).toHaveTextContent("2 (human approval, automated review)");
   });
 
+  it("moves focus into the form on open: the slug when creating, the name when editing (the slug is immutable)", async () => {
+    const { unmount } = render(<StageForm stage={null} allStages={[STAGE_A, STAGE_B]} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("stage-form-slug")).toHaveFocus();
+    unmount();
+    render(<StageForm stage={STAGE_A} allStages={[STAGE_A, STAGE_B]} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
+    expect(screen.getByTestId("stage-form-name")).toHaveFocus();
+    expect(screen.getByTestId("stage-form")).toHaveAttribute("aria-busy", "true");
+    await waitFor(() => expect(screen.getByTestId("stage-form")).toHaveAttribute("aria-busy", "false"));
+  });
+
   it("a built-in stage's Delete button is disabled with an explanatory tooltip", async () => {
     render(<StageForm stage={STAGE_A} allStages={[STAGE_A, STAGE_B]} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />);
 
@@ -243,5 +255,96 @@ describe("StageForm", () => {
 
     await waitFor(() => expect(mockDeleteStage).toHaveBeenCalledWith("2"));
     await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("2"));
+  });
+});
+
+// Story 1.3.2: mode reminder, save-failure and system-required rejection.
+describe("StageForm engine-mode surfaces (Story 1.3.2)", () => {
+  function sfView(overrides: Partial<EngineModeView> = {}): EngineModeView {
+    return {
+      kind: "shadow",
+      classes: { operator: "shadow", agent: "shadow", system: "shadow" },
+      divergence24h: 0,
+      stale: false,
+      lastCheckedAt: Date.now(),
+      fallbackActive: false,
+      invalidatorWired: true,
+      gateWired: true,
+      review: null,
+      flagRowId: "flag-row-backlog-workflow-engine-enforce",
+      ...overrides,
+    };
+  }
+
+  function renderCreateForm(engineMode?: EngineModeView) {
+    render(
+      <StageForm
+        stage={null}
+        allStages={[STAGE_A, STAGE_B]}
+        engineMode={engineMode}
+        onSaved={jest.fn()}
+        onDeleted={jest.fn()}
+        onCancel={jest.fn()}
+      />
+    );
+    fireEvent.change(screen.getByTestId("stage-form-slug"), { target: { value: "design-review" } });
+    fireEvent.change(screen.getByTestId("stage-form-name"), { target: { value: "Design Review" } });
+  }
+
+  it("shows the mode reminder directly above Save, from the shared status, never empty", () => {
+    const { rerender } = render(
+      <StageForm stage={null} allStages={[STAGE_A]} engineMode={sfView()} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />
+    );
+    const reminder = screen.getByTestId("stage-form-mode-reminder");
+    expect(reminder).toHaveTextContent("Mode: Shadow. Saved edits are not enforced yet.");
+    expect(reminder.compareDocumentPosition(screen.getByTestId("stage-form-submit"))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    rerender(
+      <StageForm stage={null} allStages={[STAGE_A]} engineMode={sfView({ kind: "unknown" })} onSaved={jest.fn()} onDeleted={jest.fn()} onCancel={jest.fn()} />
+    );
+    expect(screen.getByTestId("stage-form-mode-reminder")).toHaveTextContent("Mode: couldn\x27t be determined. Treat saved edits as not applied.");
+  });
+
+  it("a server error shows \"Couldn\x27t save stage\" with Retry, keeps values, and Retry re-submits", async () => {
+    mockCreateStage.mockRejectedValueOnce(new Error("db locked"));
+    renderCreateForm(sfView());
+    fireEvent.click(screen.getByTestId("stage-form-submit"));
+    const alert = await screen.findByTestId("stage-form-save-error");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("Couldn\x27t save stage: db locked");
+    expect(screen.getByTestId("stage-form-name")).toHaveValue("Design Review");
+    expect(screen.getByTestId("stage-form-submit")).not.toBeDisabled();
+
+    mockCreateStage.mockResolvedValueOnce(makeStage({ id: "n", slug: "design-review", name: "Design Review" }));
+    fireEvent.click(screen.getByTestId("stage-form-save-retry"));
+    await waitFor(() => expect(mockCreateStage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("stage-form-save-error")).not.toBeInTheDocument());
+  });
+
+  it("a system-required edge rejection names the edge and what relies on it, and keeps values", async () => {
+    mockCreateStage.mockRejectedValueOnce(
+      new ConnectError(
+        "transition is system-required: review->done. Automation relies on this transition; edit its gates instead of disabling it",
+        Code.FailedPrecondition
+      )
+    );
+    renderCreateForm(sfView());
+    fireEvent.click(screen.getByTestId("stage-form-submit"));
+    const alert = await screen.findByTestId("stage-form-edge-rejected");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("review->done");
+    expect(alert).toHaveTextContent("Automation relies on this transition");
+    expect(screen.queryByTestId("stage-form-save-error")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stage-form-name")).toHaveValue("Design Review");
+  });
+
+  it("marks Save aria-disabled (not removed from the tab order) while saving", async () => {
+    let resolve: (s: BacklogStage) => void = () => {};
+    mockCreateStage.mockReturnValueOnce(new Promise<BacklogStage>((r) => (resolve = r)));
+    renderCreateForm(sfView());
+    fireEvent.click(screen.getByTestId("stage-form-submit"));
+    await waitFor(() => expect(screen.getByTestId("stage-form-submit")).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByTestId("stage-form-submit")).toHaveTextContent("Saving");
+    resolve(makeStage({ id: "n", slug: "design-review", name: "Design Review" }));
+    await waitFor(() => expect(screen.getByTestId("stage-form-submit")).not.toHaveAttribute("aria-disabled"));
   });
 });

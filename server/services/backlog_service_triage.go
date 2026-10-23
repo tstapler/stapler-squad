@@ -679,17 +679,40 @@ func planArtifactsPathMissing(item *session.BacklogItemData, to session.BacklogS
 // storage.UnresolvedBlockerItemIDs before the claim loop).
 func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
-	fallback := session.BuildStageConfigSnapshotFallback(item)
-	if !s.engine.CanTransition(from, to, fallback) {
-		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
-	}
 	guardInput := session.NewBacklogItemTransitionInput(item, from)
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
 	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
-	if guardErr := s.engine.ValidateGates(guardInput, to, fallback); guardErr != nil {
-		return nil, guardErr
+	// Blocked dependencies and missing plans are expected steady-state refusals
+	// that callers surface with their own arms; return them before the gate so
+	// they do not also raise a transition_denied row. The gate re-runs the same
+	// guard and stays the sole authority for the write. No Observed item: the gate
+	// would pin updated_at, which callers that edited the item first (queue
+	// metadata) have already moved.
+	if session.NewDefaultWorkflowEngine().CanTransition(from, to, nil) {
+		if guardErr := session.TransitionGuard(guardInput, to); guardErr != nil {
+			return nil, guardErr
+		}
 	}
-	return s.storage.TransitionBacklogItemStatus(ctx, item.ID, to, precondition, triggeredBy)
+	return s.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: guardedTransitionCaller(to, triggeredBy), ItemID: item.ID, To: to,
+		Precondition: precondition, TriggeredBy: triggeredBy, Guard: &guardInput,
+	})
+}
+
+// guardedTransitionCaller names the registry entry behind a transitionWithGuard
+// call. Its three callers are told apart by target and actor: queueBacklogItem
+// (->queued), the dequeue claim (->in_progress, system) and Jules dispatch
+// (->in_progress, user). Jules reaches this through an interface whose
+// signature carries no caller.
+func guardedTransitionCaller(to session.BacklogStatus, triggeredBy string) session.TransitionCaller {
+	switch {
+	case to == session.BacklogStatusQueued:
+		return session.CallerQueueBacklogItem
+	case triggeredBy == session.TriggeredByUser:
+		return session.CallerJulesDispatchStart
+	default:
+		return session.CallerClaimAndSpawn
+	}
 }
 
 // queueBacklogItem transitions item from ready to queued after a fresh spawn hit
@@ -821,6 +844,11 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if claimDedup && s.skipForForeignClaim(ctx, &item, claims) {
 			continue
 		}
+		// A held claim is skipped before it is attempted: no repeated claim
+		// failure and no head-of-line blocking (the next item still gets its turn).
+		if s.heldByTransitionDenial(ctx, "DequeueNextQueuedItems", &item) {
+			continue
+		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
 			spawned++
 			if claimDedup {
@@ -842,50 +870,15 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 		session.TriggeredBySystem,
 		hasUnresolvedBlockers)
 	if claimErr != nil {
-		switch {
-		case errors.Is(claimErr, session.ErrPreconditionFailed):
-			// Expected under concurrent claims (another process's dequeue
-			// sweep, or a manual un-queue) — not worth logging.
-		case errors.Is(claimErr, session.ErrUnresolvedBlockers):
-			// Expected steady state: item is legitimately blocked and will be
-			// retried on a later sweep once its blocker reaches done — not a
-			// bug, so not worth a warning-level log every sweep. Still surface
-			// it durably (AC3) so the item detail view can render a BlockerChip
-			// instead of leaving the operator to guess why it's stalled.
-			s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-		case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
-			// Defense-in-depth (PR #199 review F2/F3): should be unreachable
-			// now that SpawnSessionFromItem's planning gate runs before the
-			// WIP-cap queue gate, but refuse the claim rather than silently
-			// spawning an unapproved item if this is ever hit (e.g. a future
-			// call site regression, or a pre-existing queued/ready row from
-			// before that ordering fix).
-			log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
-		case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
-			// Genuinely reachable, unlike the two cases above: a path that was
-			// valid when the plan was approved can be deleted later (triage
-			// worktree reaped by CleanupTerminalItem, then the item reopened).
-			// Leave the item queued rather than dequeuing it into a work session
-			// with no readable plan content — an operator sees this via the
-			// item's stuck-review surface and re-runs triage to refresh the path.
-			log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
-			// The log line alone is invisible to the operator; MarkStuck is idempotent across sweeps.
-			if s.storage != nil {
-				msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
-				if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
-					log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
-				}
-			}
-		default:
-			log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
-		}
+		s.handleClaimError(ctx, item, fromStatus, claimErr)
 		return false
 	}
+	s.resolveTransitionDeniedLogged(ctx, item.ID)
 
 	resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
 	if spawnErr != nil {
 		log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
-		if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
+		if _, rbErr := s.storage.Rollback(ctx, item.ID, fromStatus,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
 			session.TriggeredBySystem); rbErr != nil {
 			log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
@@ -900,6 +893,51 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 	}
 	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	return true
+}
+
+// handleClaimError classifies why transitionWithGuard refused a dequeue claim
+// and surfaces it durably or quietly as appropriate. Callers hold dequeueMu.
+func (s *BacklogService) handleClaimError(ctx context.Context, item session.BacklogItemData, fromStatus session.BacklogStatus, claimErr error) {
+	switch {
+	case errors.Is(claimErr, session.ErrPreconditionFailed):
+		// Expected under concurrent claims (another process's dequeue
+		// sweep, or a manual un-queue) — not worth logging.
+	case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+		// Expected steady state: item is legitimately blocked and will be
+		// retried on a later sweep once its blocker reaches done — not a
+		// bug, so not worth a warning-level log every sweep. Still surface
+		// it durably (AC3) so the item detail view can render a BlockerChip
+		// instead of leaving the operator to guess why it's stalled.
+		s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
+	case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+		// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+		// now that SpawnSessionFromItem's planning gate runs before the
+		// WIP-cap queue gate, but refuse the claim rather than silently
+		// spawning an unapproved item if this is ever hit (e.g. a future
+		// call site regression, or a pre-existing queued/ready row from
+		// before that ordering fix).
+		log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
+	case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
+		// Genuinely reachable, unlike the two cases above: a path that was
+		// valid when the plan was approved can be deleted later (triage
+		// worktree reaped by CleanupTerminalItem, then the item reopened).
+		// Leave the item queued rather than dequeuing it into a work session
+		// with no readable plan content — an operator sees this via the
+		// item's stuck-review surface and re-runs triage to refresh the path.
+		log.Warn("[DequeueNextQueuedItems] claim blocked — plan_artifacts_path no longer exists on disk; re-run triage", "item", item.ID, "status", fromStatus, "path", item.PlanArtifactsPath, "error", claimErr)
+		// The log line alone is invisible to the operator; MarkStuck is idempotent across sweeps.
+		if s.storage != nil {
+			msg := fmt.Sprintf("plan artifacts directory %q does not exist on disk — re-run triage", item.PlanArtifactsPath)
+			if _, markErr := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, fromStatus, msg); markErr != nil {
+				log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
+			}
+		}
+	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, session.ErrGateNotSatisfied):
+		// An engine denial was already reported by the gate (transition_denied row,
+		// comment, notification) under caller claim_and_spawn.
+	default:
+		log.Warn("[DequeueNextQueuedItems] claim failed", "item", item.ID, "status", fromStatus, "error", claimErr)
+	}
 }
 
 // effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort
@@ -1272,7 +1310,10 @@ func (s *BacklogService) spawnSessionAfterGates(
 		if autonomous {
 			triggeredBy = session.TriggeredBySystem
 		}
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy); transErr != nil {
+		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerSpawnSessionAfterGates, ItemID: item.ID, To: session.BacklogStatusInProgress,
+			TriggeredBy: triggeredBy, Unconditional: true,
+		}); transErr != nil {
 			log.Error("[SpawnSessionFromItem] failed to transition item to in_progress", "error", transErr)
 			// The work session and worktree above are already created and
 			// persisted — a live session is now running for this item while its
@@ -1328,7 +1369,10 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
 	if item.Status == string(session.BacklogStatusReview) {
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy)
+		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
+			TriggeredBy: triggeredBy, Unconditional: true,
+		})
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
 		}
@@ -1884,6 +1928,60 @@ func (s *BacklogService) writeSessionFilesLocked(item *session.BacklogItemData, 
 	return nil
 }
 
+// evaluateReviewFailureBreakers applies AutoReopenAfterFailedReview's two
+// repeated-failure circuit breakers. park is true when the streak survived the
+// escalated retry and the item must stay in review for remediation;
+// escalateRetryReason is non-empty when the respawn should be flagged as an
+// escalated (not identical) retry. BuildSessionInitialPrompt recomputes the same
+// streak from the verdict history, so no request field carries the reason.
+func (s *BacklogService) evaluateReviewFailureBreakers(ctx context.Context, item *session.BacklogItemData, sessions []session.ItemSessionSummary, recentVerdicts []session.ReviewVerdictSummary, verdictErr error) (escalateRetryReason string, park bool) {
+	itemID := item.ID
+	if verdictErr != nil {
+		log.Warn("[AutoReopenAfterFailedReview] GetRecentReviewVerdictSummaries failed", "item", itemID, "error", verdictErr)
+	} else if streak := session.ReviewFailureStreakLen(recentVerdicts); streak >= session.RepeatedFailureParkThreshold {
+		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", streak)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
+		return escalateRetryReason, true
+	} else if streak >= session.RepeatedFailureEscalationThreshold {
+		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly; granting one escalated retry before parking", "item", itemID, "streak", streak)
+		escalateRetryReason = recentVerdicts[0].Summary
+	}
+
+	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
+	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
+	// was killed, or hit its turn cap before ever calling submit_review_verdict
+	// is invisible to the check above — the ReviewFailureStreakLen check above
+	// never even sees it, so it can never trip on this failure shape no matter
+	// how many times it repeats. sessions (already fetched above for the work
+	// session cap check) has the review-role entries with ReviewVerdict
+	// eagerly loaded, so no extra query is needed. See
+	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
+	// loop (78 cycles in 24h) this closes. Same escalate-once-then-park shape
+	// as the verdict-summary streak above.
+	//
+	// The two streaks are checked as mutually exclusive (verdict-summary
+	// streak first, claiming the one escalation/park slot for this call if it
+	// has ANY signal at all) rather than independently — a mixed history
+	// (e.g. two matching FAIL verdicts further back, then the most recent
+	// review session crashed with no verdict) is rare enough in practice that
+	// picking one breaker over evaluating both isn't worth the added
+	// complexity here.
+	if escalateRetryReason == "" {
+		noVerdictStreak := session.NoVerdictStreakLen(recentReviewHadVerdict(sessions, session.RepeatedFailureParkThreshold))
+		switch {
+		case noVerdictStreak >= session.RepeatedFailureParkThreshold:
+			log.Info("[AutoReopenAfterFailedReview] review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", noVerdictStreak)
+			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
+			return escalateRetryReason, true
+		case noVerdictStreak >= session.RepeatedFailureEscalationThreshold:
+			log.Info("[AutoReopenAfterFailedReview] review sessions exited without ever writing a verdict; granting one escalated retry before parking", "item", itemID, "streak", noVerdictStreak)
+			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
+		}
+	}
+
+	return escalateRetryReason, false
+}
+
 // AutoReopenAfterFailedReview implements session.AutoReopenSpawner.
 // It always transitions the item from review back to in_progress (required
 // for request_review to become callable again — see its hardcoded
@@ -1900,6 +1998,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
+	}
+	if s.heldByTransitionDenial(ctx, "AutoReopenAfterFailedReview", item) {
+		return nil
 	}
 
 	// Iteration cap: count prior work sessions so we don't spin forever on a
@@ -1974,55 +2075,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// reads recentVerdicts[0]/[1], so fetching more entries above is safe.
 	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
 
-	// escalateRetryReason is non-empty exactly when this call should proceed
-	// with a respawn but flag it as an escalated (not identical) retry.
-	// Consumed a few lines down where the prompt for the new session gets
-	// built, via priorSessions — no new request/proto field needed, since
-	// BuildSessionInitialPrompt already recomputes the identical streak from
-	// the same review-verdict history this function just queried.
-	var escalateRetryReason string
-
-	if verdictErr != nil {
-		log.Warn("[AutoReopenAfterFailedReview] GetRecentReviewVerdictSummaries failed", "item", itemID, "error", verdictErr)
-	} else if streak := session.ReviewFailureStreakLen(recentVerdicts); streak >= session.RepeatedFailureParkThreshold {
-		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", streak)
-		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
+	escalateRetryReason, park := s.evaluateReviewFailureBreakers(ctx, item, sessions, recentVerdicts, verdictErr)
+	if park {
 		return nil
-	} else if streak >= session.RepeatedFailureEscalationThreshold {
-		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly; granting one escalated retry before parking", "item", itemID, "streak", streak)
-		escalateRetryReason = recentVerdicts[0].Summary
-	}
-
-	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
-	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
-	// was killed, or hit its turn cap before ever calling submit_review_verdict
-	// is invisible to the check above — the ReviewFailureStreakLen check above
-	// never even sees it, so it can never trip on this failure shape no matter
-	// how many times it repeats. sessions (already fetched above for the work
-	// session cap check) has the review-role entries with ReviewVerdict
-	// eagerly loaded, so no extra query is needed. See
-	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
-	// loop (78 cycles in 24h) this closes. Same escalate-once-then-park shape
-	// as the verdict-summary streak above.
-	//
-	// The two streaks are checked as mutually exclusive (verdict-summary
-	// streak first, claiming the one escalation/park slot for this call if it
-	// has ANY signal at all) rather than independently — a mixed history
-	// (e.g. two matching FAIL verdicts further back, then the most recent
-	// review session crashed with no verdict) is rare enough in practice that
-	// picking one breaker over evaluating both isn't worth the added
-	// complexity here.
-	if escalateRetryReason == "" {
-		noVerdictStreak := session.NoVerdictStreakLen(recentReviewHadVerdict(sessions, session.RepeatedFailureParkThreshold))
-		switch {
-		case noVerdictStreak >= session.RepeatedFailureParkThreshold:
-			log.Info("[AutoReopenAfterFailedReview] review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", noVerdictStreak)
-			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
-			return nil
-		case noVerdictStreak >= session.RepeatedFailureEscalationThreshold:
-			log.Info("[AutoReopenAfterFailedReview] review sessions exited without ever writing a verdict; granting one escalated retry before parking", "item", itemID, "streak", noVerdictStreak)
-			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
-		}
 	}
 
 	workCount := 0
@@ -2045,7 +2100,10 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}
-	inProgress, transitionErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
+	inProgress, transitionErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerAutoReopenFailedReview, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
+		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+	})
 	if transitionErr != nil {
 		return fmt.Errorf("transition to in_progress: %w", transitionErr)
 	}
@@ -2098,38 +2156,46 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		Autonomous: true,
 	}))
 	if spawnErr != nil {
-		// Roll back: item should stay in review rather than stranded in in_progress
-		// with no active session. ReconcileStuckItems is an eventual fallback, but
-		// an explicit rollback provides faster recovery.
-		//
-		// The rollback precondition is tied to the in_progress row *this call*
-		// just wrote (ExpectedUpdatedAt: inProgress.UpdatedAt), not applied
-		// unconditionally. An unconditional rollback (precondition: nil) would
-		// blindly overwrite whatever status the item is in by the time the
-		// rollback runs — including a "done" reached in the meantime by a
-		// completely different, legitimate path (the live work session shipping
-		// on its own). That is exactly what happened live on 2026-07-20 to
-		// backlog item 0fd4a940 (PR #176): SpawnSessionFromItem failed after the
-		// item had already shipped, and the unconditional rollback silently
-		// dragged an already-done item back to "review" with no audit note,
-		// kicking off a stale-verdict reprocessing cascade. Scoping the
-		// precondition here means the rollback only fires if nothing else has
-		// touched the item since this function's own in_progress write landed.
-		rollbackPrecondition := &session.BacklogItemPrecondition{
-			ExpectedStatus:    string(session.BacklogStatusInProgress),
-			ExpectedUpdatedAt: &inProgress.UpdatedAt,
-		}
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
-			log.Error("[AutoReopenAfterFailedReview] rollback to review failed", "item", itemID, "error", rollbackErr)
-			// The item is now stranded in_progress with no active session and no
-			// visible error anywhere else (BUG-030) — a log line nobody reads.
-			// Mark it durably stuck so the reconciliation sweep and the operator
-			// both see it, instead of it sitting invisible forever.
-			s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
-		}
+		s.rollbackFailedReopen(ctx, item, inProgress, spawnErr)
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
 	return nil
+}
+
+// rollbackFailedReopen returns an item to review after the respawn that followed
+// its review->in_progress reopen failed, so it is not stranded in_progress with
+// no session.
+func (s *BacklogService) rollbackFailedReopen(ctx context.Context, item *session.BacklogItemData, inProgress *session.BacklogItemData, spawnErr error) {
+	itemID := item.ID
+	// Roll back: item should stay in review rather than stranded in in_progress
+	// with no active session. ReconcileStuckItems is an eventual fallback, but
+	// an explicit rollback provides faster recovery.
+	//
+	// The rollback precondition is tied to the in_progress row *this call*
+	// just wrote (ExpectedUpdatedAt: inProgress.UpdatedAt), not applied
+	// unconditionally. An unconditional rollback (precondition: nil) would
+	// blindly overwrite whatever status the item is in by the time the
+	// rollback runs — including a "done" reached in the meantime by a
+	// completely different, legitimate path (the live work session shipping
+	// on its own). That is exactly what happened live on 2026-07-20 to
+	// backlog item 0fd4a940 (PR #176): SpawnSessionFromItem failed after the
+	// item had already shipped, and the unconditional rollback silently
+	// dragged an already-done item back to "review" with no audit note,
+	// kicking off a stale-verdict reprocessing cascade. Scoping the
+	// precondition here means the rollback only fires if nothing else has
+	// touched the item since this function's own in_progress write landed.
+	rollbackPrecondition := &session.BacklogItemPrecondition{
+		ExpectedStatus:    string(session.BacklogStatusInProgress),
+		ExpectedUpdatedAt: &inProgress.UpdatedAt,
+	}
+	if _, rollbackErr := s.storage.Rollback(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+		log.Error("[AutoReopenAfterFailedReview] rollback to review failed", "item", itemID, "error", rollbackErr)
+		// The item is now stranded in_progress with no active session and no
+		// visible error anywhere else (BUG-030) — a log line nobody reads.
+		// Mark it durably stuck so the reconciliation sweep and the operator
+		// both see it, instead of it sitting invisible forever.
+		s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
+	}
 }
 
 // AutoRespawnAutonomousWork implements the AutonomousStuckRespawner interface
@@ -2154,6 +2220,9 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
 		// Already moved on (a human acted manually, or another reconciler beat
 		// us to it) — nothing to do.
+		return nil
+	}
+	if s.heldByTransitionDenial(ctx, "AutoRespawnAutonomousWork", item) {
 		return nil
 	}
 
@@ -2255,6 +2324,9 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
 		// Already moved on (a human acted manually, or another reconciler beat
 		// us to it) — nothing to remediate.
+		return nil
+	}
+	if s.heldByTransitionDenial(ctx, "RemediateStaleWorkSession", item) {
 		return nil
 	}
 
@@ -2373,6 +2445,9 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	if session.BacklogStatus(item.Status) != session.BacklogStatusPRPending {
 		return fmt.Errorf("item %s is not pr_pending (got %s)", itemID, item.Status)
 	}
+	if s.heldByTransitionDenial(ctx, "AutoReopenForPRFix", item) {
+		return nil
+	}
 
 	// Reuse the same iteration cap as the review rework cycle.
 	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
@@ -2422,7 +2497,10 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened for PR fix (CI/review)",
 	}
-	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem); err != nil {
+	if _, err := s.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerAutoReopenForPRFix, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
+		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+	}); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
 	}
 
@@ -2435,6 +2513,22 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		}
 	}
 
+	spawnErr := s.spawnPRFixSession(ctx, item, sessions, fixContext)
+	if spawnErr != nil {
+		s.rollbackFailedPRFixReopen(ctx, item, spawnErr)
+		return fmt.Errorf("spawn session: %w", spawnErr)
+	}
+
+	log.Info("[AutoReopenForPRFix] item → in_progress for PR fix session", "item", itemID)
+	return nil
+}
+
+// spawnPRFixSession hands a pr_pending item that was just reopened to a fresh
+// work session, with the PR failure context prepended to its notes for the
+// session prompt. The original notes are restored whether or not the spawn
+// succeeds.
+func (s *BacklogService) spawnPRFixSession(ctx context.Context, item *session.BacklogItemData, sessions []session.ItemSessionSummary, fixContext string) error {
+	itemID := item.ID
 	// Best-effort: sync the currently open PR's branch with main before handing the
 	// fix off to a new session. This is preventive rather than reactive — a CI
 	// failure caused by drift from main (rather than the PR's own diff) gets
@@ -2472,22 +2566,24 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	}, nil); noteErr != nil {
 		log.Warn("[AutoReopenForPRFix] restore notes failed", "item", itemID, "error", noteErr)
 	}
+	return spawnErr
+}
 
-	if spawnErr != nil {
-		// Roll back to pr_pending so the reconciler can retry.
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
-			log.Error("[AutoReopenForPRFix] rollback to pr_pending failed", "item", itemID, "error", rollbackErr)
-			// The caller below only ever learns about spawnErr — a rollback
-			// failure here leaves the item stranded at in_progress with no work
-			// session, same shape notifySpawnAndRollbackFailed was built for
-			// (BUG-030).
-			s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
-		}
-		return fmt.Errorf("spawn session: %w", spawnErr)
+// rollbackFailedPRFixReopen returns an item to pr_pending after the PR-fix
+// spawn failed, so the reconciler can retry.
+func (s *BacklogService) rollbackFailedPRFixReopen(ctx context.Context, item *session.BacklogItemData, spawnErr error) {
+	itemID := item.ID
+	// Roll back to pr_pending so the reconciler can retry. Status-only CAS: the
+	// notes writes around the spawn bump updated_at, so it cannot be pinned.
+	rollbackPrecondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
+	if _, rollbackErr := s.storage.Rollback(ctx, itemID, session.BacklogStatusPRPending, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+		log.Error("[AutoReopenForPRFix] rollback to pr_pending failed", "item", itemID, "error", rollbackErr)
+		// The caller below only ever learns about spawnErr — a rollback
+		// failure here leaves the item stranded at in_progress with no work
+		// session, same shape notifySpawnAndRollbackFailed was built for
+		// (BUG-030).
+		s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
 	}
-
-	log.Info("[AutoReopenForPRFix] item → in_progress for PR fix session", "item", itemID)
-	return nil
 }
 
 var errReviewInFlight = errors.New("a review for this item is already in flight")
@@ -2524,6 +2620,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 		// Already moved on by the time this async call runs (e.g. a review gate
 		// was re-spawned by ReconcileStuck's FindReviewItemsWithoutGate path, or a
 		// human acted manually) — nothing to do.
+		return nil
+	}
+	if s.heldByTransitionDenial(ctx, "AutoRespawnReview", item) {
 		return nil
 	}
 
@@ -2621,6 +2720,9 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
+	if s.heldByTransitionDenial(ctx, "AutoRespawnTriage", item) {
+		return nil
+	}
 
 	if applyGate {
 		sessions, listErr := s.storage.ListItemSessions(ctx, itemID)
@@ -2641,7 +2743,10 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 		// Already in the state TriggerTriage requires — fall through below.
 	case session.BacklogStatusQueued:
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusIdea, precondition, session.TriggeredBySystem); transErr != nil {
+		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerRespawnTriage, ItemID: itemID, To: session.BacklogStatusIdea,
+			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		}); transErr != nil {
 			return fmt.Errorf("reset queued item to idea before retriage: %w", transErr)
 		}
 	default:
@@ -2881,6 +2986,42 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 	return path
 }
 
+// skipTriageForNewItem reports whether a skip rule applies to the new item. It
+// records the skip and advances the item idea->ready, since triage is what
+// normally does that and a skipped item would otherwise sit in idea forever.
+func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string) bool {
+	item, getErr := s.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		return false
+	}
+	reason := newItemTriageSkipReason(item)
+	if reason == "" {
+		return false
+	}
+	s.recordTriageSkip(ctx, itemID, reason)
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+	if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerMaybeTriggerTriage, ItemID: itemID, To: session.BacklogStatusReady,
+		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+	}); transErr != nil {
+		if isEngineDenial(transErr) {
+			// The gate reported the denial once under maybe_trigger_triage; the
+			// re-drive sweep advances the item when the gate is satisfied.
+			log.Debug("[MaybeTriggerTriage] skipped item waits on a denied idea->ready", "item", itemID, "error", transErr)
+		} else {
+			log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
+		}
+	}
+	return true
+}
+
+// triageHeldByDenial reports whether itemID already has an open denied
+// transition from its status, so a creation-time triage trigger starts nothing.
+func (s *BacklogService) triageHeldByDenial(ctx context.Context, itemID string) bool {
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	return err == nil && s.heldByTransitionDenial(ctx, "MaybeTriggerTriage", item)
+}
+
 // MaybeTriggerTriage is the single "should this newly created item get
 // auto-triaged" decision, shared by every backlog-item creation entry point:
 // RPC CreateBacklogItem and ImportGitHubIssue (backlog_service_lifecycle.go,
@@ -2903,20 +3044,11 @@ func (s *BacklogService) MaybeTriggerTriage(ctx context.Context, itemID string, 
 	if skipTriage || repoPath == "" || s.headlessPool == nil {
 		return false
 	}
-	if s.storage != nil {
-		if item, getErr := s.storage.GetBacklogItem(ctx, itemID); getErr == nil {
-			if reason := newItemTriageSkipReason(item); reason != "" {
-				s.recordTriageSkip(ctx, itemID, reason)
-				// Triage is what normally advances idea->ready; without it a skipped item
-				// would sit in idea forever, so advance it here (the note above is the visible record).
-				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
-				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, //nolint:silenttransition surfaced via the triage-gate activity note recorded just above
-					session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
-					log.Warn("[MaybeTriggerTriage] failed to advance skipped item to ready", "item", itemID, "error", transErr)
-				}
-				return false
-			}
-		}
+	if s.storage != nil && s.triageHeldByDenial(ctx, itemID) {
+		return false
+	}
+	if s.storage != nil && s.skipTriageForNewItem(ctx, itemID) {
+		return false
 	}
 	// 30s gates only the synchronous path (item lookup + ItemSession creation).
 	// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
@@ -3352,7 +3484,10 @@ Do not modify the code. Only write the review verdict.
 				log.Info("[TriggerReReview] PASS verdict but code not verified on main — leaving in review for manual transition/override", "item", item.ID)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, precondition, session.TriggeredBySystem); transErr != nil {
+				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+					Caller: session.CallerTriggerReReview, ItemID: item.ID, To: session.BacklogStatusDone,
+					Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+				}); transErr != nil {
 					log.Warn("[TriggerReReview] PASS but transition to done failed", "error", transErr)
 					// Code is confirmed shipped to main — the item is left stuck in
 					// review with nothing further to trigger a retry.
@@ -3588,7 +3723,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 			if reason != "" {
 				_ = s.storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
 			} else {
-				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now())
+				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 			}
 			continue
 		}

@@ -246,4 +246,36 @@ describe("StuckBacklogItemsProvider", () => {
 
     await waitFor(() => expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(2));
   });
+
+  it("refreshAutoMerge calls the RPC with refreshAutoMerge:true and returns the matching item", async () => {
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [makeItem("a"), makeItem("b")] });
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [makeItem("a"), makeItem("b")] });
+    let got: { itemId: string } | undefined;
+    await act(async () => {
+      got = await result.current.refreshAutoMerge("b");
+    });
+
+    expect(got?.itemId).toBe("b");
+    expect(mockListStuckBacklogItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ refreshAutoMerge: true })
+    );
+    expect(result.current.items).toHaveLength(2);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("refreshAutoMerge resolves undefined when the item is no longer listed", async () => {
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [makeItem("a")] });
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [] });
+    let got: unknown = "unset";
+    await act(async () => {
+      got = await result.current.refreshAutoMerge("a");
+    });
+    expect(got).toBeUndefined();
+  });
 });

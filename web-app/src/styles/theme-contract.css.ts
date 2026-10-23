@@ -211,6 +211,8 @@ export const breakpoints = {
 export const zIndex = {
   base: 0,
   tableHeader: 1,   // sticky <th> within a scroll container — only competes with sibling tds
+  // Dim layer over the terminal while resizing; under the loading/unavailable overlays (raised).
+  terminalDim: 5,
   raised: 10,
   // In-viewport absolute overlays inside the terminal (Story 1.4.4/1.4.5) —
   // distinct stacking context from the page-level `floatingTerminalUI`/`toast`
@@ -218,6 +220,8 @@ export const zIndex = {
   // these two (the "no more history" line stays under the loading pill).
   terminalOverlay: 15,
   terminalOverlayPill: 20,
+  // Drop-zone scrim and reconnect/hard-failed banners inside the terminal pane.
+  terminalBanner: 20,
   // Absolute chrome pinned inside the terminal pane (scroll track, "Copy all", jump-to-latest,
   // scrolling panel). Must stay below `slideOver`/`toast` so the notification tray and toast
   // deck are never painted over by terminal chrome (MC-1, notification-contrast-over-xterm.spec.ts).

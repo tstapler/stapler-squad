@@ -2,6 +2,7 @@ package mux
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,6 +86,41 @@ func TestAutoDiscoveryStartStop(t *testing.T) {
 		// Success
 	case <-time.After(2 * time.Second):
 		t.Error("Auto-discovery didn't stop within timeout")
+	}
+}
+
+// A socket that accepts but never sends metadata must not hold a cancelled probe for its 2s timeout.
+func TestProbeSocketContext_ReturnsPromptly_When_CancelledWhileSocketIsSilent(t *testing.T) {
+	t.Parallel()
+	sock := filepath.Join(t.TempDir(), "silent.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	accepted, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			close(accepted)
+			defer c.Close()
+			<-release
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	probed := make(chan error, 1)
+	go func() { _, err := probeSocketContext(ctx, sock); probed <- err }()
+	<-accepted
+	cancel()
+
+	select {
+	case err := <-probed:
+		if err == nil {
+			t.Error("probe of a silent socket should fail")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("probe ignored context cancellation")
 	}
 }
 

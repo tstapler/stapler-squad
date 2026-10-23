@@ -106,7 +106,7 @@ func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesO
 			itemID := createReadyItemForSpawn(t, svc, repoPath, "stale item "+name)
 			_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: session.SessionRoleWork})
 			require.NoError(t, err)
-			_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 			require.NoError(t, err)
 
 			require.NoError(t, svc.RemediateStaleWorkSession(t.Context(), itemID))

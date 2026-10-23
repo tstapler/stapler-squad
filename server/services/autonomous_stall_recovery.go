@@ -167,6 +167,7 @@ func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage 
 	allowed, _, err := storage.DiagnoseNudgeAllowedWithReserve(ctx, item.ID, domain.StuckReasonAutonomousStuck, stallNudgeReserve)
 	in.NudgeAllowed = err == nil && allowed
 	plan = domain.DecideStallAction(in)
+	recordStallCapSkip(in, inst.Snapshot().Title)
 	in.NudgeEnabled = true
 	wouldNudge = domain.DecideStallAction(in) == domain.StallActionNudge
 	switch {
@@ -176,6 +177,47 @@ func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage 
 		none = noneCauseRetryPending
 	}
 	return plan, wouldNudge, none
+}
+
+// recordStallCapSkip counts a stall whose only obstacle to a nudge was the cap.
+func recordStallCapSkip(in domain.StallDecisionInput, title string) {
+	if !in.NudgeEnabled || in.NudgeAllowed {
+		return
+	}
+	in.NudgeAllowed = true
+	if domain.DecideStallAction(in) == domain.StallActionNudge {
+		session.RecordNudgeOutcome(session.NudgeKindStall, session.NudgeOutcomeSkippedCap, title)
+	}
+}
+
+// nudgeOutcomeLabel maps the stop-row outcome to the durable counter's
+// vocabulary; ok is false for outcomes that are not attempts.
+func nudgeOutcomeLabel(o nudgeOutcome) (label session.NudgeOutcomeLabel, ok bool) {
+	switch o {
+	case nudgeOutcomeSuccess:
+		return session.NudgeOutcomeDelivered, true
+	case nudgeOutcomeUncertain:
+		return session.NudgeOutcomeUncertain, true
+	case nudgeOutcomeCtxCancelled, nudgeOutcomeNotRestartable:
+		return session.NudgeOutcomeCancelled, true
+	case nudgeOutcomeSlotUnavailable:
+		return session.NudgeOutcomeSkippedCap, true
+	case nudgeOutcomeNotIdle:
+		return session.NudgeOutcomeNotIdle, true
+	case nudgeOutcomeLeaseBusy:
+		return session.NudgeOutcomeLeaseBusy, true
+	case nudgeOutcomeOwnership:
+		return session.NudgeOutcomeOwnership, true
+	case nudgeOutcomeRestartFailed:
+		return session.NudgeOutcomeRestartFailed, true
+	}
+	return "", false
+}
+
+func recordStallNudgeOutcome(title string, o nudgeOutcome) {
+	if label, ok := nudgeOutcomeLabel(o); ok {
+		session.RecordNudgeOutcome(session.NudgeKindStall, label, title)
+	}
 }
 
 // classifyNudgeError maps the writer's error to the outcome class and whether
@@ -231,6 +273,7 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 		err = a.nudger().NudgeStalledSession(rctx, inst, claim)
 	}
 	outcome, leave := classifyNudgeError(err)
+	recordStallNudgeOutcome(title, outcome)
 	if err != nil {
 		log.Warn("[AutonomousDriver] stall nudge not delivered", "session", title, "item", item.ID, "nudge_outcome", string(outcome), "err", err)
 	}
@@ -249,6 +292,7 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 		if rErr := a.reattachDriver(inst, stallNudgeRestartTimeout); rErr != nil {
 			log.Warn("[AutonomousDriver] driver re-attach after nudge failed", "session", title, "err", rErr)
 			rec.Recovery.NudgeOutcome = nudgeOutcomeRestartFailed
+			recordStallNudgeOutcome(title, nudgeOutcomeRestartFailed)
 			return true, false
 		}
 		if !canRestart(rctx, inst) {
