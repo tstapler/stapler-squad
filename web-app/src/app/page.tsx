@@ -3,9 +3,9 @@
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "@/lib/nav";
-import { Session } from "@/gen/session/v1/types_pb";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
-import { SessionDetailTab } from "@/components/sessions/SessionDetail";
+import type { SessionDetailTab } from "@/components/sessions/SessionDetail";
 
 const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
 function isValidTab(tab: string | null): tab is SessionDetailTab {
@@ -20,9 +20,11 @@ import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import type { PaneAction } from "@/lib/pane/paneTypes";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
+import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 import type { WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
+import { WindowOverview } from "@/components/window/WindowOverview";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import { useSessionViewMode } from "@/lib/hooks/useSessionViewMode";
@@ -173,7 +175,29 @@ function HomeContent() {
     },
     [windows]
   );
-  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest);
+  const [windowOverviewOpen, setWindowOverviewOpen] = useState(false);
+  const toggleWindowOverview = useCallback(() => setWindowOverviewOpen((open) => !open), []);
+  useWindowShortcuts(windows, currentWindow.id, switchToWindow, handleWindowRenameRequest, toggleWindowOverview);
+
+  // Hover preview + overview read the latest windows/sessions through refs so the
+  // memoized WindowTabStrip needn't re-render on every pane change.
+  const windowsRef = useRef(windows);
+  windowsRef.current = windows;
+  const getWindows = useCallback(() => windowsRef.current, []);
+  const paneSessionsRef = useRef(paneSessions);
+  paneSessionsRef.current = paneSessions;
+  const getSessionTitle = useCallback(
+    (sessionId: string) => paneSessionsRef.current.find((s) => s.id === sessionId)?.title,
+    []
+  );
+  useShortcut("window.overview", {
+    key: "o",
+    code: "KeyO",
+    modifiers: { alt: true },
+    label: "Window overview",
+    context: "global",
+    action: toggleWindowOverview,
+  });
   // Helper function to find a session by ID with fuzzy matching for external sessions
   const findSessionById = useCallback(
     (sessionId: string): Session | undefined => findSessionByIdIn(sessions, sessionId),
@@ -330,47 +354,48 @@ function HomeContent() {
   useOmnibarQueryParamLaunch(searchParams, router, openOmnibar, track, getSession);
 
   // Close session and clear URL query parameter
-  const closeSession = () => {
+  const closeSession = useCallback(() => {
     setSelectedSession(null);
     setActiveTab("info");
     lastUrlRoutedRef.current = { sessionId: null, tab: null };
     updateUrl(null, null);
-  };
+  }, [updateUrl]);
 
   // Handle session deletion
-  const handleDeleteSession = async (sessionId: string) => {
-    if (selectedSession?.id === sessionId) {
+  const selectedSessionId = selectedSession?.id;
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (selectedSessionId === sessionId) {
       closeSession();
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     track({ name: "session_deleted", category: "user_action" });
     await deleteSession(sessionId);
-  };
+  }, [selectedSessionId, closeSession, track, deleteSession]);
 
   // Handle new workspace on same project
-  const handleNewWorkspaceSession = (sessionId: string) => {
+  const handleNewWorkspaceSession = useCallback((sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
     getSession(sessionId).then((session) => {
       openOmnibar(session?.repoRoot);
     }).catch(() => {
       openOmnibar();
     });
-  };
+  }, [track, getSession, openOmnibar]);
 
   const handleCloneSession = useCallback((_sessionId: string) => {
     openInCreationMode();
   }, [openInCreationMode]);
 
-  const handleNewSession = () => {
+  const handleNewSession = useCallback(() => {
     openInCreationMode();
-  };
+  }, [openInCreationMode]);
 
-  const handleUpdateTags = async (sessionId: string, tags: string[]) => {
+  const handleUpdateTags = useCallback(async (sessionId: string, tags: string[]) => {
     if (tags.length > 0) {
       track({ name: "session_tags_updated", category: "user_action" });
       await updateSession(sessionId, { tags });
     }
-  };
+  }, [track, updateSession]);
 
   const handleSetRateLimitEnabled = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
     track({ name: "session_rate_limit_updated", category: "user_action" });
@@ -415,7 +440,7 @@ function HomeContent() {
     return true;
   }, [updateSession, track, addNotification]);
 
-  const handleSessionClick = (session: Session) => {
+  const handleSessionClick = useCallback((session: Session) => {
     sessionTriggerRef.current = document.activeElement as HTMLElement;
     if (typeof performance !== "undefined") {
       performance.mark("session:click");
@@ -430,7 +455,7 @@ function HomeContent() {
     // Also route the session to the currently-focused tiling pane
     setExternalAssignCounter((c) => c + 1);
     setExternalAssignSession({ sessionId: session.id, tab: "info" });
-  };
+  }, [updateUrl]);
 
   const handleTabChange = (tab: SessionDetailTab) => {
     setActiveTab(tab);
@@ -567,7 +592,19 @@ function HomeContent() {
               if (id === currentWindow.id && next) switchToWindow(next);
             }}
             onRename={renameWindow}
+            getWindows={getWindows}
+            getSessionTitle={getSessionTitle}
+            onOpenOverview={() => setWindowOverviewOpen(true)}
           />
+          {windowOverviewOpen && (
+            <WindowOverview
+              windows={windows}
+              currentWindowId={currentWindow.id}
+              getSessionTitle={getSessionTitle}
+              onSwitch={switchToWindow}
+              onClose={() => setWindowOverviewOpen(false)}
+            />
+          )}
           {lookup ? (
             <SessionUnavailableCard
               variant={lookup.status === "failed" ? "failed" : "unavailable"}

@@ -44,13 +44,13 @@
     },
     {
       "spec": "multi-window.spec.ts",
-      "coupling": "nonToastAlerts excludes #__next-route-announcer__ by id.",
+      "coupling": "nonToastAlerts excludes #__next-route-announcer__ by id and the app's announcer-assertive live region.",
       "state": "neutral",
       "change": "None: the :not(#id) clause matches nothing on a build without that element."
     },
     {
       "spec": "pages/EscapeAnalyticsGlobalViewPage.ts",
-      "coupling": "getErrorBanner excludes #__next-route-announcer__ by id (used by escape-analytics-global-view.spec.ts).",
+      "coupling": "getErrorBanner excludes #__next-route-announcer__ by id and the app's announcer-assertive live region (used by escape-analytics-global-view.spec.ts).",
       "state": "neutral",
       "change": "None."
     }
@@ -60,12 +60,7 @@
     "classified": 8
   },
   "failingOnNextAtCapture": {
-    "note": "Fail 2 of 2 attempts on the isolated Next server on 2026-10-19 (spec and page-object files unchanged by this PR). Not diagnosed here; Story 7.10's comparator should treat them as baseline `fail`, not Bun regressions.",
-    "tests": [
-      "escape-analytics-global-view.spec.ts: EscapeAnalyticsGlobalView_should_ShowAggregateSummary_When_TabSwitched",
-      "escape-analytics-global-view.spec.ts: EscapeAnalyticsGlobalView_should_ShowErrorBanner_When_RpcFails",
-      "jules-status-badge.spec.ts: no badge renders before the first Jules state arrives",
-      "multi-window.spec.ts: renaming to empty reverts silently and renaming to a duplicate name is allowed silently"
-    ]
+    "note": "Emptied: the four tests listed at capture (2026-10-19) were fixed for item fb352a5d (#1135); see project_plans/e2e-triage-escape-jules-multiwindow.",
+    "tests": []
   }
 }

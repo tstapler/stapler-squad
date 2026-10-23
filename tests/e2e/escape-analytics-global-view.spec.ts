@@ -53,11 +53,17 @@ function buildGlobalSummaryResponse(fixture: GlobalSummaryFixture) {
     totalSequences: String(fixture.totalSequences),
     totalMangled: String(fixture.totalMangled),
     mangleRate: fixture.mangleRate,
+    // The fleet-wide card renders correlation_outcomes, not total_sequences; a healthy
+    // capture keeps the warning banner (also role="alert") out of the DOM.
+    correlationOutcomes: String(fixture.totalSequences),
+    correlationCoverage: 1,
+    captureHealthy: true,
     perSession: fixture.perSession.map((row) => ({
       sessionId: row.sessionId,
       totalSequences: String(row.totalSequences),
       totalMangled: String(row.totalMangled),
       mangleRate: row.mangleRate,
+      correlationOutcomes: String(row.totalSequences),
     })),
   };
 }
