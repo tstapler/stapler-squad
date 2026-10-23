@@ -290,6 +290,7 @@ export function PaneTilingContainer({
                 }}
                 title="Replace the session list pane with this session"
               >
+                {/* analytics-exempt */}
                 <LayoutList size={14} />
                 Replace list
               </button>
@@ -302,6 +303,7 @@ export function PaneTilingContainer({
               }}
               title="Open in a floating modal without changing pane layout"
             >
+              {/* analytics-exempt */}
               <Maximize2 size={14} />
               Open in Modal
               <span className={pickerActionKbd}>M</span>
@@ -311,6 +313,7 @@ export function PaneTilingContainer({
               onClick={cancelPicker}
               title="Cancel (Esc)"
             >
+              {/* analytics-exempt */}
               <X size={14} />
               Cancel
               <span className={pickerActionKbd}>Esc</span>
