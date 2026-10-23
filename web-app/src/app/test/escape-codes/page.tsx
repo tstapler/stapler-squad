@@ -380,8 +380,9 @@ export default function EscapeCodesTestPage() {
             </div>
 
             <div className={styles.controlGroup}>
-              <label>Duration (seconds)</label>
+              <label htmlFor="escape-duration-input">Duration (seconds)</label>
               <input
+                id="escape-duration-input"
                 type="number"
                 value={duration}
                 onChange={(e) => setDuration(Number(e.target.value))}
