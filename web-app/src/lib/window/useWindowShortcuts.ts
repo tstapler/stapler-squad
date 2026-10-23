@@ -199,9 +199,9 @@ export function useWindowShortcuts(
   // Alt+W is an alias for the command bar's `w` branch. The legacy leader
   // below only arms when no bar is mounted (or a modal is open), which keeps
   // this hook usable standalone (and its unit tests meaningful).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleArmLeader = useCallback(() => {
     if (!commandBarController.open(["w"])) armLeader(refs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

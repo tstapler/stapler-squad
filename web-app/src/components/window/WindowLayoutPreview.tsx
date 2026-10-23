@@ -83,6 +83,7 @@ export function WindowPreviewCard({
       aria-current={isActive ? "true" : undefined}
       onClick={() => onSelect(w.id)}
     >
+      {/* analytics-exempt */}
       <span className={styles.cardTitle}>
         {position}. {w.name}
       </span>

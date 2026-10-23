@@ -91,6 +91,7 @@ jest.mock("@/components/pane/PaneTilingContainer", () => ({
           setResult(String(ok));
         }}
       >
+        {/* analytics-exempt */}
         steer:{result}
       </button>
     );

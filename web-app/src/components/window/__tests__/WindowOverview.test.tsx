@@ -53,6 +53,19 @@ describe("WindowOverview", () => {
 });
 
 describe("WindowTabStrip hover preview", () => {
+  // jsdom has no PointerEvent, so fireEvent would drop `pointerType`.
+  beforeAll(() => {
+    if (typeof window.PointerEvent === "undefined") {
+      class PointerEventPolyfill extends MouseEvent {
+        pointerType: string;
+        constructor(type: string, init: MouseEventInit & { pointerType?: string } = {}) {
+          super(type, init);
+          this.pointerType = init.pointerType ?? "";
+        }
+      }
+      (window as unknown as { PointerEvent: unknown }).PointerEvent = PointerEventPolyfill;
+    }
+  });
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
@@ -62,7 +75,13 @@ describe("WindowTabStrip hover preview", () => {
         onClose={jest.fn()} onRename={jest.fn()} getWindows={() => windows} getSessionTitle={getSessionTitle} />,
     );
     expect(screen.queryByTestId("window-hover-preview")).toBeNull();
-    fireEvent.mouseEnter(screen.getByRole("tablist").parentElement as HTMLElement);
+    const strip = screen.getByRole("tablist").parentElement as HTMLElement;
+
+    fireEvent.pointerEnter(strip, { pointerType: "touch" });
+    act(() => { jest.advanceTimersByTime(400); });
+    expect(screen.queryByTestId("window-hover-preview")).toBeNull();
+
+    fireEvent.pointerEnter(strip, { pointerType: "mouse" });
     act(() => { jest.advanceTimersByTime(400); });
     expect(screen.getByTestId("window-hover-preview")).toBeInTheDocument();
     expect(screen.getAllByText("Fix login bug")).toHaveLength(2);

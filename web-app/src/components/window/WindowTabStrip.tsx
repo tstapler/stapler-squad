@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
 import { WindowPreviewCard, type SessionTitleLookup } from "./WindowLayoutPreview";
 import * as overviewStyles from "@/styles/window/windowOverview.css";
@@ -201,6 +201,7 @@ function WindowTabCloseButton({
         onClose(id);
       }}
     >
+      {/* analytics-exempt */}
       &times;
     </button>
   );
@@ -363,10 +364,10 @@ const WindowTabStripInner = forwardRef<
   };
   useEffect(() => clearHoverTimer, []);
 
-  const beginEdit = (id: WindowId, name: string) => {
+  const beginEdit = useCallback((id: WindowId, name: string) => {
     setEditingId(id);
     setDraftName(name);
-  };
+  }, []);
 
   const commitRename = (id: WindowId) => {
     clearHoverTimer();
@@ -449,8 +450,10 @@ const WindowTabStripInner = forwardRef<
       <div
         ref={containerRef}
         className={windowTabStrip}
-        onMouseEnter={() => scheduleHover(true)}
-        onMouseLeave={() => scheduleHover(false)}
+        // Mouse only: a touch tap synthesizes mouseenter, which would pop the preview
+        // open on every tap. Touch users get the overview button instead.
+        onPointerEnter={(e) => e.pointerType === "mouse" && scheduleHover(true)}
+        onPointerLeave={(e) => e.pointerType === "mouse" && scheduleHover(false)}
         onKeyDown={(e) => {
           if (e.key === "Escape") setPreviewWindows(null);
         }}
@@ -491,6 +494,7 @@ const WindowTabStripInner = forwardRef<
           title="New window"
           aria-label="New window"
         >
+          {/* analytics-exempt */}
           +
         </button>
         {onOpenOverview && (
@@ -504,6 +508,7 @@ const WindowTabStripInner = forwardRef<
             title="Window overview"
             aria-label="Window overview"
           >
+            {/* analytics-exempt */}
             ⊞
           </button>
         )}
@@ -542,6 +547,7 @@ const WindowTabStripInner = forwardRef<
             tmux sessions.
           </span>
           <button className={windowOnboardingHintDismiss} onClick={dismissHint}>
+            {/* analytics-exempt */}
             Got it ✕
           </button>
         </div>
