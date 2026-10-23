@@ -1,6 +1,7 @@
+// analytics-exempt
 "use client";
 
-import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
 import { WindowPreviewCard, type SessionTitleLookup } from "./WindowLayoutPreview";
 import * as overviewStyles from "@/styles/window/windowOverview.css";
@@ -363,10 +364,10 @@ const WindowTabStripInner = forwardRef<
   };
   useEffect(() => clearHoverTimer, []);
 
-  const beginEdit = (id: WindowId, name: string) => {
+  const beginEdit = useCallback((id: WindowId, name: string) => {
     setEditingId(id);
     setDraftName(name);
-  };
+  }, []);
 
   const commitRename = (id: WindowId) => {
     clearHoverTimer();

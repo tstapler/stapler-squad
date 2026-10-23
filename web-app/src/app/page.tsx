@@ -3,9 +3,9 @@
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "@/lib/nav";
-import { Session } from "@/gen/session/v1/types_pb";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
-import { SessionDetailTab } from "@/components/sessions/SessionDetail";
+import type { SessionDetailTab } from "@/components/sessions/SessionDetail";
 
 const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
 function isValidTab(tab: string | null): tab is SessionDetailTab {
@@ -354,47 +354,48 @@ function HomeContent() {
   useOmnibarQueryParamLaunch(searchParams, router, openOmnibar, track, getSession);
 
   // Close session and clear URL query parameter
-  const closeSession = () => {
+  const closeSession = useCallback(() => {
     setSelectedSession(null);
     setActiveTab("info");
     lastUrlRoutedRef.current = { sessionId: null, tab: null };
     updateUrl(null, null);
-  };
+  }, [updateUrl]);
 
   // Handle session deletion
-  const handleDeleteSession = async (sessionId: string) => {
-    if (selectedSession?.id === sessionId) {
+  const selectedSessionId = selectedSession?.id;
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (selectedSessionId === sessionId) {
       closeSession();
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     track({ name: "session_deleted", category: "user_action" });
     await deleteSession(sessionId);
-  };
+  }, [selectedSessionId, closeSession, track, deleteSession]);
 
   // Handle new workspace on same project
-  const handleNewWorkspaceSession = (sessionId: string) => {
+  const handleNewWorkspaceSession = useCallback((sessionId: string) => {
     track({ name: "session_new_workspace_initiated", category: "user_action" });
     getSession(sessionId).then((session) => {
       openOmnibar(session?.repoRoot);
     }).catch(() => {
       openOmnibar();
     });
-  };
+  }, [track, getSession, openOmnibar]);
 
   const handleCloneSession = useCallback((_sessionId: string) => {
     openInCreationMode();
   }, [openInCreationMode]);
 
-  const handleNewSession = () => {
+  const handleNewSession = useCallback(() => {
     openInCreationMode();
-  };
+  }, [openInCreationMode]);
 
-  const handleUpdateTags = async (sessionId: string, tags: string[]) => {
+  const handleUpdateTags = useCallback(async (sessionId: string, tags: string[]) => {
     if (tags.length > 0) {
       track({ name: "session_tags_updated", category: "user_action" });
       await updateSession(sessionId, { tags });
     }
-  };
+  }, [track, updateSession]);
 
   const handleSetRateLimitEnabled = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
     track({ name: "session_rate_limit_updated", category: "user_action" });
@@ -439,7 +440,7 @@ function HomeContent() {
     return true;
   }, [updateSession, track, addNotification]);
 
-  const handleSessionClick = (session: Session) => {
+  const handleSessionClick = useCallback((session: Session) => {
     sessionTriggerRef.current = document.activeElement as HTMLElement;
     if (typeof performance !== "undefined") {
       performance.mark("session:click");
@@ -454,7 +455,7 @@ function HomeContent() {
     // Also route the session to the currently-focused tiling pane
     setExternalAssignCounter((c) => c + 1);
     setExternalAssignSession({ sessionId: session.id, tab: "info" });
-  };
+  }, [updateUrl]);
 
   const handleTabChange = (tab: SessionDetailTab) => {
     setActiveTab(tab);

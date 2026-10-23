@@ -1,3 +1,4 @@
+// analytics-exempt
 "use client";
 
 import type { PaneNode } from "@/lib/pane/paneTypes";
