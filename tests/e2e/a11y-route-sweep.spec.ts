@@ -19,12 +19,7 @@ export const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 /** route -> axe rule ids tolerated on it today (pre-existing, filed in audit-findings). */
 // Entries marked #1112 were added by the 7.8a route extension; all occur on the Next build.
 const KNOWN: Record<string, string[]> = {
-  '/analytics/escape': ['color-contrast'], // #1112
   '/changelog': ['color-contrast', 'definition-list'], // #1112
-  '/login': ['color-contrast'], // #1112
-  '/resolve': ['color-contrast'], // #1112
-  '/test/escape-codes': ['label', 'select-name'], // #1112
-  '/test/terminal-stress': ['color-contrast', 'select-name'], // #1112
   '/account': ['color-contrast'],
   '/help': ['color-contrast'],
   '/history': ['color-contrast'],
