@@ -532,7 +532,7 @@ func TestGatedTransition_RecordsGateCallsPerClassCallerAndMode(t *testing.T) {
 // --- exempt entry points ---------------------------------------------------
 
 func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
-	t.Parallel()
+	// Not parallel: EngineBypassCount is process-wide, so a parallel test using the same caller would bump it between the two reads.
 	h := newGateHarness(t, ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, BacklogStatusQueued)
@@ -554,7 +554,7 @@ func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
 }
 
 func TestDebugForce_WritesAnyStatusUnchecked_AndCountsBypass(t *testing.T) {
-	t.Parallel()
+	// Not parallel: EngineBypassCount is process-wide, so a parallel test using the same caller would bump it between the two reads.
 	h := newGateHarness(t, ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, BacklogStatusIdea)
@@ -816,7 +816,7 @@ func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenId
 }
 
 func TestCreateBacklogItemForDebug_CreatesAtAnyStatus_AndCountsDebugCreate(t *testing.T) {
-	t.Parallel()
+	// Not parallel: EngineBypassCount is process-wide, so a parallel test using the same caller would bump it between the two reads.
 	h := newGateHarness(t, ModeEnforce)
 	before := EngineBypassCount(CallerDebugCreate)
 
