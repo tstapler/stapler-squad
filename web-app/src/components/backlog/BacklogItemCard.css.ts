@@ -219,11 +219,6 @@ export const disabledReason = style({
   color: vars.color.textMuted,
 });
 
-export const blockedByLabel = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-});
-
 export const actionButtonDone = style({
   background: vars.statusBadge.completeBg,
   color: vars.statusBadge.completeFg,

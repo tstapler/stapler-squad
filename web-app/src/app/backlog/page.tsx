@@ -225,6 +225,7 @@ function BacklogTableRow({
         <span
           className={styles.priorityBadge}
           data-testid="priority-badge"
+          // eslint-disable-next-line no-restricted-syntax -- priority label fallback, not a detected status
           aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
         >
           {PRIORITY_LABELS[item.priority] ?? "P?"}
@@ -465,8 +466,9 @@ function BacklogPageInner() {
 
   // Clear any in-flight exit timers on unmount.
   useEffect(() => {
+    const timers = exitTimersRef.current; // same Map for the component's lifetime
     return () => {
-      for (const timer of exitTimersRef.current.values()) clearTimeout(timer);
+      for (const timer of timers.values()) clearTimeout(timer);
     };
   }, []);
 
@@ -1052,6 +1054,7 @@ function BacklogPageInner() {
                 key={selectedItemId}
                 itemId={selectedItemId}
                 onClose={handleDetailClose}
+                onItemClick={handleRowClick}
               />
             </aside>
           </>

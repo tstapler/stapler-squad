@@ -78,6 +78,8 @@ import * as styles from "./BacklogItemDetail.css";
 interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
+  /** Opens another item (e.g. a dependency) in the detail pane. */
+  onItemClick?: (itemId: string) => void;
 }
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
@@ -124,7 +126,7 @@ function GroupLabel({ children }: { children: string }) {
   );
 }
 
-export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
+export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
   const {
     getBacklogItem,
@@ -1629,7 +1631,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             scroll-area content. */}
         <GateBlockingSection item={item} />
 
-        <DependenciesSection item={item} />
+        <DependenciesSection item={item} onItemClick={onItemClick} />
 
         {/* Durable guidance requests scoped to this item (AC3) — same shared
             component also embedded in TriageReviewPanel and SessionDetailView.
