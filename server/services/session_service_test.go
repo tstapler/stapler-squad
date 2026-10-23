@@ -5099,3 +5099,31 @@ func TestSessionService_DeleteTaggingRule_should_RemoveRule_When_RuleExists(t *t
 		assert.NotEqual(t, upsertResp.Msg.GetRule().GetId(), r.GetId(), "deleted rule must not reappear in ListTaggingRules")
 	}
 }
+
+// TestRateLimitCallbacks_ReadTitleLockFree_WhileInstanceRenamed pins that the
+// rate-limit/cold-restore notification builders read the title through
+// Snapshot(): Instance.Rename writes Title under i.mu, so a bare inst.Title
+// read races with it under -race.
+func TestRateLimitCallbacks_ReadTitleLockFree_WhileInstanceRenamed(t *testing.T) {
+	t.Parallel()
+	svc, _, inst := newRateLimitHiddenTestFixture(t, "rl-title-race")
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			_ = inst.Rename(fmt.Sprintf("rl-title-race-%d", i))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			svc.onRateLimitDetected(inst, inst.UUID, time.Time{})
+			svc.onRateLimitRecoverySucceeded(inst, inst.UUID)
+			svc.onRateLimitRecoveryFailed(inst, inst.UUID, "boom")
+			svc.onColdRestoreLostHistory(inst)
+		}
+	}()
+	wg.Wait()
+}
