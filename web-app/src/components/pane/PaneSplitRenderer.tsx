@@ -281,6 +281,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
           aria-pressed={viewMode === "list"}
           onClick={() => setViewMode("list")}
         >
+          {/* analytics-exempt */}
           List
         </button>
         <button
@@ -290,6 +291,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
           aria-pressed={viewMode === "board"}
           onClick={() => setViewMode("board")}
         >
+          {/* analytics-exempt */}
           Board
         </button>
       </div>
@@ -405,7 +407,8 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           className={pickerOverlay}
           onClick={(e) => {
             e.stopPropagation();
-            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId: pickerPendingSession!.id });
+            if (!pickerPendingSession) return;
+            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId: pickerPendingSession.id });
             dispatch({ type: "ASSIGN_TAB", paneId: pane.id, tab: "terminal" });
             cancelPicker();
           }}
@@ -413,6 +416,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           role="button"
           tabIndex={0}
         >
+          {/* analytics-exempt */}
           <span className={pickerLabel}>{pickerLetter}</span>
         </div>
       )}
@@ -474,6 +478,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
             onClick={() => dispatch({ type: "RESET_LAYOUT" })}
             title="Reset to single pane"
           >
+            {/* analytics-exempt */}
             Reset layout
           </button>
         </div>

@@ -187,7 +187,7 @@ export function PaneTilingContainer({
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [pickerPendingSession, state.root, dispatch, cancelPicker]);
+  }, [pickerPendingSession, state.root, state.focusedPaneId, dispatch, cancelPicker]);
 
   // Focus the mobile sheet when it opens so keyboard and screen reader users can interact.
   useEffect(() => {
@@ -262,6 +262,7 @@ export function PaneTilingContainer({
               }}
               title="Open in a new pane side by side"
             >
+              {/* analytics-exempt */}
               <Columns2 size={14} />
               Side by side
               <span className={pickerActionKbd}>V</span>
@@ -274,6 +275,7 @@ export function PaneTilingContainer({
               }}
               title="Open in a new pane stacked top/bottom"
             >
+              {/* analytics-exempt */}
               <Rows2 size={14} />
               Top / Bottom
               <span className={pickerActionKbd}>H</span>
