@@ -6,42 +6,6 @@
   },
   "entries": [
     {
-      "spec": "escape-analytics-global-view.spec.ts",
-      "test": "EscapeAnalyticsGlobalView_should_ShowAggregateSummary_When_TabSwitched",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1135",
-      "reason": "Fails identically on the Next build at the same commit; not caused by the Bun migration."
-    },
-    {
-      "spec": "escape-analytics-global-view.spec.ts",
-      "test": "EscapeAnalyticsGlobalView_should_ShowErrorBanner_When_RpcFails",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1135",
-      "reason": "Fails identically on the Next build at the same commit; not caused by the Bun migration."
-    },
-    {
-      "spec": "jules-status-badge.spec.ts",
-      "test": "every icon-bearing element has a non-empty accessible name distinct from its title attribute",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1135",
-      "reason": "Fails identically on the Next build at the same commit; not caused by the Bun migration."
-    },
-    {
-      "spec": "jules-status-badge.spec.ts",
-      "test": "every JulesStatusBadge phase meets 4.5:1 contrast in light and dark themes",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1135",
-      "reason": "Fails identically on the Next build at the same commit (debug seed endpoint returns HTML, not JSON); not caused by the Bun migration."
-    },
-    {
-      "spec": "jules-status-badge.spec.ts",
-      "test": "no badge renders before the first Jules state arrives",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1135",
-      "reason": "Fails identically on the Next build at the same commit (debug seed endpoint returns HTML, not JSON); not caused by the Bun migration."
-    },
-    {
-      "spec": "multi-window.spec.ts",
-      "test": "renaming to empty reverts silently and renaming to a duplicate name is allowed silently",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1135",
-      "reason": "Fails identically on the Next build at the same commit; not caused by the Bun migration."
-    },
-    {
       "spec": "scroll-policy.spec.ts",
       "test": "switching the Up Next tab leaves scroll and the history length unchanged",
       "issue": "https://github.com/tstapler/stapler-squad/issues/1136",
