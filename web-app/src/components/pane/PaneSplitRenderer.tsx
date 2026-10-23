@@ -145,9 +145,10 @@ interface PaneSplitProps {
 function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneSplitProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // On mobile: vertical (side-by-side) splits collapse to the focused pane only.
-  // Horizontal (top/bottom) splits are fine on mobile — show both panes stacked.
-  if (isMobile && pane.direction === "vertical") {
+  // On narrow screens every split collapses to the focused pane, so each pane is a
+  // full-screen "page" that MobilePaneTabStrip switches between — a stacked 50/50
+  // split leaves two cramped terminals and there is no way to get one full-screen.
+  if (isMobile) {
     const focusedInFirst = containsPaneId(pane.first, state.focusedPaneId);
     const visibleNode = focusedInFirst ? pane.first : pane.second;
     return (
