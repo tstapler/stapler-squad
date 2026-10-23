@@ -5,7 +5,7 @@ import { useState, useCallback, useRef, useEffect, useId, useMemo } from "react"
 import { Link } from "@/lib/nav";
 import { type UserPR } from "@/gen/session/v1/types_pb";
 import { type UseGitHubPRsReturn } from "@/lib/hooks/useGitHubPRs";
-import { type FilterStatus, type SortBy, type PRListFilters } from "@/lib/hooks/usePRListFilters";
+import { type FilterStatus, type SortBy, type PRListFilters, isReadyToMerge } from "@/lib/hooks/usePRListFilters";
 import { useNowTicker } from "@/lib/hooks/useNowTicker";
 import { DEGRADED_ATTENTION_TEXT } from "@/lib/unfinished/prAttention";
 import { formatRelativeTime } from "@/lib/unfinished/relativeTime";
@@ -56,12 +56,18 @@ function StatsBar({ prs }: StatsBarProps) {
   ).length;
   const needsReview = prs.filter((p) => p.changesReqCount > 0).length;
   const withSessions = prs.filter((p) => p.sessionIds.length > 0).length;
+  const readyToMerge = prs.filter(isReadyToMerge).length;
 
   return (
     <div className={styles.statsBar} data-testid="github-prs-stats">
       <span className={styles.statItem}>
         <span className={styles.statCount}>{prs.length}</span> open
       </span>
+      {readyToMerge > 0 && (
+        <span className={styles.statItem}>
+          <span className={styles.statCount}>{readyToMerge}</span> ready to merge
+        </span>
+      )}
       {ciFailures > 0 && (
         <span className={styles.statItem}>
           <span className={styles.statCountError}>{ciFailures}</span> CI failing
@@ -583,6 +589,7 @@ function TokenAuthForm({ onAuthComplete, onCancel }: TokenAuthFormProps) {
 
 const STATUS_FILTERS: { value: FilterStatus; label: string }[] = [
   { value: "all", label: "All" },
+  { value: "ready-to-merge", label: "Ready to merge" },
   { value: "ci-failing", label: "CI failing" },
   { value: "changes-requested", label: "Changes req" },
   { value: "with-session", label: "Has session" },
