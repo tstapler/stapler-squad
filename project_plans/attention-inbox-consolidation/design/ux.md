@@ -44,13 +44,15 @@ Every user-facing string uses the word in the first column and no synonym. `need
 | Word | Means | Where it appears |
 |---|---|---|
 | Needs you | items that need the operator (approval, waiting for input, error, tests failing, asked a question) | chip "Needs you", group title "NEEDS YOU", nav accessible name "N need you" (the plural of the same word), empty state "Nothing needs you" |
-| Finished | informational items | chip, group title "Finished", nav cue "N finished"; row reason labels "Finished, waiting for direction" (turn ended, no question) and "Task complete" (the program reported success and no turn-end fact exists); the other informational labels are "Uncommitted changes" and "No change for N min" |
+| Finished | ALL open informational items: `awaiting_direction`, `task_complete`, `stale`, `uncommitted_changes`, Seen or not; N is what is true now and does not drop when a session is opened | chip "Finished N", group title "Finished"; row reason labels "Finished, waiting for direction" (turn ended, no question) and "Task complete" (the program reported success and no turn-end fact exists); the other informational labels are "Uncommitted changes" and "No change for N min" |
+| New finished | ONLY `awaiting_direction` items not yet Seen on any device (a subset of Finished, so N <= the chip number; opening a session lowers N and leaves the chip number unchanged). "new" is the visible word for unseen | nav cue "N new finished" ("9+ new finished" above 9), accessible name "3 new finished"; never the chip or the group title |
 | Waiting for input | one label for both `input_required` and `waiting_for_user` (both mean the agent is blocked on the operator; the two reasons stay distinct in metrics) | row reason label |
 | Quiet | NOW: no meaningful change for N minutes and no open item, with Running/Idle status text; pull-only by design (no nav cue) | chip; Recent section "Quiet now (no change in N min)" |
 | Done | the explicit action that removes an informational item; past tense "Marked done" | button, toast, timeline entry, bulk "Mark all finished done", Recent section "Done (24 h)" |
 | Not a question | the prose-only action; past tense "Marked not a question" | button, toast, timeline entry |
 | Dismiss | tray records ONLY (a tray row is dismissed; an Attention row is never "dismissed") | tray button |
-| Mute | the one word for suppressing push and Slack; shown as static text "Muted until 16:20" | row menu, header control, nav marker. "Pause" and "snooze" are not used |
+| Mute | the one word for suppressing push and Slack; shown as static text "Muted until 16:20"; a global mute shows the short visible word "muted" on the nav cue line and ", alerts muted" in the accessible name | row menu, header control, nav marker. "Pause" and "snooze" are not used |
+| Questions not flagged | the visible state of "Stop flagging questions for this session": a text tag on that session's rows and card and an entry in the mute management list; reversed by "Flag questions for this session" | row, session card, mute management list |
 | Paused | only sessions whose Status is Paused, Stopped or Hibernated | collapsed "Paused (N)" group |
 | Seen | marker only, never an action; server-derived | text marker on a row |
 | Unconfirmed | needs-you item detected from screen/transcript text, not a hook | row tag, list header count, nav accessible name |
@@ -85,7 +87,7 @@ Every user-facing string uses the word in the first column and no synonym. `need
 +--------------------------------------------------------------------------------------------+
 ```
 
-The "Recent" chip opens the cross-session Recent activity view (S13). There is no "Show hidden" toggle here: hidden sessions never produce attention items, so it would show nothing; their activity is reachable only through S13's "Include hidden sessions" toggle.
+The "Recent" chip is a navigation control, not a filter toggle: it opens the cross-session Recent activity view (S13), carries no `aria-pressed` (it has `aria-current="page"` while that view is open), whereas Needs you, Finished and Quiet are toggle buttons with `aria-pressed`. There is no "Show hidden" toggle here: hidden sessions never produce attention items, so it would show nothing; their activity is reachable only through S13's "Include hidden sessions" toggle.
 
 Quiet filter replaces the grouped list with sessions that have no open item and `lastMeaningfulChangeAt` older than the Quiet threshold (default 30 min; Settings option 15 / 30 / 60 / 120, per viewer), sorted oldest first, labelled "Quiet (no change in N min)". Each Quiet row shows the session status as text ("Running", "Idle", "Paused"), because a 30-minute build is Running and Quiet while a finished agent at a prompt is Idle and Quiet; the two need different reactions. It is a filter chip, not a group, because quiet is derived state and not an event. The sticky "Oldest waiting" callout is plain text outside any live region (a ticking age inside `role=status` would be re-announced every 30 s, violating UX-17); when the oldest item changes, only the announcer speaks, and only the session name. Quiet is pull-only by design (the chip count and Recent's "Quiet now"); it has no nav cue, because a second nav count would drift toward the flood ADR-007 #1 avoids (decision recorded in ADR-007 alternatives).
 
@@ -116,7 +118,7 @@ Mobile shows only the first 3 rows of each group by default, then "Show N more" 
 
 ### Tablet (768-1023 px)
 
-Single column with the desktop row anatomy (S2: inline secondary buttons, 56 px rows), the desktop group cap of 10, and chips that wrap onto a second line instead of scrolling. The timeline overlays the list as a modal drawer (S6). Target size follows the input, not the width: `@media (pointer: coarse)` (any width, including a touch laptop or a tablet at 1024 px) gets 44 px targets; `(pointer: fine)` gets 24 px minimum (UX-31).
+Single column with the desktop row anatomy (S2: 56 px rows; secondary buttons inline when the row container is >= 720 px wide, else the S2 overflow menu), the desktop group cap of 10, and chips that wrap onto a second line instead of scrolling. The timeline overlays the list as a modal drawer (S6). Target size follows the input, not the width: `@media (pointer: coarse)` (any width, including a touch laptop or a tablet at 1024 px) gets 44 px targets; `(pointer: fine)` gets 24 px minimum (UX-31).
 
 ### Empty and "nothing needs you" states
 
@@ -163,13 +165,22 @@ session-name
                                                   [ ... ]
 ```
 
+Row action density (container-width rule; the threshold is measured on the list container with a container query, not the viewport, so a 768-1023 px window with a side drawer and a 1280 px window with a narrow pane behave the same):
+
+| Row container width | Visible on the row | In the overflow menu "More" (44x44 on coarse pointers) |
+|---|---|---|
+| >= 720 px | all secondary buttons inline (Timeline, Not a question, Stop flagging questions, Done, Mute) | none |
+| < 720 px, including 768-1023 px with the drawer open, 320 px reflow and 400% zoom | "Not a question" (prose rows) and "Done" (informational rows), each wrapping onto its own line below the excerpt when needed | Timeline, Stop flagging questions, Mute 1 h, Mute 8 h |
+
+"Not a question" is never moved into the overflow menu at any width or zoom (it is the common, time-critical action). Every overflow item has a keyboard path (Tab to "More", Enter, arrows); no content clips or scrolls horizontally (UX-49).
+
 | Reason | Label (words) | Icon | Visual | Actions | Interrupt |
 |---|---|---|---|---|---|
 | `approval_pending` | Approval needed | shield | high-priority accent | Open, Timeline | toast + push |
 | `input_required` | Waiting for input | keyboard | medium accent | Open, Timeline | toast |
 | `prose_question` (new) | Asked a question | speech bubble with "?" | medium accent | Open, Timeline, Not a question, Stop flagging questions for this session, Mute | `INPUT_REQUIRED` delivery: toast (tier 2), web push, Slack, below approvals; counts in badge; subject to the per-session burst guard (S3) and session Mute (push and Slack only) |
 | `error_state` / `tests_failing` / `waiting_for_user` | Error / Tests failing / Waiting for input | alert triangle | high accent | Open, Timeline (no Done) | toast; count in badge |
-| `awaiting_direction` (new) | Finished, waiting for direction | check circle | neutral/low | Open, Timeline, Done, Mute | one delivered notification per episode: tray record + web push, low urgency, no toast, no Slack by default; capped globally with a digest; mutable; always counted in the non-alerting "N finished" nav cue until Seen, whether or not push worked (S14); NOT counted in the badge number or title |
+| `awaiting_direction` (new) | Finished, waiting for direction | check circle | neutral/low | Open, Timeline, Done, Mute | one delivered notification per episode: tray record + web push, low urgency, no toast, no Slack by default; capped globally with a digest; mutable; always counted in the non-alerting "N new finished" nav cue until Seen, whether or not push worked (S14); NOT counted in the badge number or title; auto-clears on a new turn or after 24 h untouched (S4) |
 | `task_complete` | Task complete | check | neutral/low | Open, Timeline, Done | unchanged (routine, tray only); not counted in badge |
 | `stale` / visible `uncommitted_changes` | No change for N min / Uncommitted changes | clock / diff | neutral/low | Open, Timeline, Done | unchanged; not counted in badge |
 
@@ -203,7 +214,8 @@ Mobile: "Not a question" is in the row overflow menu AND as a visible text butto
 | 2 | Activates "Not a question" | Optimistic removal; RPC `AcknowledgeSession{dismiss_kind=not_a_question}`; undo toast for 10 s; `attention_prose_question_dismissed_total` increments server side |
 | 3a | Clicks Undo within 10 s | `UnacknowledgeSession` for that episode; item restored in place on the next snapshot/refetch; toast "Restored". If a newer reply already replaced it: toast "A newer reply replaced this" and nothing returns |
 | 3b | Does nothing | The mark sticks for that turn-end episode only; the next question from the same session raises a new item (ADR-006) |
-| 4 | Wants no more question flags from a chatty session | Row action "Stop flagging questions for this session" (also shown as a hint "Frequent questions from this session" once the burst guard engages, ADR-007 #7): persisted per session, no expiry, Undo toast, reversible from the session's Finished rows via "Flag questions for this session". Afterwards its question-shaped turn ends appear as "Finished, waiting for direction". After the 3rd prose-question episode from one session in 30 minutes, later ones are list row, badge and tray record only (no toast, push or Slack). Neither the opt-out nor the guard touches approvals, waiting-for-input or error items |
+| 4 | Wants no more question flags from a chatty session | Row action "Stop flagging questions for this session" (also shown as a hint "Frequent questions from this session" once the burst guard engages, ADR-007 #7): persisted per session, no expiry, Undo toast, reversible after the row has cleared from the mute management list and the session card (below), and from the session's Finished rows via "Flag questions for this session". Afterwards its question-shaped turn ends appear as "Finished, waiting for direction". After the 3rd prose-question episode from one session in 30 minutes, later ones are list row, badge and tray record only (no toast, push or Slack). Neither the opt-out nor the guard touches approvals, waiting-for-input or error items |
+| 4a | Wants to review or reverse an opt-out later | While an opt-out is set the session's rows and its session card show the text tag "Questions not flagged" (a tag, not colour only), and the mute management list (S14) lists it as "Questions not flagged since Oct 9" with [Flag questions again]. Decision: no auto-expiry (an expiry would silently restart the flood the operator judged noise) but a periodic reminder: once an opt-out is 14 days old the list header shows one dismissible informational line "Questions aren't flagged for 2 sessions. [Review]" that opens the management list; dismissal is per viewer and the line returns after 14 more days. OWNER TO CONFIRM (expiry vs reminder, 14 days) |
 | Exit | Esc dismisses the undo toast without undoing | n/a |
 
 Errors:
@@ -225,6 +237,7 @@ Do not offer "Not a question" on tool-based questions or approvals (they are rea
 | Open session (implicit Seen) | all rows | `LastViewed` is set server-side; on every device the row gets a small "Seen" text marker (not colour only) and drops its unread emphasis; row stays; a newer turn end makes it unseen again | n/a |
 | Done | informational rows only (`awaiting_direction`, `task_complete`, `uncommitted_changes`, `stale`) | Row removed; event `Acknowledged` logged (timeline text "Marked done") | Undo toast 10 s (`UnacknowledgeSession`); the "Done (24 h)" section of S13 lists recently done for recovery, with Undo |
 | Done on needs-me row | not offered | The button is absent (not disabled); keyboard `d` on a needs-me row announces "This needs a reply; Done isn't available" via the announcer | n/a |
+| Auto-clear (no action) | `awaiting_direction` only | The row leaves the list by itself when the session starts a new turn (new meaningful output or operator input after `TurnEnded.At`) or when the item is 24 h old and untouched; a `task_complete`/`stale`/`uncommitted_changes` row follows its own state change. Nothing is announced for an informational row leaving | Recovery path: Recent (S13) keeps the turn end under "Finished (24 h)" and the 7 d window, each with a "Now:" state marker and Open/Timeline, so an auto-cleared finish is still findable; the timeline keeps the `TurnEnded` and `AttentionCleared` entries |
 | "Mark all finished done" | group header of informational rows | Affects only informational rows, never needs-me (tray ADR-008); the server (`AcknowledgeSessions`) also rejects a needs-me row. Confirmation is not modal; undo toast with count: "4 marked done. Undo" | Undo within 10 s |
 
 Errors: partial bulk failure shows "3 of 4 marked done. [Retry remaining]"; rows that failed stay in the list.
@@ -459,7 +472,7 @@ One announcer speaks everything; nothing else on the page is a live region.
 | Plain-text status lines | "Live: connected - last update 14:02:11", "Oldest waiting: api-refactor, waiting 47 min", the disconnect and offline banners, "Last checked 14:02:11" and the drawer's offline line are ordinary text with no live role on them or any ancestor (their ages tick or hold an absolute time) |
 | Focus | Never moved on arrival of new items. The only programmatic focus: the S5 deep link, once (to the row, or to the "no longer waiting" banner heading when there is no row) |
 | Reorder | No reordering of rows under focus or pointer; "N new - show" button instead (S1), except that a new approval or error is promoted to a sticky line (S1 step 5) and spoken at priority 1 |
-| Nav cue | Separate from the badge number: text "N finished" for items not Seen on any device (S14). No animation, no `aria-live`; accessible name "Attention, 2 need you, 3 finished unseen" (+ ", 1 unconfirmed", + ", alerts muted", + ", may be out of date" when applicable) |
+| Nav cue | Separate from the badge number: text "N new finished" for items not Seen on any device (S14). No animation, no `aria-live`; visible text "muted" while a global mute is active; accessible name "Attention, 2 need you, 3 new finished" (+ ", 1 unconfirmed", + ", alerts muted", + ", may be out of date" when applicable) |
 | Nav badge | Count = needs-you items (the needs-human reasons in plan.md Attention Reason Classification; informational rows such as `awaiting_direction` never count). The Sessions-tab badge and the document title use the same selector. Accessible name "Attention, 3 need you". Hidden when 0. Badge text is also present as text, not a coloured dot only |
 | Document title | "(3) Stapler Squad" when needs-you count > 0; plain title otherwise. Updated on count change only |
 | Reduced motion | No pulse/flash on new items under `prefers-reduced-motion`; use a static "New" text tag until seen |
@@ -533,31 +546,40 @@ Why: a row existing is not the same as the operator having been told. Push is be
 
 ```
 Nav entry (desktop sidebar)
-  Attention  [2]  3 finished  alerts muted     <- badge number = needs-you only; the rest is plain text, no animation
-  accessible name: "Attention, 2 need you, 3 finished unseen, 1 unconfirmed, alerts muted"
+  Attention  [2]  3 new finished  muted     <- badge number = needs-you only; the rest is plain text, no animation
+  accessible name: "Attention, 2 need you, 3 new finished, 1 unconfirmed, alerts muted"
 
 Mobile bottom nav (width budget: one item is ~25% of 375 px)
-  icon + badge [2] on the icon; label "Attention"; second text line "3 finished" (shows "9+ finished" above 9;
-  the marker "alerts muted" and "1 unconfirmed" are in the accessible name only on mobile). Badge and cue are
-  hidden at 0 (no "0").
+  icon + badge [2] on the icon; label "Attention"; second text line "3 new finished  muted" (shows "9+ new finished"
+  above 9; "muted" is the global-mute marker and stays visible, alone when no finished session is unseen;
+  "1 unconfirmed" is in the accessible name only). Badge and "N new finished" are hidden at 0 (no "0").
 
 List header (informational, device-local, dismissible; never gates the cue)
-  Push is off on this device, so finished sessions will not buzz you. They still count as "N finished" in the nav.   [Got it]
+  Push is off on this device, so finished sessions will not buzz you. They still count as "N new finished" in the nav.   [Got it]
 
 Row menu:  [Timeline] [Not a question] [Stop flagging questions for this session] [Done] [Mute 1 h] [Mute 8 h]
 Header:    [Mute finished-session alerts v]  1 h / 8 h        -> "Muted until 16:20"  [Unmute]
+           the control opens the mute management list (below)
+Mobile header: the same control is one 44x44 "More" button beside [?] in the Attention header; it opens a bottom sheet
+           with Mute 1 h / Mute 8 h and the management list, so it takes no vertical space above the Needs you rows
+
+Mute management list (popover on desktop, bottom sheet on mobile; reachable after any row has cleared)
+  Alerts muted for all finished sessions, until 16:20                     [Unmute]
+  docs-site   Muted until 15:10                                           [Unmute]
+  api-docs    Questions not flagged since Oct 9                           [Flag questions again]
+  (empty: "Nothing is muted and every session's questions are flagged.")
 Unconfirmed row:  [?] Asked a question  docs-site  detected from screen, unconfirmed   "Want A or B?"
 List header: "1 unconfirmed"
 ```
 
-The cue rule has no branches: N = visible-session `awaiting_direction` items with `LastViewed < TurnEnded.At`, identical on phone and desktop. Mute durations are the same for both scopes (1 h, 8 h; max 24 h). A global mute shows "alerts muted" with the cue on every page, so the operator on another page can see alerts are off.
+The cue rule has no branches: N = visible-session `awaiting_direction` items with `LastViewed < TurnEnded.At`, identical on phone and desktop. Mute durations are the same for both scopes (1 h, 8 h; max 24 h). ONE global-mute marker rule on every page and form factor: a global mute shows the short visible word "muted" on the nav cue line (inline after the cue on desktop, on the second text line on mobile) and ", alerts muted" in the accessible name, so the operator on another page can see alerts are off without opening anything. The cue says "N new finished" (unseen `awaiting_direction` only, visible in text as "new"); the list chip "Finished N" counts every open informational row (vocabulary table).
 
 | Step | User does | System responds |
 |---|---|---|
 | 1 | A visible session finishes a turn | Tray record created; push is attempted (best effort); the nav text cue increments silently regardless of the push outcome; no toast, sound, animation or live-region speech |
 | 2 | Opens the session on either device | `MarkViewed` sets `LastViewed` (ADR-007 #2); the cue drops on every device at the next snapshot |
 | 3 | Chooses "Mute 1 h" on a noisy session | `SetNotificationMute`; the row shows static text "Muted until HH:MM"; the toast reads "Alerts muted for 1 hour. Undo (Ctrl+Z)" with no time; the row stays in the list and still counts in the cue; the session's `prose_question` push and Slack are also held, its toast, badge count and row are not (ADR-007 #4) |
-| 4 | Chooses "Mute finished-session alerts 8 h" | Global mute, same static display in the header and "alerts muted" in the nav; `prose_question`, approvals and errors are not muted |
+| 4 | Chooses "Mute finished-session alerts 8 h" | Global mute, same static display in the header and the visible "muted" marker with the nav cue (accessible name ", alerts muted"); `prose_question`, approvals and errors are not muted |
 | 5 | Sees "detected from screen, unconfirmed" | Opens the session to verify; the item still counted in the badge |
 | 6 | Sees "Frequent questions from this session" on a prose row | Uses "Stop flagging questions for this session" (S3 step 4) |
 
@@ -577,7 +599,7 @@ Errors: mute RPC fails -> inline "Couldn't mute. [Retry]" (announced once, polit
 
 ## S16. First-run help for the new labels
 
-On the first visit after `prose_question` or `awaiting_direction` becomes visible, a dismissible, non-modal disclosure (never moves focus) is rendered COLLAPSED as one line, "New labels: what they mean [Show]", placed below the Needs you group (above the Finished group; first only when Needs you is empty), so at 375 px it never pushes a needs-you row below the fold. Expanded, it lists in one line each: "Asked a question" (the agent asked in plain text), "Finished, waiting for direction" (turn ended, no question), "Task complete", "Quiet" (no change for N minutes; check Running vs Idle), "detected from screen, unconfirmed", "N finished" (finished sessions you have not opened). Dismissal is stored per viewer (try/catch) and the panel is re-openable from the `?` overlay's Attention section. Copy avoids the word "paused" except for `Status=Paused` sessions.
+On the first visit after `prose_question` or `awaiting_direction` becomes visible, a dismissible, non-modal disclosure (never moves focus) is rendered COLLAPSED as one line, "New labels: what they mean [Show]", placed below the Needs you group (above the Finished group; first only when Needs you is empty), so at 375 px it never pushes a needs-you row below the fold. Expanded, it lists in one line each: "Asked a question" (the agent asked in plain text), "Finished, waiting for direction" (turn ended, no question), "Task complete", "Quiet" (no change for N minutes; check Running vs Idle), "detected from screen, unconfirmed", "N new finished" (finished sessions you have not opened). Dismissal is stored per viewer (try/catch) and the panel is re-openable from the `?` overlay's Attention section. Copy avoids the word "paused" except for `Status=Paused` sessions.
 
 ## UX acceptance criteria
 
@@ -646,15 +668,15 @@ Numbering is stable for test mapping. Each is testable by a human or by the name
 38. UX-38 The Recent activity view is reachable in <= 2 clicks from the nav badge on desktop and mobile, lists just-finished sessions (including ones marked Done or never raised), gone-quiet sessions, changed sessions and (via "Show done") recently done ones with Undo, supports 1 h / 24 h / 7 d windows and "Load older", and hides Hidden sessions unless "Include hidden sessions" is on.
 39. UX-39 The nav badge, Sessions-tab badge and document title count the same set (needs-me reasons only); an `awaiting_direction` item raises one low-urgency tray + web-push notification per episode and never a toast or Slack message by default.
 40. UX-40 Single-key shortcuts (WCAG 2.1.4): `j`, `k`, `t`, `d` act only while focus is inside the Attention list, never in inputs, the omnibar, dialogs, the terminal or the session detail view; `?` is not re-bound; Settings has an on/off switch (default on, per viewer) that makes them inert; no conflict with the global shortcuts or with the session detail view's Ctrl+T (`terminal.spawn-shell`). Roving tabindex keeps the current row's own buttons reachable by Tab.
-41. UX-41 Finished sessions the operator has not opened appear in the nav as text "N finished" separate from the needs-you number, whether push worked, was denied or never arrived (the cue never depends on push); no sound, toast, animation or live-region speech; the count is the same on phone and desktop (server-derived Seen) and drops when the session is opened on either; hidden at 0; on a 375 px bottom nav it is a second text line under the label ("9+ finished" above 9); the list header explains once, informationally, that push is off on this device.
-42. UX-42 Volume bounds: the per-session 5-minute cap and the global 6-per-15-minutes cap with one collapsed digest push apply to `awaiting_direction` only; Mute exists per session and globally with the same durations (1 h, 8 h), shows "Muted until HH:MM" as static text (never inside a toast), is undoable, and never hides a row, the badge count, the unseen cue or a toast. Session Mute also holds that session's `prose_question` push and Slack; global Mute holds `awaiting_direction` only; no Mute ever holds approvals, waiting-for-input or error alerts. A global Mute shows "alerts muted" with the nav cue on every page.
+41. UX-41 Finished sessions the operator has not opened appear in the nav as text "N new finished" separate from the needs-you number, whether push worked, was denied or never arrived (the cue never depends on push); no sound, toast, animation or live-region speech; the count is the same on phone and desktop (server-derived Seen) and drops when the session is opened on either; hidden at 0; on a 375 px bottom nav it is a second text line under the label ("9+ new finished" above 9), and "new finished" is distinct from the list chip "Finished N" (which counts every open informational row); the list header explains once, informationally, that push is off on this device.
+42. UX-42 Volume bounds: the per-session 5-minute cap and the global 6-per-15-minutes cap with one collapsed digest push apply to `awaiting_direction` only; Mute exists per session and globally with the same durations (1 h, 8 h), shows "Muted until HH:MM" as static text (never inside a toast), is undoable, and never hides a row, the badge count, the unseen cue or a toast. Session Mute also holds that session's `prose_question` push and Slack; global Mute holds `awaiting_direction` only; no Mute ever holds approvals, waiting-for-input or error alerts. A global Mute shows the visible word "muted" with the nav cue (second line on mobile) on every page, plus ", alerts muted" in the accessible name; one rule for desktop and mobile. The global mute control is the 44x44 "More" button beside [?] on mobile, and a mute management list (active mutes and opted-out sessions, each reversible) is reachable from it.
 43. UX-43 A needs-human row detected without a hook shows "detected from screen, unconfirmed"; the list header shows "N unconfirmed" and the nav accessible name appends it; the item still counts in the badge.
 44. UX-44 Toast accessibility (WCAG 2.2.1): the countdown pauses on hover and focus, Undo is keyboard reachable (tab stop after the list, Ctrl/Cmd+Z in the list, hotkey hint in the toast text), up to 3 toasts stack with independent timers, every state-changing action (Done, Not a question, Stop flagging questions, bulk, Mute) has an Undo, toasts are not live regions (the announcer speaks them once), and Recent's "Done (24 h)" Undo remains available beyond the toast.
 45. UX-45 The timeline drawer/sheet is a modal dialog (`role="dialog"`, `aria-modal="true"`, labelled, background inert) at 1280, 900 and 375 px; 768-1023 px is single-column with the drawer overlaying the list.
 46. UX-46 After Done, "Not a question", bulk or Undo, focus lands on the next row, else the previous row, else the group header, else the list heading, and is never lost to `body`.
 47. UX-47 Quiet rows show Running/Idle/Paused text; the Quiet threshold is a setting (15/30/60/120 min, default 30) shared by the chip and Recent's "Quiet now"; Recent's "Changed" is exactly {AttentionRaised, AttentionCleared, StatusChanged, ApprovalResolved} with the 2-minute StatusChanged collapse and the 5-rows-per-session cap.
-48. UX-48 Coupling and staleness: acting on an item in Attention resolves its tray record, dismissing a tray record never removes the item (tooltip says so), and a dropped stream marks the nav badge "may be out of date"; first-run help is collapsed to one line below the Needs you group (never pushes a needs-you row below the fold at 375x812), explains every new label once and is re-openable.
-49. UX-49 Reflow, zoom and semantics: at 320 CSS px width and at 400% zoom there is no horizontal page scroll and no clipped or overlapping content (chip rows and the tab strip scroll inside their own container); WCAG 1.4.12 text-spacing overrides (line height 1.5, letter 0.12em, word 0.16em, paragraph 2em) clip nothing in a row, the drawer or a toast; semantics are: rows are `li` of a `ul`, group titles are headings, chips are a `role=group` of toggle buttons with `aria-pressed`, the Up Next strip is a `tablist` with `aria-selected`, the drawer is a labelled modal dialog, and the cue and badge are text.
+48. UX-48 Opt-out reviewability: "Stop flagging questions" shows the tag "Questions not flagged" on the session's rows and card, is listed with its set date in the mute management list with a one-step reverse, has no auto-expiry, and a 14-day reminder line (dismissible per viewer) offers Review. Coupling and staleness: acting on an item in Attention resolves its tray record, dismissing a tray record never removes the item (tooltip says so), and a dropped stream marks the nav badge "may be out of date"; first-run help is collapsed to one line below the Needs you group (never pushes a needs-you row below the fold at 375x812), explains every new label once and is re-openable.
+49. UX-49 Reflow, zoom and semantics: at 320 CSS px width and at 400% zoom there is no horizontal page scroll and no clipped or overlapping content, rows below the 720 px container threshold move Timeline, Stop flagging questions and Mute into the overflow menu while "Not a question" stays visible (S2; asserted at 768, 1023, 320 px and 400% zoom) (chip rows and the tab strip scroll inside their own container); WCAG 1.4.12 text-spacing overrides (line height 1.5, letter 0.12em, word 0.16em, paragraph 2em) clip nothing in a row, the drawer or a toast; semantics are: rows are `li` of a `ul`, group titles are headings, Needs you, Finished and Quiet chips are a `role=group` of toggle buttons with `aria-pressed` while the Recent chip is a navigation control without `aria-pressed` (`aria-current="page"` when open), the Up Next strip is a `tablist` with `aria-selected`, the drawer is a labelled modal dialog, and the cue and badge are text.
 
 49 acceptance criteria.
 
