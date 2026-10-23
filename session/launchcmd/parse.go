@@ -45,6 +45,19 @@ func ParseProgram(program string) (ExecCommand, error) {
 	return cmd, nil
 }
 
+// FromShell returns the ExecCommand for program text a shell would run as one
+// plain command, and a ShellScript for anything else. Empty text is an error.
+func FromShell(text string) (LaunchCommand, error) {
+	if cmd, err := ParseProgram(text); err == nil {
+		return cmd, nil
+	}
+	script, err := NewShellText(text)
+	if err != nil {
+		return nil, err
+	}
+	return ShellScript{Text: script}, nil
+}
+
 func parseAssigns(assigns []*syntax.Assign) ([]EnvVar, error) {
 	var env []EnvVar
 	for _, as := range assigns {
