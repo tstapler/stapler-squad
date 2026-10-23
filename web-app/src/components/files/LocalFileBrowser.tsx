@@ -160,10 +160,12 @@ function ViewerToolbar({ name, url, openLabel = "Open in new tab", onClose, extr
       <span className={styles.viewerLabel}>{name}</span>
       {extraActions}
       <button onClick={handleOpen} className={styles.externalButton} title={openLabel} data-testid="file-browser-viewer-open-external">
+        {/* analytics-exempt */}
         <ExternalLink size={14} />
       </button>
       {onClose && (
         <button onClick={onClose} className={styles.externalButton} title="Close file viewer" data-testid="file-browser-viewer-close">
+          {/* analytics-exempt */}
           <X size={14} />
         </button>
       )}
@@ -300,6 +302,7 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
                   aria-pressed={showRaw}
                   title={showRaw ? "Show rendered markdown" : "Show raw source"}
                 >
+                  {/* analytics-exempt */}
                   {showRaw ? "Rendered" : "Raw"}
                 </button>
               }
@@ -336,6 +339,7 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
               className={styles.externalButton}
               data-testid="file-browser-viewer-download"
             >
+              {/* analytics-exempt */}
               Open / Download <ExternalLink size={14} />
             </button>
           </div>
@@ -485,6 +489,7 @@ export function LocalFileBrowser() {
                 onClick={() => navigate(crumb.path)}
                 data-testid={`file-browser-breadcrumb-${i}`}
               >
+                {/* analytics-exempt */}
                 {crumb.label}
               </button>
             </span>
@@ -527,6 +532,7 @@ export function LocalFileBrowser() {
                 title={entry.path}
                 data-testid="file-browser-entry"
               >
+                {/* analytics-exempt */}
                 <span className={styles.fileIcon}>
                   <Icon size={15} />
                 </span>
