@@ -2,13 +2,13 @@
 // analytics-exempt
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import {
+import type {
   EscapeCodeDefinition,
   EscapeCategory,
   TestPriority,
   EscapeCodeTestFrame,
-  ESCAPE_CODE_TEST_PRESETS,
 } from '@/lib/test-generators/escape-codes/types';
+import { ESCAPE_CODE_TEST_PRESETS } from '@/lib/test-generators/escape-codes/types';
 import {
   ESCAPE_CODE_LIBRARY,
   getCodesByCategory,
@@ -267,18 +267,23 @@ export default function EscapeCodesTestPage() {
             <h3>Quick Presets</h3>
             <div className={styles.presetButtons}>
               <button onClick={() => applyPreset('CRITICAL_ONLY')} className={styles.presetButton}>
+                {/* analytics-exempt */}
                 Critical Only
               </button>
               <button onClick={() => applyPreset('SGR_COMPLETE')} className={styles.presetButton}>
+                {/* analytics-exempt */}
                 All SGR
               </button>
               <button onClick={() => applyPreset('CURSOR_COMPLETE')} className={styles.presetButton}>
+                {/* analytics-exempt */}
                 All Cursor
               </button>
               <button onClick={() => applyPreset('FULL_COVERAGE')} className={styles.presetButton}>
+                {/* analytics-exempt */}
                 Full Coverage
               </button>
               <button onClick={() => applyPreset('STRESS_TEST')} className={styles.presetButton}>
+                {/* analytics-exempt */}
                 Stress Test
               </button>
             </div>
@@ -389,10 +394,12 @@ export default function EscapeCodesTestPage() {
 
             <div className={styles.actionButtons}>
               {testState.isRunning ? (
+                // analytics-exempt
                 <button onClick={stopTest} className={styles.stopButton}>
                   Stop Test
                 </button>
               ) : (
+                // analytics-exempt
                 <button onClick={startTest} className={styles.startButton}>
                   Start Test
                 </button>
