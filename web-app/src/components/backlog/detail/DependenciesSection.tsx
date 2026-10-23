@@ -22,6 +22,7 @@ function DependencyList({ label, deps, testId, onItemClick }: DependencyListProp
           <li key={d.itemId}>
             {onItemClick ? (
               <button type="button" className={styles.depLink} onClick={() => onItemClick(d.itemId)}>
+                {/* analytics-exempt */}
                 {dependencyLabel(d)}
               </button>
             ) : (

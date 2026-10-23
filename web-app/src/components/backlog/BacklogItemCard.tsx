@@ -83,6 +83,7 @@ function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: s
       data-action-button="true"
       onClick={(e) => e.stopPropagation()}
     >
+      {/* analytics-exempt */}
       <CircleDot aria-hidden="true" size={12} />
       {shortRef}
     </a>
@@ -261,6 +262,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
             }
           }}
         >
+          {/* analytics-exempt */}
           {isActionPending ? (
             <>
               <span className={styles.buttonSpinner} aria-hidden="true" />
