@@ -13,6 +13,7 @@ const touchMediaQuery = `(max-width: ${breakpoints.fold})`;
 // are visible: borderBottom (this strip sits above the pane strip) and the
 // page background instead of the card background.
 export const windowTabStrip = style({
+  position: "relative", // anchors the hover-preview popover
   display: "flex",
   borderBottom: `1px solid ${vars.color.borderColor}`,
   background: vars.color.background,
@@ -88,6 +89,12 @@ export const windowTabWrapper = style({
   flexShrink: 0,
   maxWidth: "160px",
 });
+
+// Editing tabs grow past the 160px cap so longer names stay visible while typing.
+export const windowTabEditorWrapper = style([
+  windowTabWrapper,
+  { minWidth: "240px", maxWidth: "420px" },
+]);
 
 export const windowTabButton = recipe({
   base: {
@@ -214,10 +221,10 @@ export const windowOnboardingHintDismiss = style({
 });
 
 export const windowTabInput = style({
-  height: "22px",
+  height: "28px",
   width: "100%",
   padding: `0 ${vars.space["1"]}`,
-  fontSize: vars.fontSize.xs,
+  fontSize: vars.fontSize.sm,
   fontFamily: vars.font.mono,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.sm,

@@ -91,6 +91,7 @@ jest.mock("@/components/pane/PaneTilingContainer", () => ({
           setResult(String(ok));
         }}
       >
+        {/* analytics-exempt */}
         steer:{result}
       </button>
     );
@@ -194,6 +195,7 @@ describe("HomeContent multi-window wiring", () => {
       windows,
       "win-1",
       mockSwitchToWindow,
+      expect.any(Function),
       expect.any(Function)
     );
   });
