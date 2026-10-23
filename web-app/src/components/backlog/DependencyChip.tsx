@@ -42,6 +42,7 @@ export function DependencyChip({ deps, onItemClick }: DependencyChipProps) {
       tabIndex={0}
       data-action-button="true"
       data-testid="dependency-chip"
+      aria-label={`Blocked by ${depTitle(primary)}${rest.length > 0 ? ` and ${rest.length} more` : ""}`}
       title={`Blocked by: ${depTitle(primary)} (${primary.status})`}
       onClick={handleClick}
       onKeyDown={handleKeyDown}

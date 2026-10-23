@@ -999,7 +999,7 @@ describe("BacklogItemCard — dependency chip", () => {
     expect(onClick).toHaveBeenCalledWith("id-Fix auth");
   });
 
-  it("ignores clicks on chip children at the card level (data-action-button)", () => {
+  it("opens only the blocker, not the card, when a chip child is clicked", () => {
     const onClick = jest.fn();
     render(
       <BacklogItemCard

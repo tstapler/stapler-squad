@@ -26,11 +26,33 @@ describe("DependencyChip", () => {
     const chip = screen.getByRole("button");
     expect(chip).toHaveAttribute("tabindex", "0");
     fireEvent.click(chip);
-    fireEvent.keyDown(chip, { key: "Enter" });
-    fireEvent.keyDown(chip, { key: " " });
-    fireEvent.keyDown(chip, { key: "a" });
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+    // fireEvent returns false when preventDefault was called.
+    expect(fireEvent.keyDown(chip, { key: "Enter" })).toBe(false);
+    expect(onItemClick).toHaveBeenCalledTimes(2);
+    expect(fireEvent.keyDown(chip, { key: " " })).toBe(false);
+    expect(onItemClick).toHaveBeenCalledTimes(3);
+    expect(fireEvent.keyDown(chip, { key: "a" })).toBe(true);
     expect(onItemClick).toHaveBeenCalledTimes(3);
     expect(onItemClick).toHaveBeenCalledWith("id-A");
+  });
+
+  it("does not bubble keydown to a parent", () => {
+    const parent = jest.fn();
+    render(
+      <div onKeyDown={parent}>
+        <DependencyChip deps={[dep("A", "ready")]} onItemClick={jest.fn()} />
+      </div>
+    );
+    fireEvent.keyDown(screen.getByTestId("dependency-chip"), { key: "Enter" });
+    expect(parent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to publicId then itemId when the title is empty", () => {
+    const { rerender } = render(<DependencyChip deps={[{ itemId: "id-1", publicId: "BL-7", title: "", status: "ready" }]} />);
+    expect(screen.getByTestId("dependency-chip")).toHaveTextContent("BL-7");
+    rerender(<DependencyChip deps={[{ itemId: "id-1", publicId: "", title: "", status: "ready" }]} />);
+    expect(screen.getByTestId("dependency-chip")).toHaveTextContent("id-1");
   });
 
   it("does not crash without onItemClick", () => {

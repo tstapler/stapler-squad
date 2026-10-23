@@ -39,5 +39,6 @@ describe("DependenciesSection clickable dependencies", () => {
   it("falls back to plain text without onItemClick", () => {
     render(<DependenciesSection item={item} />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("backlog-blocked-by")).toHaveTextContent(/\S/);
   });
 });
