@@ -342,6 +342,26 @@ export function PaneTilingContainer({
             onKeyDown={(e) => { if (e.key === "Escape") cancelPicker(); }}
           >
             <div id="mobile-pane-picker-title" className={mobilePickerSheetTitle}>Open session in…</div>
+            {/* A split is just another full-screen page on narrow screens, so offer a
+                fresh pane instead of forcing the session into an existing one. */}
+            <button
+              className={mobilePickerPaneItem}
+              data-testid="mobile-picker-new-pane"
+              onClick={() => {
+                dispatch({
+                  type: "SPLIT_AND_ASSIGN_SESSION",
+                  paneId: state.focusedPaneId,
+                  sessionId: mobilePickerSession.id,
+                  tab: "terminal",
+                  direction: "horizontal",
+                });
+                cancelPicker();
+              }}
+            >
+              {/* analytics-exempt */}
+              <span className={mobilePickerPaneLabel}>+</span>
+              New full-screen pane
+            </button>
             {mobilePickerPanes.map((p) => (
               <button
                 key={p.id}
@@ -353,11 +373,13 @@ export function PaneTilingContainer({
                   cancelPicker();
                 }}
               >
+                {/* analytics-exempt */}
                 <span className={mobilePickerPaneLabel}>{p.letter}</span>
                 {p.label}
               </button>
             ))}
             <button className={mobilePickerCancelButton} onClick={cancelPicker}>
+              {/* analytics-exempt */}
               Cancel
             </button>
           </div>
