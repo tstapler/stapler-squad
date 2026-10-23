@@ -891,11 +891,8 @@ func TestBuildClaudeCommand_PromptJustUnderThresholdStaysInline(t *testing.T) {
 // type/url/session-UUID header.
 func assertStaplerSquadMCPEntry(t *testing.T, val, wantURL, wantUUID string) {
 	t.Helper()
-	// val is shell-quoted; strip the outer single quotes to get the raw JSON.
-	if !strings.HasPrefix(val, "'") || !strings.HasSuffix(val, "'") {
-		t.Fatalf("val should be single-quoted JSON, got %q", val)
-	}
-	raw := val[1 : len(val)-1]
+	// val is the raw argument; quoting is the renderer's job (launchcmd).
+	raw := val
 	var cfg map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatalf("val is not valid JSON: %v\nval=%q", err, raw)
@@ -928,7 +925,7 @@ func TestClaudeMCPConfigArgs_HTTPFormat(t *testing.T) {
 		Program: "claude",
 		UUID:    "test-uuid-123",
 	}
-	flag, val := inst.claudeMCPConfigArgs("http://localhost:8543/mcp")
+	flag, val := mcpArgs(inst.claudeMCPConfigArgs("http://localhost:8543/mcp"))
 	if flag != "--mcp-config" {
 		t.Errorf("flag = %q, want --mcp-config", flag)
 	}
@@ -1234,7 +1231,7 @@ func TestInstance_BuildExtraEnv_IncludesCustomProgramAndInstanceEnvVars(t *testi
 func TestClaudeSettingsEnvOverrideArgs_EmptyWhenNoEnvVars(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	inst := &Instance{Program: "claude"}
-	flag, val := inst.claudeSettingsEnvOverrideArgs()
+	flag, val := settingsArgs(inst.claudeSettingsEnvOverrideArgs())
 	if flag != "" || val != "" {
 		t.Errorf("expected no --settings override for a plain launch, got flag=%q val=%q", flag, val)
 	}
@@ -1255,18 +1252,15 @@ func TestClaudeSettingsEnvOverrideArgs_CarriesResolvedEnvVars(t *testing.T) {
 	})
 	inst := &Instance{Program: "netflix-model-gateway"}
 
-	flag, val := inst.claudeSettingsEnvOverrideArgs()
+	flag, val := settingsArgs(inst.claudeSettingsEnvOverrideArgs())
 
 	if flag != "--settings" {
 		t.Fatalf("flag = %q, want --settings", flag)
 	}
-	if !strings.HasPrefix(val, "'") || !strings.HasSuffix(val, "'") {
-		t.Fatalf("val should be single-quoted JSON, got %q", val)
-	}
 	var payload struct {
 		Env map[string]string `json:"env"`
 	}
-	if err := json.Unmarshal([]byte(val[1:len(val)-1]), &payload); err != nil {
+	if err := json.Unmarshal([]byte(val), &payload); err != nil {
 		t.Fatalf("val is not valid JSON: %v\nval=%q", err, val)
 	}
 	if got := payload.Env["ANTHROPIC_BASE_URL"]; got != "http://127.0.0.1:47000" {
@@ -1344,7 +1338,7 @@ func TestBuildLaunchCommand_should_ApplyCustomProgramFlagsOnce_When_ProgramIsCus
 func TestClaudeMCPConfigArgs_should_KeepTokenOutOfArgv_When_TokenPresent(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
 	inst := &Instance{Program: "claude", UUID: "uuid-tok"}
-	flag, val := inst.claudeMCPConfigArgsWithToken("http://localhost:8543/mcp", dir, "s3cret-token")
+	flag, val := mcpArgs(inst.claudeMCPConfigArgsWithToken("http://localhost:8543/mcp", dir, "s3cret-token"))
 	if flag != "--mcp-config" {
 		t.Fatalf("flag = %q", flag)
 	}
