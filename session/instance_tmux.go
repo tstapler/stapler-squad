@@ -773,9 +773,27 @@ func (i *Instance) applyLaunchEnv() {
 	}
 }
 
+// shellLaunch turns configured program text into a LaunchCommand; nil when the text is empty.
+func shellLaunch(text string) launchcmd.LaunchCommand {
+	cmd, err := launchcmd.FromShell(text)
+	if err != nil {
+		return nil
+	}
+	return cmd
+}
+
+// shellString renders command for backends that run shell text; "" for nil.
+func shellString(command launchcmd.LaunchCommand) string {
+	if command == nil {
+		return ""
+	}
+	return command.ShellString()
+}
+
 // wireTmuxSession constructs the tmux.TmuxSession object with full environment configuration
 // and sets it on the instance's process manager.
-func (i *Instance) wireTmuxSession(program string) {
+func (i *Instance) wireTmuxSession(command launchcmd.LaunchCommand) {
+	program := shellString(command)
 	snap := i.Snapshot()
 	tmuxPrefix := snap.TmuxPrefix
 	if tmuxPrefix == "" {
@@ -798,7 +816,7 @@ func (i *Instance) wireTmuxSession(program string) {
 		}
 		return session
 	}
-	i.processManager.WireLaunch(LaunchSpec{Program: program, NewTmuxSession: newTmuxSession})
+	i.processManager.WireLaunch(LaunchSpec{Program: program, Command: command, NewTmuxSession: newTmuxSession})
 }
 
 // updateProcessManagerForRestart swaps i.processManager and persists
@@ -808,7 +826,7 @@ func (i *Instance) wireTmuxSession(program string) {
 // this call's type assertions. Nests i.mu *inside* i.pmMu for the Backend
 // write below -- no call site anywhere else in the package nests the other
 // way (mu-then-pmMu), so keep that ordering if this ever changes.
-func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, program string) error {
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, command launchcmd.LaunchCommand) error {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 
@@ -816,7 +834,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 		// Same choke point initTmuxSession uses -- handles both TmuxBackend
 		// (SetSession, with the orphan-process guard and extra env) and
 		// TymuxBackend (SetCommand) dispatch internally.
-		i.wireTmuxSession(program)
+		i.wireTmuxSession(command)
 		return nil
 	}
 
@@ -830,7 +848,8 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
 		Backend:      backendOverride,
 		SessionName:  i.Title,
-		Program:      program,
+		Program:      shellString(command),
+		Command:      command,
 		Prefix:       tmuxPrefix,
 		ServerSocket: i.TmuxServerSocket,
 	})
@@ -874,14 +893,15 @@ func (i *Instance) initTmuxSession() {
 	if i.claudeSession != nil {
 		claudeSessionID = i.claudeSession.ConversationUUID
 	}
-	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
+	command := i.launchCommand(claudeSessionID)
+	enrichedProgram := command.ShellString()
 	i.LaunchCommand = enrichedProgram
 	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
 
 	// Single choke point: every Start path funnels through here.
 	i.markWorkingDirTrusted()
 
-	i.wireTmuxSession(enrichedProgram)
+	i.wireTmuxSession(command)
 }
 
 // KillSession terminates the tmux session only (leaves worktree intact).

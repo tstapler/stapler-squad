@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -87,8 +88,11 @@ type ProcessManager interface {
 
 // LaunchSpec is everything a backend needs to launch an instance's program.
 type LaunchSpec struct {
-	// Program is the full launch command (including any --resume flag).
+	// Program is the full launch command (including any --resume flag) as shell
+	// text, for backends that run it through a shell.
 	Program string
+	// Command is the same launch command as data, for backends that exec directly.
+	Command launchcmd.LaunchCommand
 	// NewTmuxSession builds the instance-configured tmux session (runner,
 	// prefix, socket, env) around Program; only the tmux backend calls it.
 	NewTmuxSession func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession
@@ -123,7 +127,9 @@ type ProcessManagerOptions struct {
 	Prefix       string
 	ServerSocket string
 	Program      string
-	Args         []string
+	// Command, when set, is used instead of Program by backends that exec directly.
+	Command launchcmd.LaunchCommand
+	Args    []string
 	// Backend, when non-empty, overrides both the process-wide default
 	// (RegisterBackendProvider) and NewProcessManager's defaultBackend argument for
 	// this one call — an explicit per-session choice always wins. Zero value ("")

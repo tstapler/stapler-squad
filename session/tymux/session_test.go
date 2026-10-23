@@ -1,9 +1,11 @@
 package tymux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -17,6 +19,7 @@ import (
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -32,6 +35,8 @@ type fakeTransport struct {
 	listSessionsFn  func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	reviveSessionFn func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error)
 	capturePaneFn   func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
+	// capabilities are what GetServerInfo advertises; nil makes it fail like a pre-1.5 daemon.
+	capabilities []string
 
 	// attachFn lets a test substitute a custom attachStream (e.g. one that
 	// plays back a scripted sequence of AttachEvents); defaults to a
@@ -78,6 +83,13 @@ func (f *fakeTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 		return nil, errors.New("fakeTransport: CapturePane not configured")
 	}
 	return f.capturePaneFn(ctx, req)
+}
+
+func (f *fakeTransport) GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+	if f.capabilities == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetServerInfo"))
+	}
+	return connect.NewResponse(&v1.ServerInfo{Capabilities: f.capabilities}), nil
 }
 
 func (f *fakeTransport) Attach(ctx context.Context) attachStream {
@@ -150,38 +162,98 @@ func TestTymuxGRPCSession_Start_CreatesSessionAndCachesIdentifiers(t *testing.T)
 }
 
 func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
+	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
+	require.NoError(t, os.WriteFile(promptFile, []byte("fix the bug\n"), 0o600))
+	hostile := "a b'c\"d$e`f\\g"
+	script, err := launchcmd.NewShellText("claude && true")
+	require.NoError(t, err)
+	envVar, err := launchcmd.NewEnvVar("FOO", "1 2")
+	require.NoError(t, err)
+
 	tests := []struct {
-		name        string
-		command     string
-		wantCommand string
-		wantArgs    []string
+		name         string
+		command      launchcmd.LaunchCommand
+		capabilities []string
+		wantCommand  string
+		wantArgs     []string
+		wantStderr   string
+		wantEnv      map[string]string
 	}{
-		{"bare program", "claude", "claude", nil},
-		{"absolute path", "/home/u/.local/bin/claude", "/home/u/.local/bin/claude", nil},
-		{"program with args", "claude --resume abc", shellPath, []string{shellFlagC, "claude --resume abc"}},
-		{"quoted path arg", "claude --mcp-config '/tmp/a b.json'", shellPath, []string{shellFlagC, "claude --mcp-config '/tmp/a b.json'"}},
-		{"env prefix and chaining", "FOO=1 claude && true", shellPath, []string{shellFlagC, "FOO=1 claude && true"}},
-		{"unset", "", "", nil},
+		{name: "unset", command: nil},
+		{name: "bare program", command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude")}}, wantCommand: "claude"},
+		{
+			name: "args reach the daemon unquoted",
+			command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+				launchcmd.Word("claude"), launchcmd.MustFlag("--resume"), launchcmd.Literal(hostile),
+			}},
+			wantCommand: "claude", wantArgs: []string{"--resume", hostile},
+		},
+		{
+			name:        "file contents are resolved and trimmed",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.FileContents(promptFile)}},
+			wantCommand: "claude", wantArgs: []string{"fix the bug"},
+		},
+		{
+			name:        "env goes in the request",
+			command:     launchcmd.ExecCommand{Env: []launchcmd.EnvVar{envVar}, Argv: []launchcmd.Arg{launchcmd.Word("claude")}},
+			wantCommand: "claude", wantEnv: map[string]string{"FOO": "1 2"},
+		},
+		{
+			name:         "stderr uses the daemon redirect when advertised",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("pi")}, StderrAppend: "/tmp/pi err.log"},
+			capabilities: []string{capStderrRedirect},
+			wantCommand:  "pi", wantStderr: "/tmp/pi err.log",
+		},
+		{
+			name:        "stderr falls back to a shell on an old daemon",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("pi")}, StderrAppend: "/tmp/pi err.log"},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "pi 2>>'/tmp/pi err.log'"},
+		},
+		{
+			name:        "stdin file needs a shell",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: "/tmp/in.txt"},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "claude -p <'/tmp/in.txt'"},
+		},
+		{
+			name:        "raw shell word needs a shell",
+			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.RawShell("$HOME/bin/claude")}},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "$HOME/bin/claude"},
+		},
+		{name: "shell script", command: launchcmd.ShellScript{Text: script}, wantCommand: shellPath, wantArgs: []string{shellFlagC, "claude && true"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			var gotReq *v1.CreateSessionRequest
-			transport := &fakeTransport{
-				createSessionFn: func(_ context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-					gotReq = req.Msg
-					return connect.NewResponse(fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)), nil
-				},
-			}
+			transport := captureCreateSessionRequest(dir, &gotReq)
+			transport.capabilities = tc.capabilities
 			sess := NewTymuxGRPCSession(transport)
 			sess.SetCommand(tc.command)
 
 			require.NoError(t, sess.Start(dir))
 			require.NotNil(t, gotReq)
 			assert.Equal(t, tc.wantCommand, gotReq.GetCommand())
-			assert.Equal(t, tc.wantArgs, gotReq.GetArgs())
+			assert.ElementsMatch(t, tc.wantArgs, gotReq.GetArgs()) // nil and empty are the same on the wire
+			assert.Equal(t, tc.wantStderr, gotReq.GetStderrPath())
+			for k, v := range tc.wantEnv {
+				assert.Equal(t, v, gotReq.GetEnv()[k])
+			}
 		})
 	}
+}
+
+func TestTymuxGRPCSession_Start_RejectsOversizedArgument(t *testing.T) {
+	big := filepath.Join(t.TempDir(), "big.txt")
+	require.NoError(t, os.WriteFile(big, bytes.Repeat([]byte("x"), launchcmd.MaxArgBytes), 0o600))
+	dir := t.TempDir()
+	var gotReq *v1.CreateSessionRequest
+	sess := NewTymuxGRPCSession(captureCreateSessionRequest(dir, &gotReq))
+	sess.SetCommand(launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.FileContents(big)}})
+
+	err := sess.Start(dir)
+
+	require.ErrorIs(t, err, launchcmd.ErrArgTooLarge)
+	assert.Nil(t, gotReq, "no session may be created with a truncated prompt")
 }
 
 // captureCreateSessionRequest returns a *fakeTransport whose CreateSession

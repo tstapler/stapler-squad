@@ -2421,9 +2421,9 @@ func (i *Instance) Resume() error {
 		if i.claudeSession != nil {
 			claudeSessionID = i.claudeSession.ConversationUUID
 		}
-		program := i.buildLaunchCommand(claudeSessionID)
-		i.LaunchCommand = program
-		i.wireTmuxSession(program)
+		command := i.launchCommand(claudeSessionID)
+		i.LaunchCommand = command.ShellString()
+		i.wireTmuxSession(command)
 		if claudeSessionID != "" {
 			log.Info("resume: reinitializing session with --resume", "session", i.Title, "uuid", claudeSessionID)
 		}
@@ -2651,14 +2651,14 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 		i.piSession = nil
 	}
 	i.piSessionMu.Unlock()
-	program := i.buildLaunchCommand(claudeSessionID)
+	command := i.launchCommand(claudeSessionID)
 	i.piSessionMu.Lock()
 	i.piSession = restorePiSession
 	i.piSessionMu.Unlock()
 
-	i.LaunchCommand = program
+	i.LaunchCommand = command.ShellString()
 
-	if err := i.updateProcessManagerForRestart(migrating, backendOverride, program); err != nil {
+	if err := i.updateProcessManagerForRestart(migrating, backendOverride, command); err != nil {
 		return err
 	}
 

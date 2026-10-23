@@ -486,10 +486,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 
 	if instance.Paused() {
 		instance.started.Store(true)
-		instance.wireTmuxSession(instance.Program)
+		instance.wireTmuxSession(shellLaunch(instance.Program))
 	} else if instance.Status == Stopped {
 		// Wire the tmux session object so IsAlive() can be called.
-		instance.wireTmuxSession(instance.Program)
+		instance.wireTmuxSession(shellLaunch(instance.Program))
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
 		// or exit callback fired falsely), recover it rather than leave it stuck as
 		// Stopped. IsAlive() alone can't see remain-on-exit: it keeps the tmux
@@ -549,7 +549,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
 		// but do NOT call Start — hibernated sessions resume only on explicit request.
-		instance.wireTmuxSession(instance.Program)
+		instance.wireTmuxSession(shellLaunch(instance.Program))
 		instance.started.Store(true)
 	} else if instance.Status == Crashed {
 		// Wire the tmux session object (for IsAlive checks) but do NOT call Start --
@@ -561,7 +561,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// silently auto-resuming every Crashed session on the very next server
 		// restart, exactly what the new Crashed status is designed to prevent
 		// (see session/health.go's "must not be silently respawned" comment).
-		instance.wireTmuxSession(instance.Program)
+		instance.wireTmuxSession(shellLaunch(instance.Program))
 		instance.started.Store(true)
 	} else {
 		// Wire the tmux session object first (mirrors the Paused/Stopped/Hibernated
@@ -572,7 +572,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
 		// etc.) logs a spurious "creating session" and re-runs launch bookkeeping
 		// for every Active session, even ones that were never actually down.
-		instance.wireTmuxSession(instance.Program)
+		instance.wireTmuxSession(shellLaunch(instance.Program))
 		// Raw ArchivedAt read, not IsArchived(): this runs before
 		// finishInstanceConstruction publishes the first snapshot, so
 		// Snapshot() is not populated yet. The instance is still
