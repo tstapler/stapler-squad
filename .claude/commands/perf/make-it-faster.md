@@ -536,7 +536,7 @@ prompt: |
 
   ```bash
   cd web-app && npm run build 2>/dev/null | tail -20
-  # Then inspect the largest chunks
+  # Then inspect the largest chunks (WEB_BUILD=bun: web-app/out/_next/static/*.js; Next mode (removed in PR 9): .next below)
   ls -lah web-app/.next/static/chunks/*.js 2>/dev/null | sort -k5 -rh | head -10
   # or for Vite/CRA:
   ls -lah web-app/dist/assets/*.js 2>/dev/null | sort -k5 -rh | head -10
@@ -622,7 +622,7 @@ Avoid `curl ... ?debug=1 > /tmp/ss-<profile>.txt` for mutex/block/heap/allocs �
 # Run browser baseline (app must be on localhost:8543)
 node /tmp/ss-browser-baseline.js
 
-# Inspect bundle chunks by size
+# Inspect bundle chunks by size (WEB_BUILD=bun: web-app/out/_next/static/*.js; Next mode (removed in PR 9): .next below)
 ls -lah web-app/.next/static/chunks/*.js 2>/dev/null | sort -k5 -rh | head -10
 
 # JS coverage (unused code)
@@ -635,7 +635,7 @@ ls -lah web-app/.next/static/chunks/*.js 2>/dev/null | sort -k5 -rh | head -10
 | React re-render cascade | `<Profiler onRender>` | `actualDuration / baseDuration` near 1.0 |
 | Layout thrashing | Performance panel → "Forced reflow" | `layoutCount` > 10 per interaction |
 | Memory leak | Playwright heap delta across 10 cycles | > 5MB growth |
-| Oversized bundle | `source-map-explorer` or `.next/static/chunks` | chunk > 500KB unparsed |
+| Oversized bundle | `source-map-explorer` or `.next/static/chunks` (Next mode (removed in PR 9)) | chunk > 500KB unparsed |
 
 ## Known hotspots — prune stale rows each session, don't just append
 

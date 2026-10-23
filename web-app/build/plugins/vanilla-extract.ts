@@ -57,8 +57,14 @@ function hashFiles(files: string[]): string {
  */
 export class VeCompiler {
   compileCount = 0;
-  /** Set when a dependant of an edited token file may not be re-requested by the bundler (consumed by the dev server). */
-  fullReloadOnCssTsChange = true;
+  /**
+   * Set when a dependant of an edited token file may not be re-requested by the bundler (consumed by the dev
+   * server, Story 5.6). Default false per gate S2 (project_plans/web-app-bun-build/research/spike-results.md):
+   * measured, Bun's own `development.hmr` DOES re-request and live-swap a changed .css.ts's CSS output into
+   * already-rendered dependants with no full page reload (verified <150ms, no `load` event). Flip to true only
+   * if a future Bun version regresses on this (re-run the S2 `csstoken` probe first to confirm before flipping).
+   */
+  fullReloadOnCssTsChange = false;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly identOption: IdentOption;
   private readonly maxEntries: number;

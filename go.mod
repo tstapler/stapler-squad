@@ -14,7 +14,6 @@ go 1.26.6
 godebug netdns=go
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.0
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/otelconnect v0.8.0
 	entgo.io/ent v0.14.5
@@ -22,6 +21,7 @@ require (
 	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/atotto/clipboard v0.1.4
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/bufbuild/buf v1.57.2
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/creack/pty v1.1.24
@@ -46,7 +46,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	github.com/tstapler/tymux/clients/go v0.1.1-0.20261018004533-4f517c47d2ec
+	github.com/tstapler/tymux/clients/go v0.1.1-0.20261020224721-9971ef7489a9
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/zalando/go-keyring v0.2.8
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0

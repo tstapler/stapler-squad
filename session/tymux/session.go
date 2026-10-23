@@ -28,6 +28,12 @@ var ErrNotSupportedOnTymuxBackend = errors.New("not supported by the tymux backe
 // (capture/cursor/dimensions) when Start/RestoreWithWorkDir hasn't run yet.
 var errSessionNotStarted = errors.New("tymux: session not started")
 
+// Structured-log field keys shared across this file's log.Info/Warn calls.
+const (
+	logKeySessionID = "session_id"
+	logKeyErr       = "err"
+)
+
 // tymuxGRPCSession is the real TymuxManager implementation, backed by a live
 // tymuxd daemon over gRPC via rpcTransport.
 type tymuxGRPCSession struct {
@@ -275,7 +281,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.mu.Unlock()
 	s.closing.Store(false)
 
-	log.Info("tymux: session ready", "session_id", sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())
+	log.Info("tymux: session ready", logKeySessionID, sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())
 
 	return s.openStandingStream(pane.GetId())
 }
@@ -349,6 +355,14 @@ func paneColorEnv() map[string]string {
 // bare program name; tymuxd execs Command as a single program, so these need a shell.
 const shellMetachars = " \t\n'\"\\$&|;<>()*?[]{}~`#!"
 
+// shellPath and shellFlagC are splitLaunchCommand's `/bin/sh -c` fallback,
+// named so session_test.go's expectations single-source against this file
+// instead of duplicating the literals.
+const (
+	shellPath  = "/bin/sh"
+	shellFlagC = "-c"
+)
+
 // splitLaunchCommand maps a shell-style launch command onto CreateSessionRequest's
 // Command/Args. A bare program name passes through; anything with arguments or
 // shell syntax runs as `/bin/sh -c <command>`.
@@ -356,7 +370,7 @@ func splitLaunchCommand(command string) (program string, args []string) {
 	if !strings.ContainsAny(command, shellMetachars) {
 		return command, nil
 	}
-	return "/bin/sh", []string{"-c", command}
+	return shellPath, []string{shellFlagC, command}
 }
 
 // SetCommand records the program Start() will ask tymuxd to spawn. Call
@@ -416,7 +430,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	s.mu.RUnlock()
-	log.Info("tymux: session closing", "session_id", sessionID)
+	log.Info("tymux: session closing", logKeySessionID, sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
 	// tearing anything down, so readAttachLoop's Receive() error (caused
 	// by teardownStandingStream's own cancellation below) is recognized
@@ -443,10 +457,10 @@ func (s *tymuxGRPCSession) Close() error {
 	s.liveness = v1.Liveness_LIVENESS_DEAD
 	s.mu.Unlock()
 	if err != nil {
-		log.Warn("tymux: KillSession failed during Close", "session_id", sessionID, "err", err)
+		log.Warn("tymux: KillSession failed during Close", logKeySessionID, sessionID, logKeyErr, err)
 		return classifyRPCError("Close", err)
 	}
-	log.Info("tymux: session closed", "session_id", sessionID)
+	log.Info("tymux: session closed", logKeySessionID, sessionID)
 	return nil
 }
 
@@ -481,9 +495,9 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
 		if errors.Is(err, ErrTymuxdUnreachable) {
-			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", "session_id", sessionID, "err", err)
+			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		} else {
-			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", "session_id", sessionID, "err", err)
+			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		}
 		return cachedLiveness == v1.Liveness_LIVENESS_LIVE
 	}
@@ -852,7 +866,7 @@ func (s *tymuxGRPCSession) SetOnExitCallback(fn func(string)) {
 	}
 	s.mu.Unlock()
 	if fire {
-		log.Info("tymux: exit callback fired", "session_id", s.GetSessionIdentifier(), "reason", reason, "registered_after_exit", true)
+		log.Info("tymux: exit callback fired", logKeySessionID, s.GetSessionIdentifier(), "reason", reason, "registered_after_exit", true)
 		fn(reason)
 	}
 }

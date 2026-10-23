@@ -39,6 +39,8 @@ Adopt the **trigger-based extraction model** with **coupling-radius-2 placement*
 
 **Step 1 — RSC boundary (mandatory correctness check)**
 
+*Amended by project web-app-bun-build: the Bun build has no server components, so every file is client code. The `"use client"` rule below is still enforced while Next mode exists and stops being a correctness constraint when the Next build is removed (PR 9); the placement rules in the later steps are unaffected.*
+
 Does the code use any of: `createContext`, `useState`, `useReducer`, `useEffect`, `useRef`, event handlers, browser-only APIs?
 
 → Yes: it must be in a `"use client"` component or hook. If it currently lives in an RSC file, extract immediately. This is a correctness constraint — Next.js App Router throws at runtime, not build time.

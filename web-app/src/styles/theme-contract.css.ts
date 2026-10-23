@@ -102,6 +102,9 @@ export const vars = createThemeContract({
 
     // Git status colors (file-tree badges)
     gitModified: null,
+    gitModifiedBg: null,
+    gitAddedBg: null,
+    gitDeletedBg: null,
     gitAdded: null,
     gitDeleted: null,
     gitRenamed: null,

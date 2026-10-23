@@ -4,6 +4,7 @@ import * as http from "http";
 import * as os from "os";
 import * as path from "path";
 import { allocatePort } from "./ports";
+import { parseWebBuildMode } from "./web-build-mode";
 
 /**
  * StackLauncher (see project_plans/isolated-dev-stacks/implementation/plan.md,
@@ -210,18 +211,26 @@ function defaultSpawnBackend(config: DevStackConfig): ChildProcess {
   });
 }
 
-function defaultSpawnFrontend(config: DevStackConfig): ChildProcess {
+/** Exported for tests: the frontend spawn args/env/cwd, mode-selected via the single parseWebBuildMode owner (Story 5.7). */
+export function frontendSpawnPlan(config: DevStackConfig, env: Record<string, string | undefined> = process.env): {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string | undefined>;
+} {
   const webAppDir = path.join(repoRoot(), "web-app");
+  const baseEnv = { ...env, NEXT_PUBLIC_API_URL: config.apiBaseUrl };
+  if (parseWebBuildMode(env) === "bun") {
+    // web-app/build/dev.ts (Story 5.6): bunfig.toml's [serve.static] plugin entry is resolved relative to cwd.
+    return { command: "bun", args: ["build/dev.ts"], cwd: webAppDir, env: { ...baseEnv, PORT: String(config.frontendPort) } };
+  }
   const nextBin = path.join(webAppDir, "node_modules", ".bin", "next");
-  return spawn(nextBin, ["dev", "--port", String(config.frontendPort), "--hostname", "localhost"], {
-    cwd: webAppDir,
-    detached: true,
-    env: {
-      ...process.env,
-      NEXT_PUBLIC_API_URL: config.apiBaseUrl,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  return { command: nextBin, args: ["dev", "--port", String(config.frontendPort), "--hostname", "localhost"], cwd: webAppDir, env: baseEnv };
+}
+
+function defaultSpawnFrontend(config: DevStackConfig): ChildProcess {
+  const plan = frontendSpawnPlan(config);
+  return spawn(plan.command, plan.args, { cwd: plan.cwd, detached: true, env: plan.env, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function httpProbe(url: string, isOk: (statusCode: number) => boolean): Promise<boolean> {
@@ -245,7 +254,8 @@ function defaultCheckBackendReady(config: DevStackConfig): Promise<boolean> {
 
 function defaultCheckFrontendReady(config: DevStackConfig): Promise<boolean> {
   // Any HTTP response counts as "responds" — next dev may 404 briefly during
-  // compile, but that still means it's listening on the port (Task 3.2.1c).
+  // compile (and bun dev.ts's first request waits on its own initial bundle), but
+  // that still means it's listening on the port (Task 3.2.1c).
   return httpProbe(`http://localhost:${config.frontendPort}`, () => true);
 }
 

@@ -99,14 +99,14 @@ keeping the collector off the public network.
 Disabled by default, gated the same way as the server:
 
 ```bash
-# Enable browser tracing. NEXT_PUBLIC_* vars are baked in at `next build`
+# Next mode (removed in PR 9) builds; WEB_BUILD=bun reads the same variables. Enable browser tracing. NEXT_PUBLIC_* vars are baked in at `next build`
 # time (static export, no server-side env reads), so this must be set before
 # `make web-build` / `bun run build`, not at runtime like the server's vars.
 NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 
 # Override the export endpoint (default: same-origin "/api/otel/v1/traces",
 # proxied by the Go server — see below). Only needed for local dev, where
-# `next dev` runs on a different origin (:3001) than the Go server (:8543).
+# `next dev` (Next mode (removed in PR 9)) runs on a different origin (:3001) than the Go server (:8543).
 NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8543/api/otel/v1/traces NEXT_PUBLIC_OTEL_ENABLED=true make web-build
 ```
 

@@ -58,6 +58,7 @@ runs:
     # font files) across runs, so most builds skip the fonts.gstatic.com
     # network fetch entirely instead of relying on the retry below.
     - name: Cache Next.js build cache
+      if: env.WEB_BUILD != 'bun'
       uses: actions/cache@v4
       with:
         path: web-app/.next/cache

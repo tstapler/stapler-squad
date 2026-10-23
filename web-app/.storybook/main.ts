@@ -30,7 +30,7 @@ const config: StorybookConfig = {
     config.module = config.module ?? {};
     config.module.rules = config.module.rules ?? [];
 
-    // TypeScript + JSX: use babel-loader (already installed via @storybook/nextjs)
+    // TypeScript + JSX: use babel-loader (direct devDependency)
     config.module.rules.push({
       test: /\.(ts|tsx)$/,
       exclude: /node_modules/,

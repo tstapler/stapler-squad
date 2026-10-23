@@ -113,6 +113,7 @@ export class TriggersPage {
   }
 
   callbackErrorBanner(): Locator {
-    return this.page.getByRole("alert");
+    // Excludes the permanent assertive live region (Announcer.tsx), which is also role="alert".
+    return this.page.locator('[role="alert"]:not([data-testid="announcer-assertive"])');
   }
 }
