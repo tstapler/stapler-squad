@@ -12,7 +12,6 @@ export const chip = style({
   height: "20px",
   maxWidth: "100%",
   minWidth: 0,
-  cursor: "pointer",
   background: vars.color.errorBg,
   color: vars.color.errorText,
   border: `1px solid ${vars.color.error}`,
@@ -33,3 +32,5 @@ export const more = style({
   flexShrink: 0,
   opacity: 0.8,
 });
+
+export const interactive = style({ cursor: "pointer" });

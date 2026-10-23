@@ -989,7 +989,7 @@ describe("BacklogItemCard — dependency chip", () => {
     expect(screen.queryByTestId("dependency-chip")).not.toBeInTheDocument();
   });
 
-  it("opens the dependency without triggering the card's own click", () => {
+  it("opens the blocker via the card's onClick prop", () => {
     const onClick = jest.fn();
     render(
       <BacklogItemCard item={makeItem({ blockedBy: [dep("Fix auth", "ready")] })} onAction={jest.fn()} onClick={onClick} />

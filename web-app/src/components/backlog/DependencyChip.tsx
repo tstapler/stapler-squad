@@ -4,7 +4,7 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import { Ban } from "lucide-react";
 import type { ItemDependency } from "@/lib/hooks/useBacklogService";
-import { unresolvedBlockers } from "@/lib/backlog/dependencies";
+import { dependencyLabel, unresolvedBlockers } from "@/lib/backlog/dependencies";
 import * as styles from "./DependencyChip.css";
 
 interface DependencyChipProps {
@@ -14,7 +14,7 @@ interface DependencyChipProps {
   onItemClick?: (itemId: string) => void;
 }
 
-const depTitle = (d: ItemDependency) => d.title || d.publicId || d.itemId;
+const describeDep = (d: ItemDependency) => `${dependencyLabel(d)} (${d.status})`;
 
 export function DependencyChip({ deps, onItemClick }: DependencyChipProps) {
   const open = unresolvedBlockers(deps);
@@ -34,27 +34,24 @@ export function DependencyChip({ deps, onItemClick }: DependencyChipProps) {
     activate();
   };
 
+  const ariaLabel = `Blocked by ${open.map(describeDep).join(", ")}`;
+  const interactive = onItemClick !== undefined;
+
   return (
     // data-action-button makes the card's handleCardClick ignore clicks anywhere in this subtree.
     <span
-      className={styles.chip}
-      role="button"
-      tabIndex={0}
+      className={interactive ? `${styles.chip} ${styles.interactive}` : styles.chip}
+      {...(interactive ? { role: "button", tabIndex: 0, onKeyDown: handleKeyDown } : {})}
       data-action-button="true"
       data-testid="dependency-chip"
-      aria-label={`Blocked by ${depTitle(primary)}${rest.length > 0 ? ` and ${rest.length} more` : ""}`}
-      title={`Blocked by: ${depTitle(primary)} (${primary.status})`}
+      aria-label={ariaLabel}
+      title={`Blocked by: ${describeDep(primary)}`}
       onClick={handleClick}
-      onKeyDown={handleKeyDown}
     >
       <Ban size={12} aria-hidden="true" />
-      <span className={styles.label}>{depTitle(primary)}</span>
+      <span className={styles.label}>{dependencyLabel(primary)}</span>
       {rest.length > 0 && (
-        <span
-          className={styles.more}
-          data-testid="dependency-chip-more"
-          title={rest.map((d) => `${depTitle(d)} (${d.status})`).join("\n")}
-        >
+        <span className={styles.more} data-testid="dependency-chip-more" title={rest.map(describeDep).join("\n")}>
           +{rest.length} more
         </span>
       )}

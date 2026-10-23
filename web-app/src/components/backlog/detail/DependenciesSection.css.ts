@@ -39,4 +39,5 @@ export const depLink = style({
   cursor: "pointer",
   textDecoration: "underline",
   textAlign: "left",
+  ":focus-visible": { outline: `2px solid ${vars.color.primary}`, outlineOffset: "1px" },
 });

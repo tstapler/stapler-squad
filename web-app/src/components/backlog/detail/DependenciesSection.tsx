@@ -2,7 +2,7 @@
 // +feature: backlog:item-detail-dependencies
 
 import type { BacklogItem, ItemDependency } from "@/lib/hooks/useBacklogService";
-import { isBlockerUnresolved } from "@/lib/backlog/dependencies";
+import { dependencyLabel, isBlockerUnresolved } from "@/lib/backlog/dependencies";
 import * as styles from "./DependenciesSection.css";
 
 interface DependencyListProps {
@@ -22,10 +22,10 @@ function DependencyList({ label, deps, testId, onItemClick }: DependencyListProp
           <li key={d.itemId}>
             {onItemClick ? (
               <button type="button" className={styles.depLink} onClick={() => onItemClick(d.itemId)}>
-                {d.title || d.publicId || d.itemId}
+                {dependencyLabel(d)}
               </button>
             ) : (
-              d.title || d.publicId || d.itemId
+              dependencyLabel(d)
             )}
             <span className={styles.status}>
               ({d.status}

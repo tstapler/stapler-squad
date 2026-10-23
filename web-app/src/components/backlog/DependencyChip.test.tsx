@@ -55,9 +55,17 @@ describe("DependencyChip", () => {
     expect(screen.getByTestId("dependency-chip")).toHaveTextContent("id-1");
   });
 
-  it("does not crash without onItemClick", () => {
+  it("is not exposed as a button without onItemClick", () => {
     render(<DependencyChip deps={[dep("A", "ready")]} />);
-    fireEvent.click(screen.getByTestId("dependency-chip"));
+    const chip = screen.getByTestId("dependency-chip");
+    expect(chip).not.toHaveAttribute("role");
+    expect(chip).not.toHaveAttribute("tabindex");
+    fireEvent.click(chip);
+  });
+
+  it("lists every unresolved blocker in the aria-label", () => {
+    render(<DependencyChip deps={[dep("A", "ready"), dep("B", "queued")]} onItemClick={jest.fn()} />);
+    expect(screen.getByTestId("dependency-chip")).toHaveAttribute("aria-label", "Blocked by A (ready), B (queued)");
   });
 
   it("does not bubble clicks to a parent", () => {
