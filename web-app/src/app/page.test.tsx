@@ -1,4 +1,3 @@
-// analytics-exempt
 /**
  * PR #645 Gate 2 review finding #3: handleSteerAutonomousSession's
  * result === null failure branch (page.tsx) had zero direct test —
@@ -92,6 +91,7 @@ jest.mock("@/components/pane/PaneTilingContainer", () => ({
           setResult(String(ok));
         }}
       >
+        {/* analytics-exempt */}
         steer:{result}
       </button>
     );

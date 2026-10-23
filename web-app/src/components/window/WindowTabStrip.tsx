@@ -1,4 +1,3 @@
-// analytics-exempt
 "use client";
 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
@@ -202,6 +201,7 @@ function WindowTabCloseButton({
         onClose(id);
       }}
     >
+      {/* analytics-exempt */}
       &times;
     </button>
   );
@@ -494,6 +494,7 @@ const WindowTabStripInner = forwardRef<
           title="New window"
           aria-label="New window"
         >
+          {/* analytics-exempt */}
           +
         </button>
         {onOpenOverview && (
@@ -507,6 +508,7 @@ const WindowTabStripInner = forwardRef<
             title="Window overview"
             aria-label="Window overview"
           >
+            {/* analytics-exempt */}
             ⊞
           </button>
         )}
@@ -545,6 +547,7 @@ const WindowTabStripInner = forwardRef<
             tmux sessions.
           </span>
           <button className={windowOnboardingHintDismiss} onClick={dismissHint}>
+            {/* analytics-exempt */}
             Got it ✕
           </button>
         </div>
