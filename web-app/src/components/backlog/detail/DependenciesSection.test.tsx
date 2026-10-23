@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { DependenciesSection } from "./DependenciesSection";
 
 const dep = (title: string, status: string) => ({ itemId: title, publicId: "", title, status });
@@ -23,5 +23,21 @@ describe("DependenciesSection", () => {
     render(<DependenciesSection item={{ blocking: [dep("Waiting item", "queued")] }} />);
     expect(screen.getByTestId("backlog-blocking")).toHaveTextContent("Waiting item");
     expect(screen.queryByTestId("backlog-blocked-by")).not.toBeInTheDocument();
+  });
+});
+
+describe("DependenciesSection clickable dependencies", () => {
+  const item = { blockedBy: [dep("Blocker", "ready")] };
+
+  it("calls onItemClick with the dependency id", () => {
+    const onItemClick = jest.fn();
+    render(<DependenciesSection item={item} onItemClick={onItemClick} />);
+    fireEvent.click(screen.getByRole("button", { name: "Blocker" }));
+    expect(onItemClick).toHaveBeenCalledWith("Blocker");
+  });
+
+  it("falls back to plain text without onItemClick", () => {
+    render(<DependenciesSection item={item} />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });

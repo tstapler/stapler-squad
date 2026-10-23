@@ -964,10 +964,10 @@ describe("ClaimChip on cards (cross-host claim dedup)", () => {
   });
 });
 
-describe("BacklogItemCard — blocked-by label", () => {
-  const dep = (title: string, status: string) => ({ itemId: title, publicId: "", title, status });
+describe("BacklogItemCard — dependency chip", () => {
+  const dep = (title: string, status: string) => ({ itemId: `id-${title}`, publicId: "", title, status });
 
-  it("shows 'blocked by <title>' while a blocker is unresolved", () => {
+  it("shows a chip with the blocker title and a status tooltip while a blocker is unresolved", () => {
     render(
       <BacklogItemCard
         item={makeItem({ blockedBy: [dep("Fix auth", "in_progress")] })}
@@ -975,16 +975,44 @@ describe("BacklogItemCard — blocked-by label", () => {
         onClick={jest.fn()}
       />
     );
-    expect(screen.getByTestId("backlog-card-blocked-by")).toHaveTextContent("blocked by Fix auth");
+    const chip = screen.getByTestId("dependency-chip");
+    expect(chip).toHaveTextContent("Fix auth");
+    expect(chip).toHaveAttribute("title", "Blocked by: Fix auth (in_progress)");
   });
 
   it("shows nothing once every blocker is resolved or when there are none", () => {
     const { rerender } = render(
       <BacklogItemCard item={makeItem({ blockedBy: [dep("Fix auth", "done")] })} onAction={jest.fn()} onClick={jest.fn()} />
     );
-    expect(screen.queryByTestId("backlog-card-blocked-by")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dependency-chip")).not.toBeInTheDocument();
     rerender(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
-    expect(screen.queryByTestId("backlog-card-blocked-by")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dependency-chip")).not.toBeInTheDocument();
+  });
+
+  it("opens the dependency without triggering the card's own click", () => {
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard item={makeItem({ blockedBy: [dep("Fix auth", "ready")] })} onAction={jest.fn()} onClick={onClick} />
+    );
+    fireEvent.click(screen.getByTestId("dependency-chip"));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledWith("id-Fix auth");
+  });
+
+  it("ignores clicks on chip children at the card level (data-action-button)", () => {
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ blockedBy: [dep("A", "ready"), dep("B", "ready")] })}
+        onAction={jest.fn()}
+        onClick={onClick}
+      />
+    );
+    expect(screen.getByTestId("dependency-chip")).toHaveAttribute("data-action-button", "true");
+    fireEvent.click(screen.getByTestId("dependency-chip-more"));
+    // Reaches the chip handler (opens dep A) exactly once; the card handler adds no second call.
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledWith("id-A");
   });
 });
 

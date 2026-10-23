@@ -1052,6 +1052,7 @@ function BacklogPageInner() {
                 key={selectedItemId}
                 itemId={selectedItemId}
                 onClose={handleDetailClose}
+                onItemClick={handleRowClick}
               />
             </aside>
           </>

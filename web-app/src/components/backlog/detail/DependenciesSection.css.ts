@@ -29,3 +29,14 @@ export const status = style({
   marginLeft: vars.space["1"],
   opacity: 0.75,
 });
+
+export const depLink = style({
+  background: "none",
+  border: "none",
+  padding: 0,
+  font: "inherit",
+  color: vars.color.primary,
+  cursor: "pointer",
+  textDecoration: "underline",
+  textAlign: "left",
+});
