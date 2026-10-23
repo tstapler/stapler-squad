@@ -277,7 +277,15 @@ test.describe("Jules status badge accessibility & optimistic-flash (§7.10 / §7
     };
     await page.route("**/api/session.v1.BacklogService/GetBacklogItem", holdOpen);
     await page.route("**/api/session.v1.BacklogService/ListBacklogItems", holdOpen);
-    await page.route("**/api/session.v1.BacklogService/WatchBacklogItems", holdOpen);
+    // WatchBacklogItems is a WebSocket (watch-ws-transport.ts), which page.route
+    // never sees. Playwright leaves the page-side socket unopened until the
+    // handler connects, so no snapshot frame can arrive before the gate opens.
+    let interceptedWatchSockets = 0;
+    await page.routeWebSocket("**/api/session.v1.BacklogService/WatchBacklogItems", async (ws) => {
+      interceptedWatchSockets += 1;
+      await gate;
+      ws.connectToServer();
+    });
 
     const detailPage = new BacklogItemDetailPage(page);
     await page.goto(`${BASE_URL}/backlog?item=${itemId}`, { waitUntil: "domcontentloaded" });
@@ -289,6 +297,8 @@ test.describe("Jules status badge accessibility & optimistic-flash (§7.10 / §7
 
     // No real Jules state (`item.linkedSessions`) has arrived yet — no
     // badge, neutral or otherwise, should be present.
+    // A no-op gate would make the next assertion vacuous.
+    await expect.poll(() => interceptedWatchSockets).toBeGreaterThan(0);
     await expect(page.getByTestId("jules-status-badge")).toHaveCount(0);
 
     releaseGate();
