@@ -19,7 +19,7 @@ export type SortBy = PRSortBy;
 export const DEFAULT_FILTER: FilterStatus = "all";
 export const DEFAULT_SORT: SortBy = "attention-first";
 
-/** Merge conflict must be explicitly false: undefined means details not loaded yet, so it is not "ready". */
+/** Merge conflict must be explicitly false: undefined means GitHub's mergeable state is still UNKNOWN. */
 export function isReadyToMerge(p: UserPR): boolean {
   return (
     !p.isDraft &&

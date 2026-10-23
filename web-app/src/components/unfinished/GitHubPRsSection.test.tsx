@@ -223,6 +223,7 @@ describe("GitHubPRsSection PRs panel", () => {
     render(<Panel prs={prs} />);
     fireEvent.click(screen.getByTestId("filter-chip-ready-to-merge"));
     expect(screen.getAllByTestId("github-pr-card")).toHaveLength(1);
+    expect(screen.getByTestId("github-prs-stats")).toHaveTextContent("1 ready to merge");
   });
 
   it("gitHubPRsSection_should_RenderFilterAsAriaPressedToggleGroupAndSortAsLabelledSelect_When_Rendered", () => {
