@@ -63,6 +63,7 @@ function buildGlobalSummaryResponse(fixture: GlobalSummaryFixture) {
       totalSequences: String(row.totalSequences),
       totalMangled: String(row.totalMangled),
       mangleRate: row.mangleRate,
+      correlationOutcomes: String(row.totalSequences),
     })),
   };
 }

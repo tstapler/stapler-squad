@@ -295,13 +295,16 @@ test.describe("Jules status badge accessibility & optimistic-flash (§7.10 / §7
     // any of the three held-open RPCs above.
     await expect(detailPage.pane).toBeVisible();
 
-    // No real Jules state (`item.linkedSessions`) has arrived yet — no
-    // badge, neutral or otherwise, should be present.
-    // A no-op gate would make the next assertion vacuous.
-    await expect.poll(() => interceptedWatchSockets).toBeGreaterThan(0);
-    await expect(page.getByTestId("jules-status-badge")).toHaveCount(0);
+    try {
+      // A no-op gate would make the next assertion vacuous.
+      await expect.poll(() => interceptedWatchSockets).toBeGreaterThan(0);
 
-    releaseGate();
+      // No real Jules state (`item.linkedSessions`) has arrived yet — no
+      // badge, neutral or otherwise, should be present.
+      await expect(page.getByTestId("jules-status-badge")).toHaveCount(0);
+    } finally {
+      releaseGate();
+    }
 
     await expect(page.getByTestId("jules-status-badge")).toBeVisible({ timeout: 10_000 });
   });

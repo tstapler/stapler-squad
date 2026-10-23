@@ -16,3 +16,6 @@
 ## Readiness gate
 1 every requirement has a test: PASS. 2 no TODO/TBD in plan: PASS. 3 ADRs: N/A (none referenced). 4 adversarial blockers: PASS (0). 5 architecture review: N/A (skipped at complexity 1). 6 schema change: N/A. 7 pre-mortem P1: N/A (skipped at complexity 1). 8 architecture read: PASS (test-only edits, no packages).
 **Verdict: PASS.**
+
+## sdd:6-verify result
+Review agent on c25f9b90a: 0 blockers, 4 concerns. Fixed: releaseGate in `finally`; per-row `correlationOutcomes` in the analytics fixture. Accepted (not changed): the announcer exclusion stays as a `:not()` in three locators rather than a shared helper (small, matches the existing toast exclusion); `failingOnNextAtCapture.tests` left as an empty list. Evidence: 3 target specs, 46 passed on chromium+chromium-dom (0 retries) after the fixes; triggers-panel 10 passed. Verdict: PASS with documented CONCERNS.
