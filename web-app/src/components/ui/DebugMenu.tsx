@@ -71,6 +71,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
   } | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [perfCopied, setPerfCopied] = useState(false);
+  const [perfError, setPerfError] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -198,11 +199,13 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
   const handleCopyPerfDiagnostics = async () => {
     try {
       const diagnostics = await collectPerfDiagnostics();
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable (needs a secure context)");
       await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+      setPerfError(null);
       setPerfCopied(true);
       setTimeout(() => setPerfCopied(false), 2000);
     } catch (err) {
-      setSnapshotError(err instanceof Error ? err.message : "Failed to copy perf diagnostics");
+      setPerfError(err instanceof Error ? err.message : "Failed to copy perf diagnostics");
     }
   };
 
@@ -353,6 +356,8 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
             >
               {perfCopied ? <>✓ Copied</> : <>⏱ Copy Perf Diagnostics</>}
             </button>
+
+            {perfError && <div className={snapshotErrorClass}>{perfError}</div>}
 
             {snapshotResult && (
               <div className={snapshotResultClass}>

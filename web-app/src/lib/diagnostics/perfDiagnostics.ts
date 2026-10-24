@@ -1,10 +1,15 @@
 // Browser-side perf snapshot for "the UI is slow with many windows/panes" reports.
-// Contains layout structure and session ids only: no terminal content, no secrets.
+// Exports a whitelisted layout (ids, split geometry, view kind, tab; window names are dropped),
+// DOM/heap/long-task stats and the user agent. No terminal content.
 
 const WINDOW_LAYOUT_KEY = "cockpit.windowLayout";
 
 interface LayoutNode {
   type: "leaf" | "split";
+  id?: string;
+  direction?: string;
+  ratio?: number;
+  sessionId?: string | null;
   viewKind?: string;
   activeTab?: string;
   first?: LayoutNode;
@@ -19,7 +24,7 @@ export interface PerfDiagnostics {
   heapUsedMB: number | null;
   windows: { id: string; panes: number; terminalPanes: number; activeTabs: Record<string, number> }[];
   longTasks: { count: number; maxMs: number; totalMs: number };
-  layoutRaw: unknown;
+  layout: unknown;
 }
 
 function countLeaves(node: LayoutNode | undefined, acc: { panes: number; terminalPanes: number; activeTabs: Record<string, number> }) {
@@ -35,6 +40,14 @@ function countLeaves(node: LayoutNode | undefined, acc: { panes: number; termina
   }
   countLeaves(node.first, acc);
   countLeaves(node.second, acc);
+}
+
+function sanitizeNode(node: LayoutNode | undefined): unknown {
+  if (!node) return null;
+  if (node.type === "leaf") {
+    return { type: "leaf", id: node.id, viewKind: node.viewKind, sessionId: node.sessionId, activeTab: node.activeTab };
+  }
+  return { type: "split", id: node.id, direction: node.direction, ratio: node.ratio, first: sanitizeNode(node.first), second: sanitizeNode(node.second) };
 }
 
 function readLayout(): unknown {
@@ -53,25 +66,27 @@ function collectLongTasks(): Promise<PerfDiagnostics["longTasks"]> {
     return Promise.resolve(empty);
   }
   return new Promise((resolve) => {
-    const observer = new PerformanceObserver(() => {});
+    const durations: number[] = [];
+    const observer = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) durations.push(e.duration);
+    });
     observer.observe({ type: "longtask", buffered: true });
-    // Buffered entries are queued asynchronously; yield once before draining.
+    // Buffered entries are delivered to the callback asynchronously; wait briefly, then drain any still queued.
     setTimeout(() => {
-      const entries = observer.takeRecords();
+      for (const e of observer.takeRecords()) durations.push(e.duration);
       observer.disconnect();
-      const durations = entries.map((e) => e.duration);
       resolve({
         count: durations.length,
         maxMs: Math.round(Math.max(0, ...durations)),
         totalMs: Math.round(durations.reduce((a, b) => a + b, 0)),
       });
-    }, 0);
+    }, 50);
   });
 }
 
 export async function collectPerfDiagnostics(): Promise<PerfDiagnostics> {
-  const layoutRaw = readLayout();
-  const rawWindows = (layoutRaw as { windows?: { id: string; paneState?: { root?: LayoutNode } }[] } | null)?.windows ?? [];
+  const rawLayout = readLayout() as { windows?: { id: string; paneState?: { root?: LayoutNode; focusedPaneId?: string; zoomedPaneId?: string | null } }[] } | null;
+  const rawWindows = rawLayout?.windows ?? [];
   const windows = rawWindows.map((w) => {
     const acc = { panes: 0, terminalPanes: 0, activeTabs: {} as Record<string, number> };
     countLeaves(w.paneState?.root, acc);
@@ -86,6 +101,11 @@ export async function collectPerfDiagnostics(): Promise<PerfDiagnostics> {
     heapUsedMB: memory ? Math.round(memory.usedJSHeapSize / 1048576) : null,
     windows,
     longTasks: await collectLongTasks(),
-    layoutRaw,
+    layout: rawWindows.map((w) => ({
+      id: w.id,
+      focusedPaneId: w.paneState?.focusedPaneId,
+      zoomedPaneId: w.paneState?.zoomedPaneId,
+      root: sanitizeNode(w.paneState?.root),
+    })),
   };
 }

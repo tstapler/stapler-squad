@@ -28,6 +28,34 @@ describe("collectPerfDiagnostics", () => {
     ]);
   });
 
+  it("exports a whitelisted layout without window names", async () => {
+    localStorage.setItem(
+      "cockpit.windowLayout",
+      JSON.stringify({ version: 2, revision: 1, windows: [{ id: "w0", name: "secret-name", paneState: { root: { ...leaf("a", "session-detail"), extra: "x" }, focusedPaneId: "a", zoomedPaneId: null } }] })
+    );
+    const json = JSON.stringify((await collectPerfDiagnostics()).layout);
+    expect(json).not.toContain("secret-name");
+    expect(json).not.toContain("extra");
+    expect(json).toContain('"focusedPaneId":"a"');
+  });
+
+  it("sums long tasks delivered to the observer callback", async () => {
+    const original = (global as { PerformanceObserver?: unknown }).PerformanceObserver;
+    class FakeObserver {
+      static supportedEntryTypes = ["longtask"];
+      constructor(private cb: (l: { getEntries: () => { duration: number }[] }) => void) {}
+      observe() { setTimeout(() => this.cb({ getEntries: () => [{ duration: 80 }, { duration: 120 }] }), 0); }
+      takeRecords() { return []; }
+      disconnect() {}
+    }
+    (global as { PerformanceObserver?: unknown }).PerformanceObserver = FakeObserver;
+    try {
+      expect((await collectPerfDiagnostics()).longTasks).toEqual({ count: 2, maxMs: 120, totalMs: 200 });
+    } finally {
+      (global as { PerformanceObserver?: unknown }).PerformanceObserver = original;
+    }
+  });
+
   it("tolerates a missing or corrupt layout", async () => {
     expect((await collectPerfDiagnostics()).windows).toEqual([]);
     localStorage.setItem("cockpit.windowLayout", "{not json");
