@@ -926,30 +926,10 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 	// Handles controller-based and terminal-content detection, idle/staleness checks.
 	result := rqp.statusDeterminer.Determine(inst, content, statusInfo, rqp.statusDetector, opts)
 
-	reason := result.Reason
-	priority := result.Priority
-	context := result.Context
-	claudeStatus := result.ClaudeStatus
 	shouldAdd := result.Action == DetectionActionAdd
 
-	// Handle early-exit actions from the determiner.
 	if result.Action == DetectionActionRemove {
-		// For sessions without an active controller, the raw terminal scanner can produce
-		// false-positive Active/Processing detections during a resize redraw. Suppress
-		// removal for prompt-reason items on the no-controller path only.
-		// Controller-active sessions: trust the controller — if it returns DetectionActionRemove
-		// for an approval item, the dialog is genuinely gone (e.g., user approved the tool use).
-		if !statusInfo.IsControllerActive {
-			if existing, exists := rqp.queue.Get(snap.Title); exists {
-				isPromptReason := existing.Reason == ReasonApprovalPending ||
-					existing.Reason == ReasonInputRequired ||
-					existing.Reason == ReasonWaitingForUser
-				if isPromptReason {
-					return
-				}
-			}
-		}
-		rqp.removeFromQueue(snap.Title)
+		rqp.handleDetectedRemove(snap.Title, statusInfo)
 		return
 	}
 
@@ -982,127 +962,153 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 		return
 	}
 
-	log.Debug("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", reason.String(), "priority", priority.String(), "context", context)
+	log.Debug("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", result.Reason.String(), "priority", result.Priority.String(), "context", result.Context)
 
 	if shouldAdd {
-		// Check if item already exists and preserve DetectedAt if status hasn't changed
-		detectedAt := time.Now()
-		isUpdate := false
-		var prior *ReviewItem
-		if existingItem, exists := rqp.queue.Get(snap.Title); exists {
-			isUpdate = true
-			prior = existingItem
-			// Preserve original timestamp if meaningful fields haven't changed
-			if existingItem.Reason == reason &&
-				existingItem.Priority == priority &&
-				existingItem.Context == context {
-				detectedAt = existingItem.DetectedAt
-			}
+		rqp.addDetectedItem(inst, snap, result, statusInfo)
+	}
+}
+
+// handleDetectedRemove applies a determiner Remove action.
+func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo InstanceStatusInfo) {
+	// Without a controller the raw terminal scanner can false-positive Active during a resize
+	// redraw, so keep prompt-reason items there; controller-active sessions are trusted.
+	if !statusInfo.IsControllerActive {
+		if existing, exists := rqp.queue.Get(title); exists && isPromptReason(existing.Reason) {
+			return
 		}
+	}
+	rqp.removeFromQueue(title)
+}
 
-		// DO NOT update LastMeaningfulOutput here - it must reflect actual terminal output time
-		// Updating it would defeat staleness detection by making the session appear fresh
+func isPromptReason(r AttentionReason) bool {
+	return r == ReasonApprovalPending || r == ReasonInputRequired || r == ReasonWaitingForUser
+}
 
-		// Use CreatedAt as fallback LastActivity when LastMeaningfulOutput hasn't been set yet
-		// (new sessions, sessions where StartController failed before the migration ran).
-		lastActivity := snap.LastMeaningfulOutput
-		if lastActivity.IsZero() {
-			lastActivity = snap.CreatedAt
+// addDetectedItem builds, enriches and enqueues the review item for an Add action.
+func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo) {
+	reason, priority, context := result.Reason, result.Priority, result.Context
+
+	detectedAt := time.Now()
+	isUpdate := false
+	var prior *ReviewItem
+	if existingItem, exists := rqp.queue.Get(snap.Title); exists {
+		isUpdate = true
+		prior = existingItem
+		// Preserve original timestamp if meaningful fields haven't changed
+		if existingItem.Reason == reason &&
+			existingItem.Priority == priority &&
+			existingItem.Context == context {
+			detectedAt = existingItem.DetectedAt
 		}
+	}
 
-		item := &ReviewItem{
-			SessionID:   snap.Title,
-			SessionName: snap.Title,
-			Reason:      reason,
-			Priority:    priority,
-			DetectedAt:  detectedAt,
-			Context:     context,
-			// Populate session details for rich display
-			Program:         snap.Program,
-			Branch:          snap.Branch,
-			Path:            snap.Path,
-			WorkingDir:      snap.WorkingDir,
-			Status:          snap.Status.String(),
-			Tags:            snap.Tags,
-			Category:        snap.Category,
-			DiffStats:       inst.GetDiffStats(),
-			LastActivity:    lastActivity,
-			HasCommitsAhead: inst.GetHasCommitsAhead(),
-			// Populate idle state and raw detected status for WorkingState mapping.
-			IdleState:    statusInfo.IdleState.State,
-			ClaudeStatus: claudeStatus,
-		}
+	// DO NOT update LastMeaningfulOutput here - it must reflect actual terminal output time
+	// Updating it would defeat staleness detection by making the session appear fresh
 
-		// Enrich approval items with hook metadata from ApprovalStore (Story 3, Task 3.2).
-		//
-		// ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the
-		// session's stable ID (UUID when present, Title only as a fallback) so the
-		// live notification UI can match on it — but ReviewItem is keyed by Title.
-		// Look up by UUID first since that's what most approvals are indexed under,
-		// then fall back to Title for the rare case a session has no UUID.
-		rqp.mu.RLock()
-		provider := rqp.approvalProvider
-		rqp.mu.RUnlock()
-		if reason == ReasonApprovalPending && provider != nil {
-			approvals := provider.GetApprovalMetadataBySession(snap.UUID)
-			if len(approvals) == 0 && snap.UUID != snap.Title {
-				approvals = provider.GetApprovalMetadataBySession(snap.Title)
-			}
-			if len(approvals) > 0 {
-				a := highestRiskApproval(approvals) // GAP-004: surface the most dangerous concurrent approval, not just the first
-				if item.Metadata == nil {
-					item.Metadata = make(map[string]string)
-				}
-				item.Metadata["pending_approval_id"] = a.ApprovalID
-				item.Metadata["tool_name"] = a.ToolName
-				if cmd, ok := a.ToolInput["command"].(string); ok && cmd != "" {
-					item.Metadata["tool_input_command"] = cmd
-				}
-				if filePath, ok := a.ToolInput["file_path"].(string); ok && filePath != "" {
-					item.Metadata["tool_input_file"] = filePath
-				}
-				if a.Cwd != "" {
-					item.Metadata["cwd"] = a.Cwd
-				}
-				if a.Orphaned {
-					item.Metadata["orphaned"] = "true"
-				}
-				if a.EscalationReason != "" {
-					item.Metadata["escalation_reason"] = a.EscalationReason
-				}
-				if a.EscalationCategory != "" {
-					item.Metadata["escalation_reason_category"] = a.EscalationCategory
-				}
-				if a.RiskLevel != "" {
-					item.Metadata["risk_level"] = a.RiskLevel
-				}
-				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"], "risk_level", item.Metadata["risk_level"])
-			}
-		}
+	// Use CreatedAt as fallback LastActivity when LastMeaningfulOutput hasn't been set yet
+	// (new sessions, sessions where StartController failed before the migration ran).
+	lastActivity := snap.LastMeaningfulOutput
+	if lastActivity.IsZero() {
+		lastActivity = snap.CreatedAt
+	}
 
-		log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
-		rqp.addToQueue(item, prior)
+	item := &ReviewItem{
+		SessionID:   snap.Title,
+		SessionName: snap.Title,
+		Reason:      reason,
+		Priority:    priority,
+		DetectedAt:  detectedAt,
+		Context:     context,
+		// Populate session details for rich display
+		Program:         snap.Program,
+		Branch:          snap.Branch,
+		Path:            snap.Path,
+		WorkingDir:      snap.WorkingDir,
+		Status:          snap.Status.String(),
+		Tags:            snap.Tags,
+		Category:        snap.Category,
+		DiffStats:       inst.GetDiffStats(),
+		LastActivity:    lastActivity,
+		HasCommitsAhead: inst.GetHasCommitsAhead(),
+		// Populate idle state and raw detected status for WorkingState mapping.
+		IdleState:    statusInfo.IdleState.State,
+		ClaudeStatus: result.ClaudeStatus,
+	}
 
-		// Update spam prevention timestamp via actor command so the write is
-		// serialised with buildSnapshot and does not race.
-		now := time.Now()
-		inst.SetLastAddedToQueue(now)
-		log.Debug("updated LastAddedToQueue timestamp", "session", snap.Title, "timestamp", now)
+	rqp.enrichApprovalMetadata(item, snap)
 
-		// CRITICAL: Persist LastAddedToQueue to database to prevent notification spam
-		// Without persistence, this timestamp resets on app restart or instance reload,
-		// causing the spam prevention check to fail and sessions to be re-added immediately
-		// NOTE: Use UpdateInstanceLastAddedToQueue instead of SaveInstances to avoid
-		// the merge logic which would restore deleted instances from disk.
-		if rqp.storage != nil {
-			if err := rqp.storage.UpdateInstanceLastAddedToQueue(snap.Title, now); err != nil {
-				log.Error("failed to persist LastAddedToQueue", "session", snap.Title, "err", err)
-			}
-		}
+	log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
+	rqp.addToQueue(item, prior)
 
-		if !isUpdate {
-			log.Debug("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
-		}
+	rqp.persistLastAddedToQueue(inst, snap.Title)
+
+	if !isUpdate {
+		log.Debug("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
+	}
+}
+
+// enrichApprovalMetadata adds hook metadata from ApprovalStore (Story 3, Task 3.2).
+//
+// ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the session's stable
+// ID (UUID when present, Title only as a fallback), but ReviewItem is keyed by Title, so
+// look up by UUID first and fall back to Title for sessions without a UUID.
+func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *ReviewItem, snap *InstanceSnapshot) {
+	rqp.mu.RLock()
+	provider := rqp.approvalProvider
+	rqp.mu.RUnlock()
+	if item.Reason != ReasonApprovalPending || provider == nil {
+		return
+	}
+	approvals := provider.GetApprovalMetadataBySession(snap.UUID)
+	if len(approvals) == 0 && snap.UUID != snap.Title {
+		approvals = provider.GetApprovalMetadataBySession(snap.Title)
+	}
+	if len(approvals) == 0 {
+		return
+	}
+	a := highestRiskApproval(approvals) // GAP-004: surface the most dangerous concurrent approval, not just the first
+	if item.Metadata == nil {
+		item.Metadata = make(map[string]string)
+	}
+	item.Metadata["pending_approval_id"] = a.ApprovalID
+	item.Metadata["tool_name"] = a.ToolName
+	setIfNonEmpty(item.Metadata, "tool_input_command", toolInputString(a.ToolInput, "command"))
+	setIfNonEmpty(item.Metadata, "tool_input_file", toolInputString(a.ToolInput, "file_path"))
+	setIfNonEmpty(item.Metadata, "cwd", a.Cwd)
+	if a.Orphaned {
+		item.Metadata["orphaned"] = "true"
+	}
+	setIfNonEmpty(item.Metadata, "escalation_reason", a.EscalationReason)
+	setIfNonEmpty(item.Metadata, "escalation_reason_category", a.EscalationCategory)
+	setIfNonEmpty(item.Metadata, "risk_level", a.RiskLevel)
+	log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"], "risk_level", item.Metadata["risk_level"])
+}
+
+func toolInputString(input map[string]interface{}, key string) string {
+	v, _ := input[key].(string)
+	return v
+}
+
+func setIfNonEmpty(m map[string]string, key, val string) {
+	if val != "" {
+		m[key] = val
+	}
+}
+
+// persistLastAddedToQueue stamps the spam-prevention timestamp via the actor command (so the
+// write is serialised with buildSnapshot) and persists it so restarts don't re-add sessions.
+// Uses UpdateInstanceLastAddedToQueue, not SaveInstances, to avoid the merge logic that would
+// restore deleted instances from disk.
+func (rqp *ReviewQueuePoller) persistLastAddedToQueue(inst *Instance, title string) {
+	now := time.Now()
+	inst.SetLastAddedToQueue(now)
+	log.Debug("updated LastAddedToQueue timestamp", "session", title, "timestamp", now)
+	if rqp.storage == nil {
+		return
+	}
+	if err := rqp.storage.UpdateInstanceLastAddedToQueue(title, now); err != nil {
+		log.Error("failed to persist LastAddedToQueue", "session", title, "err", err)
 	}
 }
 
