@@ -6,10 +6,10 @@ import * as path from "path";
 import { buildManifest, extractRoutePaths, type BaselineFile, type ExpectedDiffFile } from "../../../scripts/route-coverage-manifest";
 
 describe("extractRoutePaths", () => {
-  test("matches the real ROUTE_META key count (44 today; plan text says 42 -- stale, reconciled here)", () => {
+  test("matches the real ROUTE_META key count (45 today; plan text says 42 -- stale, reconciled here)", () => {
     const src = fs.readFileSync(path.join(__dirname, "../../../web-app/src/app/route-meta.ts"), "utf8");
     const routes = extractRoutePaths(src);
-    expect(routes.length).toBe(44);
+    expect(routes.length).toBe(45);
     expect(routes).toContain("/backlog/board");
   });
 });
