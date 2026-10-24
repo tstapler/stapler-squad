@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -234,31 +235,37 @@ func ComputeU1(perDay map[string]int, now time.Time, days int) PageViewBaseline 
 func loadNotifications(path string) ([]Notification, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- operator-supplied data dir
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read notifications %s: %w", path, err)
 	}
 	var file struct {
 		Notifications []Notification `json:"notifications"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse notifications %s: %w", path, err)
 	}
 	return file.Notifications, nil
 }
 
 func openReadOnly(path string) (*sql.DB, error) {
-	return sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	u := url.URL{Scheme: "file", Opaque: (&url.URL{Path: path}).EscapedPath(), RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	return db, nil
 }
 
-func parseSQLTime(s sql.NullString) time.Time {
+// parseSQLTime returns the zero time for NULL and an error for a value no known layout parses.
+func parseSQLTime(s sql.NullString) (time.Time, error) {
 	if !s.Valid {
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	for _, layout := range []string{"2006-01-02 15:04:05.999999999-07:00", "2006-01-02T15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999 -0700 MST"} {
 		if t, err := time.Parse(layout, strings.SplitN(s.String, " m=", 2)[0]); err == nil {
-			return t
+			return t, nil
 		}
 	}
-	return time.Time{}
+	return time.Time{}, fmt.Errorf("unparseable timestamp %q", s.String)
 }
 
 var programNameRe = regexp.MustCompile(`[^/\s]+$`)
@@ -271,27 +278,43 @@ func programName(raw string) string {
 	return programNameRe.FindString(first[0])
 }
 
-func loadTouches(dbPath string) (map[string]Touch, error) {
+// loadTouches reads per-session operator touches. unparsed counts timestamp values no known
+// layout parsed; those touches are treated as absent, so misses are overstated by that amount.
+func loadTouches(dbPath string) (touches map[string]Touch, unparsed int, err error) {
 	db, err := openReadOnly(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer db.Close()
 	rows, err := db.Query(`SELECT uuid, program, last_viewed, last_user_response, last_acknowledged FROM sessions`)
 	if err != nil {
-		return nil, err
+		return nil, 0, fmt.Errorf("query sessions in %s: %w", dbPath, err)
 	}
 	defer rows.Close()
-	out := map[string]Touch{}
+	touches = map[string]Touch{}
 	for rows.Next() {
 		var uuid, program string
 		var v, r, a sql.NullString
 		if err := rows.Scan(&uuid, &program, &v, &r, &a); err != nil {
-			return nil, err
+			return nil, 0, fmt.Errorf("scan sessions in %s: %w", dbPath, err)
 		}
-		out[uuid] = Touch{Program: programName(program), LastViewed: parseSQLTime(v), LastUserResponse: parseSQLTime(r), LastAcknowledged: parseSQLTime(a)}
+		t := Touch{Program: programName(program)}
+		for _, f := range []struct {
+			raw sql.NullString
+			dst *time.Time
+		}{{v, &t.LastViewed}, {r, &t.LastUserResponse}, {a, &t.LastAcknowledged}} {
+			parsed, perr := parseSQLTime(f.raw)
+			if perr != nil {
+				unparsed++
+			}
+			*f.dst = parsed
+		}
+		touches[uuid] = t
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read sessions in %s: %w", dbPath, err)
+	}
+	return touches, unparsed, nil
 }
 
 func loadPageViewsPerDay(dbPath string, pages []string) (map[string]int, error) {
@@ -300,10 +323,15 @@ func loadPageViewsPerDay(dbPath string, pages []string) (map[string]int, error) 
 		return nil, err
 	}
 	defer db.Close()
-	q := `SELECT substr(created_at,1,10), count(*) FROM analytics_events WHERE event_name='page_view' AND page IN (?,?) GROUP BY 1`
-	rows, err := db.Query(q, pages[0], pages[1])
+	args := make([]any, len(pages))
+	for i, p := range pages {
+		args[i] = p
+	}
+	q := `SELECT substr(created_at,1,10), count(*) FROM analytics_events WHERE event_name='page_view' AND page IN (` +
+		strings.TrimSuffix(strings.Repeat("?,", len(pages)), ",") + `) GROUP BY 1`
+	rows, err := db.Query(q, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query page views in %s: %w", dbPath, err)
 	}
 	defer rows.Close()
 	out := map[string]int{}
@@ -311,11 +339,14 @@ func loadPageViewsPerDay(dbPath string, pages []string) (map[string]int, error) 
 		var day string
 		var n int
 		if err := rows.Scan(&day, &n); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan page views in %s: %w", dbPath, err)
 		}
 		out[day] = n
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read page views in %s: %w", dbPath, err)
+	}
+	return out, nil
 }
 
 // lastAssistantText returns the text of the final assistant text block in a transcript JSONL.
@@ -356,6 +387,7 @@ type transcriptFile struct {
 	mod  time.Time
 }
 
+// recentTranscripts returns up to n transcripts, newest first.
 func recentTranscripts(root string, n int) []transcriptFile {
 	var files []transcriptFile
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -368,6 +400,9 @@ func recentTranscripts(root string, n int) []transcriptFile {
 		return nil
 	})
 	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	if len(files) > n {
+		files = files[:n]
+	}
 	return files
 }
 
@@ -377,7 +412,7 @@ func recentTranscripts(root string, n int) []transcriptFile {
 func HarvestSample(root string, n int, outCSV string) (int, error) {
 	f, err := os.OpenFile(outCSV, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("open harvest output %s: %w", outCSV, err)
 	}
 	defer f.Close()
 	w := csv.NewWriter(f)
@@ -400,14 +435,17 @@ func HarvestSample(root string, n int, outCSV string) (int, error) {
 		count++
 	}
 	w.Flush()
-	return count, w.Error()
+	if err := w.Error(); err != nil {
+		return count, fmt.Errorf("write harvest output %s: %w", outCSV, err)
+	}
+	return count, nil
 }
 
 // LoadLabels reads an owner-labelled harvest CSV; rows with a blank is_question are skipped.
 func LoadLabels(r io.Reader) ([]LabelledTurn, error) {
 	rows, err := csv.NewReader(r).ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read labels csv: %w", err)
 	}
 	var out []LabelledTurn
 	for i, row := range rows {
@@ -484,9 +522,12 @@ func run(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	touches, err := loadTouches(filepath.Join(*dataDir, "sessions.db"))
+	touches, unparsed, err := loadTouches(filepath.Join(*dataDir, "sessions.db"))
 	if err != nil {
 		return err
+	}
+	if unparsed > 0 {
+		fmt.Fprintf(w, "warning: %d unparseable touch timestamps in sessions.db treated as absent; detected-but-missed is overstated by up to that many touches\n", unparsed)
 	}
 	renderDetected(w, ComputeDetectedMissed(recs, touches, now, *windowDays, time.Duration(*missMin)*time.Minute))
 	ld := *logDir
@@ -497,18 +538,18 @@ func run(w io.Writer, args []string) error {
 	harvested := 0
 	if *transcripts != "" && *harvestOut != "" {
 		if harvested, err = HarvestSample(*transcripts, *sampleN, *harvestOut); err != nil {
-			return err
+			return fmt.Errorf("harvest transcripts from %s: %w", *transcripts, err)
 		}
 	}
 	var labelled []LabelledTurn
 	if *labels != "" {
 		f, err := os.Open(*labels) // #nosec G304 -- operator-supplied
 		if err != nil {
-			return err
+			return fmt.Errorf("open labels %s: %w", *labels, err)
 		}
 		defer f.Close()
 		if labelled, err = LoadLabels(f); err != nil {
-			return err
+			return fmt.Errorf("load labels %s: %w", *labels, err)
 		}
 	}
 	renderSample(w, SummarizeSample(labelled), harvested)
@@ -516,7 +557,7 @@ func run(w io.Writer, args []string) error {
 }
 
 func renderU1(w io.Writer, dbPath string, now time.Time) error {
-	for _, pages := range [][]string{{"/review-queue", "/review-queue"}, {"/review-queue", "/review-queue/"}} {
+	for _, pages := range [][]string{{"/review-queue"}, {"/review-queue", "/review-queue/"}} {
 		perDay, err := loadPageViewsPerDay(dbPath, pages)
 		if err != nil {
 			return err

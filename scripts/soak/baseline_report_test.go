@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +99,38 @@ func TestBaselineReport_Should_ExtractLastAssistantText(t *testing.T) {
 `
 	if got := lastAssistantText(strings.NewReader(in)); got != "Shall I proceed?" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLoadTouches_Should_CountUnparseableTimestampsAndOpenPathWithSpecialChars_When_DataDirHasQuestionMarkAndHash(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a#b?c")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "sessions.db")
+	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?mode=rwc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE sessions (uuid TEXT, program TEXT, last_viewed TEXT, last_user_response TEXT, last_acknowledged TEXT)`,
+		`INSERT INTO sessions VALUES ('u1', 'claude', '2026-10-24 12:00:00+00:00', 'garbage', NULL)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+
+	touches, unparsed, err := loadTouches(path)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unparsed != 1 {
+		t.Errorf("unparsed = %d, want 1", unparsed)
+	}
+	if touches["u1"].LastViewed.IsZero() || !touches["u1"].LastUserResponse.IsZero() {
+		t.Errorf("touch parsed wrongly: %+v", touches["u1"])
 	}
 }
