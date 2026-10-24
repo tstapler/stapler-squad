@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -107,12 +108,22 @@ func evaluateRules(rules []suppressionRule, rc ruleCtx) SuppressionDecision {
 	return keepDecision()
 }
 
+// needsHumanReasons are the reasons that block the agent on a person; with
+// RuleOptions.AckBypassFix they escape the output-based ack snooze.
+var needsHumanReasons = []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
+
+// NeedsHumanReasons returns a copy of the needs-human reason set.
+func NeedsHumanReasons() []AttentionReason { return slices.Clone(needsHumanReasons) }
+
+func isNeedsHumanReason(r AttentionReason) bool { return slices.Contains(needsHumanReasons, r) }
+
 // ackSnooze drops items the user acknowledged after the last output. Active high-priority
 // adds bypass it: content-signature dedup leaves LastMeaningfulOutput unchanged when an
 // identical prompt reappears, so the ack would otherwise hide a live blocking prompt.
+// With AckBypassFix the same holds for every needs-human reason, whatever its priority.
 func ackSnooze(c ruleCtx) (SuppressionDecision, bool) {
-	activeHighPriority := c.shouldAdd() && c.priority <= PriorityHigh
-	if !activeHighPriority && c.ackedAfterOutput {
+	bypass := c.shouldAdd() && (c.priority <= PriorityHigh || (c.opts.AckBypassFix && isNeedsHumanReason(c.reason)))
+	if !bypass && c.ackedAfterOutput {
 		return removeDecision("ackSnooze"), true
 	}
 	return SuppressionDecision{}, false

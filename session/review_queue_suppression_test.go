@@ -250,3 +250,53 @@ func TestSuppressionLogging_Should_EmitAgainOnDecisionChange_When_RuleChanges(t 
 		t.Errorf("debug lines = %q, want %q", rec.lines, want)
 	}
 }
+
+func ackedCtx(p Priority, r AttentionReason, bypassFix bool) ruleCtx {
+	c := addCtx()
+	c.priority, c.reason, c.ackedAfterOutput = p, r, true
+	c.opts = RuleOptions{AckBypassFix: bypassFix}
+	return c
+}
+
+func TestAckSnooze_Should_KeepInputRequired_When_BypassFixOnAndAckAfterOutput(t *testing.T) {
+	t.Parallel()
+	for _, reason := range NeedsHumanReasons() {
+		if _, decided := ackSnooze(ackedCtx(PriorityMedium, reason, true)); decided {
+			t.Errorf("reason %v at Medium was snoozed with the bypass fix on", reason)
+		}
+	}
+	if _, decided := ackSnooze(ackedCtx(PriorityMedium, ReasonWaitingForUser, true)); !decided {
+		t.Error("a non-needs-human reason must still be snoozed with the bypass fix on")
+	}
+}
+
+func TestAckSnooze_Should_RemoveInputRequired_When_BypassFixOff(t *testing.T) {
+	t.Parallel()
+	got, decided := ackSnooze(ackedCtx(PriorityMedium, ReasonInputRequired, false))
+	if !decided || got != removeDecision("ackSnooze") {
+		t.Errorf("ackSnooze = (%+v, %v), want remove by ackSnooze", got, decided)
+	}
+}
+
+func TestAckSnooze_Should_KeepApprovalPending_When_BypassFixOnOrOff(t *testing.T) {
+	t.Parallel()
+	for _, flag := range []bool{false, true} {
+		for _, p := range []Priority{PriorityUrgent, PriorityHigh} {
+			if _, decided := ackSnooze(ackedCtx(p, ReasonApprovalPending, flag)); decided {
+				t.Errorf("approval at %v snoozed with bypassFix=%v", p, flag)
+			}
+		}
+		if _, decided := ackSnooze(ackedCtx(PriorityUrgent, ReasonErrorState, flag)); decided {
+			t.Errorf("error state snoozed with bypassFix=%v", flag)
+		}
+	}
+}
+
+// PR B appends ReasonProseQuestion to this expectation when the constant exists.
+func TestNeedsHumanReasons_Should_ListBlockingReasons_When_Queried(t *testing.T) {
+	t.Parallel()
+	want := []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
+	if got := NeedsHumanReasons(); !reflect.DeepEqual(got, want) {
+		t.Errorf("NeedsHumanReasons = %v, want %v", got, want)
+	}
+}
