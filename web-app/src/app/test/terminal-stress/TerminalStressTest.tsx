@@ -2,6 +2,7 @@
 // analytics-exempt
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { vars } from '@/styles/theme.css';
 import type {
   TestConfig,
   GeneratorFrame,
@@ -356,24 +357,24 @@ export function TerminalStressTest() {
   // Get status color
   const getStatusColor = (): string => {
     switch (status) {
-      case 'running': return '#f59e0b';
-      case 'completed': return '#10b981';
-      case 'failed': return '#ef4444';
-      default: return '#6b7280';
+      case 'running': return '#92400e';
+      case 'completed': return '#065f46';
+      case 'failed': return '#b91c1c';
+      default: return '#4b5563';
     }
   };
 
   // Get frame time status
   const getFrameTimeStatus = (ms: number): { color: string; label: string } => {
-    if (ms <= 16.67) return { color: '#10b981', label: 'Excellent (60fps)' };
-    if (ms <= 33.33) return { color: '#f59e0b', label: 'Good (30fps)' };
-    return { color: '#ef4444', label: 'Poor (<30fps)' };
+    if (ms <= 16.67) return { color: '#065f46', label: 'Excellent (60fps)' };
+    if (ms <= 33.33) return { color: '#92400e', label: 'Good (30fps)' };
+    return { color: '#b91c1c', label: 'Poor (<30fps)' };
   };
 
   return (
     <div style={{ padding: '20px', fontFamily: 'system-ui, sans-serif', maxWidth: '1400px', margin: '0 auto' }}>
       <h1 style={{ marginBottom: '10px' }}>Terminal Streaming Stress Test</h1>
-      <p style={{ color: '#6b7280', marginBottom: '20px' }}>
+      <p style={{ color: vars.color.textSecondary, marginBottom: '20px' }}>
         Test terminal performance under high-volume streaming conditions
       </p>
 
@@ -387,10 +388,11 @@ export function TerminalStressTest() {
       }}>
         {/* Preset selector */}
         <div>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 500 }}>
+          <label htmlFor="stress-preset-selector" style={{ display: 'block', marginBottom: '5px', fontWeight: 500 }}>
             Test Preset
           </label>
           <select
+            id="stress-preset-selector"
             value={selectedPreset}
             onChange={(e) => setSelectedPreset(e.target.value as PresetKey)}
             disabled={status === 'running'}
@@ -431,7 +433,7 @@ export function TerminalStressTest() {
               padding: '8px 16px',
               borderRadius: '6px',
               border: 'none',
-              background: status === 'running' ? '#9ca3af' : '#10b981',
+              background: status === 'running' ? '#9ca3af' : '#065f46',
               color: 'white',
               fontWeight: 500,
               cursor: status === 'running' ? 'not-allowed' : 'pointer',
@@ -448,7 +450,7 @@ export function TerminalStressTest() {
               padding: '8px 16px',
               borderRadius: '6px',
               border: 'none',
-              background: status !== 'running' ? '#9ca3af' : '#ef4444',
+              background: status !== 'running' ? '#9ca3af' : '#b91c1c',
               color: 'white',
               fontWeight: 500,
               cursor: status !== 'running' ? 'not-allowed' : 'pointer',
@@ -498,6 +500,7 @@ export function TerminalStressTest() {
           data-testid="metrics-panel"
           style={{
             background: '#f9fafb',
+            color: '#111827',
             borderRadius: '8px',
             padding: '16px',
             border: '1px solid #e5e7eb',
@@ -524,7 +527,7 @@ export function TerminalStressTest() {
                 fontSize: '12px',
                 padding: '2px 8px',
                 borderRadius: '9999px',
-                background: rendererType === 'webgl' ? '#10b981' : rendererType === 'canvas' ? '#f59e0b' : '#6b7280',
+                background: rendererType === 'webgl' ? '#065f46' : rendererType === 'canvas' ? '#92400e' : '#4b5563',
                 color: 'white',
                 textTransform: 'uppercase',
               }}
@@ -549,7 +552,7 @@ export function TerminalStressTest() {
                 style={{
                   height: '100%',
                   width: `${Math.min(100, (progress.elapsed / ((customConfig || TEST_PRESETS[selectedPreset]).duration * 1000)) * 100)}%`,
-                  background: '#10b981',
+                  background: '#065f46',
                   transition: 'width 0.1s',
                 }}
               />
@@ -587,7 +590,7 @@ export function TerminalStressTest() {
                   {renderMetrics.avgFrameTime.toFixed(2)}ms
                 </span>
               </div>
-              <div style={{ fontSize: '12px', color: '#6b7280' }}>
+              <div style={{ fontSize: '12px', color: '#4b5563' }}>
                 {getFrameTimeStatus(renderMetrics.avgFrameTime).label}
               </div>
             </div>
@@ -612,7 +615,7 @@ export function TerminalStressTest() {
                 data-testid="max-frame-time"
                 style={{
                   fontWeight: 600,
-                  color: renderMetrics.maxFrameTime > 100 ? '#ef4444' : 'inherit',
+                  color: renderMetrics.maxFrameTime > 100 ? '#b91c1c' : 'inherit',
                 }}
               >
                 {renderMetrics.maxFrameTime.toFixed(2)}ms
@@ -634,7 +637,7 @@ export function TerminalStressTest() {
                 data-testid="memory-growth"
                 style={{
                   fontWeight: 600,
-                  color: renderMetrics.memoryGrowthRate > 1024 * 1024 ? '#ef4444' : 'inherit',
+                  color: renderMetrics.memoryGrowthRate > 1024 * 1024 ? '#b91c1c' : 'inherit',
                 }}
               >
                 {formatBytes(Math.abs(renderMetrics.memoryGrowthRate))}/s
@@ -647,12 +650,13 @@ export function TerminalStressTest() {
             marginTop: '16px',
             padding: '12px',
             background: '#fff',
+            color: '#111827',
             borderRadius: '6px',
             border: '1px solid #e5e7eb',
             fontSize: '12px',
           }}>
             <div style={{ fontWeight: 600, marginBottom: '8px' }}>Current Test Config</div>
-            <div style={{ color: '#6b7280' }}>
+            <div style={{ color: '#4b5563' }}>
               <div>Type: {(customConfig || TEST_PRESETS[selectedPreset]).type}</div>
               <div>Rate: {(customConfig || TEST_PRESETS[selectedPreset]).rate}/sec</div>
               <div>Duration: {(customConfig || TEST_PRESETS[selectedPreset]).duration}s</div>
@@ -679,6 +683,7 @@ export function TerminalStressTest() {
         marginTop: '20px',
         padding: '16px',
         background: '#eff6ff',
+        color: '#1f2937',
         borderRadius: '8px',
         border: '1px solid #bfdbfe',
       }}>

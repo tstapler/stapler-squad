@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -35,6 +36,14 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // workspacePeersBlockFor below so the flag name can't drift between where it's declared and
 // where it's read.
 const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+
+// backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
+const backlogFlagName = "backlog"
+
+// BacklogFlagEnabled reports the live state of the backlog flag, read per request.
+func BacklogFlagEnabled() bool {
+	return config.LoadConfig().GetFeatureFlag(backlogFlagName)
+}
 
 // programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
 // Default on; read per request via ProgramCLIFlagProbeEnabled.
@@ -321,12 +330,14 @@ var knownFeatureFlags = []struct {
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
-		name:        config.TriageGuidanceHaltFeatureFlag,
-		description: "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
+		name:         config.TriageGuidanceHaltFeatureFlag,
+		defaultValue: config.TriageGuidanceHaltDefault,
+		description:  "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
 	},
 	{
-		name:        config.DiagnoseNudgeFeatureFlag,
-		description: "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session, and the autonomous stall path to type its in-process nudge (also needs autonomous_stall_nudge_enabled). Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
+		name:         config.DiagnoseNudgeFeatureFlag,
+		defaultValue: config.DiagnoseNudgeDefault,
+		description:  "Diagnose & Nudge: allow a dispatched diagnostic agent to autonomously send a redirect message (diagnose_nudge_session) to a linked stuck session, and the autonomous stall path to type its in-process nudge (also needs autonomous_stall_nudge_enabled). Read fresh at the write instant, so flipping this off blocks an already-dispatched agent too. Default: off — until enabled, a dispatch can still investigate and file a bug or post a note, but never nudge.",
 	},
 	{
 		name:         config.AutonomousStallNudgeFeatureFlag,
@@ -375,6 +386,26 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:         config.WorkflowEngineShadowFeatureFlag,
+		description:  "Workflow engine shadow: compare the configured stage graph and gates against today's answer on every status transition and count the differences (see /actuator/workflow-engine). Changes nothing about what is allowed. Applies within about a second. Default: on.",
+		defaultValue: config.WorkflowEngineShadowDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceFeatureFlag,
+		description:  "Workflow engine enforce (operator class): the configured stage graph and operator gates decide status transitions instead of the built-in rules. Turn on only after make workflow-engine-soak-status reads READY. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceAgentFeatureFlag,
+		description:  "Workflow engine enforce (agent class): the configured stage graph and operator gates decide status transitions requested by agent tools (request_review, report_blocked, resume_work, report_duplicate, report_pr_created, and the generic transition tool) instead of today's checks. A denial is reported as a transition_denied stuck item. Turn on only after the agent class reads READY in make workflow-engine-soak-status. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceAgentDefault,
+	},
+	{
+		name:         config.WorkflowEngineEnforceSystemFeatureFlag,
+		description:  "Workflow engine enforce (system class): the configured stage graph and operator gates decide status transitions made by the server itself (queue claim, triage completion, lifecycle sweeps, PR merge and archive, dispatch) instead of today's unchecked writes. A denial is reported once as a transition_denied stuck item, the held automation waits quietly, and the sweep finishes the transition once the gate is satisfied. Turn on only after the system class reads READY in make workflow-engine-soak-status. Applies within about a second; global only. Default: off.",
+		defaultValue: config.WorkflowEngineEnforceSystemDefault,
+	},
+	{
 		name:        filesEditingFlagName,
 		description: "Files editing: allow saving edits from the Files tab (WriteFile). Enforced server-side; hidden-session and archived-session guards still apply. Applies at once; global only. Default: off.",
 	},
@@ -400,6 +431,49 @@ var knownFeatureFlags = []struct {
 		name:        filesEditLargeFlagName,
 		description: "Files large-file editing: allow editing files over the 1 MiB cap through ranged reads and delta writes (ADR-036). Applies at once; global only. Default: off.",
 	},
+}
+
+// workflowEngineModeTTL is how long a resolved engine mode is reused, so the
+// transition hot path never reads config per call.
+const workflowEngineModeTTL = time.Second
+
+// WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
+// flags with their registered defaults (never the plain GetFeatureFlag, which
+// returns false for an unset flag and would silently turn shadow off).
+func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
+	return session.ModeFromFlags(
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+	)
+}
+
+// NewWorkflowEngineModeSource is the production mode reader: live config,
+// cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
+	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+}
+
+// NewWorkflowEngineClassModeSource is the production per-class mode reader:
+// each class resolves its own enforce flag and the shared shadow flag from live
+// config, cached for workflowEngineModeTTL. A nil clock uses real time.
+func NewWorkflowEngineClassModeSource(load func() *config.Config, clock session.Clock) *session.FlagClassModeSource {
+	return session.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
+}
+
+// WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the
+// shadow flag's status line, counted from the ledger's repro ring (the last 200
+// divergences), so a busy day can read as a floor rather than an exact count.
+func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now func() time.Time) func() string {
+	return func() string {
+		cutoff := now().Add(-24 * time.Hour)
+		n := 0
+		for _, r := range snapshot().Repro {
+			if r.At.After(cutoff) {
+				n++
+			}
+		}
+		return fmt.Sprintf("Shadow: %d divergences/24h", n)
+	}
 }
 
 // featureFlagDefault looks up name's defaultValue in knownFeatureFlags — the single
@@ -505,13 +579,39 @@ func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string) string {
-	var parts []string
+	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(); d != "" {
 			parts = append(parts, d)
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
+// On does nothing ("inactive: requires <flag>", parsed by the Features page) and
+// whether its value is the registry default or was set explicitly.
+func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
+		return nil
+	}
+	var parts []string
+	if name == config.AutonomousStallNudgeFeatureFlag &&
+		config.EffectiveAutonomousStallNudgeEnabled(cfg) && !config.EffectiveDiagnoseNudgeEnabled(cfg) {
+		parts = append(parts, "inactive: requires "+config.DiagnoseNudgeFeatureFlag)
+	}
+	onOff := func(b bool) string {
+		if b {
+			return "On"
+		}
+		return "Off"
+	}
+	if value, explicit := cfg.FeatureFlags[name]; explicit {
+		parts = append(parts, "Set explicitly: "+onOff(value))
+	} else {
+		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+	}
+	return parts
 }
 
 // SetEnableGuard installs a precondition for enabling name. It is checked only
@@ -668,20 +768,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 // flip as an explicit false.
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
-	cfg := config.LoadConfig()
-	previous, hadKey := cfg.GetFeatureFlagOverride(name)
-	if !hadKey {
-		previous = featureFlagDefault(name)
-	}
+	var previous, hadKey bool
+	err := config.UpdateConfig(func(cfg *config.Config) error {
+		previous, hadKey = cfg.GetFeatureFlagOverride(name)
+		if !hadKey {
+			previous = featureFlagDefault(name)
+		}
+		if op.isSet() {
+			return cfg.SetFeatureFlag(name, enabled)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
-	}
-	var err error
-	if op.isSet() {
-		err = cfg.SetFeatureFlag(name, enabled)
-	} else {
-		err = cfg.DeleteFeatureFlag(name)
 	}
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
@@ -706,7 +806,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	}
 	log.Error("feature controller toggle failed, rolling back persisted flag",
 		"feature", name, "enabled", enabled, "err", ctrlErr)
-	if rollbackErr := rollbackFlag(cfg, name, previous, hadKey); rollbackErr != nil {
+	if rollbackErr := rollbackFlag(name, previous, hadKey); rollbackErr != nil {
 		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
 		if audit.active() {
 			audit.outcome = flagOutcomeControllerFailed
@@ -722,11 +822,13 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
 }
 
-func rollbackFlag(cfg *config.Config, name string, previous, hadKey bool) error {
-	if hadKey {
-		return cfg.SetFeatureFlag(name, previous)
-	}
-	return cfg.DeleteFeatureFlag(name)
+func rollbackFlag(name string, previous, hadKey bool) error {
+	return config.UpdateConfig(func(cfg *config.Config) error {
+		if hadKey {
+			return cfg.SetFeatureFlag(name, previous)
+		}
+		return cfg.DeleteFeatureFlag(name)
+	})
 }
 
 // finishApplied records the applied outcome and tells the observer which scope

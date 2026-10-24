@@ -126,6 +126,15 @@ type BacklogLifecycleListener struct {
 	// guarded by dashboardBaseURLFnMu. Nil means the footer carries no host.
 	hostRefFn func() (HostID, string)
 
+	// repoSettingsMu guards the pre-PR repo-settings seam (see
+	// SetRepoSettingsSeam) and the per-repo preflight dedupe state.
+	repoSettingsMu    sync.Mutex
+	repoSettings      RepoSettingsSeam
+	preflightSentAt   map[string]time.Time
+	preflightNowFn    func() time.Time
+	preflightWarmWG   sync.WaitGroup
+	preflightInflight map[string]bool
+
 	// noopThresholdMu guards noopThresholdFn (see SetNoopDispatchThresholdFn).
 	noopThresholdMu sync.RWMutex
 	noopThresholdFn func() int
@@ -267,12 +276,15 @@ type BacklogLifecycleListener struct {
 	// workflowEngine is consulted by transitionHasAutomatedReviewGate (Epic
 	// 2.4, Story 2.4.3) to detect a custom transition's attached
 	// GateKindAutomatedReview gate, generalizing the review-gate spawn
-	// condition beyond the built-in review status literal. nil (the default —
-	// server/dependencies.go does not wire a ConfiguredWorkflowEngine in here
-	// yet) makes transitionHasAutomatedReviewGate degrade to that literal
-	// comparison only, unchanged from pre-Epic-2.4 behavior. Wired via
-	// SetWorkflowEngine.
+	// condition beyond the built-in review status literal. nil makes
+	// transitionHasAutomatedReviewGate degrade to that literal comparison only.
+	// server/dependencies.go wires the concrete *ConfiguredWorkflowEngine here,
+	// never the SwitchableWorkflowEngine selector: the .(*ConfiguredWorkflowEngine)
+	// assertions below would fail and silently disable gate-context resolution.
+	// Wired via SetWorkflowEngine.
 	workflowEngine WorkflowEngine
+	// wrongEngineWarn limits the "not a ConfiguredWorkflowEngine" WARN to once.
+	wrongEngineWarn sync.Once
 
 	enabled atomic.Bool
 }
@@ -285,6 +297,25 @@ func (l *BacklogLifecycleListener) SetWorkflowEngine(engine WorkflowEngine) {
 	defer l.workflowEngineMu.Unlock()
 	l.workflowEngine = engine
 }
+
+// configuredWorkflowEngine returns the wired engine as a *ConfiguredWorkflowEngine.
+// Any other non-nil engine (notably the SwitchableWorkflowEngine selector)
+// silently disables gate-context resolution, so that is logged once.
+func (l *BacklogLifecycleListener) configuredWorkflowEngine() (*ConfiguredWorkflowEngine, bool) {
+	eng := l.getWorkflowEngine()
+	cwe, ok := eng.(*ConfiguredWorkflowEngine)
+	if !ok && eng != nil {
+		l.wrongEngineWarn.Do(func() {
+			log.Warn("backlog lifecycle listener: workflow engine is not a *ConfiguredWorkflowEngine; automated-review and custom-check gate contexts will not resolve",
+				"engine_type", fmt.Sprintf("%T", eng))
+		})
+	}
+	return cwe, ok
+}
+
+// WorkflowEngine returns the wired engine (nil if none); exported for the
+// production-wiring test in server/.
+func (l *BacklogLifecycleListener) WorkflowEngine() WorkflowEngine { return l.getWorkflowEngine() }
 
 // getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
 func (l *BacklogLifecycleListener) getWorkflowEngine() WorkflowEngine {
@@ -347,6 +378,22 @@ func (l *BacklogLifecycleListener) SetDashboardBaseURLFn(fn func() string) {
 	l.dashboardBaseURLFnMu.Lock()
 	defer l.dashboardBaseURLFnMu.Unlock()
 	l.dashboardBaseURLFn = fn
+}
+
+// RepoSettingsSeam gives the PR-create path a non-blocking view of GitHub repo
+// settings: Cached reads the cache only, Fetch warms it. Both nil disables the
+// pre-PR warning.
+type RepoSettingsSeam struct {
+	Cached func(ref github.RepoRef) (github.RepoSettingsResult, bool)
+	Fetch  func(ctx context.Context, ref github.RepoRef) github.RepoSettingsResult
+}
+
+// SetRepoSettingsSeam wires the repo-settings lookups used by the pre-PR
+// auto-merge warning.
+func (l *BacklogLifecycleListener) SetRepoSettingsSeam(s RepoSettingsSeam) {
+	l.repoSettingsMu.Lock()
+	defer l.repoSettingsMu.Unlock()
+	l.repoSettings = s
 }
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for
@@ -677,12 +724,37 @@ func (l *BacklogLifecycleListener) notifyAutoRemediating(itemID, title, message 
 // (BUG-030, BUG-040, BUG-041, BUG-046, BUG-048, and this fix's sibling call
 // sites in reconcileBouncingItems/ReconcilePRPending).
 func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
+	if isGateDenial(writeErr) {
+		// The gate's reporter already raised the one comment and notification.
+		log.Debug("[BacklogLifecycle] transition denied by the workflow gate; not re-notifying", "item", itemID, "error", writeErr)
+		return
+	}
 	l.notify(itemID,
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
 		7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
 		true, true, // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 	)
+}
+
+// isGateDenial reports whether err is the engine refusing a transition (graph,
+// Configured gate or Default guard) rather than a write failure. The gate has
+// already reported such a denial for a system caller.
+func isGateDenial(err error) bool {
+	return errors.Is(err, ErrTransitionNotAllowed) ||
+		errors.Is(err, ErrGateNotSatisfied) ||
+		errors.Is(err, ErrVerdictRequired)
+}
+
+// logSystemTransitionFailure logs a failed gated system write: a denial or a
+// lost compare-and-swap is expected and retried on the next tick (Debug); any
+// other failure is an Error.
+func logSystemTransitionFailure(where, itemID string, to BacklogStatus, err error) {
+	if isGateDenial(err) || errors.Is(err, ErrPreconditionFailed) {
+		log.Debug("[BacklogLifecycle] "+where+": transition skipped", "item", itemID, "to", to, "error", err)
+		return
+	}
+	log.Error("[BacklogLifecycle] "+where+": transition failed", "item", itemID, "to", to, "error", err)
 }
 
 // SetSessionArchiver wires in the archiver used to soft-archive backlog work
@@ -1001,8 +1073,10 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedStatus:    string(BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
-	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
-		log.Error("[BacklogLifecycle] TransitionBacklogItemStatus failed", "item", item.ID, "to", toStatus, "error", err)
+	if _, err := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); err != nil {
+		logSystemTransitionFailure("onSessionExited", item.ID, toStatus, err)
 		return
 	}
 
@@ -1081,15 +1155,14 @@ var builtInReviewGateContext = GateContext{
 // wired *ConfiguredWorkflowEngine with a matching GateKindAutomatedReview gate
 // resolves to that gate's own GateID/RequiresDiff/PipelineMode. ok is false
 // when no automated-review gate applies at all — the caller must not spawn a
-// review gate in that case. l.workflowEngine is nil in production until
-// SetWorkflowEngine is called (server/dependencies.go), so today this
-// degrades to the `to == BacklogStatusReview` case only, same as before this
-// generalization.
+// review gate in that case. server/dependencies.go wires the concrete engine
+// via SetWorkflowEngine; with none (or a non-concrete one) this degrades to
+// the `to == BacklogStatusReview` case only.
 func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to BacklogStatus) (GateContext, bool) {
 	if to == BacklogStatusReview {
 		return builtInReviewGateContext, true
 	}
-	cwe, ok := l.getWorkflowEngine().(*ConfiguredWorkflowEngine)
+	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
 		return GateContext{}, false
 	}
@@ -1113,7 +1186,7 @@ func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to BacklogStat
 // false when no WorkflowEngine is wired, it isn't a *ConfiguredWorkflowEngine,
 // or the edge carries no custom-check gate.
 func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to BacklogStatus) (uuid.UUID, CustomCheckConfig, bool) {
-	cwe, ok := l.getWorkflowEngine().(*ConfiguredWorkflowEngine)
+	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
 		return uuid.Nil, CustomCheckConfig{}, false
 	}
@@ -1245,7 +1318,67 @@ func (l *BacklogLifecycleListener) runStuckDetector(name string, okNames, panick
 	fn()
 }
 
-// ReconcileStuck calls ReconcileStuckItems and logs the result.
+// heldByTransitionDenial is the detector-local form of the open-denial guard
+// (Story 1.5.8): true, with a Debug line, while item's status has an open
+// transition_denied row the engine still refuses. detector names the caller in
+// the log.
+func (l *BacklogLifecycleListener) heldByTransitionDenial(ctx context.Context, item *BacklogItemData, detector string) bool {
+	if !l.storage.TransitionDenialHolds(ctx, item) {
+		return false
+	}
+	log.Debug("[BacklogLifecycle] item waits on a denied transition, skipping", "detector", detector, "item", item.ID, "status", item.Status)
+	return true
+}
+
+// respawnReviewGatesWithoutGate is ReconcileStuck's inline review-gate respawn:
+// it spawns a gate for every review item that has none. It calls the
+// listener-local spawnReviewGate rather than a BacklogService spawn point, so
+// the open-denial guard (Story 1.5.8) lives here.
+func (l *BacklogLifecycleListener) respawnReviewGatesWithoutGate(ctx context.Context, er *EntRepository) {
+	items, gateErr := er.FindReviewItemsWithoutGate(ctx)
+	if gateErr != nil {
+		log.Error("[BacklogLifecycle] FindReviewItemsWithoutGate error", "error", gateErr)
+		return
+	}
+	for _, item := range items {
+		var workSession *ItemSessionSummary
+		if len(item.Edges.ItemSessions) > 0 {
+			s := itemSessionToSummary(item.Edges.ItemSessions[0])
+			workSession = &s
+		}
+		if workSession == nil {
+			log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
+			continue
+		}
+		itemData := backlogItemToData(item)
+		if l.heldByTransitionDenial(ctx, &itemData, "ReconcileStuckReviewGates") {
+			continue
+		}
+		log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
+		isCopy := *workSession
+		go func(itemCopy *BacklogItemData, isCopy ItemSessionSummary) {
+			select {
+			case l.reviewSem <- struct{}{}:
+			case <-l.shutdownCtx.Done():
+				return
+			}
+			defer func() { <-l.reviewSem }()
+			// itemCopy.Status is already "review" here (FindReviewItemsWithoutGate's
+			// query scope), so resolveReviewGateContext's to==BacklogStatusReview
+			// branch always applies — this always resolves to
+			// builtInReviewGateContext, routed through the same resolver as
+			// onSessionExited for a single source of truth rather than a second
+			// hardcoded reference to that variable.
+			gateContext, ok := l.resolveReviewGateContext(BacklogStatus(itemCopy.Status), BacklogStatusReview)
+			if !ok {
+				gateContext = builtInReviewGateContext
+			}
+			l.spawnReviewGate(gateContext, itemCopy, isCopy)
+		}(&itemData, isCopy)
+	}
+}
+
+// ReconcileStuck calls GatedReconcileStuck and logs the result.
 // Intended to be called on a periodic ticker as a safety net for abnormal session exits.
 // No-op when the listener is disabled.
 func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
@@ -1253,15 +1386,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		return
 	}
 	er := l.storage.repo
-	n, err := er.ReconcileStuckItems(ctx)
+	n, err := l.storage.GatedReconcileStuck(ctx)
 	if err != nil {
-		log.Error("[BacklogLifecycle] ReconcileStuckItems error", "error", err)
+		log.Error("[BacklogLifecycle] ReconcileStuck error", "error", err)
 		return
 	}
 	if n > 0 {
-		log.Info("[BacklogLifecycle] ReconcileStuckItems: transitioned stuck items to review", "count", n)
+		log.Info("[BacklogLifecycle] ReconcileStuck: transitioned stuck items to review", "count", n)
 	} else {
-		log.Debug("[BacklogLifecycle] ReconcileStuckItems: no stuck items found")
+		log.Debug("[BacklogLifecycle] ReconcileStuck: no stuck items found")
 	}
 
 	// Re-spawn review gates for items stuck in "review" with no review session.
@@ -1269,44 +1402,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// Scoped to this block only (not an early return) — PR-pending polling and staleness
 	// detection below must still run even when no review mechanism is configured.
 	if l.getSessionCreator() != nil {
-		items, gateErr := er.FindReviewItemsWithoutGate(ctx)
-		if gateErr != nil {
-			log.Error("[BacklogLifecycle] FindReviewItemsWithoutGate error", "error", gateErr)
-		} else {
-			for _, item := range items {
-				var workSession *ItemSessionSummary
-				if len(item.Edges.ItemSessions) > 0 {
-					s := itemSessionToSummary(item.Edges.ItemSessions[0])
-					workSession = &s
-				}
-				if workSession == nil {
-					log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
-					continue
-				}
-				log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
-				itemData := backlogItemToData(item)
-				isCopy := *workSession
-				go func(itemCopy *BacklogItemData, isCopy ItemSessionSummary) {
-					select {
-					case l.reviewSem <- struct{}{}:
-					case <-l.shutdownCtx.Done():
-						return
-					}
-					defer func() { <-l.reviewSem }()
-					// itemCopy.Status is already "review" here (FindReviewItemsWithoutGate's
-					// query scope), so resolveReviewGateContext's to==BacklogStatusReview
-					// branch always applies — this always resolves to
-					// builtInReviewGateContext, routed through the same resolver as
-					// onSessionExited for a single source of truth rather than a second
-					// hardcoded reference to that variable.
-					gateContext, ok := l.resolveReviewGateContext(BacklogStatus(itemCopy.Status), BacklogStatusReview)
-					if !ok {
-						gateContext = builtInReviewGateContext
-					}
-					l.spawnReviewGate(gateContext, itemCopy, isCopy)
-				}(&itemData, isCopy)
-			}
-		}
+		l.respawnReviewGatesWithoutGate(ctx, er)
 	}
 
 	// Self-heal pr_pending items whose pr_number is missing (0) despite having a
@@ -1321,6 +1417,12 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// Durable stuck-reason detectors, each panic-isolated (Story 2.1.5e) so one
 	// detector's panic cannot skip the others or merge detection below.
 	var okNames, panickedNames []string
+
+	// Re-drive recorded transition denials first, so an approved gate releases
+	// its item before the spawn-point guards below look at it (Story 1.5.8).
+	l.runStuckDetector("transition_denied_redrive", &okNames, &panickedNames, func() {
+		l.storage.RedriveTransitionDenials(ctx)
+	})
 
 	// Re-read each live work session's actual HEAD into its ItemSession row, so
 	// LastCommitSha means "the session's latest commit" rather than the value it
@@ -1874,14 +1976,18 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	status := item.Status
 	if status == string(BacklogStatusInProgress) {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: status}
-		if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, precondition, TriggeredBySystem); err != nil {
+		if _, err := l.storage.GatedTransition(ctx, TransitionRequest{
+			Caller: CallerBouncingToDone, ItemID: item.ID, To: BacklogStatusReview, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+		}); err != nil {
 			return fmt.Errorf("in_progress->review: %w", err)
 		}
 		status = string(BacklogStatusReview)
 	}
 
 	precondition := &BacklogItemPrecondition{ExpectedStatus: status}
-	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); err != nil {
+	if _, err := l.storage.GatedTransition(ctx, TransitionRequest{
+		Caller: CallerBouncingToDone, ItemID: item.ID, To: BacklogStatusDone, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	}); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
 	l.cleanupTerminalItemSync(ctx, item.ID)
@@ -2218,6 +2324,8 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			// Commit-landed resolution is reconcileRepeatedNoopDispatch's
 			// else-branch (same-status, invisible to this sweep).
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
+		case domain.StuckReasonTransitionDenied:
+			resolve = !transitionDenialAnchored(row)
 		default:
 			// push_failed, rework_cap, multiple_reasons, and any future
 			// reason with no non-terminal anchor: stays open until the

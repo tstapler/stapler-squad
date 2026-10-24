@@ -11,8 +11,9 @@
 //   - nocommandpattern: requires //nolint:commandpattern comment on CommandPattern fields
 //   - norawexec: detects direct os/exec.Command calls outside approved wrapper packages
 //   - tmuxsocketscope: detects tmux command construction that bypasses socket resolution
-//   - silenttransition: detects TransitionBacklogItemStatus/UpdateItemSessionEnded
-//     calls whose error is only logged, never surfaced or propagated
+//   - silenttransition: detects Raw* status writers, UpdateItemSessionEnded and
+//     operator-class Gated* calls whose error is only logged, never surfaced
+//     or propagated
 //   - entfullscan: detects ent query .All(ctx) calls with no .Where(...) filter
 //     anywhere in the enclosing function — a full-table scan
 //   - norawgitcli: forbids git CLI call sites (exec/safeexec "git", runner.Run

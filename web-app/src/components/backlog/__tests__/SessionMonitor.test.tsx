@@ -26,8 +26,17 @@ jest.mock("@/lib/hooks/useSessionService", () => ({
   }),
 }));
 
+let mockFlags: Record<string, boolean> = {};
+let mockFlagsLoading = false;
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlags: () => ({ flags: mockFlags, isLoading: mockFlagsLoading }),
+  useFeatureFlag: (name: string) => mockFlags[name] ?? false,
+}));
+
 describe("SessionMonitor", () => {
   beforeEach(() => {
+    mockFlags = { "backlog:conversation-view": true };
+    mockFlagsLoading = false;
     getTerminalSnapshot.mockReset();
     getConversationMessages.mockReset();
     writeToSession.mockReset();
@@ -142,5 +151,42 @@ describe("SessionMonitor", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it("SessionMonitor_should_notCallConversationRpcOrShowHistory_When_conversationViewFlagOff", async () => {
+    mockFlags = {};
+    getTerminalSnapshot.mockResolvedValue("scrollback text");
+    getConversationMessages.mockResolvedValue([{ role: "user", content: "hi" }]);
+
+    render(<SessionMonitor sessionId="s1" isRunning={true} />);
+
+    await waitFor(() => expect(screen.getByText("scrollback text")).toBeInTheDocument());
+    expect(getConversationMessages).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /history/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /terminal/i })).toBeInTheDocument();
+  });
+
+  it("SessionMonitor_should_notCallConversationRpc_When_flagsStillLoading", async () => {
+    mockFlagsLoading = true;
+    getTerminalSnapshot.mockResolvedValue("scrollback text");
+    getConversationMessages.mockResolvedValue([]);
+
+    render(<SessionMonitor sessionId="s1" isRunning={true} />);
+
+    await waitFor(() => expect(screen.getByText("scrollback text")).toBeInTheDocument());
+    expect(getConversationMessages).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /history/i })).toBeNull();
+  });
+
+  it("SessionMonitor_should_renderConversationMessages_When_flagOnAndHistorySelected", async () => {
+    getTerminalSnapshot.mockResolvedValue("");
+    getConversationMessages.mockResolvedValue([{ role: "assistant", content: "hello there" }]);
+
+    render(<SessionMonitor sessionId="s1" isRunning={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /history/i }));
+
+    await waitFor(() => expect(screen.getByText("hello there")).toBeInTheDocument());
+    expect(getConversationMessages).toHaveBeenCalledWith("s1", 30);
   });
 });

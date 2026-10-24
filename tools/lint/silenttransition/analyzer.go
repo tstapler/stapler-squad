@@ -1,6 +1,7 @@
 // Package silenttransition defines a go/analysis pass that detects backlog
 // status-transition and session-bookkeeping writes (session.Storage's
-// TransitionBacklogItemStatus and UpdateItemSessionEnded) whose error is
+// Raw* status writers, UpdateItemSessionEnded, and the Gated* entry points
+// called by an operator-class or unknown-class caller) whose error is
 // checked but only logged — the write's failure is swallowed and execution
 // continues as if it had succeeded, even though the caller has already
 // committed real side effects (a work session was spawned, code was
@@ -32,10 +33,18 @@
 //     the call, or the line immediately above) explaining why this specific
 //     site's failure is safe to leave log-only (e.g. it is itself a
 //     best-effort compensating action inside an already-reported error path).
+//
+// Gated* entry points are checked only when the request's Caller is an
+// operator-class registry constant (OperatorCallers) or is not a constant: the
+// gate itself reports an agent or system denial (Story 1.5.3's gate test is the
+// guarantee), so only an operator's denial depends on this caller returning
+// the error to a human. TestSilentTransition_OperatorCallerSetMatchesRegistry
+// pins OperatorCallers to session/transition_callers.go.
 package silenttransition
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"strings"
@@ -50,7 +59,7 @@ import (
 // Analyzer is the exported analysis.Analyzer for the silenttransition check.
 var Analyzer = &analysis.Analyzer{
 	Name:     "silenttransition",
-	Doc:      "detects session.Storage TransitionBacklogItemStatus/UpdateItemSessionEnded calls whose error is only logged (not surfaced via notify/publish, propagated via return, or explicitly justified with //nolint:silenttransition)",
+	Doc:      "detects session.Storage Raw* status writers, UpdateItemSessionEnded and operator-class Gated* calls whose error is only logged (not surfaced via notify/publish, propagated via return, or explicitly justified with //nolint:silenttransition)",
 	Run:      run,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
@@ -59,9 +68,40 @@ var Analyzer = &analysis.Analyzer{
 // analyzer watches — writes whose sole purpose is to keep the item's status
 // (or the session-bookkeeping a reconciliation sweep depends on) in sync with
 // side effects that have already happened.
+//
+// The pre-1.5.4 unprefixed names are gone: no Storage method carries them, and
+// the inventory test (Story 1.5.9a) fails on any call to one.
 var targetMethods = map[string]bool{
-	"TransitionBacklogItemStatus": true,
-	"UpdateItemSessionEnded":      true,
+	"UpdateItemSessionEnded":           true,
+	"RawTransitionBacklogItemStatus":   true,
+	"RawArchiveBacklogItem":            true,
+	"RawUnarchiveBacklogItem":          true,
+	"RawSetBacklogItemPRAndTransition": true,
+}
+
+// gatedMethods maps each Gated* entry point to the index of its
+// TransitionRequest argument. A call is watched only when that request's Caller
+// is in OperatorCallers or is not a constant.
+var gatedMethods = map[string]int{
+	"GatedTransition":         1,
+	"GatedArchive":            1,
+	"GatedUnarchive":          1,
+	"GatedSetPRAndTransition": 1,
+}
+
+// OperatorCallers are the values of the operator-class entries in
+// session/transition_callers.go (the specOp rows), the callers whose denial the
+// gate does not report and so must reach a human through the caller's return.
+var OperatorCallers = map[string]bool{
+	"operator_transition_rpc":        true,
+	"operator_override_verdict":      true,
+	"operator_submit_manual_review":  true,
+	"operator_archive_rpc":           true,
+	"operator_unarchive_rpc":         true,
+	"operator_update_pr_association": true,
+	"operator_trigger_triage":        true,
+	"operator_force_reset":           true,
+	"operator_notification_action":   true,
 }
 
 // targetPackagePath is the package these methods must resolve to — guards
@@ -109,13 +149,24 @@ func checkStmtList(pass *analysis.Pass, stmts []ast.Stmt) {
 		switch s := stmt.(type) {
 		case *ast.IfStmt:
 			if assign, ok := s.Init.(*ast.AssignStmt); ok {
-				if callPos, names, ok := targetCallInAssign(pass, assign); ok && isErrNilCheck(s.Cond, names) {
-					checkErrBody(pass, callPos, s.Body)
+				if callPos, method, names, ok := targetCallInAssign(pass, assign); ok && isErrNilCheck(s.Cond, names) {
+					checkErrBody(pass, callPos, method, s.Body)
 				}
 			}
+		case *ast.ExprStmt:
+			if call, ok := s.X.(*ast.CallExpr); ok && isTargetCall(pass, call) {
+				reportDiscarded(pass, call.Pos(), call.Fun.(*ast.SelectorExpr).Sel.Name)
+			}
 		case *ast.AssignStmt:
-			callPos, names, ok := targetCallInAssign(pass, s)
-			if !ok || i+1 >= len(stmts) {
+			callPos, method, names, ok := targetCallInAssign(pass, s)
+			if !ok {
+				continue
+			}
+			if last, isIdent := s.Lhs[len(s.Lhs)-1].(*ast.Ident); isIdent && last.Name == "_" {
+				reportDiscarded(pass, callPos, method)
+				continue
+			}
+			if i+1 >= len(stmts) {
 				continue
 			}
 			nextIf, ok := stmts[i+1].(*ast.IfStmt)
@@ -123,26 +174,27 @@ func checkStmtList(pass *analysis.Pass, stmts []ast.Stmt) {
 				continue
 			}
 			if isErrNilCheck(nextIf.Cond, names) {
-				checkErrBody(pass, callPos, nextIf.Body)
+				checkErrBody(pass, callPos, method, nextIf.Body)
 			}
 		}
 	}
 }
 
-// targetCallInAssign reports whether assign's right-hand side is a call to
-// one of targetMethods, returning the call's position and the set of
-// non-blank identifier names assign binds (candidates for the error variable
-// checked by the following/enclosing if).
-func targetCallInAssign(pass *analysis.Pass, assign *ast.AssignStmt) (token.Pos, map[string]bool, bool) {
+// targetCallInAssign reports whether assign's right-hand side is a watched
+// call (a targetMethods name, or an in-scope Gated* call), returning the call's
+// position, its method name and the set of non-blank identifier names assign
+// binds (candidates for the error variable checked by the following/enclosing
+// if).
+func targetCallInAssign(pass *analysis.Pass, assign *ast.AssignStmt) (token.Pos, string, map[string]bool, bool) {
 	if assign.Tok != token.DEFINE && assign.Tok != token.ASSIGN {
-		return token.NoPos, nil, false
+		return token.NoPos, "", nil, false
 	}
 	if len(assign.Rhs) != 1 {
-		return token.NoPos, nil, false
+		return token.NoPos, "", nil, false
 	}
 	call, ok := assign.Rhs[0].(*ast.CallExpr)
 	if !ok || !isTargetCall(pass, call) {
-		return token.NoPos, nil, false
+		return token.NoPos, "", nil, false
 	}
 	names := make(map[string]bool, len(assign.Lhs))
 	for _, lhs := range assign.Lhs {
@@ -150,14 +202,20 @@ func targetCallInAssign(pass *analysis.Pass, assign *ast.AssignStmt) (token.Pos,
 			names[ident.Name] = true
 		}
 	}
-	return call.Pos(), names, true
+	return call.Pos(), call.Fun.(*ast.SelectorExpr).Sel.Name, names, true
 }
 
-// isTargetCall reports whether call resolves (via type info) to a method
-// named in targetMethods on a type declared in targetPackagePath.
+// isTargetCall reports whether call resolves (via type info) to a method on a
+// type declared in targetPackagePath that is either named in targetMethods or
+// is a Gated* entry point whose caller must handle the error.
 func isTargetCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || !targetMethods[sel.Sel.Name] {
+	if !ok {
+		return false
+	}
+	name := sel.Sel.Name
+	argIdx, gated := gatedMethods[name]
+	if !targetMethods[name] && !gated {
 		return false
 	}
 	obj, ok := pass.TypesInfo.Uses[sel.Sel]
@@ -165,10 +223,42 @@ func isTargetCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 		return false
 	}
 	fn, ok := obj.(*types.Func)
-	if !ok || fn.Pkg() == nil {
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != targetPackagePath {
 		return false
 	}
-	return fn.Pkg().Path() == targetPackagePath
+	return !gated || callerMustHandleDenial(pass, call, argIdx)
+}
+
+// callerMustHandleDenial reports whether the TransitionRequest at args[argIdx]
+// names an operator-class Caller, or one that cannot be resolved to a constant
+// (treated as in scope, so a variable cannot hide an operator caller).
+func callerMustHandleDenial(pass *analysis.Pass, call *ast.CallExpr, argIdx int) bool {
+	if argIdx >= len(call.Args) {
+		return true
+	}
+	arg := call.Args[argIdx]
+	if unary, ok := arg.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		arg = unary.X
+	}
+	lit, ok := arg.(*ast.CompositeLit)
+	if !ok {
+		return true
+	}
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); !ok || key.Name != "Caller" {
+			continue
+		}
+		tv, ok := pass.TypesInfo.Types[kv.Value]
+		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+			return true
+		}
+		return OperatorCallers[constant.StringVal(tv.Value)]
+	}
+	return true
 }
 
 // isErrNilCheck reports whether cond is exactly `<name> != nil` for some name
@@ -190,10 +280,20 @@ func isErrNilCheck(cond ast.Expr, names map[string]bool) bool {
 	}
 }
 
+// reportDiscarded flags a watched call whose error is never looked at: a bare
+// expression statement or a blank assignment of the error result.
+func reportDiscarded(pass *analysis.Pass, callPos token.Pos, method string) {
+	if nolintcomment.Contains(pass, callPos, "silenttransition") {
+		return
+	}
+	pass.Reportf(callPos,
+		"error from %s is discarded — the write's failure is silently swallowed after side effects already happened; check it and route it through a notify/publish call or return it, or add a //nolint:silenttransition justification", method)
+}
+
 // checkErrBody inspects an if-err body and reports a diagnostic at callPos
 // unless the body surfaces the failure (notify/publish call or a return
 // statement) or callPos carries a //nolint:silenttransition justification.
-func checkErrBody(pass *analysis.Pass, callPos token.Pos, body *ast.BlockStmt) {
+func checkErrBody(pass *analysis.Pass, callPos token.Pos, method string, body *ast.BlockStmt) {
 	if nolintcomment.Contains(pass, callPos, "silenttransition") {
 		return
 	}
@@ -222,5 +322,5 @@ func checkErrBody(pass *analysis.Pass, callPos token.Pos, body *ast.BlockStmt) {
 	}
 
 	pass.Reportf(callPos,
-		"error from TransitionBacklogItemStatus/UpdateItemSessionEnded is only logged here — the write's failure is silently swallowed after side effects already happened; route it through a notify/publish call, return it to the caller, or add a //nolint:silenttransition justification")
+		"error from %s is only logged here — the write's failure is silently swallowed after side effects already happened; route it through a notify/publish call, return it to the caller, or add a //nolint:silenttransition justification", method)
 }

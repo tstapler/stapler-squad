@@ -40,7 +40,7 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 	})
 	require.NoError(t, err)
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("design-review"), nil, TriggeredByUser)
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("design-review"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	// The custom stage is later deleted — e.g. an operator removing a
@@ -156,7 +156,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	})
 	require.NoError(t, err)
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
@@ -196,14 +196,14 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	require.NoError(t, err)
 
 	// First entry into review-a: captures the v1 graph (review-a -> review-b-v1).
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	// Force a measurable CreatedAt delta between the two matching events.
 	waitForClockDelta(t, 10*time.Millisecond)
 
 	// Leave review-a, then change its outgoing graph before re-entering.
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	_, err = client.StageTransition.UpdateOne(edgeV1).SetEnabled(false).Save(ctx)
@@ -216,7 +216,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	waitForClockDelta(t, 10*time.Millisecond)
 
 	// Second entry into review-a: must capture the v2 graph (review-a -> review-b-v2).
-	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)

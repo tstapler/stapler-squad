@@ -101,6 +101,27 @@ help: ## Show this help message
 git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
 	@scripts/git-soak-status.sh
 
+.PHONY: workflow-engine-soak-status
+workflow-engine-soak-status: ## Print the workflow engine shadow-soak verdict per caller class (running service; ARGS=--config-diff for the live-config diff, ARGS="--class agent" for one class; exit = worst class: 2 unreachable, 1 not ready)
+	@case "$(ARGS)" in \
+		*--class*) exec scripts/workflow-engine-soak-status.sh $(ARGS) ;; \
+	esac; \
+	rc=0; \
+	for c in operator agent system; do \
+		scripts/workflow-engine-soak-status.sh --class $$c $(ARGS) || { r=$$?; [ "$$r" -gt "$$rc" ] && rc=$$r; }; \
+	done; \
+	exit $$rc
+
+.PHONY: workflow-engine-replay
+workflow-engine-replay: ## Replay the caller registry against a COPY of the database: make workflow-engine-replay DB=<copy> (made with sqlite3 <live> ".backup <copy>"; a path inside ~/.stapler-squad is refused; exit 1 = a fixed agent/system edge is denied with no gate)
+	@test -n "$(DB)" || { echo "usage: make workflow-engine-replay DB=<path to a COPY of the database>" >&2; exit 2; }
+	@WORKFLOW_ENGINE_REPLAY_DB="$(DB)" go test ./session -run '^TestWorkflowEngineReplayCommand$$' -count=1 -v
+
+.PHONY: verify-manual-instance
+verify-manual-instance: ## Guarded manual instance for slot N (make verify-manual-instance N=1 [CHECK=1 for a dry run that starts nothing])
+	@test -n "$(N)" || (echo "usage: make verify-manual-instance N=<1-5> [CHECK=1]" && exit 2)
+	@scripts/verify-manual-instance.sh $(if $(CHECK),--check) $(N)
+
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
 	@base=$$(python3 -c "import zlib; print(61000 + zlib.crc32(b'stapler-squad') % 4525)" 2>/dev/null || echo 62871); \
@@ -380,7 +401,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.4.1
+TYMUX_VERSION ?= v1.6.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 

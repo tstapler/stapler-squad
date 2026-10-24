@@ -45,6 +45,23 @@ var guardedProcedures = map[string]middleware.GuardProfile{
 	replyProcedurePath:      middleware.ProfileRebinding,
 
 	writeFileProcedurePath: middleware.ProfileRebinding,
+
+	// Config writes that change engine or gate behavior on the unauthenticated
+	// local listener (Task 2.1.1e). Reads (Get*/List*) stay unguarded.
+	"/api" + sessionv1connect.QuotaServiceUpdateQuotaConfigProcedure:       middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteStageProcedure:           middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteStageTransitionProcedure: middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreateTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdateTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeleteTransitionGateProcedure:  middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceCreatePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceUpdatePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceDeletePipelineModeProcedure:    middleware.ProfileRebinding,
+	"/api" + sessionv1connect.BacklogServiceRecordGateApprovalProcedure:    middleware.ProfileRebinding,
 }
 
 // writeFileBodyLimit caps a WriteFile body: 1 MiB of content grows to about 1.34 MiB as

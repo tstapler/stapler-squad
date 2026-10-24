@@ -11,12 +11,23 @@ export type FilterStatus =
   | "changes-requested"
   | "with-session"
   | "draft"
-  | "needs-attention";
+  | "needs-attention"
+  | "ready-to-merge";
 
 export type SortBy = PRSortBy;
 
 export const DEFAULT_FILTER: FilterStatus = "all";
 export const DEFAULT_SORT: SortBy = "attention-first";
+
+/** Merge conflict must be explicitly false: undefined means GitHub's mergeable state is still UNKNOWN. */
+export function isReadyToMerge(p: UserPR): boolean {
+  return (
+    !p.isDraft &&
+    p.checkConclusion === "success" &&
+    p.hasMergeConflict === false &&
+    p.changesReqCount === 0
+  );
+}
 
 /** Filters and searches only; ordering is `orderPRs`' job so the list can freeze it. */
 export function applyFilter(prs: UserPR[], filter: FilterStatus, search: string): UserPR[] {
@@ -50,6 +61,9 @@ export function applyFilter(prs: UserPR[], filter: FilterStatus, search: string)
       break;
     case "needs-attention":
       result = result.filter((p) => prAttention(p).needsAttention);
+      break;
+    case "ready-to-merge":
+      result = result.filter(isReadyToMerge);
       break;
   }
   return result;

@@ -1449,7 +1449,7 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	return fields
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp and status on a backlog
+// rawArchiveBacklogItem sets the archived_at timestamp and status on a backlog
 // item. precondition may be nil (no CAS check — used by the pre-existing
 // UI-driven callers, which archive by explicit operator action and never
 // needed one). triggeredBy/note flow into the same BacklogStatusEvent audit
@@ -1457,7 +1457,7 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 // agent auto-archiving a verified duplicate) is attributed correctly instead
 // of always showing as a manual action — see reportDuplicate's unclaimed-item
 // path in server/mcp/tools_backlog.go.
-func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -1535,14 +1535,17 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string, preco
 	return &result, nil
 }
 
-// UnarchiveBacklogItem clears archived_at and restores the item to the
+// rawUnarchiveBacklogItem clears archived_at and restores the item to the
 // "idea" status — the sole valid archived-> reopen transition. It does not
 // attempt to restore whatever status the item held before archiving (no
 // history-based restoration): the item simply re-enters the idea column
 // needing a fresh session, matching UnarchiveSession's identical
 // unconditional-flip precedent (server/services/session_service.go) rather
 // than erroring or no-op'ing on an already-non-archived item.
-func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+//
+// expectedStatus, when non-empty, makes the flip a compare-and-swap on the
+// current status (ErrPreconditionFailed on a lost race); "" keeps it unconditional.
+func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expectedStatus string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -1556,17 +1559,32 @@ func (r *EntRepository) UnarchiveBacklogItem(ctx context.Context, id string) (*B
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	if expectedStatus != "" {
+		update = update.Where(backlogitem.StatusEQ(expectedStatus))
+	}
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	affected, err := update.
 		ClearArchivedAt().
 		SetStatus(string(BacklogStatusIdea)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to unarchive backlog item %s: %w", id, err)
+	}
+	if affected == 0 {
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, expectedStatus, latest.Status)
+	}
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after unarchive: %w", id, err)
 	}
 
 	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, r.client.BacklogStage, r.client.StageTransition, BacklogStatusIdea)
@@ -1705,7 +1723,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	return nil
 }
 
-// TransitionBacklogItemStatus changes the status of a backlog item with
+// rawTransitionBacklogItemStatus changes the status of a backlog item with
 // optional precondition.
 //
 // The precondition is enforced as a genuine SQL-level compare-and-swap: it is
@@ -1727,7 +1745,29 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 // 2026-07-20 repro, item 0fd4a940, PR #176), and the backlog work-item queue
 // feature's concurrent-dequeue-claim test found the same race could
 // double-claim a single queued item between two dequeue sweeps (PR #199).
-func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+func (r *EntRepository) rawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	return r.rawTransitionBacklogItemStatusWithNote(ctx, id, toStatus, precondition, triggeredBy, "")
+}
+
+// applyStatusPreconditionWhere folds a precondition's expected status and
+// updated_at into the UPDATE's WHERE clause.
+func applyStatusPreconditionWhere(update *ent.BacklogItemUpdate, precondition *BacklogItemPrecondition) *ent.BacklogItemUpdate {
+	if precondition == nil {
+		return update
+	}
+	if precondition.ExpectedStatus != "" {
+		update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
+	}
+	if precondition.ExpectedUpdatedAt != nil {
+		update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+	}
+	return update
+}
+
+// rawTransitionBacklogItemStatusWithNote is rawTransitionBacklogItemStatus that
+// also appends appendNote (when non-empty) to the item's Notes in the same
+// UPDATE, so the status, the note and the status event commit together.
+func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy, appendNote string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -1742,13 +1782,12 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	}
 
 	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
-	if precondition != nil {
-		if precondition.ExpectedStatus != "" {
-			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
-		}
-		if precondition.ExpectedUpdatedAt != nil {
-			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
-		}
+	update = applyStatusPreconditionWhere(update, precondition)
+	// The note is appended to the Notes read above; pin updated_at so a
+	// concurrent note edit makes the write lose (callers retry on
+	// ErrPreconditionFailed) instead of being overwritten.
+	if appendNote != "" && (precondition == nil || precondition.ExpectedUpdatedAt == nil) {
+		update = update.Where(backlogitem.UpdatedAtEQ(current.UpdatedAt))
 	}
 
 	now := time.Now()
@@ -1766,6 +1805,13 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	// on affected==0 below.
 	if toStatus == BacklogStatusDone && current.NextWorkflowID != nil {
 		setter = setter.SetChainedAt(now)
+	}
+	if appendNote != "" {
+		notes := current.Notes
+		if notes != "" {
+			notes += "\n"
+		}
+		setter = setter.SetNotes(notes + appendNote)
 	}
 	affected, err := setter.Save(ctx)
 	if err != nil {
@@ -1923,7 +1969,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 	return nil
 }
 
-// TransitionBacklogItemStatusWithPRFields atomically transitions a backlog
+// rawTransitionBacklogItemStatusWithPRFields atomically transitions a backlog
 // item's status while also persisting its PrURL/PrNumber, as a single
 // UPDATE ... WHERE statement — the same CAS precondition guards both writes
 // together, so a reader can never observe the status having changed without
@@ -1951,7 +1997,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
 // (see the `interface-pollution-checklist` skill).
-func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)

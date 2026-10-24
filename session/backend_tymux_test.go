@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -259,13 +260,15 @@ func (i *Instance) initializeBaselineForRestartTest() error {
 // both to test newTymuxBackendFromOpts's wiring and Restart's in-place
 // tymux-respawn SetCommand branch.
 type fakeTymuxManagerForSetCommand struct {
-	tymux.TymuxManager // deliberately nil; unused methods must not be called
-	gotCommand         string
+	tymux.TymuxManager        // deliberately nil; unused methods must not be called
+	gotCommand         string // gotLaunch rendered as shell text
+	gotLaunch          launchcmd.LaunchCommand
 	startErr           error
 }
 
-func (f *fakeTymuxManagerForSetCommand) SetCommand(command string) {
-	f.gotCommand = command
+func (f *fakeTymuxManagerForSetCommand) SetCommand(command launchcmd.LaunchCommand) {
+	f.gotLaunch = command
+	f.gotCommand = shellString(command)
 }
 
 func (f *fakeTymuxManagerForSetCommand) Start(string) error {
@@ -289,6 +292,11 @@ func TestNewTymuxBackendFromOpts_AppliesProgramViaSetCommand(t *testing.T) {
 	newTymuxBackendFromOpts(ProcessManagerOptions{Program: "claude --resume abc"})
 
 	assert.Equal(t, "claude --resume abc", fake.gotCommand)
+	exec, ok := fake.gotLaunch.(launchcmd.ExecCommand)
+	require.True(t, ok, "a plain program must reach the backend as argv, got %T", fake.gotLaunch)
+	args, err := exec.Args(nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--resume", "abc"}, args)
 }
 
 // TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCommand

@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -29,7 +30,16 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/health", handleActuatorHealth)
 	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
 	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
+	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
+	s.mux.HandleFunc("/actuator/nudge-outcomes", handleActuatorNudgeOutcomes)
 	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
+}
+
+// handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
+// and the time of the first record (Story 4.1.2).
+func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(session.DefaultNudgeOutcomes().Snapshot())
 }
 
 // handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
@@ -151,6 +161,7 @@ func handleActuatorMetrics(w http.ResponseWriter, _ *http.Request) {
 			"total_failures":     fp.TotalFailures,
 			"total_zombies":      fp.TotalZombies,
 		},
+		"workflow_engine_bypass_total": session.EngineBypassSnapshot(),
 		"runtime": map[string]any{
 			"goroutines":    runtime.NumGoroutine(),
 			"heap_inuse_mb": float64(m.HeapInuse) / 1024 / 1024,

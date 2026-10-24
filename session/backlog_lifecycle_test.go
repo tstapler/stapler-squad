@@ -1588,7 +1588,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -1605,7 +1605,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	// Put the item back at pr_pending with the same closed PR reference, as if
 	// a fresh push landed the same closed PR number again — the realistic
 	// repeat-tick scenario this gate protects against.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.ReconcilePRPending(ctx, er)
@@ -1958,7 +1958,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -1999,7 +1999,7 @@ func TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging(t 
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -3150,7 +3150,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActive
 	// Simulate the race: something else moves the item off "review" while
 	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
 	// are still in flight, before its resolveToPRPending call runs.
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -3190,7 +3190,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview
@@ -4980,9 +4980,9 @@ func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged-cleanup", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -5024,7 +5024,7 @@ func TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails(t *testi
 	// Archive the item out from under the in-flight bounce reconciliation so
 	// the review->done precondition inside transitionBouncingItemToDone fails
 	// (item.Status captured before this call is stale).
-	_, err = storage.ArchiveBacklogItem(ctx, item.ID, nil, TriggeredBySystem, "archived mid-reconcile")
+	_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, TriggeredBySystem, "archived mid-reconcile")
 	require.NoError(t, err)
 
 	transErr := listener.transitionBouncingItemToDone(ctx, *item, "test summary")

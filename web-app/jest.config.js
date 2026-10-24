@@ -23,6 +23,10 @@ module.exports = {
       // with no logic bug — each passes in well under 1s run in isolation.
       testTimeout: 20000,
       moduleNameMapper: {
+        // Window style modules get string class names (the proxy below trips React's
+        // className check); these must stay ahead of the generic .css mappers.
+        "styles/window/windowTabStrip\\.css(\\.ts)?$": "<rootDir>/src/__mocks__/windowTabStripStylesMock.js",
+        "styles/window/windowOverview\\.css(\\.ts)?$": "<rootDir>/src/__mocks__/windowOverviewStylesMock.js",
         // vanilla-extract .css.ts files — return callable proxy
         "\\.css\\.ts$": "<rootDir>/src/__mocks__/styleMock.js",
         "\\.module\\.css$": "identity-obj-proxy",

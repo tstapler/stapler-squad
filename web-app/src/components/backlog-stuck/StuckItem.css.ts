@@ -8,14 +8,28 @@ export const card = style({
   padding: `${vars.space["3"]} ${vars.space["4"]}`,
   cursor: "pointer",
   transition: "background 0.15s, border-color 0.15s",
-  outline: "none",
   ":hover": {
     background: vars.color.hoverBackground,
     borderColor: vars.color.borderHover,
   },
+});
+
+export const toggle = style({
+  flexGrow: 1,
+  minWidth: "80px",
+  overflow: "hidden",
+  padding: 0,
+  margin: 0,
+  border: "none",
+  background: "none",
+  font: "inherit",
+  color: "inherit",
+  textAlign: "left",
+  cursor: "pointer",
+  borderRadius: vars.radii.sm,
   ":focus-visible": {
-    borderColor: vars.color.inputFocusBorder,
-    boxShadow: `0 0 0 2px ${vars.color.inputFocusBorder}`,
+    outline: `2px solid ${vars.color.inputFocusBorder}`,
+    outlineOffset: "2px",
   },
 });
 
@@ -37,20 +51,19 @@ export const header = style({
 });
 
 export const title = style({
+  display: "block",
   fontSize: vars.fontSize.sm,
   color: vars.color.textPrimary,
   fontWeight: 500,
-  flexGrow: 1,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
-  minWidth: "80px",
 });
 
 export const duration = style({
   fontFamily: vars.font.mono,
   fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   flexShrink: 0,
 });
 
@@ -60,7 +73,7 @@ export const metaRow = style({
   gap: vars.space["2"],
   marginTop: vars.space["1"],
   fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   fontFamily: vars.font.mono,
   flexWrap: "wrap",
 });
@@ -95,7 +108,7 @@ export const snoozeBtn = style({
   borderRadius: vars.radii.sm,
   padding: `2px ${vars.space["2"]}`,
   fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   cursor: "pointer",
   lineHeight: 1.5,
   flexShrink: 0,
@@ -144,7 +157,7 @@ export const retryBtn = style({
   borderRadius: vars.radii.sm,
   padding: `2px ${vars.space["2"]}`,
   fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
+  color: vars.color.textSecondary,
   cursor: "pointer",
   lineHeight: 1.5,
   flexShrink: 0,

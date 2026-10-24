@@ -36,11 +36,14 @@ export class EscapeAnalyticsGlobalViewPage {
   }
 
   /**
-   * Excludes Next.js's built-in `#__next-route-announcer__`, which also carries
-   * `role="alert"` for screen-reader route-change announcements.
+   * Excludes Next.js's built-in `#__next-route-announcer__` and the app's permanent
+   * assertive live region (`announcer-assertive`, Announcer.tsx), which both carry
+   * `role="alert"` for screen-reader announcements.
    */
   getErrorBanner(): Locator {
-    return this.page.locator('[role="alert"]:not(#__next-route-announcer__)');
+    return this.page.locator(
+      '[role="alert"]:not(#__next-route-announcer__):not([data-testid="announcer-assertive"])'
+    );
   }
 
   /**

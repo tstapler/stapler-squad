@@ -43,7 +43,7 @@ func NewTymuxBackend(mgr tymux.TymuxManager) *TymuxBackend {
 func (b *TymuxBackend) TymuxManager() tymux.TymuxManager { return b.mgr }
 
 // WireLaunch records the program tymuxd must spawn; without it tymuxd runs a bare $SHELL (BUG-113).
-func (b *TymuxBackend) WireLaunch(spec LaunchSpec) { b.mgr.SetCommand(spec.Program) }
+func (b *TymuxBackend) WireLaunch(spec LaunchSpec) { b.mgr.SetCommand(spec.Command) }
 
 // AppendLaunchEnv is a no-op: tymuxd's CreateSessionRequest carries no environment.
 func (b *TymuxBackend) AppendLaunchEnv(...string) {}
