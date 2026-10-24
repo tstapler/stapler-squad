@@ -1,0 +1,9 @@
+╭─ Commands ─────────────────────────────────────────────────────────────────────╮
+│                                                                                 │
+│  new                    Start a new session                                    │
+│  clear                  Clear the current session                              │
+│  compact                Summarize and compact session history                  │
+│  history                Show session history                                   │
+│  help                   Show help                                              │
+│                                                                                 │
+╰─────────────────────────────────────────────────────────────────────────────────╯

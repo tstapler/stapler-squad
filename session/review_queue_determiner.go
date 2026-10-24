@@ -109,6 +109,36 @@ func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd b
 	return shouldAdd, priority, "", "", true
 }
 
+// verdict accumulates the queue decision while Determine walks its detection paths.
+type verdict struct {
+	reason        AttentionReason
+	priority      Priority
+	shouldAdd     bool
+	ctx           string
+	cleanWorktree bool
+}
+
+func (v *verdict) apply(dec statusDecision) {
+	v.reason, v.priority, v.ctx, v.shouldAdd = dec.Reason, dec.Priority, dec.Context, true
+}
+
+func (v *verdict) markIdle() {
+	v.reason, v.priority, v.ctx, v.shouldAdd = ReasonIdle, PriorityLow, "Session idle - ready for next task", true
+}
+
+// checkUncommitted flags a dirty worktree when nothing more urgent is queued
+// (informational - user may want to review and commit).
+func (d *DefaultStatusDeterminer) checkUncommitted(inst *Instance, v *verdict) {
+	if (v.shouldAdd && v.priority != PriorityLow) || !inst.HasGitWorktree() {
+		return
+	}
+	var newReason AttentionReason
+	v.shouldAdd, v.priority, newReason, v.ctx, v.cleanWorktree = d.applyWorktreeCheck(inst, v.shouldAdd, v.priority)
+	if newReason != "" {
+		v.reason = newReason
+	}
+}
+
 // Determine evaluates a session's state and returns a DetectionResult.
 // It is pure: no queue mutations, no storage calls, no side effects.
 func (d *DefaultStatusDeterminer) Determine(
@@ -119,217 +149,26 @@ func (d *DefaultStatusDeterminer) Determine(
 ) DetectionResult {
 	// claudeStatus captures the raw DetectedStatus from whichever detection path ran.
 	// For controller sessions this is statusInfo.ClaudeStatus; for no-controller sessions
-	// it is set inside the else block when content is available.
+	// it is set when content is available.
 	claudeStatus := statusInfo.ClaudeStatus
-
-	var reason AttentionReason
-	var priority Priority
-	var shouldAdd bool
-	var ctx string
-	cleanWorktree := false
+	var v verdict
 
 	if statusInfo.IsControllerActive {
-		// Use statusInfo.IdleState.State — already populated by GetStatus() via controller.GetIdleStateInfo().
-		// This avoids a redundant GetController()+GetIdleState() call.
-		idleState := statusInfo.IdleState.State
-
-		// IMPORTANT: Check Claude status FIRST before idle state handling.
-		// Status-based conditions (approval, input required, error) take priority over
-		// idle state because they represent explicit user prompts that need attention,
-		// even if terminal activity makes the session appear "active".
-
-		// Map controller-reported Claude status to queue action.
-		// PendingApprovals is checked alongside StatusNeedsApproval because the controller
-		// may set the count before it advances the status string.
-		switch {
-		case statusInfo.ClaudeStatus == detection.StatusNeedsApproval || statusInfo.PendingApprovals > 0:
-			reason = ReasonApprovalPending
-			priority = PriorityHigh
-			shouldAdd = true
-			ctx = effectiveCtx(statusInfo.StatusContext, "Waiting for approval to proceed")
-		case statusInfo.ClaudeStatus == detection.StatusInputRequired:
-			reason = ReasonInputRequired
-			priority = PriorityMedium
-			shouldAdd = true
-			ctx = effectiveCtx(statusInfo.StatusContext, "Waiting for explicit user input")
-		case statusInfo.ClaudeStatus == detection.StatusError:
-			reason = ReasonErrorState
-			priority = PriorityUrgent
-			shouldAdd = true
-			ctx = effectiveCtx(statusInfo.StatusContext, "Error state detected")
-		case statusInfo.ClaudeStatus == detection.StatusTestsFailing:
-			reason = ReasonTestsFailing
-			priority = PriorityHigh
-			shouldAdd = true
-			ctx = effectiveCtx(statusInfo.StatusContext, "Tests are failing")
-			log.Debug("tests failing", "session", inst.Title, "ctx", ctx)
-		case statusInfo.ClaudeStatus == detection.StatusSuccess:
-			reason = ReasonTaskComplete
-			priority = PriorityLow
-			shouldAdd = true
-			ctx = effectiveCtx(statusInfo.StatusContext, "Task completed successfully")
-			log.Debug("task complete", "session", inst.Title, "ctx", ctx)
-		case statusInfo.ClaudeStatus == detection.StatusWaitingForAgent:
-			// Mirrors the no-controller branch's grace-period logic (below): trust
-			// StatusWaitingForAgent as evidence of real background activity only while
-			// recently updated, so a stuck/orphaned background task doesn't exclude an
-			// actually-idle session from the review queue indefinitely.
-			if time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
-				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
-			}
-			// Stale background task — fall through to idle-state handling below.
-		}
-
-		// Now handle idle state - but only if no status-based condition was detected above.
-		// This ensures user prompts aren't hidden just because terminal is "active".
-		if !shouldAdd {
-			switch idleState {
-			case detection.IdleStateActive:
-				// Actively working, remove from queue (but only if no prompt detected above)
-				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
-
-			case detection.IdleStateWaiting:
-				// Normal idle state (e.g., INSERT mode) - don't add by default
-				shouldAdd = false
-
-			case detection.IdleStateTimeout:
-				// Definite timeout - been idle too long, unless the user already
-				// acknowledged this session and nothing new has happened since.
-				if !d.suppressedByAck(inst) {
-					reason = ReasonIdle
-					priority = PriorityLow
-					shouldAdd = true
-					ctx = "Session idle - ready for next task"
-				}
-			}
-		}
-
-		// Check for uncommitted changes (informational - user may want to review and commit)
-		if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
-			var newReason AttentionReason
-			shouldAdd, priority, newReason, ctx, cleanWorktree = d.applyWorktreeCheck(inst, shouldAdd, priority)
-			if newReason != "" {
-				reason = newReason
-			}
+		if d.determineFromController(inst, statusInfo, &v) {
+			return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 		}
 	} else {
-		// No active controller (either none wired or not yet started) — detect status
-		// from terminal content.
-		if content != "" {
-			// Use line-by-line detection (bottom-up scan) so recent terminal state wins
-			// over stale scrollback content. DetectWithContext (full-block) fires error
-			// patterns on old "Error: Exit code 1" output before reaching a current
-			// approval dialog at the bottom of the pane.
-			lines := strings.Split(content, "\n")
-			detectedStatus, statusContext := detector.DetectWithContextFromLines(lines)
-			claudeStatus = detectedStatus
-
-			// Map terminal-detected status to queue action.
-			switch detectedStatus {
-			case detection.StatusNeedsApproval:
-				reason = ReasonApprovalPending
-				priority = PriorityHigh
-				shouldAdd = true
-				ctx = effectiveCtx(statusContext, "Waiting for approval to proceed")
-				log.Debug("approval needed (no controller)", "session", inst.Title)
-			case detection.StatusInputRequired:
-				reason = ReasonInputRequired
-				priority = PriorityMedium
-				shouldAdd = true
-				ctx = effectiveCtx(statusContext, "Waiting for explicit user input")
-				log.Debug("input required (no controller)", "session", inst.Title)
-			case detection.StatusError:
-				reason = ReasonErrorState
-				priority = PriorityUrgent
-				shouldAdd = true
-				ctx = effectiveCtx(statusContext, "Error state detected")
-				log.Debug("error detected (no controller)", "session", inst.Title)
-			case detection.StatusTestsFailing:
-				reason = ReasonTestsFailing
-				priority = PriorityHigh
-				shouldAdd = true
-				ctx = effectiveCtx(statusContext, "Tests are failing")
-				log.Debug("tests failing (no controller)", "session", inst.Title)
-			case detection.StatusSuccess:
-				reason = ReasonTaskComplete
-				priority = PriorityLow
-				shouldAdd = true
-				ctx = effectiveCtx(statusContext, "Task completed successfully")
-				log.Debug("task complete (no controller)", "session", inst.Title)
-			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusCompacting:
-				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
-			case detection.StatusWaitingForAgent:
-				// Unlike Executing/Processing/Compacting, WaitingForAgent is now reachable
-				// via the always-present auto-mode footer override (detection/detector.go's
-				// applyFooterIdleOverride) rather than only a genuinely-active spinner line —
-				// so it can no longer be trusted as unconditional evidence of real activity.
-				// A stuck/orphaned background shell that never decrements would otherwise
-				// exclude an actually-idle session from the review queue indefinitely. Only
-				// suppress it while recently updated; once stale, fall through to the normal
-				// time-based re-add check below.
-				if time.Since(inst.UpdatedAt) < waitingForAgentStuckThreshold {
-					return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
-				}
-			}
-		}
-
-		// If no status-based condition was detected, fall back to time-based checks
-		if !shouldAdd {
-			// Check if session has been idle for a long time based on UpdatedAt,
-			// unless the user already acknowledged this session and nothing new
-			// has happened since.
-			const basicIdleThreshold = 5 * time.Second
-			if time.Since(inst.UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
-				reason = ReasonIdle
-				priority = PriorityLow
-				shouldAdd = true
-				ctx = "Session idle - ready for next task"
-			}
-		}
-
-		// Check for uncommitted changes (informational - user may want to review and commit)
-		if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
-			var newReason AttentionReason
-			shouldAdd, priority, newReason, ctx, cleanWorktree = d.applyWorktreeCheck(inst, shouldAdd, priority)
-			if newReason != "" {
-				reason = newReason
-			}
+		var remove bool
+		claudeStatus, remove = d.determineFromContent(inst, content, claudeStatus, detector, &v)
+		if remove {
+			return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 		}
 	}
 
-	// Check for terminal staleness (no meaningful output for configured threshold)
-	// IMPORTANT: Respect acknowledgment - don't flag as stale if user already acknowledged
-	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
-	alreadyAcknowledged := d.suppressedByAck(inst)
-
-	if timeSinceOutput > d.config.StalenessThreshold {
-		if alreadyAcknowledged {
-			if log.IsDebugEnabled() {
-				log.DebugLog().Printf("[ReviewQueue] Session '%s': STALE but already acknowledged - skipping staleness flag",
-					inst.Title)
-			}
-		} else {
-			// Only override if we don't already have a higher-priority reason.
-			// Only set stale if not already flagged with Medium priority or higher.
-			if !shouldAdd || priority.IsLowerThan(PriorityMedium) {
-				reason = ReasonStale
-				priority = PriorityLow
-				shouldAdd = true
-				ctx = fmt.Sprintf("No activity for %s - session may be stuck or waiting",
-					detection.FormatDuration(timeSinceOutput))
-				if log.IsDebugEnabled() {
-					log.DebugLog().Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - flagged as stale, %s since last meaningful output",
-						inst.Title, detection.FormatDuration(timeSinceOutput))
-				}
-			} else if log.IsDebugEnabled() {
-				log.DebugLog().Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
-					inst.Title, reason.String())
-			}
-		}
-	}
+	d.applyStaleness(inst, &v)
 
 	action := DetectionActionSkip
-	if shouldAdd {
+	if v.shouldAdd {
 		action = DetectionActionAdd
 	}
 
@@ -342,16 +181,112 @@ func (d *DefaultStatusDeterminer) Determine(
 	// applies uniformly regardless of which caller (ReviewQueuePoller.checkSession,
 	// StartupScanner.Scan) invokes Determine.
 	if inst.Hidden && action == DetectionActionAdd &&
-		(reason == ReasonTaskComplete || reason == ReasonIdle || reason == ReasonStale) {
+		(v.reason == ReasonTaskComplete || v.reason == ReasonIdle || v.reason == ReasonStale) {
 		action = DetectionActionSkip
 	}
 
 	return DetectionResult{
 		Action:        action,
-		Reason:        reason,
-		Priority:      priority,
-		Context:       ctx,
+		Reason:        v.reason,
+		Priority:      v.priority,
+		Context:       v.ctx,
 		ClaudeStatus:  claudeStatus,
-		CleanWorktree: cleanWorktree,
+		CleanWorktree: v.cleanWorktree,
 	}
+}
+
+// determineFromController handles sessions with an active controller. It reports true when
+// the session should be removed from the queue.
+func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, statusInfo InstanceStatusInfo, v *verdict) (remove bool) {
+	// Status-based conditions (approval, input required, error) take priority over idle
+	// state: they are explicit user prompts, even if terminal activity looks "active".
+	// PendingApprovals counts alongside StatusNeedsApproval because the controller may
+	// set the count before it advances the status string.
+	status := statusInfo.ClaudeStatus
+	if statusInfo.PendingApprovals > 0 {
+		status = detection.StatusNeedsApproval
+	}
+	if dec, ok := reasonForStatus(status, statusInfo.StatusContext); ok {
+		v.apply(dec)
+	} else if status == detection.StatusWaitingForAgent &&
+		time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
+		// Mirrors the no-controller grace-period logic: trust WaitingForAgent as real
+		// background activity only while recently updated. A stale one falls through
+		// to idle-state handling.
+		return true
+	}
+
+	// Idle state only matters when no status-based condition was detected above,
+	// so user prompts aren't hidden just because the terminal is "active".
+	if !v.shouldAdd {
+		switch statusInfo.IdleState.State {
+		case detection.IdleStateActive:
+			return true
+		case detection.IdleStateTimeout:
+			// Idle too long, unless the user already acknowledged this session and
+			// nothing new has happened since.
+			if !d.suppressedByAck(inst) {
+				v.markIdle()
+			}
+		}
+	}
+
+	d.checkUncommitted(inst, v)
+	return false
+}
+
+// determineFromContent handles sessions with no active controller by detecting status from
+// terminal content. It returns the detected status and whether to remove the session.
+func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content string, claudeStatus detection.DetectedStatus, detector detection.TerminalDetector, v *verdict) (detection.DetectedStatus, bool) {
+	if content != "" {
+		// Line-by-line detection (bottom-up scan) so recent terminal state wins over stale
+		// scrollback. DetectWithContext (full-block) fires error patterns on old
+		// "Error: Exit code 1" output before reaching a current approval dialog at the bottom.
+		detected, statusContext := detector.DetectWithContextFromLines(strings.Split(content, "\n"))
+		claudeStatus = detected
+
+		if dec, ok := reasonForStatus(detected, statusContext); ok {
+			v.apply(dec)
+			log.Debug("status detected (no controller)", "session", inst.Title, "reason", dec.Reason)
+		} else if isActiveStatus(detected) {
+			return claudeStatus, true
+		} else if detected == detection.StatusWaitingForAgent && time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
+			// Reachable via the always-present auto-mode footer override
+			// (detection/detector.go's applyFooterIdleOverride), so it is not unconditional
+			// evidence of activity: a stuck background shell would otherwise exclude an
+			// idle session forever. Suppress only while recently updated.
+			return claudeStatus, true
+		}
+	}
+
+	// No status-based condition: fall back to time-based idle, unless the user already
+	// acknowledged this session and nothing new has happened since.
+	const basicIdleThreshold = 5 * time.Second
+	if !v.shouldAdd && time.Since(inst.Snapshot().UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
+		v.markIdle()
+	}
+
+	d.checkUncommitted(inst, v)
+	return claudeStatus, false
+}
+
+func isActiveStatus(s detection.DetectedStatus) bool {
+	return s == detection.StatusExecuting || s == detection.StatusProcessing || s == detection.StatusCompacting
+}
+
+// applyStaleness flags sessions with no meaningful output for the configured threshold.
+// An acknowledged session is never flagged, and a Medium-or-higher reason is not overridden.
+func (d *DefaultStatusDeterminer) applyStaleness(inst *Instance, v *verdict) {
+	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
+	if timeSinceOutput <= d.config.StalenessThreshold || d.suppressedByAck(inst) {
+		return
+	}
+	if v.shouldAdd && !v.priority.IsLowerThan(PriorityMedium) {
+		return
+	}
+	v.reason = ReasonStale
+	v.priority = PriorityLow
+	v.shouldAdd = true
+	v.ctx = fmt.Sprintf("No activity for %s - session may be stuck or waiting",
+		detection.FormatDuration(timeSinceOutput))
 }
