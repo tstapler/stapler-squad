@@ -16,6 +16,7 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -45,8 +46,8 @@ type tymuxGRPCSession struct {
 	mu sync.RWMutex
 
 	// command is the program Start() asks tymuxd to spawn, set via SetCommand
-	// before Start(). Empty means tymuxd defaults to $SHELL.
-	command string
+	// before Start(). Nil means tymuxd defaults to $SHELL.
+	command launchcmd.LaunchCommand
 
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
 	// (v1.0, non-split) pane, cached from CreateSession/ReviveSession's
@@ -319,14 +320,12 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	s.mu.RLock()
 	command := s.command
 	s.mu.RUnlock()
-	program, args := splitLaunchCommand(command)
-	resp, err := s.transport.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{
-		Name:    dir,
-		Command: program,
-		Args:    args,
-		Cwd:     dir,
-		Env:     paneColorEnv(),
-	}))
+	ctx := context.Background()
+	req := &v1.CreateSessionRequest{Name: dir, Cwd: dir, Env: paneColorEnv()}
+	if err := s.applyLaunch(ctx, req, command); err != nil {
+		return err
+	}
+	resp, err := s.transport.CreateSession(ctx, connect.NewRequest(req))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
@@ -351,32 +350,10 @@ func paneColorEnv() map[string]string {
 	return env
 }
 
-// shellMetachars are the characters that make a launch command more than a
-// bare program name; tymuxd execs Command as a single program, so these need a shell.
-const shellMetachars = " \t\n'\"\\$&|;<>()*?[]{}~`#!"
-
-// shellPath and shellFlagC are splitLaunchCommand's `/bin/sh -c` fallback,
-// named so session_test.go's expectations single-source against this file
-// instead of duplicating the literals.
-const (
-	shellPath  = "/bin/sh"
-	shellFlagC = "-c"
-)
-
-// splitLaunchCommand maps a shell-style launch command onto CreateSessionRequest's
-// Command/Args. A bare program name passes through; anything with arguments or
-// shell syntax runs as `/bin/sh -c <command>`.
-func splitLaunchCommand(command string) (program string, args []string) {
-	if !strings.ContainsAny(command, shellMetachars) {
-		return command, nil
-	}
-	return shellPath, []string{shellFlagC, command}
-}
-
 // SetCommand records the program Start() will ask tymuxd to spawn. Call
 // it before Start(); not consulted by RestoreWithWorkDir (a revived
 // session already has its process running).
-func (s *tymuxGRPCSession) SetCommand(command string) {
+func (s *tymuxGRPCSession) SetCommand(command launchcmd.LaunchCommand) {
 	s.mu.Lock()
 	s.command = command
 	s.mu.Unlock()

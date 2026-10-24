@@ -39,3 +39,8 @@ v1.4.1 aarch64-apple-darwin ce6cac96e72b2c4e70930fffc5ccc58c9aead859513c9e2e594d
 v1.4.1 x86_64-apple-darwin 16a337694bed086fea02f7f5de9e8afe0c1c197996f045240e5ebfe576672f18
 v1.4.1 x86_64-unknown-linux-musl 27232036162aca81578f0f03e3830eb13980e65d9dcd12dd9ea705c51cb18921
 v1.4.1 aarch64-unknown-linux-musl 60d7316ceb3c195cdf7f216c6d8872c61de9777f315ce91fb6175c9bfd299866
+# v1.6.0: adds CreateSession stderr_path and file-backed arg_specs (tstapler/tymux#63).
+v1.6.0 aarch64-apple-darwin a8e023ea0d262563f1dc002e75c21930f383941e68e4cae2172afde1ac394037
+v1.6.0 x86_64-apple-darwin 4f4e823d1eb9b6e9fd6d4ceae4a8ef6bdddaaf64ee8ad1887abc804bec7a87c0
+v1.6.0 x86_64-unknown-linux-musl 7a3b898b4c03e6b0ee0724372574c5d4f17266eb77815a0062705ad7d988912d
+v1.6.0 aarch64-unknown-linux-musl 316e7d1347c782874efe4fc9c7134985a530b79dfd386af848fdd2a95cc92202
