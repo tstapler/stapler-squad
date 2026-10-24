@@ -132,6 +132,7 @@ type ReviewQueuePoller struct {
 	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
 	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
 	optionsSource    FlagOptionsSource          // Attention flags, read once per poll cycle; nil = all off
+	explain          suppressionExplainer       // Why-suppressed and why-skipped visibility
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -246,6 +247,7 @@ func (rqp *ReviewQueuePoller) RemoveInstance(instanceTitle string) {
 	}
 	rqp.contentProvider.EvictInstance(evictKey)
 	rqp.archivedLivePaneWarned.Delete(evictKey)
+	rqp.explain.forget(evictKey)
 }
 
 // SetApprovalProvider sets the approval metadata provider for enriching review queue items.
@@ -828,7 +830,23 @@ func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	// evaluate, and each surfaces to the user via its own distinct status/banner
 	// rather than a review-queue attention reason.
 	snap := inst.Snapshot()
-	return snap.Hidden || snap.Status.IsSuspended() || snap.ArchivedAt != nil || !inst.Started()
+	reason := skipReasonOf(snap, inst.Started())
+	rqp.explain.noteSkip(snap.Title, reason)
+	return reason != SkipNone
+}
+
+func skipReasonOf(snap *InstanceSnapshot, started bool) SkipReason {
+	switch {
+	case snap.Hidden:
+		return SkipHidden
+	case snap.Status.IsSuspended():
+		return SkipSuspended
+	case snap.ArchivedAt != nil:
+		return SkipArchived
+	case !started:
+		return SkipNotStarted
+	}
+	return SkipNone
 }
 
 // checkSession checks a single session and adds/removes from queue as needed.
@@ -914,7 +932,9 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 	// LastMeaningfulOutput is updated by GetContent() above via UpdateTerminalTimestamps();
 	// the persisted content-signature dedup keeps acknowledged sessions snoozed unless
 	// output genuinely changes. The rules in suppressionPolicy decide what happens next.
-	switch decision := suppressionPolicy(snap, result, statusInfo, rqp.queue, ruleOpts); decision.kind {
+	decision := suppressionPolicy(snap, result, statusInfo, rqp.queue, ruleOpts)
+	rqp.explain.noteDecision(snap.Title, decision)
+	switch decision.kind {
 	case suppressionRemove:
 		rqp.queue.Remove(snap.Title)
 		return

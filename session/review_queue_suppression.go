@@ -1,9 +1,15 @@
 package session
 
 import (
+	"context"
+	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 const (
@@ -142,4 +148,95 @@ func readdLimit(c ruleCtx) (SuppressionDecision, bool) {
 		return SuppressionDecision{}, false
 	}
 	return suppressDecision("readdLimit"), true
+}
+
+// SkipReason says why shouldSkipSession excluded a session from attention detection.
+type SkipReason uint8
+
+const (
+	SkipNone SkipReason = iota
+	SkipHidden
+	SkipSuspended
+	SkipArchived
+	SkipNotStarted
+)
+
+func (r SkipReason) String() string {
+	switch r {
+	case SkipHidden:
+		return "hidden"
+	case SkipSuspended:
+		return "suspended"
+	case SkipArchived:
+		return "archived"
+	case SkipNotStarted:
+		return "not_started"
+	}
+	return "none"
+}
+
+var attentionSkipTotal = mustAttentionSkipCounter()
+
+func mustAttentionSkipCounter() metric.Int64Counter {
+	c, err := telemetry.GetMeter().Int64Counter("attention_skip_total",
+		metric.WithDescription("Sessions the review-queue poller skipped by design, by skip_reason"))
+	if err != nil {
+		panic(err) // malformed instrument name: a build-time programmer error
+	}
+	return c
+}
+
+func countAttentionSkip(r SkipReason) {
+	attentionSkipTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("skip_reason", r.String())))
+}
+
+// suppressionExplainer makes the poller's silent decisions visible: one Debug line per
+// suppression change and one line per first skip. The zero value logs and counts for real;
+// tests replace the funcs.
+type suppressionExplainer struct {
+	debug     func(msg string, args ...any)
+	info      func(msg string, args ...any)
+	countSkip func(SkipReason)
+
+	lastRule sync.Map // title -> rule name of the last decision ("" = keep)
+	lastSkip sync.Map // title -> SkipReason of the last skip
+}
+
+func (e *suppressionExplainer) noteDecision(title string, d SuppressionDecision) {
+	if prev, ok := e.lastRule.Swap(title, d.rule); (ok && prev == d.rule) || (!ok && d.rule == "") {
+		return
+	}
+	if d.rule == "" {
+		return
+	}
+	debug := e.debug
+	if debug == nil {
+		debug = log.Debug
+	}
+	debug("suppressed", "session", title, "rule", d.rule)
+}
+
+func (e *suppressionExplainer) noteSkip(title string, r SkipReason) {
+	if r == SkipNone {
+		e.lastSkip.Delete(title)
+		return
+	}
+	count := e.countSkip
+	if count == nil {
+		count = countAttentionSkip
+	}
+	count(r)
+	if prev, ok := e.lastSkip.Swap(title, r); ok && prev == r {
+		return
+	}
+	info := e.info
+	if info == nil {
+		info = log.Info
+	}
+	info("skipping session", "session", title, "skip_reason", r.String())
+}
+
+func (e *suppressionExplainer) forget(title string) {
+	e.lastRule.Delete(title)
+	e.lastSkip.Delete(title)
 }

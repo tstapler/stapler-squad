@@ -1,7 +1,10 @@
 package session
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -168,5 +171,82 @@ func TestReaddLimit_Should_NotSuppress_When_NewEpisodeWithin2Minutes(t *testing.
 				t.Errorf("readdLimit = (%+v, %v), want suppress=%v", got, decided, tc.wantSuppress)
 			}
 		})
+	}
+}
+
+// pollerFor builds a poller whose determiner returns result for a started "demo" session.
+func pollerFor(result DetectionResult, mutate func(*Instance)) (*ReviewQueuePoller, *Instance) {
+	now := time.Now()
+	inst := &Instance{Title: "demo", UUID: "uuid-demo", Status: Running}
+	inst.started.Store(true)
+	inst.UpdatedAt = now
+	mutate(inst)
+	inst.SyncAtomicTimestamps()
+	poller := NewReviewQueuePoller(NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
+		"demo": {IsControllerActive: true},
+	}), nil)
+	poller.statusDeterminer = stubDeterminer{result: result}
+	poller.contentProvider = newFakeContentProvider(map[string]string{})
+	return poller, inst
+}
+
+type lineRecorder struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *lineRecorder) log(msg string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, logLine(msg, args))
+}
+
+// logLine renders a structured log call as "msg k=v k=v".
+func logLine(msg string, kv []any) string {
+	var b strings.Builder
+	b.WriteString(msg)
+	for i := 0; i+1 < len(kv); i += 2 {
+		fmt.Fprintf(&b, " %v=%v", kv[i], kv[i+1])
+	}
+	return b.String()
+}
+
+func TestSuppressionLogging_Should_EmitOneDebugLine_When_GraceSuppressesThreeConsecutivePolls(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	poller, inst := pollerFor(chainAdd(PriorityLow, ReasonIdle), func(i *Instance) {
+		i.LastMeaningfulOutput, i.LastAcknowledged = now.Add(-10*time.Second), now.Add(-time.Minute)
+	})
+	rec := &lineRecorder{}
+	poller.explain.debug = rec.log
+
+	for range 3 {
+		poller.checkSession(inst, nil)
+	}
+
+	if want := []string{"suppressed session=demo rule=grace"}; !reflect.DeepEqual(rec.lines, want) {
+		t.Errorf("debug lines = %q, want %q", rec.lines, want)
+	}
+}
+
+func TestSuppressionLogging_Should_EmitAgainOnDecisionChange_When_RuleChanges(t *testing.T) {
+	t.Parallel()
+	e := &suppressionExplainer{}
+	rec := &lineRecorder{}
+	e.debug = rec.log
+
+	e.noteDecision("demo", removeDecision("grace"))
+	e.noteDecision("demo", removeDecision("grace"))
+	e.noteDecision("demo", suppressDecision("readdLimit"))
+	e.noteDecision("demo", keepDecision())
+	e.noteDecision("demo", removeDecision("grace"))
+
+	want := []string{
+		"suppressed session=demo rule=grace",
+		"suppressed session=demo rule=readdLimit",
+		"suppressed session=demo rule=grace",
+	}
+	if !reflect.DeepEqual(rec.lines, want) {
+		t.Errorf("debug lines = %q, want %q", rec.lines, want)
 	}
 }
