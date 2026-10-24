@@ -11,6 +11,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
+import { collectPerfDiagnostics } from "@/lib/diagnostics/perfDiagnostics";
 import {
   overlay,
   menu,
@@ -69,6 +70,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
     summary: string;
   } | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [perfCopied, setPerfCopied] = useState(false);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -192,6 +194,17 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
   };
 
   if (!isOpen) return null;
+
+  const handleCopyPerfDiagnostics = async () => {
+    try {
+      const diagnostics = await collectPerfDiagnostics();
+      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+      setPerfCopied(true);
+      setTimeout(() => setPerfCopied(false), 2000);
+    } catch (err) {
+      setSnapshotError(err instanceof Error ? err.message : "Failed to copy perf diagnostics");
+    }
+  };
 
   return (
     <div className={overlay} onClick={onClose}>
@@ -331,6 +344,14 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
               ) : (
                 <>📸 Capture Debug Snapshot</>
               )}
+            </button>
+
+            <button
+              className={snapshotButton}
+              onClick={handleCopyPerfDiagnostics}
+              aria-label="Copy perf diagnostics"
+            >
+              {perfCopied ? <>✓ Copied</> : <>⏱ Copy Perf Diagnostics</>}
             </button>
 
             {snapshotResult && (
