@@ -691,6 +691,16 @@ type Instance struct {
 	// without acquiring any lock. Load() is guaranteed non-nil after construction.
 	snapshot atomic.Pointer[InstanceSnapshot]
 
+	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
+	LastMeaningfulChangeAt time.Time
+	// TurnEnded is the latest agent turn-end fact (zero until one is recorded).
+	TurnEnded TurnEnded
+
+	// collabMu guards the registration-time collaborators below; nil means no-op.
+	collabMu      sync.RWMutex
+	turnEndSink   turnEndSink
+	eventRecorder SessionEventRecorder
+
 	// liveInstance is the actor handle for this instance; set by NewLiveInstance.
 	// Accessed atomically so actor helpers (sendSyncErr/send/sendCtx) can route
 	// commands through the mailbox without holding any other lock.
