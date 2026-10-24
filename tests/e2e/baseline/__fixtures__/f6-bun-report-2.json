@@ -1,0 +1,25 @@
+{
+ "suites": [
+  {
+   "title": "f6.spec.ts",
+   "file": "f6.spec.ts",
+   "specs": [
+    {
+     "file": "f6.spec.ts",
+     "title": "f6 test",
+     "tests": [
+      {
+       "projectName": "chromium",
+       "results": [
+        {
+         "retry": 0,
+         "status": "passed"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

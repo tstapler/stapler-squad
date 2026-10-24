@@ -1,0 +1,13 @@
+{
+ "meta": {
+  "note": "fixture"
+ },
+ "entries": [
+  {
+   "spec": "f6.spec.ts",
+   "test": "f6 test",
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1",
+   "reason": "was failing"
+  }
+ ]
+}
