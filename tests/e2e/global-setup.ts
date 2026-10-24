@@ -16,6 +16,12 @@ async function globalSetup(config: FullConfig) {
     // inherited by Playwright worker processes (spawned after global-setup).
     process.env.TEST_SERVER_URL = getGlobalTestServer().getBaseUrl();
     console.log(`Test server URL exported: ${process.env.TEST_SERVER_URL}`);
+    // 5 specs (alias.spec.ts, alias-settings.spec.ts, omnibar-backlog-intent-confirm.spec.ts,
+    // omnibar-backlog-compose.spec.ts, workflow-cron-schedule.spec.ts) read process.env.BASE_URL
+    // directly instead of TEST_SERVER_URL, with a hardcoded :8544 fallback -- found running the
+    // Task 0.1c baseline capture, where it produced systematic ERR_CONNECTION_REFUSED failures on
+    // every run. Only set when the spec didn't already request a specific server by hand.
+    process.env.BASE_URL ??= process.env.TEST_SERVER_URL;
     // Propagate the isolated test data directory the same way, so specs that need to seed a
     // config file (e.g. launcher-presets.json) directly on disk — rather than through an RPC —
     // know where to write it. getGlobalTestServer() itself is a live singleton scoped to this

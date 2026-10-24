@@ -50,6 +50,16 @@ test("ignores default members that do not exist yet, but only for the default li
   assert.equal(gate(green, "detect-changes,e2e-next").status, 1);
 });
 
+test("fails when e2e-next is cancelled (a DEFAULT_MEMBERS member once it exists in needs)", () => {
+  assert.equal(gate({ ...green, "e2e-next": "cancelled" }).status, 1);
+});
+
+test("passes when e2e-bun fails as a non-member (not in DEFAULT_MEMBERS until the owner flip, plan decision 10)", () => {
+  const r = gate({ ...green, "e2e-next": "success", "e2e-bun": "failure" });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /e2e-bun \| failure \| not a member/);
+});
+
 test("build.yml: web-build-gate has if: always() and no continue-on-error, and every matrix sets fail-fast: false", () => {
   const yml = readFileSync(WORKFLOW, "utf8");
   const job = /\n  web-build-gate:\n([\s\S]*?)(?=\n  [a-z][\w-]*:\n|$)/.exec(yml)?.[1] ?? "";
