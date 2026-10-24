@@ -25,7 +25,7 @@ func addCtx() ruleCtx {
 func TestSuppressionPolicy_Should_EnforceRuleOrder_When_TwoRulesWouldFire(t *testing.T) {
 	t.Parallel()
 
-	var names []string
+	names := make([]string, 0, len(suppressionRules))
 	for _, r := range suppressionRules {
 		names = append(names, r.name)
 	}
