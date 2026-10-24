@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -166,7 +167,10 @@ type TmuxSession struct {
 	// built) -- see launchProgram's doc comment. Nil for every construction
 	// site that doesn't opt in via WithProgramProvider, which keeps using
 	// the frozen `program` string (pre-fix behavior, unchanged).
-	programProviderFunc func() string
+	programProviderFunc func() launchcmd.LaunchCommand
+
+	// programKind selects agent-specific prompt detection; fixed at construction.
+	programKind ProgramKind
 
 	// priorProcessAliveFunc and killPriorProcessFunc implement the guard
 	// RestoreWithWorkDir runs before concluding a fresh `new-session` is
@@ -1071,7 +1075,7 @@ func WithCommandRunner(r CommandRunner) TmuxSessionOption {
 // with when it has confirmed the session must be recreated -- see
 // TmuxSession.programProviderFunc's doc comment for why the frozen `program`
 // string is wrong for that path.
-func WithProgramProvider(fn func() string) TmuxSessionOption {
+func WithProgramProvider(fn func() launchcmd.LaunchCommand) TmuxSessionOption {
 	return func(t *TmuxSession) {
 		t.programProviderFunc = fn
 	}
@@ -1096,8 +1100,10 @@ func WithOrphanProcessGuard(isAlive func() bool, kill func() error) TmuxSessionO
 // the frozen command" rather than launching an empty program).
 func (t *TmuxSession) launchProgram() string {
 	if t.programProviderFunc != nil {
-		if p := t.programProviderFunc(); p != "" {
-			return p
+		if cmd := t.programProviderFunc(); cmd != nil {
+			if p := cmd.ShellString(); p != "" {
+				return p
+			}
 		}
 	}
 	return t.program
@@ -1113,6 +1119,7 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 	s := &TmuxSession{
 		sanitizedName:    toStaplerSquadTmuxNameWithPrefix(name, prefix),
 		program:          program,
+		programKind:      kindOfShellText(program),
 		serverSocket:     serverSocket,
 		ptyFactory:       ptyFactory,
 		cmdExec:          cmdExec,
@@ -1460,7 +1467,8 @@ func (t *TmuxSession) filterStatusLine(content string) string {
 
 // detectPromptInContent checks if the given content contains a prompt from the configured program
 func (t *TmuxSession) detectPromptInContent(content string) bool {
-	if t.program == ProgramClaude {
+	switch t.programKind {
+	case KindClaude:
 		// Claude Code approval dialogs have a distinctive pattern:
 		// An arrow selector (❯) followed by numbered options (1., 2., 3.)
 		// This is more reliable than checking for specific text that might change.
@@ -1494,9 +1502,9 @@ func (t *TmuxSession) detectPromptInContent(content string) bool {
 		// Fallback: Check for legacy patterns in case the UI changes
 		return strings.Contains(content, "No, and tell Claude what to do differently") ||
 			strings.Contains(content, "Yes, allow all edits during this session")
-	} else if strings.HasPrefix(t.program, ProgramAider) {
+	case KindAider:
 		return strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
-	} else if strings.HasPrefix(t.program, ProgramGemini) {
+	case KindGemini:
 		return strings.Contains(content, "Yes, allow once")
 	}
 	return false
