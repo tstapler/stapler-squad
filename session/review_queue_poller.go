@@ -133,6 +133,7 @@ type ReviewQueuePoller struct {
 	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
 	optionsSource    FlagOptionsSource          // Attention flags, read once per poll cycle; nil = all off
 	explain          suppressionExplainer       // Why-suppressed and why-skipped visibility
+	recorder         SessionEventRecorder       // Attention raised/cleared sink; nil = no-op
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -856,6 +857,37 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	rqp.checkSessionWithOptions(inst, paneActivity, opts, ruleOpts)
 }
 
+// SetEventRecorder wires the sink for AttentionRaised/Cleared events; nil restores the no-op.
+func (rqp *ReviewQueuePoller) SetEventRecorder(r SessionEventRecorder) {
+	rqp.mu.Lock()
+	defer rqp.mu.Unlock()
+	rqp.recorder = r
+}
+
+func (rqp *ReviewQueuePoller) eventRecorder() SessionEventRecorder {
+	rqp.mu.RLock()
+	defer rqp.mu.RUnlock()
+	return orNoopRecorder(rqp.recorder)
+}
+
+// removeFromQueue is the poller's single removal path; it records AttentionCleared for
+// the reason the removed item carried.
+func (rqp *ReviewQueuePoller) removeFromQueue(title string) {
+	existing, had := rqp.queue.Get(title)
+	if rqp.queue.Remove(title) && had {
+		rqp.eventRecorder().RecordAttentionCleared(title, existing.Reason)
+	}
+}
+
+// addToQueue is the poller's single add path; it records AttentionRaised when the item is
+// new or its reason differs from the queued one.
+func (rqp *ReviewQueuePoller) addToQueue(item, prior *ReviewItem) {
+	rqp.queue.Add(item)
+	if prior == nil || prior.Reason != item.Reason {
+		rqp.eventRecorder().RecordAttentionRaised(item.SessionID, item.Reason)
+	}
+}
+
 // SetOptionsSource wires the attention-flag source read once per poll cycle.
 func (rqp *ReviewQueuePoller) SetOptionsSource(src FlagOptionsSource) {
 	rqp.mu.Lock()
@@ -917,7 +949,7 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 				}
 			}
 		}
-		rqp.queue.Remove(snap.Title)
+		rqp.removeFromQueue(snap.Title)
 		return
 	}
 
@@ -925,7 +957,7 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 	if result.CleanWorktree {
 		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == ReasonUncommittedChanges {
 			log.Debug("changes committed, removing UncommittedChanges entry", "session", snap.Title)
-			rqp.queue.Remove(snap.Title)
+			rqp.removeFromQueue(snap.Title)
 		}
 	}
 
@@ -936,7 +968,7 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 	rqp.explain.noteDecision(snap.Title, decision)
 	switch decision.kind {
 	case suppressionRemove:
-		rqp.queue.Remove(snap.Title)
+		rqp.removeFromQueue(snap.Title)
 		return
 	case suppressionSuppress:
 		return
@@ -956,8 +988,10 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 		// Check if item already exists and preserve DetectedAt if status hasn't changed
 		detectedAt := time.Now()
 		isUpdate := false
+		var prior *ReviewItem
 		if existingItem, exists := rqp.queue.Get(snap.Title); exists {
 			isUpdate = true
+			prior = existingItem
 			// Preserve original timestamp if meaningful fields haven't changed
 			if existingItem.Reason == reason &&
 				existingItem.Priority == priority &&
@@ -1047,7 +1081,7 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 		}
 
 		log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
-		rqp.queue.Add(item)
+		rqp.addToQueue(item, prior)
 
 		// Update spam prevention timestamp via actor command so the write is
 		// serialised with buildSnapshot and does not race.

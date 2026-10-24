@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,4 +39,63 @@ func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
 	r.RecordLifecycle("demo", EventStarted)
 	r.RecordNotificationSuppressed("demo", "x")
 	r.RecordApprovalResolved("demo", true)
+}
+
+// attentionCall is one RecordAttentionRaised/Cleared invocation.
+type attentionCall struct {
+	kind   SessionEventKind
+	title  string
+	reason AttentionReason
+}
+
+type attentionRecorder struct {
+	noopSessionEventRecorder
+	mu    sync.Mutex
+	calls []attentionCall
+}
+
+func (r *attentionRecorder) add(c attentionCall) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, c)
+}
+
+func (r *attentionRecorder) RecordAttentionRaised(title string, reason AttentionReason) {
+	r.add(attentionCall{SessionEventAttentionRaised, title, reason})
+}
+
+func (r *attentionRecorder) RecordAttentionCleared(title string, reason AttentionReason) {
+	r.add(attentionCall{SessionEventAttentionCleared, title, reason})
+}
+
+func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenRemoved(t *testing.T) {
+	t.Parallel()
+	add := chainAdd(PriorityMedium, ReasonTaskComplete)
+	poller, inst := pollerFor(add, func(*Instance) {})
+	rec := &attentionRecorder{}
+	poller.SetEventRecorder(rec)
+
+	poller.checkSession(inst, nil)
+	poller.statusDeterminer = stubDeterminer{result: DetectionResult{Action: DetectionActionRemove}}
+	poller.checkSession(inst, nil)
+
+	want := []attentionCall{
+		{SessionEventAttentionRaised, "demo", ReasonTaskComplete},
+		{SessionEventAttentionCleared, "demo", ReasonTaskComplete},
+	}
+	assert.Equal(t, want, rec.calls)
+	_, queued := poller.queue.Get("demo")
+	assert.False(t, queued, "queue behavior must be unchanged by the recorder")
+}
+
+func TestPoller_Should_RecordRaisedOnce_When_SameReasonIsReAdded(t *testing.T) {
+	t.Parallel()
+	poller, inst := pollerFor(chainAdd(PriorityMedium, ReasonTaskComplete), func(*Instance) {})
+	rec := &attentionRecorder{}
+	poller.SetEventRecorder(rec)
+
+	poller.checkSession(inst, nil)
+	poller.checkSession(inst, nil)
+
+	assert.Len(t, rec.calls, 1)
 }
