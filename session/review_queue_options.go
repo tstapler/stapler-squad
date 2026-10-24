@@ -7,11 +7,6 @@ type DeterminerOptions struct {
 	ProseQuestion   bool
 }
 
-// RuleOptions are the flags consumed by the poller's suppression rules (Story 1.2.x).
-type RuleOptions struct {
-	AckBypassFix bool
-}
-
 // FlagOptionsSource resolves the current flag values. It is called once per poll
 // cycle; a nil source means every flag is off.
 type FlagOptionsSource func() (DeterminerOptions, RuleOptions)

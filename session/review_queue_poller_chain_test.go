@@ -35,6 +35,7 @@ type chainCase struct {
 	name             string
 	result           DetectionResult
 	controllerActive bool
+	bypassFix        bool
 	// ack and addedAgo are offsets before "now"; zero means unset.
 	ackAgo      time.Duration
 	outputAgo   time.Duration
@@ -58,6 +59,14 @@ func chainCases() []chainCase {
 		// acknowledgment newer than the last output snoozes a live input prompt.
 		{name: "medium_add_ack_after_output_is_snoozed", result: chainAdd(PriorityMedium, ReasonInputRequired),
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec, wantOutcome: chainGone},
+		{name: "medium_add_ack_after_output_is_kept_when_bypass_fix_on", result: chainAdd(PriorityMedium, ReasonInputRequired),
+			controllerActive: true, bypassFix: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
+			wantOutcome: chainKept(PriorityMedium, ReasonInputRequired)},
+		{name: "medium_non_human_add_ack_after_output_is_snoozed_when_bypass_fix_on", result: chainAdd(PriorityMedium, ReasonWaitingForUser),
+			controllerActive: true, bypassFix: true, outputAgo: 60 * sec, ackAgo: 30 * sec, wantOutcome: chainGone},
+		{name: "high_add_ack_after_output_bypasses_snooze_when_bypass_fix_on", result: chainAdd(PriorityHigh, ReasonApprovalPending),
+			controllerActive: true, bypassFix: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
+			wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
 		{name: "high_add_ack_after_output_bypasses_snooze", result: chainAdd(PriorityHigh, ReasonApprovalPending),
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
 			wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
@@ -134,6 +143,9 @@ func TestCheckSession_Should_PreserveCharacterizedGateChain_When_RefactoredToSup
 			poller := NewReviewQueuePoller(NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
 				"s": {IsControllerActive: tc.controllerActive},
 			}), nil)
+			poller.SetOptionsSource(func() (DeterminerOptions, RuleOptions) {
+				return DeterminerOptions{}, RuleOptions{AckBypassFix: tc.bypassFix}
+			})
 			poller.statusDeterminer = stubDeterminer{result: tc.result}
 			poller.contentProvider = newFakeContentProvider(map[string]string{})
 			if tc.existing != nil {
