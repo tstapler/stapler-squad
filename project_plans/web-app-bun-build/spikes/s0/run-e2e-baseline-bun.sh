@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Task 7.11c / Story 8.1a: runs the full Playwright suite 3 times against a Bun build
 # (WEB_BUILD=bun) using the e2e harness's own isolated global-setup (dynamic free port,
-# PID-scoped temp dir -- never :8543), capturing a JSON report per run. Deliberate deviation from
+# PID-scoped temp dir -- never the live service's port), capturing a JSON report per run. Deliberate deviation from
 # the plan's literal "a ManualInstance (ports 62871-62880)" wording for this task: global-setup.ts
 # has no mode to point Playwright at an already-running external server, and the harness's own
 # per-run isolation (dynamic port, PID-scoped temp dir, private tmux socket) already satisfies the
