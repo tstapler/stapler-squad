@@ -344,8 +344,8 @@ func (i *Instance) GetTmuxSessionName() string {
 // uses this -- not the frozen command captured at construction time -- when
 // it must actually relaunch a confirmed-missing session (see that function's
 // doc comment; BUG matching #791, a different call site).
-func (i *Instance) currentLaunchCommand() string {
-	return i.buildLaunchCommand(i.GetConversationUUID())
+func (i *Instance) currentLaunchCommand() launchcmd.LaunchCommand {
+	return i.launchCommand(i.GetConversationUUID())
 }
 
 // buildLaunchCommand constructs the final command string used to launch the program
@@ -802,7 +802,7 @@ func (i *Instance) wireTmuxSession(command launchcmd.LaunchCommand) {
 
 	runner := i.executionTarget().Runner()
 	newTmuxSession := func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession {
-		opts := append([]tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand)}, extra...)
+		opts := append([]tmux.TmuxSessionOption{tmux.WithCommandRunner(runner), tmux.WithProgramProvider(i.currentLaunchCommand), tmux.WithLaunchCommand(command)}, extra...)
 		var session *tmux.TmuxSession
 		if snap.TmuxServerSocket != "" {
 			// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
