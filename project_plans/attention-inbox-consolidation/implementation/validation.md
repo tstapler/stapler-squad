@@ -119,7 +119,7 @@ Go tests live in `session/`, `server/` etc. as `TestXxx_Should_When`; jest tests
 | R3, SM2 | session/review_queue_suppression_test.go | TestSuppressionPolicy_Should_EnforceRuleOrder_When_TwoRulesWouldFire | Unit | Ordered contract |
 | R3, SM2 | session/review_queue_suppression_test.go | TestReaddLimit_Should_NotSuppress_When_NewEpisodeWithin2Minutes | Unit | Escalation |
 | R3, SM2 | session/review_queue_suppression_test.go | TestGrace_Should_NotRemoveItem_When_NewEpisodeWithin5MinutesOfAck | Unit | Escalation |
-| R3, SM2 | session/review_queue_poller_chain_test.go | TestCheckSession_Should_PreserveCharacterizedGateChain_When_RefactoredToSuppressionPolicy | Integration | Behavior preservation |
+| R3, SM2 | session/review_queue_poller_chain_test.go | TestCheckSession_Should_PreserveCharacterizedSuppressionChain_When_RefactoredToSuppressionPolicy | Integration | Behavior preservation |
 | R3, SM2 | session/review_queue_poller_chain_test.go | TestAcknowledgeEpisode_Should_ReachLogShowingAcknowledgedE1ThenRaisedE2_When_RealSuppressionPolicy | Integration | E1/E2 through real policy |
 | R3, SM2 | session/ent_repository_turn_end_test.go | TestLostUpdate_Should_KeepNarrowWrittenColumns_When_StaleFullSaveInterleavesAtBarrier | Integration | HARD GATE (merge blocker for PR B, never skipped or quarantined) [3.1.4d]. Merge rules: narrow write survives stale full save |
 | R3, SM2 | session/ent_repository_turn_end_test.go | TestLostUpdate_Should_KeepNewerInMemoryValue_When_NarrowWriteIsOlderThanFullSave | Integration | Merge, not skip |
