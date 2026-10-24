@@ -1,5 +1,6 @@
 // Browser-side perf snapshot for "the UI is slow with many windows/panes" reports.
-// Exports a whitelisted layout (ids, split geometry, view kind, tab; window names are dropped),
+// Exports a whitelisted layout (pane ids, split geometry, view kind, tab; window names and session
+// ids are dropped because a legacy session id is its title),
 // DOM/heap/long-task stats and the user agent. No terminal content.
 
 const WINDOW_LAYOUT_KEY = "cockpit.windowLayout";
@@ -45,7 +46,7 @@ function countLeaves(node: LayoutNode | undefined, acc: { panes: number; termina
 function sanitizeNode(node: LayoutNode | undefined): unknown {
   if (!node) return null;
   if (node.type === "leaf") {
-    return { type: "leaf", id: node.id, viewKind: node.viewKind, sessionId: node.sessionId, activeTab: node.activeTab };
+    return { type: "leaf", id: node.id, viewKind: node.viewKind, hasSession: node.sessionId != null, activeTab: node.activeTab };
   }
   return { type: "split", id: node.id, direction: node.direction, ratio: node.ratio, first: sanitizeNode(node.first), second: sanitizeNode(node.second) };
 }
@@ -86,7 +87,7 @@ function collectLongTasks(): Promise<PerfDiagnostics["longTasks"]> {
 
 export async function collectPerfDiagnostics(): Promise<PerfDiagnostics> {
   const rawLayout = readLayout() as { windows?: { id: string; paneState?: { root?: LayoutNode; focusedPaneId?: string; zoomedPaneId?: string | null } }[] } | null;
-  const rawWindows = rawLayout?.windows ?? [];
+  const rawWindows = Array.isArray(rawLayout?.windows) ? rawLayout.windows : [];
   const windows = rawWindows.map((w) => {
     const acc = { panes: 0, terminalPanes: 0, activeTabs: {} as Record<string, number> };
     countLeaves(w.paneState?.root, acc);

@@ -35,7 +35,9 @@ describe("collectPerfDiagnostics", () => {
     );
     const json = JSON.stringify((await collectPerfDiagnostics()).layout);
     expect(json).not.toContain("secret-name");
+    expect(json).not.toContain('"sessionId"');
     expect(json).not.toContain("extra");
+    expect(json).toContain('"hasSession":true');
     expect(json).toContain('"focusedPaneId":"a"');
   });
 
@@ -59,6 +61,8 @@ describe("collectPerfDiagnostics", () => {
   it("tolerates a missing or corrupt layout", async () => {
     expect((await collectPerfDiagnostics()).windows).toEqual([]);
     localStorage.setItem("cockpit.windowLayout", "{not json");
+    expect((await collectPerfDiagnostics()).windows).toEqual([]);
+    localStorage.setItem("cockpit.windowLayout", JSON.stringify({ windows: "nope" }));
     expect((await collectPerfDiagnostics()).windows).toEqual([]);
   });
 });
