@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 )
 
 // TestRestoreWithWorkDir_StaleCommand_UsesCurrentProgramProvider is the
@@ -45,8 +46,8 @@ func TestRestoreWithWorkDir_StaleCommand_UsesCurrentProgramProvider(t *testing.T
 
 	session := newTmuxSession("stale-cmd-test", "claude --resume original-uuid", ptyFactory, cmdExec, TmuxPrefix,
 		WithRegistry(nil),
-		WithProgramProvider(func() string {
-			return "claude --resume " + currentUUID.Load().(string)
+		WithProgramProvider(func() launchcmd.LaunchCommand {
+			return launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("--resume"), launchcmd.Word(currentUUID.Load().(string))}}
 		}),
 	)
 
