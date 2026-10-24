@@ -157,6 +157,10 @@ type InstanceSnapshot struct {
 	// 1.1.4/4.1) — see ToInstanceData/FromInstanceData for the persisted round trip.
 	CreationProgressUpdatedAt time.Time
 
+	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
+	LastMeaningfulChangeAt time.Time
+	TurnEnded              TurnEnded
+
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
 
@@ -254,6 +258,8 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		WorkflowID:                 i.WorkflowID,
 		CLIFlags:                   i.CLIFlags,
 		ReviewState:                i.ReviewState,
+		LastMeaningfulChangeAt:     i.LastMeaningfulChangeAt,
+		TurnEnded:                  i.TurnEnded,
 		InstanceType:               i.InstanceType,
 		IsManaged:                  i.IsManaged,
 		Artifacts:                  i.Artifacts,

@@ -330,3 +330,27 @@ func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
 		t.Errorf("expected 0 added for empty list, got %d", added)
 	}
 }
+
+func TestStartupScanner_Should_ReadOptionsFromSamePerCycleSourceAsPoller_When_FirstCycleRuns(t *testing.T) {
+	t.Parallel()
+	insts := []*Instance{makeStartedInstance("scan-opts-a"), makeStartedInstance("scan-opts-b")}
+	rec := &optsRecordingDeterminer{}
+	scanner := NewStartupScanner(newFakeStatusProvider(nil), newFakeContentProvider(nil))
+	scanner.determiner = rec
+
+	var reads int
+	source := func() (DeterminerOptions, RuleOptions) {
+		reads++
+		return DeterminerOptions{ProseQuestion: true, IdleClockOutput: true}, RuleOptions{}
+	}
+	scanner.SetOptionsSource(source)
+	scanner.Scan(insts, NewReviewQueue())
+
+	if reads != 1 {
+		t.Errorf("source reads = %d, want 1 per Scan", reads)
+	}
+	want := DeterminerOptions{ProseQuestion: true, IdleClockOutput: true}
+	if len(rec.seen) != 2 || rec.seen[0] != want || rec.seen[1] != want {
+		t.Errorf("determiner saw %+v, want both = %+v", rec.seen, want)
+	}
+}

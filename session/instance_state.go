@@ -51,6 +51,7 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 	}
 	i.Status = to
 	i.touchUpdatedAt()
+	i.touchLocked(SessionEventStatusChanged, i.UpdatedAt)
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
 	// Caller already holds i.mu (see doc comment above), so buildSnapshot's

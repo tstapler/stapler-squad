@@ -1733,7 +1733,7 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			determiner := session.NewDefaultStatusDeterminer(session.DefaultReviewQueuePollerConfig())
 			res := determiner.Determine(hidden, "", session.InstanceStatusInfo{
 				IsControllerActive: true, ClaudeStatus: detection.StatusSuccess,
-			}, detection.NewStatusDetector())
+			}, detection.NewStatusDetector(), session.DeterminerOptions{})
 			require.Equal(t, session.DetectionActionSkip, res.Action)
 
 			// Layer 3: handed the routine item anyway, only the gate decides.
