@@ -689,7 +689,7 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 		return
 	}
 
-	opts, _ := rqp.currentOptions()
+	opts, ruleOpts := rqp.currentOptions()
 
 	// Fetch pane activity timestamps once for all sessions. This single subprocess call
 	// replaces per-session capture-pane calls when content hasn't changed.
@@ -703,7 +703,7 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 		go func(i *Instance) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rqp.checkSessionWithOptions(i, paneActivity, opts)
+			rqp.checkSessionWithOptions(i, paneActivity, opts, ruleOpts)
 		}(inst)
 	}
 	wg.Wait()
@@ -834,8 +834,8 @@ func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 // checkSession checks a single session and adds/removes from queue as needed.
 // paneActivity is the snapshot from batchPaneActivity(); nil falls back to TTL cache.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[string]time.Time) {
-	opts, _ := rqp.currentOptions()
-	rqp.checkSessionWithOptions(inst, paneActivity, opts)
+	opts, ruleOpts := rqp.currentOptions()
+	rqp.checkSessionWithOptions(inst, paneActivity, opts, ruleOpts)
 }
 
 // SetOptionsSource wires the attention-flag source read once per poll cycle.
@@ -853,7 +853,7 @@ func (rqp *ReviewQueuePoller) currentOptions() (DeterminerOptions, RuleOptions) 
 }
 
 // checkSessionWithOptions is checkSession with the cycle's flag options already resolved.
-func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivity map[string]time.Time, opts DeterminerOptions) {
+func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivity map[string]time.Time, opts DeterminerOptions, ruleOpts RuleOptions) {
 	// Skip paused, stopped, or unstarted sessions
 	if rqp.shouldSkipSession(inst) {
 		return
@@ -911,57 +911,15 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 		}
 	}
 
-	// LastMeaningfulOutput is updated by GetContent() above via UpdateTerminalTimestamps()
-	// when new terminal content is detected. The persisted content-signature dedup prevents
-	// false positives: sessions stay snoozed after acknowledgment unless output genuinely changes.
-
-	// Acknowledgment snooze: removes sessions where LastAcknowledged is newer than
-	// LastMeaningfulOutput (i.e., no new output since the user last dismissed it).
-	// Bypass for active high-priority conditions (approval, error, input): the
-	// content-signature dedup in UpdateTimestamps() does not update LastMeaningfulOutput
-	// when an identical prompt reappears, so IsAcknowledgedAfterOutput() would be a false
-	// positive and silently suppress a live blocking prompt.
-	isActiveHighPriority := shouldAdd && priority <= PriorityHigh
-	if !isActiveHighPriority && snap.IsAcknowledgedAfterOutput() {
+	// LastMeaningfulOutput is updated by GetContent() above via UpdateTerminalTimestamps();
+	// the persisted content-signature dedup keeps acknowledged sessions snoozed unless
+	// output genuinely changes. The rules in suppressionPolicy decide what happens next.
+	switch decision := suppressionPolicy(snap, result, statusInfo, rqp.queue, ruleOpts); decision.kind {
+	case suppressionRemove:
 		rqp.queue.Remove(snap.Title)
 		return
-	}
-
-	// Grace period: Don't re-add for 5 minutes after acknowledgment, even with new output.
-	// Scoped to low-priority or inactive-controller sessions only — high/medium priority sessions
-	// with an active controller should resurface promptly when new output arrives.
-	// Only applied when shouldAdd is true: a Skip result should leave the queue unchanged,
-	// not trigger a removal through the grace-period path.
-	if shouldAdd && (priority == PriorityLow || !statusInfo.IsControllerActive) {
-		if !snap.LastAcknowledged.IsZero() {
-			gracePeriod := 5 * time.Minute
-			timeSinceAck := time.Since(snap.LastAcknowledged)
-			if timeSinceAck < gracePeriod {
-				rqp.queue.Remove(snap.Title)
-				return
-			}
-		}
-	}
-
-	// Spam prevention: Enforce minimum re-add interval to prevent notification spam.
-	// Only applies when the item is ALREADY in the queue (i.e., already visible to the user).
-	// After a server restart the queue is empty, so LastAddedToQueue from before the restart
-	// must not block urgent prompts from re-appearing — the session should always be re-added.
-	if shouldAdd {
-		minReAddInterval := 2 * time.Minute
-		if !snap.LastAddedToQueue.IsZero() && time.Since(snap.LastAddedToQueue) < minReAddInterval {
-			if existingItem, exists := rqp.queue.Get(snap.Title); exists {
-				// Lower priority number = higher priority (Urgent=1 > High=2 > Medium=3 > Low=4)
-				isEscalation := priority < existingItem.Priority
-				if isEscalation {
-					log.Debug("priority escalation, bypassing rate limit", "session", snap.Title, "from", existingItem.Priority.String(), "to", priority.String())
-				} else {
-					return
-				}
-			}
-			// Item not currently in queue (e.g., post-restart): bypass rate limit so the
-			// session re-appears without waiting up to 2 minutes.
-		}
+	case suppressionSuppress:
+		return
 	}
 
 	// Add or update in queue, or leave unchanged.
