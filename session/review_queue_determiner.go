@@ -250,7 +250,7 @@ func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content s
 			log.Debug("status detected (no controller)", "session", inst.Title, "reason", dec.Reason)
 		} else if isActiveStatus(detected) {
 			return claudeStatus, true
-		} else if detected == detection.StatusWaitingForAgent && time.Since(inst.UpdatedAt) < waitingForAgentStuckThreshold {
+		} else if detected == detection.StatusWaitingForAgent && time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
 			// Reachable via the always-present auto-mode footer override
 			// (detection/detector.go's applyFooterIdleOverride), so it is not unconditional
 			// evidence of activity: a stuck background shell would otherwise exclude an
@@ -262,7 +262,7 @@ func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content s
 	// No status-based condition: fall back to time-based idle, unless the user already
 	// acknowledged this session and nothing new has happened since.
 	const basicIdleThreshold = 5 * time.Second
-	if !v.shouldAdd && time.Since(inst.UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
+	if !v.shouldAdd && time.Since(inst.Snapshot().UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
 		v.markIdle()
 	}
 
