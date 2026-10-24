@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails verifies the
@@ -252,4 +253,64 @@ func TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManager
 
 	assert.Equal(t, detection.StatusUnknown, status)
 	assert.False(t, controllerActive)
+}
+
+func TestTransitionTo_Touch_Should_AdvanceLastMeaningfulChangeBeforeSnapshot_When_StatusChanges(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "touch-transition", Status: Creating}
+	before := inst.Snapshot().LastMeaningfulChangeAt
+
+	inst.mu.Lock()
+	err := inst.transitionTo(context.Background(), Failed)
+	inst.mu.Unlock()
+
+	require.NoError(t, err)
+	got := inst.Snapshot().LastMeaningfulChangeAt
+	assert.True(t, got.After(before), "published snapshot must carry the advanced value")
+	assert.Equal(t, inst.UpdatedAt, got)
+}
+
+func TestUpdateTimestamps_Should_NotAdvanceLastMeaningfulChange_When_RenameOrPin(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "touch-rename", Status: Running}
+	before := inst.Snapshot().LastMeaningfulChangeAt
+
+	require.NoError(t, inst.SetPinned(true))
+	inst.SetTitleDirect("touch-renamed")
+
+	assert.Equal(t, before, inst.Snapshot().LastMeaningfulChangeAt)
+}
+
+// Snapshot pointer identity stands in for a counting build hook: each rebuild stores a new pointer.
+func TestUpdateTimestamps_Should_RebuildSnapshotOncePerMeaningfulFrameAndZeroOtherwise_When_CountingHook(t *testing.T) {
+	t.Parallel()
+	inst, err := NewInstance(InstanceOptions{Title: "touch-frames", Path: "/tmp/test", Program: "claude"})
+	require.NoError(t, err)
+	inst.SetTmuxSession(tmux.NewTmuxSession("touch-frames", "claude"))
+
+	s0 := inst.Snapshot()
+	inst.UpdateTerminalTimestamps("   \n", false)
+	assert.Same(t, s0, inst.Snapshot(), "blank frame must not rebuild")
+	assert.Equal(t, s0.LastMeaningfulChangeAt, inst.Snapshot().LastMeaningfulChangeAt)
+
+	inst.UpdateTerminalTimestamps("Hello, world!\nError: something happened", false)
+	s1 := inst.Snapshot()
+	assert.NotSame(t, s0, s1, "meaningful frame rebuilds")
+	assert.True(t, s1.LastMeaningfulChangeAt.Equal(s1.LastMeaningfulOutput))
+	assert.True(t, s1.LastMeaningfulChangeAt.After(s0.LastMeaningfulChangeAt))
+
+	inst.UpdateTerminalTimestamps("Hello, world!\nError: something happened", false)
+	assert.Equal(t, s1.LastMeaningfulChangeAt, inst.Snapshot().LastMeaningfulChangeAt, "same signature does not touch")
+}
+
+func TestRecordTurnEnd_Should_AdvanceLastMeaningfulChange_When_TurnEnded(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "touch-turn", Status: Running}
+	before := inst.Snapshot().LastMeaningfulChangeAt
+
+	inst.RecordTurnEnd("done", TurnEndSourceHook)
+
+	snap := inst.Snapshot()
+	assert.True(t, snap.LastMeaningfulChangeAt.After(before))
+	assert.Equal(t, snap.TurnEnded.At, snap.LastMeaningfulChangeAt)
 }
