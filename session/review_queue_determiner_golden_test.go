@@ -50,15 +50,16 @@ type determineGolden struct {
 }
 
 // goldenClock stands in for an injected clock: Determine reads the wall clock directly,
-// so every instance timestamp is derived from this single instant and offset far from
-// any threshold (5s idle, 5m stale, 30m background-stuck).
-type goldenClock struct{ now time.Time }
+// so each instance's timestamps are taken from time.Now() at construction (parallel
+// subtests start late; a shared early instant drifts past the 5s idle threshold).
+type goldenClock struct{}
 
 func (c goldenClock) instance(title string) *Instance {
+	now := time.Now()
 	inst := &Instance{Title: title, UUID: "uuid-" + title, Status: Running}
 	inst.started.Store(true)
-	inst.UpdatedAt = c.now
-	inst.LastMeaningfulOutput = c.now.Add(-time.Second)
+	inst.UpdatedAt = now
+	inst.LastMeaningfulOutput = now.Add(-time.Second)
 	inst.SyncAtomicTimestamps()
 	return inst
 }
@@ -116,7 +117,7 @@ func determineCase(clock goldenClock, program, name, content string) determineGo
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 	title := program + "-" + name
 
-	noController := determiner.Determine(clock.instance(title), content, InstanceStatusInfo{}, detector)
+	noController := determiner.Determine(clock.instance(title), content, InstanceStatusInfo{}, detector, DeterminerOptions{})
 
 	detected, detectedCtx := detector.DetectWithContextFromLines(strings.Split(content, "\n"))
 	withController := determiner.Determine(clock.instance(title), "", InstanceStatusInfo{
@@ -124,7 +125,7 @@ func determineCase(clock goldenClock, program, name, content string) determineGo
 		ClaudeStatus:       detected,
 		StatusContext:      detectedCtx,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateWaiting},
-	}, detector)
+	}, detector, DeterminerOptions{})
 
 	label := labelOf(name)
 	source := "captured"
@@ -163,7 +164,7 @@ func corpusCases(t *testing.T) []corpusCase {
 
 func TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgyPiGeminiOpencodeCorpus(t *testing.T) {
 	t.Parallel()
-	clock := goldenClock{now: time.Now()}
+	clock := goldenClock{}
 	perProgram := map[string]int{}
 
 	for _, c := range corpusCases(t) {
@@ -205,7 +206,7 @@ func TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgy
 
 func TestDetermineGolden_Should_ReportMissingSignalPerProgram_When_ProgramRowIsNone(t *testing.T) {
 	t.Parallel()
-	clock := goldenClock{now: time.Now()}
+	clock := goldenClock{}
 	for _, c := range corpusCases(t) {
 		if corpusPrograms[c.program] {
 			continue

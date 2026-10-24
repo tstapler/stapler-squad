@@ -131,6 +131,7 @@ type ReviewQueuePoller struct {
 	contentProvider  ContentProvider            // Fetches and caches terminal content
 	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
 	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
+	optionsSource    FlagOptionsSource          // Attention flags, read once per poll cycle; nil = all off
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -688,6 +689,8 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 		return
 	}
 
+	opts, _ := rqp.currentOptions()
+
 	// Fetch pane activity timestamps once for all sessions. This single subprocess call
 	// replaces per-session capture-pane calls when content hasn't changed.
 	paneActivity := batchPaneActivity("")
@@ -700,7 +703,7 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 		go func(i *Instance) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rqp.checkSession(i, paneActivity)
+			rqp.checkSessionWithOptions(i, paneActivity, opts)
 		}(inst)
 	}
 	wg.Wait()
@@ -831,6 +834,26 @@ func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 // checkSession checks a single session and adds/removes from queue as needed.
 // paneActivity is the snapshot from batchPaneActivity(); nil falls back to TTL cache.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[string]time.Time) {
+	opts, _ := rqp.currentOptions()
+	rqp.checkSessionWithOptions(inst, paneActivity, opts)
+}
+
+// SetOptionsSource wires the attention-flag source read once per poll cycle.
+func (rqp *ReviewQueuePoller) SetOptionsSource(src FlagOptionsSource) {
+	rqp.mu.Lock()
+	defer rqp.mu.Unlock()
+	rqp.optionsSource = src
+}
+
+func (rqp *ReviewQueuePoller) currentOptions() (DeterminerOptions, RuleOptions) {
+	rqp.mu.RLock()
+	src := rqp.optionsSource
+	rqp.mu.RUnlock()
+	return src.resolve()
+}
+
+// checkSessionWithOptions is checkSession with the cycle's flag options already resolved.
+func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivity map[string]time.Time, opts DeterminerOptions) {
 	// Skip paused, stopped, or unstarted sessions
 	if rqp.shouldSkipSession(inst) {
 		return
@@ -851,7 +874,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 
 	// Status determination: pure evaluation, no side effects.
 	// Handles controller-based and terminal-content detection, idle/staleness checks.
-	result := rqp.statusDeterminer.Determine(inst, content, statusInfo, rqp.statusDetector)
+	result := rqp.statusDeterminer.Determine(inst, content, statusInfo, rqp.statusDetector, opts)
 
 	reason := result.Reason
 	priority := result.Priority
