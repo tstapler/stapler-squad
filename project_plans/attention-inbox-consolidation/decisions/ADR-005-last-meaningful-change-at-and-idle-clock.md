@@ -23,3 +23,22 @@
 ## Alternatives rejected
 
 Make `UpdatedAt` semantic (breaks reducer dedup, sort, CAS); stop the line-110 overwrite (changes persisted semantics for every consumer; out of scope per owner).
+
+## Spike 0.1.2 findings (2026-10-24): restart-driven only; no reload-only writer
+
+Method: isolated instance (`PORT=62873`, `STAPLER_SQUAD_INSTANCE=claude-manual-test-2`, `STAPLER_SQUAD_TMUX_SOCKET=ssq-manual-2`) built from branch `aic-spikes2`; session `bar-test` (program `bash`, Active); readings via `POST /api/session.v1.SessionService/GetSession {"id":"bar-test"}`; reload driven in a real browser (Playwright) on the open session pane, which opens the terminal stream (`streamViaHub` calls `MarkViewed()`, `server/services/connectrpc_websocket.go:2112`; also `:1320`, `:3609`).
+
+| Step | `updatedAt` | `lastMeaningfulOutput` |
+|---|---|---|
+| after first server start | 19:27:43.298 | 2026-10-15 (loaded) |
+| session opened in browser (first attach) | 19:27:43.298 (unchanged) | 19:28:47.230 (attach produced output) |
+| two plain reloads, no restart (stream re-attached 2x) | 19:27:43.298 (unchanged) | 19:28:47.230 (unchanged) |
+| server restart (kill, start) | 19:29:10.083 (= shutdown save time) | 19:29:20.400 (startup output) |
+
+Findings:
+- Reload-only: `updatedAt` and `lastMeaningfulOutput` did not move. `Instance.MarkViewed` (`session/instance_state.go:235`) writes only `LastViewed` and republishes the snapshot; it never touches `UpdatedAt`.
+- Restart-driven writer: `ToInstanceData` writes `UpdatedAt: time.Now()` (`session/instance_serialization.go:110`) on the shutdown full save, so every Active/Hibernated session reloads with the shutdown time (the first start of the instance showed the same: Active and Hibernated rows at start time, Stopped rows unchanged). `lastMeaningfulOutput` is re-stamped by the first terminal output after startup.
+- Client: `SessionCard.tsx:1272` renders `formatTimeAgo(session.updatedAt)` from the server value (`:486-490`); no mount-relative value.
+- Not tested: the card value for a Claude session (a `bash` session was used), and `lastViewed` (the RPC returned null for it).
+
+Verdict: no reload-only writer outside the `SessionActivity` owners. Tasks 4.1.1e and 4.2.2c are closed as not needed; the restart reset is fixed by Story 4.1.1 (persisted `LastMeaningfulChangeAt`, decision 2). No failing characterization test is committed (nothing to characterize).

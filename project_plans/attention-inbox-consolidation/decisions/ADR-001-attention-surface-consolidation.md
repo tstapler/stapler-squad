@@ -49,3 +49,18 @@ Additional UX decisions adopted: implicit "seen" when the operator opens the ses
 ## Evidence
 
 architecture.md section 4; ux.md sections 8-9; pitfalls.md P9; features.md section 3 (tray ADR-006/008, up-next-tabs ADR-003, notification-revamp ADR-001/002).
+
+## Ratification brief (Task 0.1.3a; status stays Proposed until the owner replies)
+
+**Code check (2026-10-24, branch aic-spikes2)**: `/review-queue` is today the durable list (`ReviewQueuePanel`); `useReviewQueue.ts:178` is the single filter point feeding panel, nav badge, BottomNav and DrawerNav. Nothing in the repo yet redirects `/review-queue` or has a Sessions tab.
+
+**Question to the owner**: accept staged hybrid D (keep `/review-queue` as the durable list, fix and extend it; tray stays transient; Sessions tab in Up Next built behind `attention_inbox_consolidation`, default off; `/review-queue` later becomes a permanent flag-gated redirect to `/unfinished?tab=sessions`)?
+
+| Reply | What flips |
+|---|---|
+| "accept" | Status becomes Accepted. Story 3.2.1 and Epic 6 are unblocked: Epic 6 builds the Sessions tab and the flagged redirect, `ListSessionEvents` is the only new read RPC, tray deep links use `/review-queue?session=<id>`. The redirect flag flip remains a separate owner action after the coverage soak |
+| "change: build the Up Next tab and redirect now" | Status Amended; the sequencing row (UX wins) reverses to "same slice"; Epic 6 gets a larger regression surface (69 files reference `/review-queue`, 12+ e2e specs per Options table) and the flag-default-off guard is dropped |
+| "change: tray replaces the page" | Option B, rejected in this ADR; Epics 3.2 and 5/6 need re-planning (no per-session state view, no ack ranking) |
+| "change: keep the page only (option A)" | Epic 6 is deleted from scope; Sessions tab and redirect stories are dropped; detection/event-log slices proceed unchanged |
+
+Until the owner answers, Epic 6 does not start (wall-clock blocker named in Status).

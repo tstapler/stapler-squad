@@ -835,7 +835,7 @@ Shared files serialized: determiner (1.1.2->1.1.3->1.4->3.2.1), poller (1.2.x->3
 ##### Task 4.1.1b: Advance rules via `SessionActivity` (Task 1.2.3b) + backfill on load (S). The output-update advance is wired at the CALLER, `session/instance_approval.go:107-115` (`UpdateTerminalTimestamps`), after the promoted `ReviewState.UpdateTimestamps` (`session/review_state.go:217`) reports `changed` and before `buildSnapshot`; `ReviewState` cannot call `Instance.touchLocked`. Files: `session/instance_approval.go`, `session/instance_state.go` (`transitionTo`), `session/instance_actor_setters.go` (TurnEnded setter), `session/instance_serialization.go` (backfill)
 ##### Task 4.1.1d: Persistence-cadence tests: graceful-shutdown restart (`SaveInstances` -> reopen -> `FromInstanceData`), identical-timer assertion, crash-window assertion and zero-statements-on-output-path query-count test; no production writer is added (S)
 ##### Task 4.1.1c: Proto field + adapter mapping (XS)
-##### Task 4.1.1e: Fix the reload-only writer named by Spike 0.1.2, only if it is outside the `SessionActivity` owners (S)
+##### Task 4.1.1e: CLOSED as not needed (Spike 0.1.2 found no reload-only writer; ADR-005 findings) - was: fix the reload-only writer named by Spike 0.1.2 (S)
 - Conditional on Task 0.1.2c's verdict. *Given* ADR-005 names a server writer that changes `updated_at` or the card value on a plain reload (e.g. a `MarkViewed`/`UpdateLastViewed` path), *When* the fix lands, *Then* a characterization test that failed before (Task 0.1.2b) passes: reload without restart leaves `updated_at` and `last_meaningful_change_at` unchanged, and the writer no longer touches `updated_at` (its own field, e.g. `last_viewed`, still updates). Closed as "not needed" when the repro shows no reload-only writer.
 - Files (3): the writer file named in ADR-005, `session/instance_state_test.go`, ADR-005.
 
@@ -866,7 +866,7 @@ Shared files serialized: determiner (1.1.2->1.1.3->1.4->3.2.1), poller (1.2.x->3
 
 ##### Task 4.2.2a: Remove local `formatTimeAgo` copy at `SessionCard.tsx:485-490`; switch label (S)
 ##### Task 4.2.2b: Tests incl. reload-invariance and fallback (S)
-##### Task 4.2.2c: Client-side fix if Spike 0.1.2 finds the reset is a mount-relative client value, otherwise closed as not needed (XS)
+##### Task 4.2.2c: CLOSED as not needed (Spike 0.1.2: SessionCard derives from server `updatedAt`, not mount time; ADR-005 findings) (XS)
 - Conditional on Task 0.1.2c's verdict. Files (2): `SessionCard.tsx`, `SessionCard.test.tsx`.
 
 ---
