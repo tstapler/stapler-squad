@@ -11,7 +11,7 @@ import (
 // pinned independently of terminal detection.
 type stubDeterminer struct{ result DetectionResult }
 
-func (s stubDeterminer) Determine(*Instance, string, InstanceStatusInfo, detection.TerminalDetector) DetectionResult {
+func (s stubDeterminer) Determine(*Instance, string, InstanceStatusInfo, detection.TerminalDetector, DeterminerOptions) DetectionResult {
 	return s.result
 }
 

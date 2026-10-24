@@ -446,6 +446,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller := session.NewReviewQueuePoller(
 		core.ReviewQueue, statusManager, core.Storage,
 	)
+	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
 	prStatusPoller := session.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
@@ -1118,6 +1119,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		time.Sleep(500 * time.Millisecond)
 		contentProvider := session.NewPollerContentProvider()
 		scanner := session.NewStartupScanner(statusManager, contentProvider)
+		scanner.SetOptionsSource(attentionOptionsSource)
 		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
@@ -2092,4 +2094,15 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 		})
 	}
 	return items
+}
+
+// attentionOptionsSource adapts the live-settable attention flags to the session
+// package, which cannot import server/services.
+func attentionOptionsSource() (session.DeterminerOptions, session.RuleOptions) {
+	f := services.LoadAttentionFlags()
+	return session.DeterminerOptions{
+			IdleClockOutput: f.IdleClockOutput,
+			ProseQuestion:   f.ProseQuestionDetection,
+		},
+		session.RuleOptions{AckBypassFix: f.AckBypassFix}
 }

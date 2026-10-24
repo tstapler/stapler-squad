@@ -1606,3 +1606,14 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
 	}
 }
+
+func TestFakesForStatusDeterminer_Should_CompileAndRunPollerTests_When_SignatureUpdated(t *testing.T) {
+	t.Parallel()
+	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rec := &optsRecordingDeterminer{}
+	rqp.statusDeterminer = rec
+	rqp.checkSession(makeStaleInstance(rqp, "fake-sig"), nil)
+	if len(rec.seen) != 1 || rec.seen[0] != (DeterminerOptions{}) {
+		t.Errorf("seen = %+v, want one call with zero options", rec.seen)
+	}
+}
