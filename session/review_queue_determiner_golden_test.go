@@ -18,7 +18,7 @@ var updateDetermineGoldens = flag.Bool("update", false, "rewrite review_queue De
 const reviewQueueCorpusDir = "testdata/review_queue"
 
 // corpusPrograms lists every program dir and whether the terminal detector has patterns
-// for it. pi is driven by JSON events, so its terminal tails are expected to go undetected.
+// for it. pi has no detector row (session/detection/binaries/pi.go: empty Patterns, JSON-event driven), so its terminal tails go undetected.
 var corpusPrograms = map[string]bool{
 	"claude":   true,
 	"aider":    true,
