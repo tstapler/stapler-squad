@@ -27,6 +27,17 @@ const (
 	DetectionActionRemove                        // Remove item from queue
 )
 
+func (a DetectionAction) String() string {
+	switch a {
+	case DetectionActionAdd:
+		return "add"
+	case DetectionActionRemove:
+		return "remove"
+	default:
+		return "skip"
+	}
+}
+
 // DetectionResult is the output of status determination — pure data, no side effects.
 type DetectionResult struct {
 	Action       DetectionAction

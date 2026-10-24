@@ -117,18 +117,6 @@ func (r *raisedRecorder) raisedFor(title string) int {
 
 const matrixProsePrompt = "I found two ways to fix this.\nWhich approach would you like me to take?\n"
 
-// matrixInstance is a started session whose output and update times are offsets from now.
-func matrixInstance(title string, updatedAgo, outputAgo time.Duration) *Instance {
-	now := time.Now()
-	inst := &Instance{Title: title, UUID: "uuid-" + title, Status: Running}
-	inst.started.Store(true)
-	inst.CreatedAt = now.Add(-time.Hour)
-	inst.UpdatedAt = now.Add(-updatedAgo)
-	inst.LastMeaningfulOutput = now.Add(-outputAgo)
-	inst.SyncAtomicTimestamps()
-	return inst
-}
-
 func openItemsFor(p *ReviewQueuePoller, title string) int {
 	n := 0
 	for _, it := range p.queue.List() {
@@ -178,18 +166,18 @@ func (h *matrixHarness) run(t *testing.T, idx int, st matrixStage) {
 	h.status.statuses[human] = InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: detection.StatusInputRequired}
 	h.content.content[prose] = matrixProsePrompt
 
-	humanInst := matrixInstance(human, 0, 60*time.Second)
+	humanInst := startedInstance(human, withCreatedAgo(time.Hour), withAges(0, 60*time.Second))
 	h.poller.checkSession(humanInst, nil)
 	if got := openItemsFor(h.poller, human); got != 1 {
 		t.Fatalf("stage %d: needs-human items before ack = %d, want 1", idx, got)
 	}
 	// A fresh Instance carries the ack: direct field writes do not republish an existing snapshot.
-	ackedInst := matrixInstance(human, 0, 60*time.Second)
+	ackedInst := startedInstance(human, withCreatedAgo(time.Hour), withAges(0, 60*time.Second))
 	ackedInst.LastAcknowledged = time.Now().Add(-30 * time.Second)
 	ackedInst.SyncAtomicTimestamps()
 	h.poller.checkSession(ackedInst, nil)
-	h.poller.checkSession(matrixInstance(idleTitle, 2*time.Second, 10*time.Minute), nil)
-	h.poller.checkSession(matrixInstance(prose, 0, time.Second), nil)
+	h.poller.checkSession(startedInstance(idleTitle, withCreatedAgo(time.Hour), withAges(2*time.Second, 10*time.Minute)), nil)
+	h.poller.checkSession(startedInstance(prose, withCreatedAgo(time.Hour), withAges(0, time.Second)), nil)
 
 	for _, title := range []string{human, idleTitle, prose} {
 		if got := openItemsFor(h.poller, title); got > 1 {
@@ -233,7 +221,6 @@ func TestFlagMatrix_Should_KeepOneItemPerSessionNoBuriedProseQuestionAndNeedsHum
 // TestDetermineGolden_*, which runs with DeterminerOptions{}).
 func TestFlagMatrix_Should_MatchAllOffOutcome_When_InertFlagsOnOverCorpus(t *testing.T) {
 	t.Parallel()
-	clock := goldenClock{}
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 	for _, c := range corpusCases(t) {
@@ -242,8 +229,8 @@ func TestFlagMatrix_Should_MatchAllOffOutcome_When_InertFlagsOnOverCorpus(t *tes
 			t.Fatal(err)
 		}
 		raw := string(data)
-		off := determiner.Determine(clock.instance(c.name), raw, InstanceStatusInfo{}, detector, DeterminerOptions{})
-		on := determiner.Determine(clock.instance(c.name), raw, InstanceStatusInfo{}, detector, DeterminerOptions{ProseQuestion: true})
+		off := determiner.Determine(goldenInstance(c.name), raw, InstanceStatusInfo{}, detector, DeterminerOptions{})
+		on := determiner.Determine(goldenInstance(c.name), raw, InstanceStatusInfo{}, detector, DeterminerOptions{ProseQuestion: true})
 		if outcomeOf(off) != outcomeOf(on) {
 			t.Errorf("%s/%s: ProseQuestion changed outcome %+v -> %+v", c.program, c.name, outcomeOf(off), outcomeOf(on))
 		}

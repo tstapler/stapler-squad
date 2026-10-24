@@ -326,7 +326,7 @@ func (rqp *ReviewQueuePoller) cleanupOrphanedItems() {
 		// Remove items with zero or invalid LastActivity timestamps
 		if item.LastActivity.IsZero() || item.LastActivity.Before(minValidTime) {
 			log.Info("startup cleanup: removing orphaned item with invalid LastActivity", "session", item.SessionID, "last_activity", item.LastActivity)
-			rqp.queue.Remove(item.SessionID)
+			rqp.removeFromQueue(item.SessionID)
 			removedCount++
 		}
 	}
@@ -548,7 +548,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					rqp.queue.Remove(inst.Title)
+					rqp.removeFromQueue(inst.Title)
 					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
 				}
 			case Stopped:
@@ -706,7 +706,7 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 		go func(i *Instance) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			rqp.checkSessionWithOptions(i, paneActivity, opts, ruleOpts)
+			rqp.evaluateSession(i, paneActivity, opts, ruleOpts)
 		}(inst)
 	}
 	wg.Wait()
@@ -850,13 +850,6 @@ func skipReasonOf(snap *InstanceSnapshot, started bool) SkipReason {
 	return SkipNone
 }
 
-// checkSession checks a single session and adds/removes from queue as needed.
-// paneActivity is the snapshot from batchPaneActivity(); nil falls back to TTL cache.
-func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[string]time.Time) {
-	opts, ruleOpts := rqp.currentOptions()
-	rqp.checkSessionWithOptions(inst, paneActivity, opts, ruleOpts)
-}
-
 // SetEventRecorder wires the sink for AttentionRaised/Cleared events; nil restores the no-op.
 func (rqp *ReviewQueuePoller) SetEventRecorder(r SessionEventRecorder) {
 	rqp.mu.Lock()
@@ -902,8 +895,10 @@ func (rqp *ReviewQueuePoller) currentOptions() (DeterminerOptions, RuleOptions) 
 	return src.resolve()
 }
 
-// checkSessionWithOptions is checkSession with the cycle's flag options already resolved.
-func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivity map[string]time.Time, opts DeterminerOptions, ruleOpts RuleOptions) {
+// evaluateSession checks a single session and adds/removes from queue as needed, using the
+// cycle's already-resolved flag options. paneActivity is the snapshot from
+// batchPaneActivity(); nil falls back to the TTL cache.
+func (rqp *ReviewQueuePoller) evaluateSession(inst *Instance, paneActivity map[string]time.Time, opts DeterminerOptions, ruleOpts RuleOptions) {
 	// Skip paused, stopped, or unstarted sessions
 	if rqp.shouldSkipSession(inst) {
 		return
@@ -925,8 +920,6 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 	// Status determination: pure evaluation, no side effects.
 	// Handles controller-based and terminal-content detection, idle/staleness checks.
 	result := rqp.statusDeterminer.Determine(inst, content, statusInfo, rqp.statusDetector, opts)
-
-	shouldAdd := result.Action == DetectionActionAdd
 
 	if result.Action == DetectionActionRemove {
 		rqp.handleDetectedRemove(snap.Title, statusInfo)
@@ -962,11 +955,9 @@ func (rqp *ReviewQueuePoller) checkSessionWithOptions(inst *Instance, paneActivi
 		return
 	}
 
-	log.Debug("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", result.Reason.String(), "priority", result.Priority.String(), "context", result.Context)
+	log.Debug("final decision", "session", snap.Title, "reason", result.Reason.String(), "priority", result.Priority.String(), "context", result.Context)
 
-	if shouldAdd {
-		rqp.addDetectedItem(inst, snap, result, statusInfo)
-	}
+	rqp.addDetectedItem(inst, snap, result, statusInfo)
 }
 
 // handleDetectedRemove applies a determiner Remove action.
@@ -979,10 +970,6 @@ func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo Inst
 		}
 	}
 	rqp.removeFromQueue(title)
-}
-
-func isPromptReason(r AttentionReason) bool {
-	return r == ReasonApprovalPending || r == ReasonInputRequired || r == ReasonWaitingForUser
 }
 
 // addDetectedItem builds, enriches and enqueues the review item for an Add action.
@@ -1146,7 +1133,8 @@ func (rqp *ReviewQueuePoller) GetMonitoredCount() int {
 // the next poll cycle, providing <100ms feedback on user interactions.
 // Fetches a fresh pane activity snapshot for accurate cache invalidation.
 func (rqp *ReviewQueuePoller) CheckSession(inst *Instance) {
-	rqp.checkSession(inst, batchPaneActivity(""))
+	opts, ruleOpts := rqp.currentOptions()
+	rqp.evaluateSession(inst, batchPaneActivity(""), opts, ruleOpts)
 }
 
 // FindInstance finds an instance by session ID (exported for ReactiveQueueManager).

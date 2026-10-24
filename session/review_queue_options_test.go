@@ -1,9 +1,7 @@
 package session
 
 import (
-	"bytes"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -69,7 +67,8 @@ func TestDeterminerOptions_Should_BeZeroValue_When_NoSourceWired(t *testing.T) {
 func TestRuleOptions_Should_ReadAckBypassFlagOncePerCycleAndNotEnterDeterminer_When_ThreeSessionsPolled(t *testing.T) {
 	t.Parallel()
 	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
-	rqp.statusDeterminer = &optsRecordingDeterminer{}
+	rec := &optsRecordingDeterminer{}
+	rqp.statusDeterminer = rec
 
 	var reads atomic.Int32
 	rqp.SetOptionsSource(func() (DeterminerOptions, RuleOptions) {
@@ -87,13 +86,11 @@ func TestRuleOptions_Should_ReadAckBypassFlagOncePerCycleAndNotEnterDeterminer_W
 	if got := reads.Load(); got != 1 {
 		t.Errorf("resolver reads per cycle = %d, want 1", got)
 	}
-	for _, f := range []string{"review_queue_determiner.go", "review_queue_options.go"} {
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if bytes.Contains(src, []byte("AckBypassFix")) {
-			t.Errorf("%s mentions AckBypassFix; DeterminerOptions must not carry it", f)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, o := range rec.seen {
+		if o != (DeterminerOptions{}) {
+			t.Errorf("determiner saw %+v, want zero options (AckBypassFix is a RuleOptions flag)", o)
 		}
 	}
 }

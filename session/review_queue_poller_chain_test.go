@@ -125,20 +125,17 @@ func TestCheckSession_Should_PreserveCharacterizedSuppressionChain_When_Refactor
 	for _, tc := range chainCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			now := time.Now()
-			inst := &Instance{Title: "s", UUID: "uuid-s", Status: Running}
-			inst.started.Store(true)
-			inst.UpdatedAt = now
-			if tc.outputAgo != 0 {
-				inst.LastMeaningfulOutput = now.Add(-tc.outputAgo)
-			}
-			if tc.ackAgo != 0 {
-				inst.LastAcknowledged = now.Add(-tc.ackAgo)
-			}
-			if tc.addedAgo != 0 {
-				inst.LastAddedToQueue = now.Add(-tc.addedAgo)
-			}
-			inst.SyncAtomicTimestamps()
+			inst := startedInstance("s", func(inst *Instance, now time.Time) {
+				if tc.outputAgo != 0 {
+					inst.LastMeaningfulOutput = now.Add(-tc.outputAgo)
+				}
+				if tc.ackAgo != 0 {
+					inst.LastAcknowledged = now.Add(-tc.ackAgo)
+				}
+				if tc.addedAgo != 0 {
+					inst.LastAddedToQueue = now.Add(-tc.addedAgo)
+				}
+			})
 
 			poller := NewReviewQueuePoller(NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
 				"s": {IsControllerActive: tc.controllerActive},

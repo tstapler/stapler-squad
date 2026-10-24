@@ -176,12 +176,7 @@ func TestReaddLimit_Should_NotSuppress_When_NewEpisodeWithin2Minutes(t *testing.
 
 // pollerFor builds a poller whose determiner returns result for a started "demo" session.
 func pollerFor(result DetectionResult, mutate func(*Instance)) (*ReviewQueuePoller, *Instance) {
-	now := time.Now()
-	inst := &Instance{Title: "demo", UUID: "uuid-demo", Status: Running}
-	inst.started.Store(true)
-	inst.UpdatedAt = now
-	mutate(inst)
-	inst.SyncAtomicTimestamps()
+	inst := startedInstance("demo", func(inst *Instance, _ time.Time) { mutate(inst) })
 	poller := NewReviewQueuePoller(NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
 		"demo": {IsControllerActive: true},
 	}), nil)
@@ -298,5 +293,22 @@ func TestNeedsHumanReasons_Should_ListBlockingReasons_When_Queried(t *testing.T)
 	want := []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
 	if got := NeedsHumanReasons(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NeedsHumanReasons = %v, want %v", got, want)
+	}
+}
+
+func TestRemoveInstance_Should_ForgetExplainerState_When_SessionWasSkippedAndSuppressed(t *testing.T) {
+	t.Parallel()
+	poller, inst := pollerFor(chainAdd(PriorityLow, ReasonIdle), func(*Instance) {})
+	poller.explain.noteSkip("demo", SkipHidden)
+	poller.explain.noteDecision("demo", suppressDecision("grace"))
+	poller.AddInstance(inst)
+
+	poller.RemoveInstance("demo")
+
+	if _, ok := poller.explain.lastSkip.Load("demo"); ok {
+		t.Error("lastSkip entry leaked after RemoveInstance")
+	}
+	if _, ok := poller.explain.lastRule.Load("demo"); ok {
+		t.Error("lastRule entry leaked after RemoveInstance")
 	}
 }

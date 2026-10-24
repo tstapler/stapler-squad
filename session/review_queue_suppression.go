@@ -109,7 +109,8 @@ func evaluateRules(rules []suppressionRule, rc ruleCtx) SuppressionDecision {
 }
 
 // needsHumanReasons are the reasons that block the agent on a person; with
-// RuleOptions.AckBypassFix they escape the output-based ack snooze.
+// RuleOptions.AckBypassFix they escape the output-based ack snooze. The plan's fourth
+// reason, prose_question, arrives in PR B with the prose-question detector.
 var needsHumanReasons = []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
 
 // NeedsHumanReasons returns a copy of the needs-human reason set.

@@ -1,18 +1,23 @@
 package session
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// turnEndSink persists a turn-end fact; it never writes the acked episode.
-type turnEndSink interface {
+// TurnEndSink persists a turn-end fact; it never writes the acked episode.
+type TurnEndSink interface {
 	PersistTurnEnded(title string, turn TurnEnded) error
 }
 
-// SetTurnEndSink sets the turn-end persister at registration; nil keeps the no-op default.
-func (i *Instance) SetTurnEndSink(sink turnEndSink) {
+// SetTurnEndSink sets the turn-end persister at registration; nil (including a typed-nil
+// pointer) keeps the no-op default.
+func (i *Instance) SetTurnEndSink(sink TurnEndSink) {
+	if isNilInterface(sink) {
+		sink = nil
+	}
 	i.collabMu.Lock()
 	i.turnEndSink = sink
 	i.collabMu.Unlock()
@@ -25,7 +30,19 @@ func (i *Instance) SetEventRecorder(r SessionEventRecorder) {
 	i.collabMu.Unlock()
 }
 
-func (i *Instance) collaborators() (turnEndSink, SessionEventRecorder) {
+func isNilInterface(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
+}
+
+func (i *Instance) collaborators() (TurnEndSink, SessionEventRecorder) {
 	i.collabMu.RLock()
 	defer i.collabMu.RUnlock()
 	return i.turnEndSink, orNoopRecorder(i.eventRecorder)
@@ -36,7 +53,7 @@ func (i *Instance) collaborators() (turnEndSink, SessionEventRecorder) {
 func (i *Instance) RecordTurnEnd(text string, source TurnEndSource) {
 	turn := TurnEnded{Excerpt: text, Source: source, At: time.Now()}
 	var title string
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	err := i.sendSyncErr(func(s *instanceState) error {
 		s.inst.mu.Lock()
 		s.inst.TurnEnded = turn
 		s.inst.touchLocked(SessionEventTurnEnded, turn.At)
@@ -46,6 +63,11 @@ func (i *Instance) RecordTurnEnd(text string, source TurnEndSource) {
 		title = snap.Title
 		return nil
 	})
+	if err != nil {
+		// Actor stopped: the in-memory fact was not stored, so don't persist or record under an empty title.
+		log.Warn("turn end dropped; actor unavailable", "error", err)
+		return
+	}
 	sink, rec := i.collaborators()
 	if sink != nil {
 		if err := sink.PersistTurnEnded(title, turn); err != nil {

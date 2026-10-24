@@ -698,7 +698,7 @@ type Instance struct {
 
 	// collabMu guards the registration-time collaborators below; nil means no-op.
 	collabMu      sync.RWMutex
-	turnEndSink   turnEndSink
+	turnEndSink   TurnEndSink
 	eventRecorder SessionEventRecorder
 
 	// liveInstance is the actor handle for this instance; set by NewLiveInstance.

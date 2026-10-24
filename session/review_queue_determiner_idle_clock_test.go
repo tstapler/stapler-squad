@@ -8,17 +8,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
-func idleClockInstance(updatedAgo, outputAgo time.Duration) *Instance {
-	now := time.Now()
-	inst := &Instance{Title: "idle-clock", UUID: "uuid-idle-clock", Status: Running}
-	inst.started.Store(true)
-	inst.CreatedAt = now.Add(-time.Hour)
-	inst.UpdatedAt = now.Add(-updatedAgo)
-	inst.LastMeaningfulOutput = now.Add(-outputAgo)
-	inst.SyncAtomicTimestamps()
-	return inst
-}
-
 // idleClockDeterminer disables staleness so only the idle/stuck clocks decide the outcome.
 func idleClockDeterminer() *DefaultStatusDeterminer {
 	cfg := DefaultReviewQueuePollerConfig()
@@ -43,7 +32,7 @@ func TestDetermine_Should_ReturnIdleReason_When_IdleClockOutputOnAndOutputOlderT
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := idleClockInstance(2*time.Second, 10*time.Minute)
+			inst := startedInstance("idle-clock", withCreatedAgo(time.Hour), withAges(2*time.Second, 10*time.Minute))
 			got := determiner.Determine(inst, "", InstanceStatusInfo{}, detector, tc.opts)
 			assert.Equal(t, tc.wantAction, got.Action)
 			assert.Equal(t, tc.wantReason, got.Reason)
@@ -72,7 +61,7 @@ func TestDetermine_Should_ApplyStuckThresholdToOutputAge_When_IdleClockOutputOnA
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := idleClockInstance(time.Minute, 31*time.Minute)
+			inst := startedInstance("idle-clock", withCreatedAgo(time.Hour), withAges(time.Minute, 31*time.Minute))
 			got := determiner.Determine(inst, "", info, detector, tc.opts)
 			assert.Equal(t, tc.wantAction, got.Action)
 		})

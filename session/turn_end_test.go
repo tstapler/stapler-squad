@@ -70,3 +70,29 @@ func TestRecordTurnEnd_Should_CallSinkAndRecorderOnceAfterReleasingLock_When_Col
 	assert.Equal(t, 1, rec.calls)
 	assert.True(t, rec.lockFree, "recorder ran under i.mu")
 }
+
+func TestRecordTurnEnd_Should_SkipSinkAndRecorder_When_ActorStopped(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "stopped", Status: Running}
+	sink := &lockCheckingFake{inst: inst}
+	rec := &fakeRecorder{lockCheckingFake: lockCheckingFake{inst: inst}}
+	inst.SetTurnEndSink(sink)
+	inst.SetEventRecorder(rec)
+	NewLiveInstance(inst).Stop()
+
+	inst.RecordTurnEnd("late", TurnEndSourceHook)
+
+	assert.Equal(t, 0, sink.calls)
+	assert.Equal(t, 0, rec.calls)
+}
+
+func TestSetTurnEndSink_Should_KeepNoopDefault_When_TypedNilPassed(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "typednil", Status: Running}
+	var sink *lockCheckingFake
+	inst.SetTurnEndSink(sink)
+
+	inst.RecordTurnEnd("done", TurnEndSourceHook)
+
+	assert.Equal(t, "done", inst.Snapshot().TurnEnded.Excerpt)
+}

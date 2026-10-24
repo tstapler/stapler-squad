@@ -49,35 +49,18 @@ type determineGolden struct {
 	ControllerActive determineOutcome `json:"controller_active"`
 }
 
-// goldenClock stands in for an injected clock: Determine reads the wall clock directly,
-// so each instance's timestamps are taken from time.Now() at construction (parallel
-// subtests start late; a shared early instant drifts past the 5s idle threshold).
-type goldenClock struct{}
-
-func (c goldenClock) instance(title string) *Instance {
-	now := time.Now()
-	inst := &Instance{Title: title, UUID: "uuid-" + title, Status: Running}
-	inst.started.Store(true)
-	inst.UpdatedAt = now
-	inst.LastMeaningfulOutput = now.Add(-time.Second)
-	inst.SyncAtomicTimestamps()
-	return inst
-}
-
-func actionName(a DetectionAction) string {
-	switch a {
-	case DetectionActionAdd:
-		return "add"
-	case DetectionActionRemove:
-		return "remove"
-	default:
-		return "skip"
-	}
+// goldenInstance takes its timestamps from time.Now() at construction: Determine reads the
+// wall clock directly, and parallel subtests start late enough that a shared early instant
+// would drift past the 5s idle threshold.
+func goldenInstance(title string) *Instance {
+	return startedInstance(title, func(inst *Instance, now time.Time) {
+		inst.LastMeaningfulOutput = now.Add(-time.Second)
+	})
 }
 
 func outcomeOf(r DetectionResult) determineOutcome {
 	return determineOutcome{
-		Action:        actionName(r.Action),
+		Action:        r.Action.String(),
 		Reason:        string(r.Reason),
 		Priority:      r.Priority.String(),
 		Context:       r.Context,
@@ -112,15 +95,15 @@ func labelMatched(label string, r DetectionResult) bool {
 	return false
 }
 
-func determineCase(clock goldenClock, program, name, content string) determineGolden {
+func determineCase(program, name, content string) determineGolden {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 	title := program + "-" + name
 
-	noController := determiner.Determine(clock.instance(title), content, InstanceStatusInfo{}, detector, DeterminerOptions{})
+	noController := determiner.Determine(goldenInstance(title), content, InstanceStatusInfo{}, detector, DeterminerOptions{})
 
 	detected, detectedCtx := detector.DetectWithContextFromLines(strings.Split(content, "\n"))
-	withController := determiner.Determine(clock.instance(title), "", InstanceStatusInfo{
+	withController := determiner.Determine(goldenInstance(title), "", InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detected,
 		StatusContext:      detectedCtx,
@@ -164,7 +147,6 @@ func corpusCases(t *testing.T) []corpusCase {
 
 func TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgyPiGeminiOpencodeCorpus(t *testing.T) {
 	t.Parallel()
-	clock := goldenClock{}
 	perProgram := map[string]int{}
 
 	for _, c := range corpusCases(t) {
@@ -175,7 +157,7 @@ func TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgy
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := json.MarshalIndent(determineCase(clock, c.program, c.name, string(raw)), "", "  ")
+			got, err := json.MarshalIndent(determineCase(c.program, c.name, string(raw)), "", "  ")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,7 +188,6 @@ func TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgy
 
 func TestDetermineGolden_Should_ReportMissingSignalPerProgram_When_ProgramRowIsNone(t *testing.T) {
 	t.Parallel()
-	clock := goldenClock{}
 	for _, c := range corpusCases(t) {
 		if corpusPrograms[c.program] {
 			continue
@@ -215,7 +196,7 @@ func TestDetermineGolden_Should_ReportMissingSignalPerProgram_When_ProgramRowIsN
 		if err != nil {
 			t.Fatal(err)
 		}
-		g := determineCase(clock, c.program, c.name, string(raw))
+		g := determineCase(c.program, c.name, string(raw))
 		if g.DetectedStatus != detection.StatusUnknown.String() && g.DetectedStatus != detection.StatusIdle.String() {
 			t.Errorf("%s/%s: program has no detector row but detected %q; update corpusPrograms", c.program, c.name, g.DetectedStatus)
 		}

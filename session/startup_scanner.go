@@ -37,10 +37,10 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 	scanned, added := 0, 0
 	opts, _ := ss.optionsSource.resolve()
 	for _, inst := range instances {
-		// Mirrors ReviewQueuePoller.shouldSkipSession's ArchivedAt guard (Hidden
-		// is deliberately NOT checked here — Determine()'s reason-scoped Hidden
-		// gate handles that, see its comment and TestScan_SkipsHiddenInstance_
-		// ForSuppressedReasonsOnly). Without the ArchivedAt check, a soft-archived
+		// Mirrors ReviewQueuePoller.shouldSkipSession's ArchivedAt guard but cannot reuse
+		// skipReasonOf: Hidden is deliberately NOT skipped here (Determine()'s reason-scoped
+		// Hidden gate handles that, see TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly)
+		// and only Paused, not every suspended status, is. Without the ArchivedAt check, a soft-archived
 		// session with a long-dead tmux pane looks like a brand-new stale/idle
 		// session on every server restart (the startup scan runs once, before
 		// the poller's steady-state counterpart of this guard ever sees it) and
