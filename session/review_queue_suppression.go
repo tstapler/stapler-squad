@@ -202,7 +202,8 @@ func countAttentionSkip(r SkipReason) {
 }
 
 // suppressionExplainer makes the poller's silent decisions visible: one Debug line per
-// suppression change and one line per first skip. The zero value logs and counts for real;
+// suppression change, and one log line plus one attention_skip_total increment per first skip
+// (or change of skip reason). The zero value logs and counts for real;
 // tests replace the funcs.
 type suppressionExplainer struct {
 	debug     func(msg string, args ...any)
@@ -232,14 +233,14 @@ func (e *suppressionExplainer) noteSkip(title string, r SkipReason) {
 		e.lastSkip.Delete(title)
 		return
 	}
+	if prev, ok := e.lastSkip.Swap(title, r); ok && prev == r {
+		return
+	}
 	count := e.countSkip
 	if count == nil {
 		count = countAttentionSkip
 	}
 	count(r)
-	if prev, ok := e.lastSkip.Swap(title, r); ok && prev == r {
-		return
-	}
 	info := e.info
 	if info == nil {
 		info = log.Info

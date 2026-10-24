@@ -1647,8 +1647,8 @@ func TestShouldSkipSession_Should_LogOncePerSessionAndIncrementSkipCounter_When_
 	}
 	poller.shouldSkipSession(hidden)
 
-	if counts[SkipHidden] != 2 || counts[SkipSuspended] != 1 {
-		t.Errorf("counts = %v, want hidden=2 (two evaluations) suspended=1", counts)
+	if counts[SkipHidden] != 1 || counts[SkipSuspended] != 1 {
+		t.Errorf("counts = %v, want hidden=1 suspended=1 (one increment per skipped session, not per evaluation)", counts)
 	}
 	want := []string{
 		"skipping session session=sys-1 skip_reason=hidden",

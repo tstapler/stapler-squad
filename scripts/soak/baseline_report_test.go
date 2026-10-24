@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-var t0 = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+func t0() time.Time { return time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC) }
 
 func notif(session string, typ int32, ago time.Duration) Notification {
-	return Notification{SessionID: session, NotificationType: typ, CreatedAt: t0.Add(-ago)}
+	return Notification{SessionID: session, NotificationType: typ, CreatedAt: t0().Add(-ago)}
 }
 
 func TestBaselineReport_Should_ComputeDetectedButMissedRateWithWindowAndSampleSize_When_FixtureHistoryReplayed(t *testing.T) {
-	viewed := t0.Add(-48*time.Hour + 10*time.Minute)
+	viewed := t0().Add(-48*time.Hour + 10*time.Minute)
 	touches := map[string]Touch{
 		"a": {Program: "claude", LastViewed: viewed},
 		"b": {Program: "claude"},
@@ -26,7 +26,7 @@ func TestBaselineReport_Should_ComputeDetectedButMissedRateWithWindowAndSampleSi
 		notif("c", typeError, 2*time.Hour),           // missed
 		notif("a", 4, time.Hour),                     // not needs-operator
 	}
-	rep := ComputeDetectedMissed(recs, touches, t0, 30, 30*time.Minute)
+	rep := ComputeDetectedMissed(recs, touches, t0(), 30, 30*time.Minute)
 	if rep.Total.Episodes != 3 || rep.Total.Missed != 2 {
 		t.Fatalf("total = %+v", rep.Total)
 	}
@@ -40,7 +40,7 @@ func TestBaselineReport_Should_ComputeDetectedButMissedRateWithWindowAndSampleSi
 
 func TestBaselineReport_Should_StateActualCoveredWindowAndLimitations_When_HistoryShorterThan30Days(t *testing.T) {
 	recs := []Notification{notif("a", typeError, 5*24*time.Hour), notif("a", typeError, time.Hour)}
-	rep := ComputeDetectedMissed(recs, nil, t0, 30, 30*time.Minute)
+	rep := ComputeDetectedMissed(recs, nil, t0(), 30, 30*time.Minute)
 	if rep.CoveredDays > 5.1 || rep.CoveredDays < 4.9 {
 		t.Fatalf("covered days = %v", rep.CoveredDays)
 	}
@@ -82,7 +82,7 @@ func TestBaselineReport_Should_SwitchToNoIncreasePlusRecallTarget_When_B1Below5P
 
 func TestBaselineReport_Should_AveragePageViewsOverTrailing14CompleteDays(t *testing.T) {
 	perDay := map[string]int{"2026-10-23": 14, "2026-10-10": 14, "2026-10-24": 1000, "2026-10-09": 1000}
-	u := ComputeU1(perDay, t0, 14)
+	u := ComputeU1(perDay, t0(), 14)
 	if u.Total != 28 || u.Mean != 2 {
 		t.Fatalf("u1 = %+v", u)
 	}
