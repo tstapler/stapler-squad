@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, RefObject } from "react";
+import { useState, useEffect, useRef, type RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   getNotificationPreference,
@@ -226,6 +226,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
             onClick={onClose}
             aria-label="Close debug menu"
           >
+            {/* analytics-exempt */}
             ×
           </button>
         </div>
@@ -259,6 +260,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 role="switch"
                 aria-checked={notificationsEnabled}
               >
+                {/* analytics-exempt */}
                 <span className={toggleSlider} />
               </button>
             </label>
@@ -280,6 +282,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 role="switch"
                 aria-checked={serverDebugLog}
               >
+                {/* analytics-exempt */}
                 <span className={toggleSlider} />
               </button>
             </label>
@@ -297,6 +300,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 role="switch"
                 aria-checked={terminalDebug}
               >
+                {/* analytics-exempt */}
                 <span className={toggleSlider} />
               </button>
             </label>
@@ -309,6 +313,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
               className={debugLink}
               onClick={onClose}
             >
+              {/* analytics-exempt */}
               <span className={debugLinkIcon}>📊</span>
               <div className={debugLinkContent}>
                 <span className={debugLinkName}>Escape Code Analytics</span>
@@ -340,6 +345,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
               disabled={isCapturing}
               aria-label="Capture debug snapshot"
             >
+              {/* analytics-exempt */}
               {isCapturing ? (
                 <>
                   <span className={spinner} /> Capturing...
@@ -354,6 +360,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
               onClick={handleCopyPerfDiagnostics}
               aria-label="Copy perf diagnostics"
             >
+              {/* analytics-exempt */}
               {perfCopied ? <>✓ Copied</> : <>⏱ Copy Perf Diagnostics</>}
             </button>
 
@@ -396,6 +403,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
 
         <div className={footer}>
           <button className={doneButton} onClick={onClose}>
+            {/* analytics-exempt */}
             Done
           </button>
         </div>
