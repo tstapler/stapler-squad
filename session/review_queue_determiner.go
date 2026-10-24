@@ -147,7 +147,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	content string,
 	statusInfo InstanceStatusInfo,
 	detector detection.TerminalDetector,
-	_ DeterminerOptions, // plumbed for Story 1.4.1; no flag is consumed yet
+	opts DeterminerOptions,
 ) DetectionResult {
 	// claudeStatus captures the raw DetectedStatus from whichever detection path ran.
 	// For controller sessions this is statusInfo.ClaudeStatus; for no-controller sessions
@@ -156,12 +156,12 @@ func (d *DefaultStatusDeterminer) Determine(
 	var v verdict
 
 	if statusInfo.IsControllerActive {
-		if d.determineFromController(inst, statusInfo, &v) {
+		if d.determineFromController(inst, statusInfo, opts, &v) {
 			return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 		}
 	} else {
 		var remove bool
-		claudeStatus, remove = d.determineFromContent(inst, content, claudeStatus, detector, &v)
+		claudeStatus, remove = d.determineFromContent(inst, content, claudeStatus, detector, opts, &v)
 		if remove {
 			return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 		}
@@ -199,7 +199,7 @@ func (d *DefaultStatusDeterminer) Determine(
 
 // determineFromController handles sessions with an active controller. It reports true when
 // the session should be removed from the queue.
-func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, statusInfo InstanceStatusInfo, v *verdict) (remove bool) {
+func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, statusInfo InstanceStatusInfo, opts DeterminerOptions, v *verdict) (remove bool) {
 	// Status-based conditions (approval, input required, error) take priority over idle
 	// state: they are explicit user prompts, even if terminal activity looks "active".
 	// PendingApprovals counts alongside StatusNeedsApproval because the controller may
@@ -211,7 +211,7 @@ func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, status
 	if dec, ok := reasonForStatus(status, statusInfo.StatusContext); ok {
 		v.apply(dec)
 	} else if status == detection.StatusWaitingForAgent &&
-		time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
+		idleClockAge(inst, opts) < waitingForAgentStuckThreshold {
 		// Mirrors the no-controller grace-period logic: trust WaitingForAgent as real
 		// background activity only while recently updated. A stale one falls through
 		// to idle-state handling.
@@ -239,7 +239,7 @@ func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, status
 
 // determineFromContent handles sessions with no active controller by detecting status from
 // terminal content. It returns the detected status and whether to remove the session.
-func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content string, claudeStatus detection.DetectedStatus, detector detection.TerminalDetector, v *verdict) (detection.DetectedStatus, bool) {
+func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content string, claudeStatus detection.DetectedStatus, detector detection.TerminalDetector, opts DeterminerOptions, v *verdict) (detection.DetectedStatus, bool) {
 	if content != "" {
 		// Line-by-line detection (bottom-up scan) so recent terminal state wins over stale
 		// scrollback. DetectWithContext (full-block) fires error patterns on old
@@ -252,7 +252,7 @@ func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content s
 			log.Debug("status detected (no controller)", "session", inst.Title, "reason", dec.Reason)
 		} else if isActiveStatus(detected) {
 			return claudeStatus, true
-		} else if detected == detection.StatusWaitingForAgent && time.Since(inst.Snapshot().UpdatedAt) < waitingForAgentStuckThreshold {
+		} else if detected == detection.StatusWaitingForAgent && idleClockAge(inst, opts) < waitingForAgentStuckThreshold {
 			// Reachable via the always-present auto-mode footer override
 			// (detection/detector.go's applyFooterIdleOverride), so it is not unconditional
 			// evidence of activity: a stuck background shell would otherwise exclude an
@@ -264,12 +264,21 @@ func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content s
 	// No status-based condition: fall back to time-based idle, unless the user already
 	// acknowledged this session and nothing new has happened since.
 	const basicIdleThreshold = 5 * time.Second
-	if !v.shouldAdd && time.Since(inst.Snapshot().UpdatedAt) > basicIdleThreshold && !d.suppressedByAck(inst) {
+	if !v.shouldAdd && idleClockAge(inst, opts) > basicIdleThreshold && !d.suppressedByAck(inst) {
 		v.markIdle()
 	}
 
 	d.checkUncommitted(inst, v)
 	return claudeStatus, false
+}
+
+// idleClockAge is the age the idle and WaitingForAgent thresholds compare against: time
+// since the last meaningful output when IdleClockOutput is on, else since the last update.
+func idleClockAge(inst *Instance, opts DeterminerOptions) time.Duration {
+	if opts.IdleClockOutput {
+		return inst.GetTimeSinceLastMeaningfulOutput()
+	}
+	return time.Since(inst.Snapshot().UpdatedAt)
 }
 
 func isActiveStatus(s detection.DetectedStatus) bool {
