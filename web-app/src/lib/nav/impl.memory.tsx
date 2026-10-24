@@ -77,6 +77,7 @@ export const Link = forwardRef<HTMLAnchorElement, NavLinkProps>(function Link(
   const router = useRouter();
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event);
+    if (href.startsWith("#")) return; // same-page hash links belong to the browser, as in the other impls
     const plainLeftClick = event.button === 0 && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
     if (event.defaultPrevented || !plainLeftClick || (target && target !== "_self")) return;
     event.preventDefault();

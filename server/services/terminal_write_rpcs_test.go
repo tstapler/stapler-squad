@@ -51,7 +51,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"DeleteLivenessDefinition", "DeletePipelineMode", "DeleteStage", "DeleteStageTransition",
 		"DeleteTransitionGate", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
 		"GetBacklogItemShipStatus", "GetLivenessDefinition", "GetPendingGates", "GetPipelineMode",
-		"GetSessionBacklogIndex", "GetStage", "GetStageTransition", "GetSyncHistory", "GetTransitionGate",
+		"GetSessionBacklogIndex", "GetStage", "GetStageTransition", "GetSyncHistory", "GetTransitionGate", "GetWorkflowEngineStatus",
 		"ImportGitHubIssue", "ListBacklogItemDependencies", "ListBacklogItems", "ListForeignClaims", "ListGitHubIssues", "ListItemSources",
 		"ListLivenessDefinitions", "ListPipelineModes", "ListStages", "ListStageTransitions",
 		"ListStuckBacklogItems", "ListTransitionGates", "OverrideClaimBlock", "OverrideVerdict",
@@ -94,6 +94,9 @@ var notTerminalWriteRPCs = map[string][]string{
 	},
 	"WakeTriggerService": {
 		"CancelWakeTrigger", "CreateOperatorReminder", "ListPeerHelpRequests", "ListWakeTriggers",
+	},
+	"QuotaService": {
+		"GetQuotaConfig", "UpdateQuotaConfig", // read and edit backlog quota tuning; type into no pane
 	},
 	"RemoteService": {
 		"CreateRemote", "DeleteRemote", "GenerateRemoteIdentity", "ListRemotes", "TestRemoteConnection",

@@ -42,6 +42,14 @@ jest.mock("@/lib/contexts/AnalyticsContext", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
 
+jest.mock("react-markdown", () => ({
+  __esModule: true,
+  default: ({ children }: { children: string }) => (
+    <div data-testid="mock-markdown">{children}</div>
+  ),
+}));
+jest.mock("remark-gfm", () => ({ __esModule: true, default: () => {} }));
+
 function mockListingOnce(body: unknown) {
   (global.fetch as jest.Mock).mockResolvedValueOnce({
     ok: true,
@@ -156,4 +164,64 @@ describe("LocalFileBrowser — truncation notice", () => {
     const notice = await screen.findByTestId("file-browser-truncation-notice", {}, { timeout: 15000 });
     expect(notice).toHaveTextContent("Showing first 2000 of 2001 entries");
   }, 20000);
+});
+
+describe("LocalFileBrowser — markdown viewer", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  it("renders .md files via the markdown path and toggles to the raw <pre> view", async () => {
+    mockListingOnce({
+      path: "/home/user",
+      parent: "/home",
+      total: 1,
+      has_more: false,
+      entries: [{ name: "README.md", path: "/home/user/README.md", is_dir: false, size: 10 }],
+    });
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve("# Hello"),
+    });
+
+    render(<LocalFileBrowser />);
+    fireEvent.click(await screen.findByText("README.md"));
+
+    expect(await screen.findByTestId("mock-markdown")).toHaveTextContent("# Hello");
+    const toggle = screen.getByTestId("file-browser-viewer-toggle-raw");
+    expect(toggle).toHaveTextContent("Raw");
+    expect(document.querySelector("pre")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(screen.queryByTestId("mock-markdown")).not.toBeInTheDocument();
+    expect(document.querySelector("pre")).toHaveTextContent("# Hello");
+    expect(toggle).toHaveTextContent("Rendered");
+  });
+
+  it("opens the next markdown file in Rendered mode after Raw was chosen on the previous one", async () => {
+    mockListingOnce({
+      path: "/home/user",
+      parent: "/home",
+      total: 2,
+      has_more: false,
+      entries: [
+        { name: "A.md", path: "/home/user/A.md", is_dir: false, size: 10 },
+        { name: "B.md", path: "/home/user/B.md", is_dir: false, size: 10 },
+      ],
+    });
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve("# A") })
+      .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve("# B") });
+
+    render(<LocalFileBrowser />);
+    fireEvent.click(await screen.findByText("A.md"));
+    fireEvent.click(await screen.findByTestId("file-browser-viewer-toggle-raw"));
+    expect(document.querySelector("pre")).toHaveTextContent("# A");
+
+    fireEvent.click(screen.getByText("B.md"));
+
+    expect(await screen.findByTestId("mock-markdown")).toHaveTextContent("# B");
+    expect(screen.getByTestId("file-browser-viewer-toggle-raw")).toHaveTextContent("Raw");
+  });
 });

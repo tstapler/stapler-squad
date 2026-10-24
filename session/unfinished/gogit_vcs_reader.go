@@ -808,7 +808,12 @@ func (g *GoGitVCSReader) gogitstoreRegistry() *gogitstore.Registry {
 // miss (bounded by distinct-repo count and TTL eviction, not per
 // git-operation), so that cost is negligible in practice.
 func syncMmapIndexFlag(reg *gogitstore.Registry) {
-	reg.SetUseMmapIndex(config.LoadConfig().GetFeatureFlag(mmapIndexFeatureFlag))
+	reg.SetUseMmapIndex(MmapIndexEnabled())
+}
+
+// MmapIndexEnabled reports the live state of the unfinished:mmap-index flag.
+func MmapIndexEnabled() bool {
+	return config.LoadConfig().GetFeatureFlag(mmapIndexFeatureFlag)
 }
 
 var _ VCSReader = (*GoGitVCSReader)(nil)

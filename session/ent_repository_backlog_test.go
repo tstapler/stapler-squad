@@ -479,7 +479,7 @@ func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetRe
 	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusInProgress, nil, "test")
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusInProgress, nil, "test")
 	require.NoError(t, err)
 
 	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
@@ -517,7 +517,7 @@ func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDo
 	require.NoError(t, err)
 	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker ships")
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
 	require.NoError(t, err)
 
 	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
@@ -551,7 +551,7 @@ func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_Blo
 	require.NoError(t, err)
 	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker is archived")
 
-	_, err = repo.TransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusArchived, nil, "test")
+	_, err = repo.rawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusArchived, nil, "test")
 	require.NoError(t, err)
 
 	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})

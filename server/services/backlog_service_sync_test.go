@@ -38,7 +38,7 @@ func TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFa
 		session.BacklogStatusReady, session.BacklogStatusInProgress,
 		session.BacklogStatusReview, session.BacklogStatusDone,
 	} {
-		_, err := storage.TransitionBacklogItemStatus(t.Context(), itemID, target, nil, session.TriggeredBySystem)
+		_, err := storage.RawTransitionBacklogItemStatus(t.Context(), itemID, target, nil, session.TriggeredBySystem)
 		require.NoError(t, err, "transition to %s", target)
 	}
 
@@ -81,7 +81,7 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
 
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	resp, err := svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{

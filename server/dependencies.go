@@ -99,6 +99,10 @@ type ServerDependencies struct {
 	QuotaGate *services.QuotaGate
 	SyncLoop  *session.SyncLoop
 
+	// WorkflowEngine is the selector/recorder stack behind BacklogService's
+	// engine; the server starts its recorder and wires the soak actuator.
+	WorkflowEngine *WorkflowEngineWiring
+
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag. See RuntimeDeps.BacklogEnabledCheck.
 	BacklogEnabledCheck func() bool
@@ -207,6 +211,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		BacklogService:                 rt.BacklogService,
 		QuotaGate:                      rt.QuotaGate,
 		SyncLoop:                       rt.SyncLoop,
+		WorkflowEngine:                 rt.WorkflowEngine,
 		BacklogEnabledCheck:            rt.BacklogEnabledCheck,
 		AnalyticsEntClient:             rt.AnalyticsEntClient,
 		VNCDeps:                        rt.VNCDeps,
@@ -515,7 +520,15 @@ type RuntimeDeps struct {
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
 	SyncLoop  *session.SyncLoop
-	Config    *config.Config // Used for encryption of sensitive data
+
+	// WorkflowEngine (see the identically-named field on ServerDependencies).
+	WorkflowEngine *WorkflowEngineWiring
+
+	// BacklogController starts and stops the periodic SyncLoop; exposed so the
+	// production-wiring test can check which engine that loop holds.
+	BacklogController *session.BacklogController
+
+	Config *config.Config // Used for encryption of sensitive data
 
 	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
 	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
@@ -679,7 +692,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// WorkflowEngine governs backlog state transitions; constructed once and shared
 	// by the service layer.
-	workflowEngine := session.NewDefaultWorkflowEngine()
+	defaultWorkflowEngine := session.NewDefaultWorkflowEngine()
 
 	// PipelineEngine resolves a backlog item's slash-command set / prompts (Epic 1.5).
 	// Constructed here — before NewBacklogLifecycleListenerWithPool and
@@ -762,7 +775,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// TransitionGate CRUD RPCs (Epic 2.7 of backlog-custom-workflow-stages).
 	// stageConfigEngine here is used only for its InvalidateCache method —
 	// those write handlers' downstream cache-invalidation target — not as
-	// the active session.WorkflowEngine (workflowEngine above still is);
+	// the active session.WorkflowEngine (the workflowEngine selector below is);
 	// switching runtime transition/gate evaluation over to
 	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
 	// posture as pipelineEngine/livenessEngine above.
@@ -782,6 +795,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	} else {
 		log.Warn("stageCRUDRepo unavailable: storage is not ent-backed; Stage/StageTransition/TransitionGate CRUD RPCs will return CodeUnavailable")
 	}
+
+	// The selector must exist, with its shadow recorder, before NewBacklogService
+	// and the BacklogController's SyncLoop take their engine.
+	workflowEngine := newWorkflowEngineWiring(defaultWorkflowEngine, stageConfigEngine, storage.GetEntClient(), config.LoadConfig)
+	session.InitNudgeOutcomes()
 
 	// Construct the headless LLM pool early so the lifecycle listener can receive it
 	// via constructor (eliminating the post-construction wiring race). Non-fatal if
@@ -1425,6 +1443,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		keyFunc = cfg.GetOrCreateEncryptionKey
 	}
 	backlogCtrl := session.NewBacklogController(backlogLifecycleListener, storage, syncRegistry, keyFunc)
+	backlogCtrl.SetWorkflowEngine(workflowEngine.Engine)
 	if cfg.GetFeatureFlag("backlog") {
 		if err := backlogCtrl.Enable(context.Background()); err != nil {
 			log.Error("failed to enable backlog feature on startup — disk config says enabled but the runtime controller is not; TriggerSync will reject calls until this is retried", "err", err)
@@ -1459,6 +1478,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		eventBus,
 	)
 	sessionService.SetQuotaGate(quotaGate)
+	services.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
 	quotaGate.Reconcile(context.Background())
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
@@ -1494,8 +1514,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}
 
-	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine, pipelineEngine, pipelineModeRepo)
+	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
+		return nil, gateErr
+	}
 	backlogSvc.SetLivenessRepository(livenessRepo)
+	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
+	backlogSvc.SetWorkflowEngineStatusSource(workflowEngine.Status)
+	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
 	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)
@@ -1559,7 +1585,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// literal only. Guarded the same way backlogSvc.SetStageConfigEngine is
 	// above: stageConfigEngine is a concrete *session.ConfiguredWorkflowEngine,
 	// and passing a nil one through SetWorkflowEngine's interface parameter
-	// would box it as a non-nil-interface-wrapping-nil-pointer.
+	// would box it as a non-nil-interface-wrapping-nil-pointer. Never pass the
+	// workflowEngine.Engine selector here: the listener type-asserts the concrete
+	// engine, and the selector would silently disable gate-context resolution.
 	if stageConfigEngine != nil {
 		backlogLifecycleListener.SetWorkflowEngine(stageConfigEngine)
 	}
@@ -1661,6 +1689,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	sessionService.SetResolveConversationUUID(storage.GetClaudeConversationUUIDBySessionUUID)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 	sessionService.SetStatusDetailProvider("backlog", quotaGate.StatusDetail)
+	workflowEngine.RegisterStatusDetail(sessionService)
 	// Read-only visibility for the restart-with-handoff-summary feature (see
 	// services.HandoffSummaryFeatureController's doc comment): lets the frontend
 	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
@@ -1939,6 +1968,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}()
 
+	// Unwired, GatedTransition answers in Off mode, so every transition would pass unchecked.
+	if !storage.TransitionGateWired() {
+		return nil, errors.New("workflow engine transition gate is not wired; refusing to start with unchecked transitions")
+	}
+
 	return &RuntimeDeps{
 		HeadlessPool:                   headlessPool,
 		LLMSelector:                    llmSelector,
@@ -1968,6 +2002,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		BacklogService:                 backlogSvc,
 		QuotaGate:                      quotaGate,
 		SyncLoop:                       nil, // managed by BacklogController
+		WorkflowEngine:                 workflowEngine,
+		BacklogController:              backlogCtrl,
 		BacklogEnabledCheck:            backlogCtrl.IsEnabled,
 		Config:                         cfg,
 		AnalyticsEntClient:             analyticsClient,

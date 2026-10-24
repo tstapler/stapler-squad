@@ -291,7 +291,8 @@ Per `local-dev-port-management`'s Sequential Batch Strategy: a fixed block reser
 | 62872 | Manual instance #1 — `--remote-port` |
 | 62873 | Manual instance #2 — `PORT` (when a second concurrent instance is needed, e.g. comparing before/after) |
 | 62874 | Manual instance #2 — `--remote-port` |
-| 62875–62880 | Spare |
+| 62875 | Bun dev server (`web-app/build/dev.ts`, `WEB_BUILD=bun`; localhost only) |
+| 62876–62880 | Spare |
 
 `tests/e2e/` doesn't use this block — it allocates a free ephemeral port per run via `findFreePort()` (`tests/e2e/helpers/test-server.ts`), which needs no fixed reservation.
 
@@ -329,6 +330,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
+| Build the web UI: `WEB_BUILD` next/bun, `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
 | macOS code signing / TCC | `docs/how-to/macos-codesigning.md` |
 | PTY multiplexing (ssq-mux) | `docs/how-to/monitor-external-terminal-sessions.md` |
 | State file isolation / multi-instance | `docs/reference/state-isolation.md` |
@@ -379,3 +381,4 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Verify the notification-actions rollout on an isolated instance, per flag | `docs/how-to/verify-notification-actions-rollout.md` |
 | Flag-default flip PR checklist for the four notification-actions flags | `docs/how-to/flag-default-flip-pr-template.md` |
 | Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |
+| Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |

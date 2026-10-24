@@ -13,6 +13,13 @@ on:
       - 'web-app/src/**'
       - 'web-app/package.json'
       - 'web-app/bun.lock'
+      - 'web-app/build/**'
+      - 'web-app/index.html'
+      - 'web-app/patches/**'
+      - 'web-app/bunfig.toml'
+      - 'web-app/scripts/ci/**'
+      - 'server/middleware/testdata/**'
+      - '.bun-version'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -77,7 +84,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -112,7 +119,7 @@ jobs:
     uses: ./.github/workflows/_prepare.yml
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # web-build-smoke: proves `make web-build` succeeds standalone on a bare
+  # web-build-smoke-next: proves `make web-build` succeeds standalone on a bare
   # checkout, with none of the manual buf/bun pre-steps that `prepare` (above)
   # runs by hand. `prepare` bypasses the Makefile's own dependency graph, so it
   # cannot catch a missing prerequisite there (e.g. `web-app/out` not depending
@@ -120,7 +127,7 @@ jobs:
   # documented in CLAUDE.md/README (`make web-build`) the way a fresh clone
   # actually would.
   # ─────────────────────────────────────────────────────────────────────────────
-  web-build-smoke:
+  web-build-smoke-next:
     name: make web-build (clean checkout smoke test)
     runs-on: ubuntu-latest
     needs: detect-changes
@@ -184,6 +191,456 @@ jobs:
 
       - name: Verify proto bindings were generated
         run: test -f web-app/src/gen/session/v1/session_pb.ts
+
+      # Storybook's webpackFinal requires babel-loader/presets directly; under
+      # bunfig's isolated linker an undeclared transitive dep fails here.
+      - name: Build Storybook
+        working-directory: web-app
+        env:
+          STORYBOOK_DISABLE_TELEMETRY: '1'
+        run: bun run build-storybook
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # web-build-smoke-bun: the same clean-checkout proof for the Bun pipeline
+  # (WEB_BUILD=bun, web-app/build/). Runs and reports from its first appearance but
+  # is NOT a member of web-build-gate until the repository variable
+  # WEB_BUILD_GATE_MEMBERS says so (plan decision 10); it is not continue-on-error.
+  # No matrix: a matrix leg has no needs.<job>.result of its own, and fail-fast would
+  # cancel the Next job when Bun fails.
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-build-smoke-bun:
+    name: make web-build WEB_BUILD=bun (clean checkout smoke test)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    timeout-minutes: 15
+    # always() for the same reason as web-build-smoke-next above.
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # Pinned by commit SHA inside the composite action; reads .bun-version.
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/buf
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      # Exact key, no restore-keys: a partial restore could keep a stale or unpatched
+      # `eval` (oven-sh/bun#33520); the build's guard stage also fails loudly on that.
+      - name: Cache shared node_modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.stapler-squad/shared-node-modules
+          key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
+
+      # Retried once: wall time is a budget (maxWallMs) and a loaded runner can miss it.
+      - name: make web-build (WEB_BUILD=bun, unminified cutover default)
+        env:
+          WEB_BUILD: bun
+          WEB_MINIFY: '0'
+        run: make web-build || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make web-build; }
+
+      - name: Verify proto bindings were generated
+        run: test -f web-app/src/gen/session/v1/session_pb.ts
+
+      # Byte budgets apply to the minified build (ADR-004); it is written outside web-app/out,
+      # so it never reaches the embedded server/web/dist. build.ts runs verify-output itself.
+      - name: Minified size build and budget check
+        working-directory: web-app
+        run: |
+          bun build/build.ts --out .build/out-min --stats .build/stats-minified.json \
+            || { echo "retrying once (host load)"; bun build/build.ts --out .build/out-min --stats .build/stats-minified.json; }
+
+      - name: Write build stats to the step summary
+        working-directory: web-app
+        run: bun build/stats-cli.ts .build/stats.json .build/stats-minified.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build stats
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build-bun-stats
+          path: |
+            web-app/.build/stats.json
+            web-app/.build/stats-minified.json
+          if-no-files-found: warn
+
+      # The Go auth-exemption walk (built-assets-guard) tests exactly what would be embedded.
+      - name: Upload built out/
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build-bun-out
+          path: web-app/out
+          if-no-files-found: error
+          retention-days: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # built-assets-guard: every file of the Bun build must be auth-exempt or on the public
+  # allowlist (server/middleware/built_assets_test.go). REQUIRE_BUILT_OUT makes a missing
+  # artifact a failure instead of a skip. Not in web-build-gate's needs: it joins by variable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  built-assets-guard:
+    name: Go auth-exemption walk of the Bun build
+    runs-on: ubuntu-latest
+    needs: web-build-smoke-bun
+    if: always() && needs.web-build-smoke-bun.result == 'success'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Generate protobuf and ent code
+        uses: ./.github/actions/prepare-stub
+
+      - name: Download built out/
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build-bun-out
+          path: web-app/out
+
+      - name: Walk every built file against the auth exemption
+        env:
+          REQUIRE_BUILT_OUT: '1'
+        run: go test ./server/middleware -run 'TestBuiltAssets' -count=1 -v
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # e2e-next: the full Playwright suite (every spec under tests/e2e/, every project) against
+  # the Next build, using the harness's own isolated global-setup (dynamic free port,
+  # PID-scoped temp dir -- never :8543). A default member of web-build-gate from day one
+  # (web-app/scripts/ci/web-build-gate.mjs's DEFAULT_MEMBERS already names it), unlike
+  # e2e-bun below, which opts in later via the WEB_BUILD_GATE_MEMBERS repository variable
+  # (plan decision 10, Story 5.11). Uploads its Playwright JSON report with if: always() so
+  # e2e-bun's comparator can read it even when this job itself fails (plan Story 0.1's gate
+  # rule judges a spec missing from the baseline against this same-run report).
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-next:
+    name: e2e (Next build)
+    runs-on: ubuntu-latest
+    needs: [detect-changes, prepare]
+    # always() for the same reason as web-build-smoke-next above.
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
+
+      # prepare's shared artifact is already a Next-mode build (WEB_BUILD unset there too), so
+      # a plain `go build` suffices -- no `make` rebuild needed, mirroring e2e-video.yml's
+      # build-binary job.
+      - name: Build binary (Next build, from prepare's shared artifact)
+        run: go build -o stapler-squad .
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
+
+      - name: Install Playwright + test dependencies
+        run: |
+          cd tests/e2e
+          bun install --frozen-lockfile
+          npx playwright install chromium firefox webkit --with-deps
+
+      # Soft-timeout wrapper (e2e-video.yml's pattern): fail with a diagnostic at 200m rather
+      # than riding the job's 240m hard timeout-minutes to a SIGTERM with no explanation.
+      - name: Run full e2e suite (Next build)
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          WEB_BUILD: next
+          PLAYWRIGHT_JSON_REPORT_PATH: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
+        run: |
+          cd tests/e2e
+          timeout 200m npx playwright test --reporter=list || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 124 ]; then
+              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' exceeded its 200m budget"
+              echo "CI-BUDGET-EXCEEDED: 'e2e-next' exceeded its 200m budget" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit $EXIT_CODE
+          }
+
+      - name: Upload Playwright JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-next-report
+          path: tests/e2e/playwright-report/report.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # e2e-bun: the same full suite against the Bun build, scored against the recorded Next
+  # baseline (tests/e2e/baseline/next-e2e-baseline.json, Task 0.1e) and the expected-diff list
+  # (tests/e2e/baseline/bun-expected-diff.json, Story 7.11) by scripts/e2e-baseline-compare.ts
+  # (Task 7.10c) -- the job's result is the comparator's verdict, not Playwright's raw exit
+  # code, so a listed/expected failure never fails this job before the comparator runs. Runs
+  # even when e2e-next failed (needs its report either way); only skips if e2e-next itself was
+  # skipped or cancelled, since then there is no same-run report to judge missing specs against.
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-bun:
+    name: e2e (Bun build)
+    runs-on: ubuntu-latest
+    needs: [detect-changes, prepare, e2e-next]
+    if: always() && needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/buf
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      # proto/ent code generation is not WEB_BUILD-dependent, so this still saves the buf/ent
+      # steps below even though the web UI itself is rebuilt for Bun (next step's `make`).
+      - name: Download generated files (proto/ent; web UI rebuilt below for Bun)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
+
+      # Exact key, no restore-keys: see web-build-smoke-bun's identical step for why.
+      - name: Cache shared node_modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.stapler-squad/shared-node-modules
+          key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
+
+      # The Makefile's WEB_BUILD_STAMP seam (Makefile:228-240) detects the mode flip from
+      # prepare's Next-mode artifact and rebuilds web-app/out + server/web/dist for Bun once.
+      - name: Build binary (Bun build)
+        env:
+          WEB_BUILD: bun
+        run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
+
+      - name: Install Playwright + test dependencies
+        run: |
+          cd tests/e2e
+          bun install --frozen-lockfile
+          npx playwright install chromium firefox webkit --with-deps
+
+      # Raw Playwright failures do not fail this step -- the comparator below is the real
+      # verdict (plan Story 7.10: an expected/listed Bun-only failure must not fail the job).
+      - name: Run full e2e suite (Bun build)
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          WEB_BUILD: bun
+          PLAYWRIGHT_JSON_REPORT_PATH: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
+        run: |
+          cd tests/e2e
+          timeout 200m npx playwright test --reporter=list || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 124 ]; then
+              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' exceeded its 200m budget"
+              echo "CI-BUDGET-EXCEEDED: 'e2e-bun' exceeded its 200m budget" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            true
+          }
+
+      - name: Download e2e-next's Playwright JSON report
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-next-report
+          path: /tmp/e2e-next-report
+        continue-on-error: true
+
+      - name: Run the baseline comparator
+        if: always()
+        # pipefail: without it, the step's exit status is tee's (always 0), masking a
+        # comparator failure -- this job's result must be the comparator's verdict.
+        run: |
+          set -o pipefail
+          web-app/node_modules/.bin/ts-node --compiler-options '{"module":"commonjs","moduleResolution":"node","esModuleInterop":true}' \
+            scripts/e2e-baseline-compare.ts \
+            --baseline tests/e2e/baseline/next-e2e-baseline.json \
+            --expected-diff tests/e2e/baseline/bun-expected-diff.json \
+            --next-report /tmp/e2e-next-report/report.json \
+            --bun-reports tests/e2e/playwright-report/report.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # web-build-gate: the only check meant for branch protection. Membership comes from the
+  # repository variable WEB_BUILD_GATE_MEMBERS (see web-app/scripts/ci/web-build-gate.mjs),
+  # so a Bun job joins or leaves with `gh variable set`, never a workflow edit. e2e-next is a
+  # DEFAULT_MEMBERS member from its first appearance; e2e-bun is not (plan decision 10) --
+  # both are listed in needs: below only so the gate can report their result, same as
+  # web-build-smoke-bun already does for the Bun smoke job.
+  # if: always() is required: with a failed need the job would otherwise be skipped,
+  # and a skipped required check passes silently.
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-build-gate:
+    name: web-build-gate
+    runs-on: ubuntu-latest
+    needs: [detect-changes, web-build-smoke-next, web-build-smoke-bun, e2e-next, e2e-bun]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: web-app/scripts/ci
+
+      - name: Evaluate gate
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          MEMBERS: ${{ vars.WEB_BUILD_GATE_MEMBERS }}
+        run: node web-app/scripts/ci/web-build-gate.mjs
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # storybook-build: non-blocking (not in web-build-gate's needs:). Storybook stays on
+  # react-webpack5 (ADR-002); this catches a story or nav-facade change that breaks it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  storybook-build:
+    name: storybook build (non-blocking)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Storybook-relevant changes
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          if echo "$CHANGED" | grep -qE '^web-app/src/.*\.stories\.tsx$|^web-app/\.storybook/|^web-app/src/lib/nav/|^web-app/package\.json$|^web-app/bun\.lock$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Bun
+        if: steps.detect.outputs.relevant == 'true'
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.relevant == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up buf
+        if: steps.detect.outputs.relevant == 'true'
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      - name: Install dependencies and generate protobuf code
+        if: steps.detect.outputs.relevant == 'true'
+        run: |
+          cd web-app && bun install --frozen-lockfile
+          cd .. && buf generate proto
+
+      - name: Build Storybook
+        if: steps.detect.outputs.relevant == 'true'
+        working-directory: web-app
+        run: bun run build-storybook
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # web-supply-chain: the install must resolve the same screened tree twice, with no
+  # github: source, banned version or no-op trustedDependencies entry (Story 6.10).
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-supply-chain:
+    name: web-app install and dependency screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install (frozen)
+        working-directory: web-app
+        run: bun install --frozen-lockfile
+
+      # bun#44713: a first plain install after a lockfile edit can still rewrite it.
+      - name: Lockfile is stable across repeated installs
+        working-directory: web-app
+        run: |
+          bun install
+          bun install
+          git diff --exit-code -- bun.lock
+
+      - name: Dependency screen
+        working-directory: web-app
+        run: bun run check:dependency-screen
 
   # ─────────────────────────────────────────────────────────────────────────────
   # test-affected: the PR-time Go test gate -- only the packages transitively
@@ -960,6 +1417,8 @@ jobs:
     needs: prepare
     timeout-minutes: 15
     strategy:
+      # Legs are independent platforms; one failing must not hide the others (asserted by web-build-gate.test.mjs).
+      fail-fast: false
       # PRs only exercise the platform actually validated downstream
       # (goreleaser-check.yml's native-only smoke test); the full 5-way
       # cross-compile matrix still runs on push-to-main/workflow_dispatch, so

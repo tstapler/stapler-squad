@@ -582,29 +582,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						}
 					}
 					if toStatus != "" {
-						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil { //nolint:silenttransition surfaced below via statusTransitionErr, which overrides the operator notification title/body ("status update failed") rather than a silent success
-							statusTransitionErr = transErr
-							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
-						} else {
-							log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
-							// The item just advanced via the automated pipeline. Close any open
-							// autonomous_stuck row now rather than leaving it for a human to clear
-							// via resolveStuckOnManualTransition (server/services/
-							// backlog_service_lifecycle.go), which only fires on a manual
-							// TransitionBacklogItemStatus RPC — items that complete entirely through
-							// the automated pipeline never hit that path. Only resolve on an actually
-							// successful (outcome.Done) run: the SessionRoleWork case above still
-							// transitions in_progress->review even when the driver got stuck, and
-							// MarkStuck may have just (re)opened this exact row a few lines up.
-							if outcome.Done {
-								a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
-							}
-							// Immediately kick off headless review for completed work sessions.
-							if toStatus == session.BacklogStatusReview && a.reviewGateTrigger != nil {
-								a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
-							}
-						}
+						statusTransitionErr = a.advanceItemOnDriverComplete(ctx, concreteStorage, item, toStatus, expectedStatus, outcome.Done)
 					}
 				}
 			}
@@ -935,4 +913,29 @@ func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Cont
 	if _, err := storage.ResolveStuck(ctx, itemID, domain.StuckReasonAutonomousStuck); err != nil {
 		log.Warn("[AutonomousDriver] resolveAutonomousStuck ResolveStuck(autonomous_stuck) failed", "item", itemID, "err", err)
 	}
+}
+
+// advanceItemOnDriverComplete performs the one status write a completed driver
+// run makes (triage idea->ready) through the transition gate. A returned error,
+// including an engine denial, is surfaced by the caller as the "status update
+// failed" notification.
+func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *session.BacklogItemData, toStatus session.BacklogStatus, expectedStatus string, done bool) error {
+	_, err := storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller:       session.CallerAutonomousComplete,
+		ItemID:       item.ID,
+		To:           toStatus,
+		Precondition: &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus},
+		TriggeredBy:  session.TriggeredBySystem,
+	})
+	if err != nil {
+		log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", err)
+		return err
+	}
+	log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", done)
+	// Items that complete through the automated pipeline never hit
+	// resolveStuckOnManualTransition, so close any open autonomous_stuck row here.
+	if done {
+		a.resolveAutonomousStuck(ctx, storage, item.ID)
+	}
+	return nil
 }

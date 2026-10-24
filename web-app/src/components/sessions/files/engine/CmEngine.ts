@@ -12,6 +12,7 @@ import type {
   HitRange, LineRange, ModeConfig, PendingEdits, ScrollSnapshot, VirtualDoc,
 } from "./EditorEngine";
 import { loadCodemirrorLang } from "./languages";
+import { diffHighlightExtension, markAtDocLine } from "./diffHighlight";
 import { legacyVimKeymap } from "./legacyKeymap";
 import { cmTheme } from "./cmTheme";
 import { changesToEdits } from "./pendingEdits";
@@ -111,7 +112,7 @@ export class CmEngine implements EditorEngine {
       class: "cm-changeGutter",
       lineMarker(view, block) {
         if (!marks || marks.size === 0) return null;
-        const markType = marks.get(view.state.doc.lineAt(block.from).number);
+        const markType = markAtDocLine(view.state, marks, view.state.doc.lineAt(block.from).number);
         return markType ? new ChangeGutterMarker(markType) : null;
       },
     });
@@ -123,6 +124,7 @@ export class CmEngine implements EditorEngine {
       cmTheme,
       legacyVimKeymap(),
       changeGutter,
+      diffHighlightExtension(marks),
       this.comps.readOnly.of(mode.readOnly),
       this.comps.wrap.of(mode.wrap),
       this.comps.label.of(mode.label),
@@ -245,7 +247,10 @@ class CmHandle implements EngineHandle {
     const lazy = src.text === undefined ? { lineCount: src.lineCount ?? 0 } : undefined;
     void this.createBuffer({ doc: src.text ?? "", lazy }).then((b) => {
       this.setBuffer(b);
-      this.whenIdle(() => this.lazy?.setFetcher(src.fetch ? (r) => src.fetch!(r) : null));
+      this.whenIdle(() => {
+        const fetchRange = src.fetch?.bind(src);
+        this.lazy?.setFetcher(fetchRange ?? null);
+      });
     });
   }
 

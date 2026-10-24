@@ -1,0 +1,90 @@
+name: CSS differential
+
+# Story 5.10: proves vanilla-extract output under Bun equals Node's (oracle) and that the Bun build's CSS
+# matches the Next build's (census) on every Bun bump. A separate workflow, not a build.yml job: a nightly
+# schedule on build.yml would rerun every job in it. Not part of web-build-gate.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'web-app/patches/**'
+      - 'web-app/bun.lock'
+      - '.bun-version'
+      - 'web-app/build/oracle/**'
+      - '.github/workflows/css-differential.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: css-differential-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  css-differential:
+    name: VE oracle and Next/Bun CSS census
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache buf binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/buf
+          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          version: '1.41.0'
+          setup_only: 'true'
+
+      - name: Install web-app dependencies
+        run: make web-app/node_modules/.ssq-install-stamp
+
+      - name: Oracle - every .css.ts matches Node byte for byte
+        working-directory: web-app
+        run: bun run oracle:ve
+
+      - name: Build with Next
+        run: make web-build
+
+      - name: Keep the Next output
+        run: cp -r web-app/out "$RUNNER_TEMP/next-out"
+
+      - name: Build with Bun (minified, to a separate directory)
+        working-directory: web-app
+        run: bun build/build.ts --out "$RUNNER_TEMP/bun-out" --stats "$RUNNER_TEMP/bun-stats.json"
+
+      - name: Census - theme custom properties and cascade winners
+        working-directory: web-app
+        run: bun build/oracle/census-cli.ts --next "$RUNNER_TEMP/next-out" --bun "$RUNNER_TEMP/bun-out" | tee "$RUNNER_TEMP/census.json"
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '### CSS census'
+            echo '```json'
+            cat "$RUNNER_TEMP/census.json" 2>/dev/null || echo 'no census output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

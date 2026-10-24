@@ -213,6 +213,22 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"ResolveClaimDispute": "ResolveClaimDispute",
 	// Launcher presets RPCs
 	"GetLauncherPresets": "launcher_presets:get",
+	// Identity ids: these RPCs already have committed fallback-id registry files
+	// (docs/registry/features/backend/<Method>.json); a kebab-case id would relocate them.
+	"ClosePRDirect":                "ClosePRDirect",
+	"ConvertPRToDraft":             "ConvertPRToDraft",
+	"GetFileTransportCapabilities": "GetFileTransportCapabilities",
+	"GetQuotaConfig":               "GetQuotaConfig",
+	"GetWorkflowEngineStatus":      "GetWorkflowEngineStatus",
+	"InvokeNotificationAction":     "InvokeNotificationAction",
+	"ListSavedGuidanceAnswers":     "ListSavedGuidanceAnswers",
+	"MarkPRReady":                  "MarkPRReady",
+	"MergePRDirect":                "MergePRDirect",
+	"ReadFileRange":                "ReadFileRange",
+	"SearchContent":                "SearchContent",
+	"StatFile":                     "StatFile",
+	"UpdateQuotaConfig":            "UpdateQuotaConfig",
+	"WriteFile":                    "WriteFile",
 	// Program config RPCs
 	"ListProgramsConfig":  "program_config:list",
 	"UpsertProgramConfig": "program_config:upsert",

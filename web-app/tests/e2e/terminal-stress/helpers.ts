@@ -45,6 +45,12 @@ export async function launchSession(page: Page, namePrefix: string): Promise<str
  * Navigate to stress test page and wait for terminal to initialize
  */
 export async function setupStressTestPage(page: Page): Promise<void> {
+  // Without this, a fresh context's first-run onboarding tour covers the page and
+  // intercepts clicks on start-test (the recurring "Frontend Terminal Throughput"
+  // CI flake: Test timeout waiting for start-test, ModalTour_overlay intercepts pointer events).
+  await page.addInitScript(() => {
+    localStorage.setItem('stapler-squad:onboarded', 'true');
+  });
   await page.goto('/test/terminal-stress');
   // Wait for terminal container with longer timeout (parallel tests compete for resources)
   await page.waitForSelector('[data-testid="terminal-container"]', { timeout: 30000 });

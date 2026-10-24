@@ -160,7 +160,12 @@ function BacklogBoardPageInner() {
         />
         {selectedItemId && (
           <aside className={styles.detailPane} aria-label="Item detail">
-            <BacklogItemDetail key={selectedItemId} itemId={selectedItemId} onClose={handleDetailClose} />
+            <BacklogItemDetail
+              key={selectedItemId}
+              itemId={selectedItemId}
+              onClose={handleDetailClose}
+              onItemClick={handleItemClick}
+            />
           </aside>
         )}
       </div>

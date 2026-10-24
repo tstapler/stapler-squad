@@ -89,18 +89,20 @@ export const path = style({
 
 export const cloneButton = style({
   flexShrink: 0,
-  padding: "2px 6px",
-  fontSize: "12px",
+  padding: "4px 10px",
+  fontSize: "14px",
   background: "transparent",
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: "4px",
   color: vars.color.textMuted,
   cursor: "pointer",
-  opacity: 0,
+  // Dimmed rather than hidden: a hover-only button can vanish mid-reach.
+  opacity: 0.45,
   transition: "opacity 0.1s ease, background 0.1s ease",
   selectors: {
     [`${row}:hover &`]: { opacity: 1 },
     [`${rowHighlighted} &`]: { opacity: 1 },
+    "&:hover, &:focus-visible": { opacity: 1 },
     "&:hover": { background: vars.color.hoverBackground, color: vars.color.textPrimary },
   },
 });

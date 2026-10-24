@@ -14,16 +14,19 @@ import { WindowTabStripPage } from './pages/WindowTabStripPage';
  * NotificationPanel.tsx) and can show a background NotificationToast
  * (role="alert", data-testid="toast") from unrelated seeded test-server
  * activity; Next.js itself also always mounts a route-change announcer
- * (id="__next-route-announcer__", role="alert"). None of these are specific
+ * (id="__next-route-announcer__", role="alert") and an always-present assertive live
+ * region (data-testid="announcer-assertive", Announcer.tsx). None of these are specific
  * to window actions, so "no dialog/alert appeared as a result of this
- * action" must exclude all three rather than assert a literal zero count
+ * action" must exclude all of them rather than assert a literal zero count
  * page-wide.
  */
 function nonWindowDialogs(page: Page) {
   return page.locator('[role="dialog"]:not([aria-label="Notification Panel"])');
 }
 function nonToastAlerts(page: Page) {
-  return page.locator('[role="alert"]:not([data-testid="toast"]):not(#__next-route-announcer__)');
+  return page.locator(
+    '[role="alert"]:not([data-testid="toast"]):not([data-testid="announcer-assertive"]):not(#__next-route-announcer__)'
+  );
 }
 
 test.describe('multi-window UX acceptance', () => {

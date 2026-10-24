@@ -7,7 +7,7 @@ import path from "node:path";
 
 export const MARKER = "ssq-patch: eval-bun-createRequire";
 
-function defaultEvalDir() {
+export function defaultEvalDir() {
   const fromIntegration = createRequire(createRequire(import.meta.url).resolve("@vanilla-extract/integration/package.json"));
   return path.dirname(fromIntegration.resolve("eval/package.json"));
 }

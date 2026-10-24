@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Local-dev equivalent of .github/workflows/lint.yml's file-scoped ESLint
 # step: lint only files changed vs BASE (default origin/main) via
-# `next lint --file`, instead of a full-repo `next lint` surfacing every
-# pre-existing warning in the repo. Run from web-app/ (or via `bun run
+# scripts/eslint-gate.sh (any warning fails), instead of a full-repo run
+# surfacing every pre-existing warning in the repo. Run from web-app/ (or via `bun run
 # lint:affected`); override the base with `BASE=some-ref bun run lint:affected`.
 set -euo pipefail
 
@@ -37,14 +37,14 @@ if [ -z "$CHANGED" ]; then
   exit 0
 fi
 
-FILE_FLAGS=()
+FILES=()
 while IFS= read -r f; do
-  [ -n "$f" ] && [ -f "$f" ] && FILE_FLAGS+=(--file "$f")
+  [ -n "$f" ] && [ -f "$f" ] && FILES+=("$f")
 done <<< "$CHANGED"
 
-if [ ${#FILE_FLAGS[@]} -eq 0 ]; then
+if [ ${#FILES[@]} -eq 0 ]; then
   echo "Changed TS/TSX files vs $BASE_LABEL no longer exist on disk — nothing to lint"
   exit 0
 fi
 
-npx next lint "${FILE_FLAGS[@]}"
+bash scripts/eslint-gate.sh "${FILES[@]}"

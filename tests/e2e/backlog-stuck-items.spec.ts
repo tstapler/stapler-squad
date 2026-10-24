@@ -195,12 +195,13 @@ test.describe("stuck items", () => {
     await expect(chip).toHaveAttribute("aria-pressed", "true");
 
     const card = stuckPage.cardByTitle("fix: keyboard operability test");
-    await card.focus();
+    const toggle = card.getByTestId("stuck-item-toggle");
+    await toggle.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("stuck-item-detail")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("stuck-item-detail")).not.toBeVisible();
-    await expect(card).toBeFocused();
+    await expect(toggle).toBeFocused();
   });
 
   test("snoozes an item in two clicks and it leaves the list", async ({ page, request }) => {

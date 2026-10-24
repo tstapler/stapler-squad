@@ -466,6 +466,9 @@ message TransitionGate {
   // "automated_review", "structural", "custom".
   string kind = 3;
   map<string, string> config = 4;
+  // stateful is the EFFECTIVE value: true for a one-shot gate whose outcome is
+  // recorded and never re-evaluated. human_approval, automated_review and custom
+  // gates are always stateful; a structural gate is stateful only when set.
   bool stateful = 5;
   int32 order_index = 6;
   bool enabled = 7;
@@ -1192,6 +1195,60 @@ message ListStagesResponse {
   repeated BacklogStage items = 1;
 }
 
+// WorkflowEngineMode is the mode the selector applies to one caller class.
+enum WorkflowEngineMode {
+  WORKFLOW_ENGINE_MODE_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_MODE_OFF = 1;
+  WORKFLOW_ENGINE_MODE_SHADOW = 2;
+  WORKFLOW_ENGINE_MODE_ENFORCE = 3;
+}
+
+enum WorkflowEngineConfigProvenance {
+  WORKFLOW_ENGINE_CONFIG_PROVENANCE_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_CONFIG_PROVENANCE_SEEDED = 1;
+  WORKFLOW_ENGINE_CONFIG_PROVENANCE_EDITED = 2;
+}
+
+enum WorkflowEngineSoakVerdict {
+  WORKFLOW_ENGINE_SOAK_VERDICT_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_SOAK_VERDICT_READY = 1;
+  WORKFLOW_ENGINE_SOAK_VERDICT_NOT_READY = 2;
+  WORKFLOW_ENGINE_SOAK_VERDICT_NEEDS_OWNER_ACK = 3;
+  WORKFLOW_ENGINE_SOAK_VERDICT_UNAVAILABLE = 4;
+}
+
+enum WorkflowEngineReviewState {
+  WORKFLOW_ENGINE_REVIEW_STATE_UNSPECIFIED = 0;
+  WORKFLOW_ENGINE_REVIEW_STATE_UNAVAILABLE = 1;
+  WORKFLOW_ENGINE_REVIEW_STATE_NOT_DUE = 2;
+  WORKFLOW_ENGINE_REVIEW_STATE_OVERDUE = 3;
+  WORKFLOW_ENGINE_REVIEW_STATE_ENFORCED = 4;
+}
+
+message GetWorkflowEngineStatusRequest {}
+
+// ClassReadiness is the decision-time evidence for flipping one class.
+message ClassReadiness {
+  int64 divergence_24h = 1;
+  WorkflowEngineSoakVerdict soak_verdict = 2;
+  int64 stranded_item_count = 3;
+}
+
+message GetWorkflowEngineStatusResponse {
+  // class_modes is keyed by caller class: operator, agent, system.
+  map<string, WorkflowEngineMode> class_modes = 1;
+  int64 divergence_24h = 2;
+  WorkflowEngineConfigProvenance config_provenance = 3;
+  bool invalidator_wired = 4;
+  bool gate_wired = 5;
+  bool fallback_active = 6;
+  map<string, ClassReadiness> class_readiness = 7;
+  // review_due_at is unset when review_state is UNAVAILABLE.
+  google.protobuf.Timestamp review_due_at = 8;
+  bool review_overdue = 9;
+  WorkflowEngineReviewState review_state = 10;
+}
+
 message CreateStageTransitionRequest {
   string from_stage_slug = 1;
   string to_stage_slug = 2;
@@ -1245,6 +1302,9 @@ message CreateTransitionGateRequest {
   string transition_id = 1;
   string kind = 2;
   map<string, string> config = 3;
+  // stateful latches a structural gate after its first satisfied transition.
+  // Recorded kinds are always stateful: false is normalized to true here (a
+  // plain bool cannot distinguish unset from false).
   bool stateful = 4;
   int32 order_index = 5;
   bool enabled = 6;
@@ -1263,6 +1323,8 @@ message UpdateTransitionGateRequest {
   string id = 1;
   string kind = 2;
   map<string, string> config = 3;
+  // An explicit false on a recorded kind is rejected InvalidArgument; unset on a
+  // recorded kind stores true.
   optional bool stateful = 4;
   optional int32 order_index = 5;
   optional bool enabled = 6;
@@ -1683,6 +1745,10 @@ service BacklogService {
 
   // ListStages returns all stages, including disabled ones.
   rpc ListStages(ListStagesRequest) returns (ListStagesResponse) {}
+
+  // GetWorkflowEngineStatus reports each caller class's engine mode, shadow
+  // divergence, wiring health and flip-readiness evidence. Read-only.
+  rpc GetWorkflowEngineStatus(GetWorkflowEngineStatusRequest) returns (GetWorkflowEngineStatusResponse) {}
 
   // CreateStageTransition adds a new (from_stage, to_stage) edge, invoking
   // Epic 2.6's graph validator before committing.
@@ -2124,6 +2190,10 @@ enum StuckReason {
   // work session (timeout waiting for idle, a hidden-session refusal, or a
   // steer delivery error).
   STUCK_REASON_VERDICT_UNDELIVERED = 24;
+  // STUCK_REASON_TRANSITION_DENIED: see domain.StuckReasonTransitionDenied — an
+  // automated claim was denied by the workflow engine; the denied_* fields on
+  // StuckBacklogItem say which edge and why.
+  STUCK_REASON_TRANSITION_DENIED = 25;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
@@ -2142,13 +2212,9 @@ message StuckBacklogItem {
   // become un-snoozed at query time (ListStuckBacklogItems only ever returns
   // rows that are currently un-snoozed, so this is normally unset).
   google.protobuf.Timestamp snoozed_until = 10;
-  // allow_auto_merge surfaces the repo's GitHub auto-merge setting, read-only
-  // and best-effort (see plan.md Story 4.1.4 / ADR discussion). This field is
-  // declared here so the Phase 4 frontend work doesn't require a second
-  // proto-gen round-trip, but it is intentionally left unset (not populated)
-  // by the ListStuckBacklogItems handler added in this change — Phase 4 owns
-  // fetching and populating it. Unset means "not fetched / unknown", not
-  // "auto-merge disabled".
+  // allow_auto_merge is the repo's GitHub auto-merge setting. It is meaningful
+  // only when auto_merge_lookup_status is OK; for every other status it is
+  // unset, so "false" never accompanies a failed or skipped lookup.
   optional bool allow_auto_merge = 11;
   // remediation_attempts is how many automated (or operator-triggered via
   // TriggerRemediationNow) remediation attempts have been made for this open
@@ -2170,9 +2236,38 @@ message StuckBacklogItem {
   // report_duplicate claim (see BacklogItem.duplicate_pending).
   bool duplicate_pending = 15;
   string duplicate_ref = 16;
+  // Populated only for STUCK_REASON_TRANSITION_DENIED. denied_reason is
+  // "config_graph" or "operator_gate".
+  string denied_caller = 17;
+  string denied_from = 18;
+  string denied_to = 19;
+  string denied_reason = 20;
+  // auto_merge_lookup_status says whether allow_auto_merge can be trusted.
+  // UNSPECIFIED means no lookup was made (e.g. no GitHub repo for the item).
+  AutoMergeLookupStatus auto_merge_lookup_status = 21;
+  // auto_merge_checked_at is the time of the lookup attempt, set for every
+  // status except UNSPECIFIED (including failed lookups, shown as "Last tried").
+  google.protobuf.Timestamp auto_merge_checked_at = 22;
+  // diagnose_nudge_count is how many Diagnose & Nudge slots this open row has
+  // used (BacklogStuckState.DiagnoseNudgeCount); 0 when none.
+  int32 diagnose_nudge_count = 23;
 }
 
-message ListStuckBacklogItemsRequest {}
+// AutoMergeLookupStatus is the outcome of the per-repo auto-merge setting lookup.
+enum AutoMergeLookupStatus {
+  AUTO_MERGE_LOOKUP_STATUS_UNSPECIFIED = 0;
+  AUTO_MERGE_LOOKUP_STATUS_OK = 1;
+  AUTO_MERGE_LOOKUP_STATUS_RATE_LIMITED = 2;
+  AUTO_MERGE_LOOKUP_STATUS_NO_PERMISSION = 3;
+  AUTO_MERGE_LOOKUP_STATUS_NOT_FOUND = 4;
+  AUTO_MERGE_LOOKUP_STATUS_ERROR = 5;
+}
+
+message ListStuckBacklogItemsRequest {
+  // refresh_auto_merge bypasses the repo-settings cache for the auto-merge
+  // lookup (interactive Retry in the stuck-item detail panel).
+  bool refresh_auto_merge = 1;
+}
 
 message ListStuckBacklogItemsResponse {
   repeated StuckBacklogItem items = 1;

@@ -358,6 +358,52 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(q conversationOwner
 	return "", false
 }
 
+// conversationClaim is one inFlightConversationClaims entry.
+type conversationClaim struct {
+	instanceUUID string
+	claimedAt    time.Time
+}
+
+// conversationClaimTTL bounds how long an in-flight conversation-UUID claim
+// blocks a sibling before expiring. Generous relative to a cold-restore's
+// actual spawn time (tmux new-session + process launch is sub-second to a
+// few seconds even under load) so a legitimate claim never expires while
+// still in flight, but short enough that a claimant whose Start() errored
+// out before going alive doesn't permanently strand the UUID for everyone
+// else — see inFlightConversationClaims' doc comment.
+const conversationClaimTTL = 30 * time.Second
+
+// claimConversationUUID atomically claims candidateUUID for selfUUID unless
+// another instance already holds an unexpired claim on it. Closes the race
+// ConversationOwnedByOtherLiveSession alone cannot: two sessions concurrently
+// cold-restoring into the same project directory can both reach this point
+// before either is IsBackendProcessAlive(), so the live-sibling check sees
+// neither of them as an owner yet. See inFlightConversationClaims' doc
+// comment on SessionService for the full race this closes.
+func (s *SessionService) claimConversationUUID(candidateUUID, selfUUID string) (ownerUUID string, claimedByOther bool) {
+	now := time.Now()
+	for {
+		actual, loaded := s.inFlightConversationClaims.LoadOrStore(candidateUUID, conversationClaim{instanceUUID: selfUUID, claimedAt: now})
+		if !loaded {
+			return "", false
+		}
+		existing, ok := actual.(conversationClaim)
+		if !ok || existing.instanceUUID == selfUUID {
+			return "", false // re-entrant: this instance already holds it (e.g. a retried Start())
+		}
+		if now.Sub(existing.claimedAt) < conversationClaimTTL {
+			return existing.instanceUUID, true
+		}
+		// Expired: an instance that claimed this UUID but never went alive must not
+		// strand it forever. Take over the slot via CAS rather than a blind Store so
+		// a third, concurrent claimant racing the same expiry can't both "win".
+		if s.inFlightConversationClaims.CompareAndSwap(candidateUUID, actual, conversationClaim{instanceUUID: selfUUID, claimedAt: now}) {
+			return "", false
+		}
+		// Lost the CAS race to another claimant's refresh/takeover; re-check its result.
+	}
+}
+
 // RefuseIfWorktreeSharedWithOtherLiveSession resolves
 // OtherLiveSessionInsideWorktree into a ready-to-return error, shared by
 // every worktree-deleting path: MCP pause/stop, RPC UpdateSession, and

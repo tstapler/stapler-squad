@@ -31,3 +31,21 @@ v1.3.0 aarch64-apple-darwin c1a16bd03dac717c37756893be4a8368255e7c6c1675e2f8c804
 v1.3.0 x86_64-apple-darwin 1c85256761f22f35594ae8d92a285aeb9007ca7b96ed56e7866de76c08ebc519
 v1.3.0 x86_64-unknown-linux-musl 0c2155f3d7f76bc7e2f028fa07211288c5d165fc2fd979a0f6ef6a9ed158a466
 v1.3.0 aarch64-unknown-linux-musl e23ad7b79a32ed6ec73004c620673dbb03f9f19f8d0fd32a4867fb30d2de1a0a
+# v1.4.1: adds GetServerInfo (version/protocol-revision/capabilities RPC) and
+# a portable-pty kill-pane perf fix; no change to the session-I/O transport
+# this repo's tymux backend depends on. Commits v1.3.0..v1.4.1:
+# tstapler/tymux#56, #57, #59, #60, #61.
+v1.4.1 aarch64-apple-darwin ce6cac96e72b2c4e70930fffc5ccc58c9aead859513c9e2e594d19739d49851c
+v1.4.1 x86_64-apple-darwin 16a337694bed086fea02f7f5de9e8afe0c1c197996f045240e5ebfe576672f18
+v1.4.1 x86_64-unknown-linux-musl 27232036162aca81578f0f03e3830eb13980e65d9dcd12dd9ea705c51cb18921
+v1.4.1 aarch64-unknown-linux-musl 60d7316ceb3c195cdf7f216c6d8872c61de9777f315ce91fb6175c9bfd299866
+# v1.6.0: adds CreateSession stderr_path and file-backed arg_specs (tstapler/tymux#63).
+v1.6.0 aarch64-apple-darwin a8e023ea0d262563f1dc002e75c21930f383941e68e4cae2172afde1ac394037
+v1.6.0 x86_64-apple-darwin 4f4e823d1eb9b6e9fd6d4ceae4a8ef6bdddaaf64ee8ad1887abc804bec7a87c0
+v1.6.0 x86_64-unknown-linux-musl 7a3b898b4c03e6b0ee0724372574c5d4f17266eb77815a0062705ad7d988912d
+v1.6.0 aarch64-unknown-linux-musl 316e7d1347c782874efe4fc9c7134985a530b79dfd386af848fdd2a95cc92202
+# v1.8.0: adds CreateSession stdin_path (tstapler/tymux#65, ADR-0005).
+v1.8.0 aarch64-apple-darwin 99343fe7a73c79c8006416a1cc9e18b22394e16a1691fb539c65e34b573c7398
+v1.8.0 x86_64-apple-darwin 44b1db3b5e17c42c38b931160acdce9d17333aadd56a2606f76275a910448128
+v1.8.0 x86_64-unknown-linux-musl 9f8882b58fca4b4f73ea0b133741114530d9ba964010f84db037b655fde665c1
+v1.8.0 aarch64-unknown-linux-musl 5ad5f714d8cc58680d491bcf5e1d6a07559f6455defb2f33a54112de2d1e3c88

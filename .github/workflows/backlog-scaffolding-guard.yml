@@ -50,7 +50,7 @@ jobs:
           fi
 
           # Mirrors git.ScaffoldingExcludePatterns in session/git/scaffolding.go.
-          MATCHES=$(echo "$CHANGED" | grep -E '(^|/)\.backlog-context\.md$|^\.claude/commands/backlog/|^web-app/\.next/' || true)
+          MATCHES=$(echo "$CHANGED" | grep -E '(^|/)\.backlog-context\.md$|^\.claude/commands/backlog/|^web-app/\.next/|^web-app/\.out-tmp-|^web-app/\.build/' || true)
 
           if [ -n "$MATCHES" ]; then
             echo "::error::This PR commits backlog scaffolding file(s) that must never be tracked:"

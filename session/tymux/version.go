@@ -15,7 +15,6 @@ import (
 	"golang.org/x/mod/semver"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
-	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -195,8 +194,7 @@ func detectRunningByProcess(ctx context.Context, cfg DaemonConfig, info DaemonVe
 func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
-	client := tymuxv1connect.NewTymuxServiceClient(newH2CClient(), cfg.Addr, connect.WithGRPC())
-	resp, err := client.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
+	resp, err := NewRealTransport(cfg.Addr).GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
 	if err != nil {
 		return nil, err
 	}

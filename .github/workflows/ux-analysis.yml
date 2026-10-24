@@ -1,16 +1,27 @@
 name: UX Analysis
 
 # Story 5: UX Analysis Automation
-# Runs on PRs touching web-app/src. Non-blocking advisory step.
+# Runs on PRs touching web-app/src or the web build/serve path. Non-blocking advisory step.
 # - Axe Core: WCAG 2.1 AA (critical/serious violations block)
 # - Lighthouse CI: performance score < 70 warns
 # - Claude vision: advisory UX analysis (skipped if no API key)
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
     paths:
       - 'web-app/src/**'
+      - 'web-app/build/**'
+      - 'web-app/package.json'
+      - 'web-app/bun.lock'
+      - 'web-app/patches/**'
+      - 'web-app/index.html'
+      - 'web-app/bunfig.toml'
+      - 'Makefile'
+      - 'server/web/**'
+      - 'server/middleware/static.go'
+      - 'server/middleware/auth.go'
 
 permissions:
   pull-requests: write

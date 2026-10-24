@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { RootShell } from "./RootShell";
@@ -47,5 +49,20 @@ describe("RootShell", () => {
     const shell = screen.getByTestId("cockpit-shell");
     expect(shell).toContainElement(screen.getByTestId("notification-panel"));
     expect(main).not.toContainElement(screen.getByTestId("notification-panel"));
+  });
+
+  it("attaches mainRef to the layout main and makes it a programmatic focus target", () => {
+    const mainRef = React.createRef<HTMLElement>();
+    render(<RootShell mainRef={mainRef}><span>child</span></RootShell>);
+    expect(mainRef.current).toBe(document.getElementById("main-content"));
+    expect(mainRef.current?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  // The global style mock cannot compute styles, so the rule is checked in the source: one outline removal, on mainContent only.
+  it("removes the focus outline only on the layout main's own class", () => {
+    const source = fs.readFileSync(path.join(__dirname, "layout.css.ts"), "utf8");
+    expect(source.match(/outline/g)).toHaveLength(1);
+    expect(source).toMatch(/export const mainContent = style\(\{[\s\S]*"&:focus, &:focus-visible": \{ outline: "none" \}[\s\S]*\}\);\s*$/);
+    expect(source).not.toMatch(/boxShadow/);
   });
 });

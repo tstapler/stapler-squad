@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // RefType represents the type of GitHub reference parsed from a URL or shorthand
@@ -250,6 +251,18 @@ type ghPatterns struct {
 	pr, branch, file, commit, issue, compare, release, repo, ssh, sshProtocol *regexp.Regexp
 }
 
+// patternCache memoizes compilePatterns by host alternation. The key space is
+// bounded by the distinct enterprise-host sets in config, so it never needs eviction.
+var patternCache sync.Map // string -> *ghPatterns
+
+func cachedPatterns(hostAlt string) *ghPatterns {
+	if v, ok := patternCache.Load(hostAlt); ok {
+		return v.(*ghPatterns)
+	}
+	v, _ := patternCache.LoadOrStore(hostAlt, compilePatterns(hostAlt))
+	return v.(*ghPatterns)
+}
+
 func compilePatterns(hostAlt string) *ghPatterns {
 	return &ghPatterns{
 		pr:          regexp.MustCompile(fmt.Sprintf(prURLTmpl, hostAlt)),
@@ -296,7 +309,7 @@ func ParseGitHubRefWithHosts(input string, enterpriseHosts []string) (*ParsedGit
 		return nil, fmt.Errorf("empty input")
 	}
 
-	p := compilePatterns(hostAlternation(enterpriseHosts))
+	p := cachedPatterns(hostAlternation(enterpriseHosts))
 
 	// Try PR URL first
 	if matches := p.pr.FindStringSubmatch(input); matches != nil {
