@@ -315,6 +315,9 @@ func ensureDaemonRunningWithRetry(healthy func() bool, attempts int, backoffStar
 // a fresh context.Background()-derived timeout inside the closure rather
 // than depending on any one caller's context.
 func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, error) {
+	if sharedDaemonBlockedInTest(cfg.Addr) {
+		return TymuxdReady{}, ErrSharedDaemonInTest
+	}
 	if checkDaemonHealthyFn(ctx, cfg) {
 		return TymuxdReady{}, nil // reuse case: correct steady-state outcome
 	}

@@ -154,6 +154,9 @@ func NewRealTransport(addr string) rpcTransport {
 	if addr == "" {
 		addr = tymuxdAddr()
 	}
+	if sharedDaemonBlockedInTest(addr) {
+		addr = deadLoopbackAddr
+	}
 	client := tymuxv1connect.NewTymuxServiceClient(newH2CClient(), addr, connect.WithGRPC())
 	return &grpcTransport{client: client}
 }

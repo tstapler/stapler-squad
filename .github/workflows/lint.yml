@@ -150,6 +150,9 @@ jobs:
       - name: Check tymux client/daemon pin agreement
         run: tools/ci/check-tymux-pin.sh
 
+      - name: Test tymux pin check
+        run: tools/ci/check-tymux-pin_test.sh
+
   go-lint:
     name: Go lint
     runs-on: ubuntu-latest

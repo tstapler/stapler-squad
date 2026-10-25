@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -1102,9 +1102,13 @@ ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web verify
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
+	tools/ci/check-tymux-pin_test.sh
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && bun install --silent && bun run test
 	@echo "✅ ready: local approximation of PR checks complete"
+
+test-tymux-pin: ## Test tools/ci/check-tymux-pin.sh against a local fixture remote (no network)
+	tools/ci/check-tymux-pin_test.sh
 
 ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
 	@GOBIN=$$(go env GOBIN); \
