@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/launchcmd"
@@ -17,27 +18,36 @@ const (
 	KindGemini
 )
 
-// ProgramKindOf classifies a launch command. It matches the historical
-// string checks exactly: Claude only when the whole command renders as the
-// bare word `claude`; Aider/Gemini when the rendered command starts with
-// the program name (so a quoted Literal or a leading env assignment is KindOther).
+// ProgramKindOf classifies a launch command by the basename of its program
+// (Argv[0]), so args, env prefixes, redirects, quoting and absolute paths do
+// not matter -- the same basename rule as session.isClaude. A ShellScript is
+// opaque and keeps the rendered-text check.
 func ProgramKindOf(cmd launchcmd.LaunchCommand) ProgramKind {
 	switch c := cmd.(type) {
 	case launchcmd.ExecCommand:
-		if len(c.Env) > 0 || len(c.Argv) == 0 {
+		prog, ok := c.Program()
+		if !ok {
 			return KindOther
 		}
-		head := launchcmd.ExecCommand{Argv: c.Argv[:1]}.ShellString()
-		if head == ProgramClaude && len(c.Argv) == 1 && !c.HasRedirects() {
-			return KindClaude
-		}
-		return kindByPrefix(head)
+		return kindByBasename(filepath.Base(prog))
 	case launchcmd.ShellScript:
 		text := c.ShellString()
 		if text == ProgramClaude {
 			return KindClaude
 		}
 		return kindByPrefix(text)
+	}
+	return KindOther
+}
+
+func kindByBasename(base string) ProgramKind {
+	switch base {
+	case ProgramClaude:
+		return KindClaude
+	case ProgramAider:
+		return KindAider
+	case ProgramGemini:
+		return KindGemini
 	}
 	return KindOther
 }

@@ -70,6 +70,8 @@ type launchCommandBuilder interface {
 	// doesn't reach the visible pane, or "" to leave stderr alone. Must be a
 	// real file, never /dev/null -- see piLaunchBuilder.StderrLog's doc comment.
 	StderrLog(i *Instance) string
+	// PromptChannel reports how this program accepts Instance.Prompt at launch.
+	PromptChannel() promptChannel
 }
 
 // launchBuilders is the ordered, stateless set of builders buildLaunchCommand
@@ -98,6 +100,8 @@ func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) l
 }
 
 func (b *claudeLaunchBuilder) StderrLog(i *Instance) string { return "" }
+
+func (b *claudeLaunchBuilder) PromptChannel() promptChannel { return promptChannelArgv }
 
 // piLaunchBuilder implements launchCommandBuilder for the pi binary.
 type piLaunchBuilder struct{}
@@ -131,6 +135,8 @@ func (b *piLaunchBuilder) StderrLog(i *Instance) string {
 	}
 	return path
 }
+
+func (b *piLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
 
 // piStderrLogPath returns the path to a plain-text file (distinct from the
 // session_<id>.log the Logs tab reads, which is JSON-lines and would be
@@ -170,6 +176,8 @@ func (b *opencodeLaunchBuilder) Build(i *Instance, base, resumeSessionID string)
 
 func (b *opencodeLaunchBuilder) StderrLog(i *Instance) string { return "" }
 
+func (b *opencodeLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
+
 // agyLaunchBuilder implements launchCommandBuilder for Antigravity (agy).
 type agyLaunchBuilder struct{}
 
@@ -188,6 +196,8 @@ func (b *agyLaunchBuilder) Build(i *Instance, base, resumeSessionID string) laun
 
 func (b *agyLaunchBuilder) StderrLog(i *Instance) string { return "" }
 
+func (b *agyLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
+
 // geminiLaunchBuilder implements launchCommandBuilder for Gemini CLI.
 type geminiLaunchBuilder struct{}
 
@@ -205,6 +215,8 @@ func (b *geminiLaunchBuilder) Build(i *Instance, base, resumeSessionID string) l
 }
 
 func (b *geminiLaunchBuilder) StderrLog(i *Instance) string { return "" }
+
+func (b *geminiLaunchBuilder) PromptChannel() promptChannel { return promptChannelNone }
 
 // isOpencode reports whether the program command invokes the opencode binary.
 func isOpencode(program string) bool {
@@ -542,10 +554,12 @@ func (i *Instance) appendClaudeOutputAndPromptFlags(cmd launchcmd.ExecCommand, c
 	if i.OneShot {
 		cmd = cmd.With(launchcmd.MustFlag("-p"), launchcmd.MustFlag("--output-format"), launchcmd.Word("json"))
 	}
-	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) {
-		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
-		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
-		cmd = cmd.With(launchcmd.MustFlag("--"), i.promptArg())
+	if claudeSessionID == "" || i.OneShot {
+		mode := promptInteractive
+		if i.OneShot {
+			mode = promptNonInteractive
+		}
+		cmd = i.appendLaunchPrompt(cmd, (&claudeLaunchBuilder{}).PromptChannel(), mode)
 	}
 	return cmd
 }

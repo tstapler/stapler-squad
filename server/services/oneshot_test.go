@@ -12,6 +12,7 @@ import (
 	connect "connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // ─── extractPRURL unit tests ──────────────────────────────────────────────────
@@ -187,6 +188,10 @@ func TestBatchCreateSessions_EmptyRequest(t *testing.T) {
 func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
+	// Without a poller FindLiveInstance is always nil, so DeleteSession would
+	// skip Destroy() and leave the created session's SessionDriver polling
+	// config.LoadConfig() (which writes config.json) into later tests' state dirs.
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil))
 
 	// The first "dup" passes validation and reaches real session creation.
 	// Isolate config to this test and use a trivial program so it doesn't spawn
