@@ -614,6 +614,12 @@ jobs:
       - name: Install Playwright CLI (no browsers needed to merge reports)
         run: cd tests/e2e && bun install --frozen-lockfile
 
+      # The comparator below runs via web-app/node_modules/.bin/ts-node -- the pre-sharding
+      # e2e-bun job got this as a side effect of its full `make stapler-squad` build; this job
+      # only needs the installed deps, not a built web UI.
+      - name: Install web-app dependencies (for ts-node, used by the comparator)
+        run: cd web-app && bun install --frozen-lockfile
+
       - name: Download all shard blob reports
         uses: actions/download-artifact@v4
         with:
