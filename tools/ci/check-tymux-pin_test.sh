@@ -50,7 +50,7 @@ run_case() {
   if [[ "$rc" -ne "$want_rc" || "$out" != *"$want_msg"* ]]; then
     failures=$((failures + 1))
     echo "FAIL: $desc (exit $rc, want $want_rc; want output containing: $want_msg)" >&2
-    echo "$out" | sed 's/^/    /' >&2
+    printf '    %s\n' "${out//$'\n'/$'\n    '}" >&2
   else
     echo "ok: $desc"
   fi
