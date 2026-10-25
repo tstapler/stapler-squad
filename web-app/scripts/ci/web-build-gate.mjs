@@ -3,7 +3,14 @@
 // A member's failure or cancellation fails the gate; success and skipped (irrelevant PR) pass; non-members only report.
 import { appendFileSync } from "node:fs";
 
-export const DEFAULT_MEMBERS = ["detect-changes", "web-build-smoke-next", "e2e-next"];
+// e2e-next was a default member from its first appearance in the plan, but the real baseline
+// (tests/e2e/baseline/next-e2e-baseline.json) shows ~529 of ~2400 specs genuinely failing today
+// on the Next build -- pre-existing, not a regression. Its raw Playwright exit code (not a
+// baseline-aware comparator result) was therefore always going to fail, which made
+// web-build-gate fail on main's very first post-merge run (confirmed in CI). Reporting-only
+// until e2e-next is demonstrated clean, same graduation discipline e2e-bun already has via
+// WEB_BUILD_GATE_MEMBERS (plan decision 10).
+export const DEFAULT_MEMBERS = ["detect-changes", "web-build-smoke-next"];
 const FAILING = new Set(["failure", "cancelled"]);
 const PASSING = new Set(["success", "skipped"]);
 

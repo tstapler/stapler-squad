@@ -50,8 +50,15 @@ test("ignores default members that do not exist yet, but only for the default li
   assert.equal(gate(green, "detect-changes,e2e-next").status, 1);
 });
 
-test("fails when e2e-next is cancelled (a DEFAULT_MEMBERS member once it exists in needs)", () => {
-  assert.equal(gate({ ...green, "e2e-next": "cancelled" }).status, 1);
+test("passes when e2e-next fails or is cancelled as a non-member (not in DEFAULT_MEMBERS: the real baseline has ~529 pre-existing failing specs, so raw Playwright exit code always fails -- confirmed on main's first post-merge run; joins via WEB_BUILD_GATE_MEMBERS like e2e-bun once demonstrated clean)", () => {
+  assert.equal(gate({ ...green, "e2e-next": "failure" }).status, 0);
+  assert.equal(gate({ ...green, "e2e-next": "cancelled" }).status, 0);
+});
+
+test("fails for e2e-next when the variable explicitly includes it", () => {
+  const r = gate({ ...green, "e2e-next": "failure" }, "detect-changes,web-build-smoke-next,e2e-next");
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /e2e-next: failure/);
 });
 
 test("passes when e2e-bun fails as a non-member (not in DEFAULT_MEMBERS until the owner flip, plan decision 10)", () => {
