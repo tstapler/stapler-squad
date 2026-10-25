@@ -45,8 +45,9 @@ func (b *TymuxBackend) TymuxManager() tymux.TymuxManager { return b.mgr }
 // WireLaunch records the program tymuxd must spawn; without it tymuxd runs a bare $SHELL (BUG-113).
 func (b *TymuxBackend) WireLaunch(spec LaunchSpec) { b.mgr.SetCommand(spec.Command) }
 
-// AppendLaunchEnv is a no-op: tymuxd's CreateSessionRequest carries no environment.
-func (b *TymuxBackend) AppendLaunchEnv(...string) {}
+// AppendLaunchEnv forwards KEY=VALUE env to tymuxd's CreateSessionRequest.Env.
+// tymuxd persists it in plaintext session records, so never pass secrets.
+func (b *TymuxBackend) AppendLaunchEnv(env ...string) { b.mgr.AppendEnv(env...) }
 
 // --- Lifecycle ---
 

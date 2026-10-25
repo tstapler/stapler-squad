@@ -264,6 +264,11 @@ type fakeTymuxManagerForSetCommand struct {
 	gotCommand         string // gotLaunch rendered as shell text
 	gotLaunch          launchcmd.LaunchCommand
 	startErr           error
+	gotEnv             []string
+}
+
+func (f *fakeTymuxManagerForSetCommand) AppendEnv(env ...string) {
+	f.gotEnv = append(f.gotEnv, env...)
 }
 
 func (f *fakeTymuxManagerForSetCommand) SetCommand(command launchcmd.LaunchCommand) {
