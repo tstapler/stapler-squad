@@ -115,7 +115,7 @@ jobs:
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: tstapler/benchdiff@03845d60bd136fe36f365cf8f6ac4a6f9ae86257 # main
+        uses: tstapler/benchdiff@3921c948d6d9cbc538a62d3808d979c06cc13a94 # v0.1.0
         with:
           head: tier1-bench.txt
           base: ${{ hashFiles('benchmarks/go/tier1-baseline.txt') != '' && 'benchmarks/go/tier1-baseline.txt' || '' }}
@@ -340,7 +340,7 @@ jobs:
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: tstapler/benchdiff@03845d60bd136fe36f365cf8f6ac4a6f9ae86257 # main
+        uses: tstapler/benchdiff@3921c948d6d9cbc538a62d3808d979c06cc13a94 # v0.1.0
         with:
           head: web-app/benchmark-results.json
           base: ${{ hashFiles('benchmarks/frontend/throughput-baseline.json') != '' && 'benchmarks/frontend/throughput-baseline.json' || '' }}
