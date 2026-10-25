@@ -430,6 +430,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            .github/actions
             tests/e2e
             scripts
 
@@ -596,6 +597,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            .github/actions
             tests/e2e
             scripts
 
