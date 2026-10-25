@@ -338,13 +338,25 @@ jobs:
   # e2e-bun's comparator can read it even when this job itself fails (plan Story 0.1's gate
   # rule judges a spec missing from the baseline against this same-run report).
   # ─────────────────────────────────────────────────────────────────────────────
+  # Sharded across 4 independent runner jobs -- each shard gets its own global-setup/server
+  # (tests/e2e/global-setup.ts starts one shared backend per *job*, which is why
+  # playwright.config.ts pins workers: 1/fullyParallel: false: in-process workers would share
+  # one server and race each other. Job-level sharding has no such hazard -- each shard is a
+  # fully separate process/server/port, same isolation the suite already relies on for a single
+  # run. Cuts a ~3h20m serial run to ~50-60m per shard. e2e-next-report merges the 4 partial
+  # blob reports back into the single report.json e2e-bun already expects, so nothing downstream
+  # of that artifact name needs to change.
   e2e-next:
     name: e2e (Next build)
     runs-on: ubuntu-latest
     needs: [detect-changes, prepare]
     # always() for the same reason as web-build-smoke-next above.
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
-    timeout-minutes: 240
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -387,25 +399,73 @@ jobs:
           bun install --frozen-lockfile
           npx playwright install chromium firefox webkit --with-deps
 
-      # Soft-timeout wrapper (e2e-video.yml's pattern): fail with a diagnostic at 200m rather
-      # than riding the job's 240m hard timeout-minutes to a SIGTERM with no explanation.
-      - name: Run full e2e suite (Next build)
+      # Soft-timeout wrapper (e2e-video.yml's pattern): fail with a diagnostic at 80m rather
+      # than riding the job's 90m hard timeout-minutes to a SIGTERM with no explanation.
+      # --shard runs this leg's 1/4 slice; blob reporter output merges losslessly across shards
+      # (unlike json, which each shard would overwrite/partial-write independently).
+      - name: Run full e2e suite (Next build), shard ${{ matrix.shard }}/4
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           WEB_BUILD: next
-          PLAYWRIGHT_JSON_REPORT_PATH: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
         run: |
           cd tests/e2e
-          timeout 200m npx playwright test --reporter=list || {
+          timeout 80m npx playwright test --shard=${{ matrix.shard }}/4 --reporter=blob || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
-              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' exceeded its 200m budget"
-              echo "CI-BUDGET-EXCEEDED: 'e2e-next' exceeded its 200m budget" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }}/4 exceeded its 80m budget"
+              echo "CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }}/4 exceeded its 80m budget" >> "$GITHUB_STEP_SUMMARY"
             fi
             exit $EXIT_CODE
           }
 
-      - name: Upload Playwright JSON report
+      - name: Upload blob report shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-next-${{ matrix.shard }}
+          path: tests/e2e/blob-report
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # e2e-next-report: merges the 4 e2e-next shards' blob reports into the single report.json
+  # e2e-bun (and the comparator, and anyone downloading the e2e-next-report artifact) already
+  # expects -- this job exists purely so sharding e2e-next requires zero changes downstream.
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-next-report:
+    name: e2e (Next build) report merge
+    runs-on: ubuntu-latest
+    needs: [detect-changes, prepare, e2e-next]
+    if: always() && needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install Playwright CLI (no browsers needed to merge reports)
+        run: cd tests/e2e && bun install --frozen-lockfile
+
+      - name: Download all shard blob reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-next-*
+          path: tests/e2e/all-blob-reports
+          merge-multiple: true
+
+      - name: Merge shards into one JSON report
+        run: |
+          cd tests/e2e
+          mkdir -p playwright-report
+          npx playwright merge-reports --reporter=json ./all-blob-reports > playwright-report/report.json
+
+      - name: Upload merged Playwright JSON report
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -423,12 +483,19 @@ jobs:
   # even when e2e-next failed (needs its report either way); only skips if e2e-next itself was
   # skipped or cancelled, since then there is no same-run report to judge missing specs against.
   # ─────────────────────────────────────────────────────────────────────────────
+  # Sharded the same way as e2e-next (see its comment); e2e-bun-report merges the shards and
+  # runs the comparator against the merged, full-suite Bun report -- the comparator needs every
+  # spec's result in one place, which per-shard partial reports can't provide.
   e2e-bun:
     name: e2e (Bun build)
     runs-on: ubuntu-latest
     needs: [detect-changes, prepare, e2e-next]
     if: always() && needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'
-    timeout-minutes: 240
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -493,23 +560,72 @@ jobs:
           bun install --frozen-lockfile
           npx playwright install chromium firefox webkit --with-deps
 
-      # Raw Playwright failures do not fail this step -- the comparator below is the real
-      # verdict (plan Story 7.10: an expected/listed Bun-only failure must not fail the job).
-      - name: Run full e2e suite (Bun build)
+      # Raw Playwright failures do not fail this step -- e2e-bun-report's comparator is the
+      # real verdict (plan Story 7.10: an expected/listed Bun-only failure must not fail the job).
+      - name: Run full e2e suite (Bun build), shard ${{ matrix.shard }}/4
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           WEB_BUILD: bun
-          PLAYWRIGHT_JSON_REPORT_PATH: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
         run: |
           cd tests/e2e
-          timeout 200m npx playwright test --reporter=list || {
+          timeout 80m npx playwright test --shard=${{ matrix.shard }}/4 --reporter=blob || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
-              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' exceeded its 200m budget"
-              echo "CI-BUDGET-EXCEEDED: 'e2e-bun' exceeded its 200m budget" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }}/4 exceeded its 80m budget"
+              echo "CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }}/4 exceeded its 80m budget" >> "$GITHUB_STEP_SUMMARY"
             fi
             true
           }
+
+      - name: Upload blob report shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-bun-${{ matrix.shard }}
+          path: tests/e2e/blob-report
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # e2e-bun-report: merges the 4 e2e-bun shards into one full-suite report, then runs the
+  # comparator against it (Task 7.10c) -- the comparator is the real pass/fail signal for the
+  # Bun build, not raw Playwright exit codes (plan Story 7.10).
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-bun-report:
+    name: e2e (Bun build) report + comparator
+    runs-on: ubuntu-latest
+    needs: [detect-changes, prepare, e2e-next-report, e2e-bun]
+    # e2e-next-report is itself skipped when e2e-next was skipped/cancelled (see its own if:),
+    # so checking its result here is equivalent to checking e2e-next's directly, without needing
+    # e2e-next in this job's own needs: list.
+    if: always() && needs.e2e-next-report.result != 'skipped' && needs.e2e-next-report.result != 'cancelled'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install Playwright CLI (no browsers needed to merge reports)
+        run: cd tests/e2e && bun install --frozen-lockfile
+
+      - name: Download all shard blob reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-bun-*
+          path: tests/e2e/all-blob-reports
+          merge-multiple: true
+
+      - name: Merge shards into one JSON report
+        run: |
+          cd tests/e2e
+          mkdir -p playwright-report
+          npx playwright merge-reports --reporter=json ./all-blob-reports > playwright-report/report.json
 
       - name: Download e2e-next's Playwright JSON report
         if: always()
@@ -546,7 +662,10 @@ jobs:
   web-build-gate:
     name: web-build-gate
     runs-on: ubuntu-latest
-    needs: [detect-changes, web-build-smoke-next, web-build-smoke-bun, e2e-next, e2e-bun]
+    # e2e-bun-report (not e2e-bun) carries the real Bun verdict post-sharding: it's where the
+    # comparator now runs, since e2e-bun's own per-shard result is raw, pre-comparator Playwright
+    # output (same reason the pre-sharding e2e-bun job already never failed on raw results).
+    needs: [detect-changes, web-build-smoke-next, web-build-smoke-bun, e2e-next, e2e-bun-report]
     if: always()
     timeout-minutes: 5
     steps:
