@@ -9,8 +9,10 @@ const shimmerFrames = keyframes({
 export const skeleton = style({
   background: `linear-gradient(90deg, ${vars.color.borderSubtle} 25%, ${vars.color.borderMuted} 50%, ${vars.color.borderSubtle} 75%)`,
   backgroundSize: "200% 100%",
-  animation: `${shimmerFrames} 1.5s infinite`,
   "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animation: `${shimmerFrames} 1.5s infinite`,
+    },
     "(prefers-color-scheme: dark)": {
       background: `linear-gradient(90deg, ${vars.color.surfaceMuted} 25%, ${vars.color.borderMuted} 50%, ${vars.color.surfaceMuted} 75%)`,
       backgroundSize: "200% 100%",

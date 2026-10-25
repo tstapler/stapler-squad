@@ -19,3 +19,22 @@ func TestBunInstallCmdClearsInheritedUserAgent(t *testing.T) {
 	}
 	require.Contains(t, cmd.Env, "KEEP_ME=1")
 }
+
+// Regression: target == webAppDir (the plain-install and pre-existing-node_modules-verify
+// paths in Run) must omit --cwd. cmd.Dir already places bun in webAppDir; Bun resolves
+// --cwd relative to its own process cwd, so passing both doubled the path
+// (web-app/web-app) and failed with ENOENT ("failed to change directory to \"web-app\"").
+func TestBunInstallCmdOmitsCwdWhenTargetIsWebAppDir(t *testing.T) {
+	cmd := bunInstallCmd(context.Background(), "web-app", "web-app")
+
+	require.Equal(t, "web-app", cmd.Dir)
+	require.NotContains(t, cmd.Args, "--cwd")
+}
+
+func TestBunInstallCmdPassesCwdWhenTargetDiffers(t *testing.T) {
+	cmd := bunInstallCmd(context.Background(), "web-app", "/store")
+
+	require.Equal(t, "web-app", cmd.Dir)
+	require.Contains(t, cmd.Args, "--cwd")
+	require.Contains(t, cmd.Args, "/store")
+}

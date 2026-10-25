@@ -3,6 +3,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { FileTreeHandle } from "@/components/sessions/FileTree";
 import { fileHash, parseDeepLink } from "@/lib/files/deepLink";
+import { replaceHash } from "@/lib/nav";
 
 interface Options {
   /** Cross-linked path (e.g. from the VCS panel); revealed in the tree whenever it changes. */
@@ -40,6 +41,6 @@ export function useFilesDeepLink({ initialSelectedPath, tree, selectedPath, onJu
     }
     first.current = false;
     if (window.location.hash === hash) return;
-    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${hash}`);
+    replaceHash(hash);
   }, [selectedPath]);
 }

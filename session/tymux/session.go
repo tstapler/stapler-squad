@@ -16,6 +16,7 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -28,6 +29,12 @@ var ErrNotSupportedOnTymuxBackend = errors.New("not supported by the tymux backe
 // (capture/cursor/dimensions) when Start/RestoreWithWorkDir hasn't run yet.
 var errSessionNotStarted = errors.New("tymux: session not started")
 
+// Structured-log field keys shared across this file's log.Info/Warn calls.
+const (
+	logKeySessionID = "session_id"
+	logKeyErr       = "err"
+)
+
 // tymuxGRPCSession is the real TymuxManager implementation, backed by a live
 // tymuxd daemon over gRPC via rpcTransport.
 type tymuxGRPCSession struct {
@@ -39,8 +46,12 @@ type tymuxGRPCSession struct {
 	mu sync.RWMutex
 
 	// command is the program Start() asks tymuxd to spawn, set via SetCommand
-	// before Start(). Empty means tymuxd defaults to $SHELL.
-	command string
+	// before Start(). Nil means tymuxd defaults to $SHELL.
+	command launchcmd.LaunchCommand
+
+	// extraEnv is launch env added via AppendEnv; merged into the create
+	// request at Start() (see launchEnv for precedence).
+	extraEnv map[string]string
 
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
 	// (v1.0, non-split) pane, cached from CreateSession/ReviveSession's
@@ -275,7 +286,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.mu.Unlock()
 	s.closing.Store(false)
 
-	log.Info("tymux: session ready", "session_id", sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())
+	log.Info("tymux: session ready", logKeySessionID, sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())
 
 	return s.openStandingStream(pane.GetId())
 }
@@ -313,37 +324,70 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	s.mu.RLock()
 	command := s.command
 	s.mu.RUnlock()
-	program, args := splitLaunchCommand(command)
-	resp, err := s.transport.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{
-		Name:    dir,
-		Command: program,
-		Args:    args,
-		Cwd:     dir,
-	}))
+	ctx := context.Background()
+	req := &v1.CreateSessionRequest{Name: dir, Cwd: dir, Env: s.launchEnv()}
+	if err := s.applyLaunch(ctx, req, command); err != nil {
+		return err
+	}
+	resp, err := s.transport.CreateSession(ctx, connect.NewRequest(req))
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
 	return s.cacheFromSession(resp.Msg)
 }
 
-// shellMetachars are the characters that make a launch command more than a
-// bare program name; tymuxd execs Command as a single program, so these need a shell.
-const shellMetachars = " \t\n'\"\\$&|;<>()*?[]{}~`#!"
-
-// splitLaunchCommand maps a shell-style launch command onto CreateSessionRequest's
-// Command/Args. A bare program name passes through; anything with arguments or
-// shell syntax runs as `/bin/sh -c <command>`.
-func splitLaunchCommand(command string) (program string, args []string) {
-	if !strings.ContainsAny(command, shellMetachars) {
-		return command, nil
+// paneColorEnv returns the TERM/COLORTERM overrides CreateSessionRequest.Env
+// layers over tymuxd's own environment. stapler-squad normally runs headless
+// under systemd with no TERM set at all, which tymuxd then passes straight
+// through to the pane's shell — the shell sees no TERM, assumes a dumb
+// terminal, and never emits ANSI/SGR color codes. Mirrors
+// tmux.go's buildAttachCommand, which solves the identical problem for the
+// classic tmux backend.
+func paneColorEnv() map[string]string {
+	env := make(map[string]string, 2)
+	if os.Getenv("TERM") == "" {
+		env["TERM"] = "xterm-256color"
 	}
-	return "/bin/sh", []string{"-c", command}
+	if os.Getenv("COLORTERM") == "" {
+		env["COLORTERM"] = "truecolor"
+	}
+	return env
+}
+
+// launchEnv builds the create request's base env. Precedence, lowest to
+// highest: paneColorEnv, AppendEnv entries, then the command's own env
+// (applied afterwards by applyLaunch).
+func (s *tymuxGRPCSession) launchEnv() map[string]string {
+	env := paneColorEnv()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for k, v := range s.extraEnv {
+		env[k] = v
+	}
+	return env
+}
+
+// AppendEnv records KEY=VALUE launch env for the next Start(). tymuxd stores
+// session env in plaintext records, so callers must not pass secrets.
+func (s *tymuxGRPCSession) AppendEnv(env ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if s.extraEnv == nil {
+			s.extraEnv = make(map[string]string)
+		}
+		s.extraEnv[k] = v
+	}
 }
 
 // SetCommand records the program Start() will ask tymuxd to spawn. Call
 // it before Start(); not consulted by RestoreWithWorkDir (a revived
 // session already has its process running).
-func (s *tymuxGRPCSession) SetCommand(command string) {
+func (s *tymuxGRPCSession) SetCommand(command launchcmd.LaunchCommand) {
 	s.mu.Lock()
 	s.command = command
 	s.mu.Unlock()
@@ -397,7 +441,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
 	s.mu.RUnlock()
-	log.Info("tymux: session closing", "session_id", sessionID)
+	log.Info("tymux: session closing", logKeySessionID, sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
 	// tearing anything down, so readAttachLoop's Receive() error (caused
 	// by teardownStandingStream's own cancellation below) is recognized
@@ -424,10 +468,10 @@ func (s *tymuxGRPCSession) Close() error {
 	s.liveness = v1.Liveness_LIVENESS_DEAD
 	s.mu.Unlock()
 	if err != nil {
-		log.Warn("tymux: KillSession failed during Close", "session_id", sessionID, "err", err)
+		log.Warn("tymux: KillSession failed during Close", logKeySessionID, sessionID, logKeyErr, err)
 		return classifyRPCError("Close", err)
 	}
-	log.Info("tymux: session closed", "session_id", sessionID)
+	log.Info("tymux: session closed", logKeySessionID, sessionID)
 	return nil
 }
 
@@ -462,9 +506,9 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
 		if errors.Is(err, ErrTymuxdUnreachable) {
-			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", "session_id", sessionID, "err", err)
+			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		} else {
-			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", "session_id", sessionID, "err", err)
+			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		}
 		return cachedLiveness == v1.Liveness_LIVENESS_LIVE
 	}
@@ -833,7 +877,7 @@ func (s *tymuxGRPCSession) SetOnExitCallback(fn func(string)) {
 	}
 	s.mu.Unlock()
 	if fire {
-		log.Info("tymux: exit callback fired", "session_id", s.GetSessionIdentifier(), "reason", reason, "registered_after_exit", true)
+		log.Info("tymux: exit callback fired", logKeySessionID, s.GetSessionIdentifier(), "reason", reason, "registered_after_exit", true)
 		fn(reason)
 	}
 }

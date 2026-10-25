@@ -171,3 +171,17 @@ export async function seedHeadlessTriageItem(
   const body = (await resp.json()) as { itemId: string; sessionId: string };
   return body;
 }
+
+export async function seedReviewVerdictItem(
+  request: APIRequestContext,
+  opts: { title: string; status?: string }
+): Promise<{ itemId: string; sessionId: string }> {
+  const resp = await request.post(`${BASE_URL}/api/debug/backlog/seed-review-verdict`, {
+    headers: { "Content-Type": "application/json" },
+    data: { title: opts.title, status: opts.status ?? "review" },
+  });
+  if (!resp.ok()) {
+    throw new Error(`seedReviewVerdictItem failed (${resp.status()}): ${await resp.text().catch(() => "")}`);
+  }
+  return (await resp.json()) as { itemId: string; sessionId: string };
+}

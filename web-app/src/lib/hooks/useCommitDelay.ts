@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/lib/nav";
 import { getTiming } from "./interactionTiming";
 import { useEngagement } from "./useEngagedCard";
 

@@ -1,7 +1,7 @@
 "use client";
 // +feature: session:guidance-structured
 
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import { useId, useState } from "react";
 import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
 import { QUESTION_FORM_COPY as COPY, COPY as ROW_COPY } from "@/lib/copy/notificationCopy";

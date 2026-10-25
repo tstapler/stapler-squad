@@ -53,13 +53,10 @@ export const primaryActionButton = style({
   background: "none",
   border: "none",
   cursor: "pointer",
-  color: vars.color.primary,
+  color: "inherit",
   fontSize: vars.fontSize.sm,
   padding: 0,
   textDecoration: "underline",
-  ":hover": {
-    color: vars.color.primaryHover,
-  },
 });
 
 export const secondaryActionButton = style({

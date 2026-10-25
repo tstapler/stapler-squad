@@ -2,7 +2,7 @@
 
 // analytics-exempt
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { Link, useSearchParams } from "@/lib/nav";
 import * as Tabs from "@radix-ui/react-tabs";
 import { GlobalDefaultsForm } from "@/components/settings/GlobalDefaultsForm";
 import { ProfilesManager } from "@/components/settings/ProfilesManager";
@@ -20,7 +20,6 @@ import { usePageView } from "@/lib/analytics/usePageView";
 import { useOnboardingContext } from "@/lib/contexts/OnboardingContext";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { routes } from "@/lib/routes";
-import Link from "next/link";
 import * as styles from "./settings.css";
 
 function SettingsPageInner() {
@@ -106,6 +105,11 @@ function SettingsPageInner() {
               </Link>
             </section>
             <section className={styles.section}>
+              <Link href={routes.settingsBacklogQuota} className={styles.helpLink} data-testid="settings-backlog-quota-link">
+                Backlog Quota (pause backlog automation near the session limit) →
+              </Link>
+            </section>
+            <section className={styles.section}>
               <Link href={routes.settingsRemotes} className={styles.helpLink} data-testid="settings-remotes-link">
                 Remotes (SSH hosts) →
               </Link>
@@ -135,12 +139,13 @@ function SettingsPageInner() {
               <div className={styles.helpSection}>
                 <div className={styles.helpSectionTitle}>Help</div>
                 <div className={styles.helpRow}>
+                  {// analytics-exempt
                   <button
                     className={styles.helpButton}
                     onClick={triggerOnboarding}
                   >
                     Show onboarding tour again
-                  </button>
+                  </button>}
                   <Link href={routes.help} className={styles.helpLink}>
                     View documentation
                   </Link>

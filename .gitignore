@@ -89,10 +89,16 @@ bench-diff.txt
 benchmark_results.txt
 bench-otel-*.txt
 /web-app/out/
+# Bun build (WEB_BUILD=bun): per-PID temp output, stats, and the last-built-mode stamp
+/web-app/.out-tmp-*
+/web-app/.build/
+/web-app/.web-build-mode
 /server/web/dist/
 
 # Build artifacts
 build/
+# web-app/build/ holds tracked Bun build sources and tests, not output
+!/web-app/build/
 
 # Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
 # so its contents don't need ignore rules).

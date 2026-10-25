@@ -2,7 +2,7 @@
 
 import { createContext, forwardRef, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { MouseEvent, ReactNode } from "react";
-import { pushTrayEntryInHistory, replaceHashInHistory, replaceSearchInHistory } from "./history";
+import { pushHistoryMarkerInHistory, pushTrayEntryInHistory, replaceHashInHistory, replaceSearchInHistory } from "./history";
 import type { NavImpl, NavLinkProps, NavRouter, NavSearchParams, RedirectProps } from "./impl.types";
 import { normalizePathname } from "./normalize";
 
@@ -77,6 +77,7 @@ export const Link = forwardRef<HTMLAnchorElement, NavLinkProps>(function Link(
   const router = useRouter();
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event);
+    if (href.startsWith("#")) return; // same-page hash links belong to the browser, as in the other impls
     const plainLeftClick = event.button === 0 && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
     if (event.defaultPrevented || !plainLeftClick || (target && target !== "_self")) return;
     event.preventDefault();
@@ -105,6 +106,7 @@ export function useReplaceSearch(): (search: string) => void {
 
 export const replaceHash = replaceHashInHistory;
 export const pushTrayEntry = pushTrayEntryInHistory;
+export const pushHistoryMarker = pushHistoryMarkerInHistory;
 
 export const memoryImpl = {
   useRouter,
@@ -115,4 +117,5 @@ export const memoryImpl = {
   useReplaceSearch,
   replaceHash,
   pushTrayEntry,
+  pushHistoryMarker,
 } satisfies NavImpl;

@@ -40,4 +40,6 @@ export interface NavImpl {
   replaceHash(hash: string): void;
   /** Pushes (or with `replace`, replaces) the mobile tray history entry marker. */
   pushTrayEntry(replace?: boolean): void;
+  /** Pushes (or with `replace`, replaces) an entry whose state adds `[key]: value` to the current state; throws if History does. */
+  pushHistoryMarker(key: string, value: unknown, replace?: boolean): void;
 }

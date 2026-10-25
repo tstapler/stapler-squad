@@ -23,6 +23,10 @@ module.exports = {
       // with no logic bug — each passes in well under 1s run in isolation.
       testTimeout: 20000,
       moduleNameMapper: {
+        // Window style modules get string class names (the proxy below trips React's
+        // className check); these must stay ahead of the generic .css mappers.
+        "styles/window/windowTabStrip\\.css(\\.ts)?$": "<rootDir>/src/__mocks__/windowTabStripStylesMock.js",
+        "styles/window/windowOverview\\.css(\\.ts)?$": "<rootDir>/src/__mocks__/windowOverviewStylesMock.js",
         // vanilla-extract .css.ts files — return callable proxy
         "\\.css\\.ts$": "<rootDir>/src/__mocks__/styleMock.js",
         "\\.module\\.css$": "identity-obj-proxy",
@@ -81,6 +85,30 @@ module.exports = {
               module: "commonjs",
               moduleResolution: "node",
               esModuleInterop: true,
+            },
+          },
+        ],
+      },
+    },
+    {
+      // Node-side tests of the Bun build. Bun-only behaviour runs in a pinned `bun`
+      // subprocess via runInBun; `*.bun.ts` scripts are not tests and are never collected.
+      // scripts/__tests__/*.test.mjs use node:test and run through `bun run test:codemods`.
+      displayName: "build",
+      preset: "ts-jest",
+      testEnvironment: "node",
+      roots: ["<rootDir>/build"],
+      testMatch: ["<rootDir>/build/**/__tests__/**/*.test.ts"],
+      testPathIgnorePatterns: ["/node_modules/", "/fixtures/"],
+      transform: {
+        "^.+\\.tsx?$": [
+          "ts-jest",
+          {
+            tsconfig: {
+              module: "commonjs",
+              moduleResolution: "node",
+              esModuleInterop: true,
+              types: ["node", "jest"],
             },
           },
         ],

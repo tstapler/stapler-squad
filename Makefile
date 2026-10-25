@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -100,6 +100,27 @@ help: ## Show this help message
 .PHONY: git-soak-status
 git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
 	@scripts/git-soak-status.sh
+
+.PHONY: workflow-engine-soak-status
+workflow-engine-soak-status: ## Print the workflow engine shadow-soak verdict per caller class (running service; ARGS=--config-diff for the live-config diff, ARGS="--class agent" for one class; exit = worst class: 2 unreachable, 1 not ready)
+	@case "$(ARGS)" in \
+		*--class*) exec scripts/workflow-engine-soak-status.sh $(ARGS) ;; \
+	esac; \
+	rc=0; \
+	for c in operator agent system; do \
+		scripts/workflow-engine-soak-status.sh --class $$c $(ARGS) || { r=$$?; [ "$$r" -gt "$$rc" ] && rc=$$r; }; \
+	done; \
+	exit $$rc
+
+.PHONY: workflow-engine-replay
+workflow-engine-replay: ## Replay the caller registry against a COPY of the database: make workflow-engine-replay DB=<copy> (made with sqlite3 <live> ".backup <copy>"; a path inside ~/.stapler-squad is refused; exit 1 = a fixed agent/system edge is denied with no gate)
+	@test -n "$(DB)" || { echo "usage: make workflow-engine-replay DB=<path to a COPY of the database>" >&2; exit 2; }
+	@WORKFLOW_ENGINE_REPLAY_DB="$(DB)" go test ./session -run '^TestWorkflowEngineReplayCommand$$' -count=1 -v
+
+.PHONY: verify-manual-instance
+verify-manual-instance: ## Guarded manual instance for slot N (make verify-manual-instance N=1 [CHECK=1 for a dry run that starts nothing])
+	@test -n "$(N)" || (echo "usage: make verify-manual-instance N=<1-5> [CHECK=1]" && exit 2)
+	@scripts/verify-manual-instance.sh $(if $(CHECK),--check) $(N)
 
 .PHONY: ports
 ports: ## Show reserved manual dev port block (see CLAUDE.md's "Manual dev port block")
@@ -216,8 +237,40 @@ web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
-# Build Next.js app to web-app/out
-web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) web-app/next.config.ts
+# WEB_BUILD selects the bundler: next (default) or bun (web-app/build/, ADR-006). Both write web-app/out.
+WEB_BUILD ?= next
+ifneq ($(filter $(WEB_BUILD),next bun),$(WEB_BUILD))
+$(error WEB_BUILD must be "next" or "bun", got "$(WEB_BUILD)")
+endif
+# Bun builds are minified unless this is 0. Unminified until PR 8b turns minification on (plan Story 8.6, which deletes this line).
+WEB_MINIFY ?= 0
+
+# The stamp changes only when WEB_BUILD does, so flipping modes rebuilds web-app/out (and recopies dist) once, never twice.
+WEB_BUILD_STAMP := web-app/.web-build-mode
+.PHONY: FORCE-web-build-mode
+FORCE-web-build-mode: ;
+$(WEB_BUILD_STAMP): FORCE-web-build-mode
+	@[ "$$(cat $@ 2>/dev/null)" = "$(WEB_BUILD)" ] || echo "$(WEB_BUILD)" > $@
+
+ifeq ($(WEB_BUILD),bun)
+WEB_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
+else
+WEB_BUILD_INPUTS := web-app/next.config.ts
+endif
+
+# end of the WEB_BUILD seam block (scripts/__tests__/makefile-web-build.test.mjs extracts everything above)
+
+# Build the web UI to web-app/out (Next by default, Bun with WEB_BUILD=bun)
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(WEB_BUILD_INPUTS) $(WEB_BUILD_STAMP)
+ifeq ($(WEB_BUILD),bun)
+	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
+	@test -d web-app/node_modules/@vanilla-extract/integration || { \
+		echo "⚠️  node_modules incomplete, re-installing..."; \
+		go run ./tools/shared-node-modules web-app; \
+	}
+	@echo "Building web UI with Bun (WEB_BUILD=bun, WEB_MINIFY=$(WEB_MINIFY))..."
+	@cd web-app && WEB_MINIFY=$(WEB_MINIFY) bun build/build.ts
+else
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/next || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
@@ -226,6 +279,7 @@ web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WE
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@mkdir -p $(HOME)/.stapler-squad/nextjs-webpack-cache
 	@cd web-app && NEXT_BUILD_MODE=development NEXTJS_SHARED_CACHE_DIR=$(HOME)/.stapler-squad/nextjs-webpack-cache ../scripts/retry-with-backoff.sh -n 3 -s 5 -- bun run build
+endif
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -237,7 +291,7 @@ server/web/dist: web-app/out
 	@touch server/web/dist # Update timestamp
 	@echo "✅ Web UI built and copied successfully"
 
-web-build: server/web/dist ## Build the Next.js web UI (convenience target)
+web-build: server/web/dist ## Build the web UI (Next by default; WEB_BUILD=bun for the Bun pipeline)
 
 build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
@@ -347,7 +401,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.3.0
+TYMUX_VERSION ?= v1.8.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -457,7 +511,22 @@ backup-binary: ## Snapshot the current binary to stapler-squad.prev before a new
 		echo "==> Saved current binary to ./stapler-squad.prev"; \
 	fi
 
-install-service: backup-binary build-embedded-tymux install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+# Story 8.5 (project_plans/web-app-bun-build): restart-safety precondition.
+# Paths are overridable (a command-line `VAR=...` wins over a makefile `?=`)
+# so scripts/install-service-preflight.test.sh can point these at fake unit
+# files instead of the real deployed one.
+INSTALL_SERVICE_LINUX_UNIT ?= $(HOME)/.config/systemd/user/stapler-squad.service
+INSTALL_SERVICE_MACOS_PLIST_GLOB ?= $(HOME)/Library/LaunchAgents/*stapler-squad*.plist
+ifeq ($(UNAME_S),Darwin)
+INSTALL_SERVICE_KEEP_SERVER_FLAG := $(shell grep -l -- '--tmux-keep-server' $(INSTALL_SERVICE_MACOS_PLIST_GLOB) 2>/dev/null)
+else
+INSTALL_SERVICE_KEEP_SERVER_FLAG := $(shell test -f "$(INSTALL_SERVICE_LINUX_UNIT)" && grep -- '--tmux-keep-server' "$(INSTALL_SERVICE_LINUX_UNIT)" 2>/dev/null)
+endif
+
+install-service-preflight: ## Story 8.5 guard: fail before install-service builds anything if the deployed unit lacks --tmux-keep-server (override with ACCEPT_SESSION_LOSS=1)
+	@:$(if $(filter 1,$(ACCEPT_SESSION_LOSS)),,$(if $(strip $(INSTALL_SERVICE_KEEP_SERVER_FLAG)),,$(error install-service preflight: the deployed stapler-squad unit does not pass --tmux-keep-server. Restarting it now would destroy every live tmux session, including any session this command runs from -- see docs/explanation/tmux-keep-server-on-restart.md. Re-deploy with the flag first, or re-run with ACCEPT_SESSION_LOSS=1 to explicitly accept the loss)))
+
+install-service: install-service-preflight backup-binary build-embedded-tymux install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
 endif
@@ -549,7 +618,7 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	STAPLER_SQUAD_USE_CONTROL_MODE=false \
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
-# Isolated backend + next-dev DevStack for manual testing (Epic 3.2,
+# Isolated backend + next-dev DevStack (Next mode (removed in PR 9)) for manual testing (Epic 3.2,
 # scripts/dev-stack/launch.ts). Distinct from `make preview` (which runs the
 # built Go binary alone against the static-exported web UI) — this spins up
 # BOTH a backend and a real `next dev` on separately allocated ports, wired
@@ -647,6 +716,12 @@ test-affected: ensure-tools proto-gen $(GOTESTSUM_BIN) ## Run tests only for pac
 test-affected-web: ## Run only the web-app Jest tests transitively affected by changes vs BASE (default origin/main); usage: make test-affected-web [BASE=some-ref]
 	cd web-app && BASE=$(or $(BASE),origin/main) bun run test:affected
 	cd web-app && bun run test:codemods
+
+test-web-build: web-app/node_modules/.ssq-install-stamp ## Run the web-app `build` Jest project (Bun-side tests, shells out to the pinned bun)
+	cd web-app && bunx jest --selectProjects build --no-coverage
+
+verify-eval-patch: web-app/node_modules/.ssq-install-stamp ## Fail if the vanilla-extract `eval` bun patch (ADR-008) is not applied
+	cd web-app && bun run verify:eval-patch
 
 test-coverage: ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) ## Run tests with coverage report (HTML)
 	# Same tmux-contention root cause as the test target above -- see its comment.
@@ -1023,13 +1098,17 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
-	cd web-app && npx next lint
+ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
+	tools/ci/check-tymux-pin_test.sh
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && bun install --silent && bun run test
 	@echo "✅ ready: local approximation of PR checks complete"
+
+test-tymux-pin: ## Test tools/ci/check-tymux-pin.sh against a local fixture remote (no network)
+	tools/ci/check-tymux-pin_test.sh
 
 ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/revive/dupl gate, mirroring lint.yml's PR-only complexity/duplication check
 	@GOBIN=$$(go env GOBIN); \
@@ -1052,6 +1131,12 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 # per-file — so a small amount of that specific duplication is irreducible, ~0.09% today).
 # 0.1% leaves a small buffer above that irreducible baseline while still failing on any
 # meaningfully-sized new duplication.
+lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a misnamed needs: or bad expression fails here, not in CI)
+	@which actionlint >/dev/null 2>&1 || { echo "actionlint not found; brew install actionlint"; exit 1; }
+	@# -shellcheck= : the embedded-script shellcheck findings in older workflows predate this gate; syntax, expression and needs: checks are what it guards.
+	actionlint -shellcheck=
+	cd web-app && bun run test:codemods
+
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
 

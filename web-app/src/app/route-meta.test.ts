@@ -5,7 +5,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as ts from "typescript";
-import { NOT_FOUND_META, ROUTE_META } from "./route-meta";
+import { NOT_FOUND_META, ROUTE_META, routeMetaFor } from "./route-meta";
+import { ROUTE_PATHS } from "@/lib/nav/paths";
 
 const APP_DIR = __dirname;
 const ROOT_TITLE = "Stapler Squad Sessions";
@@ -102,14 +103,18 @@ describe("ROUTE_META", () => {
     expect(Object.keys(ROUTE_META).sort()).toEqual(pageRoutes);
   });
 
+  it("RoutePath lists exactly the page.tsx routes", () => {
+    expect([...ROUTE_PATHS].sort()).toEqual(pageRoutes);
+  });
+
   it.each(pageRoutes)("title for %s equals the effective Next title", (route) => {
-    const meta = ROUTE_META[route];
+    const meta = routeMetaFor(route);
     if (!meta) throw new Error(`No RouteMeta row for ${route}: ${FIX_HINT}`);
     expect({ route, title: meta.title }).toEqual({ route, title: effectiveTitle(route) });
   });
 
   it.each(pageRoutes)("guard for %s equals the FeatureGuard in its layout chain", (route) => {
-    expect({ route, guard: ROUTE_META[route]?.guard }).toEqual({ route, guard: effectiveGuard(route) });
+    expect({ route, guard: routeMetaFor(route)?.guard }).toEqual({ route, guard: effectiveGuard(route) });
   });
 
   it("pins well-known titles", () => {

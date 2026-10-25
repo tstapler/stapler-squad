@@ -62,7 +62,7 @@ export const tab = style({
       color: vars.color.textPrimary,
     },
     '&[aria-selected="true"]': {
-      color: vars.color.primary,
+      color: vars.color.accentText,
       borderBottomColor: vars.color.primary,
       fontWeight: vars.fontWeight.semibold,
     },

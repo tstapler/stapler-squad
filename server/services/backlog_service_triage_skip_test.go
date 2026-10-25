@@ -137,7 +137,7 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 	require.Equal(t, 1, pool.callCount())
 
 	// Back to queued (e.g. plan never approved): unchanged content -> skipped, status preserved.
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusQueued, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusQueued, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 	require.NoError(t, svc.AutoRespawnTriage(t.Context(), item.ID))
 	assert.Equal(t, 1, pool.callCount())
@@ -182,7 +182,7 @@ func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
 		return e == nil && got.Status == string(session.BacklogStatusReady) && !svc.IsTriageLive(item.ID)
 	}, 5*time.Second, 20*time.Millisecond, "first triage completes")
 
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusQueued, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusQueued, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 	assert.True(t, svc.IsRetriagePointless(t.Context(), item.ID), "content unchanged since the completed triage")
 

@@ -7,6 +7,8 @@ import (
 	"context"
 	"os"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 )
 
 // TymuxManager is the interface satisfied by the concrete tymux gRPC session
@@ -29,7 +31,14 @@ type TymuxManager interface {
 	// SetCommand records the program the next Start() call should spawn in
 	// the pane -- tymux's equivalent of TmuxManager's baked-in-program
 	// SetSession(). Call it before Start().
-	SetCommand(command string)
+	SetCommand(command launchcmd.LaunchCommand)
+
+	// AppendEnv adds KEY=VALUE entries to the environment the next Start()
+	// passes to tymuxd. Later entries for the same key replace earlier ones;
+	// entries without '=' are ignored. The command's own env still wins.
+	// tymuxd persists session env in plaintext records: pass only
+	// non-secret values (DISPLAY, CDP URLs).
+	AppendEnv(env ...string)
 
 	// Identification
 	GetSessionIdentifier() string

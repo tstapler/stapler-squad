@@ -145,9 +145,10 @@ interface PaneSplitProps {
 function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneSplitProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // On mobile: vertical (side-by-side) splits collapse to the focused pane only.
-  // Horizontal (top/bottom) splits are fine on mobile — show both panes stacked.
-  if (isMobile && pane.direction === "vertical") {
+  // On narrow screens every split collapses to the focused pane, so each pane is a
+  // full-screen "page" that MobilePaneTabStrip switches between — a stacked 50/50
+  // split leaves two cramped terminals and there is no way to get one full-screen.
+  if (isMobile) {
     const focusedInFirst = containsPaneId(pane.first, state.focusedPaneId);
     const visibleNode = focusedInFirst ? pane.first : pane.second;
     return (
@@ -280,6 +281,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
           aria-pressed={viewMode === "list"}
           onClick={() => setViewMode("list")}
         >
+          {/* analytics-exempt */}
           List
         </button>
         <button
@@ -289,6 +291,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
           aria-pressed={viewMode === "board"}
           onClick={() => setViewMode("board")}
         >
+          {/* analytics-exempt */}
           Board
         </button>
       </div>
@@ -404,7 +407,8 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           className={pickerOverlay}
           onClick={(e) => {
             e.stopPropagation();
-            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId: pickerPendingSession!.id });
+            if (!pickerPendingSession) return;
+            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId: pickerPendingSession.id });
             dispatch({ type: "ASSIGN_TAB", paneId: pane.id, tab: "terminal" });
             cancelPicker();
           }}
@@ -412,6 +416,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           role="button"
           tabIndex={0}
         >
+          {/* analytics-exempt */}
           <span className={pickerLabel}>{pickerLetter}</span>
         </div>
       )}
@@ -473,6 +478,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
             onClick={() => dispatch({ type: "RESET_LAYOUT" })}
             title="Reset to single pane"
           >
+            {/* analytics-exempt */}
             Reset layout
           </button>
         </div>

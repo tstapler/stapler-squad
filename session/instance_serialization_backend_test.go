@@ -66,7 +66,7 @@ func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 	inst := &Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: BackendTymux}
 	inst.processManager = NewTymuxBackend(fake)
 
-	inst.wireTmuxSession("claude --resume abc")
+	inst.wireTmuxSession(shellLaunch("claude --resume abc"))
 
 	assert.Equal(t, "claude --resume abc", fake.gotCommand)
 }
@@ -77,7 +77,7 @@ func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
 	inst := &Instance{Title: "wire-tmux", Path: t.TempDir(), Program: "claude"}
 	inst.processManager = NewTmuxBackend(mgr)
 
-	inst.wireTmuxSession("claude")
+	inst.wireTmuxSession(shellLaunch("claude"))
 
 	assert.NotNil(t, mgr.Session())
 }

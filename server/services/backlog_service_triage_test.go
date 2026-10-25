@@ -668,7 +668,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
@@ -792,7 +792,7 @@ func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
+			_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
 			results <- err
 		}()
 	}
@@ -1008,7 +1008,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
@@ -2061,7 +2061,7 @@ func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPrecond
 	// function under test with the (now stale) pre-read state, exactly as
 	// AutoReopenAfterFailedReview would if something else touched the item
 	// between its own read and this call.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, "test")
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, "test")
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
@@ -2640,7 +2640,7 @@ func TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)

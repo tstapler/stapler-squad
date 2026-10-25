@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { pushHistoryMarker } from "@/lib/nav";
 import { useFilesAnalytics } from "@/lib/files/analytics/filesAnalytics";
 
 export type PaneState = "files" | "editor" | "search";
@@ -53,7 +54,7 @@ export function useMobilePane(active: boolean) {
     }
     const below = paneRef.current;
     try {
-      window.history.pushState({ ...(window.history.state ?? {}), [KEY]: depth.current + 1 }, "");
+      pushHistoryMarker(KEY, depth.current + 1);
       depth.current += 1;
       stack.current = [...stack.current.slice(0, depth.current), to];
     } catch {

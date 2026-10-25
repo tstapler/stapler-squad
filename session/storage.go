@@ -287,6 +287,9 @@ type Storage struct {
 	foreignClaims atomic.Pointer[ForeignClaimLookup]
 	// provenance builds the PR provenance comment; nil means no stamping.
 	provenance atomic.Pointer[PRProvenanceSource]
+	// gate is the engine and denial reporter GatedTransition decides with; nil
+	// means unwired and every caller gets the legacy (Off) answer.
+	gate atomic.Pointer[transitionGate]
 }
 
 // NewStorageWithRepository creates a Storage backed by an EntRepository.
@@ -1008,6 +1011,19 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 	return created, nil
 }
 
+// CreateBacklogItemForDebug is CreateBacklogItem for the operator-only debug
+// seed and mutate endpoints, which may create an item at any status. It is
+// counted as workflow_engine_bypass_total{caller=debug_create}; every other
+// creator is held to idea (or no status) by the bypass inventory test
+// (ADR-007 D1), which is why CreateBacklogItem itself rejects nothing.
+func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data BacklogItemData) (*BacklogItemData, error) {
+	created, err := s.CreateBacklogItem(ctx, data)
+	if err == nil {
+		RecordEngineBypass(CallerDebugCreate)
+	}
+	return created, err
+}
+
 // recordClaim is the single choke point (ADR-002 of
 // project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
 // claim for every newly created item that has an ExternalURL. Best-effort: a
@@ -1083,15 +1099,15 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update Backl
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
-// ArchiveBacklogItem sets the archived_at timestamp and status. See
+// RawArchiveBacklogItem sets the archived_at timestamp and status. See
 // EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
-func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
-	return s.repo.ArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
+func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+	return s.repo.rawArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
-// UnarchiveBacklogItem clears archived_at and restores the item to "idea".
-func (s *Storage) UnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
-	return s.repo.UnarchiveBacklogItem(ctx, id)
+// RawUnarchiveBacklogItem clears archived_at and restores the item to "idea".
+func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.rawUnarchiveBacklogItem(ctx, id, "")
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.
@@ -1099,12 +1115,12 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 	return s.repo.DeleteBacklogItem(ctx, id)
 }
 
-// TransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
-	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
+// RawTransitionBacklogItemStatus changes the status of a backlog item.
+func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	return s.repo.rawTransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
-// SetBacklogItemPRAndTransition is the shared primary-write path for
+// RawSetBacklogItemPRAndTransition is the shared primary-write path for
 // recording a PR that genuinely exists on GitHub against a backlog item and
 // moving it review -> pr_pending, or — when observed is already pr_pending —
 // correcting an already-recorded PR to a different one (a reassignment, e.g.
@@ -1161,7 +1177,15 @@ func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, to
 // than silently succeeding because the check only lived in one handler.
 // guard is ignored (may be nil) when observed.Status is review — a
 // first-time recording never needs one.
-func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
+func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
+	return s.setPRAndTransition(ctx, observed, PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
+}
+
+// setPRAndTransition is the single-UPDATE write shared by
+// RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; the contract
+// is documented on the former.
+func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemData, pr PRAssociation) error {
+	prURL, prNumber, summary, guard := pr.URL, pr.Number, pr.Summary, pr.Guard
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
@@ -1215,7 +1239,7 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, observed *B
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	if _, err := s.repo.TransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+	if _, err := s.repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 

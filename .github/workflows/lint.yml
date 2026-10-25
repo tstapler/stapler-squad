@@ -150,6 +150,9 @@ jobs:
       - name: Check tymux client/daemon pin agreement
         run: tools/ci/check-tymux-pin.sh
 
+      - name: Test tymux pin check
+        run: tools/ci/check-tymux-pin_test.sh
+
   go-lint:
     name: Go lint
     runs-on: ubuntu-latest
@@ -159,8 +162,15 @@ jobs:
       # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
       # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
       # see that step's comment for why.
+      #
+      # ref: pins the checkout to the PR's actual head commit, not GitHub's synthetic
+      # refs/pull/N/merge (actions/checkout's default for pull_request events, which tracks
+      # main's current tip independently of base.sha) — see web-lint's identical comment
+      # for the full failure mode this avoids (PR #1144's gofmt diff below has the same bug
+      # shape as web-lint's file-scoped ESLint diff).
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
@@ -281,12 +291,18 @@ jobs:
       # resolve github.event.before -- a shallow (default depth-1) checkout
       # doesn't have that parent commit's object, so `git cat-file -e` on it
       # always failed, BASE_SHA stayed empty, and the script silently fell
-      # through to an unscoped `npx next lint` full-repo scan every push to
-      # main. `next lint` exits 1 on ANY warning (not just errors), and the
-      # repo carries ~1450 pre-existing ones, so that fallback always failed
-      # -- this is why "Lint" had been red on main since at least 2026-08-28.
+      # through to an unscoped full-repo scan on every push to main.
+      #
+      # ref: pins the checkout to the PR's actual head commit. Without it, actions/checkout
+      # defaults to GitHub's synthetic refs/pull/N/merge for pull_request events -- a merge
+      # of the PR head into main's CURRENT tip, which moves independently of BASE_SHA
+      # (captured once, at the PR's last push/sync). Once main has advanced past BASE_SHA,
+      # `git diff BASE_SHA...HEAD` picks up every file from every PR merged to main in
+      # between, not just this PR's own diff -- surfaced 2026-10-22 as unrelated
+      # pre-existing warnings in files this PR never touched (see PR #1144's CI history).
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
@@ -342,15 +358,10 @@ jobs:
         working-directory: web-app
         run: |
           run_eslint() {
-            # Only lint files changed by this push/PR — avoids surfacing the repo's ~1450
-            # pre-existing warnings (found 2026-08-25: this file's OLD "falls back to full
-            # scan on push" comment claimed pre-existing warnings wouldn't block push, but
-            # `next lint` (unlike raw eslint) exits 1 on ANY warning, not just errors — so
-            # every direct push to main had been failing this check silently for at least
-            # 6 commits before anyone noticed, since push events never got the PR path's
-            # file-scoped treatment). Push events now diff against github.event.before (the
-            # commit before this push) using the same file-scoped `next lint --file` call
-            # the PR path already uses — PRs and pushes share one code path below.
+            # Only lint files changed by this push/PR, failing on any warning there — so the
+            # repo's ~1450 pre-existing warnings do not block unrelated changes. Push events
+            # diff against github.event.before (the commit before this push); PRs and
+            # pushes share one code path below.
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             if [ -z "$BASE_SHA" ]; then
               CANDIDATE="${{ github.event.before }}"
@@ -377,15 +388,20 @@ jobs:
                 echo "No TS/TSX files changed — skipping ESLint"
                 exit 0
               fi
-              # Build --file args (one per changed file)
-              FILE_FLAGS=""
+              # Any warning in a changed file fails (--max-warnings 0, scripts/eslint-gate.sh).
+              # Files deleted by the diff are dropped; eslint errors on a missing path.
+              FILES=()
               while IFS= read -r f; do
-                [ -n "$f" ] && FILE_FLAGS="$FILE_FLAGS --file $f"
+                [ -n "$f" ] && [ -f "$f" ] && FILES+=("$f")
               done <<< "$CHANGED"
-              # shellcheck disable=SC2086
-              npx next lint $FILE_FLAGS
+              if [ "${#FILES[@]}" -eq 0 ]; then
+                echo "Changed TS/TSX files were all deleted — skipping ESLint"
+                exit 0
+              fi
+              bash scripts/eslint-gate.sh "${FILES[@]}"
             else
-              npx next lint
+              # Whole-repo run: errors fail, the ~1450 pre-existing warnings do not.
+              bun run lint:eslint
             fi
           }
           export -f run_eslint

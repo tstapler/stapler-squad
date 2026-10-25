@@ -10,7 +10,7 @@ import type { NamedWindow, WindowId } from "./windowTypes";
 /**
  * useWindowShortcuts — tmux-style leader-key window switcher.
  *
- * Alt+W arms a leader mode for LEADER_TIMEOUT_MS, during which 1-9/n/p/,/Escape
+ * Alt+W arms a leader mode for LEADER_TIMEOUT_MS, during which 1-9/n/p/,/o/Escape
  * are dynamically registered as follow-ups (Task 3.3.1a/b). Alt+W was chosen
  * over any Ctrl-based leader (Ctrl+B, tmux's actual default prefix, or Ctrl+A,
  * its common screen/remap alternative) specifically because this app displays
@@ -34,12 +34,14 @@ import type { NamedWindow, WindowId } from "./windowTypes";
  * call below.
  */
 
+const noop = () => {};
+
 const LEADER_TIMEOUT_MS = 3000;
 
 const DIGIT_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 
 /** Every key the leader recognizes as a follow-up once armed. */
-const FOLLOWUP_KEYS = new Set<string>([...DIGIT_KEYS, "n", "p", ",", "Escape"]);
+const FOLLOWUP_KEYS = new Set<string>([...DIGIT_KEYS, "n", "p", ",", "o", "Escape"]);
 
 /** Mutable state threaded through the module-level leader functions below. */
 interface LeaderRefs {
@@ -47,6 +49,7 @@ interface LeaderRefs {
   currentWindowId: RefObject<WindowId>;
   switchToWindow: RefObject<(id: WindowId) => void>;
   onRenameRequest: RefObject<(id: WindowId) => void>;
+  onOverviewRequest: RefObject<() => void>;
   followupCleanups: RefObject<Array<() => void>>;
   timeout: RefObject<ReturnType<typeof setTimeout> | null>;
   catchAllListener: RefObject<((e: KeyboardEvent) => void) | null>;
@@ -107,6 +110,7 @@ function registerNavigationFollowups(refs: LeaderRefs): void {
   registerFollowup(refs, "window.leader.rename", ",", () =>
     refs.onRenameRequest.current(refs.currentWindowId.current)
   );
+  registerFollowup(refs, "window.leader.overview", "o", () => refs.onOverviewRequest.current());
   // Escape disarms with no other action.
   registerFollowup(refs, "window.leader.cancel", "Escape", () => {});
 }
@@ -154,7 +158,8 @@ function useLeaderRefs(
   windows: NamedWindow[],
   currentWindowId: WindowId,
   switchToWindow: (id: WindowId) => void,
-  onRenameRequest: (id: WindowId) => void
+  onRenameRequest: (id: WindowId) => void,
+  onOverviewRequest: () => void
 ): LeaderRefs {
   const windowsRef = useRef(windows);
   windowsRef.current = windows;
@@ -164,6 +169,8 @@ function useLeaderRefs(
   switchToWindowRef.current = switchToWindow;
   const onRenameRequestRef = useRef(onRenameRequest);
   onRenameRequestRef.current = onRenameRequest;
+  const onOverviewRequestRef = useRef(onOverviewRequest);
+  onOverviewRequestRef.current = onOverviewRequest;
   const followupCleanupsRef = useRef<Array<() => void>>([]);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const catchAllListenerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
@@ -173,6 +180,7 @@ function useLeaderRefs(
     currentWindowId: currentWindowIdRef,
     switchToWindow: switchToWindowRef,
     onRenameRequest: onRenameRequestRef,
+    onOverviewRequest: onOverviewRequestRef,
     followupCleanups: followupCleanupsRef,
     timeout: timeoutRef,
     catchAllListener: catchAllListenerRef,
@@ -183,16 +191,17 @@ export function useWindowShortcuts(
   windows: NamedWindow[],
   currentWindowId: WindowId,
   switchToWindow: (id: WindowId) => void,
-  onRenameRequest: (id: WindowId) => void
+  onRenameRequest: (id: WindowId) => void,
+  onOverviewRequest: () => void = noop
 ): void {
-  const refs = useLeaderRefs(windows, currentWindowId, switchToWindow, onRenameRequest);
+  const refs = useLeaderRefs(windows, currentWindowId, switchToWindow, onRenameRequest, onOverviewRequest);
 
   // Alt+W is an alias for the command bar's `w` branch. The legacy leader
   // below only arms when no bar is mounted (or a modal is open), which keeps
   // this hook usable standalone (and its unit tests meaningful).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleArmLeader = useCallback(() => {
     if (!commandBarController.open(["w"])) armLeader(refs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -211,6 +220,7 @@ export function useWindowShortcuts(
       ]),
       ["window.seq.next", "Next window", ["w", "n"], () => cycle(refs, 1)],
       ["window.seq.prev", "Previous window", ["w", "p"], () => cycle(refs, -1)],
+      ["window.seq.overview", "Window overview", ["w", "o"], () => refs.onOverviewRequest.current()],
       ["window.seq.rename", "Rename window", ["w", ","], () => refs.onRenameRequest.current(refs.currentWindowId.current)],
     ];
     const cleanups = defs.map(([id, label, sequence, action]) =>

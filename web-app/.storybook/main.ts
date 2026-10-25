@@ -30,7 +30,7 @@ const config: StorybookConfig = {
     config.module = config.module ?? {};
     config.module.rules = config.module.rules ?? [];
 
-    // TypeScript + JSX: use babel-loader (already installed via @storybook/nextjs)
+    // TypeScript + JSX: use babel-loader (direct devDependency)
     config.module.rules.push({
       test: /\.(ts|tsx)$/,
       exclude: /node_modules/,
@@ -65,6 +65,8 @@ const config: StorybookConfig = {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
       ...config.resolve.alias,
+      // Exact match, listed before "@": stories run on the in-memory nav fake, never on Next.
+      "@/lib/nav/impl$": path.resolve(__dirname, "../src/lib/nav/impl.memory.tsx"),
       "@": path.resolve(__dirname, "../src"),
     };
 

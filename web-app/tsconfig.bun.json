@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["bun"],
+    "incremental": false,
+    "plugins": [],
+    "paths": {
+      "@/lib/lazy/impl": ["./src/lib/lazy/impl.bun.tsx"],
+      "@/lib/nav/impl": ["./src/lib/nav/impl.router.tsx"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "build/**/*.ts",
+    "build/**/*.tsx",
+    "scripts/verify-eval-patch.mjs",
+    "src/main.tsx",
+    "src/theme-boot.ts",
+    "src/lib/nav/impl.next.tsx",
+    "src/lib/nav/impl.router.tsx",
+    "src/lib/lazy/impl.next.tsx",
+    "src/lib/lazy/impl.bun.tsx",
+    "src/types/*.d.ts"
+  ],
+  "exclude": ["node_modules", "build/**/*.test.ts", "build/**/fixtures/**", "build/oracle/*.cjs"]
+}

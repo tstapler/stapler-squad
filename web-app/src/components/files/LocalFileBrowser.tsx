@@ -1,8 +1,10 @@
 // +feature: local-file-browser
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { useRouter, useSearchParams } from "@/lib/nav";
 import {
   Folder,
   File,
@@ -68,11 +70,11 @@ function fromRawListing(raw: RawDirListing): DirListing {
   };
 }
 
-type RenderMode = "html" | "image" | "svg" | "pdf" | "video" | "text" | "binary";
+type RenderMode = "html" | "image" | "svg" | "pdf" | "video" | "text" | "markdown" | "binary";
 
 // Module-level constant — avoids allocating a new Set on every render/call.
 const TEXT_EXTENSIONS = new Set([
-  "txt", "md", "markdown", "rst", "log", "diff", "patch",
+  "txt", "rst", "log", "diff", "patch",
   "js", "mjs", "cjs", "ts", "tsx", "jsx",
   "css", "scss", "sass", "less",
   "json", "jsonc", "yaml", "yml", "toml", "ini", "env", "envrc", "conf", "cfg",
@@ -96,6 +98,7 @@ function inferRenderMode(filename: string): RenderMode {
     return "image";
   if (ext === "pdf") return "pdf";
   if (["mp4", "webm", "ogv", "mov", "avi"].includes(ext)) return "video";
+  if (["md", "markdown"].includes(ext)) return "markdown";
   if (TEXT_EXTENSIONS.has(ext)) return "text";
   return "binary";
 }
@@ -147,22 +150,36 @@ interface ViewerToolbarProps {
   url: string;
   openLabel?: string;
   onClose?: () => void;
+  extraActions?: ReactNode;
 }
 
-function ViewerToolbar({ name, url, openLabel = "Open in new tab", onClose }: ViewerToolbarProps) {
+function ViewerToolbar({ name, url, openLabel = "Open in new tab", onClose, extraActions }: ViewerToolbarProps) {
   const handleOpen = () => window.open(url, "_blank", "noopener");
   return (
     <div className={styles.viewerToolbar}>
       <span className={styles.viewerLabel}>{name}</span>
+      {extraActions}
       <button onClick={handleOpen} className={styles.externalButton} title={openLabel} data-testid="file-browser-viewer-open-external">
+        {/* analytics-exempt */}
         <ExternalLink size={14} />
       </button>
       {onClose && (
         <button onClick={onClose} className={styles.externalButton} title="Close file viewer" data-testid="file-browser-viewer-close">
+          {/* analytics-exempt */}
           <X size={14} />
         </button>
       )}
     </div>
+  );
+}
+
+// react-markdown without rehype-raw already escapes raw HTML; links must not tab-nap.
+function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+  if (href?.startsWith("#")) return <a href={href}>{children}</a>;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
   );
 }
 
@@ -174,11 +191,12 @@ interface FileViewerProps {
 function FileViewer({ entry, onClose }: FileViewerProps) {
   const [textContent, setTextContent] = useState<string | null>(null);
   const [textError, setTextError] = useState<string | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
   const url = serveUrl(entry.path);
   const mode = inferRenderMode(entry.name);
 
   useEffect(() => {
-    if (mode !== "text") {
+    if (mode !== "text" && mode !== "markdown") {
       setTextContent(null);
       setTextError(null);
       return;
@@ -251,6 +269,7 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
       );
 
     case "text":
+    case "markdown":
       if (textError) {
         return (
           <div className={styles.viewerWrapper}>
@@ -264,6 +283,39 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
           <div className={styles.viewerWrapper}>
             <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
             <div className={styles.viewerEmpty}>Loading…</div>
+          </div>
+        );
+      }
+      if (mode === "markdown") {
+        return (
+          <div className={styles.viewerWrapper}>
+            <ViewerToolbar
+              name={entry.name}
+              url={url}
+              openLabel="Open raw"
+              onClose={onClose}
+              extraActions={
+                <button
+                  onClick={() => setShowRaw((v) => !v)}
+                  className={styles.externalButton}
+                  data-testid="file-browser-viewer-toggle-raw"
+                  aria-pressed={showRaw}
+                  title={showRaw ? "Show rendered markdown" : "Show raw source"}
+                >
+                  {/* analytics-exempt */}
+                  {showRaw ? "Rendered" : "Raw"}
+                </button>
+              }
+            />
+            {showRaw ? (
+              <pre className={styles.viewerText}>{textContent}</pre>
+            ) : (
+              <div className={styles.viewerMarkdown} data-testid="file-browser-viewer-markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
+                  {textContent}
+                </ReactMarkdown>
+              </div>
+            )}
           </div>
         );
       }
@@ -287,6 +339,7 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
               className={styles.externalButton}
               data-testid="file-browser-viewer-download"
             >
+              {/* analytics-exempt */}
               Open / Download <ExternalLink size={14} />
             </button>
           </div>
@@ -436,6 +489,7 @@ export function LocalFileBrowser() {
                 onClick={() => navigate(crumb.path)}
                 data-testid={`file-browser-breadcrumb-${i}`}
               >
+                {/* analytics-exempt */}
                 {crumb.label}
               </button>
             </span>
@@ -478,6 +532,7 @@ export function LocalFileBrowser() {
                 title={entry.path}
                 data-testid="file-browser-entry"
               >
+                {/* analytics-exempt */}
                 <span className={styles.fileIcon}>
                   <Icon size={15} />
                 </span>
@@ -495,7 +550,7 @@ export function LocalFileBrowser() {
 
         <div className={styles.viewer}>
           {selectedEntry ? (
-            <FileViewer entry={selectedEntry} onClose={() => setSelectedEntry(null)} />
+            <FileViewer key={selectedEntry.path} entry={selectedEntry}onClose={() => setSelectedEntry(null)} />
           ) : (
             <div className={styles.viewerEmpty}>
               <FolderOpen size={40} />

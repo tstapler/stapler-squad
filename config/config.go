@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -422,6 +423,10 @@ type Config struct {
 	// Quota holds configuration for the account-wide session-quota gate that
 	// pauses/resumes backlog automation based on inferred quota headroom.
 	Quota QuotaConfig `json:"quota,omitempty"`
+	// QuotaConfiguredAt is stamped when the quota settings page (UpdateQuotaConfig)
+	// saves. LoadConfig persists defaults into Quota, so the stored object alone
+	// cannot tell "never configured" from "configured with default values".
+	QuotaConfiguredAt *time.Time `json:"quota_configured_at,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
@@ -561,6 +566,10 @@ const HiddenSessionGateDefault = true
 // TymuxFeatureFlag.
 const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 
+// TriageGuidanceHaltDefault is the registry default, shared by the flag service
+// and EffectiveTriageGuidanceHaltEnabled.
+const TriageGuidanceHaltDefault = false
+
 // EffectiveTriageGuidanceHaltEnabled reports whether automated triage should
 // halt and create a GuidanceRequest on ambiguity rather than guess. Callers
 // must read this fresh at the exact halt-decision instant, not cache it at
@@ -568,7 +577,7 @@ const TriageGuidanceHaltFeatureFlag = "triage_guidance_halt"
 // request/response RPC, so staleness at the decision point is the risk that
 // matters (mirrors EffectiveTymuxEnabled's live-read contract).
 func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, false)
+	return cfg.GetFeatureFlagWithDefault(TriageGuidanceHaltFeatureFlag, TriageGuidanceHaltDefault)
 }
 
 // DiagnoseNudgeFeatureFlag is the config.FeatureFlags key backing
@@ -580,6 +589,10 @@ func EffectiveTriageGuidanceHaltEnabled(cfg *Config) bool {
 // autonomous nudging as the default yet.
 const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
 
+// DiagnoseNudgeDefault is the registry default, shared by the flag service and
+// EffectiveDiagnoseNudgeEnabled.
+const DiagnoseNudgeDefault = false
+
 // EffectiveDiagnoseNudgeEnabled reports whether a dispatched Diagnose & Nudge
 // agent may actually perform a nudge write. Callers must read this fresh at
 // the exact write instant (diagnose_nudge_session's MCP handler), not cache
@@ -587,7 +600,7 @@ const DiagnoseNudgeFeatureFlag = "diagnose_nudge_enabled"
 // decided to nudge before the flag flips off must still be blocked at the
 // write call site.
 func EffectiveDiagnoseNudgeEnabled(cfg *Config) bool {
-	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, false)
+	return cfg.GetFeatureFlagWithDefault(DiagnoseNudgeFeatureFlag, DiagnoseNudgeDefault)
 }
 
 // AutonomousStallNudgeFeatureFlag gates the in-process nudge the autonomous
@@ -603,6 +616,52 @@ const AutonomousStallNudgeDefault = false
 // Read it at the decision instant, never cached.
 func EffectiveAutonomousStallNudgeEnabled(cfg *Config) bool {
 	return cfg.GetFeatureFlagWithDefault(AutonomousStallNudgeFeatureFlag, AutonomousStallNudgeDefault)
+}
+
+// WorkflowEngineShadowFeatureFlag and the per-class enforce flags select the
+// backlog workflow engine mode (session.ModeFromFlags): shadow compares the
+// configured engine against today's answer without changing anything; an
+// enforce flag makes the configured graph and gates decide for its caller
+// class (operator, agent, system). All are live-settable.
+const (
+	WorkflowEngineShadowFeatureFlag        = "backlog:workflow-engine-shadow"
+	WorkflowEngineEnforceFeatureFlag       = "backlog:workflow-engine-enforce"
+	WorkflowEngineEnforceAgentFeatureFlag  = "backlog:workflow-engine-enforce-agent"
+	WorkflowEngineEnforceSystemFeatureFlag = "backlog:workflow-engine-enforce-system"
+
+	// WorkflowEngineShadowDefault is on so the soak accrues evidence from the first boot.
+	WorkflowEngineShadowDefault = true
+	// WorkflowEngineEnforceDefault is off until the soak verdict is READY.
+	WorkflowEngineEnforceDefault = false
+	// WorkflowEngineEnforceAgentDefault is off until the agent class's soak is acknowledged.
+	WorkflowEngineEnforceAgentDefault = false
+	// WorkflowEngineEnforceSystemDefault is off until the system class's soak is
+	// acknowledged and the Story 1.5.8 recovery guards are on the deployed binary.
+	WorkflowEngineEnforceSystemDefault = false
+)
+
+// EffectiveWorkflowEngineShadow reports whether shadow comparison is on. Read
+// with the registered default: a plain GetFeatureFlag returns false when unset
+// and would silently switch shadow off.
+func EffectiveWorkflowEngineShadow(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineShadowFeatureFlag, WorkflowEngineShadowDefault)
+}
+
+// EffectiveWorkflowEngineEnforce reports whether the configured engine decides.
+func EffectiveWorkflowEngineEnforce(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceFeatureFlag, WorkflowEngineEnforceDefault)
+}
+
+// EffectiveWorkflowEngineEnforceAgent reports whether the configured engine
+// decides for agent (MCP tool) callers.
+func EffectiveWorkflowEngineEnforceAgent(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceAgentFeatureFlag, WorkflowEngineEnforceAgentDefault)
+}
+
+// EffectiveWorkflowEngineEnforceSystem reports whether the configured engine
+// decides for system (lifecycle, triage and dispatch) callers.
+func EffectiveWorkflowEngineEnforceSystem(cfg *Config) bool {
+	return cfg.GetFeatureFlagWithDefault(WorkflowEngineEnforceSystemFeatureFlag, WorkflowEngineEnforceSystemDefault)
 }
 
 // EffectiveTymuxEnabled reports whether the global tymux process-manager
@@ -1585,6 +1644,8 @@ func saveConfigLocked(config *Config, configPath string) error {
 	// so the renamed config.json keeps its historical permissions.
 	chmodErr := tmpFile.Chmod(0644)
 	_, writeErr := tmpFile.Write(data)
+	// Sync before rename so a power loss cannot leave a zero-length config.json.
+	syncErr := tmpFile.Sync()
 	closeErr := tmpFile.Close()
 	if chmodErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1593,6 +1654,10 @@ func saveConfigLocked(config *Config, configPath string) error {
 	if writeErr != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to write temp config: %w", writeErr)
+	}
+	if syncErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync temp config: %w", syncErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
@@ -1608,6 +1673,51 @@ func saveConfigLocked(config *Config, configPath string) error {
 // SaveConfig exports the saveConfig function for use by other packages.
 func SaveConfig(config *Config) error {
 	return saveConfig(config)
+}
+
+// updateConfigMu holds one *sync.Mutex per config path. It is the OUTER lock of
+// UpdateConfig and must stay distinct from saveConfigMu: saveConfig takes that
+// one itself and sync.Mutex is not reentrant.
+var updateConfigMu sync.Map //nolint:gochecknoglobals // per-configPath *sync.Mutex
+
+// UpdateConfig is an atomic read-modify-write of config.json: it holds a per-path
+// lock across LoadConfig, fn and the save, so two UpdateConfig callers cannot lose
+// each other's change. Callers that still do an unlocked LoadConfig+SaveConfig can
+// race with it; migrate them here. fn may call setters that save on their own.
+func UpdateConfig(fn func(*Config) error) error {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+	configPath := filepath.Join(configDir, ConfigFileName)
+
+	lock, _ := updateConfigMu.LoadOrStore(configPath, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Only a missing file starts from defaults; an unreadable or half-written one
+	// must not be overwritten with defaults plus this one change.
+	cfg, err := LoadConfigFromPath(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("refusing to update unreadable config %s: %w", configPath, err)
+		}
+		cfg = DefaultConfig()
+	}
+	if err := fn(cfg); err != nil {
+		return err
+	}
+	return saveConfig(cfg, configPath)
+}
+
+// QuotaIsConfigured reports whether the operator has set quota values: the page
+// stamped QuotaConfiguredAt, or a hand edit made Quota differ from the defaults.
+func (c *Config) QuotaIsConfigured() bool {
+	if c.QuotaConfiguredAt != nil {
+		return true
+	}
+	return !reflect.DeepEqual(c.Quota, QuotaConfig{}.QuotaConfigOrDefault())
 }
 
 // GitBackendCohortsConfig is the raw cohort-name -> mode map from config.json. Decoding is

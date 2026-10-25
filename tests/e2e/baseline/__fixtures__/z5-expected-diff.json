@@ -1,0 +1,13 @@
+{
+ "meta": {
+  "note": "fixture"
+ },
+ "entries": [
+  {
+   "spec": "z5.spec.ts",
+   "test": "z5 test",
+   "issue": "https://github.com/tstapler/stapler-squad/issues/2",
+   "reason": "still fails"
+  }
+ ]
+}

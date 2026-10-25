@@ -1,7 +1,7 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { AutoMergeLookupStatus, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 const mockUseStuckBacklogItems = jest.fn();
 const mockGetBacklogItem = jest.fn();
@@ -44,6 +44,11 @@ function makeItem(overrides: Partial<StuckBacklogItem> = {}): StuckBacklogItem {
     context: "PR #148 green & mergeable, unmerged for 3 days",
     ...overrides,
   } as StuckBacklogItem;
+}
+
+function present<T>(value: T | null | undefined): T {
+  if (value == null) throw new Error("expected value to be present");
+  return value;
 }
 
 function baseHookReturn(overrides: Partial<ReturnType<typeof mockUseStuckBacklogItems>> = {}) {
@@ -302,9 +307,9 @@ describe("StuckItemsSection", () => {
         .getAllByTestId("stuck-item")
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.BOUNCING));
       expect(bouncingCard).toBeDefined();
-      const bouncingBadge = bouncingCard!.querySelector('[data-testid="stuck-item-other-reasons-badge"]');
+      const bouncingBadge = present(bouncingCard).querySelector('[data-testid="stuck-item-other-reasons-badge"]');
       expect(bouncingBadge).not.toBeNull();
-      expect(bouncingBadge!.textContent).toMatch(/also stuck for 1 other reason/);
+      expect(present(bouncingBadge).textContent).toMatch(/also stuck for 1 other reason/);
       // Sanity: there are badges on both the bouncing and push_failed cards
       // (the multiple_reasons card itself summarizes both, so it also gets a
       // badge — only the count on the non-escalation cards is under test here).
@@ -336,7 +341,7 @@ describe("StuckItemsSection", () => {
         .getAllByTestId("stuck-item")
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.MULTIPLE_REASONS));
       expect(escalationCard).toBeDefined();
-      fireEvent.click(escalationCard!);
+      fireEvent.click(present(escalationCard));
 
       // Next poll: the multiple_reasons row has resolved, but bouncing is still open.
       mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: [bouncingItem] }));
@@ -541,7 +546,7 @@ describe("StuckItemsSection", () => {
         .getAllByTestId("stuck-item")
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
       expect(card).toBeDefined();
-      fireEvent.click(card!);
+      fireEvent.click(present(card));
 
       expect(mockGetBacklogItem).toHaveBeenCalledWith("item-1");
       const current = await screen.findByTestId("stuck-item-rework-cap-current");
@@ -560,7 +565,7 @@ describe("StuckItemsSection", () => {
       const card = screen
         .getAllByTestId("stuck-item")
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
-      fireEvent.click(card!);
+      fireEvent.click(present(card));
 
       expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
       const current = await screen.findByTestId("stuck-item-rework-cap-current");
@@ -579,7 +584,7 @@ describe("StuckItemsSection", () => {
       const card = screen
         .getAllByTestId("stuck-item")
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
-      fireEvent.click(card!);
+      fireEvent.click(present(card));
 
       expect(mockGetBacklogItem).toHaveBeenCalledWith("item-2");
       const current = await screen.findByTestId("stuck-item-rework-cap-current");
@@ -613,15 +618,15 @@ describe("StuckItemsSection", () => {
       // below are what actually prove that (the loading-state copy shown
       // meanwhile is identical to the pre-fetch state, so asserting it here
       // would be tautological).
-      fireEvent.click(card!);
+      fireEvent.click(present(card));
       await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(1));
 
       // Collapse and re-expand: a genuinely-cached "no override" would never
       // call getBacklogItem again (see the caching test above) — a failed
       // fetch must retry instead.
       mockGetBacklogItem.mockResolvedValueOnce({ id: "item-3", reworkCapOverride: 9 });
-      fireEvent.click(card!);
-      fireEvent.click(card!);
+      fireEvent.click(present(card));
+      fireEvent.click(present(card));
 
       await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalledTimes(2));
       const retried = await screen.findByTestId("stuck-item-rework-cap-current");
@@ -650,10 +655,10 @@ describe("StuckItemsSection", () => {
         .find((c) => c.getAttribute("data-reason") === String(StuckReason.REWORK_CAP));
       expect(card).toBeDefined();
 
-      fireEvent.click(card!); // expand — fetches
+      fireEvent.click(present(card)); // expand — fetches
       await screen.findByTestId("stuck-item-rework-cap-current");
-      fireEvent.click(card!); // collapse
-      fireEvent.click(card!); // re-expand — must not re-fetch
+      fireEvent.click(present(card)); // collapse
+      fireEvent.click(present(card)); // re-expand — must not re-fetch
 
       await screen.findByTestId("stuck-item-rework-cap-current");
       expect(mockGetBacklogItem).toHaveBeenCalledTimes(1);
@@ -687,13 +692,14 @@ describe("StuckItemsSection", () => {
       const { rerender } = render(<StuckItemsSection focusItemId="target-item" />);
 
       const findTargetCard = () =>
-        screen.getAllByTestId("stuck-item").find((c) => c.getAttribute("data-item-id") === "target-item")!;
+        present(screen.getAllByTestId("stuck-item").find((c) => c.getAttribute("data-item-id") === "target-item"));
 
-      await waitFor(() => expect(findTargetCard()).toHaveAttribute("aria-expanded", "true"));
+      const targetToggle = () => within(findTargetCard()).getByTestId("stuck-item-toggle");
+      await waitFor(() => expect(targetToggle()).toHaveAttribute("aria-expanded", "true"));
 
       // User manually collapses the deep-linked card.
       fireEvent.click(findTargetCard());
-      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+      expect(targetToggle()).toHaveAttribute("aria-expanded", "false");
 
       // Simulate a poll tick: same data, but a fresh array reference and a
       // fresh item object, and focusItemId is still on the URL.
@@ -701,7 +707,32 @@ describe("StuckItemsSection", () => {
       mockUseStuckBacklogItems.mockReturnValue(baseHookReturn({ items: polledItems }));
       rerender(<StuckItemsSection focusItemId="target-item" />);
 
-      expect(findTargetCard()).toHaveAttribute("aria-expanded", "false");
+      expect(targetToggle()).toHaveAttribute("aria-expanded", "false");
+    });
+  });
+
+  describe("auto-merge Retry wiring", () => {
+    it("renders Retry on a failed lookup, calls refreshAutoMerge with the item ID, and keeps focus on repeat failure", async () => {
+      const failed = makeItem({
+        autoMergeLookupStatus: AutoMergeLookupStatus.RATE_LIMITED,
+        autoMergeCheckedAt: timestampFromDate(new Date()),
+      });
+      const refreshAutoMerge = jest.fn().mockResolvedValue(failed);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [failed], refreshAutoMerge })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId("stuck-item"));
+
+      const btn = screen.getByTestId("stuck-item-auto-merge-retry");
+      btn.focus();
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+
+      expect(refreshAutoMerge).toHaveBeenCalledWith(failed.itemId);
+      expect(screen.getByTestId("stuck-item-auto-merge-retry")).toBe(btn);
+      expect(btn).toHaveFocus();
     });
   });
 });

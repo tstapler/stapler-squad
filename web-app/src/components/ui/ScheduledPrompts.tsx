@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/lib/nav";
 import type { WakeTriggerInfo } from "@/gen/session/v1/wake_trigger_pb";
 import { WakeCancelOutcome } from "@/gen/session/v1/wake_trigger_pb";
 import { cancelWakeTrigger } from "@/lib/api/wakeTriggerApi";

@@ -70,7 +70,7 @@ export const tab = recipe({
         color: vars.color.textPrimary,
       },
       '&[data-state="active"]': {
-        color: vars.color.primary,
+        color: vars.color.accentText,
         borderBottomColor: vars.color.primary,
       },
     },

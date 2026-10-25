@@ -1,6 +1,7 @@
 name: Benchmarks
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
@@ -248,6 +249,11 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    # .size-limit.json's 6,349,052B cap (Story 5.9) is calibrated against the
+    # Bun build (minified by build.ts's default); building Next here instead
+    # measured Next's naturally larger, differently-chunked output against it.
+    env:
+      WEB_BUILD: bun
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -276,6 +282,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
@@ -284,7 +291,7 @@ jobs:
             nextjs-bundle-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
             nextjs-bundle-${{ runner.os }}-
 
-      - name: Build Next.js app
+      - name: Build web UI (Bun, minified)
         run: cd web-app && bun run build
 
       - name: Check bundle size
@@ -332,6 +339,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
@@ -514,6 +522,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache
@@ -588,6 +597,7 @@ jobs:
       # build cache" step — see its comment for why the key includes both the
       # lockfile and src hash, with restore-keys fallbacks.
       - name: Cache Next.js build cache
+        if: env.WEB_BUILD != 'bun'
         uses: actions/cache@v4
         with:
           path: web-app/.next/cache

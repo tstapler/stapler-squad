@@ -64,6 +64,7 @@ import { AutonomousHealthStrip } from "./detail/AutonomousHealthStrip";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { ActivityLogSection } from "./detail/ActivityLogSection";
+import { BacklogResultPanels } from "./BacklogResultPanels";
 import { NotesSection } from "./detail/NotesSection";
 import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import { GateBlockingSection } from "./GateBlockingSection";
@@ -77,6 +78,8 @@ import * as styles from "./BacklogItemDetail.css";
 interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
+  /** Opens another item (e.g. a dependency) in the detail pane. */
+  onItemClick?: (itemId: string) => void;
 }
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
@@ -123,7 +126,7 @@ function GroupLabel({ children }: { children: string }) {
   );
 }
 
-export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
+export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
   const {
     getBacklogItem,
@@ -1628,7 +1631,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             scroll-area content. */}
         <GateBlockingSection item={item} />
 
-        <DependenciesSection item={item} />
+        <DependenciesSection item={item} onItemClick={onItemClick} />
 
         {/* Durable guidance requests scoped to this item (AC3) — same shared
             component also embedded in TriageReviewPanel and SessionDetailView.
@@ -1704,6 +1707,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
         {/* Planning record — read-only triage result for items past idea status */}
         <PlanningSection item={item} />
+
+        <BacklogResultPanels item={item} />
 
         {/* Triage failed banner — generalized 2026-08-03
             (docs/tasks/backlog-feature-improvement.md, item be676dab) from

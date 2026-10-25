@@ -136,6 +136,17 @@ describe.each([
     impl().pushTrayEntry(true);
     expect(window.history.length).toBe(before + 1);
   });
+
+  it("pushHistoryMarker adds a keyed marker to the current state; replace reuses the entry", () => {
+    window.history.replaceState({ keep: 1 }, "", "/");
+    const before = window.history.length;
+    impl().pushHistoryMarker("depth", 2);
+    expect(window.history.length).toBe(before + 1);
+    expect(window.history.state).toEqual({ keep: 1, depth: 2 });
+    impl().pushHistoryMarker("depth", 3, true);
+    expect(window.history.length).toBe(before + 1);
+    expect(window.history.state).toEqual({ keep: 1, depth: 3 });
+  });
 });
 
 describe("impl.memory navigation", () => {

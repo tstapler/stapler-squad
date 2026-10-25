@@ -85,10 +85,11 @@ func (b *ClaudeCommandBuilder) isClaudeCommand() bool {
 	return strings.ToLower(commandName) == "claude"
 }
 
+var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 // isValidUUID validates that a string matches UUID v4 format.
 // Format: 8-4-4-4-12 hexadecimal digits (e.g., 550e8400-e29b-41d4-a716-446655440000)
 // This validation is critical because Claude CLI requires valid UUIDs for session IDs.
 func isValidUUID(uuid string) bool {
-	uuidRegex := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	return uuidRegex.MatchString(strings.ToLower(uuid))
 }

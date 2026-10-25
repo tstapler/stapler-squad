@@ -52,6 +52,31 @@ export class StuckItemsPage {
   navBadge(): Locator {
     return this.page.getByTestId("stuck-nav-badge");
   }
+
+  /** Expands the card with this title and returns its detail panel. */
+  async openDetail(title: string): Promise<Locator> {
+    await this.cardByTitle(title).click();
+    const detail = this.page.getByTestId("stuck-item-detail");
+    await detail.waitFor();
+    return detail;
+  }
+
+  /** The repo auto-merge line inside an open detail panel. */
+  autoMergeLine(): Locator {
+    return this.page.getByTestId("stuck-item-detail").getByTestId("stuck-item-auto-merge");
+  }
+
+  autoMergeRetry(): Locator {
+    return this.page.getByTestId("stuck-item-auto-merge-retry");
+  }
+
+  autoMergeStatus(): Locator {
+    return this.page.getByTestId("stuck-item-auto-merge-status");
+  }
+
+  autoMergeSettingsLink(): Locator {
+    return this.page.getByTestId("stuck-item-auto-merge-settings-link");
+  }
 }
 
 const seededItemIds: string[] = [];

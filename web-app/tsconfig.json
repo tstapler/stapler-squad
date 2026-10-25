@@ -15,6 +15,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
+    "types": ["node", "jest", "react", "react-dom"],
     "incremental": true,
     "plugins": [
       {
@@ -42,6 +43,7 @@
   ],
   "exclude": [
     "node_modules",
+    "build/**",
     "src/gen/session/v1/session_connect.ts"
   ]
 }

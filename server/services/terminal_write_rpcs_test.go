@@ -37,6 +37,7 @@ var notTerminalWriteReasons = map[string]string{
 	"HandoffSummaryService.TriggerHandoffSummary":  `restart with a handoff summary goes through Instance.Restart, pinned by the lifecycle caller test`,
 	"GuidanceRequestService.AnswerGuidanceRequest": `stores an answer for the triage pipeline; types into no pane`,
 	"HeadlessService.RunHeadlessCall":              `headless call, no pane`,
+	"TymuxRolloutService.ReplaceTymuxd":            `restarts the tymuxd process; panes are revived by the daemon, nothing is typed`,
 }
 
 // notTerminalWriteRPCs lists every other RPC, per service.
@@ -50,7 +51,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"DeleteLivenessDefinition", "DeletePipelineMode", "DeleteStage", "DeleteStageTransition",
 		"DeleteTransitionGate", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
 		"GetBacklogItemShipStatus", "GetLivenessDefinition", "GetPendingGates", "GetPipelineMode",
-		"GetSessionBacklogIndex", "GetStage", "GetStageTransition", "GetSyncHistory", "GetTransitionGate",
+		"GetSessionBacklogIndex", "GetStage", "GetStageTransition", "GetSyncHistory", "GetTransitionGate", "GetWorkflowEngineStatus",
 		"ImportGitHubIssue", "ListBacklogItemDependencies", "ListBacklogItems", "ListForeignClaims", "ListGitHubIssues", "ListItemSources",
 		"ListLivenessDefinitions", "ListPipelineModes", "ListStages", "ListStageTransitions",
 		"ListStuckBacklogItems", "ListTransitionGates", "OverrideClaimBlock", "OverrideVerdict",
@@ -93,6 +94,9 @@ var notTerminalWriteRPCs = map[string][]string{
 	},
 	"WakeTriggerService": {
 		"CancelWakeTrigger", "CreateOperatorReminder", "ListPeerHelpRequests", "ListWakeTriggers",
+	},
+	"QuotaService": {
+		"GetQuotaConfig", "UpdateQuotaConfig", // read and edit backlog quota tuning; type into no pane
 	},
 	"RemoteService": {
 		"CreateRemote", "DeleteRemote", "GenerateRemoteIdentity", "ListRemotes", "TestRemoteConnection",
@@ -137,7 +141,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"GetSessionSummary", "RegenerateSessionSummary",
 	},
 	"TymuxRolloutService": {
-		"CompleteTymuxRollbackRehearsal", "GetTymuxRolloutStatus", "SetTymuxGlobalOverride",
+		"CompleteTymuxRollbackRehearsal", "GetTymuxRolloutStatus", "ReplaceTymuxd", "SetTymuxGlobalOverride",
 		"SetTymuxSessionOverride",
 	},
 	"UnfinishedWorkService": {

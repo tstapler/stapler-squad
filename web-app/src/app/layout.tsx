@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { RootShell } from "./RootShell";
 import { matrixTheme, cyberpunk77Theme, wh40kTheme, cleanTheme, lightTheme, darkTheme } from "@/styles/theme.css";
+import { buildThemeBootScript } from "@/styles/theme-boot-script";
 import { jetbrainsMono, rajdhani, cinzel, inter } from "./fonts";
 import "./globals.css";
 import "@/styles/globalEffects.css";
@@ -22,10 +23,9 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // FOUC-prevention: the themeMap is embedded at build time from the imported
-  // vanilla-extract class strings so the inline script can look up the correct
-  // hashed class name before React hydrates.
-  const themeMapJson = JSON.stringify({
+  // FOUC-prevention: the map is embedded at build time from the imported vanilla-extract class
+  // strings so the inline script can look up the hashed class name before React hydrates.
+  const foucScript = buildThemeBootScript({
     matrix: matrixTheme,
     cyberpunk77: cyberpunk77Theme,
     wh40k: wh40kTheme,
@@ -33,11 +33,6 @@ export default function RootLayout({
     light: lightTheme,
     dark: darkTheme,
   });
-
-  // Remove only theme classes (those that match one of our known theme hashes) so
-  // font variable classes added by next/font are preserved during theme switching.
-  const allThemeClasses = Object.values(JSON.parse(themeMapJson) as Record<string, string>).join(' ');
-  const foucScript = `(function(){try{var m=${themeMapJson};var t=localStorage.getItem('stapler-theme');var cls=t&&m[t]?m[t]:m['clean'];if(t&&t.indexOf('custom:')===0){var c=JSON.parse(localStorage.getItem('stapler-theme-custom')||'null');if(c&&c.id===t&&typeof c.cls==='string'&&/^\\S+$/.test(c.cls)&&c.props){cls=c.cls;Object.keys(c.props).forEach(function(k){document.documentElement.style.setProperty(k,c.props[k]);});}}var themeClasses=${JSON.stringify(allThemeClasses)}.split(' ');themeClasses.forEach(function(c){if(c)document.documentElement.classList.remove(c);});document.documentElement.classList.add(cls);}catch(e){}})();`;
 
   return (
     <html

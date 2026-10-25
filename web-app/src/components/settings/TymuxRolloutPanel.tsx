@@ -2,8 +2,8 @@
 // +feature: tymux-rollout
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { createClient } from "@connectrpc/connect";
-import { TymuxRolloutService } from "@/gen/session/v1/tymux_rollout_pb";
+import { Code, ConnectError, createClient } from "@connectrpc/connect";
+import { TymuxRolloutService, TymuxdVersionDirection, type TymuxdVersionInfo } from "@/gen/session/v1/tymux_rollout_pb";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { timestampDate, type Timestamp } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -51,16 +51,21 @@ export function TymuxRolloutPanel() {
   const [busy, setBusy] = useState(false);
   const [migrateTitle, setMigrateTitle] = useState("");
   const [migrateStatus, setMigrateStatus] = useState<string | null>(null);
+  const [daemon, setDaemon] = useState<TymuxdVersionInfo | undefined>(undefined);
+  const [replaceBlockedByLiveSessions, setReplaceBlockedByLiveSessions] = useState(false);
 
   const applyStatus = useCallback((status: {
     rollbackRehearsalCompletedAt?: Timestamp;
     sessionOverrides: SessionOverride[];
     globalOverride?: boolean;
+    daemon?: TymuxdVersionInfo;
   }) => {
     const ts = status.rollbackRehearsalCompletedAt;
     setRehearsalCompletedAt(ts ? timestampDate(ts) : null);
     setOverrides(status.sessionOverrides);
     setGlobalOverride(status.globalOverride);
+    // Only Get/Replace carry daemon info; keep the last known value otherwise.
+    if (status.daemon) setDaemon(status.daemon);
   }, []);
 
   const load = useCallback(async () => {
@@ -153,6 +158,24 @@ export function TymuxRolloutPanel() {
       setBusy(false);
     }
   }, [sessionClient, migrateTitle, track]);
+
+  const replaceDaemon = useCallback(async (allowInterruptLiveSessions: boolean) => {
+    track({ name: "tymuxd_replace", category: "user_action", component: "TymuxRolloutPanel", labels: { allowInterruptLiveSessions: String(allowInterruptLiveSessions) } });
+    setBusy(true);
+    setError(null);
+    setReplaceBlockedByLiveSessions(false);
+    try {
+      applyStatus(await client.replaceTymuxd({ allowInterruptLiveSessions }));
+    } catch (e) {
+      if (ConnectError.from(e).code === Code.FailedPrecondition) {
+        setReplaceBlockedByLiveSessions(true);
+      } else {
+        setError("Failed to replace tymuxd");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [client, applyStatus, track]);
 
   const removeOverride = useCallback(async (sessionName: string) => {
     track({ name: "tymux_override_removed", category: "user_action", component: "TymuxRolloutPanel" });
@@ -270,6 +293,50 @@ export function TymuxRolloutPanel() {
         </button>
       </div>
       {migrateStatus && <p className={styles.hint}>{migrateStatus}</p>}
+
+      <h3 className={styles.heading}>tymuxd version</h3>
+      <div data-testid="tymuxd-version">
+        {daemon?.running ? (
+          <p className={styles.description}>
+            Running <code>{daemon.runningVersion || "unknown"}</code> (pid {daemon.pid}); configured binary{" "}
+            <code>{daemon.installedVersion || "unknown"}</code>
+            {daemon.direction === TymuxdVersionDirection.SAME && " — up to date."}
+            {daemon.direction === TymuxdVersionDirection.UPGRADE && " — an upgrade is available."}
+            {daemon.direction === TymuxdVersionDirection.DOWNGRADE && " — the configured binary is older (a downgrade)."}
+          </p>
+        ) : (
+          <p className={styles.description}>No tymuxd is running.</p>
+        )}
+      </div>
+      {daemon?.running && daemon.direction !== TymuxdVersionDirection.SAME && (
+        <>
+          <p className={styles.hint}>
+            Replacing restarts the daemon; each live session&apos;s program is respawned when it
+            reconnects, interrupting any running agent.
+          </p>
+          <button
+            className={styles.actionButton}
+            disabled={busy}
+            onClick={() => replaceDaemon(false)}
+            data-testid="tymuxd-replace"
+          >
+            Replace with configured version
+          </button>
+        </>
+      )}
+      {replaceBlockedByLiveSessions && (
+        <p className={styles.hint} role="alert">
+          Live sessions would be interrupted.{" "}
+          <button
+            className={styles.actionButton}
+            disabled={busy}
+            onClick={() => replaceDaemon(true)}
+            data-testid="tymuxd-replace-anyway"
+          >
+            Replace anyway
+          </button>
+        </p>
+      )}
     </section>
   );
 }

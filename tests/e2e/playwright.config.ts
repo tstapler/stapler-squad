@@ -40,6 +40,12 @@ export default defineConfig({
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',
   testDir: './',
+  // Playwright's default testMatch picks up ANY *.test.ts too, which would sweep in the
+  // Jest-only unit tests under tests/e2e/baseline/ (describe/test as ts-jest globals, not
+  // imported from @playwright/test -- Playwright fails loading them outright). Every real e2e
+  // spec in this directory is named *.spec.ts (confirmed: no running suite needs the default
+  // pattern), so this is a narrowing, not a behavior change for any spec that currently runs.
+  testMatch: '**/*.spec.ts',
 
   // Test timeout (individual test)
   timeout: 30000,
@@ -63,6 +69,9 @@ export default defineConfig({
     ['list'], // Console output
     ['html', { outputFolder: './playwright-report' }],
     ['allure-playwright', { outputFolder: 'allure-results' }],
+    // scripts/e2e-baseline-compare.ts's input (Task 0.1e/7.10a): e2e-next/e2e-bun (build.yml)
+    // and the local baseline/expected-diff procedures (Stories 0.1, 7.11, 8.1) all read this.
+    ['json', { outputFile: process.env.PLAYWRIGHT_JSON_REPORT_PATH || './playwright-report/report.json' }],
   ],
 
   // Global test setup

@@ -156,13 +156,23 @@ describe("PaneSplitRenderer — mobile layout", () => {
   });
 
   describe("horizontal split on mobile", () => {
-    it("shows both panes for horizontal split (stacked rows) on mobile", () => {
+    it("collapses a horizontal split to the focused pane so each session is full screen", () => {
       render(
         <PaneSplitRenderer state={horizontalSplitState} dispatch={jest.fn()} sessions={sessions} />
       );
-      // Horizontal splits are not collapsed on mobile — both panes are visible
       const sessionDetails = screen.getAllByTestId("session-detail");
-      expect(sessionDetails).toHaveLength(2);
+      expect(sessionDetails).toHaveLength(1);
+      expect(sessionDetails[0]).toHaveTextContent("Session One");
+    });
+
+    it("shows the second pane of a horizontal split when it is focused", () => {
+      const secondFocused: PaneState = { ...horizontalSplitState, focusedPaneId: "p2" };
+      render(
+        <PaneSplitRenderer state={secondFocused} dispatch={jest.fn()} sessions={sessions} />
+      );
+      const sessionDetails = screen.getAllByTestId("session-detail");
+      expect(sessionDetails).toHaveLength(1);
+      expect(sessionDetails[0]).toHaveTextContent("Session Two");
     });
 
     it("shows mobile tab strip for horizontal split", () => {

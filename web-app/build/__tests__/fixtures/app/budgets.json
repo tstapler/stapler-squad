@@ -1,0 +1,6 @@
+{
+  "totalJsBytes": { "limit": 100000, "source": "fixture" },
+  "initialJsBytes": { "limit": 100000, "source": "fixture" },
+  "largestChunkBytes": { "limit": 100000, "source": "fixture" },
+  "maxWallMs": { "limit": 10000, "source": "fixture" }
+}

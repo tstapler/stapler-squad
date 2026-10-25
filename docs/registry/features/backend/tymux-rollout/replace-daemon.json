@@ -1,0 +1,14 @@
+{
+  "id": "tymux-rollout:replace-daemon",
+  "type": "backend",
+  "service": "TymuxRolloutService",
+  "method": "ReplaceTymuxd",
+  "protoFile": "proto/session/v1/tymux_rollout.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/tymux_rollout_service.go",
+  "tested": true,
+  "testIds": [
+    "TestReplaceTymuxd_MapsOutcomes"
+  ],
+  "lastModified": "2026-10-19T01:26:11.64298059-07:00"
+}

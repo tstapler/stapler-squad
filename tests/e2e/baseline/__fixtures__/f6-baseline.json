@@ -1,0 +1,13 @@
+{
+ "meta": {
+  "note": "fixture"
+ },
+ "specs": [
+  {
+   "spec": "f6.spec.ts",
+   "project": "chromium",
+   "title": "f6 test",
+   "class": "pass"
+  }
+ ]
+}

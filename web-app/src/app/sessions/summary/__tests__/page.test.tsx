@@ -16,6 +16,7 @@ import SessionSummaryPage from "../page";
 
 const mockUseSearchParams = jest.fn();
 jest.mock("@/lib/nav", () => ({
+  ...jest.requireActual("@/lib/nav/impl.memory"),
   useSearchParams: () => mockUseSearchParams(),
 }));
 

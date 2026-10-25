@@ -8,7 +8,7 @@ import {
   useSearchParams as useNextSearchParams,
 } from "next/navigation";
 import { forwardRef, useCallback, useMemo } from "react";
-import { pushTrayEntryInHistory, replaceHashInHistory, replaceSearchInHistory } from "./history";
+import { pushHistoryMarkerInHistory, pushTrayEntryInHistory, replaceHashInHistory, replaceSearchInHistory } from "./history";
 import type { NavigateOptions, NavImpl, NavLinkProps, NavRouter, NavSearchParams, RedirectProps } from "./impl.types";
 import { normalizePathname } from "./normalize";
 
@@ -51,6 +51,7 @@ export function useReplaceSearch(): (search: string) => void {
 
 export const replaceHash = replaceHashInHistory;
 export const pushTrayEntry = pushTrayEntryInHistory;
+export const pushHistoryMarker = pushHistoryMarkerInHistory;
 
 export const nextImpl = {
   useRouter,
@@ -61,4 +62,5 @@ export const nextImpl = {
   useReplaceSearch,
   replaceHash,
   pushTrayEntry,
+  pushHistoryMarker,
 } satisfies NavImpl;

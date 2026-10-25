@@ -77,6 +77,9 @@ type Server struct {
 	selfAuthMu                 sync.RWMutex                    // guards selfAuthPaths
 	selfAuthPaths              []func(path string) bool        // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
 	hookIPC                    *hookIPCState                   // resident instance-scoped PreToolUse classifier; started with the HTTP server
+
+	// workflowEngineSoak is what /actuator/workflow-engine reads; set via SetWorkflowEngineSoakSource.
+	workflowEngineSoak atomic.Pointer[WorkflowEngineSoakSource]
 }
 
 // ServeHTTP makes *Server an http.Handler wrapping s.mux. Beyond delegating,
@@ -256,6 +259,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			<-deps.ClaudeSettingsWatcher.Stopped()
 		})
 		log.Info("ClaudeSettingsWatcher started")
+	}
+
+	// Shadow ledger recorder: flushes the soak window every minute and once more
+	// when serverCtx ends; the actuator reads the same recorder.
+	if we := deps.WorkflowEngine; we != nil {
+		srv.SetWorkflowEngineSoakSource(we.Soak)
+		srv.goBackground(func() { we.Recorder.Run(serverCtx) })
 	}
 
 	// Start UnfinishedWork scanner.
@@ -737,9 +747,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		blOpts := append(
 			ConnectOptions(deps.ErrorRegistry),
-			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", func() bool {
-				return config.LoadConfig().GetFeatureFlag("backlog")
-			})),
+			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", services.BacklogFlagEnabled)),
 		)
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
@@ -802,6 +810,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
 		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
+	}
+
+	// QuotaService: live-editable quota gate settings (always registered; the gate
+	// re-reads config.json each reconcile).
+	{
+		quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(
+			services.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
+		srv.RegisterConnectHandler("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
+		log.Info("Registered QuotaService handler", "path", "/api"+quotaPath)
 	}
 
 	// Register ImportService handler (import-external-session, Phase 1).
@@ -1427,6 +1444,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 }
 
+// getWebDistFS is a test seam so tests need not depend on a built web-app.
+var getWebDistFS = web.GetDistFS //nolint:gochecknoglobals
+
 // registerStaticRoutes mounts routes that are always registered regardless of
 // whether dependencies were successfully built (image upload, server-info, web UI).
 func registerStaticRoutes(srv *Server) {
@@ -1447,7 +1467,7 @@ func registerStaticRoutes(srv *Server) {
 	log.Info("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files
-	distFS, err := web.GetDistFS()
+	distFS, err := getWebDistFS()
 	if err != nil {
 		log.Error("Failed to load web UI filesystem", "err", err)
 	} else {

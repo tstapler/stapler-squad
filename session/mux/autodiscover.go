@@ -84,7 +84,7 @@ func (ad *AutoDiscovery) startWatching(ctx context.Context) (<-chan struct{}, er
 		defer close(ad.watcherDone)
 
 		// Initial scan to catch existing sessions
-		_, _ = ad.Scan()
+		_, _ = ad.scanContext(ctx)
 
 		for {
 			select {
