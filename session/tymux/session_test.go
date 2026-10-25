@@ -281,6 +281,54 @@ func TestTymuxGRPCSession_Start_RejectsOversizedArgument(t *testing.T) {
 	assert.Nil(t, gotReq, "no session may be created with a truncated prompt")
 }
 
+// A prompt at or above MaxArgBytes reaches tymuxd without ever being an argv
+// entry: one-shot via stdin_path, interactive via a short reference instruction.
+func TestTymuxGRPCSession_Start_LargePromptRoutes(t *testing.T) {
+	dir := t.TempDir()
+	stdinFile := filepath.Join(dir, "prompt-stdin.txt")
+	require.NoError(t, os.WriteFile(stdinFile, bytes.Repeat([]byte("p"), 2*1024*1024), 0o600))
+	instruction := "Your complete task instructions are in the file /cache/prompt-ref.md. Read it."
+
+	tests := []struct {
+		name      string
+		command   launchcmd.ExecCommand
+		wantArgs  []string
+		wantStdin string
+	}{
+		{
+			name:      "one-shot prompt goes through stdin_path",
+			command:   launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: stdinFile},
+			wantArgs:  []string{"-p"},
+			wantStdin: stdinFile,
+		},
+		{
+			name: "interactive prompt is a short reference instruction",
+			command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+				launchcmd.Word("claude"), launchcmd.MustFlag("--add-dir"), launchcmd.Literal("/cache"), launchcmd.MustFlag("--"), launchcmd.Literal(instruction),
+			}},
+			wantArgs: []string{"--add-dir", "/cache", "--", instruction},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotReq *v1.CreateSessionRequest
+			transport := captureCreateSessionRequest(dir, &gotReq)
+			transport.capabilities = []string{capStdinFile}
+			sess := NewTymuxGRPCSession(transport)
+			sess.SetCommand(tc.command)
+
+			require.NoError(t, sess.Start(dir))
+			require.NotNil(t, gotReq)
+			assert.Equal(t, "claude", gotReq.GetCommand())
+			assert.Equal(t, tc.wantArgs, gotReq.GetArgs())
+			assert.Equal(t, tc.wantStdin, gotReq.GetStdinPath())
+			for _, a := range gotReq.GetArgs() {
+				assert.Less(t, len(a), launchcmd.MaxArgBytes)
+			}
+		})
+	}
+}
+
 // captureCreateSessionRequest returns a *fakeTransport whose CreateSession
 // records the request it received into *got and replies with a live,
 // single-pane session rooted at dir.
