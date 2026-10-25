@@ -49,7 +49,7 @@ jobs:
   #   - CircularBuffer (scrollback package)
   #   - SessionService_ListSessions, GetSession, StreamTerminal (services package)
   # On push to main: saves updated baseline to the "bench-tier1-" cache.
-  # On PR: restores the latest baseline from cache, runs benchstat, posts a comment.
+  # On PR: restores the latest baseline from cache, diffs with benchdiff (sticky PR comment).
   # ─────────────────────────────────────────────────────────────────────────────
   go-tier1:
     name: Go Benchmarks (Tier 1)
@@ -68,9 +68,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
-
-      - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
 
       - name: Install buf
         run: |
@@ -110,77 +107,22 @@ jobs:
           restore-keys: |
             bench-tier1-
 
+      # Same Mann-Whitney test benchstat used (alpha 0.05, count=8). The sticky
+      # comment replaces the old hand-written one and stays visible even when
+      # nothing regressed. fail-on-regression 20 mirrors the old 20% gate;
+      # continue-on-error keeps PRs advisory-only, as before (the step still
+      # shows red on a regression).
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
-        id: compare
-        run: |
-          if [ -f benchmarks/go/tier1-baseline.txt ]; then
-            # No -delta-test flag: the pinned benchstat's table-format rewrite
-            # dropped it in favor of an automatic alpha=0.05 significance test
-            # (insignificant deltas are marked "~" in the output already).
-            benchstat benchmarks/go/tier1-baseline.txt tier1-bench.txt > benchstat-tier1.txt 2>&1 || true
-            echo "## Go Benchmarks (Tier 1)" >> $GITHUB_STEP_SUMMARY
-            cat benchstat-tier1.txt >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No baseline yet — will be established on next push to main." > benchstat-tier1.txt
-          fi
-          # A bare `if <cmd>` is exempt from -e/pipefail, so a genuine crash
-          # in the gate script (require() failure, bad benchstat output) must
-          # be distinguished from a real "false" result — otherwise it's
-          # silently written as has_regression=false, exactly the kind of
-          # silently-suppressed comment pre-mortem.md names as this item's
-          # top risk.
-          if ! RESULT=$(node -e "console.log(require('./tools/ci-gates/benchmark-regression.js').hasGoTier1Regression(require('fs').readFileSync('benchstat-tier1.txt','utf8')))"); then
-            echo "::error::benchmark-regression.js failed to evaluate — failing loudly instead of silently suppressing the PR comment"
-            exit 1
-          fi
-          echo "has_regression=${RESULT}" >> "$GITHUB_OUTPUT"
-
-      - name: Post PR comment
-        if: github.event_name == 'pull_request'
-        continue-on-error: true # advisory comment; never fail the job if posting is denied
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
+        continue-on-error: true
+        uses: tstapler/benchdiff@03845d60bd136fe36f365cf8f6ac4a6f9ae86257 # main
         with:
-          script: |
-            const marker = '<!-- benchmark-go-tier1 -->';
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-            if (process.env.HAS_REGRESSION !== 'true') {
-              if (existing) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                });
-              }
-              return;
-            }
-            const fs = require('fs');
-            const output = fs.existsSync('benchstat-tier1.txt')
-              ? fs.readFileSync('benchstat-tier1.txt', 'utf8').trim()
-              : 'No comparison available.';
-            const body = `${marker}\n## ⚠️ Go Benchmarks (Tier 1) — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
+          head: tier1-bench.txt
+          base: ${{ hashFiles('benchmarks/go/tier1-baseline.txt') != '' && 'benchmarks/go/tier1-baseline.txt' || '' }}
+          format: go
+          tag: go-tier1
+          title: Go Benchmarks (Tier 1)
+          fail-on-regression: 20
 
       - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -391,84 +333,21 @@ jobs:
           restore-keys: |
             bench-frontend-throughput-
 
+      # benchmark-results.json is github-action-benchmark "customBiggerIsBetter"
+      # JSON, which benchdiff reads natively as gab-bigger (no adapter needed).
+      # Single sample per metric, so judged by threshold only; fail-on-regression
+      # 50 mirrors the old "throughput halved" gate, advisory as before.
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
-        id: compare
-        run: |
-          if [ -f benchmarks/frontend/throughput-baseline.json ]; then
-            node -e "
-              const gate = require('./tools/ci-gates/benchmark-regression.js');
-              const baseline = JSON.parse(require('fs').readFileSync('benchmarks/frontend/throughput-baseline.json', 'utf8'));
-              const current  = JSON.parse(require('fs').readFileSync('web-app/benchmark-results.json', 'utf8'));
-              const pctNums = [];
-              const rows = current.map(c => {
-                const b = baseline.find(e => e.name === c.name);
-                if (!b) return c.name + ': no baseline';
-                const pctNum = (c.value - b.value) / b.value * 100;
-                pctNums.push(pctNum);
-                const pct = pctNum.toFixed(1);
-                const sign = pctNum >= 0 ? '+' : '';
-                const arrow = c.value >= b.value ? '▲' : '▼';
-                return c.name + ': ' + (c.value/1024).toFixed(0) + ' KB/s ' + arrow + ' ' + sign + pct + '% (baseline: ' + (b.value/1024).toFixed(0) + ' KB/s)';
-              });
-              require('fs').writeFileSync('throughput-comparison.txt', rows.join('\n'));
-              require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'has_regression=' + gate.hasThroughputRegression(pctNums) + '\n');
-              console.log(rows.join('\n'));
-            "
-            echo "## Frontend Terminal Throughput" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat throughput-comparison.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No baseline yet — will be established on next push to main." > throughput-comparison.txt
-            echo "has_regression=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Post PR comment
-        if: github.event_name == 'pull_request'
-        continue-on-error: true # advisory comment; never fail the job if posting is denied
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
+        continue-on-error: true
+        uses: tstapler/benchdiff@03845d60bd136fe36f365cf8f6ac4a6f9ae86257 # main
         with:
-          script: |
-            const marker = '<!-- benchmark-frontend-throughput -->';
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-            if (process.env.HAS_REGRESSION !== 'true') {
-              if (existing) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                });
-              }
-              return;
-            }
-            const fs = require('fs');
-            const output = fs.existsSync('throughput-comparison.txt')
-              ? fs.readFileSync('throughput-comparison.txt', 'utf8').trim()
-              : 'No comparison available.';
-            const body = `${marker}\n## ⚠️ Frontend Terminal Throughput — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
+          head: web-app/benchmark-results.json
+          base: ${{ hashFiles('benchmarks/frontend/throughput-baseline.json') != '' && 'benchmarks/frontend/throughput-baseline.json' || '' }}
+          format: gab-bigger
+          tag: frontend-throughput
+          title: Frontend Terminal Throughput
+          fail-on-regression: 50
 
       - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
