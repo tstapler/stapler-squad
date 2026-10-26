@@ -11,6 +11,7 @@ import { getConnectTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
 import { Session, SessionStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
+import { measureRowHeight } from "./measureRowHeight";
 import { SessionRow } from "./SessionRow";
 import { SessionListEmptyState } from "./SessionListEmptyState";
 import { SessionListSkeleton } from "./SessionListSkeleton";
@@ -686,7 +687,7 @@ export function SessionList({
     // line); measureElement still corrects the real height post-render.
     estimateSize: (i) => (flatItems[i]?.kind === "header" ? 40 : 64),
     overscan: 8,
-    measureElement: (el) => el.getBoundingClientRect().height,
+    measureElement: measureRowHeight,
   });
 
   // Handler for cycling grouping strategy (keyboard shortcut 'G')
