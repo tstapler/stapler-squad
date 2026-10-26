@@ -406,6 +406,38 @@ func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config Plugin
 	return nil
 }
 
+// PostProgressComment posts body on the issue, then reads the issue back and
+// returns its updated_at so the caller can advance the loop-prevention
+// watermark: a comment bumps the issue's updated_at, and without advancing
+// past it the next backward sync would re-ingest the issue. A zero time with a
+// nil error means the comment was posted but the read-back failed.
+func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config PluginConfig, externalID, body string) (time.Time, error) {
+	if err := g.PostIssueComment(ctx, config, externalID, body); err != nil {
+		return time.Time{}, err
+	}
+	cfg, err := decodeGithubIssuesConfig(config)
+	if err != nil {
+		return time.Time{}, err
+	}
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues/%s", cfg.Owner, cfg.Repo, externalID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return time.Time{}, nil
+	}
+	req.Header.Set("Authorization", "token "+cfg.Token)
+	resp, err := github.HTTPClient().Do(req)
+	if err != nil {
+		return time.Time{}, nil
+	}
+	defer resp.Body.Close()
+	var issue githubIssue
+	if resp.StatusCode >= 300 || json.NewDecoder(resp.Body).Decode(&issue) != nil {
+		return time.Time{}, nil
+	}
+	updatedAt, _ := time.Parse(time.RFC3339, issue.UpdatedAt)
+	return updatedAt, nil
+}
+
 // MapToBacklogItem converts a GitHub ExternalItem to a BacklogItemData.
 func (g *GitHubIssuesPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
 	title := item.Title

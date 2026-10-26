@@ -1003,6 +1003,13 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 			data.RepoPath = resolved
 		}
 	}
+	if data.ExternalURL != "" && data.ClaimingHostID == "" {
+		if rec := s.claimRecorder.Load(); rec != nil {
+			if p, ok := (*rec).(localHostIDProvider); ok {
+				data.ClaimingHostID = p.LocalHostID()
+			}
+		}
+	}
 	created, err := s.repo.CreateBacklogItem(ctx, data)
 	if err != nil {
 		return nil, err
