@@ -204,17 +204,21 @@ type fakeRoutes struct {
 
 func (f fakeRoutes) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
 
-func TestBuildDescriptors_ShouldKeepAnswerAvailableRemotely_WhenRouteIsDurableRecord(t *testing.T) {
+func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTierBEffective(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name      string
 		routes    fakeRoutes
+		tierBOff  bool
 		available bool
 		tier      sessionv1.ActionTier
 	}{
-		{"stopped or archived session", fakeRoutes{routeDurableRecord, true}, true, sessionv1.ActionTier_ACTION_TIER_A},
-		{"live session", fakeRoutes{routeLiveKeystrokeVisible, true}, false, sessionv1.ActionTier_ACTION_TIER_B},
-		{"unknown session", fakeRoutes{}, false, sessionv1.ActionTier_ACTION_TIER_B},
+		{"stopped or archived session", fakeRoutes{routeDurableRecord, true}, false, true, sessionv1.ActionTier_ACTION_TIER_A},
+		{"stopped session with tierB off", fakeRoutes{routeDurableRecord, true}, true, true, sessionv1.ActionTier_ACTION_TIER_A},
+		{"live session with tierB on", fakeRoutes{routeLiveKeystrokeVisible, true}, false, true, sessionv1.ActionTier_ACTION_TIER_B},
+		{"live hidden session with tierB on", fakeRoutes{routeLiveKeystrokeHidden, true}, false, true, sessionv1.ActionTier_ACTION_TIER_B},
+		{"live session with tierB off", fakeRoutes{routeLiveKeystrokeVisible, true}, true, false, sessionv1.ActionTier_ACTION_TIER_B},
+		{"unknown session", fakeRoutes{}, false, false, sessionv1.ActionTier_ACTION_TIER_B},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,6 +227,7 @@ func TestBuildDescriptors_ShouldKeepAnswerAvailableRemotely_WhenRouteIsDurableRe
 			f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = PendingQuestion{}
 			b := f.builder()
 			b.sources.Routes = tc.routes
+			f.flags[scopeChannelTierB] = !tc.tierBOff
 			recs := []*sessionv1.NotificationHistoryRecord{questionRecord("n1", "s1", "q1")}
 			b.Annotate(context.Background(), recs, ListenerClassRemote)
 			d := recs[0].Actions[0]

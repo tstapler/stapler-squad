@@ -365,8 +365,8 @@ func (b *DescriptorBuilder) limitAnswer(d *sessionv1.NotificationActionDescripto
 }
 
 // remoteAnswerAllowed reports whether d may be answered on the remote listener:
-// the policy row allows it, or the session's answer is a durable record, which
-// writes no keystroke (the dispatcher's tierGate treats it as Tier A).
+// the policy row allows it, the session's answer is a durable record (no
+// keystroke, Tier A), or it is a live keystroke and Tier B is enabled remotely.
 func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionDescriptor) bool {
 	if actionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
 		return true
@@ -375,11 +375,13 @@ func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionD
 		return false
 	}
 	route, known := b.sources.Routes.RouteFor(d.GetSessionId())
-	if !known || route != routeDurableRecord {
+	if !known {
 		return false
 	}
 	d.Tier = answerTier(route)
-	return true
+	// A live keystroke is Tier B: offered remotely only when channel:remote:tierB is effective,
+	// the same check the dispatcher's tierGate makes.
+	return route == routeDurableRecord || b.flag(scopeChannelTierB)
 }
 
 // tabbedQuestionDescriptor is ANSWER_QUESTION for an open hook row in the

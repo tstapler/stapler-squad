@@ -73,8 +73,9 @@ func agentWakeTriggerScopes() []string {
 const (
 	// spikeS1HookReplyPassed gates stage:hook_reply; flip when S1 PASS is recorded.
 	spikeS1HookReplyPassed = false
-	// spikeS6TierBPassed gates channel:remote:tierB; flip when S6 PASS is recorded.
-	spikeS6TierBPassed = false
+	// spikeS6TierBPassed gates channel:remote:tierB: S6 PASS (authenticated remote chain,
+	// research/spike-S6.md) plus the Story 2.8 remote-chain test. The scope itself stays opt-in.
+	spikeS6TierBPassed = true
 )
 
 // liveFlag is a flag's live global value. The zero value is OFF (fail closed).
