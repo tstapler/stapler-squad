@@ -64,3 +64,20 @@ user. Differentiate with distinct placeholder text:
 `CDPState` proto has only `CDPStatus status = 1`; it does not expose the port number.
 The CDPViewer connects to `/api/sessions/{id}/cdp-stream` (the Go relay), not directly
 to the Chrome CDP port — so no port field is needed on the frontend.
+
+## Live finding (2026-10-25): backend never delivers frames — second root cause
+
+Reproduced on Linux with `/usr/bin/google-chrome-stable` (Chrome 146) against an isolated instance
+(`PORT=62871`, `browser-passthrough` flag on, session `cdp-live`):
+
+- `GetSession` → `cdpState: CDP_STATUS_STREAMING` once Chrome ran with `--remote-debugging-port=$CDP_PORT`.
+- Frontend (this fix): Browser tab enabled, `CDPViewer` mounted, `cdp-stream` WebSocket opens — but **0 frames**
+  arrive in 7 s and the canvas stays 300x150/blank.
+- Cause: `session/cdp/manager.go` `runScreencast` dials the **browser-level** endpoint
+  (`/devtools/browser/<id>` from `/json/version`) and sends `Page.enable` / `Page.startScreencast` with no
+  `sessionId`. Chrome answers `{"error":{"code":-32601,"message":"'Page.enable' wasn't found"}}` for both
+  (probe: `bun run cdpprobe.ts` against port 35541). `setState(CDPStatusStreaming)` runs regardless of those errors.
+- Consequence: `STREAMING` does not mean frames are flowing, so AC5/AC6 ("CDPViewer rendering frames") cannot be
+  met by a frontend-only change, and AC9 ("no Go backend code modified") conflicts with them.
+- Test-setup note: the in-session shell rc reordered `PATH`, hiding the `cdp-bins` wrapper dir, so Chrome had to be
+  launched with `--remote-debugging-port=$CDP_PORT` explicitly.
