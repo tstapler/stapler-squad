@@ -15,11 +15,11 @@ const RECENT_LIMIT = 8;
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 /** Everything the buffered (files:viewer-v2) Files tab needs, composed once so FilesTab stays a thin root. */
-export function useFilesV2(sessionId: string, sessionRunning: boolean, options: UseOpenBuffersOptions) {
+export function useFilesV2(sessionId: string, sessionRunning: boolean, options: UseOpenBuffersOptions, tabActive = true) {
   const buffers = useOpenBuffers(sessionId, options);
   const feedback = useFilesFeedback();
   const bridge = useEditorBridge(buffers, { announce: feedback.announceInfo });
-  const freshness = useBufferFreshness({ active: buffers.active, enabled: true, sessionRunning, onAdoptToken: buffers.adoptToken });
+  const freshness = useBufferFreshness({ active: buffers.active, enabled: tabActive, sessionRunning, onAdoptToken: buffers.adoptToken });
   const { active, close } = buffers;
   const { stale, resolve } = freshness;
   const { back, forward, setOverlay, reload, swapView, text } = bridge;

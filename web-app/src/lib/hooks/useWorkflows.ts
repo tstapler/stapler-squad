@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useCallback, useSyncExternalStore } from "react";
 import { createClient } from "@connectrpc/connect";
 import {
   SessionService,
@@ -77,76 +77,128 @@ interface UseWorkflowsReturn {
   refresh: () => Promise<void>;
 }
 
+interface WorkflowsSnapshot {
+  workflows: WorkflowProto[];
+  loading: boolean;
+  error: Error | null;
+}
+
+// Module-level store: every useWorkflows() consumer (Omnibar, each SessionDetailView,
+// panels) reads one list, so mounting N views costs one ListWorkflows instead of N.
+let snapshot: WorkflowsSnapshot = { workflows: [], loading: false, error: null };
+let loaded = false;
+let inflight: Promise<void> | null = null;
+const listeners = new Set<() => void>();
+
+function patchSnapshot(patch: Partial<WorkflowsSnapshot>): void {
+  snapshot = { ...snapshot, ...patch };
+  listeners.forEach((l) => l());
+}
+
+function updateWorkflows(fn: (prev: WorkflowProto[]) => WorkflowProto[]): void {
+  patchSnapshot({ workflows: fn(snapshot.workflows) });
+}
+
+const getClient = () => createClient(SessionService, getConnectTransport());
+
+/** One shared fetch: joins an in-flight request, and skips entirely once loaded unless `force`. */
+function fetchWorkflowsShared(force = false): Promise<void> {
+  if (inflight) return inflight;
+  if (loaded && !force) return Promise.resolve();
+  patchSnapshot({ loading: true, error: null });
+  const run = (async () => {
+    try {
+      const resp = await getClient().listWorkflows(create(ListWorkflowsRequestSchema, {}));
+      loaded = true;
+      patchSnapshot({ workflows: resp.workflows ?? [] });
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error("Failed to fetch workflows");
+      patchSnapshot({ error: e });
+      console.error("Failed to fetch workflows:", e);
+    } finally {
+      inflight = null;
+      patchSnapshot({ loading: false });
+    }
+  })();
+  inflight = run;
+  return run;
+}
+
+// Staleness backstop: WatchWorkflows (useWatchWorkflows.ts) can silently
+// stall -- e.g. a proxy idle-timeout that never surfaces a stream error or
+// close -- in which case its own reconnect-on-error logic never fires and
+// a long-lived tab keeps serving an ever-stale list with no indication.
+// A low-frequency re-fetch, plus one on tab refocus, catches that case
+// without connection-state tracking; the workflow list is small enough
+// that a full ListWorkflows call is cheap. Installed once while any consumer is mounted.
+const BACKSTOP_MS = 90_000;
+let uninstallBackstop: (() => void) | null = null;
+
+function installBackstop(): () => void {
+  const interval = setInterval(() => void fetchWorkflowsShared(true), BACKSTOP_MS);
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") void fetchWorkflowsShared(true);
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  return () => {
+    clearInterval(interval);
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  uninstallBackstop ??= installBackstop();
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      uninstallBackstop?.();
+      uninstallBackstop = null;
+    }
+  };
+}
+
+const getSnapshot = () => snapshot;
+
+/** Test-only: reset the shared store. */
+export function resetWorkflowsStoreForTests(): void {
+  snapshot = { workflows: [], loading: false, error: null };
+  loaded = false;
+  inflight = null;
+  uninstallBackstop?.();
+  uninstallBackstop = null;
+  listeners.clear();
+}
+
+interface UseWorkflowsOptions {
+  /**
+   * Subscribe to WatchWorkflows for live updates (default true). Read-only consumers
+   * that sit beside an always-mounted watcher (the Omnibar) pass false.
+   */
+  watch?: boolean;
+}
+
 /**
  * React hook for managing workflow definitions.
  *
- * Fetches all workflows via listWorkflows and exposes create/update/delete actions.
+ * Reads the shared workflow store (one ListWorkflows for all consumers) and exposes
+ * create/update/delete actions.
  */
-export function useWorkflows(): UseWorkflowsReturn {
-  const [workflows, setWorkflows] = useState<WorkflowProto[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWorkflowsReturn {
+  const { workflows, loading, error } = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
+  const refresh = useCallback(() => fetchWorkflowsShared(true), []);
 
   useEffect(() => {
-    clientRef.current = createClient(SessionService, getConnectTransport());
+    void fetchWorkflowsShared();
   }, []);
-
-  const fetchWorkflows = useCallback(async () => {
-    if (!clientRef.current) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const req = create(ListWorkflowsRequestSchema, {});
-      const resp = await clientRef.current.listWorkflows(req);
-      setWorkflows(resp.workflows ?? []);
-    } catch (err) {
-      const e = err instanceof Error ? err : new Error("Failed to fetch workflows");
-      setError(e);
-      console.error("Failed to fetch workflows:", e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const refresh = useCallback(async () => {
-    await fetchWorkflows();
-  }, [fetchWorkflows]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  // Staleness backstop: WatchWorkflows (useWatchWorkflows.ts) can silently
-  // stall -- e.g. a proxy idle-timeout that never surfaces a stream error or
-  // close -- in which case its own reconnect-on-error logic never fires and
-  // a long-lived tab keeps serving an ever-stale list with no indication.
-  // A low-frequency re-fetch, plus one on tab refocus, catches that case
-  // without connection-state tracking; the workflow list is small enough
-  // that a full ListWorkflows call is cheap.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      void fetchWorkflows();
-    }, 90_000);
-
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") void fetchWorkflows();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [fetchWorkflows]);
 
   // Live updates from any client (MCP tool, another tab, a cron fire) via
   // WatchWorkflows -- keeps `workflows` current without requiring a manual
   // refresh. See useWatchWorkflows.ts's header for why this stays a plain
   // upsert/remove against local state rather than a Redux-backed store.
   const onWorkflowCreatedOrUpdated = useCallback((workflow: WorkflowProto) => {
-    setWorkflows((prev) => {
+    updateWorkflows((prev) => {
       const idx = prev.findIndex((w) => w.id === workflow.id);
       if (idx === -1) return [...prev, workflow];
       const next = prev.slice();
@@ -156,17 +208,19 @@ export function useWorkflows(): UseWorkflowsReturn {
   }, []);
 
   const onWorkflowDeleted = useCallback((id: string) => {
-    setWorkflows((prev) => prev.filter((w) => w.id !== id));
+    updateWorkflows((prev) => prev.filter((w) => w.id !== id));
   }, []);
 
-  useWatchWorkflows({
-    onCreatedOrUpdated: onWorkflowCreatedOrUpdated,
-    onDeleted: onWorkflowDeleted,
-  });
+  useWatchWorkflows(
+    {
+      onCreatedOrUpdated: onWorkflowCreatedOrUpdated,
+      onDeleted: onWorkflowDeleted,
+    },
+    { enabled: watch }
+  );
 
   const createWorkflow = useCallback(
     async (data: WorkflowFormData) => {
-      if (!clientRef.current) return;
       const req = create(CreateWorkflowRequestSchema, {
         slug: data.slug,
         name: data.name,
@@ -191,7 +245,7 @@ export function useWorkflows(): UseWorkflowsReturn {
         promptTemplate: data.promptTemplate ?? "",
         webhookSecret: data.webhookSecret ?? "",
       });
-      await clientRef.current.createWorkflow(req);
+      await getClient().createWorkflow(req);
       await refresh();
     },
     [refresh]
@@ -199,7 +253,6 @@ export function useWorkflows(): UseWorkflowsReturn {
 
   const updateWorkflow = useCallback(
     async (id: string, data: Partial<WorkflowFormData>) => {
-      if (!clientRef.current) return;
       const req = create(UpdateWorkflowRequestSchema, {
         id,
         ...(data.name !== undefined && { name: data.name }),
@@ -228,7 +281,7 @@ export function useWorkflows(): UseWorkflowsReturn {
         // conditionally spreading like the optional fields above.
         webhookSecret: data.webhookSecret ?? "",
       });
-      await clientRef.current.updateWorkflow(req);
+      await getClient().updateWorkflow(req);
       await refresh();
     },
     [refresh]
@@ -236,15 +289,14 @@ export function useWorkflows(): UseWorkflowsReturn {
 
   const deleteWorkflow = useCallback(
     async (id: string) => {
-      if (!clientRef.current) return;
       // Snapshot before optimistic update for rollback.
       const prev = workflows;
-      setWorkflows((w) => w.filter((wf) => wf.id !== id));
+      updateWorkflows((w) => w.filter((wf) => wf.id !== id));
       try {
         const req = create(DeleteWorkflowRequestSchema, { id });
-        await clientRef.current.deleteWorkflow(req);
+        await getClient().deleteWorkflow(req);
       } catch (err) {
-        setWorkflows(prev); // rollback on failure
+        patchSnapshot({ workflows: prev }); // rollback on failure
         throw err;
       }
     },
@@ -253,9 +305,8 @@ export function useWorkflows(): UseWorkflowsReturn {
 
   const archiveWorkflowSessions = useCallback(
     async (workflowId: string): Promise<number> => {
-      if (!clientRef.current) return 0;
       const req = create(ArchiveWorkflowSessionsRequestSchema, { workflowId });
-      const resp = await clientRef.current.archiveWorkflowSessions(req);
+      const resp = await getClient().archiveWorkflowSessions(req);
       await refresh();
       return resp.archivedCount;
     },
@@ -264,9 +315,8 @@ export function useWorkflows(): UseWorkflowsReturn {
 
   const deleteWorkflowFailedSessions = useCallback(
     async (workflowId: string): Promise<number> => {
-      if (!clientRef.current) return 0;
       const req = create(DeleteWorkflowFailedSessionsRequestSchema, { workflowId });
-      const resp = await clientRef.current.deleteWorkflowFailedSessions(req);
+      const resp = await getClient().deleteWorkflowFailedSessions(req);
       await refresh();
       return resp.deletedCount;
     },

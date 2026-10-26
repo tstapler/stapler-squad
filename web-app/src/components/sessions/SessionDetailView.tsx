@@ -432,7 +432,7 @@ export function SessionDetailView({
   // to its Workflow row so we can show "Triggered by: {slug} ({trigger_type})" for
   // automated (non-"manual") trigger-created sessions, distinguishing them from a
   // plain @slug manually-invoked Workflow session.
-  const { workflows: attributionWorkflows } = useWorkflows();
+  const { workflows: attributionWorkflows } = useWorkflows({ watch: false });
   const triggerWorkflow = session.workflowId
     ? attributionWorkflows.find((w) => w.id === session.workflowId)
     : undefined;
@@ -1210,6 +1210,7 @@ export function SessionDetailView({
               baseUrl={getApiBaseUrl()}
               initialSelectedPath={filesSelectedPath}
               onSelectedPathChange={setFilesSelectedPath}
+              tabActive={activeTab === "files"}
               sessionRunning={session.status === SessionStatus.RUNNING}
               sessionName={session.title}
               onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}

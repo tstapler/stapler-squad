@@ -41,6 +41,8 @@ interface FilesTabProps {
   sessionName?: string;
   /** Resume action for a paused session (Search refuses without a worktree). */
   onResumeSession?: (trigger: HTMLElement) => void;
+  /** The Files tab is the visible tab; false pauses on-disk freshness polling (StatFile). Defaults to true. */
+  tabActive?: boolean;
 }
 
 // ---- Component ----
@@ -72,8 +74,8 @@ function FilesTabGate(props: FilesTabProps) {
 }
 
 /** files:viewer-v2 on: selection is the active buffer of the open-buffers reducer. */
-function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, sessionRunning = false, ...rest }: FilesTabProps) {
-  const v2 = useFilesV2(sessionId, sessionRunning, { initialSelectedPath, onSelectedPathChange });
+function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, sessionRunning = false, tabActive = true, ...rest }: FilesTabProps) {
+  const v2 = useFilesV2(sessionId, sessionRunning, { initialSelectedPath, onSelectedPathChange }, tabActive);
   const { open } = v2.bridge;
   const onOpen = useCallback((path: string, source?: OpenSource) => open(path, { source }), [open]);
   return (

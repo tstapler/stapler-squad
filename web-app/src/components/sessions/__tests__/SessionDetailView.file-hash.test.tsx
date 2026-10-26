@@ -32,8 +32,8 @@ jest.mock("@/lib/hooks/useShells", () => require("./sessionDetailViewTestFixture
 
 // Exposes the selection callbacks so the test can drive the file selection.
 jest.mock("../FilesTab", () => ({
-  FilesTab: (props: { initialSelectedPath: string | null; onSelectedPathChange: (p: string | null) => void }) => (
-    <div>
+  FilesTab: (props: { initialSelectedPath: string | null; onSelectedPathChange: (p: string | null) => void; tabActive?: boolean }) => (
+    <div data-tab-active={String(props.tabActive)}>
       <span data-testid="initial-path">{props.initialSelectedPath}</span>
       <button onClick={() => props.onSelectedPathChange("a/b.go")}>select-file</button>
       <button onClick={() => props.onSelectedPathChange(null)}>clear-file</button>
@@ -97,6 +97,13 @@ describe("SessionDetailView file-selection hash", () => {
     expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
     fireEvent.click(screen.getByRole("tab", { name: /info/i }));
     expect(screen.getByTestId("initial-path")).toBeTruthy();
+  });
+
+  it("sessionDetailView_should_PassTabActiveFalse_When_FilesTabRetainedButHidden", () => {
+    const { container } = renderView({ initialTab: "files" });
+    expect(container.querySelector("[data-tab-active]")?.getAttribute("data-tab-active")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: /info/i }));
+    expect(container.querySelector("[data-tab-active]")?.getAttribute("data-tab-active")).toBe("false");
   });
 
   it("sessionDetailView_should_NotSeedFilesSelectionFromHash_When_PaneNotFocused", () => {

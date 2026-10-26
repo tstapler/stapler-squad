@@ -46,7 +46,7 @@ function dispatchWorkflowEvent(event: WorkflowEvent, handlers: UseWatchWorkflows
  * change the workflow definition list and are ignored, as is the
  * content-free snapshot_complete marker.
  */
-export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers): void {
+export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers, { enabled = true }: { enabled?: boolean } = {}): void {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
@@ -73,5 +73,6 @@ export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers): void {
     getSeq: (event) => event.seq,
     getDeployId: (event) => event.deployId,
     name: "workflows",
+    enabled,
   });
 }
