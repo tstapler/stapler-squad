@@ -5,13 +5,14 @@
 
 import React from "react";
 import { renderHook, act } from "@testing-library/react";
-import { TerminalPoolProvider, useTerminalPool } from "../TerminalPool";
+import { render, screen } from "@testing-library/react";
+import { TerminalPoolProvider, useTerminalPool, usePooledTerminal, usePooledTerminalCallbacks } from "../TerminalPool";
 
 jest.mock("@/components/sessions/XtermTerminal", () => {
   const ReactLib = require("react");
-  const XtermTerminal = ReactLib.forwardRef((_props: unknown, ref: unknown) => {
+  const XtermTerminal = ReactLib.forwardRef((props: { windowActive?: boolean }, ref: unknown) => {
     ReactLib.useImperativeHandle(ref, () => ({ terminal: { cols: 80, rows: 24 }, focus: jest.fn(), fit: jest.fn() }));
-    return ReactLib.createElement("div");
+    return ReactLib.createElement("div", { "data-testid": "xterm", "data-window-active": String(props.windowActive) });
   });
   return { XtermTerminal };
 });
@@ -46,5 +47,38 @@ describe("TerminalPool keep-alive policy", () => {
       for (const id of ids) expect(result.current.getOrCreateEntry(id)).toBe(entries.get(id));
     });
     document.body.removeChild(anchor);
+  });
+});
+
+describe("TerminalPool windowActive plumbing (Story 4.1.3e)", () => {
+  const noop = () => {};
+  function Consumer({ windowActive }: { windowActive: boolean }) {
+    const dockRef = React.useRef<HTMLDivElement>(null);
+    usePooledTerminal("s1", dockRef, true);
+    usePooledTerminalCallbacks("s1", true, {
+      onData: noop,
+      onResize: noop,
+      isAltScreenActive: () => false,
+      onAltScreenScrollUp: noop,
+      windowActive,
+    });
+    return <div ref={dockRef} />;
+  }
+
+  it("pool_should_PassWindowActiveToXterm_And_KeepEntryDocked_When_WindowHides", async () => {
+    const view = render(
+      <TerminalPoolProvider maxSize={4}>
+        <Consumer windowActive={true} />
+      </TerminalPoolProvider>
+    );
+    expect((await screen.findByTestId("xterm")).dataset.windowActive).toBe("true");
+
+    view.rerender(
+      <TerminalPoolProvider maxSize={4}>
+        <Consumer windowActive={false} />
+      </TerminalPoolProvider>
+    );
+    expect((await screen.findByTestId("xterm")).dataset.windowActive).toBe("false");
+    expect(document.querySelector('[data-pooled-session-id="s1"]')?.parentElement).toBe(view.container.firstElementChild);
   });
 });

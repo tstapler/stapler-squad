@@ -135,6 +135,8 @@ interface PoolEntry {
   onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null>;
   scrollGesture: ScrollGestureProps;
   stableOnScrollModeChange: (mode: ScrollMode) => void;
+  /** False while the consumer's window is hidden (keep-alive): the terminal skips fit and yields its WebGL slot. Docking is unaffected. */
+  windowActive: boolean;
 }
 
 interface TerminalPoolContextValue {
@@ -211,6 +213,7 @@ function createEntry(sessionId: string): PoolEntry {
     onScrollModeChangeRef,
     scrollGesture,
     stableOnScrollModeChange: (mode) => onScrollModeChangeRef.current?.(mode),
+    windowActive: true,
   };
 }
 
@@ -363,6 +366,7 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
             onScrollModeChange={entry.stableOnScrollModeChange}
             isAltScreenActive={entry.stableIsAltScreenActive}
             onAltScreenScrollUp={entry.stableOnAltScreenScrollUp}
+            windowActive={entry.windowActive}
           />
         </Suspense>,
         entry.hostEl
@@ -558,6 +562,8 @@ export interface PooledTerminalCallbacks {
   /** Scroll/gesture settings + callbacks (see ScrollGestureProps). Primitive changes re-render the pooled terminal. */
   scrollGesture?: ScrollGestureProps;
   onScrollModeChange?: (mode: ScrollMode) => void;
+  /** Defaults to true; false when the owning window is hidden (Story 4.1.3e). */
+  windowActive?: boolean;
 }
 
 /**
@@ -571,7 +577,7 @@ export interface PooledTerminalCallbacks {
 export function usePooledTerminalCallbacks(
   sessionId: string,
   isVisible: boolean,
-  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange }: PooledTerminalCallbacks
+  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange, windowActive = true }: PooledTerminalCallbacks
 ): void {
   const pool = useTerminalPoolContext();
   // Entry must already exist -- usePooledTerminal (called earlier in the
@@ -606,6 +612,12 @@ export function usePooledTerminalCallbacks(
       if (entry.onScrollModeChangeRef.current === onScrollModeChange) entry.onScrollModeChangeRef.current = null;
     };
   }, [entry, onScrollModeChange]);
+
+  useEffect(() => {
+    if (entry.windowActive === windowActive) return;
+    entry.windowActive = windowActive;
+    pool.registerEntry();
+  }, [entry, pool, windowActive]);
 
   // Callbacks flow through the source ref; only the primitives need a re-render of <XtermTerminal>.
   const scrollOverride = scrollGesture?.scrollOverride;

@@ -1029,6 +1029,7 @@ export function SessionDetailView({
                       isExternal={true}
                       tmuxSessionName={session.externalMetadata?.tmuxSessionName}
                       isVisible={poolPath === session.externalMetadata?.muxSocketPath}
+                      windowActive={windowActive}
                       scheduleResync={getScheduleResync(poolPath)}
                     />
                   </div>
@@ -1049,6 +1050,7 @@ export function SessionDetailView({
                       sessionId={poolId}
                       baseUrl={getApiBaseUrl()}
                       isVisible={poolId === session.id}
+                      windowActive={windowActive}
                       scheduleResync={getScheduleResync(poolId)}
                       readOnly={hiddenPoolIdsRef.current.has(poolId)}
                     />
@@ -1151,6 +1153,7 @@ export function SessionDetailView({
                 baseUrl={getApiBaseUrl()}
                 shellId={shellId}
                 isVisible={activeTabId === shellKey}
+                windowActive={windowActive}
                 scheduleResync={getScheduleResync(shellKey)}
                 readOnly={session.hidden}
                 onShellStatusChange={(status, exitCode) => {

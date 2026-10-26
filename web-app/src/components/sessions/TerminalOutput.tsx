@@ -57,6 +57,8 @@ interface TerminalOutputProps {
   isExternal?: boolean;
   tmuxSessionName?: string; // For external sessions, the tmux session name
   isVisible?: boolean; // When provided, triggers fit+focus on visibility change
+  /** False while the owning window is hidden (keep-alive); the terminal stays docked but skips fit/WebGL. Default true. */
+  windowActive?: boolean;
   /** When set, routes the terminal stream to a custom shell PTY. */
   shellId?: string;
   /** Callback invoked when a ShellStatusUpdate is received for this shell. */
@@ -117,7 +119,7 @@ function blockedToastCopy(reason: ScrollBlockedReason, program: string): string 
   }
 }
 
-export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange, scheduleResync, readOnly = false }: TerminalOutputProps) {
+export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, windowActive = true, shellId, onShellStatusChange, scheduleResync, readOnly = false }: TerminalOutputProps) {
   const { track } = useAnalytics();
   const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
@@ -1415,6 +1417,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onAltScreenScrollUp,
     scrollGesture: scrollGestureProps,
     onScrollModeChange: handleScrollModeChange,
+    windowActive,
   });
 
   // Read-only view: xterm itself stops emitting keystrokes. handleTerminalData and the flow-control
