@@ -11,6 +11,20 @@ import analytics from "eslint-plugin-analytics";
 import rpcLifecycle from "eslint-plugin-rpc-lifecycle";
 import globals from "globals";
 
+const sharedTransportMessage =
+  "Build unary transports only in lib/api/transport.ts (getConnectTransport / getKeepaliveConnectTransport) or lib/transport/*, so every caller shares the auth, timing and in-flight-gauge interceptors and one connection pool.";
+
+const connectTransportImportBan = {
+  name: "@connectrpc/connect-web",
+  importNames: ["createConnectTransport"],
+  message: sharedTransportMessage,
+};
+
+const dynamicConnectWebImport = {
+  selector: "ImportExpression[source.value='@connectrpc/connect-web']",
+  message: sharedTransportMessage,
+};
+
 export default [
   {
     files: ["src/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
@@ -81,6 +95,7 @@ export default [
       "react/jsx-max-props-per-line": "off",
       "no-restricted-syntax": [
         "error",
+        dynamicConnectWebImport,
         {
           selector: "Literal[value='100vh']",
           message: "Use var(--viewport-height) instead of '100vh'. iOS virtual keyboard shrinks the visual viewport but not 100vh, hiding content behind the keyboard. ViewportProvider updates --viewport-height via the visualViewport API. See project_plans/ux-overhaul/.",
@@ -196,6 +211,20 @@ export default [
     },
   },
   {
+    // Must precede the CodeMirror block below: a later block replaces this rule's options for files both match,
+    // so that block repeats connectTransportImportBan.
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: [
+      "src/lib/api/transport.ts",
+      "src/lib/transport/**",
+      "src/components/backlog/backlogItemDetailTestFixtures.ts",
+      "src/**/*.test.*",
+      "src/**/*.spec.*",
+      "src/**/__tests__/**",
+    ],
+    rules: { "no-restricted-imports": ["error", { paths: [connectTransportImportBan] }] },
+  },
+  {
     files: [
       "src/components/sessions/**/*.ts",
       "src/components/sessions/**/*.tsx",
@@ -214,6 +243,7 @@ export default [
       "no-restricted-imports": [
         "error",
         {
+          paths: [connectTransportImportBan],
           patterns: [
             {
               group: ["@codemirror/*", "@replit/codemirror-vim", "@lezer/*", "codemirror"],
@@ -249,6 +279,7 @@ export default [
     rules: {
       "no-restricted-syntax": [
         "warn",
+        dynamicConnectWebImport,
         {
           selector: "TSInterfaceDeclaration[id.name=/Props$/] > TSInterfaceBody > TSPropertySignature:nth-child(13) ~ TSPropertySignature",
           message: "Component props interface has >12 props. Consider splitting the component or grouping props into a sub-interface.",
@@ -262,6 +293,7 @@ export default [
     rules: {
       "no-restricted-syntax": [
         "warn",
+        dynamicConnectWebImport,
         {
           selector: "Literal[value=/^(Executing|Processing|Needs Approval|Input Required|Idle|Unknown|Success|Error|Tests Failing|Rate Limited|Waiting for Agent)$/]",
           message: "Use DetectedStatus enum from @/gen/session/v1/types_pb instead of raw strings for detected status values.",
