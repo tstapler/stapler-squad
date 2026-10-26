@@ -118,7 +118,7 @@ func newBridgeHarness(t *testing.T, listener string, opts ...UnaryWsOption) *bri
 		return nil
 	}, opts...)
 	baseCtx, cancel := context.WithCancel(context.Background())
-	srv := httptest.NewUnstartedServer(WithRequestRecord(listener, false)(bridge))
+	srv := httptest.NewUnstartedServer(WithRequestRecord(listener, listener == ListenerRemote)(bridge))
 	srv.Config.BaseContext = func(_ net.Listener) context.Context { return baseCtx }
 	srv.Start()
 	t.Cleanup(func() { cancel(); srv.Close() })
@@ -466,6 +466,7 @@ func TestUnaryWsBridge_should_RefuseUpgrade_When_Query_Origin_or_PolicyMissing(t
 	require.Error(t, err)
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
+	// remote harness stamps AuthModeRequired; the gate itself is covered over the real chain.
 	remoteOK := newBridgeHarness(t, ListenerRemote, WithUnaryOriginPolicy(ListenerRemote, func(*http.Request) bool { return true }))
 	remoteOK.connect(nil)
 }

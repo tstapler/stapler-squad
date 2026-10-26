@@ -42,6 +42,7 @@ const (
 	connectUnaryTrailerPrefix = "Trailer-"
 
 	wsUnaryQueryForbidden = "ws_unary_query_forbidden"
+	wsUnaryAuthRequired   = "ws_unary_auth_required"
 )
 
 // Connect error codes used by the bridge.
@@ -64,7 +65,7 @@ type UnaryDispatchers func(listener string) http.Handler
 type UnaryWsBridge struct {
 	dispatchers UnaryDispatchers
 	// policies is the upgrade origin rule per listener name. A listener without an
-	// entry is refused: the remote listener gets its strict policy from Task 5.2.1g.
+	// entry is refused; the server installs the strict remote policy (ws_unary_origin.go).
 	policies    map[string]func(*http.Request) bool
 	maxInFlight int
 	pingPeriod  time.Duration
@@ -149,6 +150,12 @@ func (b *UnaryWsBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.RawQuery != "" {
 		b.denyUpgrade(w, r, listener, "query", http.StatusBadRequest, wsUnaryQueryForbidden)
+		return
+	}
+	// Never widen an open chain: a nil authMW leaves the remote listener without
+	// authentication, and every later REQUEST would dispatch unauthenticated.
+	if listener == ListenerRemote && rec.AuthMode != AuthModeRequired {
+		b.denyUpgrade(w, r, listener, "auth_required", http.StatusForbidden, wsUnaryAuthRequired)
 		return
 	}
 	policy := b.policies[listener]

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,10 +56,10 @@ func TestLocalDispatcher_ShouldStampListenerAndApplyHostGuard(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code, "HostGuard rejects a rebinding Host inside the dispatcher")
 }
 
-// Chain parity (Task 5.2.1d): the unary bridge over the real localChain() and
-// remoteChain(), with HTTP as the reference. The remote origin policy is Task
-// 5.2.1g's; these tests install a permissive stand-in so only dispatch parity is
-// under test.
+// Chain parity (Task 5.2.1d) and the remote origin/auth gate (Task 5.2.1g): the
+// unary bridge over the real localChain() and remoteChain(), with HTTP as the
+// reference. The remote harness installs the production origin policy and trusts
+// exactly its own TLS origin.
 
 const (
 	chainToken       = "chain-token"
@@ -106,11 +107,19 @@ type chainHarness struct {
 	chainCase
 	stub      *chainStub
 	validator *chainValidator
+	bridge    *services.UnaryWsBridge
 	ts        *httptest.Server
 	dialer    *websocket.Dialer
 }
 
 func newChainHarness(t *testing.T, cc chainCase) *chainHarness {
+	t.Helper()
+	return newChainHarnessWithRemoteAuth(t, cc, true)
+}
+
+// newChainHarnessWithRemoteAuth lets a test start the remote chain with no auth
+// middleware (the nil-authMW posture); local cases ignore remoteAuth.
+func newChainHarnessWithRemoteAuth(t *testing.T, cc chainCase, remoteAuth bool) *chainHarness {
 	t.Helper()
 	srv, _ := newServerBase("localhost:8543")
 	t.Cleanup(srv.connCtxCancel)
@@ -119,10 +128,11 @@ func newChainHarness(t *testing.T, cc chainCase) *chainHarness {
 	srv.RegisterConnectHandler("/api"+path, http.StripPrefix("/api", h))
 
 	v := &chainValidator{}
-	srv.mux.Handle(services.UnaryWsPath, services.NewUnaryWsBridge(srv.unaryDispatcher,
-		services.WithUnaryOriginPolicy(services.ListenerRemote, func(*http.Request) bool { return true })))
+	bridge := services.NewUnaryWsBridge(srv.unaryDispatcher,
+		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+	srv.mux.Handle(services.UnaryWsPath, bridge)
 
-	hn := &chainHarness{chainCase: cc, stub: stub, validator: v}
+	hn := &chainHarness{chainCase: cc, stub: stub, validator: v, bridge: bridge}
 	if cc.listener == services.ListenerLocal {
 		if cc.auth {
 			srv.SetupAuth(middleware.Auth(v), true)
@@ -131,9 +141,15 @@ func newChainHarness(t *testing.T, cc chainCase) *chainHarness {
 		hn.ts = httptest.NewServer(srv.localChain())
 		hn.dialer = websocket.DefaultDialer
 	} else {
-		authMW := middleware.Auth(v)
-		srv.setUnaryDispatcher(services.ListenerRemote, srv.remoteDispatcher(authMW, true))
-		hn.ts = httptest.NewTLSServer(srv.remoteChain(authMW, true))
+		var authMW func(http.Handler) http.Handler
+		if remoteAuth {
+			authMW = middleware.Auth(v)
+		}
+		srv.setUnaryDispatcher(services.ListenerRemote, srv.remoteDispatcher(authMW, remoteAuth))
+		hn.ts = httptest.NewUnstartedServer(srv.remoteChain(authMW, remoteAuth))
+		// Origins are set before the server starts: SetOrigins is not synchronized.
+		srv.SetOrigins([]string{"https://" + hn.ts.Listener.Addr().String()})
+		hn.ts.StartTLS()
 		hn.dialer = &websocket.Dialer{TLSClientConfig: hn.ts.Client().Transport.(*http.Transport).TLSClientConfig}
 	}
 	t.Cleanup(hn.ts.Close)
@@ -349,4 +365,98 @@ func decodeTestFrame(t *testing.T, raw []byte) unaryFrameLite {
 		return unaryFrameLite{Kind: "PONG"}
 	}
 	return unaryFrameLite{Kind: "OTHER"}
+}
+
+// CSWSH and auth-gate rows over the real remoteChain (Task 5.2.1g).
+
+var remoteChainCase = chainCase{"remote", services.ListenerRemote, true}
+
+func (h *chainHarness) expectDeniedUpgrade(t *testing.T, hd http.Header, wantStatus int, why string) {
+	t.Helper()
+	c, resp, err := h.dial(t, hd)
+	require.Error(t, err, why)
+	require.Nil(t, c, why)
+	require.NotNil(t, resp, why)
+	assert.Equal(t, wantStatus, resp.StatusCode, why)
+	assert.Zero(t, h.stub.listHits.Load(), "%s: handler never invoked", why)
+}
+
+func TestUnaryChain_ShouldReturn403AtUpgradeAndSkipHandler_WhenRemoteCookieValidButOriginEvil(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+	hd := h.header()
+	hd.Set("Origin", "https://evil.example")
+
+	h.expectDeniedUpgrade(t, hd, http.StatusForbidden, "evil origin")
+	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(services.ListenerRemote, "origin"))
+
+	// Control: the same credentials with the allowed origin upgrade.
+	c, _, err := h.dial(t, h.header())
+	require.NoError(t, err)
+	assert.Equal(t, "RESPONSE", h.send(t, c, 1, chainListFiles, nil, &sessionv1.ListFilesRequest{}).Kind)
+}
+
+func TestUnaryChain_ShouldReturn401_WhenRemoteUpgradeHasNoCookie(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+	hd := http.Header{"Origin": {"https://" + h.host()}}
+
+	h.expectDeniedUpgrade(t, hd, http.StatusUnauthorized, "no cookie")
+	assert.Zero(t, h.bridge.Metrics().UpgradeDenied(services.ListenerRemote, "origin"), "bridge never ran")
+}
+
+func TestUnaryChain_ShouldReturn403_WhenRemoteOriginSameSiteOtherPortPlaintextNullOrHostnameNotVerified(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+	hostname, _, err := net.SplitHostPort(h.host())
+	require.NoError(t, err)
+
+	withOrigin := func(origin string) http.Header {
+		hd := h.header()
+		hd.Set("Origin", origin)
+		return hd
+	}
+	cases := map[string]http.Header{
+		"same site, other port": withOrigin("https://" + hostname + ":1"),
+		"plaintext origin":      withOrigin("http://" + h.host()),
+		"null origin":           withOrigin("null"),
+		"missing origin":        {"Cookie": h.header()["Cookie"]},
+		"rebinding shape":       {"Origin": {"https://evil.example"}, "Host": {"evil.example"}, "Cookie": h.header()["Cookie"]},
+	}
+	for name, hd := range cases {
+		h.expectDeniedUpgrade(t, hd, http.StatusForbidden, name)
+	}
+}
+
+func TestUnaryChain_ShouldUpgrade_WhenRemoteMissingOriginPresentsBearerOnly(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+	c, _, err := h.dial(t, http.Header{"Authorization": {"Bearer " + chainToken}})
+	require.NoError(t, err)
+	assert.Equal(t, "RESPONSE", h.send(t, c, 1, chainListFiles, nil, &sessionv1.ListFilesRequest{}).Kind)
+}
+
+func TestUnaryChain_ShouldRefuseQueryToken_WhenRemote(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+
+	_, resp, err := h.dialer.Dial(h.wsURL()+"?token="+chainToken, http.Header{"Origin": {"https://" + h.host()}})
+	require.Error(t, err)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "a URL token never authenticates")
+
+	_, resp, err = h.dialer.Dial(h.wsURL()+"?x=1", h.header())
+	require.Error(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "any query is refused")
+}
+
+func TestUnaryChain_ShouldReturn403AuthRequired_WhenRemoteChainHasNoAuthMiddleware(t *testing.T) {
+	h := newChainHarnessWithRemoteAuth(t, remoteChainCase, false)
+	hd := http.Header{"Origin": {"https://" + h.host()}}
+
+	h.expectDeniedUpgrade(t, hd, http.StatusForbidden, "open remote chain")
+	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(services.ListenerRemote, "auth_required"))
+}
+
+func TestUnaryChain_ShouldReturn401_WhenRevokedCookieOpensSecondRemoteSocket(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+	_, _, err := h.dial(t, h.header())
+	require.NoError(t, err)
+
+	h.validator.expired.Store(true)
+	h.expectDeniedUpgrade(t, h.header(), http.StatusUnauthorized, "revoked session")
 }

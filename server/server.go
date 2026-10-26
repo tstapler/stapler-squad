@@ -530,9 +530,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Registered StreamingWSBridge", "watchSessions", watchSessionsPath, "watchReviewQueue", watchReviewQueuePath, "watchWorkflows", watchWorkflowsPath)
 
 	// Unary multiplex over one socket (Epic 5). Calls re-enter the listener's
-	// dispatcher (published by Start/StartRemote); the remote listener has no origin
-	// policy yet (Task 5.2.1g), so its upgrades are refused.
-	srv.mux.Handle(services.UnaryWsPath, services.NewUnaryWsBridge(srv.unaryDispatcher))
+	// dispatcher (published by Start/StartRemote); the remote listener upgrades only
+	// with an authenticated session and an allow-listed Origin.
+	srv.mux.Handle(services.UnaryWsPath, services.NewUnaryWsBridge(srv.unaryDispatcher,
+		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy())))
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
