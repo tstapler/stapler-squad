@@ -79,3 +79,13 @@
 {"workflow":"mcp-integration.yml","timestamp":"2026-10-19T06:35:06Z","rolling_avg_minutes":2.2}
 {"workflow":"release-please.yml","timestamp":"2026-10-19T06:35:06Z","rolling_avg_minutes":0.3}
 {"workflow":"ux-analysis.yml","timestamp":"2026-10-19T06:35:06Z","rolling_avg_minutes":10}
+{"workflow":"backlog-scaffolding-guard.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":1.3}
+{"workflow":"benchmark.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":14}
+{"workflow":"build.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":5.5}
+{"workflow":"e2e-video.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":8.6}
+{"workflow":"generated-proto-guard.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":1.2}
+{"workflow":"goreleaser-check.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":4.3}
+{"workflow":"lint.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":14.4}
+{"workflow":"mcp-integration.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":6.8}
+{"workflow":"release-please.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":1.5}
+{"workflow":"ux-analysis.yml","timestamp":"2026-10-26T06:40:02Z","rolling_avg_minutes":10.7}

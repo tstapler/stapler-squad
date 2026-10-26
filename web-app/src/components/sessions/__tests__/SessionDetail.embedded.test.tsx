@@ -55,7 +55,7 @@ jest.mock("../BrowserTab", () => ({
   BrowserTab: ({ sessionId }: { sessionId: string }) => (
     <div data-testid={`browser-tab-stub-${sessionId}`} />
   ),
-  VNCStatus: { UNSPECIFIED: 0, STARTING: 1, READY: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
+  CDPStatus: { UNSPECIFIED: 0, WAITING: 1, STREAMING: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
 }));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
