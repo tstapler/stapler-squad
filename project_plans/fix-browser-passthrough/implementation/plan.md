@@ -202,3 +202,34 @@ browser-tab visibility using `vncState`): update to use `session.cdpState`.
 - [ ] Manual: Linux with Chrome — Browser tab enables when cdpState goes STREAMING (not waiting for xdotool)
 - [ ] Manual: host without Chrome — Browser tab shows correct tooltip text "Chrome or Chromium"
 - [ ] Manual: mobile (touch) — tapping disabled Browser tab shows correct toast copy
+
+---
+
+## Revision 2 (2026-10-25): live finding — scope conflict AC5/AC6 vs AC9
+
+Tasks 1–3 above are implemented (commit `034e28ca3`). Live verification (see `research/pitfalls.md`, "Live finding")
+showed the frontend fix makes the tab enable and `CDPViewer` mount, but **no frames reach the canvas** because
+`session/cdp/manager.go` `runScreencast` sends `Page.enable`/`Page.startScreencast` on Chrome's browser-level
+WebSocket, which rejects them (`'Page.enable' wasn't found`), while still publishing `CDP_STATUS_STREAMING`.
+
+### Decision required (owner): AC9 vs AC5/AC6 cannot both hold
+
+| Option | Scope | AC5/AC6 | AC9 |
+|---|---|---|---|
+| A. Ship frontend-only now; file backend follow-up | 4 FE files (done) | stay FAIL (unverified/unmet) | holds |
+| B. Also fix backend in this PR | + `session/cdp/manager.go` (+ test) | can pass after live proof | **violated; AC9 must be waived** |
+
+Recommendation: A for this PR (AC9 is explicit), and a follow-up backlog item for B.
+
+### Task 4 (follow-up, NOT in this PR unless owner waives AC9): attach to a page target
+1. After `Chrome detected`, send `Target.getTargets` (or `GET /json/list`), pick the first `type=="page"` target.
+2. Either dial that target's `webSocketDebuggerUrl` (Page.* works there) or `Target.attachToTarget{flatten:true}` and
+   include `sessionId` on every command and filter events by it.
+3. Set `CDPStatusStreaming` only after `Page.startScreencast` returns a non-error result (today it is set unconditionally).
+4. Re-attach on target close / navigation to a new page target.
+5. Test: fake CDP server asserting Page.* arrives on the page endpoint and state stays `Waiting` on an error reply;
+   live proof: `bun run cdpprobe.ts`-style probe plus a non-blank canvas in the Browser tab.
+
+### Added risks
+- R-A: `STREAMING` is a false positive today; the frontend now trusts it (isReady) — spinner-less blank viewer until Task 4.
+- R-B: `PATH` wrapper (`cdp-bins`) can be defeated by shell rc files reordering `PATH`; Chrome then runs without the debug port and state sits at `NO_BROWSER`.
