@@ -61,6 +61,16 @@ installConsoleErrorSilencer();
 describe("SessionDetailView file-selection hash", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
+  it("does not seed FilesTab from #file= unless it is the focused pane opened on Files", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
+    const props = { session, allSessions: [], actions: {} as ReturnType<typeof useSessionActions>, onClose: jest.fn() };
+    const { unmount } = render(<SessionDetailView {...props} />);
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
+    unmount();
+    render(<SessionDetailView {...props} initialTab="files" isActive={false} />);
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
+  });
+
   it("seeds FilesTab from #file= and never writes the hash itself", () => {
     window.history.replaceState(null, "", "/#file=a%2Fb.go");
     const replaceState = jest.spyOn(window.history, "replaceState");
@@ -70,6 +80,7 @@ describe("SessionDetailView file-selection hash", () => {
         allSessions={[]}
         actions={{} as ReturnType<typeof useSessionActions>}
         onClose={jest.fn()}
+        initialTab="files"
       />,
     );
     expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");

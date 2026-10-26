@@ -491,7 +491,8 @@ export function SessionDetailView({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   // The path is remembered with its session so a switch to another session never inherits it.
   const [filesSelection, setFilesSelection] = useState<{ sessionId: string; path: string | null }>(() => {
-    const hash = typeof window === "undefined" ? "" : window.location.hash;
+    // Only the focused pane opened on Files may adopt the global hash; others would fight over it.
+    const hash = typeof window === "undefined" || !isActive || initialTab !== "files" ? "" : window.location.hash;
     const path = hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
     return { sessionId: session.id, path };
   });
@@ -1216,6 +1217,7 @@ export function SessionDetailView({
             baseUrl={getApiBaseUrl()}
             initialSelectedPath={filesSelectedPath}
             onSelectedPathChange={setFilesSelectedPath}
+            urlActive={isActive && activeTab === "files"}
             sessionRunning={session.status === SessionStatus.RUNNING}
             sessionName={session.title}
             onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
