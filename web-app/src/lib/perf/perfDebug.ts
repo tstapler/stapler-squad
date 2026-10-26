@@ -14,6 +14,8 @@ export interface SsqPerf {
   /** Filled by the WS transport (Task 5.4.1b); always empty/0 before it exists. */
   wsQueueMs: number[];
   wsQueuedOver1s: number;
+  /** Max messages ever queued in one `fromWebSocket` streaming reader (instrumentation only; no bound). */
+  wsReaderQueueHighWatermark: number;
 }
 
 declare global {
@@ -51,12 +53,19 @@ export function installSsqPerf(): SsqPerf | undefined {
     status0: 0,
     wsQueueMs: [],
     wsQueuedOver1s: 0,
+    wsReaderQueueHighWatermark: 0,
   };
   window.__ssqPerf = perf;
   observeQueuedRequests(() => {
     perf.queuedOver1s++;
   });
   return perf;
+}
+
+/** Raises `__ssqPerf.wsReaderQueueHighWatermark` to `depth` when opted in; no-op otherwise. */
+export function recordReaderQueueDepth(depth: number): void {
+  const perf = typeof window === "undefined" ? undefined : window.__ssqPerf;
+  if (perf && depth > perf.wsReaderQueueHighWatermark) perf.wsReaderQueueHighWatermark = depth;
 }
 
 /** Logs the call stack for `label` when `__ssqPerf.trace` is on; no-op otherwise. */
