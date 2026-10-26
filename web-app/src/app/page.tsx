@@ -17,14 +17,14 @@ import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
-import type { PaneAction } from "@/lib/pane/paneTypes";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 import type { WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
-import { WindowPanel } from "@/components/window/WindowPanel";
+import { WindowKeepAliveHost } from "@/components/pane/WindowKeepAliveHost";
+import { useWindowsController } from "@/lib/window/useWindowsController";
 import {
   focusKindForTrigger,
   focusWindowContent,
@@ -81,9 +81,12 @@ function HomeContent() {
   // Using a counter-based key so that clicking the same session again still triggers.
   const [externalAssignCounter, setExternalAssignCounter] = useState(0);
   const [externalAssignSession, setExternalAssignSession] = useState<{ sessionId: string; tab: SessionDetailTab; forceNewPane?: boolean } | null>(null);
+  const externalSessionAssign = useMemo(
+    () => (externalAssignSession ? { ...externalAssignSession, version: externalAssignCounter } : null),
+    [externalAssignSession, externalAssignCounter],
+  );
 
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
-  const sessionDetailRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
@@ -117,7 +120,7 @@ function HomeContent() {
       sessionTriggerRef.current.focus();
       sessionTriggerRef.current = null;
     }
-  }, [selectedSession]);
+  }, [selectedSession, sessionDetailRef]);
 
   // Trap focus inside delete confirmation dialog; return focus on close
   useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
@@ -193,10 +196,10 @@ function HomeContent() {
     });
     switchWindowUnrecorded(id, trigger);
   };
-  const paneDispatch = useCallback(
-    (action: PaneAction) => dispatchPane(currentWindow.id, action),
-    [dispatchPane, currentWindow.id]
-  );
+  const { keepAlive, paneDispatchFor, detailRefFor, activeDetailRef: sessionDetailRef } = useWindowsController({
+    currentWindowId: currentWindow.id,
+    dispatchPane,
+  });
   // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
   // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
   // inline editor double-click/F2 already open, not a separate native prompt.
@@ -637,44 +640,49 @@ function HomeContent() {
               onClose={() => setWindowOverviewOpen(false)}
             />
           )}
-          <WindowPanel ref={windowPanelRef} windowId={currentWindow.id}>
-            {lookup ? (
-              <SessionUnavailableCard
-                variant={lookup.status === "failed" ? "failed" : "unavailable"}
-                sessionLabel={lookup.sessionId.slice(0, 8)}
-                notification={lookup.status === "not_found" ? lookupNotification : null}
-                onOpenNotifications={() => router.push("/notifications")}
-                onGoToSessions={() => {
-                  setLookup(null);
-                  updateUrl(null, null);
-                }}
-                onRetry={() => {
-                  const link = parseSessionDeepLink(searchParams);
-                  setLookup(null);
-                  fetchHiddenSessionFallback(link, true);
-                }}
-              />
-            ) : (
-              <div
-                ref={sessionDetailRef}
-                className={styles.cockpitContainer}
-                tabIndex={-1}
-                role="region"
-                aria-label="Session cockpit"
-                data-context="cockpit"
-              >
-                <PaneTilingContainer
-                  sessions={paneSessions}
-                  paneState={currentWindow.paneState}
-                  dispatch={paneDispatch}
-                  externalSessionAssign={externalAssignSession ? {
-                    ...externalAssignSession,
-                    version: externalAssignCounter,
-                  } : null}
+          <WindowKeepAliveHost
+            windows={windows}
+            currentWindowId={currentWindow.id}
+            keepAlive={keepAlive}
+            focusMemory={windowFocusMemory}
+            panelRef={windowPanelRef}
+            externalAssign={externalSessionAssign}
+            renderWindow={(w, { active, externalAssign }) =>
+              lookup && active ? (
+                <SessionUnavailableCard
+                  variant={lookup.status === "failed" ? "failed" : "unavailable"}
+                  sessionLabel={lookup.sessionId.slice(0, 8)}
+                  notification={lookup.status === "not_found" ? lookupNotification : null}
+                  onOpenNotifications={() => router.push("/notifications")}
+                  onGoToSessions={() => {
+                    setLookup(null);
+                    updateUrl(null, null);
+                  }}
+                  onRetry={() => {
+                    const link = parseSessionDeepLink(searchParams);
+                    setLookup(null);
+                    fetchHiddenSessionFallback(link, true);
+                  }}
                 />
-              </div>
-            )}
-          </WindowPanel>
+              ) : (
+                <div
+                  ref={detailRefFor(w.id)}
+                  className={styles.cockpitContainer}
+                  tabIndex={-1}
+                  role="region"
+                  aria-label="Session cockpit"
+                  data-context="cockpit"
+                >
+                  <PaneTilingContainer
+                    sessions={paneSessions}
+                    paneState={w.paneState}
+                    dispatch={paneDispatchFor(w.id)}
+                    externalSessionAssign={externalAssign}
+                  />
+                </div>
+              )
+            }
+          />
         </SessionViewModeProvider>
       </CockpitActionsProvider>
 

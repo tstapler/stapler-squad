@@ -194,7 +194,7 @@ describe("HomeContent multi-window wiring", () => {
     expect(useWindowShortcuts).toHaveBeenCalledWith(
       windows,
       "win-1",
-      mockSwitchToWindow,
+      expect.any(Function), // the page's focus-recording wrapper around mockSwitchToWindow
       expect.any(Function),
       expect.any(Function)
     );
