@@ -1,6 +1,11 @@
 import { getConnectTransport, getWatchTransport, _resetTransportForTesting } from "../transport";
 
 const mockAuthInterceptor = jest.fn();
+const mockTimingInterceptor = jest.fn();
+
+jest.mock("@/lib/telemetry/rpcTiming", () => ({
+  createSharedRpcTimingInterceptor: jest.fn(() => mockTimingInterceptor),
+}));
 
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn((opts: { baseUrl: string }) => ({ baseUrl: opts.baseUrl, _tag: "transport" })),
@@ -32,7 +37,7 @@ describe("getConnectTransport", () => {
     expect(createConnectTransport).toHaveBeenCalledWith({
       baseUrl: "http://localhost:8543",
       defaultTimeoutMs: 30_000,
-      interceptors: [mockAuthInterceptor],
+      interceptors: [mockAuthInterceptor, mockTimingInterceptor],
       fetch: expect.any(Function),
     });
     expect(t).toBeDefined();
@@ -51,9 +56,34 @@ describe("getConnectTransport", () => {
     expect(createConnectTransport).toHaveBeenCalledWith({
       baseUrl: "https://custom.host:9000",
       defaultTimeoutMs: 30_000,
-      interceptors: [mockAuthInterceptor],
+      interceptors: [mockAuthInterceptor, mockTimingInterceptor],
       fetch: expect.any(Function),
     });
+  });
+});
+
+describe("getConnectTransport options", () => {
+  it("getConnectTransport_should_ReturnMemoizedInstance_When_CalledWithSameBaseUrlAndTimeout", () => {
+    const a = getConnectTransport({ timeoutMs: 5_000 });
+    const b = getConnectTransport({ timeoutMs: 5_000 });
+    expect(a).toBe(b);
+    expect(createConnectTransport).toHaveBeenCalledTimes(1);
+    expect(createConnectTransport).toHaveBeenCalledWith(expect.objectContaining({ defaultTimeoutMs: 5_000 }));
+  });
+
+  it("returns distinct transports for different timeouts or base URLs", () => {
+    const base = getConnectTransport();
+    const slow = getConnectTransport({ timeoutMs: 120_000 });
+    const other = getConnectTransport({ baseUrl: "http://other:1" });
+    expect(new Set([base, slow, other]).size).toBe(3);
+    expect(createConnectTransport).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: "http://other:1" }));
+  });
+
+  it("carries the shared rpc-timing interceptor on every variant", () => {
+    getConnectTransport({ timeoutMs: 1_000 });
+    expect(createConnectTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ interceptors: [mockAuthInterceptor, mockTimingInterceptor] }),
+    );
   });
 });
 

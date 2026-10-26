@@ -126,3 +126,16 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
     }
   };
 }
+
+type RpcTimingSink = Pick<AnalyticsProvider, "track">;
+let rpcTimingSink: RpcTimingSink | undefined;
+
+/** Registered once by the analytics provider; shared-transport rpc events are dropped until then. */
+export function setRpcTimingSink(sink: RpcTimingSink | undefined): void {
+  rpcTimingSink = sink;
+}
+
+/** rpc-timing interceptor for the shared transport; reads the sink at call time since the transport outlives React context. */
+export function createSharedRpcTimingInterceptor(): Interceptor {
+  return createRpcTimingInterceptor({ track: (event) => rpcTimingSink?.track(event) });
+}

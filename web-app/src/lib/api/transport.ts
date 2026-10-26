@@ -2,9 +2,10 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import type { Transport } from "@connectrpc/connect";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { withInFlightGauge } from "@/lib/perf/perfDebug";
+import { createSharedRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 
-let _transport: Transport | null = null;
+const _transports = new Map<string, Transport>();
 let _watchTransport: Transport | null = null;
 let _keepaliveTransport: Transport | null = null;
 
@@ -19,7 +20,8 @@ let _keepaliveTransport: Transport | null = null;
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
 /**
- * Returns the shared ConnectRPC HTTP transport singleton.
+ * Returns the shared ConnectRPC HTTP transport, memoized per {baseUrl, timeoutMs}
+ * (default: one singleton).
  *
  * Every non-streaming hook should call this instead of constructing its own
  * transport. This ensures a single transport instance for all unary/streaming
@@ -30,16 +32,28 @@ const DEFAULT_RPC_TIMEOUT_MS = 30_000;
  * NOT use this singleton — it has its own reconnect logic. Use
  * getWatchTransport() for that.
  */
-export function getConnectTransport(): Transport {
-  if (!_transport) {
-    _transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      defaultTimeoutMs: DEFAULT_RPC_TIMEOUT_MS,
-      interceptors: [createAuthInterceptor()],
+export interface ConnectTransportOptions {
+  /** Overrides getApiBaseUrl(); rare (tests, cross-origin tooling). */
+  baseUrl?: string;
+  /** Overrides the default Connect-Timeout-Ms for long-running unary RPCs. */
+  timeoutMs?: number;
+}
+
+export function getConnectTransport(opts: ConnectTransportOptions = {}): Transport {
+  const baseUrl = opts.baseUrl ?? getApiBaseUrl();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+  const key = `${baseUrl}|${timeoutMs}`;
+  let transport = _transports.get(key);
+  if (!transport) {
+    transport = createConnectTransport({
+      baseUrl,
+      defaultTimeoutMs: timeoutMs,
+      interceptors: [createAuthInterceptor(), createSharedRpcTimingInterceptor()],
       fetch: withInFlightGauge(),
     });
+    _transports.set(key, transport);
   }
-  return _transport;
+  return transport;
 }
 
 /**
@@ -81,7 +95,7 @@ export function getWatchTransport(): Transport {
 
 /** Reset the transport singletons (for testing only). */
 export function _resetTransportForTesting(): void {
-  _transport = null;
+  _transports.clear();
   _watchTransport = null;
   _keepaliveTransport = null;
 }
