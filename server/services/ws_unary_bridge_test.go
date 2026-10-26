@@ -529,4 +529,14 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 	_, _, err := websocket.DefaultDialer.Dial(u, http.Header{"Origin": {"https://evil.example"}})
 	require.Error(t, err)
 	assert.EqualValues(t, 1, m.UpgradeDenied(ListenerLocal, "origin"), "ws_unary_upgrade_denied_total{listener,reason}")
+
+	// The same tallies, as the /actuator/ws-unary endpoint serves them.
+	rep := h.bridge.Report()
+	assert.Equal(t, []UnaryWsCallCount{
+		{Method: listFilesMethod, Code: "ok", Count: 2},
+		{Method: wsUnaryMethodOther, Code: "permission_denied", Count: 1},
+	}, rep.CallsTotal)
+	assert.Equal(t, []UnaryWsDeniedCount{{Method: wsUnaryMethodOther, Count: 1}}, rep.DeniedTotal)
+	assert.Equal(t, []UnaryWsUpgradeDeniedCount{{Listener: ListenerLocal, Reason: "origin", Count: 1}}, rep.UpgradeDeniedTotal)
+	assert.Zero(t, rep.Inflight)
 }

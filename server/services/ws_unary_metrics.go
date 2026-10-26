@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -123,3 +124,76 @@ func (m *unaryMetrics) UpgradeDenied(listener, reason string) int64 {
 
 // Inflight returns the ws_unary_inflight gauge value.
 func (m *unaryMetrics) Inflight() int64 { return m.inflight.Load() }
+
+// UnaryWsCallCount is one ws_unary_calls_total series.
+type UnaryWsCallCount struct {
+	Method string `json:"method"`
+	Code   string `json:"code"`
+	Count  int64  `json:"count"`
+}
+
+// UnaryWsDeniedCount is one ws_unary_denied_total series.
+type UnaryWsDeniedCount struct {
+	Method string `json:"method"`
+	Count  int64  `json:"count"`
+}
+
+// UnaryWsUpgradeDeniedCount is one ws_unary_upgrade_denied_total series.
+type UnaryWsUpgradeDeniedCount struct {
+	Listener string `json:"listener"`
+	Reason   string `json:"reason"`
+	Count    int64  `json:"count"`
+}
+
+// UnaryWsReport is the /actuator/ws-unary payload. Method labels are the
+// allowlisted names plus "other", the same bound the OTel counters use.
+type UnaryWsReport struct {
+	CallsTotal         []UnaryWsCallCount          `json:"ws_unary_calls_total"`
+	DeniedTotal        []UnaryWsDeniedCount        `json:"ws_unary_denied_total"`
+	UpgradeDeniedTotal []UnaryWsUpgradeDeniedCount `json:"ws_unary_upgrade_denied_total"`
+	Inflight           int64                       `json:"ws_unary_inflight"`
+}
+
+// Report returns a sorted, JSON-ready copy of the tallies. A nil receiver
+// (bridge not built yet) yields an empty report.
+func (m *unaryMetrics) Report() UnaryWsReport {
+	r := UnaryWsReport{
+		CallsTotal:         []UnaryWsCallCount{},
+		DeniedTotal:        []UnaryWsDeniedCount{},
+		UpgradeDeniedTotal: []UnaryWsUpgradeDeniedCount{},
+	}
+	if m == nil {
+		return r
+	}
+	m.mu.Lock()
+	for k, n := range m.calls {
+		r.CallsTotal = append(r.CallsTotal, UnaryWsCallCount{Method: k.method, Code: k.code, Count: n})
+	}
+	for k, n := range m.denied {
+		r.DeniedTotal = append(r.DeniedTotal, UnaryWsDeniedCount{Method: k, Count: n})
+	}
+	for k, n := range m.upgradeDenied {
+		r.UpgradeDeniedTotal = append(r.UpgradeDeniedTotal, UnaryWsUpgradeDeniedCount{Listener: k.listener, Reason: k.reason, Count: n})
+	}
+	m.mu.Unlock()
+	r.Inflight = m.inflight.Load()
+	sort.Slice(r.CallsTotal, func(i, j int) bool {
+		a, b := r.CallsTotal[i], r.CallsTotal[j]
+		return a.Method+"\x00"+a.Code < b.Method+"\x00"+b.Code
+	})
+	sort.Slice(r.DeniedTotal, func(i, j int) bool { return r.DeniedTotal[i].Method < r.DeniedTotal[j].Method })
+	sort.Slice(r.UpgradeDeniedTotal, func(i, j int) bool {
+		a, b := r.UpgradeDeniedTotal[i], r.UpgradeDeniedTotal[j]
+		return a.Listener+"\x00"+a.Reason < b.Listener+"\x00"+b.Reason
+	})
+	return r
+}
+
+// Report exposes the bridge's counters for the actuator endpoint; a nil bridge
+// reports empty.
+func (b *UnaryWsBridge) Report() UnaryWsReport {
+	if b == nil {
+		return (*unaryMetrics)(nil).Report()
+	}
+	return b.metrics.Report()
+}
