@@ -36,6 +36,7 @@ type DaemonVersionInfo struct {
 	Running          bool
 	PID              int
 	RunningVersion   string
+	ProtocolVersion  uint32 // 0 when the daemon predates GetServerInfo or could not be asked
 	InstalledVersion string
 	Direction        VersionDirection
 }
@@ -43,6 +44,9 @@ type DaemonVersionInfo struct {
 // ErrLiveSessionsWouldBeInterrupted is returned by ReplaceDaemon when sessions are
 // live and the caller did not opt in: a restarted daemon respawns each pane's process.
 var ErrLiveSessionsWouldBeInterrupted = errors.New("tymux: replacing the daemon would interrupt live sessions")
+
+// clientProtocolVersion is the tymux wire protocol revision this client speaks (ADR-0003 upstream).
+const clientProtocolVersion = 1
 
 const (
 	versionProbeTimeout    = 5 * time.Second
@@ -56,6 +60,7 @@ var (
 	listenerPIDFn   = listenerPID
 	processExeFn    = processExe
 	liveSessionsFn  = countLiveSessions
+	serverInfoFn    = fetchServerInfo
 	signalProcessFn = func(pid int, sig os.Signal) error {
 		proc, err := os.FindProcess(pid)
 		if err != nil {
@@ -156,6 +161,20 @@ func DetectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionIn
 	} else {
 		log.Debug("[tymux] could not read installed tymuxd version", "err", err)
 	}
+	if si, err := serverInfoFn(ctx, cfg); err == nil {
+		info.Running, info.PID = true, int(si.GetPid())
+		info.RunningVersion, info.ProtocolVersion = si.GetVersion(), si.GetProtocolVersion()
+		info.Direction = CompareVersions(info.RunningVersion, info.InstalledVersion)
+		return info
+	} else if connect.CodeOf(err) != connect.CodeUnimplemented {
+		log.Debug("[tymux] GetServerInfo failed, falling back to probing the process", "err", err)
+	}
+	return detectRunningByProcess(ctx, cfg, info)
+}
+
+// detectRunningByProcess finds a daemon that cannot answer GetServerInfo (pre-1.4, or not
+// reachable over gRPC) by asking the OS which process owns the port, then running it --version.
+func detectRunningByProcess(ctx context.Context, cfg DaemonConfig, info DaemonVersionInfo) DaemonVersionInfo {
 	pid, err := listenerPIDFn(ctx, cfg.Addr)
 	if err != nil {
 		return info
@@ -170,6 +189,16 @@ func DetectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionIn
 	}
 	info.Direction = CompareVersions(info.RunningVersion, info.InstalledVersion)
 	return info
+}
+
+func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
+	defer cancel()
+	resp, err := NewRealTransport(cfg.Addr).GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg, nil
 }
 
 func countLiveSessions(ctx context.Context, cfg DaemonConfig) (int, error) {

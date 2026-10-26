@@ -22,6 +22,16 @@ type ClaimRecorder interface {
 	RecordClaim(ctx context.Context, record ClaimRecord) error
 }
 
+// localHostIDProvider is optionally implemented by a ClaimRecorder that knows
+// the local host's identity; Storage.CreateBacklogItem uses it to stamp
+// BacklogItemData.ClaimingHostID.
+type localHostIDProvider interface {
+	LocalHostID() string
+}
+
+// LocalHostID implements localHostIDProvider.
+func (r *ClaimIndexRecorder) LocalHostID() string { return r.identity.ID.String() }
+
 // ForeignClaimLookup is the read-only, local-only port SyncOne consults before
 // creating an item: it reports a claim held by a host other than this one, and
 // never touches the network. Injected via Storage.SetForeignClaimLookup.

@@ -37,6 +37,8 @@ type fakeTransport struct {
 	capturePaneFn   func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
 	// capabilities are what GetServerInfo advertises; nil makes it fail like a pre-1.5 daemon.
 	capabilities []string
+	// serverInfoCalls counts GetServerInfo calls.
+	serverInfoCalls int32
 
 	// attachFn lets a test substitute a custom attachStream (e.g. one that
 	// plays back a scripted sequence of AttachEvents); defaults to a
@@ -86,6 +88,7 @@ func (f *fakeTransport) CapturePane(ctx context.Context, req *connect.Request[v1
 }
 
 func (f *fakeTransport) GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+	atomic.AddInt32(&f.serverInfoCalls, 1)
 	if f.capabilities == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fakeTransport: no GetServerInfo"))
 	}
@@ -177,6 +180,8 @@ func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
 		wantCommand  string
 		wantArgs     []string
 		wantStderr   string
+		wantStdin    string
+		wantInfoRPCs int32
 		wantEnv      map[string]string
 	}{
 		{name: "unset", command: nil},
@@ -202,17 +207,35 @@ func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
 			name:         "stderr uses the daemon redirect when advertised",
 			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("pi")}, StderrAppend: "/tmp/pi err.log"},
 			capabilities: []string{capStderrRedirect},
-			wantCommand:  "pi", wantStderr: "/tmp/pi err.log",
+			wantCommand:  "pi", wantStderr: "/tmp/pi err.log", wantInfoRPCs: 1,
 		},
 		{
 			name:        "stderr falls back to a shell on an old daemon",
 			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("pi")}, StderrAppend: "/tmp/pi err.log"},
-			wantCommand: shellPath, wantArgs: []string{shellFlagC, "pi 2>>'/tmp/pi err.log'"},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "pi 2>>'/tmp/pi err.log'"}, wantInfoRPCs: 1,
 		},
 		{
-			name:        "stdin file needs a shell",
+			name:         "stdin uses the daemon redirect when advertised",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: "/tmp/in.txt"},
+			capabilities: []string{capStdinFile},
+			wantCommand:  "claude", wantArgs: []string{"-p"}, wantStdin: "/tmp/in.txt", wantInfoRPCs: 1,
+		},
+		{
+			name:        "stdin falls back to a shell on an old daemon",
 			command:     launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: "/tmp/in.txt"},
-			wantCommand: shellPath, wantArgs: []string{shellFlagC, "claude -p <'/tmp/in.txt'"},
+			wantCommand: shellPath, wantArgs: []string{shellFlagC, "claude -p <'/tmp/in.txt'"}, wantInfoRPCs: 1,
+		},
+		{
+			name:         "relative stdin path never reaches the daemon",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude")}, StdinFile: "in.txt"},
+			capabilities: []string{capStdinFile},
+			wantCommand:  shellPath, wantArgs: []string{shellFlagC, "claude <'in.txt'"},
+		},
+		{
+			name:         "stdin and stderr share one capability lookup",
+			command:      launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude")}, StdinFile: "/tmp/in.txt", StderrAppend: "/tmp/err.log"},
+			capabilities: []string{capStdinFile, capStderrRedirect},
+			wantCommand:  "claude", wantStdin: "/tmp/in.txt", wantStderr: "/tmp/err.log", wantInfoRPCs: 1,
 		},
 		{
 			name:        "raw shell word needs a shell",
@@ -235,6 +258,8 @@ func TestTymuxGRPCSession_Start_SendsConfiguredCommand(t *testing.T) {
 			assert.Equal(t, tc.wantCommand, gotReq.GetCommand())
 			assert.ElementsMatch(t, tc.wantArgs, gotReq.GetArgs()) // nil and empty are the same on the wire
 			assert.Equal(t, tc.wantStderr, gotReq.GetStderrPath())
+			assert.Equal(t, tc.wantStdin, gotReq.GetStdinPath())
+			assert.Equal(t, tc.wantInfoRPCs, atomic.LoadInt32(&transport.serverInfoCalls))
 			for k, v := range tc.wantEnv {
 				assert.Equal(t, v, gotReq.GetEnv()[k])
 			}
@@ -254,6 +279,54 @@ func TestTymuxGRPCSession_Start_RejectsOversizedArgument(t *testing.T) {
 
 	require.ErrorIs(t, err, launchcmd.ErrArgTooLarge)
 	assert.Nil(t, gotReq, "no session may be created with a truncated prompt")
+}
+
+// A prompt at or above MaxArgBytes reaches tymuxd without ever being an argv
+// entry: one-shot via stdin_path, interactive via a short reference instruction.
+func TestTymuxGRPCSession_Start_LargePromptRoutes(t *testing.T) {
+	dir := t.TempDir()
+	stdinFile := filepath.Join(dir, "prompt-stdin.txt")
+	require.NoError(t, os.WriteFile(stdinFile, bytes.Repeat([]byte("p"), 2*1024*1024), 0o600))
+	instruction := "Your complete task instructions are in the file /cache/prompt-ref.md. Read it."
+
+	tests := []struct {
+		name      string
+		command   launchcmd.ExecCommand
+		wantArgs  []string
+		wantStdin string
+	}{
+		{
+			name:      "one-shot prompt goes through stdin_path",
+			command:   launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("claude"), launchcmd.MustFlag("-p")}, StdinFile: stdinFile},
+			wantArgs:  []string{"-p"},
+			wantStdin: stdinFile,
+		},
+		{
+			name: "interactive prompt is a short reference instruction",
+			command: launchcmd.ExecCommand{Argv: []launchcmd.Arg{
+				launchcmd.Word("claude"), launchcmd.MustFlag("--add-dir"), launchcmd.Literal("/cache"), launchcmd.MustFlag("--"), launchcmd.Literal(instruction),
+			}},
+			wantArgs: []string{"--add-dir", "/cache", "--", instruction},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotReq *v1.CreateSessionRequest
+			transport := captureCreateSessionRequest(dir, &gotReq)
+			transport.capabilities = []string{capStdinFile}
+			sess := NewTymuxGRPCSession(transport)
+			sess.SetCommand(tc.command)
+
+			require.NoError(t, sess.Start(dir))
+			require.NotNil(t, gotReq)
+			assert.Equal(t, "claude", gotReq.GetCommand())
+			assert.Equal(t, tc.wantArgs, gotReq.GetArgs())
+			assert.Equal(t, tc.wantStdin, gotReq.GetStdinPath())
+			for _, a := range gotReq.GetArgs() {
+				assert.Less(t, len(a), launchcmd.MaxArgBytes)
+			}
+		})
+	}
 }
 
 // captureCreateSessionRequest returns a *fakeTransport whose CreateSession

@@ -32,6 +32,7 @@ import (
 // overridable via TYMUXD_ADDR — see transport.go's tymuxdAddr()). Run
 // with: go test -tags integration ./session/tymux/...
 func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
+	t.Setenv(allowSharedDaemonInTestEnv, "1")
 	dir := t.TempDir()
 	sess := NewTymuxGRPCSession(NewRealTransport(""))
 

@@ -49,6 +49,10 @@ type tymuxGRPCSession struct {
 	// before Start(). Nil means tymuxd defaults to $SHELL.
 	command launchcmd.LaunchCommand
 
+	// extraEnv is launch env added via AppendEnv; merged into the create
+	// request at Start() (see launchEnv for precedence).
+	extraEnv map[string]string
+
 	// sessionID/paneID are tymux's own UUIDs for the session and its single
 	// (v1.0, non-split) pane, cached from CreateSession/ReviveSession's
 	// response — GetSessionIdentifier() needs no RPC (architecture.md §1).
@@ -321,7 +325,7 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	command := s.command
 	s.mu.RUnlock()
 	ctx := context.Background()
-	req := &v1.CreateSessionRequest{Name: dir, Cwd: dir, Env: paneColorEnv()}
+	req := &v1.CreateSessionRequest{Name: dir, Cwd: dir, Env: s.launchEnv()}
 	if err := s.applyLaunch(ctx, req, command); err != nil {
 		return err
 	}
@@ -348,6 +352,36 @@ func paneColorEnv() map[string]string {
 		env["COLORTERM"] = "truecolor"
 	}
 	return env
+}
+
+// launchEnv builds the create request's base env. Precedence, lowest to
+// highest: paneColorEnv, AppendEnv entries, then the command's own env
+// (applied afterwards by applyLaunch).
+func (s *tymuxGRPCSession) launchEnv() map[string]string {
+	env := paneColorEnv()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for k, v := range s.extraEnv {
+		env[k] = v
+	}
+	return env
+}
+
+// AppendEnv records KEY=VALUE launch env for the next Start(). tymuxd stores
+// session env in plaintext records, so callers must not pass secrets.
+func (s *tymuxGRPCSession) AppendEnv(env ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if s.extraEnv == nil {
+			s.extraEnv = make(map[string]string)
+		}
+		s.extraEnv[k] = v
+	}
 }
 
 // SetCommand records the program Start() will ask tymuxd to spawn. Call

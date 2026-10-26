@@ -182,10 +182,12 @@ different `TYMUX_VERSION` does not change the daemon you are talking to. Setting
 "tymuxd version" (and `GetTymuxRolloutStatus.daemon`) shows both versions and whether replacing
 would be an upgrade or a downgrade; `ReplaceTymuxd` does it.
 
-- **Detection** (`session/tymux/version.go`): finds the listener on the configured address
-  (`lsof`, falling back to `ss`), resolves its executable, and runs `--version` on it. The pid file
-  is deliberately not used: it records only the last daemon this process spawned and goes stale.
-  Once tymux ships `GetServerInfo` (tstapler/tymux#56) this should ask the daemon directly.
+- **Detection** (`session/tymux/version.go`): asks the daemon with the `GetServerInfo` RPC
+  (tymuxd 1.4+), which also reports its protocol revision. A daemon that answers `UNIMPLEMENTED`
+  (older than 1.4) or is unreachable over gRPC falls back to finding the listener on the
+  configured address (`lsof`, then `ss`), resolving its executable, and running `--version`.
+  The pid file is deliberately not used: it records only the last daemon this process spawned
+  and goes stale.
 - **Replacement**: SIGTERM (tymuxd flushes its session records), wait for the port to free, SIGKILL
   as a last resort, then `EnsureDaemonRunning` spawns the configured binary. The direction is
   whatever the configured binary is relative to the running one, so a downgrade is: pin an older

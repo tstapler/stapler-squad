@@ -315,6 +315,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_PiSupport_ChangesPiExtensionHook",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:github_issue_progress_comments": {
+		testName:   "TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:programs:cli-flag-probe": {
 		testName:   "TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",

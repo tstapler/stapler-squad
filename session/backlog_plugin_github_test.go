@@ -389,6 +389,49 @@ func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
 	require.Equal(t, comment, gotBody["body"])
 }
 
+func TestGitHubIssuesPlugin_PostProgressComment(t *testing.T) {
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+
+	t.Run("success returns read-back updated_at", func(t *testing.T) {
+		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.Write([]byte(`{"id":1}`))
+				return
+			}
+			w.Write([]byte(`{"updated_at":"2024-06-01T12:00:00Z"}`))
+		})
+		got, err := NewGitHubIssuesPlugin().PostProgressComment(context.Background(), cfg, "42", "hi")
+		require.NoError(t, err)
+		require.True(t, got.Equal(time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)))
+	})
+
+	t.Run("read-back HTTP error yields zero time and nil error", func(t *testing.T) {
+		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.Write([]byte(`{"id":1}`))
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+		got, err := NewGitHubIssuesPlugin().PostProgressComment(context.Background(), cfg, "42", "hi")
+		require.NoError(t, err)
+		require.True(t, got.IsZero())
+	})
+
+	t.Run("post failure returns error and never reads back", func(t *testing.T) {
+		gets := 0
+		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				gets++
+			}
+			w.WriteHeader(http.StatusForbidden)
+		})
+		_, err := NewGitHubIssuesPlugin().PostProgressComment(context.Background(), cfg, "42", "hi")
+		require.Error(t, err)
+		require.Zero(t, gets)
+	})
+}
+
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "github_prs", NewGitHubPRsPlugin().PluginID())

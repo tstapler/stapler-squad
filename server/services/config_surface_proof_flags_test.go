@@ -55,6 +55,14 @@ func TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate(t *testing.T) {
 	}, false, true)
 }
 
+func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T) {
+	set := bkfFlagWriter(t)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		set(githubIssueProgressCommentsFlagName, setting.(bool))
+		return GitHubIssueProgressCommentsEnabled()
+	}, false, true)
+}
+
 func TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault(t *testing.T) {
 	set := bkfFlagWriter(t)
 	assertConfigChangesBehavior(t, func(setting any) any {

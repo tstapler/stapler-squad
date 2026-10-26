@@ -310,53 +310,55 @@ func sourceSyncEventToData(e *ent.SourceSyncEvent) SourceSyncEventData {
 
 func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 	data := BacklogItemData{
-		ID:                           item.ID.String(),
-		PublicIDRaw:                  item.PublicID,
-		Title:                        item.Title,
-		Description:                  item.Description,
-		AcceptanceCriteria:           AcCriteriaJSON(item.AcceptanceCriteria),
-		Priority:                     item.Priority,
-		Status:                       item.Status,
-		RepoPath:                     item.RepoPath,
-		BaseBranch:                   item.BaseBranch,
-		SkipReviewGate:               item.SkipReviewGate,
-		SkipPlanning:                 item.SkipPlanning,
-		AutoSpawnSession:             item.AutoSpawnSession,
-		AutoCreatePR:                 item.AutoCreatePr,
-		AutoApprovePlan:              item.AutoApprovePlan,
-		PipelineMode:                 item.PipelineMode,
-		Category:                     item.Category,
-		PlanApproved:                 item.PlanApproved,
-		PlanApprovedAt:               item.PlanApprovedAt,
-		QueuedAt:                     item.QueuedAt,
-		QueuedAutonomous:             item.QueuedAutonomous,
-		PlanArtifactsPath:            item.PlanArtifactsPath,
-		PlanRejectionReason:          item.PlanRejectionReason,
-		PlanRejectedAt:               item.PlanRejectedAt,
-		Notes:                        item.Notes,
-		ExternalID:                   item.ExternalID,
-		ExternalURL:                  item.ExternalURL,
-		Labels:                       item.Labels,
-		ArchivedAt:                   item.ArchivedAt,
-		PrURL:                        item.PrURL,
-		PrNumber:                     item.PrNumber,
-		ShippedCheckConclusion:       item.ShippedCheckConclusion,
-		ShippedApprovedCount:         item.ShippedApprovedCount,
-		ShippedChangesReqCount:       item.ShippedChangesReqCount,
-		ShippedSnapshotAt:            item.ShippedSnapshotAt,
-		PrFeedbackAddressedAt:        item.PrFeedbackAddressedAt,
-		GitHubSyncedIssueUpdatedAt:   item.GithubSyncedIssueUpdatedAt,
-		UserModifiedFields:           item.UserModifiedFields,
-		ShippedFileStats:             item.ShippedFileStats,
-		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
-		ReworkCapOverride:            item.ReworkCapOverride,
-		CostBudgetThresholdUsd:       item.CostBudgetThresholdUsd,
-		NextWorkflowID:               item.NextWorkflowID,
-		ChainFired:                   item.ChainFired,
-		ChainedAt:                    item.ChainedAt,
-		TriggeredByChainDepth:        item.TriggeredByChainDepth,
-		CreatedAt:                    item.CreatedAt,
-		UpdatedAt:                    item.UpdatedAt,
+		ID:                              item.ID.String(),
+		PublicIDRaw:                     item.PublicID,
+		Title:                           item.Title,
+		Description:                     item.Description,
+		AcceptanceCriteria:              AcCriteriaJSON(item.AcceptanceCriteria),
+		Priority:                        item.Priority,
+		Status:                          item.Status,
+		RepoPath:                        item.RepoPath,
+		BaseBranch:                      item.BaseBranch,
+		SkipReviewGate:                  item.SkipReviewGate,
+		SkipPlanning:                    item.SkipPlanning,
+		AutoSpawnSession:                item.AutoSpawnSession,
+		AutoCreatePR:                    item.AutoCreatePr,
+		AutoApprovePlan:                 item.AutoApprovePlan,
+		PipelineMode:                    item.PipelineMode,
+		Category:                        item.Category,
+		PlanApproved:                    item.PlanApproved,
+		PlanApprovedAt:                  item.PlanApprovedAt,
+		QueuedAt:                        item.QueuedAt,
+		QueuedAutonomous:                item.QueuedAutonomous,
+		PlanArtifactsPath:               item.PlanArtifactsPath,
+		PlanRejectionReason:             item.PlanRejectionReason,
+		PlanRejectedAt:                  item.PlanRejectedAt,
+		Notes:                           item.Notes,
+		ExternalID:                      item.ExternalID,
+		ExternalURL:                     item.ExternalURL,
+		Labels:                          item.Labels,
+		ArchivedAt:                      item.ArchivedAt,
+		PrURL:                           item.PrURL,
+		PrNumber:                        item.PrNumber,
+		ShippedCheckConclusion:          item.ShippedCheckConclusion,
+		ShippedApprovedCount:            item.ShippedApprovedCount,
+		ShippedChangesReqCount:          item.ShippedChangesReqCount,
+		ShippedSnapshotAt:               item.ShippedSnapshotAt,
+		PrFeedbackAddressedAt:           item.PrFeedbackAddressedAt,
+		GitHubSyncedIssueUpdatedAt:      item.GithubSyncedIssueUpdatedAt,
+		ClaimingHostID:                  item.ClaimingHostID,
+		GitHubLastProgressCommentStatus: item.GithubLastProgressCommentStatus,
+		UserModifiedFields:              item.UserModifiedFields,
+		ShippedFileStats:                item.ShippedFileStats,
+		ShippedSnapshotCaptureFailed:    item.ShippedSnapshotCaptureFailed,
+		ReworkCapOverride:               item.ReworkCapOverride,
+		CostBudgetThresholdUsd:          item.CostBudgetThresholdUsd,
+		NextWorkflowID:                  item.NextWorkflowID,
+		ChainFired:                      item.ChainFired,
+		ChainedAt:                       item.ChainedAt,
+		TriggeredByChainDepth:           item.TriggeredByChainDepth,
+		CreatedAt:                       item.CreatedAt,
+		UpdatedAt:                       item.UpdatedAt,
 	}
 	// Resolve source ID from the eager-loaded edge when available.
 	if item.Edges.Source != nil {
@@ -473,7 +475,9 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillableArchivedAt(data.ArchivedAt).
 		SetNillableReworkCapOverride(data.ReworkCapOverride).
 		SetNillableCostBudgetThresholdUsd(data.CostBudgetThresholdUsd).
-		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
+		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt).
+		SetClaimingHostID(data.ClaimingHostID).
+		SetGithubLastProgressCommentStatus(data.GitHubLastProgressCommentStatus)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)
@@ -1283,6 +1287,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	} else if update.GitHubSyncedIssueUpdatedAt != nil {
 		u.SetGithubSyncedIssueUpdatedAt(*update.GitHubSyncedIssueUpdatedAt)
 	}
+	if update.GitHubLastProgressCommentStatus != nil {
+		u.SetGithubLastProgressCommentStatus(*update.GitHubLastProgressCommentStatus)
+	}
 	if update.UserModifiedFields != nil {
 		u.SetUserModifiedFields(*update.UserModifiedFields)
 	}
@@ -1430,6 +1437,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.GitHubSyncedIssueUpdatedAt != nil || update.ClearGitHubSyncedIssueUpdatedAt {
 		fields = append(fields, "gitHubSyncedIssueUpdatedAt")
+	}
+	if update.GitHubLastProgressCommentStatus != nil {
+		fields = append(fields, "githubLastProgressCommentStatus")
 	}
 	if update.UserModifiedFields != nil {
 		fields = append(fields, "userModifiedFields")

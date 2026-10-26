@@ -224,6 +224,10 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:        githubIssueProgressCommentsFlagName,
+		description: "Comment on the linked GitHub issue when a backlog item starts work (in_progress, naming the host) and when it opens a PR (review). The done-transition close comment is not gated by this flag. Default: off.",
+	},
+	{
 		name:         ChangelogFlagName,
 		description:  "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
 		defaultValue: true,
