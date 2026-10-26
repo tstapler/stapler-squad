@@ -240,6 +240,7 @@ export interface BacklogItem {
   hasPendingGuidanceRequests?: boolean;
   /** Deep link to the source tracker's issue for this item (e.g. a GitHub issue's html_url), populated for imported items only. */
   externalUrl?: string;
+  claimingHostId?: string;
   /** Labels mirrored from the source tracker (e.g. GitHub issue labels), populated for imported items only. */
   labels?: string[];
   /**
@@ -713,6 +714,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pluginId: p.pluginId || undefined,
     hasPendingGuidanceRequests: p.hasPendingGuidanceRequests || undefined,
     externalUrl: p.externalUrl || undefined,
+    claimingHostId: p.claimingHostId || undefined,
     labels: p.labels ?? [],
     allowedTransitions: p.allowedTransitions ?? [],
   };
