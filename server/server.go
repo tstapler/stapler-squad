@@ -61,6 +61,8 @@ type Server struct {
 	tlsConfig                  *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler // nil when auth is disabled
 	requiresAuth               bool                            // explicit: a real validator is wired
+	dispatchersMu              sync.RWMutex                    // guards dispatchers
+	dispatchers                map[string]http.Handler         // listener name -> dispatcher the unary WS bridge re-enters
 	httpsURL                   atomic.Pointer[string]          // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]        // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
 	verifiedHostnames          atomic.Pointer[[]string]        // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
@@ -1601,8 +1603,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
+	localDispatcher := s.localDispatcherWith(guardedProcedures)
+	s.setUnaryDispatcher(services.ListenerLocal, localDispatcher)
 	handler := otelhttp.NewHandler(
-		s.localChain(),
+		wrapOuterMiddleware(localDispatcher, s.origins),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -1939,12 +1943,37 @@ func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 // TestRemoteChain_should_LeaveNudgeReachable_When_AuthMiddlewareNil); main.go
 // always passes middleware.Auth, so nil only occurs in tests.
 func (s *Server) remoteChain(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
+	return wrapOuterMiddleware(s.remoteDispatcher(authMW, requiresAuth), s.origins)
+}
+
+// remoteDispatcher is remoteChain minus Logging/CORS/Compress (see localDispatcherWith).
+func (s *Server) remoteDispatcher(authMW func(http.Handler) http.Handler, requiresAuth bool) http.Handler {
 	inner := http.Handler(s)
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	return s.stampRequest(services.ListenerRemote, requiresAuth)(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+	return s.stampRequest(services.ListenerRemote, requiresAuth)(inner)
+}
+
+// setUnaryDispatcher publishes the listener's dispatcher for the unary WebSocket
+// bridge; called from Start()/StartRemote() once the chain's inputs are final.
+func (s *Server) setUnaryDispatcher(listener string, h http.Handler) {
+	s.dispatchersMu.Lock()
+	defer s.dispatchersMu.Unlock()
+	next := make(map[string]http.Handler, len(s.dispatchers)+1)
+	for k, v := range s.dispatchers {
+		next[k] = v
+	}
+	next[listener] = h
+	s.dispatchers = next
+}
+
+// unaryDispatcher returns the dispatcher for a listener, or nil when that
+// listener has not started; the bridge treats nil as fail-closed.
+func (s *Server) unaryDispatcher(listener string) http.Handler {
+	s.dispatchersMu.RLock()
+	defer s.dispatchersMu.RUnlock()
+	return s.dispatchers[listener]
 }
 
 // stampRequest stamps the raw request record and the in-handler verdict's live
@@ -1970,8 +1999,10 @@ func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 // It binds eagerly (returns a bind error immediately if the port is in use),
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler, requiresAuth bool) error {
+	remoteDispatcher := s.remoteDispatcher(authMW, requiresAuth)
+	s.setUnaryDispatcher(services.ListenerRemote, remoteDispatcher)
 	handler := otelhttp.NewHandler(
-		s.remoteChain(authMW, requiresAuth),
+		wrapOuterMiddleware(remoteDispatcher, s.origins),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
