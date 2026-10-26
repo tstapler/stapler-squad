@@ -1503,6 +1503,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   useSessionConnectionBootstrap({
     sessionId,
     containerWidth: containerSize.width,
+    containerHeight: containerSize.height,
     terminalContainerRef,
     xtermRef,
     isConnected,
