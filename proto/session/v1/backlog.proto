@@ -314,6 +314,9 @@ message BacklogItem {
   // has_pending_guidance_requests is true while at least one GuidanceRequest
   // scoped to this item is open (neither answered nor cancelled).
   bool has_pending_guidance_requests = 45;
+  // claiming_host_id is the HostID of the host that created this item from an
+  // external issue. Empty for items without an external_url.
+  string claiming_host_id = 46;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency

@@ -16,6 +16,7 @@ export interface SourceSectionProps {
   externalUrl: string;
   externalId?: string;
   pluginId?: string;
+  claimingHostId?: string;
   labels: string[];
   defaultExpanded: boolean;
 }
@@ -32,7 +33,7 @@ export interface SourceSectionProps {
  * defensively: only shown when externalId is actually present, to avoid a
  * literal "Issue #undefined".
  */
-export function SourceSection({ externalUrl, externalId, pluginId, labels, defaultExpanded }: SourceSectionProps) {
+export function SourceSection({ externalUrl, externalId, pluginId, claimingHostId, labels, defaultExpanded }: SourceSectionProps) {
   const source = getSourceBadgeConfig(pluginId);
   const refLabel = externalId ? buildExternalRefLabels(pluginId, externalUrl, externalId).fullRef : "";
   const href = safeExternalHref(externalUrl);
@@ -51,6 +52,11 @@ export function SourceSection({ externalUrl, externalId, pluginId, labels, defau
           </a>
         ) : (
           <span className={styles.link}>{content}</span>
+        )}
+        {claimingHostId && (
+          <span className={styles.hostRow} data-testid="source-working-host">
+            Working host: {claimingHostId}
+          </span>
         )}
         {labels.length > 0 && (
           <div className={styles.labels}>

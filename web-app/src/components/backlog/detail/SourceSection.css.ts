@@ -21,6 +21,11 @@ export const link = style({
   },
 });
 
+export const hostRow = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+});
+
 export const labels = style({
   display: "flex",
   flexWrap: "wrap",
