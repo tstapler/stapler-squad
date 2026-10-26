@@ -1,6 +1,6 @@
 # ADR-002: Dispatch, fallback, retry, replay and auth semantics for unary-over-WebSocket
 
-**Status**: Proposed (amended in repairs 2026-10-26 pass 1, pass 2, the Phase 4 patch and the remote-listener owner decision reversal, which replaces the remote 403 refusal in items 4 and 7 and adds item 11; the Story 5.1.1 spike records Accepted)
+**Status**: Accepted 2026-10-26 by the Story 5.1.1 spike (`research/ws-unary-seams.md`, `server/ws_unary_spike_test.go`; no amendment). Prior history: Proposed (amended in repairs 2026-10-26 pass 1, pass 2, the Phase 4 patch and the remote-listener owner decision reversal, which replaces the remote 403 refusal in items 4 and 7 and adds item 11; the Story 5.1.1 spike records Accepted)
 **Date**: 2026-10-26
 **Decider**: tstapler
 

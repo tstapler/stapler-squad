@@ -1,6 +1,6 @@
 # ADR-001: Wire framing for unary RPCs multiplexed over one WebSocket
 
-**Status**: Proposed (Phase 3 plan, amended in repairs 2026-10-26 pass 1 and pass 2; confirm in spike Story 5.1.1. Build proceeds on Proposed; Accepted is recorded by the spike)
+**Status**: Accepted 2026-10-26 by the Story 5.1.1 spike (`research/ws-unary-seams.md`, `server/ws_unary_spike_test.go`; no amendment). Prior history: Proposed (Phase 3 plan, amended in repairs 2026-10-26 pass 1 and pass 2; confirm in spike Story 5.1.1. Build proceeds on Proposed; Accepted is recorded by the spike)
 **Date**: 2026-10-26
 **Decider**: tstapler (owner decision recorded: build unary-over-WebSocket; not deferred; default-on is gated by Story 5.5.1)
 
