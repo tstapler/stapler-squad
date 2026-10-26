@@ -1,6 +1,8 @@
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { Transport } from "@connectrpc/connect";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { createCoalescingInterceptor } from "./coalescingInterceptor";
+import { peekFlags, preloadFlagValue } from "@/lib/features/flagStore";
 import { withInFlightGauge } from "@/lib/perf/perfDebug";
 import { createSharedRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
@@ -18,6 +20,12 @@ let _keepaliveTransport: Transport | null = null;
  * cancellation instead, since a live terminal stream has no fixed deadline).
  */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
+/** Server value once flags have loaded, else the pre-load default; the flag-store import cycle is safe because this runs per call. */
+function isRequestCoalescingEnabled(): boolean {
+  const loaded = peekFlags()?.find((f) => f.name === "request_coalescing");
+  return loaded ? loaded.enabled : (preloadFlagValue("request_coalescing") ?? true);
+}
 
 /**
  * Returns the shared ConnectRPC HTTP transport, memoized per {baseUrl, timeoutMs}
@@ -48,7 +56,12 @@ export function getConnectTransport(opts: ConnectTransportOptions = {}): Transpo
     transport = createConnectTransport({
       baseUrl,
       defaultTimeoutMs: timeoutMs,
-      interceptors: [createAuthInterceptor(), createSharedRpcTimingInterceptor()],
+      // Outermost: one flight is one auth/timing/network pass, however many callers join it.
+      interceptors: [
+        createCoalescingInterceptor({ isEnabled: isRequestCoalescingEnabled }),
+        createAuthInterceptor(),
+        createSharedRpcTimingInterceptor(),
+      ],
       fetch: withInFlightGauge(),
     });
     _transports.set(key, transport);

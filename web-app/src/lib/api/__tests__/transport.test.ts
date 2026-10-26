@@ -37,7 +37,7 @@ describe("getConnectTransport", () => {
     expect(createConnectTransport).toHaveBeenCalledWith({
       baseUrl: "http://localhost:8543",
       defaultTimeoutMs: 30_000,
-      interceptors: [mockAuthInterceptor, mockTimingInterceptor],
+      interceptors: [expect.any(Function), mockAuthInterceptor, mockTimingInterceptor],
       fetch: expect.any(Function),
     });
     expect(t).toBeDefined();
@@ -56,7 +56,7 @@ describe("getConnectTransport", () => {
     expect(createConnectTransport).toHaveBeenCalledWith({
       baseUrl: "https://custom.host:9000",
       defaultTimeoutMs: 30_000,
-      interceptors: [mockAuthInterceptor, mockTimingInterceptor],
+      interceptors: [expect.any(Function), mockAuthInterceptor, mockTimingInterceptor],
       fetch: expect.any(Function),
     });
   });
@@ -82,7 +82,7 @@ describe("getConnectTransport options", () => {
   it("carries the shared rpc-timing interceptor on every variant", () => {
     getConnectTransport({ timeoutMs: 1_000 });
     expect(createConnectTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ interceptors: [mockAuthInterceptor, mockTimingInterceptor] }),
+      expect.objectContaining({ interceptors: [expect.any(Function), mockAuthInterceptor, mockTimingInterceptor] }),
     );
   });
 });
