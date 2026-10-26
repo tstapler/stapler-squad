@@ -1,4 +1,12 @@
 import { render, screen, act } from "@testing-library/react";
+
+// Every RPC made through a connect client is recorded; the archived-session test asserts none revive.
+const rpcCalls: string[] = [];
+jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
+  createClient: () =>
+    new Proxy({}, { get: (_t, method: string) => (...args: unknown[]) => { rpcCalls.push(method); return Promise.resolve(args); } }),
+}));
 import { WindowKeepAliveHost } from "./WindowKeepAliveHost";
 import { useWindowFocusMemory } from "@/lib/window/useWindowFocusMemory";
 import { initialPaneState } from "@/lib/pane/paneReducer";
@@ -119,5 +127,15 @@ describe("WindowKeepAliveHost", () => {
     expect(document.getElementById("window-panel-w1")).toContainElement(screen.getByTestId("connecting-w1"));
     rerender(<Harness windows={windows} current="w1" keepAlive={false} connecting />);
     expect(screen.queryByTestId("connecting-w1")).toBeNull();
+  });
+
+  it("activation_should_IssueNoResumeOrStartRpc_When_RetainedWindowHoldsArchivedSession", () => {
+    rpcCalls.length = 0;
+    const windows = [makeWindow("w1", "archived-session"), makeWindow("w2")];
+    const { rerender } = render(<Harness windows={windows} current="w1" />);
+    rerender(<Harness windows={windows} current="w2" />);
+    rerender(<Harness windows={windows} current="w1" />); // reactivate the retained window holding the archived session
+    expect(document.getElementById("window-panel-w1")).not.toHaveAttribute("hidden");
+    expect(rpcCalls.filter((m) => /resume|start|restart|revive|unarchive|retry/i.test(m))).toEqual([]);
   });
 });
