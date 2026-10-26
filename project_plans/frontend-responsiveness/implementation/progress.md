@@ -10,6 +10,16 @@ Started 2026-10-26. Coordinator: top-level Phase 5 thread. Workers: fresh genera
 | 1.1.1a traceCall + 1.1.2 gauge/marks | done | 20b35acc6, e12563d88 | window-switch end mark = 2 rAF, does not yet wait for terminal fit/focus |
 | 1.1.1b GetFeatureFlags trace | done | see git log (docs(perf): trace GetFeatureFlags) | 14 = 7 documents x 2 uncoupled consumers |
 | 1.1.3 perf spec | partial | 7478e4944 | a,b,d done; c/e partial; baseline.json NOT captured |
+| 2.1.0 SessionDetailView seam | done | 0941d4052 | |
+| 2.1.4a flagStore | done | bbc53c8d5 | |
+| 2.1.5a programs cache | done | 83c7e3b00 | |
+| 5.3.2a reader queue watermark | done | 20ea716f5 | |
+| 2.1.4b unify flag fetchers | done | babf93c51 | 14 -> 7 (1 per doc) until cross-document coalescing |
+| 2.1.1a-d migrate transport callers | done | 4e3a2bd2d, 2d7ea52eb, 96c0a2351, 7f04f4677 | |
+| 2.1.3 log batching | done | 62c79ca35 | |
+| 2.1.1e + 7.1.1a ESLint ban | done | d1c04d0bf | |
+| 2.1.2a/b coalescing | done | b2b77d4f5, e99bb4ee1 | |
+| 2.1.6a-d per-pane dedupe | done (programs-fallback abort moved to 2.1.9 worker) | 65a581b1c..3f938e5db | |
 
 ## Deviations
 - Tag `perf-baseline-code` marks the pre-Epic-2 code state (HEAD at 7478e4944+docs). baseline.json could not be captured (machine load 45-97); owner/quiet machine must run it against that tag, then tag `perf-baseline`.
