@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadFlags, resetFlagStoreForTest } from "@/lib/features/flagStore";
+import { loadFlags, peekFlags, resetFlagStoreForTest, subscribeFlags } from "@/lib/features/flagStore";
 import type { FeatureFlag } from "@/gen/session/v1/session_pb";
 
 /** Operator copy for the FLAG_OFF action outcome (UX-AC55, UX-AC57); Story 2.5's ActionRow maps the outcome to it. */
 export const flagOffMessage = "This action is turned off. Open session.";
-
-const CACHE_TTL_MS = 30_000;
 
 /** Clears the module cache (tests, and after a flag flip a caller knows about). */
 export const resetFeatureFlagValueCache = resetFlagStoreForTest;
@@ -28,7 +26,7 @@ export function resolveFlagValue(flags: FeatureFlag[], name: string, scope?: str
  * Reads a feature flag (optionally at a scope) through GetFeatureFlags, with a
  * short shared cache. Until loaded, and when the first read fails, it returns
  * `fallback` (default OFF), so a failed read never enables a new path. It re-reads
- * every cache TTL so a kill switch reaches an open page; a failed re-read keeps the
+ * every cache TTL (one shared store timer) so a kill switch reaches an open page; a failed re-read keeps the
  * last known value rather than reverting to `fallback`.
  * `enabled=false` skips the read (the row has nothing the flag could change).
  */
@@ -38,17 +36,20 @@ export function useFeatureFlagValue(name: string, scope?: string, fallback = fal
   useEffect(() => {
     if (!enabled) return;
     let live = true;
-    const read = () =>
-      loadFlags(Date.now)
-        .then((flags) => {
-          if (live) setValue(resolveFlagValue(flags, name, scope) ?? fallback);
-        })
-        .catch(() => {});
-    void read();
-    const timer = setInterval(() => void read(), CACHE_TTL_MS);
+    const apply = (flags: FeatureFlag[]) => {
+      if (live) setValue(resolveFlagValue(flags, name, scope) ?? fallback);
+    };
+    // Cheap when the cache is fresh; after a recorded write the cache is stale, so this refetches once for all consumers.
+    const read = () => void loadFlags(Date.now).then(apply).catch(() => {});
+    const unsubscribe = subscribeFlags(() => {
+      const last = peekFlags();
+      if (last) apply(last);
+      read();
+    });
+    read();
     return () => {
       live = false;
-      clearInterval(timer);
+      unsubscribe();
     };
   }, [name, scope, fallback, enabled]);
 

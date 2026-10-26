@@ -20,6 +20,33 @@ const KEEP_ALIVE_FLAG = "window_keep_alive";
 
 let cached: { at: number; flags: FeatureFlag[] } | null = null;
 let inFlight: Promise<FeatureFlag[]> | null = null;
+// Bumped on every invalidation so a response that started before a write cannot overwrite the write.
+let generation = 0;
+
+const listeners = new Set<() => void>();
+let timer: ReturnType<typeof setInterval> | null = null;
+
+function notify(): void {
+  for (const l of [...listeners]) l();
+}
+
+/**
+ * Subscribes to store changes (a landed load or a recorded write). While at least one
+ * subscriber exists, one shared timer re-reads every TTL so a kill switch reaches an open page.
+ */
+export function subscribeFlags(listener: () => void): () => void {
+  listeners.add(listener);
+  if (!timer) {
+    timer = setInterval(() => void loadFlags(Date.now, { force: true }).catch(() => {}), CACHE_TTL_MS);
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0 && timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+}
 
 function storage(): Storage | null {
   try {
@@ -71,21 +98,28 @@ export function peekFlags(): FeatureFlag[] | null {
   return cached ? cached.flags : null;
 }
 
-export async function loadFlags(now: () => number = Date.now): Promise<FeatureFlag[]> {
+/** `force` skips the TTL (explicit reload, periodic refresh) but still joins an in-flight read. */
+export async function loadFlags(
+  now: () => number = Date.now,
+  opts?: { force?: boolean },
+): Promise<FeatureFlag[]> {
   traceCall("flagStore.loadFlags");
-  if (cached && now() - cached.at < CACHE_TTL_MS) return cached.flags;
+  if (!opts?.force && cached && now() - cached.at < CACHE_TTL_MS) return cached.flags;
   if (!inFlight) {
+    const startedAt = generation;
     const client = createClient(SessionService, getConnectTransport());
     inFlight = client
       // Shared across consumers, so a per-component abort would cancel others' read; bound it by time instead.
       .getFeatureFlags({}, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
       .then((res) => {
+        if (startedAt !== generation) return res.flags;
         cached = { at: now(), flags: res.flags };
         persistFlags(res.flags);
+        notify();
         return res.flags;
       })
       .finally(() => {
-        inFlight = null;
+        if (startedAt === generation) inFlight = null;
       });
   }
   return inFlight;
@@ -104,10 +138,16 @@ export function recordFlagWrite(name: string, enabled: boolean, scope?: string):
   });
   cached = { at: Number.NEGATIVE_INFINITY, flags };
   inFlight = null;
+  generation++;
+  notify();
 }
 
 /** Clears cache and in-flight state (tests, and after a flag flip a caller knows about). */
 export function resetFlagStoreForTest(): void {
   cached = null;
   inFlight = null;
+  generation++;
+  listeners.clear();
+  if (timer) clearInterval(timer);
+  timer = null;
 }
