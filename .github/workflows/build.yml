@@ -400,6 +400,11 @@ jobs:
               exit 0
             fi
             echo "::warning::Playwright install attempt $attempt failed or timed out; retrying..."
+            # timeout(1) only signals the npx process it forked directly; apt-get (spawned as
+            # root underneath it) survives and keeps the dpkg lock held into the next attempt,
+            # which then fails immediately with "Could not get lock /var/lib/dpkg/lock-frontend"
+            # instead of retrying the install. Clear any such orphan before sleeping.
+            sudo pkill -9 -f 'apt-get|dpkg' 2>/dev/null || true
             sleep 10
           done
           echo "Playwright install failed after 3 attempts" >&2
@@ -663,6 +668,11 @@ jobs:
               exit 0
             fi
             echo "::warning::Playwright install attempt $attempt failed or timed out; retrying..."
+            # timeout(1) only signals the npx process it forked directly; apt-get (spawned as
+            # root underneath it) survives and keeps the dpkg lock held into the next attempt,
+            # which then fails immediately with "Could not get lock /var/lib/dpkg/lock-frontend"
+            # instead of retrying the install. Clear any such orphan before sleeping.
+            sudo pkill -9 -f 'apt-get|dpkg' 2>/dev/null || true
             sleep 10
           done
           echo "Playwright install failed after 3 attempts" >&2
