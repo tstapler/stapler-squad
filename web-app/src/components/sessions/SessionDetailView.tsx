@@ -16,7 +16,7 @@ import { BrowserTab } from "./BrowserTab";
 import { ArtifactsTab } from "./ArtifactsTab";
 import { SessionSummaryPanel } from "./SessionSummaryPanel";
 import { RetryHistoryList } from "./RetryHistoryList";
-import { VNCStatus } from "@/gen/session/v1/types_pb";
+import { CDPStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { getApiBaseUrl } from "@/lib/config";
@@ -601,9 +601,9 @@ export function SessionDetailView({
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
-  const vncState = session.vncState;
-  const vncStatus = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
-  const isBrowserAvailable = vncStatus !== VNCStatus.VNC_STATUS_UNAVAILABLE && vncStatus !== VNCStatus.VNC_STATUS_UNSPECIFIED;
+  const cdpState = session.cdpState;
+  const cdpStatus = cdpState?.status ?? CDPStatus.CDP_STATUS_UNSPECIFIED;
+  const isBrowserAvailable = cdpStatus !== CDPStatus.CDP_STATUS_UNAVAILABLE && cdpStatus !== CDPStatus.CDP_STATUS_UNSPECIFIED;
 
   const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
     { id: "terminal", label: "Terminal", icon: Terminal },
@@ -920,7 +920,7 @@ export function SessionDetailView({
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const disabledReason = tab.disabled && tab.id === "browser"
-            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            ? "Browser passthrough requires Chrome or Chromium installed on the host"
             : tab.disabled && tab.id === "summary"
               ? "Summary is generated after the session ends."
               : undefined;
@@ -1137,10 +1137,11 @@ export function SessionDetailView({
           style={{ display: activeTab === "browser" ? undefined : 'none' }}
         >
           <BrowserTab
+            key={session.id}
             sessionId={session.id}
             baseUrl={getApiBaseUrl()}
             isVisible={activeTab === "browser"}
-            vncState={vncState}
+            cdpState={cdpState}
           />
         </div>
 

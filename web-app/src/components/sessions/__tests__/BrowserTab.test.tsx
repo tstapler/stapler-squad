@@ -1,18 +1,19 @@
 import React from 'react';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowserTab, VNCStatus, buildWsUrl, buildInspectUrl, formatInspectContext } from '../BrowserTab';
-import type { VNCState } from '../BrowserTab';
+import { BrowserTab, CDPStatus, buildWsUrl, buildInspectUrl, formatInspectContext } from '../BrowserTab';
+import type { CDPState } from '../BrowserTab';
 
-// Helper to construct minimal VNCState objects for tests without requiring
+// Helper to construct minimal CDPState objects for tests without requiring
 // the full Message<> protobuf metadata at runtime.
-function makeVncState(partial: Partial<VNCState>): VNCState {
-  return partial as VNCState;
+function makeCdpState(partial: Partial<CDPState>): CDPState {
+  return partial as CDPState;
 }
 
 // Capture the latest onDisconnected callback so tests can simulate disconnects
 let capturedOnDisconnected: (() => void) | undefined;
 let capturedOnConnected: (() => void) | undefined;
+let capturedOnFrame: (() => void) | undefined;
 let capturedInspectMode: boolean | undefined;
 let capturedOnInspectClick: ((x: number, y: number) => void) | undefined;
 
@@ -25,10 +26,11 @@ jest.mock('@/lib/api/transport', () => ({ getConnectTransport: () => ({}) }));
 // Mock CDPViewer — pure canvas component, no DOM APIs needed in tests
 jest.mock('../CDPViewer', () => ({
   __esModule: true,
-  default: jest.fn(({ wsUrl, onConnected, onDisconnected, inspectMode, onInspectClick }: { wsUrl: string; onConnected?: () => void; onDisconnected?: () => void; inspectMode?: boolean; onInspectClick?: (x: number, y: number) => void }) => {
+  default: jest.fn(({ wsUrl, onConnected, onDisconnected, onFrame, inspectMode, onInspectClick }: { wsUrl: string; onFrame?: () => void; onConnected?: () => void; onDisconnected?: () => void; inspectMode?: boolean; onInspectClick?: (x: number, y: number) => void }) => {
     capturedInspectMode = inspectMode;
     capturedOnInspectClick = onInspectClick;
     capturedOnConnected = onConnected;
+    capturedOnFrame = onFrame;
     capturedOnDisconnected = onDisconnected;
     return <canvas data-testid="cdp-viewer" data-ws-url={wsUrl} />;
   }),
@@ -49,43 +51,43 @@ describe('BrowserTab', () => {
     sessionId: 'test-session-id',
     baseUrl: 'http://localhost:8543/api',
     isVisible: true,
-    vncState: undefined,
+    cdpState: undefined,
   };
 
-  it('shows unavailable message when vncState is undefined', () => {
+  it('shows unavailable message when cdpState is undefined', () => {
     render(<BrowserTab {...defaultProps} />);
     expect(screen.getByText(/unavailable on this host/i)).toBeInTheDocument();
   });
 
   it('shows unavailable message when status is UNAVAILABLE', () => {
-    render(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_UNAVAILABLE })} />);
+    render(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_UNAVAILABLE })} />);
     expect(screen.getByText(/unavailable on this host/i)).toBeInTheDocument();
   });
 
-  it('shows "Starting" text when status is STARTING', () => {
-    render(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_STARTING })} />);
-    expect(screen.getByText(/starting virtual display/i)).toBeInTheDocument();
+  it('shows "Connecting" text when status is WAITING', () => {
+    render(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_WAITING })} />);
+    expect(screen.getByText(/connecting to browser/i)).toBeInTheDocument();
   });
 
-  it('shows "No browser open" when status is NO_BROWSER', () => {
-    render(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_NO_BROWSER })} />);
-    expect(screen.getByText(/no browser open yet/i)).toBeInTheDocument();
+  it('shows "No browser detected" when status is NO_BROWSER', () => {
+    render(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_NO_BROWSER })} />);
+    expect(screen.getByText(/no browser detected/i)).toBeInTheDocument();
   });
 
-  it('does not mount CDPViewer until status is READY', () => {
-    render(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_NO_BROWSER })} />);
+  it('does not mount CDPViewer until status is STREAMING', () => {
+    render(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_NO_BROWSER })} />);
     expect(screen.queryByTestId('cdp-viewer')).not.toBeInTheDocument();
   });
 
-  it('mounts CDPViewer when status becomes READY', () => {
-    render(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true })} />);
+  it('mounts CDPViewer when status becomes STREAMING', () => {
+    render(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING })} />);
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
   });
 
   it('builds correct ws:// URL from http:// baseUrl', () => {
     render(<BrowserTab {...defaultProps}
       baseUrl="http://localhost:8543/api"
-      vncState={makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true })}
+      cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING })}
     />);
     const viewer = screen.getByTestId('cdp-viewer');
     expect(viewer.getAttribute('data-ws-url')).toBe('ws://localhost:8543/api/sessions/test-session-id/cdp-stream');
@@ -95,7 +97,7 @@ describe('BrowserTab', () => {
     render(<BrowserTab {...defaultProps}
       sessionId="test-session-id"
       baseUrl="https://myhost.example.com/api"
-      vncState={makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true })}
+      cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING })}
     />);
     const viewer = screen.getByTestId('cdp-viewer');
     expect(viewer.getAttribute('data-ws-url')).toBe('wss://myhost.example.com/api/sessions/test-session-id/cdp-stream');
@@ -104,40 +106,40 @@ describe('BrowserTab', () => {
   it('handles trailing slash in baseUrl without doubling /api', () => {
     render(<BrowserTab {...defaultProps}
       baseUrl="http://localhost:8543/api/"
-      vncState={makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true })}
+      cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING })}
     />);
     const viewer = screen.getByTestId('cdp-viewer');
     expect(viewer.getAttribute('data-ws-url')).not.toContain('/api/api/');
   });
 
-  it('BrowserTab_should_keepViewerMounted_When_vncBecomesUnavailableAfterReady', () => {
-    // Start in READY state so hasBeenReadyRef is set to true
-    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
-    const { rerender } = render(<BrowserTab {...defaultProps} vncState={readyState} />);
+  it('BrowserTab_should_keepViewerMounted_When_cdpBecomesUnavailableAfterReady', () => {
+    // Start in STREAMING state so hasBeenReadyRef is set to true
+    const readyState = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+    const { rerender } = render(<BrowserTab {...defaultProps} cdpState={readyState} />);
 
     // Confirm viewer is mounted in the ready state
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
 
-    // Transition to STARTING (temporarily unavailable)
-    rerender(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_STARTING })} />);
+    // Transition to WAITING (temporarily unavailable)
+    rerender(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_WAITING })} />);
 
     // CDPViewer should remain mounted (sticky-mount behavior via hasBeenReadyRef)
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
   });
 
-  it('BrowserTab_should_keepViewerMounted_When_vncBecomesNoBrowserAfterReady', () => {
-    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
-    const { rerender } = render(<BrowserTab {...defaultProps} vncState={readyState} />);
+  it('BrowserTab_should_keepViewerMounted_When_cdpBecomesNoBrowserAfterReady', () => {
+    const readyState = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+    const { rerender } = render(<BrowserTab {...defaultProps} cdpState={readyState} />);
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
 
-    rerender(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_NO_BROWSER })} />);
+    rerender(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_NO_BROWSER })} />);
 
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
   });
 
   it('BrowserTab_should_showReconnectingBanner_When_connectionDrops', () => {
-    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
-    render(<BrowserTab {...defaultProps} vncState={readyState} />);
+    const readyState = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+    render(<BrowserTab {...defaultProps} cdpState={readyState} />);
 
     // Simulate the CDPViewer calling onDisconnected
     act(() => {
@@ -148,8 +150,8 @@ describe('BrowserTab', () => {
   });
 
   it('BrowserTab_should_hideReconnectingBanner_When_connectionRestored', () => {
-    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
-    render(<BrowserTab {...defaultProps} vncState={readyState} />);
+    const readyState = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+    render(<BrowserTab {...defaultProps} cdpState={readyState} />);
 
     act(() => { capturedOnDisconnected?.(); });
     expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
@@ -160,8 +162,8 @@ describe('BrowserTab', () => {
 
   it('BrowserTab_should_remountViewer_When_reconnectButtonClicked', async () => {
     const user = userEvent.setup();
-    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
-    render(<BrowserTab {...defaultProps} vncState={readyState} />);
+    const readyState = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+    render(<BrowserTab {...defaultProps} cdpState={readyState} />);
 
     act(() => { capturedOnDisconnected?.(); });
     expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
@@ -233,7 +235,7 @@ describe('BrowserTab — inspect mode', () => {
     sessionId: 'sess-1',
     baseUrl: 'http://localhost:8543/api',
     isVisible: true,
-    vncState: makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true }),
+    cdpState: makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING }),
   };
   const okBody = {
     html: '<button>Go</button>',
@@ -256,7 +258,7 @@ describe('BrowserTab — inspect mode', () => {
   beforeEach(() => { mockWriteToSession.mockClear(); capturedInspectMode = undefined; });
 
   it('disables the Inspect toggle (with tooltip) when the stream is not ready', () => {
-    render(<BrowserTab {...readyProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_STARTING })} />);
+    render(<BrowserTab {...readyProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_WAITING })} />);
     const btn = screen.getByTestId('inspect-toggle');
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute('title', expect.stringMatching(/stream is live/i));
@@ -328,5 +330,55 @@ describe('BrowserTab — inspect mode', () => {
     await act(async () => { capturedOnInspectClick?.(1, 1); });
     expect(await screen.findByRole('alert')).toHaveTextContent('CDP not connected');
     expect(screen.queryByTestId('inspect-result-panel')).not.toBeInTheDocument();
+  });
+
+  describe('first-frame feedback', () => {
+    const streaming = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+
+    afterEach(() => jest.useRealTimers());
+
+    it('shows "Waiting for first frame" while STREAMING with no frame yet', () => {
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
+    });
+
+    it('shows a no-frames message after the timeout', () => {
+      jest.useFakeTimers();
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { jest.advanceTimersByTime(10_000); });
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/no frames received/i);
+    });
+
+    it('clears the no-frames message once a frame arrives after the timeout', () => {
+      jest.useFakeTimers();
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { jest.advanceTimersByTime(10_000); });
+      act(() => { capturedOnFrame?.(); });
+      expect(screen.queryByTestId('waiting-first-frame')).not.toBeInTheDocument();
+    });
+
+    it('returns to "Waiting for first frame" after Reconnect following a timeout', () => {
+      jest.useFakeTimers();
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { jest.advanceTimersByTime(10_000); });
+      act(() => { capturedOnDisconnected?.(); });
+      fireEvent.click(screen.getByRole('button', { name: /reconnect/i }));
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
+    });
+
+    it('re-arms "Waiting for first frame" when the stream drops and resumes', () => {
+      const waiting = makeCdpState({ status: CDPStatus.CDP_STATUS_WAITING });
+      const { rerender } = render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { capturedOnFrame?.(); });
+      rerender(<BrowserTab {...readyProps} cdpState={waiting} />);
+      rerender(<BrowserTab {...readyProps} cdpState={streaming} />);
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
+    });
+
+    it('hides the message once a frame is painted', () => {
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { capturedOnFrame?.(); });
+      expect(screen.queryByTestId('waiting-first-frame')).not.toBeInTheDocument();
+    });
   });
 });
