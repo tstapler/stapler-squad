@@ -2,6 +2,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import type { Transport } from "@connectrpc/connect";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { createCoalescingInterceptor } from "./coalescingInterceptor";
+import { createPriorityInterceptor } from "./requestPriority";
 import { peekFlags, preloadFlagValue } from "@/lib/features/flagStore";
 import { withInFlightGauge } from "@/lib/perf/perfDebug";
 import { createSharedRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
@@ -56,8 +57,9 @@ export function getConnectTransport(opts: ConnectTransportOptions = {}): Transpo
     transport = createConnectTransport({
       baseUrl,
       defaultTimeoutMs: timeoutMs,
-      // Outermost: one flight is one auth/timing/network pass, however many callers join it.
+      // Priority first (once per transport, ADR-002 item 7); coalescing next: one flight is one auth/timing/network pass, however many callers join it.
       interceptors: [
+        createPriorityInterceptor(),
         createCoalescingInterceptor({ isEnabled: isRequestCoalescingEnabled }),
         createAuthInterceptor(),
         createSharedRpcTimingInterceptor(),
