@@ -24,7 +24,8 @@ type Throttle = (typeof THROTTLES)[number];
 
 /** PERF_KEEP_ALIVE=on|off pins `window_keep_alive` for the run; every number in the report is for that state. */
 const KEEP_ALIVE = process.env.PERF_KEEP_ALIVE as 'on' | 'off' | undefined;
-const RETAINED_SWITCH_MEDIAN_MS = 150; // OPEN-DECISION-throttle-gate: recorded as annotations, not a hard fail
+// Option A (owner-resolved): the unthrottled run gates; the 4x CPU-throttled numbers are recorded as advisory annotations.
+const RETAINED_SWITCH_MEDIAN_MS = 150;
 const RETAINED_LONG_TASK_MAX_MS = 50;
 const COLD_LONG_TASK_MAX_MS = 100;
 
@@ -260,8 +261,8 @@ test.describe('frontend responsiveness (perf)', () => {
         return { switchMsMedian: median(ms), highlightFirstFrame: Number(highlight.every(Boolean)) };
       }, { prepare: (c) => loadShell(c, '/') });
       assertCriticalNeverQueued(s);
-      annotateTarget('retained switch median', s.metrics.switchMsMedian?.median, RETAINED_SWITCH_MEDIAN_MS);
-      annotateTarget('retained long-task max', s.metrics.longTaskMaxMs?.median, RETAINED_LONG_TASK_MAX_MS);
+      gateTarget('retained switch median', throttle, s.metrics.switchMsMedian?.median, RETAINED_SWITCH_MEDIAN_MS);
+      gateTarget('retained long-task max', throttle, s.metrics.longTaskMaxMs?.median, RETAINED_LONG_TASK_MAX_MS);
     });
 
     test(`switch window cold ${throttle}x`, async ({ browser }) => {
@@ -321,7 +322,19 @@ test.describe('frontend responsiveness (perf)', () => {
           await c.perf.spaNavigate('/');
           back.push((await c.perf.lastMeasureMs('ssq:route-change')) ?? NaN);
         }
-        return { toBacklogMedianMs: median(to), backToSessionsMedianMs: median(back) };
+        // Geometry parity (Story 4.1.5): compare these between a keep-alive ON and OFF run, within 1 px.
+        const geometry = await c.page.evaluate(() => {
+          const panel = document.querySelector('[data-testid="window-panel"]:not([hidden])')?.getBoundingClientRect();
+          const main = document.getElementById('main-content');
+          return { w: panel?.width ?? NaN, h: panel?.height ?? NaN, scroll: main?.scrollHeight ?? NaN };
+        });
+        return {
+          toBacklogMedianMs: median(to),
+          backToSessionsMedianMs: median(back),
+          panelWidthPx: geometry.w,
+          panelHeightPx: geometry.h,
+          mainScrollHeightPx: geometry.scroll,
+        };
       }, { prepare: (c) => loadShell(c, '/') });
     });
 
@@ -407,6 +420,21 @@ test.describe('frontend responsiveness (perf)', () => {
     }
   });
 });
+
+/**
+ * Retained-switch gate: hard only for the unthrottled run with `window_keep_alive` pinned on and a baseline on
+ * disk (nothing to compare against otherwise, and flag-off numbers are not the retained path); the 4x run
+ * only annotates.
+ */
+function gateTarget(label: string, throttle: Throttle, actual: number | null | undefined, max: number) {
+  const hard = throttle === 1 && KEEP_ALIVE === 'on' && readBaseline() !== null && process.env.PERF_WRITE_BASELINE !== '1';
+  if (!hard) {
+    annotateTarget(`${label} (advisory${throttle === 1 ? '' : ', 4x throttle'})`, actual, max);
+    return;
+  }
+  expect(actual, `${label} must be measured`).not.toBeNull();
+  expect(actual as number, `${label} (unthrottled, keep-alive on) <= ${max} ms`).toBeLessThanOrEqual(max);
+}
 
 function annotateTarget(label: string, actual: number | null | undefined, max: number) {
   if (actual == null || actual <= max) return;
