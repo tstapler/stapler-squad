@@ -143,3 +143,8 @@ export function setRpcTimingSink(sink: RpcTimingSink | undefined): void {
 export function createSharedRpcTimingInterceptor(): Interceptor {
   return createRpcTimingInterceptor({ track: (event) => rpcTimingSink?.track(event) });
 }
+
+/** Emits a non-RPC event (e.g. `ws_unary_fallback_total`) to the same sink; dropped until one is registered. */
+export function trackSharedEvent(event: Parameters<RpcTimingSink["track"]>[0]): void {
+  rpcTimingSink?.track(event);
+}

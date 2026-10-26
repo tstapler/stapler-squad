@@ -7,7 +7,8 @@ import type {
 } from "@bufbuild/protobuf";
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
 import type { ContextValues, Transport, UnaryResponse } from "@connectrpc/connect";
-import { Code, ConnectError, createContextValues } from "@connectrpc/connect";
+import type { ContextKey } from "@connectrpc/connect";
+import { Code, ConnectError, createContextKey, createContextValues } from "@connectrpc/connect";
 import { createMethodUrl, runUnaryCall } from "@connectrpc/connect/protocol";
 import { codeFromString } from "@connectrpc/connect/protocol-connect";
 import { IDEMPOTENT_METHODS } from "@/lib/api/idempotentMethods";
@@ -46,8 +47,18 @@ export const BREAKER_OPEN_MS = 60_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const REPLAYABLE = new Set<string>(IDEMPOTENT_METHODS.replayable);
 
+/** Per-call hook the policy sets to learn when the REQUEST frame was written (wsQueueMs). */
+export const frameWrittenKey: ContextKey<(() => void) | undefined> =
+  // Guard: many Jest suites mock "@connectrpc/connect" without createContextKey.
+  typeof createContextKey === "function"
+    ? createContextKey<(() => void) | undefined>(undefined, { description: "ws request frame written" })
+    : ({ id: Symbol("ws request frame written"), defaultValue: undefined } as ContextKey<(() => void) | undefined>);
+
+// Guard: lib/api/transport imports this module, and many Jest suites mock "@connectrpc/connect" without ConnectError.
+const ErrorBase: typeof ConnectError = ConnectError ?? (class {} as unknown as typeof ConnectError);
+
 /** ConnectError from an ERROR frame; `marker` is `details.marker` (e.g. `ws_method_not_allowed`). */
-export class WsUnaryError extends ConnectError {
+export class WsUnaryError extends ErrorBase {
   readonly marker: string | undefined;
   constructor(json: ErrorJson) {
     const meta = new Headers();
@@ -132,6 +143,7 @@ interface Call {
   toResponse: (meta: ResponseMeta, payload: Uint8Array) => UnaryResponse<DescMessage, DescMessage>;
   viaHttp: () => Promise<UnaryResponse<DescMessage, DescMessage>>;
   detach: () => void;
+  onWritten?: () => void;
 }
 
 function concatParts(parts: Uint8Array[], total: number): Uint8Array {
@@ -267,6 +279,7 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
         }),
         viaHttp: viaHttp as Call["viaHttp"],
         detach: () => signal.removeEventListener("abort", onAbort),
+        onWritten: contextValues.get(frameWrittenKey),
       };
       const onAbort = () => {
         const wasSent = call.sent;
@@ -302,7 +315,8 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     if (this.state === "backoff") return false;
     if (this.state === "idle") {
       this.connect();
-      return this.state === "connecting" || this.state === "open";
+      const after = this.state as SocketState; // connect() mutates state
+      return after === "connecting" || after === "open";
     }
     if (this.state === "connecting") return Date.now() - this.connectStartedAt < CONNECT_WINDOW_MS;
     return true;
@@ -394,6 +408,7 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     call.sent = true;
     this.outstanding++;
     this.sendRaw(call.frame);
+    call.onWritten?.();
     this.updateLiveness();
   }
 
