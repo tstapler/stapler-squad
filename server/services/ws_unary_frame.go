@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 )
 
 // Unary mux wire format (ADR-001, project_plans/frontend-responsiveness/decisions).
@@ -53,7 +54,7 @@ type unaryResponseMeta struct {
 type unaryErrorBody struct {
 	Code     string            `json:"code"`
 	Message  string            `json:"message"`
-	Details  map[string]any    `json:"details,omitempty"`
+	Details  json.RawMessage   `json:"details,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Trailers map[string]string `json:"trailers,omitempty"`
 }
@@ -247,4 +248,24 @@ func encodeUnaryError(id uint32, e unaryErrorBody) ([]byte, error) {
 // encodeUnaryControl encodes the bodiless CANCEL, PING and PONG frames.
 func encodeUnaryControl(t unaryFrameType, id uint32) []byte {
 	return unaryHeader(t, id, 0)
+}
+
+func (t unaryFrameType) String() string {
+	switch t {
+	case unaryFrameRequest:
+		return "REQUEST"
+	case unaryFrameResponse:
+		return "RESPONSE"
+	case unaryFrameError:
+		return "ERROR"
+	case unaryFrameCancel:
+		return "CANCEL"
+	case unaryFramePing:
+		return "PING"
+	case unaryFramePong:
+		return "PONG"
+	case unaryFrameChunk:
+		return "CHUNK"
+	}
+	return "UNKNOWN(" + strconv.Itoa(int(t)) + ")"
 }
