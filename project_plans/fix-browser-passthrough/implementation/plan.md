@@ -251,3 +251,24 @@ Recommendation: A for this PR (AC9 is explicit), and a follow-up backlog item fo
 | 7 | No open P1 in pre-mortem.md | PASS after mitigation above |
 | 8 | No cycle/layering problems | PASS (no new packages) |
 Verdict: CONCERNS (criterion 1 note; Option B owner decision pending). Triad review not run (complexity field absent in requirements.md; treated as 2).
+
+## Revision 3 (2026-10-25): owner chose Option B; readiness gate re-run
+Owner decision (this session): waive AC9 and fix the backend. Task 4 implemented in `session/cdp/manager.go`:
+`runLoop` still polls `/json/version` for liveness, then dials a page target from `/json/list` (`pageWebSocketURL`,
+shared with `inspect.go`) for `Page.enable`/`Page.startScreencast`/`Input.*`; state is `Waiting` until the first frame
+is stored, then `Streaming`; it returns to `Waiting` when the stream ends or reconnects. Adversarial concerns addressed:
+page-level dial (no flat `sessionId`, so the int frame-ack path is untouched), `Streaming` gated on first frame,
+`DispatchInput` now rides the page connection. Not addressed (still open): re-pick of a *different* page target while the
+current socket stays open; extension/devtools pages are skipped only because `pageWebSocketURL` filters on `type=="page"`.
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Every requirement has a test in validation.md | PASS (validation.md updated: UT-TS-020..022, UT-GO-001, LV-001) |
+| 2 | No TODO/TBD in plan | PASS |
+| 3 | ADRs on disk | N/A |
+| 4 | No BLOCKER in adversarial-review.md | PASS (0 blockers) |
+| 5 | No BLOCKER in architecture-review.md | N/A (not dispatched) |
+| 6 | Migration plan | N/A (no schema change) |
+| 7 | No open P1 in pre-mortem.md | PASS (overlay + backend fix) |
+| 8 | No import cycles / layering issues | PASS (no new package; `go build`, `make lint` clean) |
+Verdict: PASS (architecture/triad reviews not run; complexity treated as 2).

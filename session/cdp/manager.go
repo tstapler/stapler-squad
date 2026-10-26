@@ -346,7 +346,7 @@ func (m *cdpStreamManager) runLoop(ctx context.Context, port int) {
 
 	for {
 		// Poll until Chrome appears or context is cancelled.
-		wsURL, err := m.pollForChrome(ctx, port, pollTimeout, pollInterval)
+		_, err := m.pollForChrome(ctx, port, pollTimeout, pollInterval)
 		if err != nil {
 			// Context cancelled or timeout.
 			select {
@@ -372,8 +372,29 @@ func (m *cdpStreamManager) runLoop(ctx context.Context, port int) {
 			continue
 		}
 
-		// Connected to Chrome — start the screencast session.
-		if err := m.runScreencast(ctx, wsURL, port); err != nil {
+		// Page.* and Input.* are not served on the browser-level endpoint from
+		// /json/version, so stream from a page target's own WebSocket.
+		pageURL, err := pageWebSocketURL(ctx, port)
+		if err != nil {
+			log.Warn("cdp: no page target to stream yet",
+				"err", err,
+				"session", m.cfg.SessionID,
+			)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(chromeRetryDelay):
+			}
+			continue
+		}
+
+		err = m.runScreencast(ctx, pageURL, port)
+		if ctx.Err() == nil {
+			m.mu.Lock()
+			m.setState(CDPState{Status: CDPStatusWaiting, Port: port})
+			m.mu.Unlock()
+		}
+		if err != nil {
 			select {
 			case <-ctx.Done():
 				return
@@ -461,6 +482,11 @@ func (m *cdpStreamManager) runScreencast(ctx context.Context, wsURL string, port
 		m.cdpConnMu.Unlock()
 	}()
 
+	// Not Streaming until a frame arrives; a reconnect must not keep a stale Streaming.
+	m.mu.Lock()
+	m.setState(CDPState{Status: CDPStatusWaiting, Port: port})
+	m.mu.Unlock()
+
 	// Enable Page domain.
 	if err := m.sendCommand(conn, "Page.enable", nil); err != nil {
 		return fmt.Errorf("cdp: Page.enable: %w", err)
@@ -483,11 +509,7 @@ func (m *cdpStreamManager) runScreencast(ctx context.Context, wsURL string, port
 		return fmt.Errorf("cdp: Page.startScreencast: %w", err)
 	}
 
-	m.mu.Lock()
-	m.setState(CDPState{Status: CDPStatusStreaming, Port: port})
-	m.mu.Unlock()
-
-	log.Info("cdp: screencast started",
+	log.Info("cdp: screencast requested",
 		"port", port,
 		"session", m.cfg.SessionID,
 	)
@@ -569,6 +591,13 @@ func (m *cdpStreamManager) handleScreencastFrame(conn *websocket.Conn, params js
 	m.frameMu.Lock()
 	m.latestFrame = frameBytes
 	m.frameMu.Unlock()
+
+	// Streaming means frames are actually flowing, not just that Chrome answered.
+	m.mu.Lock()
+	if m.state.Status != CDPStatusStreaming {
+		m.setState(CDPState{Status: CDPStatusStreaming, Port: m.state.Port})
+	}
+	m.mu.Unlock()
 
 	// Acknowledge the frame so Chrome sends the next one.
 	ackParams := map[string]interface{}{"sessionId": fp.SessionID}

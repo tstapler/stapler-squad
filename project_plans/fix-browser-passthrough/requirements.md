@@ -64,7 +64,13 @@ condition entirely unrelated to whether the CDP stream is flowing.
   by the UI (e.g. to auto-switch to the Browser tab), it can be added as an additive
   enhancement without regressions.
 
-### FR-7: No change to backend or proto
+### FR-7: No change to backend or proto — WAIVED in part (owner decision, 2026-10-25)
+> **Waiver:** the owner decided in this session to waive this requirement (backlog AC9) and fix the
+> backend root cause. Live testing showed `session/cdp/manager.go` `runScreencast` sent `Page.*`
+> commands on Chrome's browser-level WebSocket, which rejects them, so no frame was ever delivered.
+> Permitted Go change: `session/cdp/manager.go` (+ `session/cdp/screencast_test.go`) only. The proto
+> schema and generated bindings remain unchanged.
+
 - No Go code, proto schema, or generated proto bindings need to change for this fix.
 - `session.cdpState` is already populated in `instance_adapter.go` and present on the
   proto `Session` message (field 52 `cdp_state`), and `make build` regenerates the TS
@@ -103,4 +109,5 @@ condition entirely unrelated to whether the CDP stream is flowing.
 4. The "Connecting to browser..." placeholder appears while `CDP_STATUS_WAITING`.
 5. Existing unit tests pass with updated prop types; new tests cover the CDP-gated
    availability path.
-6. No backend Go code, proto schema, or generated files are modified.
+6. ~~No backend Go code, proto schema, or generated files are modified.~~ Waived for `session/cdp/manager.go` (see FR-7); proto and generated files still unchanged.
+7. `Page.enable`/`Page.startScreencast` go to a page-target WebSocket and `CDP_STATUS_STREAMING` is published only after the first frame is stored.

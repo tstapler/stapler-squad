@@ -89,6 +89,16 @@
 - Verify toast message shows "Chrome or Chromium" copy (not the old Xvfb copy)
 - Covers: NFR-2
 
+## Added in Revision 2 (2026-10-25)
+
+**UT-TS-020..022** (`BrowserTab.test.tsx`, "first-frame feedback"): STREAMING without a frame shows "Waiting for first frame…"; after 10 s shows "No frames received from the browser"; `onFrame` hides it. Covers: pre-mortem P1.
+
+**UT-GO-001** `TestScreencast_UsesPageTargetAndStreamsOnFirstFrame` (`session/cdp/screencast_test.go`): fake Chrome whose browser endpoint rejects `Page.*`; asserts `Page.enable`, `Page.startScreencast` arrive on the page endpoint, state reaches Streaming only after a frame, `LatestFrame()` equals the frame. Verified to FAIL on the pre-fix `manager.go` and pass after. Covers: FR-7 (waived), AC5.
+
+**LV-001** Live (Linux, Chrome 146, isolated instance): `cdpState` STREAMING; Browser tab enabled; canvas 780x441 with 343978 non-black pixels showing the Chrome page; animated page gave 74 frames / 303418 bytes over 5 s on `cdp-stream`. macOS not run.
+
+Owner decision on AC5 vs AC9: AC9 waived, backend fixed (see `requirements.md` FR-7).
+
 ## Requirements Coverage
 
 | Requirement | Tests |
@@ -99,6 +109,6 @@
 | FR-4: Placeholder text updated | UT-TS-002, UT-TS-003 |
 | FR-5: macOS works | UT-TS-011, MV-001 |
 | FR-6: Linux parity | MV-002 |
-| FR-7: No backend changes | Build passes, no Go test regressions |
+| FR-7: No backend changes (WAIVED; backend fixed) | UT-GO-001, `go test ./session/cdp -race`, LV-001 |
 | NFR-1: No tests broken | `make test` / `bunx jest` pass |
 | NFR-2: Mobile tooltip | MV-004 |
