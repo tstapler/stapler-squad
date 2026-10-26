@@ -12,6 +12,7 @@ import {
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import {
   shouldNotify,
+  getNotifiedSessions,
   markNotified,
   markAcknowledged,
   markNotifiedBatch,
@@ -214,9 +215,11 @@ export function useReviewQueueNotifications(
     // 1. Not yet notified this queue-lifetime (notifiedItemsRef, not previousItemsRef)
     // 2. Should be notified (not in localStorage grace period)
     // 3. Have dwelled in the queue long enough (dwell-time filter for auto-approve)
+    let storedRecords: ReturnType<typeof getNotifiedSessions> | undefined;
     const newItemIds = Array.from(currentItemIds).filter((id) => {
       if (notifiedItemsRef.current.has(id)) return false; // Already notified — skip
-      if (!shouldNotify(id)) return false;
+      storedRecords ??= getNotifiedSessions(); // parse localStorage once per run, not per id
+      if (!shouldNotify(id, storedRecords)) return false;
       const firstSeen = itemFirstSeenRef.current.get(id) ?? now;
       if (firstSeen === 0) return false; // Was already present at initial load
       return now - firstSeen >= DWELL_TIME_MS;
