@@ -386,10 +386,22 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
 
       - name: Install Playwright + test dependencies
+        # --with-deps runs apt-get, which stalls on mirror connections (see
+        # benchmark.yml); an unbounded stall ate the whole 50m job timeout and
+        # surfaced as a cancelled shard. Bound each attempt and retry.
+        timeout-minutes: 20
         run: |
           cd tests/e2e
           bun install --frozen-lockfile
-          npx playwright install chromium firefox webkit --with-deps
+          for attempt in 1 2 3; do
+            if timeout 6m npx playwright install chromium firefox webkit --with-deps; then
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
       # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
@@ -553,10 +565,22 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
 
       - name: Install Playwright + test dependencies
+        # --with-deps runs apt-get, which stalls on mirror connections (see
+        # benchmark.yml); an unbounded stall ate the whole 50m job timeout and
+        # surfaced as a cancelled shard. Bound each attempt and retry.
+        timeout-minutes: 20
         run: |
           cd tests/e2e
           bun install --frozen-lockfile
-          npx playwright install chromium firefox webkit --with-deps
+          for attempt in 1 2 3; do
+            if timeout 6m npx playwright install chromium firefox webkit --with-deps; then
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
 
       # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
       # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
