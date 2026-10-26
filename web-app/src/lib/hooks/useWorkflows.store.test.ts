@@ -51,4 +51,18 @@ describe("useWorkflows shared store", () => {
     await act(async () => { await jest.advanceTimersByTimeAsync(180_000); });
     expect(mockListWorkflows).toHaveBeenCalledTimes(1);
   });
+
+  it("useWorkflows_should_IssueNoRequests_When_OnlyHiddenWindowConsumersFor120s", async () => {
+    renderHook(() => useWorkflows({ watch: false, pollMode: "off" }));
+    await act(async () => { await jest.advanceTimersByTimeAsync(120_000); });
+    expect(mockListWorkflows).not.toHaveBeenCalled();
+  });
+
+  it("useWorkflows_should_KeepBackstop_When_VisibleConsumerSitsBesideHiddenOne", async () => {
+    renderHook(() => useWorkflows({ watch: false, pollMode: "off" }));
+    renderHook(() => useWorkflows({ watch: false, pollMode: "slow" }));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await jest.advanceTimersByTimeAsync(90_000); });
+    expect(mockListWorkflows).toHaveBeenCalledTimes(2);
+  });
 });

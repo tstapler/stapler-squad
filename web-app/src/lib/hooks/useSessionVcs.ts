@@ -10,6 +10,7 @@ import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 import { fetchVcsEntry, invalidateVcsEntry } from "@/lib/hooks/useVcsStatus";
+import { pollIntervalMs, type PollMode } from "@/lib/hooks/pollMode";
 
 /** Parsed diff stats returned by getSessionDiff. */
 export interface SessionDiff {
@@ -61,14 +62,13 @@ const INACTIVE_STATUS_POLL_MS = 600_000;
  * useSessionVcsContext(). This eliminates the 3 independent, uncached fetches
  * those components previously made independently.
  *
- * @param isActive - Whether this session's pane currently has focus.
- * Defaults to true (matches prior always-poll-every-60s behavior) so every
- * caller except a multi-pane layout is unaffected. A multi-pane layout
- * should pass the focused pane's own focus state so unfocused panes fall
- * back to INACTIVE_STATUS_POLL_MS instead of polling as if the user were
- * watching them.
+ * @param pollMode - "fast" (default; matches the prior always-poll-every-60s
+ * behavior) for a focused pane, "slow" (INACTIVE_STATUS_POLL_MS) for a visible
+ * unfocused pane, "off" for a pane in a hidden window: no fetch at all until
+ * the mode changes (the effect refetches on activation).
  */
-export function useSessionVcs(sessionId: string, baseUrl: string, isActive = true): SessionVcsState {
+export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: PollMode = "fast"): SessionVcsState {
+  const isActive = pollMode === "fast";
   const [status, setStatus] = useState<VCSStatus | null>(null);
   const [diff, setDiff] = useState<SessionDiff | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -183,16 +183,17 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   // VCS status: re-fetch on mount and whenever the session changes in Redux.
   // Event-driven is the primary trigger; the fallback interval catches git
   // commits that happen mid-session without changing the session's status
-  // field. isActive controls the fallback's cadence, not whether it fires —
+  // field. pollMode controls the fallback's cadence, not whether it fires —
   // a backgrounded pane still needs a backstop, just not one tuned for a
   // user actively watching it.
   useEffect(() => {
     stoppedRef.current = false;
+    const pollMs = pollIntervalMs(pollMode, ACTIVE_STATUS_POLL_MS, INACTIVE_STATUS_POLL_MS);
+    if (pollMs === null) return;
     setStatusLoading(true);
     const firstForSession = mountedSessionRef.current !== sessionId;
     mountedSessionRef.current = sessionId;
     void loadStatus(!firstForSession);
-    const pollMs = isActive ? ACTIVE_STATUS_POLL_MS : INACTIVE_STATUS_POLL_MS;
     const fallback = setInterval(() => {
       if (stoppedRef.current) {
         clearInterval(fallback);
@@ -202,7 +203,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     }, pollMs);
     return () => clearInterval(fallback);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, isActive]);
+  }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 
   // Diff: fetch once on mount; consumers call refreshDiff() when needed.
   // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.

@@ -47,14 +47,14 @@ describe("useSessionVcs prefetch dedupe", () => {
 
   it("useSessionVcs_should_TagGetVCSStatusDeferred_When_PaneNotActive", async () => {
     mockGetVCSStatus.mockResolvedValue({ vcsStatus: { branch: "x" }, error: "" });
-    const { result } = renderHook(() => useSessionVcs("s3", "", false));
+    const { result } = renderHook(() => useSessionVcs("s3", "", "slow"));
     await waitFor(() => expect(result.current.statusLoading).toBe(false));
     expect(mockGetVCSStatus.mock.calls[0][1].contextValues.get(priorityKey)).toBe("deferred");
   });
 
   it("useSessionVcs_should_LeaveGetVCSStatusCritical_When_PaneActive", async () => {
     mockGetVCSStatus.mockResolvedValue({ vcsStatus: { branch: "x" }, error: "" });
-    const { result } = renderHook(() => useSessionVcs("s4", "", true));
+    const { result } = renderHook(() => useSessionVcs("s4", "", "fast"));
     await waitFor(() => expect(result.current.statusLoading).toBe(false));
     expect(mockGetVCSStatus.mock.calls[0][1]).toBeUndefined();
   });

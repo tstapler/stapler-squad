@@ -1,4 +1,6 @@
-export type PollMode = "off" | "slow" | "fast";
+import type { PollMode } from "@/lib/hooks/pollMode";
+
+export type { PollMode };
 
 export interface SessionDetailActivity {
   pollMode: PollMode;

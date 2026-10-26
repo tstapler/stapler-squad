@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useFilesFlags } from "@/lib/hooks/useFilesFlags";
 import { useFilesV2, type FilesV2 } from "@/lib/hooks/useFilesV2";
 import type { OpenSource } from "@/lib/hooks/useOpenBuffers";
+import type { PollMode } from "@/lib/hooks/pollMode";
 import { useFilesShortcuts } from "@/lib/hooks/useFilesShortcuts";
 import { useFilesDeepLink } from "@/lib/hooks/useFilesDeepLink";
 import { FileTransportProvider } from "@/lib/hooks/useFileTransport";
@@ -43,6 +44,8 @@ interface FilesTabProps {
   onResumeSession?: (trigger: HTMLElement) => void;
   /** The Files tab is the visible tab; false pauses on-disk freshness polling (StatFile). Defaults to true. */
   tabActive?: boolean;
+  /** Buffer-freshness cadence; "off" in a hidden window. Defaults to "fast". */
+  pollMode?: PollMode;
 }
 
 // ---- Component ----
@@ -74,8 +77,8 @@ function FilesTabGate(props: FilesTabProps) {
 }
 
 /** files:viewer-v2 on: selection is the active buffer of the open-buffers reducer. */
-function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, sessionRunning = false, tabActive = true, ...rest }: FilesTabProps) {
-  const v2 = useFilesV2(sessionId, sessionRunning, { initialSelectedPath, onSelectedPathChange }, tabActive);
+function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange, sessionRunning = false, tabActive = true, pollMode, ...rest }: FilesTabProps) {
+  const v2 = useFilesV2(sessionId, sessionRunning, { initialSelectedPath, onSelectedPathChange }, tabActive, pollMode);
   const { open } = v2.bridge;
   const onOpen = useCallback((path: string, source?: OpenSource) => open(path, { source }), [open]);
   return (

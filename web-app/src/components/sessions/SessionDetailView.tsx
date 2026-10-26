@@ -393,7 +393,7 @@ export function SessionDetailView({
   isActive = true,
   windowActive = true,
 }: SessionDetailViewProps) {
-  const { measureEnabled } = useSessionDetailActivity({ isFocused: isActive, windowActive });
+  const { measureEnabled, keysEnabled, pollMode } = useSessionDetailActivity({ isFocused: isActive, windowActive });
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
 
@@ -431,7 +431,7 @@ export function SessionDetailView({
   // to its Workflow row so we can show "Triggered by: {slug} ({trigger_type})" for
   // automated (non-"manual") trigger-created sessions, distinguishing them from a
   // plain @slug manually-invoked Workflow session.
-  const { workflows: attributionWorkflows } = useWorkflows({ watch: false });
+  const { workflows: attributionWorkflows } = useWorkflows({ watch: false, pollMode });
   const triggerWorkflow = session.workflowId
     ? attributionWorkflows.find((w) => w.id === session.workflowId)
     : undefined;
@@ -642,7 +642,7 @@ export function SessionDetailView({
     label: "Spawn new shell",
     context: "terminal",
     action: handleOpenNewShellDialog,
-  }, isActive);
+  }, keysEnabled);
 
   const handleSpawnShell = useCallback(async (params: { name?: string; command?: string; workingDir?: string }) => {
     const tab = await spawnShell(params);
@@ -664,9 +664,7 @@ export function SessionDetailView({
       });
   };
 
-  // Literal true keeps today's behavior (every mounted view handles keys); Task 4.1.3b
-  // switches it to activity.keysEnabled.
-  useReviewNavKeys(true, { isFullscreen, setIsFullscreen, showNavigation, onNext, onPrevious });
+  useReviewNavKeys(keysEnabled, { isFullscreen, setIsFullscreen, showNavigation, onNext, onPrevious });
 
   function makeStringFieldEditor(
     editValue: string,
@@ -1210,6 +1208,7 @@ export function SessionDetailView({
               initialSelectedPath={filesSelectedPath}
               onSelectedPathChange={setFilesSelectedPath}
               tabActive={activeTab === "files"}
+              pollMode={pollMode}
               sessionRunning={session.status === SessionStatus.RUNNING}
               sessionName={session.title}
               onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}

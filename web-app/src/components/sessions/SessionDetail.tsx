@@ -5,6 +5,7 @@ import { lazyComponent } from "@/lib/lazy";
 import { Session } from "@/gen/session/v1/types_pb";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionVcsProvider } from "@/lib/contexts/SessionVcsContext";
+import { useSessionDetailActivity } from "./useSessionDetailActivity";
 import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
@@ -61,9 +62,9 @@ interface SessionDetailProps {
   backlogItemId?: string;
   /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
   backlogEntry?: BacklogIndexEntry;
-  /** Whether this session's pane currently has focus — forwarded to SessionVcsProvider. Defaults to true. */
+  /** Whether this session's pane currently has focus. Defaults to true. */
   isActive?: boolean;
-  /** Window is the visible one. Defaults to true; plumbed to SessionDetailView (no-op until Task 4.1.3b). */
+  /** Window is the visible one. Defaults to true. Gates polling, keys and measuring via useSessionDetailActivity. */
   windowActive?: boolean;
 }
 
@@ -90,6 +91,7 @@ export function SessionDetail({
   isActive,
   windowActive,
 }: SessionDetailProps) {
+  const { pollMode } = useSessionDetailActivity({ isFocused: isActive ?? true, windowActive: windowActive ?? true });
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
   const sessionsError = useAppSelector(selectSessionsError);
@@ -149,7 +151,7 @@ export function SessionDetail({
   // Read-only is decided from session.hidden (the server enforces the same rule, Story 5.1).
   // The wrapper exists only for hidden sessions so a visible session's layout is untouched.
   return (
-    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} isActive={isActive}>
+    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} pollMode={pollMode}>
       {session.hidden ? (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", minHeight: 0 }}>
           <ReadOnlyBanner replyCardPresent={pendingQuestion !== undefined} />

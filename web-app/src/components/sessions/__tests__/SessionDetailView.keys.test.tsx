@@ -1,6 +1,6 @@
 /**
  * Task 2.1.0b pin: the window keydown moved into useReviewNavKeys with no behavior change.
- * Task 4.1.3b later inverts the unfocused-pane case (keysEnabled = windowActive && isFocused).
+ * Task 4.1.3b inverted the unfocused-pane case: keysEnabled = windowActive && isFocused.
  */
 import React from "react";
 import { render, fireEvent } from "@testing-library/react";
@@ -73,29 +73,50 @@ describe("useReviewNavKeys / SessionDetailView keydown", () => {
     expect(onNext).not.toHaveBeenCalled();
   });
 
-  it("reviewNavKeys_should_FireOnBothViews_When_OneIsAnUnfocusedPaneBeforeTask4_1_3b", () => {
-    const focusedNext = jest.fn();
-    const unfocusedNext = jest.fn();
+  const renderViews = (views: Array<{ onNext: () => void; isActive: boolean; windowActive?: boolean }>) => {
     const actions = {} as ReturnType<typeof useSessionActions>;
-    const view = (onNext: () => void, isActive: boolean) => (
-      <SessionDetailView
-        session={session}
-        allSessions={[]}
-        actions={actions}
-        onClose={jest.fn()}
-        onNext={onNext}
-        showNavigation
-        isActive={isActive}
-      />
-    );
     render(
       <>
-        {view(focusedNext, true)}
-        {view(unfocusedNext, false)}
+        {views.map((v, i) => (
+          <SessionDetailView
+            key={i}
+            session={session}
+            allSessions={[]}
+            actions={actions}
+            onClose={jest.fn()}
+            onNext={v.onNext}
+            showNavigation
+            isActive={v.isActive}
+            windowActive={v.windowActive}
+          />
+        ))}
       </>,
     );
     fireEvent.keyDown(window, { key: "ArrowRight", shiftKey: true });
+  };
+
+  it("reviewNavKeys_should_NotFire_When_UnfocusedPaneOrHiddenWindowAfterTask4_1_3b", () => {
+    const focusedNext = jest.fn();
+    const unfocusedNext = jest.fn();
+    const hiddenWindowNext = jest.fn();
+    renderViews([
+      { onNext: focusedNext, isActive: true },
+      { onNext: unfocusedNext, isActive: false },
+      { onNext: hiddenWindowNext, isActive: true, windowActive: false },
+    ]);
     expect(focusedNext).toHaveBeenCalledTimes(1);
-    expect(unfocusedNext).toHaveBeenCalledTimes(1);
+    expect(unfocusedNext).not.toHaveBeenCalled();
+    expect(hiddenWindowNext).not.toHaveBeenCalled();
+  });
+
+  it("keypress_should_BeHandledOnce_When_TwoWindowsMounted", () => {
+    const activeWindowNext = jest.fn();
+    const hiddenWindowNext = jest.fn();
+    renderViews([
+      { onNext: hiddenWindowNext, isActive: true, windowActive: false },
+      { onNext: activeWindowNext, isActive: true, windowActive: true },
+    ]);
+    expect(activeWindowNext).toHaveBeenCalledTimes(1);
+    expect(hiddenWindowNext).not.toHaveBeenCalled();
   });
 });

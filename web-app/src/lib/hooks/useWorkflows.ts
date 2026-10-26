@@ -16,6 +16,7 @@ import { create } from "@bufbuild/protobuf";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
 import { useWatchWorkflows } from "@/lib/hooks/useWatchWorkflows";
+import type { PollMode } from "@/lib/hooks/pollMode";
 
 export interface WorkflowFormData {
   slug: string;
@@ -150,10 +151,20 @@ function installBackstop(): () => void {
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  uninstallBackstop ??= installBackstop();
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) {
+  };
+}
+
+// Consumers that want the backstop (any whose pollMode is not "off"): hidden-window views
+// do not keep it alive, so a hidden window alone issues no polling.
+let pollers = 0;
+function acquireBackstop(): () => void {
+  pollers += 1;
+  uninstallBackstop ??= installBackstop();
+  return () => {
+    pollers -= 1;
+    if (pollers === 0) {
       uninstallBackstop?.();
       uninstallBackstop = null;
     }
@@ -169,6 +180,7 @@ export function resetWorkflowsStoreForTests(): void {
   inflight = null;
   uninstallBackstop?.();
   uninstallBackstop = null;
+  pollers = 0;
   listeners.clear();
 }
 
@@ -178,6 +190,8 @@ interface UseWorkflowsOptions {
    * that sit beside an always-mounted watcher (the Omnibar) pass false.
    */
   watch?: boolean;
+  /** "off" in a hidden window: no initial fetch, no staleness backstop, no watch stream. Defaults to "fast". */
+  pollMode?: PollMode;
 }
 
 /**
@@ -186,14 +200,17 @@ interface UseWorkflowsOptions {
  * Reads the shared workflow store (one ListWorkflows for all consumers) and exposes
  * create/update/delete actions.
  */
-export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWorkflowsReturn {
+export function useWorkflows({ watch = true, pollMode = "fast" }: UseWorkflowsOptions = {}): UseWorkflowsReturn {
   const { workflows, loading, error } = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const refresh = useCallback(() => fetchWorkflowsShared(true), []);
 
+  const polling = pollMode !== "off";
   useEffect(() => {
+    if (!polling) return;
     void fetchWorkflowsShared();
-  }, []);
+    return acquireBackstop();
+  }, [polling]);
 
   // Live updates from any client (MCP tool, another tab, a cron fire) via
   // WatchWorkflows -- keeps `workflows` current without requiring a manual
@@ -218,7 +235,7 @@ export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWor
       onCreatedOrUpdated: onWorkflowCreatedOrUpdated,
       onDeleted: onWorkflowDeleted,
     },
-    { enabled: watch }
+    { enabled: watch && polling }
   );
 
   const createWorkflow = useCallback(

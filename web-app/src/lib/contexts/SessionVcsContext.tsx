@@ -2,6 +2,7 @@
 
 import { createContext, useContext, ReactNode } from "react";
 import { useSessionVcs, SessionVcsState } from "@/lib/hooks/useSessionVcs";
+import type { PollMode } from "@/lib/hooks/pollMode";
 
 const SessionVcsContext = createContext<SessionVcsState | null>(null);
 
@@ -16,16 +17,16 @@ const SessionVcsContext = createContext<SessionVcsState | null>(null);
 export function SessionVcsProvider({
   sessionId,
   baseUrl,
-  isActive,
+  pollMode,
   children,
 }: {
   sessionId: string;
   baseUrl: string;
-  /** Forwarded to useSessionVcs — see its doc comment. Defaults to true. */
-  isActive?: boolean;
+  /** Forwarded to useSessionVcs — see its doc comment. Defaults to "fast". */
+  pollMode?: PollMode;
   children: ReactNode;
 }) {
-  const value = useSessionVcs(sessionId, baseUrl, isActive);
+  const value = useSessionVcs(sessionId, baseUrl, pollMode);
   return (
     <SessionVcsContext.Provider value={value}>
       {children}

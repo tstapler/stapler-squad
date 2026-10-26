@@ -7,6 +7,7 @@ import { getConnectTransport } from "@/lib/api/transport";
 import { deferUnless } from "@/lib/api/requestPriority";
 import type { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
+import { pollIntervalMs, type PollMode } from "@/lib/hooks/pollMode";
 
 interface VcsCacheEntry {
   data: VCSStatus | null;
@@ -102,7 +103,8 @@ interface UseVcsStatusResult {
 export function useVcsStatus(
   sessionId: string,
   baseUrl: string,
-  pollIntervalMs = 15_000
+  fastPollMs = 15_000,
+  pollMode: PollMode = "fast",
 ): UseVcsStatusResult {
   const hit = getCached(sessionId);
   const [data, setData] = useState<VCSStatus | null>(hit?.data ?? null);
@@ -159,6 +161,8 @@ export function useVcsStatus(
 
   useEffect(() => {
     stoppedRef.current = false;
+    const intervalMs = pollIntervalMs(pollMode, fastPollMs, fastPollMs * 10);
+    if (intervalMs === null) return; // hidden window: the effect reruns and refetches on activation
     fetchVcs();
     const interval = setInterval(() => {
       if (stoppedRef.current) {
@@ -166,9 +170,9 @@ export function useVcsStatus(
         return;
       }
       if (!document.hidden) fetchVcs();
-    }, pollIntervalMs);
+    }, intervalMs);
     return () => clearInterval(interval);
-  }, [sessionId, baseUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, baseUrl, pollMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { data, loading, error, refetch: () => fetchVcs(true) };
 }

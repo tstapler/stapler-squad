@@ -6,6 +6,7 @@ import type { LoadedBuffer } from "@/lib/files/bufferReducer";
 import type { FileStat, FileTransportPort } from "@/lib/files/transport/fileTransport";
 import { StaleBanner } from "@/components/sessions/files/StaleBanner";
 import { useBufferFreshness, compareTokens } from "../useBufferFreshness";
+import type { PollMode } from "../pollMode";
 
 const T1 = "v1:5:1:h1";
 const MTIME_ONLY = "v1:5:2:h1";
@@ -19,15 +20,15 @@ const buffer = (token: string, over: Partial<LoadedBuffer> = {}): LoadedBuffer =
 
 const statOf = (token: string): FileStat => ({ token, size: 5, readOnly: "none", analysis: "unspecified" });
 
-function setup(initial: { active?: LoadedBuffer | null; enabled?: boolean; sessionRunning?: boolean } = {}) {
+function setup(initial: { active?: LoadedBuffer | null; enabled?: boolean; sessionRunning?: boolean; pollMode?: PollMode } = {}) {
   const stat = jest.fn<Promise<FileStat>, []>(async () => statOf(T1));
   const transport: FileTransportPort = { ...createFakeTransport({ files: { "a.go": "x" } }), stat };
   const h = createFilesTestHarness({ sessionId: "s1", transport });
   const onAdoptToken = jest.fn();
   const view = renderHook(
-    (p: { active: LoadedBuffer | null; enabled: boolean; sessionRunning: boolean }) =>
+    (p: { active: LoadedBuffer | null; enabled: boolean; sessionRunning: boolean; pollMode?: PollMode }) =>
       useBufferFreshness({ ...p, onAdoptToken }),
-    { wrapper: h.wrapper, initialProps: { active: initial.active === undefined ? buffer(T1) : initial.active, enabled: initial.enabled ?? true, sessionRunning: initial.sessionRunning ?? false } },
+    { wrapper: h.wrapper, initialProps: { active: initial.active === undefined ? buffer(T1) : initial.active, enabled: initial.enabled ?? true, sessionRunning: initial.sessionRunning ?? false, ...(initial.pollMode && { pollMode: initial.pollMode }) } },
   );
   return { h, stat, onAdoptToken, ...view };
 }
@@ -184,5 +185,20 @@ describe("useBufferFreshness", () => {
     act(() => result.current.resolve("reload"));
     expect(result.current.stale).toBeNull();
     expect(h.analytics.events.find((e) => e.name === "files.stale.action")!.labels).toMatchObject({ action: "reload" });
+  });
+
+  it("useBufferFreshness_should_NotStat_When_PollModeOffForHiddenWindow", async () => {
+    const { stat } = setup({ pollMode: "off" });
+    await tick(120_000);
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("useBufferFreshness_should_PollSlowly_When_PollModeSlowForUnfocusedPane", async () => {
+    const { stat } = setup({ pollMode: "slow" });
+    await tick(30_000);
+    expect(stat).not.toHaveBeenCalled(); // fast cadence is 10 s
+    await tick(80_000);
+    expect(stat).toHaveBeenCalledTimes(1);
   });
 });
