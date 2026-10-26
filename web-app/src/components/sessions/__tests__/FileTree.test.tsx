@@ -297,7 +297,8 @@ describe("FileTree – root loading", () => {
         "test-session-uuid",
         ".",
         false,
-        "http://localhost:8543"
+        "http://localhost:8543",
+        expect.any(AbortSignal)
       );
     });
   });
@@ -388,7 +389,8 @@ describe("FileTree – handleToggle loads directories", () => {
         "test-session-uuid",
         "src",
         false,
-        "http://localhost:8543"
+        "http://localhost:8543",
+        expect.any(AbortSignal)
       );
     });
   });
@@ -1004,10 +1006,37 @@ describe("FileTree – multi-session isolation", () => {
     render(<FileTree {...defaultProps} sessionId="session-b" sortBy="type" filterChangedOnly={true} />);
 
     await waitFor(() => {
-      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-a", ".", false, expect.any(String));
-      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-b", ".", false, expect.any(String));
+      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-a", ".", false, expect.any(String), expect.any(AbortSignal));
+      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-b", ".", false, expect.any(String), expect.any(AbortSignal));
     });
 
     unmountA();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.1.6d: unmount cancels in-flight directory loads
+// ---------------------------------------------------------------------------
+
+describe("FileTree unmount cancellation", () => {
+  it("fileTree_should_AbortRootLoadAndStaySilent_When_UnmountedWithPendingListFiles", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    let resolve!: (v: unknown) => void;
+    mockFetchDirectoryFiles.mockReset();
+    mockFetchDirectoryFiles.mockReturnValue(new Promise((r) => { resolve = r; }));
+
+    const { unmount } = render(<FileTree {...defaultProps} />);
+    const signal = mockFetchDirectoryFiles.mock.calls[0][4] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+
+    unmount();
+    expect(signal.aborted).toBe(true);
+
+    await act(async () => {
+      resolve(makeFileResponse([{ path: "a.go", isDir: false }]));
+      await Promise.resolve();
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
