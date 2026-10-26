@@ -20,9 +20,21 @@ const connectTransportImportBan = {
   message: sharedTransportMessage,
 };
 
-const dynamicConnectWebImport = {
-  selector: "ImportExpression[source.value='@connectrpc/connect-web']",
-  message: sharedTransportMessage,
+// A rule of its own (not a no-restricted-syntax selector): later no-restricted-syntax blocks replace the
+// whole option list and downgrade it to "warn", which silently turned the dynamic-import ban into a warning.
+const transportBanPlugin = {
+  rules: {
+    "no-dynamic-connect-web-import": {
+      meta: { type: "problem", schema: [] },
+      create: (context) => ({
+        ImportExpression(node) {
+          if (node.source.value === "@connectrpc/connect-web") {
+            context.report({ node, message: sharedTransportMessage });
+          }
+        },
+      }),
+    },
+  },
 };
 
 export default [
@@ -95,7 +107,6 @@ export default [
       "react/jsx-max-props-per-line": "off",
       "no-restricted-syntax": [
         "error",
-        dynamicConnectWebImport,
         {
           selector: "Literal[value='100vh']",
           message: "Use var(--viewport-height) instead of '100vh'. iOS virtual keyboard shrinks the visual viewport but not 100vh, hiding content behind the keyboard. ViewportProvider updates --viewport-height via the visualViewport API. See project_plans/ux-overhaul/.",
@@ -222,7 +233,11 @@ export default [
       "src/**/*.spec.*",
       "src/**/__tests__/**",
     ],
-    rules: { "no-restricted-imports": ["error", { paths: [connectTransportImportBan] }] },
+    plugins: { "transport-ban": transportBanPlugin },
+    rules: {
+      "no-restricted-imports": ["error", { paths: [connectTransportImportBan] }],
+      "transport-ban/no-dynamic-connect-web-import": "error",
+    },
   },
   {
     files: [
@@ -279,7 +294,6 @@ export default [
     rules: {
       "no-restricted-syntax": [
         "warn",
-        dynamicConnectWebImport,
         {
           selector: "TSInterfaceDeclaration[id.name=/Props$/] > TSInterfaceBody > TSPropertySignature:nth-child(13) ~ TSPropertySignature",
           message: "Component props interface has >12 props. Consider splitting the component or grouping props into a sub-interface.",
@@ -293,7 +307,6 @@ export default [
     rules: {
       "no-restricted-syntax": [
         "warn",
-        dynamicConnectWebImport,
         {
           selector: "Literal[value=/^(Executing|Processing|Needs Approval|Input Required|Idle|Unknown|Success|Error|Tests Failing|Rate Limited|Waiting for Agent)$/]",
           message: "Use DetectedStatus enum from @/gen/session/v1/types_pb instead of raw strings for detected status values.",
