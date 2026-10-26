@@ -29,3 +29,10 @@ Started 2026-10-26. Coordinator: top-level Phase 5 thread. Workers: fresh genera
 - HAR re-capture with DevTools closed (1.1.1b/1.1.4b); confirm baseline was 7 documents.
 - baseline.json: quiet machine, >=5 kept runs: `PERF_WRITE_BASELINE=1 PW_PERF=1 bunx playwright test --project=perf` against checkout of `perf-baseline-code`; commit and tag `perf-baseline`.
 - 1.1.3: route-change scenario debug; CI seeding + page.clock spikes on a runner.
+
+## Phase 5 end state (2026-10-26)
+
+Done (code + tests, local commits, not pushed): 1.1.1a/b(code part), 1.1.2, 1.1.3 (harness), 1.1.6, 2.1.0-2.1.6, 2.1.9, 3.1.1, 3.1.2, 4.1.1-4.1.5, 5.1.1, 5.2.1 (a-g, plus /actuator/ws-unary e6d145059), 5.3.1, 5.3.2, 5.4.1a/b, 7.1.1-7.1.2, 7.1.3a. Gap-repair commits: cef5c6c26, a8e1cbc8f, 7712e411b, 33ae80ffb, bdadcaa6a, 04c12edf3, 355142824, e6d145059.
+
+Blocked (owner / quiet machine / gate): 1.1.3 baseline.json + `perf-baseline` tag; 1.1.4 slot holders; 1.1.5 backlog attribution; 2.1.7 numeric exit; 2.1.8 (conditional on 1.1.4); 5.1.2 decision gate; 5.4.1c; 5.5.1/5.5.2 three-arm; 4.1.6 default flip; 6.1.1-6.1.3 (need 1.1.5 note); 7.1.3b blocking flip; 7.1.4 final recapture; headed VoiceOver pass; HAR recapture with DevTools closed.
+Known unmet tests: statusText contrast / newControls keyboard-reachable (UI from Epic 6); keystroke +10% echo e2e; page.clock spike unrun in CI.
