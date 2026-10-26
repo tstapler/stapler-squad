@@ -2,7 +2,10 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { PROGRAMS, type ProgramOption } from "@/lib/constants/programs";
 
 // jest.setup.js globally mocks this hook; these tests need the real one.
-const { useAvailablePrograms } = jest.requireActual<{ useAvailablePrograms: () => ProgramOption[] }>("./useAvailablePrograms");
+const { useAvailablePrograms, resetAvailableProgramsForTest } = jest.requireActual<{
+  useAvailablePrograms: () => ProgramOption[];
+  resetAvailableProgramsForTest: () => void;
+}>("./useAvailablePrograms");
 
 const mockList = jest.fn();
 jest.mock("@connectrpc/connect", () => ({ createClient: () => ({ listProgramsConfig: mockList }) }));
@@ -12,6 +15,37 @@ describe("useAvailablePrograms", () => {
   beforeAll(() => {
     // jsdom has no fetch; the hook bails out early without one.
     global.fetch = jest.fn() as unknown as typeof fetch;
+  });
+
+  beforeEach(() => {
+    resetAvailableProgramsForTest();
+    mockList.mockReset();
+    (global.fetch as jest.Mock).mockReset();
+  });
+
+  it("useAvailablePrograms_should_IssueOneListProgramsConfig_When_58ConsumersMount", async () => {
+    mockList.mockResolvedValue({ programs: [{ id: "aider", label: "Aider", description: "", command: "aider", cliFlags: "" }] });
+    const hooks = Array.from({ length: 58 }, () => renderHook(() => useAvailablePrograms()));
+    await waitFor(() => hooks.forEach((h) => expect(h.result.current[0].value).toBe("aider")));
+    expect(mockList).toHaveBeenCalledTimes(1);
+    const late = renderHook(() => useAvailablePrograms());
+    await waitFor(() => expect(late.result.current[0].value).toBe("aider"));
+    expect(mockList).toHaveBeenCalledTimes(1);
+  });
+
+  it("useAvailablePrograms_should_IssueOneServerInfoFallback_And_NotCacheFailure_When_RpcRejectsAnd10ConsumersMount", async () => {
+    mockList.mockRejectedValue(new Error("down"));
+    (global.fetch as jest.Mock).mockResolvedValue({ json: () => Promise.resolve({ programs: ["/usr/bin/extra-cli"] }) });
+    const hooks = Array.from({ length: 10 }, () => renderHook(() => useAvailablePrograms()));
+    await waitFor(() => hooks.forEach((h) => expect(h.result.current.at(-1)?.value).toBe("extra-cli")));
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(mockList).toHaveBeenCalledTimes(1);
+
+    // Failure is not cached: a later mount retries the RPC.
+    mockList.mockResolvedValue({ programs: [{ id: "aider", label: "Aider", description: "", command: "aider", cliFlags: "" }] });
+    const retry = renderHook(() => useAvailablePrograms());
+    await waitFor(() => expect(retry.result.current[0].value).toBe("aider"));
+    expect(mockList).toHaveBeenCalledTimes(2);
   });
 
   it("useAvailablePrograms_should_CarryCommandAndCliFlags_When_ListProgramsConfigMapped", async () => {
