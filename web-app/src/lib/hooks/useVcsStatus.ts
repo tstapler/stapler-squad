@@ -24,24 +24,62 @@ function getCached(sessionId: string): VcsCacheEntry | null {
   return null;
 }
 
+const vcsInflight = new Map<string, Promise<VcsCacheEntry>>();
+
+/**
+ * Resolve a session's VCS status through the shared cache and a shared in-flight
+ * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
+ * `force` skips a fresh cache hit but still joins an in-flight request.
+ * Rejects on RPC failure; callers own error handling.
+ */
+export function fetchVcsEntry(sessionId: string, force = false): Promise<VcsCacheEntry> {
+  if (!force) {
+    const cached = getCached(sessionId);
+    if (cached) return Promise.resolve(cached);
+  }
+  const existing = vcsInflight.get(sessionId);
+  if (existing) return existing;
+  const client = createClient(SessionService, getConnectTransport());
+  // Shared by several callers, so no single caller's signal may cancel it; each
+  // caller drops the result itself when its own signal has aborted.
+  // abort-signal-exempt
+  const promise: Promise<VcsCacheEntry> = client
+    .getVCSStatus({ id: sessionId })
+    .then((response) => {
+      const entry: VcsCacheEntry = {
+        data: response.vcsStatus ?? null,
+        error: response.error || null,
+        timestamp: Date.now(),
+      };
+      vcsCache.set(sessionId, entry);
+      return entry;
+    })
+    .finally(() => {
+      if (vcsInflight.get(sessionId) === promise) vcsInflight.delete(sessionId);
+    });
+  vcsInflight.set(sessionId, promise);
+  return promise;
+}
+
+/** Drop a session's cached status (session deleted). */
+export function invalidateVcsEntry(sessionId: string): void {
+  vcsCache.delete(sessionId);
+}
+
+/** Test-only: clear the module cache and in-flight map. */
+export function resetVcsCacheForTests(): void {
+  vcsCache.clear();
+  vcsInflight.clear();
+}
+
 /**
  * Warm the VCS cache for a session without rendering anything.
  * Call from SessionDetail when a session is selected.
  */
 export async function prefetchVcsStatus(sessionId: string, baseUrl: string): Promise<void> {
-  if (getCached(sessionId)) return;
+  void baseUrl;
   try {
-    const client = createClient(SessionService, getConnectTransport());
-    // One-shot cache warm with no component lifecycle to cancel against;
-    // the TTL cache above (not a signal) is what stops this from
-    // compounding on rapid session switches.
-    // abort-signal-exempt
-    const response = await client.getVCSStatus({ id: sessionId });
-    vcsCache.set(sessionId, {
-      data: response.vcsStatus ?? null,
-      error: response.error || null,
-      timestamp: Date.now(),
-    });
+    await fetchVcsEntry(sessionId);
   } catch {
     // Prefetch failures are silent – the hook will retry on mount.
   }
@@ -96,15 +134,8 @@ export function useVcsStatus(
 
       const signal = startFetch();
       try {
-        const client = createClient(SessionService, getConnectTransport());
-        const response = await client.getVCSStatus({ id: sessionId }, { signal });
+        const entry = await fetchVcsEntry(sessionId, skipCache);
         if (signal.aborted) return;
-        const entry: VcsCacheEntry = {
-          data: response.vcsStatus ?? null,
-          error: response.error || null,
-          timestamp: Date.now(),
-        };
-        vcsCache.set(sessionId, entry);
         setData(entry.data);
         setError(entry.error);
       } catch (err) {

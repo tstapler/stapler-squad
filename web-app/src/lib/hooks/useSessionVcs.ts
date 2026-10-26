@@ -9,6 +9,7 @@ import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
+import { fetchVcsEntry, invalidateVcsEntry } from "@/lib/hooks/useVcsStatus";
 
 /** Parsed diff stats returned by getSessionDiff. */
 export interface SessionDiff {
@@ -77,6 +78,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   // Set once GetVCSStatus reports the session no longer exists, so the 60s
   // fallback interval below stops calling a deleted session forever.
   const stoppedRef = useRef(false);
+  const mountedSessionRef = useRef<string | null>(null);
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -96,26 +98,29 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   const startStatus = useAbortableRequest();
   const startDiff = useAbortableRequest();
 
-  const fetchStatus = useCallback(async () => {
+  // `force` skips a fresh prefetch-cache hit; the first fetch after mount reads
+  // the cache and joins any in-flight prefetch (Story 2.1.6a).
+  const loadStatus = useCallback(async (force: boolean) => {
     if (stoppedRef.current) {
       setStatusLoading(false);
       return;
     }
     const signal = startStatus();
     try {
-      const response = await getClient().getVCSStatus({ id: sessionId }, { signal });
+      const entry = await fetchVcsEntry(sessionId, force);
       if (signal.aborted) return;
-      if (response.error) {
-        setError(new Error(response.error));
+      if (entry.error) {
+        setError(new Error(entry.error));
         setStatus(null);
       } else {
-        setStatus(response.vcsStatus ?? null);
+        setStatus(entry.data);
         setError(null);
       }
     } catch (err) {
       if (signal.aborted) return;
       if (err instanceof ConnectError && err.code === Code.NotFound) {
         stoppedRef.current = true;
+        invalidateVcsEntry(sessionId);
         setError(err);
         setStatus(null);
         return;
@@ -124,7 +129,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     } finally {
       if (!signal.aborted) setStatusLoading(false);
     }
-  }, [sessionId, getClient, startStatus]);
+  }, [sessionId, startStatus]);
+
+  const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
   const fetchDiff = useCallback(async () => {
     if (stoppedRef.current) {
@@ -182,7 +189,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   useEffect(() => {
     stoppedRef.current = false;
     setStatusLoading(true);
-    fetchStatus();
+    const firstForSession = mountedSessionRef.current !== sessionId;
+    mountedSessionRef.current = sessionId;
+    void loadStatus(!firstForSession);
     const pollMs = isActive ? ACTIVE_STATUS_POLL_MS : INACTIVE_STATUS_POLL_MS;
     const fallback = setInterval(() => {
       if (stoppedRef.current) {
@@ -193,7 +202,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     }, pollMs);
     return () => clearInterval(fallback);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchStatus, sessionStatus, sessionUpdatedAt, isActive]);
+  }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, isActive]);
 
   // Diff: fetch once on mount; consumers call refreshDiff() when needed.
   // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.
