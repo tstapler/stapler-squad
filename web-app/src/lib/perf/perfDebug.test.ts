@@ -111,4 +111,33 @@ describe("InFlightGauge", () => {
       global.PerformanceObserver = original;
     }
   });
+
+  it("queuedOver1sByClass_should_AttributeEntriesToLastSeenPriority_When_QueuedOver1s", () => {
+    const { createPriorityInterceptor, resetRequestPriorityForTest } = jest.requireActual("@/lib/api/requestPriority");
+    resetRequestPriorityForTest();
+    const { SessionService } = jest.requireActual("@/gen/session/v1/session_pb");
+    const run = createPriorityInterceptor({ gate: () => Promise.resolve() })((async () => ({})) as never) as (r: unknown) => Promise<unknown>;
+    const mk = (name: string) => ({ stream: false, service: SessionService, method: SessionService.method[name], contextValues: { get: () => undefined }, signal: new AbortController().signal });
+    void run(mk("getFeatureFlags"));
+    void run(mk("listShells"));
+    const entries = ["GetFeatureFlags", "ListShells", "ListShells"].map((n) => ({
+      name: `http://x/api/session.v1.SessionService/${n}`, initiatorType: "fetch", fetchStart: 0, requestStart: 2000,
+    })) as unknown as PerformanceResourceTiming[];
+    let cb: PerformanceObserverCallback = () => {};
+    const original = global.PerformanceObserver;
+    global.PerformanceObserver = class {
+      constructor(c: PerformanceObserverCallback) { cb = c; }
+      observe() {}
+      disconnect() {}
+    } as never;
+    try {
+      window.localStorage.setItem("ssq:perf", "1");
+      const perf = installSsqPerf()!;
+      cb({ getEntries: () => entries } as never, {} as never);
+      expect(perf.queuedOver1sByClass).toEqual({ critical: 1, deferred: 2 });
+      expect(perf.queuedOver1s).toBe(3);
+    } finally {
+      global.PerformanceObserver = original;
+    }
+  });
 });

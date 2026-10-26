@@ -3,6 +3,8 @@ import { Page, Locator, CDPSession } from '@playwright/test';
 export interface PerfGauge {
   peakInFlight: number;
   queuedOver1s: number;
+  queuedOver1sCritical: number;
+  queuedOver1sDeferred: number;
 }
 
 /** Page helper for the frontend-responsiveness perf spec; end conditions are `ssq:*` User Timing measures, never `networkidle`. */
@@ -50,10 +52,11 @@ export class PerfPage {
       w.__ev = [];
       performance.clearMeasures('ssq:window-switch');
       performance.clearMeasures('ssq:route-change');
-      const p = (window as unknown as { __ssqPerf?: { inFlight: number; peakInFlight: number; queuedOver1s: number } }).__ssqPerf;
+      const p = (window as unknown as { __ssqPerf?: { inFlight: number; peakInFlight: number; queuedOver1s: number; queuedOver1sByClass: { critical: number; deferred: number } } }).__ssqPerf;
       if (p) {
         p.peakInFlight = p.inFlight;
         p.queuedOver1s = 0;
+        p.queuedOver1sByClass = { critical: 0, deferred: 0 };
       }
     });
   }
@@ -61,12 +64,19 @@ export class PerfPage {
   async readCounters(): Promise<{ longTasks: number[]; xtermMounts: number; eventDurations: number[]; gauge: PerfGauge | null }> {
     return this.page.evaluate(() => {
       const w = window as unknown as { __lt: number[]; __xt: number; __ev: number[] };
-      const p = (window as unknown as { __ssqPerf?: { inFlight: number; peakInFlight: number; queuedOver1s: number } }).__ssqPerf;
+      const p = (window as unknown as { __ssqPerf?: { inFlight: number; peakInFlight: number; queuedOver1s: number; queuedOver1sByClass: { critical: number; deferred: number } } }).__ssqPerf;
       return {
         longTasks: [...w.__lt],
         xtermMounts: w.__xt,
         eventDurations: [...w.__ev],
-        gauge: p ? { peakInFlight: p.peakInFlight, queuedOver1s: p.queuedOver1s } : null,
+        gauge: p
+          ? {
+              peakInFlight: p.peakInFlight,
+              queuedOver1s: p.queuedOver1s,
+              queuedOver1sCritical: p.queuedOver1sByClass.critical,
+              queuedOver1sDeferred: p.queuedOver1sByClass.deferred,
+            }
+          : null,
       };
     });
   }

@@ -1,3 +1,4 @@
+import { lastClassOfMethod } from "@/lib/api/requestPriority";
 import { observeQueuedRequests } from "./resourceTiming";
 
 /** Runtime-opt-in diagnostics surface at `window.__ssqPerf`; absent unless `?ssqperf=1|trace` or `localStorage["ssq:perf"]` is set. */
@@ -7,6 +8,8 @@ export interface SsqPerf {
   inFlight: number;
   peakInFlight: number;
   queuedOver1s: number;
+  /** `queuedOver1s` split by request priority class (unattributed entries, e.g. non-RPC fetches, count under `critical`). */
+  queuedOver1sByClass: { critical: number; deferred: number };
   /** Calls whose method+body matched a request already in flight, by method name. */
   dupCount: Record<string, number>;
   /** Unary calls that rejected before the browser started the request (status 0). */
@@ -49,6 +52,7 @@ export function installSsqPerf(): SsqPerf | undefined {
     inFlight: 0,
     peakInFlight: 0,
     queuedOver1s: 0,
+    queuedOver1sByClass: { critical: 0, deferred: 0 },
     dupCount: {},
     status0: 0,
     wsQueueMs: [],
@@ -56,8 +60,9 @@ export function installSsqPerf(): SsqPerf | undefined {
     wsReaderQueueHighWatermark: 0,
   };
   window.__ssqPerf = perf;
-  observeQueuedRequests(() => {
+  observeQueuedRequests((entry) => {
     perf.queuedOver1s++;
+    perf.queuedOver1sByClass[lastClassOfMethod(methodOf(entry.name ?? "")) ?? "critical"]++;
   });
   return perf;
 }

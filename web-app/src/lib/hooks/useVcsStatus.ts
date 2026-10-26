@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
+import { deferUnless } from "@/lib/api/requestPriority";
 import type { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
 
@@ -24,27 +25,28 @@ function getCached(sessionId: string): VcsCacheEntry | null {
   return null;
 }
 
-const vcsInflight = new Map<string, Promise<VcsCacheEntry>>();
+const vcsInflight = new Map<string, { promise: Promise<VcsCacheEntry>; focused: boolean }>();
 
 /**
  * Resolve a session's VCS status through the shared cache and a shared in-flight
  * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
  * `force` skips a fresh cache hit but still joins an in-flight request.
+ * `focused` false marks the call deferred (Story 2.1.9); a focused caller never joins a deferred flight.
  * Rejects on RPC failure; callers own error handling.
  */
-export function fetchVcsEntry(sessionId: string, force = false): Promise<VcsCacheEntry> {
+export function fetchVcsEntry(sessionId: string, force = false, focused = true): Promise<VcsCacheEntry> {
   if (!force) {
     const cached = getCached(sessionId);
     if (cached) return Promise.resolve(cached);
   }
   const existing = vcsInflight.get(sessionId);
-  if (existing) return existing;
+  if (existing && (existing.focused || !focused)) return existing.promise;
   const client = createClient(SessionService, getConnectTransport());
   // Shared by several callers, so no single caller's signal may cancel it; each
   // caller drops the result itself when its own signal has aborted.
   // abort-signal-exempt
   const promise: Promise<VcsCacheEntry> = client
-    .getVCSStatus({ id: sessionId })
+    .getVCSStatus({ id: sessionId }, deferUnless(focused))
     .then((response) => {
       const entry: VcsCacheEntry = {
         data: response.vcsStatus ?? null,
@@ -55,9 +57,9 @@ export function fetchVcsEntry(sessionId: string, force = false): Promise<VcsCach
       return entry;
     })
     .finally(() => {
-      if (vcsInflight.get(sessionId) === promise) vcsInflight.delete(sessionId);
+      if (vcsInflight.get(sessionId)?.promise === promise) vcsInflight.delete(sessionId);
     });
-  vcsInflight.set(sessionId, promise);
+  vcsInflight.set(sessionId, { promise, focused });
   return promise;
 }
 

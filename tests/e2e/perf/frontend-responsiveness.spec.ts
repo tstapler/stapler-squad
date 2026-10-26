@@ -130,6 +130,8 @@ async function runScenario(
         xtermMounts: counters.xtermMounts,
         peakInFlight: counters.gauge?.peakInFlight ?? null,
         queuedOver1s: counters.gauge?.queuedOver1s ?? null,
+        queuedOver1sCritical: counters.gauge?.queuedOver1sCritical ?? null,
+        queuedOver1sDeferred: counters.gauge?.queuedOver1sDeferred ?? null,
         eventP75Ms: counters.eventDurations.length ? percentile(counters.eventDurations, 0.75) : null,
         ...out,
       });
@@ -226,11 +228,12 @@ test.describe('frontend responsiveness (perf)', () => {
         return {};
       });
       assertBudgets(s);
+      assertCriticalNeverQueued(s);
     });
 
     test(`switch window retained ${throttle}x`, async ({ browser }) => {
       test.skip(!wanted('switchRetained'));
-      await runScenario(browser, 'switchRetained', throttle, async (c) => {
+      const s = await runScenario(browser, 'switchRetained', throttle, async (c) => {
         const ms: number[] = [];
         const highlight: boolean[] = [];
         for (let i = 0; i < SWITCHES; i++) {
@@ -241,6 +244,7 @@ test.describe('frontend responsiveness (perf)', () => {
         }
         return { switchMsMedian: median(ms), highlightFirstFrame: Number(highlight.every(Boolean)) };
       }, { prepare: (c) => loadShell(c, '/') });
+      assertCriticalNeverQueued(s);
     });
 
     test(`switch window cold ${throttle}x`, async ({ browser }) => {
@@ -333,6 +337,12 @@ test.describe('frontend responsiveness (perf)', () => {
   }
 
   // CDP Profiler pass: separate from the timing pass, unthrottled, one run each.
+  test('criticalCalls_should_HaveZeroQueuedOver1s_When_LoadScenarioRuns', async () => {
+    const loads = Object.entries(report.scenarios).filter(([k]) => k.startsWith('load@'));
+    test.skip(loads.length === 0, 'load scenario did not run in this invocation');
+    for (const [, s] of loads) assertCriticalNeverQueued(s);
+  });
+
   test('cpu profile: window switch and /backlog load', async ({ browser }) => {
     test.skip(!wanted('cpu'));
     const { context, page, perf, cdp } = await openPage(browser, 1);
@@ -359,6 +369,13 @@ test.describe('frontend responsiveness (perf)', () => {
     }
   });
 });
+
+/** Story 2.1.9: deferral must keep every `critical` call out of the browser's 6-connection queue (> 1 s). */
+function assertCriticalNeverQueued(s: ScenarioReport) {
+  if (process.env.PERF_WRITE_BASELINE === '1') return;
+  const worst = Math.max(0, ...(s.metrics.queuedOver1sCritical?.runs ?? []).map((n) => n ?? 0));
+  expect(worst, 'critical calls with requestStart - fetchStart > 1000 ms').toBe(0);
+}
 
 function assertBudgets(s: ScenarioReport) {
   const violations = budgetViolations(s, LOAD_WINDOW_MS / 1000);

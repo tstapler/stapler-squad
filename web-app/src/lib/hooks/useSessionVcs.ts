@@ -107,7 +107,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     }
     const signal = startStatus();
     try {
-      const entry = await fetchVcsEntry(sessionId, force);
+      const entry = await fetchVcsEntry(sessionId, force, isActive);
       if (signal.aborted) return;
       if (entry.error) {
         setError(new Error(entry.error));
@@ -129,7 +129,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     } finally {
       if (!signal.aborted) setStatusLoading(false);
     }
-  }, [sessionId, startStatus]);
+  }, [sessionId, startStatus, isActive]);
 
   const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
