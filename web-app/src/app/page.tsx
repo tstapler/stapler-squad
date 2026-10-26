@@ -24,6 +24,14 @@ import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 import type { WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
+import { WindowPanel } from "@/components/window/WindowPanel";
+import {
+  focusKindForTrigger,
+  focusWindowContent,
+  useWindowFocusMemory,
+  type WindowSwitchTrigger,
+} from "@/lib/window/useWindowFocusMemory";
+import { containsPaneId } from "@/lib/pane/paneUtils";
 import { WindowOverview } from "@/components/window/WindowOverview";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
@@ -159,8 +167,32 @@ function HomeContent() {
   // (Task 2.2.2b) is deferred to Epic 3.1, where it doesn't exist yet.
   const { windows, isRestored: isWindowsRestored, dispatchPane, createWindow, closeWindow, renameWindow } =
     useWindowManager(paneSessions);
-  const { currentWindowId, switchToWindow } = useWindowUrlSync(windows, isWindowsRestored);
+  const windowPanelRef = useRef<HTMLDivElement>(null);
+  const windowFocusMemory = useWindowFocusMemory();
+  // Focus after a committed switch depends on the trigger (design/ux.md S3): tab-key keeps it on the tab,
+  // touch/swipe never focus a terminal, everything else lands in the target's last-focused pane.
+  const handleWindowSwitchCommitted = (id: WindowId, trigger: WindowSwitchTrigger) => {
+    if (focusKindForTrigger(trigger) !== "pane") return;
+    const target = windows.find((w) => w.id === id);
+    if (!target) return;
+    const remembered = windowFocusMemory.recall(id)?.paneId;
+    const paneId =
+      remembered && containsPaneId(target.paneState.root, remembered) ? remembered : target.paneState.focusedPaneId;
+    focusWindowContent(windowPanelRef.current, paneId);
+  };
+  const {
+    currentWindowId,
+    highlightedWindowId,
+    switchToWindow: switchWindowUnrecorded,
+  } = useWindowUrlSync(windows, isWindowsRestored, handleWindowSwitchCommitted);
   const currentWindow = windows.find((w) => w.id === currentWindowId) ?? windows[0];
+  const switchToWindow = (id: WindowId, trigger?: WindowSwitchTrigger) => {
+    windowFocusMemory.record(currentWindow.id, {
+      paneId: currentWindow.paneState.focusedPaneId,
+      scrollTop: windowPanelRef.current?.scrollTop ?? 0,
+    });
+    switchWindowUnrecorded(id, trigger);
+  };
   const paneDispatch = useCallback(
     (action: PaneAction) => dispatchPane(currentWindow.id, action),
     [dispatchPane, currentWindow.id]
@@ -584,7 +616,7 @@ function HomeContent() {
           <WindowTabStrip
             ref={windowTabStripRef}
             windows={windows}
-            currentWindowId={currentWindow.id}
+            currentWindowId={highlightedWindowId}
             onSwitch={switchToWindow}
             onCreate={() => switchToWindow(createWindow())}
             onClose={(id) => {
@@ -601,46 +633,48 @@ function HomeContent() {
               windows={windows}
               currentWindowId={currentWindow.id}
               getSessionTitle={getSessionTitle}
-              onSwitch={switchToWindow}
+              onSwitch={(id) => switchToWindow(id, "overview")}
               onClose={() => setWindowOverviewOpen(false)}
             />
           )}
-          {lookup ? (
-            <SessionUnavailableCard
-              variant={lookup.status === "failed" ? "failed" : "unavailable"}
-              sessionLabel={lookup.sessionId.slice(0, 8)}
-              notification={lookup.status === "not_found" ? lookupNotification : null}
-              onOpenNotifications={() => router.push("/notifications")}
-              onGoToSessions={() => {
-                setLookup(null);
-                updateUrl(null, null);
-              }}
-              onRetry={() => {
-                const link = parseSessionDeepLink(searchParams);
-                setLookup(null);
-                fetchHiddenSessionFallback(link, true);
-              }}
-            />
-          ) : (
-            <div
-              ref={sessionDetailRef}
-              className={styles.cockpitContainer}
-              tabIndex={-1}
-              role="region"
-              aria-label="Session cockpit"
-              data-context="cockpit"
-            >
-              <PaneTilingContainer
-                sessions={paneSessions}
-                paneState={currentWindow.paneState}
-                dispatch={paneDispatch}
-                externalSessionAssign={externalAssignSession ? {
-                  ...externalAssignSession,
-                  version: externalAssignCounter,
-                } : null}
+          <WindowPanel ref={windowPanelRef} windowId={currentWindow.id}>
+            {lookup ? (
+              <SessionUnavailableCard
+                variant={lookup.status === "failed" ? "failed" : "unavailable"}
+                sessionLabel={lookup.sessionId.slice(0, 8)}
+                notification={lookup.status === "not_found" ? lookupNotification : null}
+                onOpenNotifications={() => router.push("/notifications")}
+                onGoToSessions={() => {
+                  setLookup(null);
+                  updateUrl(null, null);
+                }}
+                onRetry={() => {
+                  const link = parseSessionDeepLink(searchParams);
+                  setLookup(null);
+                  fetchHiddenSessionFallback(link, true);
+                }}
               />
-            </div>
-          )}
+            ) : (
+              <div
+                ref={sessionDetailRef}
+                className={styles.cockpitContainer}
+                tabIndex={-1}
+                role="region"
+                aria-label="Session cockpit"
+                data-context="cockpit"
+              >
+                <PaneTilingContainer
+                  sessions={paneSessions}
+                  paneState={currentWindow.paneState}
+                  dispatch={paneDispatch}
+                  externalSessionAssign={externalAssignSession ? {
+                    ...externalAssignSession,
+                    version: externalAssignCounter,
+                  } : null}
+                />
+              </div>
+            )}
+          </WindowPanel>
         </SessionViewModeProvider>
       </CockpitActionsProvider>
 
