@@ -1,15 +1,33 @@
 {
   "meta": {
     "story": "7.11c",
-    "note": "Created from a local Bun ManualInstance run before PR 7b opened (plan Task 7.11c), per the 3-run/comparator procedure in Story 7.10 and Story 0.1's gate rule. Every entry below reproduced identically on the Next build run at the same commit, so none is a Bun-only regression; they are listed because tests/e2e/baseline/next-e2e-baseline.json (Task 0.1e, Phase 0/PR 0) has not been committed yet in this repo, so the real comparator cannot classify them as a shared baseline-'fail' and exclude them automatically. Remove entries once that baseline exists and the comparator confirms the same-run e2e-next job shows them too (Story 0.1's gate rule).",
-    "generatedFrom": "3 local runs on a Bun ManualInstance, PORT=62871, commit c5891c617 (post-merge of origin/main PR 6a)"
+    "note": "Next-baseline specs that fail or skip on the Bun build by design; each has a Bun-only companion spec asserting the new behaviour (tracked in issue 1177). Entries match on the spec file plus the FULL title (describe blocks joined by ' > '). The list may only shrink: remove an entry once the Next-baseline block it covers is deleted.",
+    "generatedFrom": "Bun comparator findings of the main Build run 40184788547 (commit d5059a663 lineage), re-checked by a local Bun build run; 2026-10-25 triage"
   },
   "entries": [
     {
-      "spec": "scroll-policy.spec.ts",
-      "test": "switching the Up Next tab leaves scroll and the history length unchanged",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1136",
-      "reason": "Fails identically on the Next build at the same commit; not caused by the Bun migration."
+      "spec": "route-focus-and-announce.spec.ts",
+      "test": "route focus and announcements (Next baseline) > clicking the History nav link announces the new title in a live region",
+      "issue": "https://github.com/tstapler/stapler-squad/issues/1177",
+      "reason": "Bun's route announcer is role=status; Next's is role=alert. The Bun-only block 'the announcer is role=status, not role=alert' asserts the Bun contract."
+    },
+    {
+      "spec": "not-found.spec.ts",
+      "test": "not found (Next baseline) > an unknown path answers 200 and ends on the recorded page",
+      "issue": "https://github.com/tstapler/stapler-squad/issues/1177",
+      "reason": "Bun renders the in-place NotFound view (UX G3) instead of landing on '/'; asserted by 'not found (Bun only, UX G3)'."
+    },
+    {
+      "spec": "theme-fouc.spec.ts",
+      "test": "theme FOUC prevention (Next baseline) > font variable classes survive every theme",
+      "issue": "https://github.com/tstapler/stapler-squad/issues/1177",
+      "reason": "Bun vendors fonts as global --font-* properties, not next/font/local classes (UX G10); asserted by 'theme FOUC prevention (Bun only, UX G10)'."
+    },
+    {
+      "spec": "login-static-assets.spec.ts",
+      "test": "login page static assets (remote auth, no session) > every static asset /login needs loads 2xx with no redirect to /login",
+      "issue": "https://github.com/tstapler/stapler-squad/issues/1177",
+      "reason": "test.skip(isBunBuild()) by design (comparator counts a skip as non-pass); the Bun build is covered by 'login page static assets (Bun only, PR 7b)'."
     }
   ]
 }

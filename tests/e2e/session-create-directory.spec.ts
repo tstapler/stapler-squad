@@ -39,7 +39,7 @@ test.describe('directory session creation', () => {
     await page.getByRole('radio', { name: 'Directory' }).click();
 
     // Main input is empty — submit must be disabled regardless of session name
-    await page.getByLabel('Session Name').fill('my-dir-session');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('my-dir-session');
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeDisabled();
   });
 

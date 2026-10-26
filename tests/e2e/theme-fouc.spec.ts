@@ -100,8 +100,9 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
       'stapler-theme-custom': JSON.stringify(custom),
     });
     expect(facts.classes).toContain('e2e-custom-theme');
-    expect(facts.style).toContain('--e2e-probe');
-    expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--e2e-probe'))).toBe('42px');
+    // Read from the DOMContentLoaded snapshot: a later read races ThemeContext's /api/themes check, which
+    // (correctly) drops the override once it finds no server-side theme named custom:e2e.
+    expect(facts.style).toMatch(/--e2e-probe:\s*42px/);
   });
 
   test('an unknown stored theme degrades to clean and the page stays usable', async ({ browser }) => {

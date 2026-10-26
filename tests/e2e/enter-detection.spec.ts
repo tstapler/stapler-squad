@@ -169,11 +169,22 @@ test.describe("enter-detection", () => {
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
+    // The isolated server runs with the backlog feature off, so the session list's backlog RPCs answer
+    // 404 [not_found] and the browser logs a generic "Failed to load resource" for each. Count them to
+    // discount exactly those console lines, whichever build's load timing surfaces them.
+    let backlogDisabled404s = 0;
+    page.on("response", (resp) => {
+      if (resp.status() === 404 && resp.url().includes("/session.v1.BacklogService/")) backlogDisabled404s++;
+    });
 
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
     await page.waitForSelector("body", { timeout: 15000 });
 
+    const unexpected = consoleErrors.filter(
+      (e) => !e.includes("favicon") && !e.includes('feature "backlog" is not enabled')
+    );
+    const genericLoadFailures = unexpected.filter((e) => e.startsWith("Failed to load resource"));
     // No JS errors on page load
-    expect(consoleErrors.filter(e => !e.includes("favicon"))).toHaveLength(0);
+    expect(unexpected.length - Math.min(genericLoadFailures.length, backlogDisabled404s)).toBe(0);
   });
 });

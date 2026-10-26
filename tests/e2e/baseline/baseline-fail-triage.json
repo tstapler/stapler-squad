@@ -1,0 +1,194 @@
+{
+ "meta": {
+  "note": "Root-cause triage of the 529 baseline rows of class fail (one row per spec x project), 2026-10-25. Categories come from the Next report of main Build run 40184788547 plus a local Bun chromium run of every spec file holding a fail row. Counts are rows.",
+  "baseline": "next-e2e-baseline.json"
+ },
+ "categories": [
+  {
+   "id": "stale-baseline-passes-on-next-without-changes",
+   "rows": 146,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1186",
+   "rootCause": "Passes first try in the Next report of main Build run 40184788547; baseline needs a re-record.",
+   "specs": {
+    "a11y-route-sweep.spec.ts": 6,
+    "accessibility.spec.ts": 6,
+    "background-activity.spec.ts": 1,
+    "backlog-copy-link.spec.ts": 5,
+    "backlog-cross-host-handoff.spec.ts": 8,
+    "backlog-deep-link-resolve.spec.ts": 2,
+    "backlog-detail-live-updates.spec.ts": 1,
+    "backlog-item-detail-redesign.spec.ts": 3,
+    "backlog-item-id-deep-link.spec.ts": 2,
+    "backlog-live-updates.spec.ts": 2,
+    "backlog-manual-override.spec.ts": 2,
+    "backlog-pipeline-mode.spec.ts": 1,
+    "backlog-result-panels-mobile.spec.ts": 4,
+    "backlog-rich-text.spec.ts": 2,
+    "backlog-send-back-feedback.spec.ts": 13,
+    "backlog-session-steer.spec.ts": 9,
+    "backlog-stuck-items.spec.ts": 1,
+    "backlog.spec.ts": 6,
+    "bulk-select.spec.ts": 5,
+    "enter-detection.spec.ts": 1,
+    "escape-analytics-global-view.spec.ts": 2,
+    "files-large.spec.ts": 1,
+    "files-shortcuts.spec.ts": 2,
+    "hidden-session-view.spec.ts": 5,
+    "history-search.spec.ts": 1,
+    "item-budget-warning.spec.ts": 3,
+    "jules-dispatch.spec.ts": 1,
+    "jules-status-badge.spec.ts": 2,
+    "multi-window.spec.ts": 1,
+    "notification-inline-actions.spec.ts": 13,
+    "notification-tray-bulk.spec.ts": 1,
+    "plan-gate.spec.ts": 1,
+    "plan-review.spec.ts": 1,
+    "review-queue-priority-tiers.spec.ts": 1,
+    "route-smoke.spec.ts": 1,
+    "scroll-forward-no-dead-ends.spec.ts": 1,
+    "scroll-forward-stalled-loading-cancel.spec.ts": 1,
+    "scroll-policy.spec.ts": 1,
+    "session-board-view.spec.ts": 2,
+    "session-completion-summary.spec.ts": 1,
+    "session-create-new-worktree.spec.ts": 4,
+    "session-creation-async.spec.ts": 2,
+    "session-lifecycle.spec.ts": 1,
+    "toast-stack.spec.ts": 1,
+    "triage-question-answer.spec.ts": 8,
+    "triage-related-work.spec.ts": 4,
+    "vcs-widget.spec.ts": 2,
+    "workspace-management.spec.ts": 2
+   }
+  },
+  {
+   "id": "fixed-by-this-pr-verified-locally",
+   "rows": 93,
+   "issue": null,
+   "rootCause": "Passed on a local Bun build (chromium project) after this PR; chromium-dom rows share the spec and are unverified until CI.",
+   "specs": {
+    "alias-settings.spec.ts": 12,
+    "backlog-send-back-feedback.spec.ts": 1,
+    "backlog-session-steer.spec.ts": 1,
+    "backlog.spec.ts": 16,
+    "escape-analytics-global-view.spec.ts": 2,
+    "log-viewer.spec.ts": 14,
+    "multi-window.spec.ts": 1,
+    "plan-gate.spec.ts": 1,
+    "rules-yaml-import.spec.ts": 8,
+    "session-board-view.spec.ts": 4,
+    "session-create-new-worktree.spec.ts": 2,
+    "session-list-collapse-groups.spec.ts": 3,
+    "shell-tabs.spec.ts": 4,
+    "terminal-stress/ascii-video.spec.ts": 6,
+    "terminal-stress/log-flood.spec.ts": 6,
+    "terminal-stress/memory-leak.spec.ts": 10,
+    "triggers-panel.spec.ts": 2
+   }
+  },
+  {
+   "id": "omnibar-session-creation-drift",
+   "rows": 90,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1180",
+   "rootCause": "Specs assert the pre-redesign omnibar labels.",
+   "specs": {
+    "alias.spec.ts": 4,
+    "launcher-presets.spec.ts": 2,
+    "omnibar-backlog-intent-confirm.spec.ts": 2,
+    "one-off-session.spec.ts": 8,
+    "session-create-directory.spec.ts": 14,
+    "session-create-existing-worktree.spec.ts": 14,
+    "session-create-new-project.spec.ts": 22,
+    "session-create-new-worktree.spec.ts": 4,
+    "session-creation-async.spec.ts": 2,
+    "touch-targets.spec.ts": 18
+   }
+  },
+  {
+   "id": "session-list-fixtures-or-ui-drift",
+   "rows": 48,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1181",
+   "rootCause": "Seeded session cards / list controls not found.",
+   "specs": {
+    "browser-passthrough.spec.ts": 4,
+    "create-pull-request.spec.ts": 6,
+    "demo.spec.ts": 2,
+    "hidden-session-quiet.spec.ts": 2,
+    "idle-session-chip.spec.ts": 2,
+    "mobile-navigation.spec.ts": 2,
+    "review-queue-priority-tiers.spec.ts": 2,
+    "session-actions-steer-focus.spec.ts": 2,
+    "session-artifacts.spec.ts": 2,
+    "session-board-view.spec.ts": 2,
+    "session-list-collapse-groups.spec.ts": 4,
+    "session-list-density.spec.ts": 2,
+    "session-pin.spec.ts": 4,
+    "session-program-change.spec.ts": 4,
+    "shell-tabs.spec.ts": 4,
+    "smoke.spec.ts": 4
+   }
+  },
+  {
+   "id": "terminal-pages-and-perf",
+   "rows": 47,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1182",
+   "rootCause": "Removed /test-terminal page, missing test triggers, perf floors.",
+   "specs": {
+    "android-url-bar.spec.ts": 2,
+    "input-drop-badge.spec.ts": 10,
+    "terminal-flickering.spec.ts": 14,
+    "terminal-mobile-overflow.spec.ts": 8,
+    "terminal-resize.spec.ts": 1,
+    "terminal-resync-feature-flags.spec.ts": 2,
+    "terminal-stress/ascii-video.spec.ts": 6,
+    "terminal-stress/large-payload.spec.ts": 4
+   }
+  },
+  {
+   "id": "backlog-flows",
+   "rows": 40,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1183",
+   "rootCause": "Shared-server backlog state and stale strings.",
+   "specs": {
+    "backlog-connection-indicator.spec.ts": 2,
+    "backlog-copy-link.spec.ts": 2,
+    "backlog-deep-link-errors.spec.ts": 4,
+    "backlog-detail-live-updates.spec.ts": 4,
+    "backlog-edit-buffering.spec.ts": 4,
+    "backlog-github-sync-settings.spec.ts": 4,
+    "backlog-manual-override.spec.ts": 2,
+    "backlog-pipeline-mode.spec.ts": 2,
+    "backlog-rich-text.spec.ts": 2,
+    "backlog-sources-settings.spec.ts": 8,
+    "backlog.spec.ts": 6
+   }
+  },
+  {
+   "id": "notification-tray-drift",
+   "rows": 31,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1184",
+   "rootCause": "Notification tray elements no longer appear.",
+   "specs": {
+    "approval-ci-block.spec.ts": 4,
+    "notification-a11y-matrix.spec.ts": 8,
+    "notification-contrast-over-xterm.spec.ts": 12,
+    "notification-tray-bulk.spec.ts": 2,
+    "notification-tray-variants.spec.ts": 3,
+    "notifications-needs-decision.spec.ts": 2
+   }
+  },
+  {
+   "id": "environment-and-misc",
+   "rows": 34,
+   "issue": "https://github.com/tstapler/stapler-squad/issues/1185",
+   "rootCause": "Host keychain, dev-server-only, Next-only facts; visual-regression is issue 1188.",
+   "specs": {
+    "alias-settings.spec.ts": 6,
+    "dev-mode-hmr.spec.ts": 6,
+    "jules-dispatch.spec.ts": 5,
+    "local-file-browser.spec.ts": 4,
+    "route-focus-and-announce.spec.ts": 2,
+    "visual-regression.spec.ts": 11
+   }
+  }
+ ]
+}
