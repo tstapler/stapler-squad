@@ -24,6 +24,8 @@ import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
 import type { WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
 import { WindowKeepAliveHost } from "@/components/pane/WindowKeepAliveHost";
+import { ConnectingPlaceholder } from "@/components/window/ConnectingPlaceholder";
+import { getAllLeaves } from "@/lib/pane/paneUtils";
 import { useWindowsController } from "@/lib/window/useWindowsController";
 import {
   focusKindForTrigger,
@@ -224,6 +226,15 @@ function HomeContent() {
   const getSessionTitle = useCallback(
     (sessionId: string) => paneSessionsRef.current.find((s) => s.id === sessionId)?.title,
     []
+  );
+  const connectingSessionsFor = useCallback(
+    (root: Parameters<typeof getAllLeaves>[0]) =>
+      getAllLeaves(root).flatMap((leaf) =>
+        leaf.viewKind === "session-detail" && leaf.sessionId
+          ? [{ id: leaf.sessionId, title: getSessionTitle(leaf.sessionId) ?? leaf.sessionId.slice(0, 8) }]
+          : [],
+      ),
+    [getSessionTitle]
   );
   useShortcut("window.overview", {
     key: "o",
@@ -647,6 +658,9 @@ function HomeContent() {
             focusMemory={windowFocusMemory}
             panelRef={windowPanelRef}
             externalAssign={externalSessionAssign}
+            renderConnecting={(w, { active }) => (
+              <ConnectingPlaceholder sessions={connectingSessionsFor(w.paneState.root)} active={active} />
+            )}
             renderWindow={(w, { active, externalAssign }) =>
               lookup && active ? (
                 <SessionUnavailableCard

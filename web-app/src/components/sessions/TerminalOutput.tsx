@@ -17,6 +17,7 @@ import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { ScrollGestureProps } from "./XtermTerminal";
 import { usePooledTerminal, usePooledTerminalCallbacks } from "@/lib/terminal/TerminalPool";
 import * as poolStyles from "@/lib/terminal/TerminalPool.css";
+import { clearTerminalConnectionStatus, setTerminalConnectionStatus } from "@/lib/terminal/terminalConnectionStatus";
 import { InputDropBadge } from "./InputDropBadge";
 import { ConnectionCountIndicator } from "./ConnectionCountIndicator";
 import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
@@ -898,6 +899,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     handleHookReconnect();
   }, [bumpConnectionEpoch, handleHookReconnect]);
   const [isRetryingSession, setIsRetryingSession] = useState(false);
+  // Feeds the keep-alive "Connecting <title>..." placeholder (components/window/ConnectingPlaceholder).
+  const connectionStatus = connectionAttempts >= 5 ? "failed" : isLoadingInitialContent ? "connecting" : "connected";
+  useEffect(() => {
+    if (shellId || isExternal) return;
+    setTerminalConnectionStatus(effectiveSessionId, connectionStatus, reconnectViaHook);
+  }, [effectiveSessionId, connectionStatus, reconnectViaHook, shellId, isExternal]);
+  useEffect(() => {
+    if (shellId || isExternal) return;
+    return () => clearTerminalConnectionStatus(effectiveSessionId);
+  }, [effectiveSessionId, shellId, isExternal]);
+
   const handleRetryNow = useCallback(async () => {
     setIsRetryingSession(true);
     try {

@@ -20,9 +20,10 @@ interface HarnessProps {
   assign?: { version: number } | null;
   seen?: Record<string, unknown>;
   panelRef?: React.RefObject<HTMLDivElement | null>;
+  connecting?: boolean;
 }
 
-function Harness({ windows, current, keepAlive = true, assign = null, seen, panelRef }: HarnessProps) {
+function Harness({ windows, current, keepAlive = true, assign = null, seen, panelRef, connecting = false }: HarnessProps) {
   const memory = useWindowFocusMemory();
   return (
     <WindowKeepAliveHost
@@ -32,6 +33,7 @@ function Harness({ windows, current, keepAlive = true, assign = null, seen, pane
       focusMemory={memory}
       panelRef={panelRef}
       externalAssign={assign}
+      renderConnecting={connecting ? (w) => <div data-testid={`connecting-${w.id}`} /> : undefined}
       renderWindow={(w, ctx) => {
         if (seen) seen[w.id] = ctx.externalAssign;
         return (
@@ -109,5 +111,13 @@ describe("WindowKeepAliveHost", () => {
     expect(activeAtInert).toEqual([document.getElementById("window-panel-w2")]);
     expect(document.activeElement).not.toBe(document.body);
     expect(panelRef.current?.id).toBe("window-panel-w2");
+  });
+
+  it("host_should_RenderConnectingOverlayInsidePanel_When_FlagOnAndNotWhenFlagOff", () => {
+    const windows = ["w1", "w2"].map((id) => makeWindow(id));
+    const { rerender } = render(<Harness windows={windows} current="w1" connecting />);
+    expect(document.getElementById("window-panel-w1")).toContainElement(screen.getByTestId("connecting-w1"));
+    rerender(<Harness windows={windows} current="w1" keepAlive={false} connecting />);
+    expect(screen.queryByTestId("connecting-w1")).toBeNull();
   });
 });

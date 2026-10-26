@@ -24,6 +24,8 @@ interface WindowKeepAliveHostProps<TAssign> {
   externalAssign?: TAssign | null;
   maxRetained?: number;
   renderWindow: (window: NamedWindow, ctx: WindowRenderContext<TAssign>) => ReactNode;
+  /** Overlay for a window mounted cold (keep-alive on only); rendered inside its panel. */
+  renderConnecting?: (window: NamedWindow, ctx: { active: boolean }) => ReactNode;
 }
 
 const PANE_LEAF_SELECTOR = '[data-testid^="pane-leaf-"]';
@@ -50,6 +52,7 @@ export function WindowKeepAliveHost<TAssign = unknown>({
   externalAssign = null,
   maxRetained = MAX_RETAINED_WINDOWS,
   renderWindow,
+  renderConnecting,
 }: WindowKeepAliveHostProps<TAssign>) {
   const [retainedState, setRetained] = useState<readonly WindowId[]>([currentWindowId]);
   const retained = keepAlive ? nextRetainedWindows(retainedState, currentWindowId, windows, maxRetained) : [currentWindowId];
@@ -97,6 +100,7 @@ export function WindowKeepAliveHost<TAssign = unknown>({
             }}
           >
             {renderWindow(w, { active, externalAssign: active ? externalAssign : null })}
+            {keepAlive && renderConnecting?.(w, { active })}
           </WindowPanel>
         );
       })}
