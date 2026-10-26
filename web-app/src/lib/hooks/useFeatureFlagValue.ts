@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
+import { traceCall } from "@/lib/perf/perfDebug";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { FeatureFlag } from "@/gen/session/v1/session_pb";
 
@@ -22,6 +23,7 @@ export function resetFeatureFlagValueCache(): void {
 }
 
 async function loadFlags(now: () => number): Promise<FeatureFlag[]> {
+  traceCall("useFeatureFlagValue.loadFlags");
   if (cached && now() - cached.at < CACHE_TTL_MS) return cached.flags;
   if (!inFlight) {
     const client = createClient(SessionService, getConnectTransport());

@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { useRouter } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
+import { traceCall } from "@/lib/perf/perfDebug";
 import { FlagMutation, SessionService } from "@/gen/session/v1/session_pb";
 import type { FeatureFlag } from "@/gen/session/v1/session_pb";
 import { GLOBAL_SCOPE } from "./featureFlagScopes";
@@ -102,6 +103,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const fetchFlags = useCallback(async (opts?: { quiet?: boolean }) => {
     const mine = ++seq.current;
     try {
+      traceCall("FeatureFlagsContext.getFeatureFlags");
       const res = await client.getFeatureFlags({});
       if (mine < minAcceptable.current) return;
       minAcceptable.current = mine;
