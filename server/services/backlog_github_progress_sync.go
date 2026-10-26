@@ -87,7 +87,7 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 	if err != nil || current.ExternalURL == "" {
 		return
 	}
-	if current.GitHubLastProgressCommentStatus == newStatus {
+	if progressCommentAlreadyPosted(current.GitHubLastProgressCommentStatus, newStatus) {
 		return
 	}
 
@@ -122,6 +122,16 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 	if _, err := storage.UpdateBacklogItem(ctx, current.ID, update, nil); err != nil {
 		log.Warn("backlog_github_progress_sync: failed to persist watermark", "item", current.ID, "err", err)
 	}
+}
+
+// progressCommentAlreadyPosted: in_progress is the first comment in an item's
+// life, so any recorded status means it was already announced (a rework cycle
+// review -> in_progress must not re-announce); review only dedups against itself.
+func progressCommentAlreadyPosted(lastPosted, newStatus string) bool {
+	if lastPosted == "" {
+		return false
+	}
+	return newStatus == string(session.BacklogStatusInProgress) || lastPosted == newStatus
 }
 
 func progressStartedComment(hostID string) string {

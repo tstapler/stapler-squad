@@ -85,6 +85,18 @@ func TestProgressComment_ReEnteringInProgressDoesNotRepost(t *testing.T) {
 	require.Len(t, fake.posted(), 1)
 }
 
+func TestProgressComment_ReworkCycleDoesNotReannounceInProgress(t *testing.T) {
+	t.Parallel()
+	fake := &fakeProgressPlugin{fakeNonCloserPlugin: fakeNonCloserPlugin{pluginID: "fake_progress"}}
+	storage, registry, syncLoop, item := newProgressFixture(t, fake, "https://github.com/o/r/pull/7")
+
+	for _, st := range []string{"in_progress", "review", "in_progress", "review"} {
+		handleProgressComment(context.Background(), registry, syncLoop, storage, item, st)
+	}
+
+	require.Len(t, fake.posted(), 2, "one in_progress and one review comment")
+}
+
 func TestProgressComment_ReviewPostsPRURL(t *testing.T) {
 	t.Parallel()
 	fake := &fakeProgressPlugin{fakeNonCloserPlugin: fakeNonCloserPlugin{pluginID: "fake_progress"}}
