@@ -3,11 +3,10 @@
 import { useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import { QuickCommitPushRequestSchema } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./CommitPushModal.css";
 
@@ -28,10 +27,7 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
 
   useFocusTrap(dialogRef, true);
 
-  const transport = createConnectTransport({
-    baseUrl: getApiBaseUrl(),
-    interceptors: [createAuthInterceptor()],
-  });
+  const transport = getConnectTransport();
   const client = createClient(UnfinishedWorkService, transport);
 
   const handleSubmit = useCallback(async () => {

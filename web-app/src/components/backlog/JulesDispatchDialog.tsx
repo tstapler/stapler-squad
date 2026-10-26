@@ -12,11 +12,10 @@
 import { useEffect, useId, useRef, useState, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { AcCriterion } from "@/lib/hooks/useBacklogService";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
@@ -100,10 +99,7 @@ export function JulesDispatchDialog({
     session: ReturnType<typeof createClient<typeof SessionService>>;
   } | null>(null);
   if (!clientsRef.current) {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
+    const transport = getConnectTransport();
     clientsRef.current = {
       backlog: createClient(BacklogService, transport),
       session: createClient(SessionService, transport),

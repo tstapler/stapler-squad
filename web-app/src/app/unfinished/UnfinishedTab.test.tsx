@@ -28,7 +28,7 @@ jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({})),
 }));
 
-jest.mock("@/lib/api/transport", () => ({ getWatchTransport: () => ({}) }));
+jest.mock("@/lib/api/transport", () => ({ getWatchTransport: () => ({}), getConnectTransport: () => ({}) }));
 jest.mock("@/lib/config", () => ({
   getApiBaseUrl: () => "http://localhost",
   createAuthInterceptor: () => jest.fn(),

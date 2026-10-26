@@ -3,14 +3,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import {
   GetWorktreeAISummaryRequestSchema,
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { CommitPushModal } from "./CommitPushModal";
 import { WorktreeDiffModal } from "./WorktreeDiffModal";
@@ -49,10 +48,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showSessionPicker]);
 
-  const transport = createConnectTransport({
-    baseUrl: getApiBaseUrl(),
-    interceptors: [createAuthInterceptor()],
-  });
+  const transport = getConnectTransport();
   const client = createClient(UnfinishedWorkService, transport);
 
   const handleOpenSession = useCallback(() => {

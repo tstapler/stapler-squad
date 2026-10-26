@@ -4,10 +4,9 @@
 import { useCallback, useEffect, useRef, useState, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { DiffRenderer } from "@/components/shared/DiffRenderer";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
@@ -43,10 +42,7 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose, t
   const fetchDiff = useCallback(() => {
     setLoading(true);
     setFetchError(null);
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
+    const transport = getConnectTransport();
     const client = createClient(BacklogService, transport);
 
     client.getBacklogItemDiff({ itemId }).then((resp) => {

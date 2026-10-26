@@ -5,7 +5,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { Link, useReplaceSearch, useSearchParams } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import {
@@ -13,7 +13,6 @@ import {
   SnoozeWorktreeRequestSchema,
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { stringParam } from "@/lib/nav/search-params";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
@@ -63,10 +62,7 @@ export function UnfinishedTab() {
 
   const transport = useMemo(
     () =>
-      createConnectTransport({
-        baseUrl: getApiBaseUrl(),
-        interceptors: [createAuthInterceptor()],
-      }),
+      getConnectTransport(),
     []
   );
   const client = useMemo(() => createClient(UnfinishedWorkService, transport), [transport]);

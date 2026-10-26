@@ -3,13 +3,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getWatchTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
 import { useBacklogService, mapBacklogItem, type BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { useAppSelector } from "@/lib/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -110,10 +109,8 @@ export function BacklogItemPanel({
 
     const watchTerminal = async () => {
       try {
-        const transport = createConnectTransport({
-          baseUrl: getApiBaseUrl(),
-          interceptors: [createAuthInterceptor()],
-        });
+        // Server stream: the unary transport's default 30s deadline would kill it.
+        const transport = getWatchTransport();
         const client = createClient(BacklogService, transport);
         const stream = client.watchBacklogItems(
           { statusFilter: [], categoryFilter: [], afterSeq: 0n },

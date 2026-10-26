@@ -3,9 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { DiffRenderer } from "@/components/shared/DiffRenderer";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import * as styles from "./WorktreeDiffModal.css";
@@ -30,7 +29,7 @@ export function WorktreeDiffModal({ repoPath, branch, repoName, onClose }: Workt
     try {
       const client = createClient(
         UnfinishedWorkService,
-        createConnectTransport({ baseUrl: getApiBaseUrl(), interceptors: [createAuthInterceptor()] }),
+        getConnectTransport(),
       );
       const res = await client.getWorktreeDiff({ repoPath, branch });
       if (res.error) {
