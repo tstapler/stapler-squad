@@ -299,6 +299,18 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:request_coalescing": {
+		exempt: "client-only: no Go reader; the web client gates request coalescing on it (client reader lands with Task 2.1.4a via flagStore; Jest test to be named there), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:unary_over_ws": {
+		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:unary_over_ws_remote": {
+		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on remote-access origins on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:window_keep_alive": {
+		exempt: "client-only: no Go reader; the web client gates window keep-alive on it (client reader lands with the window keep-alive story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
 	"flag:review:block-approval-on-ci-failure": {
 		testName:   "TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
