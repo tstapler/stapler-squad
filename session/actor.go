@@ -28,6 +28,11 @@ type instanceState struct {
 	inst *Instance
 }
 
+// actorStopped reports li.ctx's error up front. A select over a buffered
+// mailbox and ctx.Done() picks randomly when both are ready, so without this
+// check a send to an already-stopped actor can enqueue and report success.
+func (li *LiveInstance) actorStopped() error { return li.ctx.Err() }
+
 // sendSyncErr enqueues fn on the actor mailbox and blocks until it executes.
 // If liveInstance is nil (e.g. before NewLiveInstance, or in tests), fn runs
 // directly on the calling goroutine without locking.
@@ -35,6 +40,9 @@ func (i *Instance) sendSyncErr(fn func(*instanceState) error) error {
 	li := i.liveInstance.Load()
 	if li == nil {
 		return fn(&instanceState{inst: i})
+	}
+	if err := li.actorStopped(); err != nil {
+		return err
 	}
 	var cmdErr error
 	reply := make(chan struct{}, 1)
@@ -80,6 +88,9 @@ func (i *Instance) sendCtx(ctx context.Context, fn func(*instanceState)) error {
 	if li == nil {
 		fn(&instanceState{inst: i})
 		return nil
+	}
+	if err := li.actorStopped(); err != nil {
+		return err
 	}
 	reply := make(chan struct{}, 1)
 	cmd := func(inst *Instance) { fn(&instanceState{inst: inst}); close(reply) }
@@ -162,6 +173,9 @@ func finishLiveInstanceConstruction(li *LiveInstance) {
 // Returns li.ctx.Err() if the actor has already stopped or stops while waiting.
 // Used by tests (Story 3.2) and will be used by Epic 4+ command wrappers.
 func (li *LiveInstance) sendSync(cmd command) error {
+	if err := li.actorStopped(); err != nil {
+		return err
+	}
 	reply := make(chan struct{}, 1)
 	wrapped := func(i *Instance) { cmd(i); close(reply) }
 	select {
