@@ -7,8 +7,7 @@ import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
-import {
-  BacklogService,
+import type {
   BacklogItem as BacklogItemProto,
   DependencyInfo,
   AcCriterion as AcCriterionProto,
@@ -18,7 +17,9 @@ import {
   BacklogProgressNote as BacklogProgressNoteProto,
   BacklogActivityNote as BacklogActivityNoteProto,
   PipelineMode as PipelineModeProto,
-  PipelineStageExecutor as PipelineStageExecutorProto,
+  PipelineStageExecutor as PipelineStageExecutorProto} from "@/gen/session/v1/backlog_pb";
+import {
+  BacklogService
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
