@@ -118,6 +118,30 @@ func TestProgressComment_ReviewWithoutPRURLSkips(t *testing.T) {
 	require.Empty(t, fake.posted())
 }
 
+func TestProgressComment_ReviewWithMalformedPRURLOmitsLink(t *testing.T) {
+	t.Parallel()
+	fake := &fakeProgressPlugin{fakeNonCloserPlugin: fakeNonCloserPlugin{pluginID: "fake_progress"}}
+	storage, registry, syncLoop, item := newProgressFixture(t, fake, "https://evil.example/x) [click](http://bad")
+
+	handleProgressComment(context.Background(), registry, syncLoop, storage, item, "review")
+
+	require.Len(t, fake.posted(), 1)
+	require.NotContains(t, fake.posted()[0], "evil.example")
+}
+
+func TestProgressComment_ReadBackFailureKeepsWatermarkButRecordsStatus(t *testing.T) {
+	t.Parallel()
+	fake := &fakeProgressPlugin{fakeNonCloserPlugin: fakeNonCloserPlugin{pluginID: "fake_progress"}}
+	storage, registry, syncLoop, item := newProgressFixture(t, fake, "")
+
+	handleProgressComment(context.Background(), registry, syncLoop, storage, item, "in_progress")
+
+	got, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, "in_progress", got.GitHubLastProgressCommentStatus)
+	require.Nil(t, got.GitHubSyncedIssueUpdatedAt, "a guessed watermark could skip real remote edits")
+}
+
 func TestProgressComment_PostFailureLeavesWatermarkUnset(t *testing.T) {
 	t.Parallel()
 	fake := &fakeProgressPlugin{fakeNonCloserPlugin: fakeNonCloserPlugin{pluginID: "fake_progress"}, err: errors.New("token is required")}
@@ -143,7 +167,9 @@ func TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts(t *testing.T) {
 
 	var mu sync.Mutex
 	enabled := false
-	StartBacklogGitHubProgressSyncSubscriber(ctx, bus, func() bool { mu.Lock(); defer mu.Unlock(); return enabled }, registry, syncLoop, storage)
+	flagCalls := 0
+	StartBacklogGitHubProgressSyncSubscriber(ctx, bus, func() bool { mu.Lock(); defer mu.Unlock(); flagCalls++; return enabled }, registry, syncLoop, storage)
+	calls := func() int { mu.Lock(); defer mu.Unlock(); return flagCalls }
 
 	publish := func() {
 		bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
@@ -151,7 +177,8 @@ func TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts(t *testing.T) {
 		}))
 	}
 	publish()
-	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest negative assertion on a subscriber goroutine with no completion signal
+	// The flag is read before any post, so once it has been consulted with the flag off the event is fully handled.
+	wait.RequireEventually(t, func() bool { return calls() == 1 }, 2*time.Second, 10*time.Millisecond, "expected the flag to be consulted")
 	require.Empty(t, fake.posted())
 
 	mu.Lock()
@@ -174,6 +201,24 @@ func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 
 	_, _, _, ok = resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://example.com/not-github"})
 	require.False(t, ok)
+}
+
+func TestForwardSyncClose_PostsCommentWithHostID(t *testing.T) {
+	t.Parallel()
+	storage := newForwardSyncTestStorage(t)
+	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
+	})
+	require.NoError(t, err)
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "fake_closer", closeUpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+	registry := session.NewPluginRegistry()
+	registry.Register(fake)
+
+	handleForwardSyncClose(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item)
+
+	require.Equal(t, 1, fake.commentCallCount())
+	require.Contains(t, fake.commentCalls[0].body, "`host-abc`")
 }
 
 func TestForwardSyncCloseCommentFor_IncludesHostWhenKnown(t *testing.T) {

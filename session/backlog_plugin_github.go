@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const githubIssuesPerPage = 50
@@ -410,7 +411,8 @@ func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config Plugin
 // returns its updated_at so the caller can advance the loop-prevention
 // watermark: a comment bumps the issue's updated_at, and without advancing
 // past it the next backward sync would re-ingest the issue. A zero time with a
-// nil error means the comment was posted but the read-back failed.
+// nil error means the comment was posted but the read-back failed; the caller
+// must then leave the watermark alone rather than guess.
 func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config PluginConfig, externalID, body string) (time.Time, error) {
 	if err := g.PostIssueComment(ctx, config, externalID, body); err != nil {
 		return time.Time{}, err
@@ -419,23 +421,34 @@ func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config Plu
 	if err != nil {
 		return time.Time{}, err
 	}
+	updatedAt, err := readIssueUpdatedAt(ctx, cfg, externalID)
+	if err != nil {
+		log.Debug("github_issues: read-back after progress comment failed", "issue", externalID, "err", err)
+		return time.Time{}, nil
+	}
+	return updatedAt, nil
+}
+
+func readIssueUpdatedAt(ctx context.Context, cfg githubPluginConfig, externalID string) (time.Time, error) {
 	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues/%s", cfg.Owner, cfg.Repo, externalID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return time.Time{}, nil
+		return time.Time{}, err
 	}
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	resp, err := github.HTTPClient().Do(req)
 	if err != nil {
-		return time.Time{}, nil
+		return time.Time{}, err
 	}
 	defer resp.Body.Close()
-	var issue githubIssue
-	if resp.StatusCode >= 300 || json.NewDecoder(resp.Body).Decode(&issue) != nil {
-		return time.Time{}, nil
+	if resp.StatusCode >= 300 {
+		return time.Time{}, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	updatedAt, _ := time.Parse(time.RFC3339, issue.UpdatedAt)
-	return updatedAt, nil
+	var issue githubIssue
+	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339, issue.UpdatedAt)
 }
 
 // MapToBacklogItem converts a GitHub ExternalItem to a BacklogItemData.

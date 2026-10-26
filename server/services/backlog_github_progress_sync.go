@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -77,11 +78,14 @@ func StartBacklogGitHubProgressSyncSubscriber(ctx context.Context, bus *events.E
 
 // handleProgressComment posts the comment for newStatus. Failures are logged
 // and swallowed: this runs from a subscriber goroutine and a missing token or
-// GitHub outage must never fail the transition that triggered it.
+// GitHub outage must never fail the transition that triggered it. Best-effort:
+// the dedup status is persisted after the post, so a persist failure can duplicate.
 func handleProgressComment(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData, newStatus string) {
 	if item == nil || item.ID == "" {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, progressCommentTimeout)
+	defer cancel()
 	// Re-fetch: the event's snapshot can predate pr_url being written and lacks the source edge.
 	current, err := storage.GetBacklogItem(ctx, item.ID)
 	if err != nil || current.ExternalURL == "" {
@@ -99,7 +103,7 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 		if current.PrURL == "" {
 			return
 		}
-		body = fmt.Sprintf("A pull request has been opened for this issue: %s", current.PrURL)
+		body = progressReviewComment(current.PrURL)
 	default:
 		return
 	}
@@ -114,11 +118,12 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 		return
 	}
 
-	watermark := issueUpdatedAt
-	if watermark.IsZero() {
-		watermark = time.Now().UTC()
+	// A zero updatedAt means the read-back failed: record the dedup status but
+	// leave the watermark, since a guessed one could skip real remote edits.
+	update := session.BacklogItemUpdate{GitHubLastProgressCommentStatus: &newStatus}
+	if !issueUpdatedAt.IsZero() {
+		update.GitHubSyncedIssueUpdatedAt = &issueUpdatedAt
 	}
-	update := session.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark, GitHubLastProgressCommentStatus: &newStatus}
 	if _, err := storage.UpdateBacklogItem(ctx, current.ID, update, nil); err != nil {
 		log.Warn("backlog_github_progress_sync: failed to persist watermark", "item", current.ID, "err", err)
 	}
@@ -134,6 +139,23 @@ func progressCommentAlreadyPosted(lastPosted, newStatus string) bool {
 	return newStatus == string(session.BacklogStatusInProgress) || lastPosted == newStatus
 }
 
+// progressCommentTimeout bounds the network I/O done on the subscriber goroutine.
+const progressCommentTimeout = 15 * time.Second
+
+// progressReviewComment links the PR only when prURL is a canonical github.com
+// pull URL, so a malformed stored value is never echoed into a public comment.
+func progressReviewComment(prURL string) string {
+	const base = "A pull request has been opened for this issue"
+	if !strings.HasPrefix(prURL, "https://github.com/") {
+		return base + "."
+	}
+	ref, err := githubpkg.ParseGitHubRefWithHosts(prURL, nil)
+	if err != nil || ref.Type != githubpkg.RefTypePR {
+		return base + "."
+	}
+	return fmt.Sprintf("%s: %s", base, prURL)
+}
+
 func progressStartedComment(hostID string) string {
 	if hostID == "" {
 		return "Work has started on this issue in stapler-squad."
@@ -144,7 +166,8 @@ func progressStartedComment(hostID string) string {
 // resolveProgressTarget finds where to post for item: its ItemSource's plugin
 // config when it has one, otherwise (MCP/web-imported items with no SourceID) a
 // github.com config derived from ExternalURL, whose token the plugin takes from
-// the keychain. ok is false when the item has no postable GitHub issue.
+// the keychain (these trust external_url as-is, and GHE hosts are skipped since
+// no host list is passed to the parser). ok is false when the item has no postable GitHub issue.
 func resolveProgressTarget(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData) (poster issueProgressCommenter, cfg session.PluginConfig, externalID string, ok bool) {
 	if item.SourceID != "" && item.ExternalID != "" {
 		source, err := storage.GetItemSourceByID(ctx, item.SourceID)
