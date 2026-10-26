@@ -3,11 +3,10 @@
 
 import { useEffect, useState, useRef, useCallback, Fragment } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { ErrorEventRecord } from "@/gen/session/v1/session_pb";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl } from "@/lib/config";
 import { formatTimestamp } from "@/lib/utils/datetime";
 import * as styles from "./ErrorDashboard.css";
 
@@ -22,7 +21,7 @@ export function ErrorDashboard() {
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   }, []);
 

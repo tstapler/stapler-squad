@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import {
   AvailableWorkspaceTargets,
@@ -94,7 +94,7 @@ export function WorkspaceSwitchModal({
     () =>
       createClient(
         SessionService,
-        createConnectTransport({ baseUrl })
+        getConnectTransport({ baseUrl })
       ),
     [baseUrl]
   );

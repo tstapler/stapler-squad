@@ -18,6 +18,7 @@ jest.mock("../DebugMenu.css", () =>
 jest.mock("@connectrpc/connect", () => ({
   createClient: jest.fn(() => ({})),
 }));
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn(() => ({})),
 }));

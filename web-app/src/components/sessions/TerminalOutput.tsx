@@ -47,7 +47,7 @@ import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
 import { isWorktreeMissingError } from "@/lib/utils/backoff";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import * as styles from "./TerminalOutput.css";
 
@@ -889,7 +889,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // per open terminal pane).
   const retrySessionClientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   if (!retrySessionClientRef.current) {
-    retrySessionClientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+    retrySessionClientRef.current = createClient(SessionService, getConnectTransport({ baseUrl }));
   }
   const reconnectViaHook = useCallback(() => {
     bumpConnectionEpoch();

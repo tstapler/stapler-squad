@@ -4,11 +4,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeConfigFile } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import Editor, { OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import * as styles from "./config.css";
-import { getApiBaseUrl } from "@/lib/config";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { registerPasskey, logout as doLogout } from "@/lib/auth/passkey";
 
@@ -83,9 +82,7 @@ export function ConfigPageContent() {
 
   // Initialize ConnectRPC client
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-    });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   }, []);
 

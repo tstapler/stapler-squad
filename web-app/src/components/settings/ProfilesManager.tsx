@@ -6,8 +6,7 @@ import {
   type ProfileDefaultsProto,
 } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
 import {
   container,
@@ -94,7 +93,7 @@ export function ProfilesManager() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadProfiles();
   }, [loadProfiles]);

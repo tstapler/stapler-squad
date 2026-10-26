@@ -2,6 +2,10 @@ import { trace } from "@opentelemetry/api";
 import type { Interceptor } from "@connectrpc/connect";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
 
+// jsdom (Jest) defines `performance` without mark/measure.
+const canMeasure = () =>
+  typeof performance !== "undefined" && typeof performance.mark === "function" && typeof performance.measure === "function";
+
 /**
  * Network-queueing-delay attribute name set on the active OTel span (see
  * getNetworkQueueDelayMs below). Named to sort next to the standard
@@ -77,7 +81,7 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
     const method = req.method.name;
     const startMark = `rpc:${method}:start`;
 
-    if (typeof performance !== "undefined") {
+    if (canMeasure()) {
       performance.mark(startMark);
     }
     const wallStart = Date.now();
@@ -92,7 +96,7 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
       const durationMs = Date.now() - wallStart;
       const queueDelayMs = getNetworkQueueDelayMs(req.url);
 
-      if (typeof performance !== "undefined") {
+      if (canMeasure()) {
         try {
           performance.measure(`rpc:${method}`, {
             start: startMark,

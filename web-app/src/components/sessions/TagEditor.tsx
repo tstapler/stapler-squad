@@ -2,9 +2,8 @@
 
 import { useState, KeyboardEvent, useRef, RefObject } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   UNCLASSIFIED_TAG, hasProvenance, removalConfirmationText,
@@ -98,7 +97,7 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
     setReclassifyStatus(null);
     setError(null);
     try {
-      const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+      const transport = getConnectTransport();
       const client = createClient(SessionService, transport);
       const response = await client.reclassifySessionTags({ sessionId });
       const applied = [...response.tags];

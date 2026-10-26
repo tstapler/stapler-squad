@@ -4,8 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService, type AliasProto } from "@/gen/session/v1/session_pb";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { ALIAS_NAME_RE } from "@/lib/omnibar/detectors/AliasDetector";
@@ -132,7 +131,7 @@ export function AliasesManager() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadAliases();
   }, [loadAliases]);

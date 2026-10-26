@@ -8,9 +8,8 @@ import {
   requestNotificationPermission,
 } from "@/lib/utils/notifications";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 import { collectPerfDiagnostics } from "@/lib/diagnostics/perfDiagnostics";
 import {
   overlay,
@@ -78,7 +77,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
   useFocusTrap(menuRef, isOpen, triggerRef);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   }, []);
 

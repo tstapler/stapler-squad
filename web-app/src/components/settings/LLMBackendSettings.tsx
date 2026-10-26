@@ -8,8 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { LLMBackendService, type LLMBackendStatus } from "@/gen/session/v1/llm_backend_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import {
   container,
   heading,
@@ -85,7 +84,7 @@ export function LLMBackendSettings() {
   }, []);
 
   useEffect(() => {
-    clientRef.current = createClient(LLMBackendService, createConnectTransport({ baseUrl: getApiBaseUrl() }));
+    clientRef.current = createClient(LLMBackendService, getConnectTransport());
     load();
   }, [load]);
 

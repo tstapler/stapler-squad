@@ -4,9 +4,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import * as styles from "./OnboardingModal.css";
 import { ONBOARDED_KEY } from "./useOnboarding";
@@ -63,7 +62,7 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
   const [hookMessage, setHookMessage] = useState<string | null>(null);
 
   const client = useMemo(
-    () => createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() })),
+    () => createClient(SessionService, getConnectTransport()),
     []
   );
 
