@@ -1,10 +1,15 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "@/lib/nav";
+import { announce, formatWindowAnnouncement } from "@/lib/nav/announce";
 import { markWindowSwitchEnd, markWindowSwitchStart } from "@/lib/perf/perfMarks";
 import { getLastFocusedWindowId, setLastFocusedWindowId } from "./windowPersistence";
+import type { WindowSwitchTrigger } from "./useWindowFocusMemory";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
 const WINDOW_PARAM = "window";
+
+/** The URL lags a click by a router transition; give up waiting and show the URL's window after this long. */
+const PENDING_SAFETY_MS = 2000;
 
 /**
  * Resolution order per ADR-001: URL `?window=` param (if it names an
@@ -44,16 +49,31 @@ function resolveCurrentWindowId(
  */
 export function useWindowUrlSync(
   windows: NamedWindow[],
-  isRestored: boolean
+  isRestored: boolean,
+  onCommit?: (id: WindowId, trigger: WindowSwitchTrigger) => void
 ): {
   currentWindowId: WindowId;
-  switchToWindow: (id: WindowId) => void;
+  /** The tab to draw as selected: the switch target from the click's own frame, else `currentWindowId`. */
+  highlightedWindowId: WindowId;
+  switchToWindow: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
 } {
   const searchParams = useSearchParams();
   const router = useRouter();
 
   const paramWindowId = searchParams.get(WINDOW_PARAM);
   const currentWindowId = resolveCurrentWindowId(paramWindowId, windows);
+
+  // `currentWindowId` is derived from the URL and cannot lead `router.replace`, so the tab highlight
+  // follows this local target until the URL commits. Last switch wins.
+  const [pendingWindowId, setPendingWindowId] = useState<WindowId | null>(null);
+  const pendingTrigger = useRef<WindowSwitchTrigger>("programmatic");
+  const windowsRef = useRef(windows);
+  windowsRef.current = windows;
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+
+  const pendingExists = pendingWindowId !== null && windows.some((w) => w.id === pendingWindowId);
+  const highlightedWindowId = pendingExists ? pendingWindowId : currentWindowId;
 
   useEffect(() => {
     if (!isRestored) return;
@@ -74,16 +94,40 @@ export function useWindowUrlSync(
     markWindowSwitchEnd();
   }, [currentWindowId]);
 
+  // Pending target closed by another tab or window: drop it silently (nothing is announced).
+  useEffect(() => {
+    if (pendingWindowId !== null && !pendingExists) setPendingWindowId(null);
+  }, [pendingWindowId, pendingExists]);
+
+  useEffect(() => {
+    if (pendingWindowId === null) return;
+    const timer = setTimeout(() => setPendingWindowId(null), PENDING_SAFETY_MS);
+    return () => clearTimeout(timer);
+  }, [pendingWindowId]);
+
+  // The user's switch has committed: announce it and let the caller place focus.
+  useEffect(() => {
+    if (pendingWindowId === null || pendingWindowId !== currentWindowId || !pendingExists) return;
+    const list = windowsRef.current;
+    const index = list.findIndex((w) => w.id === pendingWindowId);
+    announce(formatWindowAnnouncement(index + 1, list.length, list[index].name));
+    setPendingWindowId(null);
+    onCommitRef.current?.(pendingWindowId, pendingTrigger.current);
+  }, [pendingWindowId, currentWindowId, pendingExists]);
+
   const switchToWindow = useCallback(
-    (id: WindowId) => {
+    (id: WindowId, trigger: WindowSwitchTrigger = "programmatic") => {
+      if (id === highlightedWindowId) return;
       markWindowSwitchStart();
       setLastFocusedWindowId(id);
+      pendingTrigger.current = trigger;
+      setPendingWindowId(id);
       const params = new URLSearchParams(searchParams.toString());
       params.set(WINDOW_PARAM, id);
       router.replace(`/?${params.toString()}`, { resetScroll: false });
     },
-    [router, searchParams]
+    [router, searchParams, highlightedWindowId]
   );
 
-  return { currentWindowId, switchToWindow };
+  return { currentWindowId, highlightedWindowId, switchToWindow };
 }
