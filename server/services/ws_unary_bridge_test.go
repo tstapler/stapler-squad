@@ -94,9 +94,16 @@ type bridgeHarness struct {
 	bridge *UnaryWsBridge
 	srv    *httptest.Server
 	cancel context.CancelFunc
+	dialer *websocket.Dialer
 }
 
 func newBridgeHarness(t *testing.T, listener string, opts ...UnaryWsOption) *bridgeHarness {
+	t.Helper()
+	return newBridgeHarnessTLS(t, listener, false, opts...)
+}
+
+// newBridgeHarnessTLS serves the bridge over wss:// (httptest TLS) when useTLS is set.
+func newBridgeHarnessTLS(t *testing.T, listener string, useTLS bool, opts ...UnaryWsOption) *bridgeHarness {
 	t.Helper()
 	stub := newBridgeStub()
 	_, h := sessionv1connect.NewSessionServiceHandler(stub)
@@ -120,14 +127,20 @@ func newBridgeHarness(t *testing.T, listener string, opts ...UnaryWsOption) *bri
 	baseCtx, cancel := context.WithCancel(context.Background())
 	srv := httptest.NewUnstartedServer(WithRequestRecord(listener, listener == ListenerRemote)(bridge))
 	srv.Config.BaseContext = func(_ net.Listener) context.Context { return baseCtx }
-	srv.Start()
+	dialer := websocket.DefaultDialer
+	if useTLS {
+		srv.StartTLS()
+		dialer = &websocket.Dialer{TLSClientConfig: srv.Client().Transport.(*http.Transport).TLSClientConfig}
+	} else {
+		srv.Start()
+	}
 	t.Cleanup(func() { cancel(); srv.Close() })
-	return &bridgeHarness{t: t, stub: stub, bridge: bridge, srv: srv, cancel: cancel}
+	return &bridgeHarness{t: t, stub: stub, bridge: bridge, srv: srv, cancel: cancel, dialer: dialer}
 }
 
 func (h *bridgeHarness) dial(header http.Header) (*websocket.Conn, *http.Response, error) {
 	u := "ws" + strings.TrimPrefix(h.srv.URL, "http") + UnaryWsPath
-	return websocket.DefaultDialer.Dial(u, header)
+	return h.dialer.Dial(u, header)
 }
 
 func (h *bridgeHarness) connect(header http.Header) *websocket.Conn {
@@ -489,4 +502,31 @@ func TestWsUnaryAllowlist_should_MatchSharedFixture(t *testing.T) {
 	assert.ElementsMatch(t, a.WsUnaryAllowed, bare)
 	assert.Equal(t, a.MaxInFlight, wsUnaryMaxInFlight)
 	assert.Equal(t, a.ClientHeaders, wsUnaryClientHeaders)
+}
+
+func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(t *testing.T) {
+	h := newBridgeHarness(t, ListenerLocal)
+	m := h.bridge.Metrics()
+	c := h.connect(nil)
+
+	sendListFiles(t, c, 1, "counted")
+	require.Equal(t, unaryFrameResponse, readFrame(t, c).Type)
+	assert.EqualValues(t, 1, m.Calls(listFilesMethod, "ok"), "ws_unary_calls_total{method,code=ok}")
+
+	sendRequest(t, c, 3, writeFileMethod, unaryRequestMeta{}, nil)
+	require.Equal(t, unaryFrameError, readFrame(t, c).Type)
+	assert.EqualValues(t, 1, m.Denied(wsUnaryMethodOther), "ws_unary_denied_total{method}")
+
+	sendListFiles(t, c, 5, "gate:inflight")
+	<-h.stub.started
+	assert.EqualValues(t, 1, m.Inflight(), "ws_unary_inflight while a call executes")
+	h.stub.release("gate:inflight")
+	require.Equal(t, unaryFrameResponse, readFrame(t, c).Type)
+	require.Eventually(t, func() bool { return m.Inflight() == 0 }, readWait, time.Millisecond)
+	assert.EqualValues(t, 2, m.Calls(listFilesMethod, "ok"))
+
+	u := "ws" + strings.TrimPrefix(h.srv.URL, "http") + UnaryWsPath
+	_, _, err := websocket.DefaultDialer.Dial(u, http.Header{"Origin": {"https://evil.example"}})
+	require.Error(t, err)
+	assert.EqualValues(t, 1, m.UpgradeDenied(ListenerLocal, "origin"), "ws_unary_upgrade_denied_total{listener,reason}")
 }

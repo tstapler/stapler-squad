@@ -460,3 +460,18 @@ func TestUnaryChain_ShouldReturn401_WhenRevokedCookieOpensSecondRemoteSocket(t *
 	h.validator.expired.Store(true)
 	h.expectDeniedUpgrade(t, h.header(), http.StatusUnauthorized, "revoked session")
 }
+
+func TestUnaryChain_ShouldReturn101_WhenUpgradeOnRealRemoteChainWithValidCookieAndAllowedOrigin(t *testing.T) {
+	h := newChainHarness(t, remoteChainCase)
+	c, resp, err := h.dial(t, h.header())
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+
+	viaWS := h.send(t, c, 1, chainListFiles, nil, &sessionv1.ListFilesRequest{SessionId: "remote-ok"})
+	require.Equal(t, "RESPONSE", viaWS.Kind, viaWS.ErrorCode)
+	var wsMsg sessionv1.ListFilesResponse
+	require.NoError(t, proto.Unmarshal(viaWS.Body, &wsMsg))
+	httpMsg, err := h.httpListFiles(t, "remote-ok")
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(httpMsg, &wsMsg), "ws=%v http=%v", &wsMsg, httpMsg)
+}
