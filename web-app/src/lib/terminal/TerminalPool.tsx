@@ -408,15 +408,25 @@ export interface UsePooledTerminalResult {
  * non-zero size AND `entry.handleRef` is populated (see usePooledTerminal's
  * docking effect for why neither is guaranteed on the frame docking
  * happens). Returns a cleanup function that cancels any pending retry.
+ *
+ * Stops polling (no rAF, no rect reads) while the anchor is hidden
+ * (ResizeObserver reports 0x0, i.e. `display:none`) or detached, and re-arms
+ * when the observer next reports a real size. FIT_ON_SHOW_MAX_ATTEMPTS still
+ * caps the visible-but-not-ready polling.
  */
 function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): () => void {
   let settled = false;
   let rafId: number | null = null;
   let attempts = 0;
+  let hidden = false;
 
   const tryFit = () => {
     rafId = null;
-    if (settled) return;
+    if (settled || hidden) return;
+    if (!anchor.isConnected) {
+      hidden = true;
+      return;
+    }
     const handle = entry.handleRef.current;
     const { width, height } = anchor.getBoundingClientRect();
     if (handle && width > 0 && height > 0) {
@@ -437,11 +447,20 @@ function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): ()
   // Anchor size changing (including its first real layout, which fires once
   // even if it never changes again) is exactly the signal that a
   // previously-failed fit attempt might now succeed.
-  const observer = new ResizeObserver(() => {
-    if (rafId === null) rafId = requestAnimationFrame(tryFit);
+  const observer = new ResizeObserver((entries) => {
+    const last = entries[entries.length - 1];
+    hidden = !!last && last.contentRect.width === 0 && last.contentRect.height === 0;
+    if (hidden) {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      return;
+    }
+    if (rafId === null && !settled) rafId = requestAnimationFrame(tryFit);
   });
   observer.observe(anchor);
-  rafId = requestAnimationFrame(tryFit);
+  if (!hidden && rafId === null) rafId = requestAnimationFrame(tryFit);
 
   return () => {
     settled = true;

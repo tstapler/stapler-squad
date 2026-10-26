@@ -1485,6 +1485,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         // matches lastContainerSize, which would otherwise dedupe it away.
         if (width === 0 || height === 0) {
           wasZero = true;
+          // Hidden: drop the pending debounce and any running sampler; the restore path above re-fits.
+          if (resizeTimeout) {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = null;
+          }
+          if (samplerActive) {
+            consumeRepaintRequest();
+            anchorBottom = false;
+            stopSampler();
+            flushFitted(true);
+          }
         } else if (wasZero || pendingRefit) {
           const reason: RefitReason = "visibility";
           wasZero = false;

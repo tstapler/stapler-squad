@@ -242,6 +242,18 @@ describe("zero-size, restore, renderer and viewport handling", () => {
     expect(terminal.refresh).toHaveBeenCalledTimes(2);
   });
 
+  it("ro_should_CancelPendingSampler_When_ContainerCollapsesToZero", async () => {
+    const { terminal, fit, ro } = await mount();
+    deliver(ro, 330, 410); // size change schedules the debounced sampler start
+    size.w = 0;
+    size.h = 0;
+    deliver(ro, 0, 0); // hidden before the debounce fires
+    advance(500);
+    expect(fit.proposeDimensions).not.toHaveBeenCalled();
+    expect(fit.fit).not.toHaveBeenCalled();
+    expect(terminal.refresh).not.toHaveBeenCalled();
+  });
+
   it("refit_should_NotRenderErrorUi_When_RetryExhausted", async () => {
     const { ref, container } = await mount();
     size.w = 0;
