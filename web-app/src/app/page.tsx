@@ -678,6 +678,7 @@ function HomeContent() {
                     paneState={w.paneState}
                     dispatch={paneDispatchFor(w.id)}
                     externalSessionAssign={externalAssign}
+                    windowActive={active}
                   />
                 </div>
               )

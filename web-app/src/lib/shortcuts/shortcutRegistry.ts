@@ -95,8 +95,9 @@ export class ShortcutRegistry {
       console.warn(`[ShortcutRegistry] Duplicate shortcut id: "${id}" — overwriting.`);
     }
     this.shortcuts.set(id, shortcut);
+    // Owner-token cleanup: a stale registration (e.g. a hidden window unmounting) must not delete a later overwrite.
     return () => {
-      this.shortcuts.delete(id);
+      if (this.shortcuts.get(id) === shortcut) this.shortcuts.delete(id);
     };
   }
 
