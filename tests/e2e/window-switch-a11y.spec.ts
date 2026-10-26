@@ -2,8 +2,9 @@
 /**
  * Window-switch focus, announcement, tabpanel and highlight (Story 4.1.4, UX criteria 1-5, 7, 8, 14, 33).
  * Runs with `window_keep_alive` OFF (the only state that exists today); re-run under the flag once Story 4.1.2
- * lands. Criterion 15 (leader 4 s idle) stays in `useWindowShortcuts.test.ts` because it needs `page.clock`,
- * which is gated on the Task 1.1.3e spike; criterion 32 is the manual VoiceOver pass (not automated here).
+ * lands. Criterion 15 (leader 4 s idle) uses `page.clock`; the Task 1.1.3e spike for it has not run in CI
+ * (research/ci-spikes.md), so it also keeps its Jest fake-timer twin in `useWindowShortcuts.test.ts`.
+ * Criterion 32 is automated here as a keyboard-only proxy; the VoiceOver pass stays manual.
  */
 import { test, expect, Page } from '@playwright/test';
 import { WindowTabStripPage } from './pages/WindowTabStripPage';
@@ -113,6 +114,44 @@ test.describe('window switch: highlight, focus, announcement, tabpanel', () => {
     await page.keyboard.press('3');
     await expect(strip.getActiveTab()).toHaveAttribute('title', 'Window 3');
     await expect.poll(() => activeElementInsidePanel(page)).toBe(true);
+  });
+
+  test('keyboardOnlyFlow_should_AnnounceOrShowFocusAtEachStep_When_SwitchToWindow3AndType', async ({ page }) => {
+    const strip = await seedThreeWindows(page);
+    const region = page.getByTestId('route-announcer');
+    const hasAnnouncer = (await region.count()) > 0;
+
+    // Step 1: focus the tablist by keyboard; focus is evident on a tab.
+    await strip.getActiveTab().focus();
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('role'))).toBe('tab');
+
+    // Step 2: leader switch to window 3; the selected state and (where mounted) the announcement follow.
+    await page.keyboard.press('Alt+w');
+    await page.keyboard.press('3');
+    await expect(strip.getActiveTab()).toHaveAttribute('title', 'Window 3');
+    await expect(strip.getTab('Window 3')).toHaveAttribute('aria-selected', 'true');
+    if (hasAnnouncer) await expect(region).toHaveText('Window 3 of 3: Window 3');
+
+    // Step 3: focus lands inside the tabpanel, so typing reaches that window's content, not the tab strip.
+    await expect.poll(() => activeElementInsidePanel(page)).toBe(true);
+    await page.keyboard.type('ls');
+    expect(await activeElementIsTab(page, 'Window 3')).toBe(false);
+    await expect(strip.getActiveTab()).toHaveAttribute('title', 'Window 3');
+  });
+
+  test('leaderKey_should_Disarm_When_4sIdleBeforeDigit', async ({ page }) => {
+    // Installed before navigation so the leader timer runs on the fake clock; time still flows until fastForward.
+    await page.clock.install();
+    const strip = await seedThreeWindows(page);
+    await expect(strip.getActiveTab()).toHaveAttribute('title', 'Window 1');
+    await page.keyboard.press('Alt+w');
+    await page.clock.fastForward(4000);
+    await page.keyboard.press('2');
+    await expect(strip.getActiveTab()).toHaveAttribute('title', 'Window 1');
+    // Control: the same sequence without idle does switch, so the disarm assertion above is not vacuous.
+    await page.keyboard.press('Alt+w');
+    await page.keyboard.press('2');
+    await expect(strip.getActiveTab()).toHaveAttribute('title', 'api');
   });
 
   for (const reducedMotion of ['reduce', 'no-preference'] as const) {
