@@ -1,5 +1,7 @@
 # Per-Worker E2E Backend Server Seam (Deferred N-Server Design)
 
+**2026-10-26: Story 3.3.1 checkpoint ran; verdict: (b) insufficient — escalate (`percent_improvement = -43.3%`, a regression). See [`project_plans/e2e-test-parallelization/decisions/post-phase3-checkpoint-finding.md`](../../project_plans/e2e-test-parallelization/decisions/post-phase3-checkpoint-finding.md). Backlog item `0892086f-79c1-4b8d-a0bf-15867facdf4d` opened to schedule this rearchitecture.**
+
 **Status: not implemented this round — see [ADR-001: Isolate via seam, defer N-server rearchitecture](../../project_plans/e2e-test-parallelization/decisions/ADR-001-isolate-via-seam-defer-n-server-rearchitecture.md).** This doc exists so a future implementer starts from a bounded design instead of re-deriving it from scratch. No code described below has been written.
 
 ## The blocker is `global-setup.ts`, not `TestServer`

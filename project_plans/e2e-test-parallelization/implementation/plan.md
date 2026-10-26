@@ -3,6 +3,7 @@
 **Feature**: Reduce `e2e-next`/`e2e-bun` wall-clock beyond the #1166 10-way-shard baseline via duration-neutral native rebalancing, browser-install isolation, and a bounded test-content triage, while deferring the higher-risk per-worker-server rearchitecture as a documented seam.
 **Date**: 2026-10-25
 **Status**: Ready for implementation
+Phase 3 shipped (PR #1196, PR #1197); post-Phase-3 checkpoint (Story 3.3.1) recorded on 2026-10-26: **(b) insufficient — escalate** (`percent_improvement = -43.3%`; see [`decisions/post-phase3-checkpoint-finding.md`](../decisions/post-phase3-checkpoint-finding.md)).
 **ADRs**: [ADR-001: Isolate via seam — defer N-server rearchitecture](../decisions/ADR-001-isolate-via-seam-defer-n-server-rearchitecture.md), [ADR-002: fullyParallel:true before any third-party shard balancer](../decisions/ADR-002-fullyparallel-before-third-party-balancer.md)
 
 ---
