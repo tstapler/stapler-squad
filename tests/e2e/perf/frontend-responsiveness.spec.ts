@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PerfPage } from '../pages/PerfPage';
-import { perfFixtureShape, perfInitScript, seedPerfFixture, SeededFixture } from './fixture';
+import { perfFixtureShape, perfInitScript, seedPerfFixture, SeededFixture, tmuxPaneDims } from './fixture';
 import { summarizeProfile, CpuProfile } from './cpuProfile';
 
 /**
@@ -21,6 +21,12 @@ const ECHO_ROUND_TRIPS = Number(process.env.PERF_ECHOES ?? 30);
 const BASELINE_PATH = path.join(__dirname, 'baseline.json');
 const THROTTLES = [4, 1] as const;
 type Throttle = (typeof THROTTLES)[number];
+
+/** PERF_KEEP_ALIVE=on|off pins `window_keep_alive` for the run; every number in the report is for that state. */
+const KEEP_ALIVE = process.env.PERF_KEEP_ALIVE as 'on' | 'off' | undefined;
+const RETAINED_SWITCH_MEDIAN_MS = 150; // OPEN-DECISION-throttle-gate: recorded as annotations, not a hard fail
+const RETAINED_LONG_TASK_MAX_MS = 50;
+const COLD_LONG_TASK_MAX_MS = 100;
 
 const wanted = (name: string) => !process.env.PERF_SCENARIOS || process.env.PERF_SCENARIOS.split(',').includes(name);
 
@@ -187,6 +193,14 @@ function budgetViolations(s: ScenarioReport, durationS: number): string[] {
 test.describe('frontend responsiveness (perf)', () => {
   test.beforeAll(async () => {
     test.setTimeout(900000);
+    if (KEEP_ALIVE) {
+      const resp = await fetch(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'window_keep_alive', enabled: KEEP_ALIVE === 'on' }),
+      });
+      if (!resp.ok) throw new Error(`UpdateFeatureFlag window_keep_alive failed: HTTP ${resp.status}`);
+    }
     fixture = await seedPerfFixture(BASE_URL, {
       sessionCount: process.env.PERF_SESSIONS ? Number(process.env.PERF_SESSIONS) : undefined,
       backlogCount: process.env.PERF_BACKLOG ? Number(process.env.PERF_BACKLOG) : undefined,
@@ -204,6 +218,7 @@ test.describe('frontend responsiveness (perf)', () => {
           actualBacklogItems: process.env.PERF_BACKLOG ? Number(process.env.PERF_BACKLOG) : perfFixtureShape.backlogItems,
           seedMs: fixture?.seedMs,
         },
+        windowKeepAlive: KEEP_ALIVE ?? 'server-default',
         keptRuns: KEPT_RUNS,
         throttles: THROTTLES,
         viewport: '1600x900',
@@ -245,11 +260,13 @@ test.describe('frontend responsiveness (perf)', () => {
         return { switchMsMedian: median(ms), highlightFirstFrame: Number(highlight.every(Boolean)) };
       }, { prepare: (c) => loadShell(c, '/') });
       assertCriticalNeverQueued(s);
+      annotateTarget('retained switch median', s.metrics.switchMsMedian?.median, RETAINED_SWITCH_MEDIAN_MS);
+      annotateTarget('retained long-task max', s.metrics.longTaskMaxMs?.median, RETAINED_LONG_TASK_MAX_MS);
     });
 
     test(`switch window cold ${throttle}x`, async ({ browser }) => {
       test.skip(!wanted('switchCold'));
-      await runScenario(browser, 'switchCold', throttle, async (c) => {
+      const s = await runScenario(browser, 'switchCold', throttle, async (c) => {
         // First visit of w2..w4, then w1 again: w1 has been LRU-evicted once K = 3 other windows were visited.
         const first = await c.perf.switchWindow(1);
         await c.perf.switchWindow(2);
@@ -257,6 +274,27 @@ test.describe('frontend responsiveness (perf)', () => {
         const evicted = await c.perf.switchWindow(0);
         return { coldFirstVisitMs: first, coldEvictedRevisitMs: evicted };
       }, { prepare: (c) => loadShell(c, '/') });
+      // Cold switches are out of the 150 ms / 50 ms retained numbers but not out of the 100 ms task ceiling.
+      annotateTarget('cold long-task max', s.metrics.longTaskMaxMs?.median, COLD_LONG_TASK_MAX_MS);
+    });
+
+    test(`switch window tmux pane dims ${throttle}x`, async ({ browser }) => {
+      test.skip(!wanted('switchTmuxDims') || throttle !== 1);
+      const names = fixture.sessionTitles.map((t) => `staplersquad_${t.replace(/[^A-Za-z0-9_-]/g, '_')}`);
+      const { context, page, perf, cdp } = await openPage(browser, throttle);
+      try {
+        await loadShell({ page, perf, cdp, runIndex: 0 }, '/');
+        const before = await Promise.all(names.map((n) => tmuxPaneDims(n)));
+        // w2..w4 first visits (cold), then w1 again (evicted at K = 3), then w2 again (retained).
+        for (const index of [1, 2, 3, 0, 1]) {
+          await perf.switchWindow(index);
+          const after = await Promise.all(names.map((n) => tmuxPaneDims(n)));
+          expect(after, `tmux pane dims after switching to window ${index + 1} (keep-alive ${KEEP_ALIVE ?? 'server-default'})`).toEqual(before);
+          for (const dims of after) expect(dims).not.toMatch(/^(0x|1x1$)|x0$/);
+        }
+      } finally {
+        await context.close();
+      }
     });
 
     test(`switch window leader key ${throttle}x`, async ({ browser }) => {
@@ -369,6 +407,11 @@ test.describe('frontend responsiveness (perf)', () => {
     }
   });
 });
+
+function annotateTarget(label: string, actual: number | null | undefined, max: number) {
+  if (actual == null || actual <= max) return;
+  test.info().annotations.push({ type: 'over-target', description: `${label}: ${actual} ms > ${max} ms (keep-alive ${KEEP_ALIVE ?? 'server-default'})` });
+}
 
 /** Story 2.1.9: deferral must keep every `critical` call out of the browser's 6-connection queue (> 1 s). */
 function assertCriticalNeverQueued(s: ScenarioReport) {
