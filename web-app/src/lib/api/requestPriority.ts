@@ -1,5 +1,5 @@
 import { Code, ConnectError, createContextKey, createContextValues } from "@connectrpc/connect";
-import type { CallOptions, Interceptor, UnaryRequest, UnaryResponse } from "@connectrpc/connect";
+import type { CallOptions, ContextKey, Interceptor, UnaryRequest, UnaryResponse } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 
 export type RequestPriority = "critical" | "deferred";
@@ -18,9 +18,12 @@ const DEFERRED_METHODS: ReadonlySet<string> = new Set([
  * Per-call override. GetVCSStatus/ListFiles are critical for the focused pane and deferred otherwise,
  * which only the call site knows (pass `priorityOptions("deferred")`).
  */
-export const priorityKey = createContextKey<RequestPriority | undefined>(undefined, {
-  description: "request priority override",
-});
+export const priorityKey: ContextKey<RequestPriority | undefined> =
+  // Guard: this module loads transitively via lib/api/transport, and many Jest suites mock
+  // "@connectrpc/connect" with a factory that omits createContextKey (real in production).
+  typeof createContextKey === "function"
+    ? createContextKey<RequestPriority | undefined>(undefined, { description: "request priority override" })
+    : ({ id: Symbol("request priority override"), defaultValue: undefined } as ContextKey<RequestPriority | undefined>);
 
 /** Call option tagging one call with a priority. */
 export function priorityOptions(priority: RequestPriority): Pick<CallOptions, "contextValues"> {
