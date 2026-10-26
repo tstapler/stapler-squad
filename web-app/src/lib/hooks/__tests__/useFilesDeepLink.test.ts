@@ -48,4 +48,26 @@ describe("useFilesDeepLink hash ownership", () => {
     rerender({ selectedPath: FILE, active: false });
     expect(window.location.hash).toBe("#file=other.go");
   });
+
+  it("claims the hash when an inactive tab with a selection becomes active", () => {
+    const { rerender } = setup({ selectedPath: FILE, active: false });
+    expect(window.location.hash).toBe("");
+    rerender({ selectedPath: FILE, active: true });
+    expect(window.location.hash).toBe("#file=a%2Fb.go");
+  });
+
+  it("leaves a foreign hash intact when it becomes active with nothing selected", () => {
+    window.history.replaceState(null, "", "/#file=other.go");
+    const { rerender } = setup({ selectedPath: null, active: false });
+    rerender({ selectedPath: null, active: true });
+    expect(window.location.hash).toBe("#file=other.go");
+  });
+
+  it("hands the hash from one pane to the next", () => {
+    const a = setup({ selectedPath: FILE, active: true });
+    const b = setup({ selectedPath: "c/d.go", active: false });
+    a.rerender({ selectedPath: FILE, active: false });
+    b.rerender({ selectedPath: "c/d.go", active: true });
+    expect(window.location.hash).toBe("#file=c%2Fd.go");
+  });
 });

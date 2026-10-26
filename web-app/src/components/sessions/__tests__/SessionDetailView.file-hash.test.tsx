@@ -32,9 +32,14 @@ jest.mock("@/lib/hooks/useShells", () => require("./sessionDetailViewTestFixture
 
 // Exposes the selection callbacks so the test can drive the file selection.
 jest.mock("../FilesTab", () => ({
-  FilesTab: (props: { initialSelectedPath: string | null; onSelectedPathChange: (p: string | null) => void }) => (
+  FilesTab: (props: {
+    initialSelectedPath: string | null;
+    urlActive?: boolean;
+    onSelectedPathChange: (p: string | null) => void;
+  }) => (
     <div>
       <span data-testid="initial-path">{props.initialSelectedPath}</span>
+      <span data-testid="url-active">{String(props.urlActive)}</span>
       <button onClick={() => props.onSelectedPathChange("a/b.go")}>select-file</button>
       <button onClick={() => props.onSelectedPathChange(null)}>clear-file</button>
     </div>
@@ -66,9 +71,11 @@ describe("SessionDetailView file-selection hash", () => {
     const props = { session, allSessions: [], actions: {} as ReturnType<typeof useSessionActions>, onClose: jest.fn() };
     const { unmount } = render(<SessionDetailView {...props} />);
     expect(screen.getByTestId("initial-path").textContent).toBe("");
+    expect(screen.getByTestId("url-active").textContent).toBe("false");
     unmount();
     render(<SessionDetailView {...props} initialTab="files" isActive={false} />);
     expect(screen.getByTestId("initial-path").textContent).toBe("");
+    expect(screen.getByTestId("url-active").textContent).toBe("false");
   });
 
   it("seeds FilesTab from #file= and never writes the hash itself", () => {
@@ -84,6 +91,7 @@ describe("SessionDetailView file-selection hash", () => {
       />,
     );
     expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
+    expect(screen.getByTestId("url-active").textContent).toBe("true");
 
     fireEvent.click(screen.getByText("select-file"));
     fireEvent.click(screen.getByText("clear-file"));
