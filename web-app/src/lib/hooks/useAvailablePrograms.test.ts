@@ -63,4 +63,39 @@ describe("useAvailablePrograms", () => {
     expect(result.current).toBe(PROGRAMS);
     expect(result.current.every((p) => p.command === undefined && p.cliFlags === undefined)).toBe(true);
   });
+
+  describe("server-info fallback abort", () => {
+    function hangingFetch(): AbortSignal[] {
+      const signals: AbortSignal[] = [];
+      (global.fetch as jest.Mock).mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+        signals.push(init.signal);
+        return new Promise(() => {});
+      });
+      return signals;
+    }
+
+    it("useAvailablePrograms_should_AbortServerInfoFallback_When_LastSubscriberUnmounts", async () => {
+      mockList.mockRejectedValue(new Error("down"));
+      const signals = hangingFetch();
+      const a = renderHook(() => useAvailablePrograms());
+      const b = renderHook(() => useAvailablePrograms());
+      await waitFor(() => expect(signals).toHaveLength(1));
+
+      a.unmount();
+      expect(signals[0].aborted).toBe(false); // another consumer still waits on the shared flight
+      b.unmount();
+      expect(signals[0].aborted).toBe(true);
+    });
+
+    it("useAvailablePrograms_should_StartFreshFlight_When_RemountedAfterAbort", async () => {
+      mockList.mockRejectedValue(new Error("down"));
+      const signals = hangingFetch();
+      const first = renderHook(() => useAvailablePrograms());
+      await waitFor(() => expect(signals).toHaveLength(1));
+      first.unmount();
+      renderHook(() => useAvailablePrograms());
+      await waitFor(() => expect(signals).toHaveLength(2));
+      expect(signals[1].aborted).toBe(false);
+    });
+  });
 });
