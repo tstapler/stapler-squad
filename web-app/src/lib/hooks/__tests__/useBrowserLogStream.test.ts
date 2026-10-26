@@ -13,6 +13,7 @@
 
 import { renderHook, act } from "@testing-library/react";
 import { useBrowserLogStream } from "../useBrowserLogStream";
+import { resetLogBufferForTest } from "@/lib/telemetry/logBuffer";
 
 // Mock the ConnectRPC dependencies so we don't need an actual server
 const mockLogClientEvents = jest.fn().mockResolvedValue({});
@@ -42,6 +43,7 @@ describe("useBrowserLogStream", () => {
   let mockSendBeacon: jest.Mock;
 
   beforeEach(() => {
+    resetLogBufferForTest();
     jest.useFakeTimers();
     mockLogClientEvents.mockClear();
     mockLogClientEvents.mockResolvedValue({});
@@ -56,6 +58,7 @@ describe("useBrowserLogStream", () => {
   });
 
   afterEach(() => {
+    resetLogBufferForTest();
     // Safety net: restore console methods in case hook cleanup didn't run
     console.log = origLog;
     console.warn = origWarn;
@@ -476,17 +479,17 @@ describe("useBrowserLogStream", () => {
   });
 
   // UT-F-16
-  it("beforeunload_should_trigger_sendBeacon", () => {
+  it("pagehide_should_flush_buffered_entries_in_one_keepalive_request", () => {
     const { unmount } = renderHook(() =>
       useBrowserLogStream({ enabled: true, sessionId: "sess-1" })
     );
 
     console.log("unload entry");
+    window.dispatchEvent(new Event("pagehide"));
 
-    // Trigger beforeunload
-    window.dispatchEvent(new Event("beforeunload"));
-
-    expect(mockSendBeacon).toHaveBeenCalled();
+    expect(mockLogClientEvents).toHaveBeenCalledTimes(1);
+    expect(mockLogClientEvents.mock.calls[0][0].entries).toHaveLength(1);
+    expect(mockSendBeacon).not.toHaveBeenCalled();
 
     unmount();
   });

@@ -962,7 +962,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   }, [terminalState]);
 
   // Remote browser log streaming for mobile debugging
-  useBrowserLogStream({ enabled: logStreamEnabled, sessionId, baseUrl });
+  useBrowserLogStream({ enabled: logStreamEnabled, sessionId });
 
   // Update sendFlowControl ref when available + sync it into TerminalStreamManager
   useEffect(() => {
