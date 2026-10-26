@@ -6,10 +6,11 @@
  *  - TC-2.2: SessionList is rendered inside the scroll wrapper (descendant, not sibling)
  *  - TC-2.3: Scroll wrapper does not set inline overflowX (REQ-2c)
  *  - TC-2.4: Non-session-list pane (session-detail) does not have the scroll wrapper
+ *  - TC-2.5: Scroll position survives unmount/remount of the session-list pane
  */
 
 import React from "react";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { PaneSplitRenderer } from "../PaneSplitRenderer";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import type { PaneState } from "@/lib/pane/paneTypes";
@@ -154,5 +155,22 @@ describe("SessionListPaneBody — scroll wrapper", () => {
       />
     );
     expect(queryByTestId("session-list-scroll")).toBeNull();
+  });
+
+  it("SessionListPaneBody_should_restoreScrollTop_When_paneRemounts", () => {
+    // Mobile unmounts the list when the terminal pane is focused, then remounts it.
+    const props = {
+      state: sessionListPaneState,
+      dispatch: jest.fn(),
+      sessions: [makeSession("s1", "S1") as Session],
+    };
+    const first = renderWithProviders(<PaneSplitRenderer {...props} />);
+    const el = first.getByTestId("session-list-scroll");
+    el.scrollTop = 300;
+    fireEvent.scroll(el);
+    first.unmount();
+
+    const second = renderWithProviders(<PaneSplitRenderer {...props} />);
+    expect(second.getByTestId("session-list-scroll").scrollTop).toBe(300);
   });
 });

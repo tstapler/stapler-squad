@@ -28,6 +28,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { MobilePaneTabStrip } from "./MobilePaneTabStrip";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { containsPaneId, hasVerticalSplit } from "@/lib/pane/paneUtils";
+import { useScrollRestore } from "@/lib/hooks/useScrollRestore";
 import {
   splitContainer,
   leafContainer,
@@ -214,6 +215,8 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   const { sessions, loading, error, listSessions, hibernateSession, resumeHibernatedSession } = useSessionServiceContext();
   const { triggerPicker, triggerPickerForceNew, backlogIndex } = usePaneContext();
   const { viewMode, setViewMode } = useSessionViewModeContext();
+  // Mobile swaps this pane for the terminal and remounts it on return; restore the scroll.
+  const scrollRef = useScrollRestore(`session-list-scroll-${pane.id}`);
   if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
   // `error` is useSessionServiceContext's single shared Redux field -- ANY
   // session-mutating RPC (createSession, updateSession, cancelSessionCreation,
@@ -305,7 +308,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
       >
         {viewMode === "board" ? `Board view, showing ${sessions.length} sessions` : `List view, showing ${sessions.length} sessions`}
       </div>
-      <div className={sessionListScroll} data-testid="session-list-scroll">
+      <div ref={scrollRef} className={sessionListScroll} data-testid="session-list-scroll">
         {viewMode === "board" ? (
           <SessionBoard {...sharedProps} />
         ) : (
