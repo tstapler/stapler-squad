@@ -72,6 +72,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
+	if code == 0 {
+		if n := awaitNoSessionDrivers(5 * time.Second); n > 0 {
+			fmt.Fprintf(os.Stderr, "TestMain: %d SessionDriver goroutine(s) outlived their tests; "+
+				"stop them with setupForkTestFixture or stopSessionDriverOnCleanup (see driver_leak_test.go)\n", n)
+			code = 1
+		}
+	}
 	restoreState()
 	restore()
 	restoreClaudeCLI()
