@@ -33,6 +33,7 @@ describe("getConnectTransport", () => {
       baseUrl: "http://localhost:8543",
       defaultTimeoutMs: 30_000,
       interceptors: [mockAuthInterceptor],
+      fetch: expect.any(Function),
     });
     expect(t).toBeDefined();
   });
@@ -51,6 +52,7 @@ describe("getConnectTransport", () => {
       baseUrl: "https://custom.host:9000",
       defaultTimeoutMs: 30_000,
       interceptors: [mockAuthInterceptor],
+      fetch: expect.any(Function),
     });
   });
 });

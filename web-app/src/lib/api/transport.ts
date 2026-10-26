@@ -1,6 +1,7 @@
 import { createConnectTransport } from "@connectrpc/connect-web";
 import type { Transport } from "@connectrpc/connect";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { withInFlightGauge } from "@/lib/perf/perfDebug";
 import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
 
 let _transport: Transport | null = null;
@@ -35,6 +36,7 @@ export function getConnectTransport(): Transport {
       baseUrl: getApiBaseUrl(),
       defaultTimeoutMs: DEFAULT_RPC_TIMEOUT_MS,
       interceptors: [createAuthInterceptor()],
+      fetch: withInFlightGauge(),
     });
   }
   return _transport;

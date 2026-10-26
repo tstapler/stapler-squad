@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { useRouter, useSearchParams } from "@/lib/nav";
+import { markWindowSwitchEnd, markWindowSwitchStart } from "@/lib/perf/perfMarks";
 import { getLastFocusedWindowId, setLastFocusedWindowId } from "./windowPersistence";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
@@ -68,8 +69,14 @@ export function useWindowUrlSync(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams identity changes every render; comparing paramWindowId/currentWindowId values is sufficient to avoid redundant replace calls
   }, [paramWindowId, currentWindowId, isRestored]);
 
+  // No-op unless a switch is pending; ends the measure once the target window has committed.
+  useEffect(() => {
+    markWindowSwitchEnd();
+  }, [currentWindowId]);
+
   const switchToWindow = useCallback(
     (id: WindowId) => {
+      markWindowSwitchStart();
       setLastFocusedWindowId(id);
       const params = new URLSearchParams(searchParams.toString());
       params.set(WINDOW_PARAM, id);
