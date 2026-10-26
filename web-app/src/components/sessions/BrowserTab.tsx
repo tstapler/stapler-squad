@@ -6,17 +6,17 @@ import { SessionService, WriteToSessionRequestSchema } from '@/gen/session/v1/se
 import { getConnectTransport } from '@/lib/api/transport';
 import * as styles from './BrowserTab.css';
 import CDPViewer from './CDPViewer';
-import { VNCState, VNCStatus } from '@/gen/session/v1/types_pb';
+import { CDPState, CDPStatus } from '@/gen/session/v1/types_pb';
 
-export type { VNCState };
-export { VNCStatus };
+export type { CDPState };
+export { CDPStatus };
 
 interface BrowserTabProps {
   sessionId: string;
   /** The application base URL, e.g. window.location.origin + '/api'. Used to derive the WebSocket URL. */
   baseUrl: string;
   isVisible: boolean;
-  vncState: VNCState | undefined;
+  cdpState: CDPState | undefined;
 }
 
 export interface InspectResult {
@@ -72,19 +72,15 @@ export function buildWsUrl(baseUrl: string, sessionId: string): string {
   return `${wsScheme}://${host}/api/sessions/${sessionId}/cdp-stream`;
 }
 
-export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserTabProps) {
-  const status = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
-  const isUnavailable = status === VNCStatus.VNC_STATUS_UNAVAILABLE || status === VNCStatus.VNC_STATUS_UNSPECIFIED;
-  const isWaiting = !isUnavailable && (
-    status === VNCStatus.VNC_STATUS_STARTING ||
-    status === VNCStatus.VNC_STATUS_NO_BROWSER ||
-    !vncState?.browserWindowDetected
-  );
-  const isReady = status === VNCStatus.VNC_STATUS_READY && vncState?.browserWindowDetected === true;
+export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserTabProps) {
+  const status = cdpState?.status ?? CDPStatus.CDP_STATUS_UNSPECIFIED;
+  const isUnavailable = status === CDPStatus.CDP_STATUS_UNAVAILABLE || status === CDPStatus.CDP_STATUS_UNSPECIFIED;
+  const isReady = status === CDPStatus.CDP_STATUS_STREAMING;
+  const isWaiting = !isUnavailable && !isReady;
 
   // Track if we've ever been ready — keeps CDPViewer mounted once connected
   // so the WebSocket connection survives tab switches even if isReady temporarily flickers.
-  // This avoids a premature WebSocket handshake during STARTING/NO_BROWSER states.
+  // This avoids a premature WebSocket handshake during WAITING/NO_BROWSER states.
   const hasBeenReadyRef = useRef(false);
   if (isReady) hasBeenReadyRef.current = true;
   const shouldMountViewer = hasBeenReadyRef.current;
@@ -201,13 +197,13 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
 
         {isWaiting && !isUnavailable && (
           <div className={styles.placeholderOverlay}>
-            {status === VNCStatus.VNC_STATUS_STARTING ? (
-              <span>Starting virtual display...</span>
+            {status === CDPStatus.CDP_STATUS_WAITING ? (
+              <span>Connecting to browser...</span>
             ) : (
               <>
-                <span>No browser open yet</span>
+                <span>No browser detected</span>
                 <span style={{ fontSize: '0.85em', opacity: 0.7 }}>
-                  Run a browser in this session to see it here
+                  Run Chrome or Chromium in this session to see it here
                 </span>
               </>
             )}
@@ -215,7 +211,7 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
         )}
 
         {/* Mount CDPViewer only once isReady has been true — prevents premature
-            WebSocket handshake during STARTING/NO_BROWSER states before the CDP
+            WebSocket handshake during WAITING/NO_BROWSER states before the CDP
             endpoint is available. Once mounted, keep it mounted (hasBeenReadyRef)
             so the connection survives tab switches. */}
         {shouldMountViewer && (
