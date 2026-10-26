@@ -212,7 +212,7 @@ func realCallerConfig() callerConfig {
 		exemptFiles: set("tmux_process_manager.go", "native_process_manager.go", "native_process_manager_windows.go",
 			"tmux_backend.go", "backend_tymux.go", "instance_tmux.go"),
 		exemptUnits: set("Instance.SendKeys", "Instance.SendKeysN", "Instance.SendPrompt", "Instance.TapEnter", "Instance.WriteToPTY",
-			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent"),
+			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent", "sendKeysChunked"),
 	}
 }
 
