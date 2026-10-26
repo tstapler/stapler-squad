@@ -108,6 +108,8 @@ function fetchWorkflowsShared(force = false): Promise<void> {
   patchSnapshot({ loading: true, error: null });
   const run = (async () => {
     try {
+      // shared store fetch has no single owning component to cancel it
+      // abort-signal-exempt
       const resp = await getClient().listWorkflows(create(ListWorkflowsRequestSchema, {}));
       loaded = true;
       patchSnapshot({ workflows: resp.workflows ?? [] });
@@ -245,6 +247,8 @@ export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWor
         promptTemplate: data.promptTemplate ?? "",
         webhookSecret: data.webhookSecret ?? "",
       });
+      // user-initiated mutation
+      // abort-signal-exempt
       await getClient().createWorkflow(req);
       await refresh();
     },
@@ -281,6 +285,8 @@ export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWor
         // conditionally spreading like the optional fields above.
         webhookSecret: data.webhookSecret ?? "",
       });
+      // user-initiated mutation
+      // abort-signal-exempt
       await getClient().updateWorkflow(req);
       await refresh();
     },
@@ -294,6 +300,8 @@ export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWor
       updateWorkflows((w) => w.filter((wf) => wf.id !== id));
       try {
         const req = create(DeleteWorkflowRequestSchema, { id });
+        // user-initiated mutation
+        // abort-signal-exempt
         await getClient().deleteWorkflow(req);
       } catch (err) {
         patchSnapshot({ workflows: prev }); // rollback on failure
@@ -306,6 +314,8 @@ export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWor
   const archiveWorkflowSessions = useCallback(
     async (workflowId: string): Promise<number> => {
       const req = create(ArchiveWorkflowSessionsRequestSchema, { workflowId });
+      // user-initiated mutation
+      // abort-signal-exempt
       const resp = await getClient().archiveWorkflowSessions(req);
       await refresh();
       return resp.archivedCount;
@@ -316,6 +326,8 @@ export function useWorkflows({ watch = true }: UseWorkflowsOptions = {}): UseWor
   const deleteWorkflowFailedSessions = useCallback(
     async (workflowId: string): Promise<number> => {
       const req = create(DeleteWorkflowFailedSessionsRequestSchema, { workflowId });
+      // user-initiated mutation
+      // abort-signal-exempt
       const resp = await getClient().deleteWorkflowFailedSessions(req);
       await refresh();
       return resp.deletedCount;
