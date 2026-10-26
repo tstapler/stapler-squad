@@ -334,7 +334,10 @@ func (m *cdpStreamManager) DispatchInput(msg []byte) error {
 	m.writeMu.Lock()
 	err = conn.WriteMessage(websocket.TextMessage, data)
 	m.writeMu.Unlock()
-	return err
+	if err != nil {
+		return fmt.Errorf("cdp: write input: %w", err)
+	}
+	return nil
 }
 
 // runLoop polls for Chrome, connects via CDP WebSocket, subscribes to screencast
@@ -374,7 +377,9 @@ func (m *cdpStreamManager) runLoop(ctx context.Context, port int) {
 
 		// Page.* and Input.* are not served on the browser-level endpoint from
 		// /json/version, so stream from a page target's own WebSocket.
-		pageURL, err := pageWebSocketURL(ctx, port)
+		listCtx, cancelList := context.WithTimeout(ctx, 3*time.Second)
+		pageURL, err := pageWebSocketURL(listCtx, port)
+		cancelList()
 		if err != nil {
 			log.Warn("cdp: no page target to stream yet",
 				"err", err,
@@ -482,7 +487,10 @@ func (m *cdpStreamManager) runScreencast(ctx context.Context, wsURL string, port
 		m.cdpConnMu.Unlock()
 	}()
 
-	// Not Streaming until a frame arrives; a reconnect must not keep a stale Streaming.
+	// Not Streaming until a frame arrives; a reconnect must not keep a stale Streaming or frame.
+	m.frameMu.Lock()
+	m.latestFrame = nil
+	m.frameMu.Unlock()
 	m.mu.Lock()
 	m.setState(CDPState{Status: CDPStatusWaiting, Port: port})
 	m.mu.Unlock()

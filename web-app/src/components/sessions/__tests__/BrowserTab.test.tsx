@@ -113,14 +113,14 @@ describe('BrowserTab', () => {
   });
 
   it('BrowserTab_should_keepViewerMounted_When_cdpBecomesUnavailableAfterReady', () => {
-    // Start in READY state so hasBeenReadyRef is set to true
+    // Start in STREAMING state so hasBeenReadyRef is set to true
     const readyState = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
     const { rerender } = render(<BrowserTab {...defaultProps} cdpState={readyState} />);
 
     // Confirm viewer is mounted in the ready state
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
 
-    // Transition to STARTING (temporarily unavailable)
+    // Transition to WAITING (temporarily unavailable)
     rerender(<BrowserTab {...defaultProps} cdpState={makeCdpState({ status: CDPStatus.CDP_STATUS_WAITING })} />);
 
     // CDPViewer should remain mounted (sticky-mount behavior via hasBeenReadyRef)
@@ -347,6 +347,23 @@ describe('BrowserTab — inspect mode', () => {
       render(<BrowserTab {...readyProps} cdpState={streaming} />);
       act(() => { jest.advanceTimersByTime(10_000); });
       expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/no frames received/i);
+    });
+
+    it('clears the no-frames message once a frame arrives after the timeout', () => {
+      jest.useFakeTimers();
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { jest.advanceTimersByTime(10_000); });
+      act(() => { capturedOnFrame?.(); });
+      expect(screen.queryByTestId('waiting-first-frame')).not.toBeInTheDocument();
+    });
+
+    it('returns to "Waiting for first frame" after Reconnect following a timeout', () => {
+      jest.useFakeTimers();
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { jest.advanceTimersByTime(10_000); });
+      act(() => { capturedOnDisconnected?.(); });
+      fireEvent.click(screen.getByRole('button', { name: /reconnect/i }));
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
     });
 
     it('hides the message once a frame is painted', () => {

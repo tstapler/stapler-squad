@@ -1136,6 +1136,7 @@ export function SessionDetailView({
           style={{ display: activeTab === "browser" ? undefined : 'none' }}
         >
           <BrowserTab
+            key={session.id}
             sessionId={session.id}
             baseUrl={getApiBaseUrl()}
             isVisible={activeTab === "browser"}

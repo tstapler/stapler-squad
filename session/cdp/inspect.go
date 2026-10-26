@@ -113,6 +113,9 @@ func pageWebSocketURL(ctx context.Context, port int) (string, error) {
 		return "", fmt.Errorf("cdp: list targets: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("cdp: list targets: status %d", resp.StatusCode)
+	}
 	var targets []struct {
 		Type                 string `json:"type"`
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`

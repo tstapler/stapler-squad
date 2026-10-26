@@ -6,7 +6,7 @@ import { SessionService, WriteToSessionRequestSchema } from '@/gen/session/v1/se
 import { getConnectTransport } from '@/lib/api/transport';
 import * as styles from './BrowserTab.css';
 import CDPViewer from './CDPViewer';
-import { CDPState, CDPStatus } from '@/gen/session/v1/types_pb';
+import { type CDPState, CDPStatus } from '@/gen/session/v1/types_pb';
 
 export type { CDPState };
 export { CDPStatus };
@@ -178,6 +178,7 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserT
   function handleReconnect() {
     setConnectionState('disconnected');
     setHasFrame(false);
+    setFrameTimedOut(false);
     setViewerKey((k) => k + 1);
   }
 

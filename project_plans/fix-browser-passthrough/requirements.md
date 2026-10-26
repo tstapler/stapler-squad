@@ -70,6 +70,10 @@ condition entirely unrelated to whether the CDP stream is flowing.
 > commands on Chrome's browser-level WebSocket, which rejects them, so no frame was ever delivered.
 > Permitted Go change: `session/cdp/manager.go` (+ `session/cdp/screencast_test.go`) only. The proto
 > schema and generated bindings remain unchanged.
+>
+> **Verification note (sdd:6-verify):** no owner message backing this waiver could be located, and plan.md
+> Revision 2 says the owner decision was unavailable. Backlog AC9 is therefore reported as FAILED, not waived;
+> the Go change stays because AC5 cannot pass without it. A human must confirm or reject the Go change.
 
 - No Go code, proto schema, or generated proto bindings need to change for this fix.
 - `session.cdpState` is already populated in `instance_adapter.go` and present on the
