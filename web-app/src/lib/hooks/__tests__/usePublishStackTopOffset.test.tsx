@@ -1,7 +1,7 @@
 import React, { useRef } from "react";
 import { act, render } from "@testing-library/react";
 import { usePublishDeckTopOffset, usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
-import { getStackTopOffset } from "@/lib/utils/toastDock";
+import { getStackTopOffset, setDeckTopOffset } from "@/lib/utils/toastDock";
 
 let bottom = 120;
 let height = 40;
@@ -89,6 +89,15 @@ describe("usePublishStackTopOffset", () => {
       const background = render(<Pane visible={false} />);
       background.unmount();
       expect(deckVar()).toBe("330px");
+    });
+
+    it("setDeckTopOffset skips the style write when the value is unchanged", () => {
+      const setProperty = jest.spyOn(document.documentElement.style, "setProperty");
+      const owner = Symbol("o");
+      setDeckTopOffset(250, owner);
+      setDeckTopOffset(250, owner);
+      expect(setProperty).toHaveBeenCalledTimes(1);
+      setDeckTopOffset(null, owner);
     });
 
     it("only the owner may clear the anchor when two terminals are mounted", () => {

@@ -393,8 +393,7 @@ export function SessionDetailView({
   isActive = true,
   windowActive = true,
 }: SessionDetailViewProps) {
-  // No-op seam: later stories read pollMode/keysEnabled/measureEnabled from here.
-  useSessionDetailActivity({ isFocused: isActive, windowActive });
+  const { measureEnabled } = useSessionDetailActivity({ isFocused: isActive, windowActive });
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
 
@@ -469,7 +468,7 @@ export function SessionDetailView({
 
   // The mobile toast deck docks directly under this tab row.
   const tabRowRef = useRef<HTMLDivElement>(null);
-  usePublishStackTopOffset(tabRowRef);
+  usePublishStackTopOffset(tabRowRef, measureEnabled);
 
   // Fire a toast notification when a shell exits with a non-zero exit code.
   // Track which shell IDs we've already notified to avoid duplicate toasts.
