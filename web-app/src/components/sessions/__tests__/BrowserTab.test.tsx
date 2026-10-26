@@ -366,6 +366,15 @@ describe('BrowserTab — inspect mode', () => {
       expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
     });
 
+    it('re-arms "Waiting for first frame" when the stream drops and resumes', () => {
+      const waiting = makeCdpState({ status: CDPStatus.CDP_STATUS_WAITING });
+      const { rerender } = render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { capturedOnFrame?.(); });
+      rerender(<BrowserTab {...readyProps} cdpState={waiting} />);
+      rerender(<BrowserTab {...readyProps} cdpState={streaming} />);
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
+    });
+
     it('hides the message once a frame is painted', () => {
       render(<BrowserTab {...readyProps} cdpState={streaming} />);
       act(() => { capturedOnFrame?.(); });

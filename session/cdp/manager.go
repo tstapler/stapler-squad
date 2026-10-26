@@ -106,6 +106,7 @@ type cdpStreamManager struct {
 	mu            sync.RWMutex
 	state         CDPState
 	stateChangeCb func(CDPState)
+	stateSeq      uint64 // drops callbacks superseded before their goroutine ran
 
 	// wrapperDir is the temp directory holding Chrome wrapper scripts.
 	wrapperDir string
@@ -145,9 +146,17 @@ func (m *cdpStreamManager) SetStateChangeCallback(cb func(CDPState)) {
 // Must be called with m.mu held.
 func (m *cdpStreamManager) setState(s CDPState) {
 	m.state = s
+	m.stateSeq++
 	if m.stateChangeCb != nil {
-		cb := m.stateChangeCb
-		go cb(s)
+		cb, seq := m.stateChangeCb, m.stateSeq
+		go func() {
+			m.mu.RLock()
+			stale := m.stateSeq != seq
+			m.mu.RUnlock()
+			if !stale {
+				cb(s)
+			}
+		}()
 	}
 }
 
@@ -385,6 +394,9 @@ func (m *cdpStreamManager) runLoop(ctx context.Context, port int) {
 				"err", err,
 				"session", m.cfg.SessionID,
 			)
+			m.mu.Lock()
+			m.setState(CDPState{Status: CDPStatusWaiting, Port: port})
+			m.mu.Unlock()
 			select {
 			case <-ctx.Done():
 				return

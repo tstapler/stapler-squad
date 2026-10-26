@@ -98,6 +98,9 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserT
   const [hasFrame, setHasFrame] = useState(false);
   const [frameTimedOut, setFrameTimedOut] = useState(false);
   useEffect(() => {
+    if (!isReady) setHasFrame(false); // a server-side reconnect clears the frame
+  }, [isReady]);
+  useEffect(() => {
     if (!isReady || hasFrame) {
       setFrameTimedOut(false);
       return;
