@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, RefObject } from "react";
+import { useState, useEffect, useRef, type RefObject } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   getNotificationPreference,
@@ -11,6 +11,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
+import { collectPerfDiagnostics } from "@/lib/diagnostics/perfDiagnostics";
 import {
   overlay,
   menu,
@@ -69,6 +70,8 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
     summary: string;
   } | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [perfCopied, setPerfCopied] = useState(false);
+  const [perfError, setPerfError] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -193,6 +196,19 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
 
   if (!isOpen) return null;
 
+  const handleCopyPerfDiagnostics = async () => {
+    try {
+      const diagnostics = await collectPerfDiagnostics();
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable (needs a secure context)");
+      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+      setPerfError(null);
+      setPerfCopied(true);
+      setTimeout(() => setPerfCopied(false), 2000);
+    } catch (err) {
+      setPerfError(err instanceof Error ? err.message : "Failed to copy perf diagnostics");
+    }
+  };
+
   return (
     <div className={overlay} onClick={onClose}>
       <div
@@ -210,6 +226,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
             onClick={onClose}
             aria-label="Close debug menu"
           >
+            {/* analytics-exempt */}
             ×
           </button>
         </div>
@@ -243,6 +260,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 role="switch"
                 aria-checked={notificationsEnabled}
               >
+                {/* analytics-exempt */}
                 <span className={toggleSlider} />
               </button>
             </label>
@@ -264,6 +282,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 role="switch"
                 aria-checked={serverDebugLog}
               >
+                {/* analytics-exempt */}
                 <span className={toggleSlider} />
               </button>
             </label>
@@ -281,6 +300,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 role="switch"
                 aria-checked={terminalDebug}
               >
+                {/* analytics-exempt */}
                 <span className={toggleSlider} />
               </button>
             </label>
@@ -293,6 +313,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
               className={debugLink}
               onClick={onClose}
             >
+              {/* analytics-exempt */}
               <span className={debugLinkIcon}>📊</span>
               <div className={debugLinkContent}>
                 <span className={debugLinkName}>Escape Code Analytics</span>
@@ -324,6 +345,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
               disabled={isCapturing}
               aria-label="Capture debug snapshot"
             >
+              {/* analytics-exempt */}
               {isCapturing ? (
                 <>
                   <span className={spinner} /> Capturing...
@@ -332,6 +354,17 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
                 <>📸 Capture Debug Snapshot</>
               )}
             </button>
+
+            <button
+              className={snapshotButton}
+              onClick={handleCopyPerfDiagnostics}
+              aria-label="Copy perf diagnostics"
+            >
+              {/* analytics-exempt */}
+              {perfCopied ? <>✓ Copied</> : <>⏱ Copy Perf Diagnostics</>}
+            </button>
+
+            {perfError && <div className={snapshotErrorClass}>{perfError}</div>}
 
             {snapshotResult && (
               <div className={snapshotResultClass}>
@@ -370,6 +403,7 @@ export function DebugMenu({ isOpen, onClose, triggerRef }: DebugMenuProps) {
 
         <div className={footer}>
           <button className={doneButton} onClick={onClose}>
+            {/* analytics-exempt */}
             Done
           </button>
         </div>

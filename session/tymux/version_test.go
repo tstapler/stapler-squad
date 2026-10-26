@@ -7,8 +7,11 @@ import (
 	"syscall"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 )
 
 func TestParseTymuxdVersion(t *testing.T) {
@@ -47,8 +50,13 @@ func TestCompareVersions(t *testing.T) {
 // stubVersionSeams installs fakes for every probe and restores them on cleanup.
 func stubVersionSeams(t *testing.T, running, installed string, pid int) {
 	t.Helper()
-	origBin, origPID, origExe := binaryVersionFn, listenerPIDFn, processExeFn
-	t.Cleanup(func() { binaryVersionFn, listenerPIDFn, processExeFn = origBin, origPID, origExe })
+	origBin, origPID, origExe, origInfo := binaryVersionFn, listenerPIDFn, processExeFn, serverInfoFn
+	t.Cleanup(func() {
+		binaryVersionFn, listenerPIDFn, processExeFn, serverInfoFn = origBin, origPID, origExe, origInfo
+	})
+	serverInfoFn = func(context.Context, DaemonConfig) (*v1.ServerInfo, error) {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pre-1.4 daemon"))
+	}
 	binaryVersionFn = func(_ context.Context, path string) (string, error) {
 		if path == "/running/exe" {
 			return running, nil
@@ -122,4 +130,26 @@ func TestReplaceDaemon_StopsListenerThenEnsuresDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []os.Signal{syscall.SIGTERM}, signals)
 	assert.True(t, spawned, "a replacement daemon must be started")
+}
+
+func TestDetectDaemonVersions_PrefersServerInfo(t *testing.T) {
+	stubVersionSeams(t, "should-not-be-used", "1.5.0", 1)
+	serverInfoFn = func(context.Context, DaemonConfig) (*v1.ServerInfo, error) {
+		return &v1.ServerInfo{Version: "1.4.1", ProtocolVersion: 1, Pid: 777}, nil
+	}
+
+	info := DetectDaemonVersions(context.Background(), DaemonConfig{Addr: "127.0.0.1:1", BinaryPath: "/installed/tymuxd"})
+
+	assert.Equal(t, DaemonVersionInfo{Running: true, PID: 777, RunningVersion: "1.4.1", ProtocolVersion: 1, InstalledVersion: "1.5.0", Direction: VersionUpgrade}, info)
+}
+
+func TestDetectDaemonVersions_FallsBackToProcessProbeWhenRPCFails(t *testing.T) {
+	stubVersionSeams(t, "1.3.0", "1.4.1", 4242)
+	serverInfoFn = func(context.Context, DaemonConfig) (*v1.ServerInfo, error) {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("connection refused"))
+	}
+
+	info := DetectDaemonVersions(context.Background(), DaemonConfig{Addr: "127.0.0.1:1", BinaryPath: "/installed/tymuxd"})
+
+	assert.Equal(t, DaemonVersionInfo{Running: true, PID: 4242, RunningVersion: "1.3.0", InstalledVersion: "1.4.1", Direction: VersionUpgrade}, info)
 }

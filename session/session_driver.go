@@ -24,7 +24,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
@@ -250,26 +249,6 @@ func JoinSessionDriver(inst *Instance) {
 	}
 }
 
-// sanitizeInitialPromptForTmux strips characters that would corrupt the tmux
-// send-keys call: null bytes (which tmux silently drops in unpredictable ways),
-// newlines and carriage returns (collapsed to spaces so the prompt stays on one
-// line), and hard-limits the length to 4096 characters. Returns the trimmed
-// result; an empty return value means the caller should fall back to the static
-// driverInitialPrompt.
-func sanitizeInitialPromptForTmux(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	if len(s) > 4096 {
-		s = s[:4096]
-		// Step back from the truncation point to avoid splitting a multi-byte UTF-8 rune.
-		for !utf8.ValidString(s) && len(s) > 0 {
-			s = s[:len(s)-1]
-		}
-	}
-	return strings.TrimSpace(s)
-}
-
 // runSessionDriver is the thin wrapper that resolves the effective retry
 // policy once and delegates to runSessionDriverWithPrompt.
 func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) {
@@ -280,7 +259,7 @@ func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) 
 
 	var initialPrompt string
 	if inst.InitialPrompt != "" {
-		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		sanitized := cleanDriverPromptText(inst.InitialPrompt)
 		if sanitized != "" {
 			initialPrompt = sanitized
 		}
@@ -739,6 +718,14 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 			log.Error("SessionDriver: lease API refused the initial prompt write", "session", inst.Title, "err", err)
 			return
 		}
+		if errors.Is(err, ErrPromptUndeliverable) {
+			// Deterministic: retrying cannot help, so stop and tell the operator.
+			log.Error("SessionDriver: initial prompt cannot be delivered; not sending it",
+				"session", inst.Title, "promptLen", len(initialPrompt), "err", err)
+			markSessionNeedsAttention(inst, "initial prompt not delivered: "+err.Error())
+			markSent()
+			return
+		}
 		log.Warn("SessionDriver: failed to send initial prompt",
 			"session", inst.Title,
 			"claudeAtPrompt", claudeAtPrompt,
@@ -901,7 +888,12 @@ func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previe
 // submitInitialPrompt is a variable only so a test can force a lease-API error
 // out of the otherwise unreachable ErrNoLease/ErrLeaseMismatch branch.
 var submitInitialPrompt = func(ctx context.Context, inst *Instance, lease *HeldLease, prompt string) error {
-	return SubmitDriverContent(ctx, inst, lease, prompt, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
+	typed, err := ParseDriverPrompt(prompt)
+	if err != nil {
+		lease.Release()
+		return err
+	}
+	return SubmitDriverContent(ctx, inst, lease, typed.Keys(), DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait)
 }
 
 // sendAnswerKeyUnderLease types the affirmative key for a dialog. It is the
@@ -1080,7 +1072,7 @@ func buildRetryContinuationPrompt(inst *Instance, reason string) string {
 	base := buildContinuationPrompt(inst)
 	if base == "Your previous session exited unexpectedly. Please continue from where you left off." &&
 		inst.InitialPrompt != "" {
-		if sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt); sanitized != "" {
+		if sanitized := cleanDriverPromptText(inst.InitialPrompt); sanitized != "" {
 			base = sanitized
 		}
 	}

@@ -33,6 +33,13 @@ type TymuxManager interface {
 	// SetSession(). Call it before Start().
 	SetCommand(command launchcmd.LaunchCommand)
 
+	// AppendEnv adds KEY=VALUE entries to the environment the next Start()
+	// passes to tymuxd. Later entries for the same key replace earlier ones;
+	// entries without '=' are ignored. The command's own env still wins.
+	// tymuxd persists session env in plaintext records: pass only
+	// non-secret values (DISPLAY, CDP URLs).
+	AppendEnv(env ...string)
+
 	// Identification
 	GetSessionIdentifier() string
 

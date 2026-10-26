@@ -112,7 +112,7 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, lease *HeldLea
 			return fmt.Errorf("pane owner not verified, content not sent: %w", err)
 		}
 	}
-	if err := inst.SendKeys(content); err != nil {
+	if err := sendKeysChunked(ctx, inst, content); err != nil {
 		return fmt.Errorf("send content: %w", err)
 	}
 	waitForPaneSettle(ctx, inst, pollInterval, maxWait)
@@ -140,6 +140,27 @@ func SubmitDriverContent(ctx context.Context, inst paneSubmitter, lease *HeldLea
 		return nil
 	}
 	return ErrSubmitNotConfirmed
+}
+
+// sendKeysChunked writes content in maxInlinePromptBytes pieces (ADR-031's
+// inline class) so one write never holds the pane writer for a whole large
+// prompt. The pane is a byte stream, so splitting is lossless. A failure says
+// how much was already written: partial delivery must be visible.
+func sendKeysChunked(ctx context.Context, inst keySender, content string) error {
+	if len(content) <= maxInlinePromptBytes {
+		return inst.SendKeys(content)
+	}
+	for sent := 0; sent < len(content); {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("cancelled after %d of %d bytes: %w", sent, len(content), err)
+		}
+		end := min(sent+maxInlinePromptBytes, len(content))
+		if err := inst.SendKeys(content[sent:end]); err != nil {
+			return fmt.Errorf("failed after %d of %d bytes: %w", sent, len(content), err)
+		}
+		sent = end
+	}
+	return nil
 }
 
 // SubmitContentWithEnter routes content through SubmitDriverContent, bounding
