@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
-import { VCSStatus } from "@/gen/session/v1/types_pb";
+import type { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import type { AsyncResult } from "@/lib/types/asyncResult";
