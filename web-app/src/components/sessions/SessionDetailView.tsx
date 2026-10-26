@@ -2,6 +2,8 @@
 // +feature: session-trigger-attribution-badge
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useReviewNavKeys } from "./useReviewNavKeys";
+import { useSessionDetailActivity } from "./useSessionDetailActivity";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
 import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package, FileText } from "lucide-react";
@@ -324,6 +326,8 @@ export interface SessionDetailViewProps {
   backlogEntry?: BacklogIndexEntry;
   /** Whether this is the focused pane. Defaults to true for callers that mount a single view. */
   isActive?: boolean;
+  /** Window is the visible one. Defaults to true; no consumer until Tasks 3.1.1b/4.1.3b. */
+  windowActive?: boolean;
 }
 
 // Terminal per the SessionStatus doc comment: "Session has been stopped
@@ -387,7 +391,10 @@ export function SessionDetailView({
   backlogItemId,
   backlogEntry,
   isActive = true,
+  windowActive = true,
 }: SessionDetailViewProps) {
+  // No-op seam: later stories read pollMode/keysEnabled/measureEnabled from here.
+  useSessionDetailActivity({ isFocused: isActive, windowActive });
   // activeTabId is either a static SessionDetailTab or a shell tab id "shell:<shellId>"
   const [activeTabId, setActiveTabId] = useState<string>(initialTab);
 
@@ -653,28 +660,9 @@ export function SessionDetailView({
       });
   };
 
-  // Keyboard shortcuts: Escape to exit fullscreen, Shift+Arrow for navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isFullscreen) {
-        setIsFullscreen(false);
-      }
-
-      // Review queue navigation shortcuts (Shift+Arrow)
-      if (showNavigation && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        if (e.key === "ArrowRight" && onNext) {
-          e.preventDefault();
-          onNext();
-        } else if (e.key === "ArrowLeft" && onPrevious) {
-          e.preventDefault();
-          onPrevious();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isFullscreen, showNavigation, onNext, onPrevious]);
+  // Literal true keeps today's behavior (every mounted view handles keys); Task 4.1.3b
+  // switches it to activity.keysEnabled.
+  useReviewNavKeys(true, { isFullscreen, setIsFullscreen, showNavigation, onNext, onPrevious });
 
   function makeStringFieldEditor(
     editValue: string,

@@ -63,6 +63,8 @@ interface SessionDetailProps {
   backlogEntry?: BacklogIndexEntry;
   /** Whether this session's pane currently has focus — forwarded to SessionVcsProvider. Defaults to true. */
   isActive?: boolean;
+  /** Window is the visible one. Defaults to true; plumbed to SessionDetailView (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
 export function SessionDetail({
@@ -86,6 +88,7 @@ export function SessionDetail({
   backlogItemId,
   backlogEntry,
   isActive,
+  windowActive,
 }: SessionDetailProps) {
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
@@ -138,6 +141,7 @@ export function SessionDetail({
       canGoBack={canGoBack}
       backlogItemId={backlogItemId}
       isActive={isActive}
+      windowActive={windowActive}
       backlogEntry={backlogEntry}
     />
   );
