@@ -23,6 +23,11 @@ interface WindowKeepAliveHostProps<TAssign> {
   panelRef?: RefObject<HTMLDivElement | null>;
   externalAssign?: TAssign | null;
   maxRetained?: number;
+  /**
+   * False while the host is mounted above a route that is not showing it: every panel stays mounted but
+   * hidden and inert, and no window reports `active`.
+   */
+  routeActive?: boolean;
   renderWindow: (window: NamedWindow, ctx: WindowRenderContext<TAssign>) => ReactNode;
   /** Overlay for a window mounted cold (keep-alive on only); rendered inside its panel. */
   renderConnecting?: (window: NamedWindow, ctx: { active: boolean }) => ReactNode;
@@ -51,6 +56,7 @@ export function WindowKeepAliveHost<TAssign = unknown>({
   panelRef,
   externalAssign = null,
   maxRetained = MAX_RETAINED_WINDOWS,
+  routeActive = true,
   renderWindow,
   renderConnecting,
 }: WindowKeepAliveHostProps<TAssign>) {
@@ -62,7 +68,8 @@ export function WindowKeepAliveHost<TAssign = unknown>({
   const previousActive = useRef<WindowId | null>(null);
 
   useLayoutEffect(() => {
-    const active = panels.current.get(currentWindowId) ?? null;
+    const activeId = routeActive ? currentWindowId : null;
+    const active = (activeId && panels.current.get(activeId)) || null;
     if (panelRef) panelRef.current = active;
     if (active?.hidden) {
       active.hidden = false;
@@ -70,7 +77,7 @@ export function WindowKeepAliveHost<TAssign = unknown>({
       active.scrollTop = focusMemory.recall(currentWindowId)?.scrollTop ?? 0;
     }
     for (const [id, panel] of panels.current) {
-      if (id === currentWindowId || panel.hidden) continue;
+      if (id === activeId || panel.hidden) continue;
       if (id === previousActive.current) {
         focusMemory.record(id, {
           paneId: focusedPaneId(panel) ?? focusMemory.recall(id)?.paneId ?? null,
@@ -81,14 +88,14 @@ export function WindowKeepAliveHost<TAssign = unknown>({
       panel.setAttribute("inert", ""); // attribute, not the `inert` property: jsdom lacks the property
       panel.hidden = true;
     }
-    previousActive.current = currentWindowId;
+    previousActive.current = activeId;
   });
 
   const shown = windows.filter((w) => retained.includes(w.id));
   return (
     <>
       {shown.map((w) => {
-        const active = w.id === currentWindowId;
+        const active = routeActive && w.id === currentWindowId;
         return (
           <WindowPanel
             // Flag off keeps one element across switches, as before the host existed.

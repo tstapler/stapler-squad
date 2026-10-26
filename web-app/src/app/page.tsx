@@ -21,12 +21,13 @@ import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
-import type { WindowId } from "@/lib/window/windowTypes";
+import type { NamedWindow, WindowId } from "@/lib/window/windowTypes";
 import { WindowTabStrip, type WindowTabStripHandle } from "@/components/window/WindowTabStrip";
-import { WindowKeepAliveHost } from "@/components/pane/WindowKeepAliveHost";
+import { WindowKeepAliveHost, type WindowRenderContext } from "@/components/pane/WindowKeepAliveHost";
 import { ConnectingPlaceholder } from "@/components/window/ConnectingPlaceholder";
 import { getAllLeaves } from "@/lib/pane/paneUtils";
 import { useWindowsController } from "@/lib/window/useWindowsController";
+import { WindowHostSlot, useWindowsContext, type WindowHostInputs } from "@/lib/window/WindowsProvider";
 import {
   focusKindForTrigger,
   focusWindowContent,
@@ -188,20 +189,22 @@ function HomeContent() {
     });
     switchWindowUnrecorded(id, trigger);
   };
-  const { keepAlive, paneDispatchFor, detailRefFor, activeDetailRef: sessionDetailRef } = useWindowsController({
-    currentWindowId: currentWindow.id,
-    dispatchPane,
-  });
+  // The layout-level provider owns the controller (and, with keep-alive on, the host) so retained windows
+  // survive navigating away; the local controller only serves trees rendered without a provider.
+  const windowsContext = useWindowsContext();
+  const localController = useWindowsController({ currentWindowId: currentWindow.id, dispatchPane });
+  const { keepAlive, paneDispatchFor, detailRefFor, focusActiveDetail } =
+    windowsContext?.controller ?? localController;
 
   // Focus detail panel when session opens; return focus on close
   useEffect(() => {
     if (selectedSession) {
-      sessionDetailRef.current?.focus();
+      focusActiveDetail();
     } else if (sessionTriggerRef.current) {
       sessionTriggerRef.current.focus();
       sessionTriggerRef.current = null;
     }
-  }, [selectedSession, sessionDetailRef]);
+  }, [selectedSession, focusActiveDetail]);
   // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
   // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
   // inline editor double-click/F2 already open, not a separate native prompt.
@@ -622,6 +625,78 @@ function HomeContent() {
     handleToggleAutonomousMode, handleTogglePinned, handleToggleAutoApprove, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
+  const renderConnecting = (w: NamedWindow, { active }: { active: boolean }) => (
+    <ConnectingPlaceholder sessions={connectingSessionsFor(w.paneState.root)} active={active} />
+  );
+  const renderWindow = (w: NamedWindow, { active, externalAssign }: WindowRenderContext<typeof externalSessionAssign>) =>
+    lookup && active ? (
+      <SessionUnavailableCard
+        variant={lookup.status === "failed" ? "failed" : "unavailable"}
+        sessionLabel={lookup.sessionId.slice(0, 8)}
+        notification={lookup.status === "not_found" ? lookupNotification : null}
+        onOpenNotifications={() => router.push("/notifications")}
+        onGoToSessions={() => {
+          setLookup(null);
+          updateUrl(null, null);
+        }}
+        onRetry={() => {
+          const link = parseSessionDeepLink(searchParams);
+          setLookup(null);
+          fetchHiddenSessionFallback(link, true);
+        }}
+      />
+    ) : (
+      <div
+        ref={detailRefFor(w.id)}
+        className={styles.cockpitContainer}
+        tabIndex={-1}
+        role="region"
+        aria-label="Session cockpit"
+        data-context="cockpit"
+      >
+        <PaneTilingContainer
+          sessions={paneSessions}
+          paneState={w.paneState}
+          dispatch={paneDispatchFor(w.id)}
+          externalSessionAssign={externalAssign}
+          windowActive={active}
+        />
+      </div>
+    );
+  // With keep-alive on and a provider, the windows render above the route (so they outlive this page) and
+  // this page only supplies their inputs; otherwise the host renders inline exactly as before.
+  const hostSlot =
+    keepAlive && windowsContext ? (
+      <WindowHostSlot
+        inputs={{
+          windows,
+          currentWindowId: currentWindow.id,
+          focusMemory: windowFocusMemory,
+          panelRef: windowPanelRef,
+          externalAssign: externalSessionAssign,
+          dispatchPane,
+          renderWindow: renderWindow as WindowHostInputs["renderWindow"],
+          renderConnecting,
+          wrap: (host) => (
+            <CockpitActionsProvider value={cockpitActions}>
+              <SessionViewModeProvider value={{ viewMode, setViewMode }}>{host}</SessionViewModeProvider>
+            </CockpitActionsProvider>
+          ),
+        }}
+      />
+    ) : (
+      <WindowKeepAliveHost
+        windows={windows}
+        currentWindowId={currentWindow.id}
+        keepAlive={keepAlive}
+        focusMemory={windowFocusMemory}
+        panelRef={windowPanelRef}
+        externalAssign={externalSessionAssign}
+        renderConnecting={renderConnecting}
+        renderWindow={renderWindow}
+      />
+    );
+
   return (
     <div className={styles.page}>
       {/* Unified tiling cockpit — session list and detail panels are both pane views */}
@@ -651,53 +726,7 @@ function HomeContent() {
               onClose={() => setWindowOverviewOpen(false)}
             />
           )}
-          <WindowKeepAliveHost
-            windows={windows}
-            currentWindowId={currentWindow.id}
-            keepAlive={keepAlive}
-            focusMemory={windowFocusMemory}
-            panelRef={windowPanelRef}
-            externalAssign={externalSessionAssign}
-            renderConnecting={(w, { active }) => (
-              <ConnectingPlaceholder sessions={connectingSessionsFor(w.paneState.root)} active={active} />
-            )}
-            renderWindow={(w, { active, externalAssign }) =>
-              lookup && active ? (
-                <SessionUnavailableCard
-                  variant={lookup.status === "failed" ? "failed" : "unavailable"}
-                  sessionLabel={lookup.sessionId.slice(0, 8)}
-                  notification={lookup.status === "not_found" ? lookupNotification : null}
-                  onOpenNotifications={() => router.push("/notifications")}
-                  onGoToSessions={() => {
-                    setLookup(null);
-                    updateUrl(null, null);
-                  }}
-                  onRetry={() => {
-                    const link = parseSessionDeepLink(searchParams);
-                    setLookup(null);
-                    fetchHiddenSessionFallback(link, true);
-                  }}
-                />
-              ) : (
-                <div
-                  ref={detailRefFor(w.id)}
-                  className={styles.cockpitContainer}
-                  tabIndex={-1}
-                  role="region"
-                  aria-label="Session cockpit"
-                  data-context="cockpit"
-                >
-                  <PaneTilingContainer
-                    sessions={paneSessions}
-                    paneState={w.paneState}
-                    dispatch={paneDispatchFor(w.id)}
-                    externalSessionAssign={externalAssign}
-                    windowActive={active}
-                  />
-                </div>
-              )
-            }
-          />
+          {hostSlot}
         </SessionViewModeProvider>
       </CockpitActionsProvider>
 

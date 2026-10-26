@@ -10,6 +10,8 @@ import type { WindowId } from "./windowTypes";
 interface WindowsControllerInput {
   currentWindowId: WindowId;
   dispatchPane: (windowId: WindowId, action: PaneAction) => void;
+  /** False while a different route is showing; focus effects become no-ops so they never take focus from it. */
+  routeActive?: boolean;
 }
 
 export interface WindowsController {
@@ -21,13 +23,25 @@ export interface WindowsController {
   detailRefFor: (windowId: WindowId) => RefObject<HTMLDivElement | null>;
   /** Stable ref whose `current` is the active window's cockpit container (what the page's focus effects use). */
   activeDetailRef: RefObject<HTMLDivElement | null>;
+  /** Focuses the active window's cockpit container; a no-op while off-route. */
+  focusActiveDetail: () => void;
+  /**
+   * Points `activeDetailRef` at `windowId` before the next render of the owner. A layout-level provider
+   * learns the current window from the page, so it must be told synchronously or the page's own effects
+   * would resolve the previous window's container.
+   */
+  syncCurrentWindow: (windowId: WindowId) => void;
 }
 
 /**
  * Per-window state for the keep-alive host: dispatch, container refs and the flag. Provider-shaped (takes
  * only the current id and the shared dispatcher) so Story 4.1.5 can lift it into a layout-level provider.
  */
-export function useWindowsController({ currentWindowId, dispatchPane }: WindowsControllerInput): WindowsController {
+export function useWindowsController({
+  currentWindowId,
+  dispatchPane,
+  routeActive = true,
+}: WindowsControllerInput): WindowsController {
   const keepAlive = useFeatureFlagValue(
     "window_keep_alive",
     undefined,
@@ -68,5 +82,14 @@ export function useWindowsController({ currentWindowId, dispatchPane }: WindowsC
     [],
   );
 
-  return { keepAlive, paneDispatchFor, detailRefFor, activeDetailRef };
+  const routeActiveRef = useRef(routeActive);
+  routeActiveRef.current = routeActive;
+  const focusActiveDetail = useCallback(() => {
+    if (routeActiveRef.current) activeDetailRef.current?.focus();
+  }, [activeDetailRef]);
+  const syncCurrentWindow = useCallback((windowId: WindowId) => {
+    currentIdRef.current = windowId;
+  }, []);
+
+  return { keepAlive, paneDispatchFor, detailRefFor, activeDetailRef, focusActiveDetail, syncCurrentWindow };
 }
