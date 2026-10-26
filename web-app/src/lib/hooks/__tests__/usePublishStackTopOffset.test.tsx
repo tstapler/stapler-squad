@@ -1,7 +1,7 @@
 import React, { useRef } from "react";
 import { act, render } from "@testing-library/react";
 import { usePublishDeckTopOffset, usePublishStackTopOffset } from "@/lib/hooks/usePublishStackTopOffset";
-import { getStackTopOffset, setDeckTopOffset } from "@/lib/utils/toastDock";
+import { getStackTopOffset, setDeckTopOffset, subscribeStackTopOffset } from "@/lib/utils/toastDock";
 
 let bottom = 120;
 let height = 40;
@@ -52,6 +52,26 @@ describe("usePublishStackTopOffset", () => {
     unmount();
     expect(cssVar()).toBe("0px");
     expect(getStackTopOffset()).toBeNull();
+  });
+
+  it("usePublishBottomEdge_should_PublishOncePerChangedValue_When_8SessionDetailViewsMounted", () => {
+    const onChange = jest.fn();
+    const unsubscribe = subscribeStackTopOffset(onChange);
+    const views = Array.from({ length: 8 }, () => render(<Row />));
+    // Eight views measure the same edge, but toastDock only notifies on a changed value.
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(getStackTopOffset()).toBe(120);
+
+    bottom = 150;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+      jest.advanceTimersByTime(50);
+    });
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(getStackTopOffset()).toBe(150);
+
+    unsubscribe();
+    views.forEach((v) => v.unmount());
   });
 
   describe("usePublishDeckTopOffset", () => {

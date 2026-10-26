@@ -512,3 +512,29 @@ describe("scroll settings wiring (Stories 1.2.5e / 1.2.5g)", () => {
     expect(surface()?.getAttribute("data-gesture-scroll")).toBe("off");
   });
 });
+
+describe("hidden terminal resize safety", () => {
+  it("xterm_should_SendNoResizeSessionRpc_When_HiddenAndResizeObserverDelivers0x0", async () => {
+    const onResize = jest.fn();
+    const { terminal, fit, ro } = await mount({ onResize });
+    size.w = 0;
+    size.h = 0;
+    deliver(ro, 0, 0);
+    advance(500);
+    expect(fit.fit).not.toHaveBeenCalled();
+    expect(onResize).not.toHaveBeenCalled();
+    expect(terminal.cols).toBeGreaterThan(0);
+  });
+
+  it("xterm_should_SendNoResizeSessionRpc_When_WindowInactiveAndResizeObserverDelivers0x0", async () => {
+    const onResize = jest.fn();
+    const { rerender, fit, ro } = await mount({ onResize, windowActive: true });
+    rerender(<XtermTerminal onResize={onResize} windowActive={false} />);
+    size.w = 0;
+    size.h = 0;
+    deliver(ro, 0, 0);
+    advance(500);
+    expect(fit.fit).not.toHaveBeenCalled();
+    expect(onResize).not.toHaveBeenCalled();
+  });
+});
