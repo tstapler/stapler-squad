@@ -27,9 +27,11 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 	}
 	acks := s.wireGuidanceAcks(w.Storage)
 	s.wireHookReply(w.Storage, acks)
+	router := s.WireAnswerRouter(answerRouterDeps(w, acks))
+	src.Routes = router
 	delegates := ActionDelegates{
 		Approvals: NewApprovalResolver(s.approvalSvc, s.approvalStore),
-		Questions: s.WireAnswerRouter(answerRouterDeps(w, acks)),
+		Questions: router,
 		Resolver:  NewNotificationResolver(s.GetNotificationStore()),
 		Cancels:   w.Cancels,
 	}

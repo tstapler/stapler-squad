@@ -197,6 +197,46 @@ func TestBuildDescriptors_ShouldMarkTierBDesktopOnly_WhenListenerRemote(t *testi
 	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, remote[0].Actions[0].Tier)
 }
 
+type fakeRoutes struct {
+	route answerRoute
+	known bool
+}
+
+func (f fakeRoutes) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
+
+func TestBuildDescriptors_ShouldKeepAnswerAvailableRemotely_WhenRouteIsDurableRecord(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		routes    fakeRoutes
+		available bool
+		tier      sessionv1.ActionTier
+	}{
+		{"stopped or archived session", fakeRoutes{routeDurableRecord, true}, true, sessionv1.ActionTier_ACTION_TIER_A},
+		{"live session", fakeRoutes{routeLiveKeystrokeVisible, true}, false, sessionv1.ActionTier_ACTION_TIER_B},
+		{"unknown session", fakeRoutes{}, false, sessionv1.ActionTier_ACTION_TIER_B},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newDescriptorFixture()
+			f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = PendingQuestion{}
+			b := f.builder()
+			b.sources.Routes = tc.routes
+			recs := []*sessionv1.NotificationHistoryRecord{questionRecord("n1", "s1", "q1")}
+			b.Annotate(context.Background(), recs, ListenerClassRemote)
+			d := recs[0].Actions[0]
+			assert.Equal(t, tc.available, d.Available)
+			assert.Equal(t, tc.tier, d.Tier)
+			if tc.available {
+				assert.Empty(t, d.UnavailableReason)
+			} else {
+				assert.Equal(t, "desktop_only", d.UnavailableReason)
+			}
+		})
+	}
+}
+
 func TestBuildDescriptors_ShouldOfferAnswerGuidance_WhenGuidanceOpen(t *testing.T) {
 	t.Parallel()
 	f := newDescriptorFixture()
