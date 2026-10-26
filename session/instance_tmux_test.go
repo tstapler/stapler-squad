@@ -1361,3 +1361,17 @@ func TestClaudeMCPConfigArgs_should_KeepTokenOutOfArgv_When_TokenPresent(t *test
 		t.Errorf("file missing Authorization/UUID headers: %s", data)
 	}
 }
+
+func TestInstance_ResizePTY_should_RejectNonPositiveDimensions_WithoutReachingSetWindowSize(t *testing.T) {
+	t.Parallel()
+	for _, dims := range [][2]int{{0, 24}, {80, 0}, {0, 0}, {-1, 24}} {
+		pm := &fakeHasSessionProcessManager{}
+		instance := &Instance{Title: "test", processManager: pm}
+		instance.started.Store(true)
+
+		err := instance.ResizePTY(dims[0], dims[1])
+
+		require.Error(t, err, "ResizePTY(%d, %d)", dims[0], dims[1])
+		assert.False(t, pm.resized, "SetWindowSize must not be reached for %dx%d", dims[0], dims[1])
+	}
+}
