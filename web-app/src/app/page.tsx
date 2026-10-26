@@ -112,16 +112,6 @@ function HomeContent() {
     status: Exclude<SessionLookupOutcome, "found">;
   } | null>(null);
 
-  // Focus detail panel when session opens; return focus on close
-  useEffect(() => {
-    if (selectedSession) {
-      sessionDetailRef.current?.focus();
-    } else if (sessionTriggerRef.current) {
-      sessionTriggerRef.current.focus();
-      sessionTriggerRef.current = null;
-    }
-  }, [selectedSession, sessionDetailRef]);
-
   // Trap focus inside delete confirmation dialog; return focus on close
   useFocusTrap(deleteDialogRef, !!deleteConfirmTarget, lastFocusBeforeDelete);
 
@@ -200,6 +190,16 @@ function HomeContent() {
     currentWindowId: currentWindow.id,
     dispatchPane,
   });
+
+  // Focus detail panel when session opens; return focus on close
+  useEffect(() => {
+    if (selectedSession) {
+      sessionDetailRef.current?.focus();
+    } else if (sessionTriggerRef.current) {
+      sessionTriggerRef.current.focus();
+      sessionTriggerRef.current = null;
+    }
+  }, [selectedSession, sessionDetailRef]);
   // Bridges useWindowShortcuts' "," leader follow-up (which only knows a
   // window id) to WindowTabStrip's imperative beginEdit(id, name) — the same
   // inline editor double-click/F2 already open, not a separate native prompt.
