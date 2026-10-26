@@ -37,7 +37,12 @@ Branch rebased onto main after #1192 landed the same page-target fix; `manager.g
 
 Main's manager no longer logs the attach / first-frame lines, so the Streaming state itself (published only after a frame is stored) is the evidence.
 
+## Criterion 3 status
+
+- **Linux: proven.** `CDP_STATUS_STREAMING` on 6 of 6 `GetSession` polls; the Browser tab canvas rendered the non-blank orange "CDP LIVE PROOF 3" page (6,880 of 6,880 sampled pixels non-white). See the rebased-head re-run above.
+- **macOS: waived by the owner.** Not run and not verified; this is a waiver, not a pass.
+
 ## Gaps
 
-1. macOS was not run, since this host is Linux; owner-side.
+1. macOS was not run (waived by the owner, see above).
 2. The cdp-bins PATH wrapper is still bypassed by shell rc files: `which google-chrome-stable` resolves to `/usr/bin`.
