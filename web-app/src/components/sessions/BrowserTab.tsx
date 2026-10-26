@@ -72,6 +72,8 @@ export function buildWsUrl(baseUrl: string, sessionId: string): string {
   return `${wsScheme}://${host}/api/sessions/${sessionId}/cdp-stream`;
 }
 
+const NO_FRAME_TIMEOUT_MS = 10_000;
+
 export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserTabProps) {
   const status = cdpState?.status ?? CDPStatus.CDP_STATUS_UNSPECIFIED;
   const isUnavailable = status === CDPStatus.CDP_STATUS_UNAVAILABLE || status === CDPStatus.CDP_STATUS_UNSPECIFIED;
@@ -91,6 +93,18 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserT
   const [connectionState, setConnectionState] = useState<'connected' | 'reconnecting' | 'disconnected'>('disconnected');
   // Incrementing key forces CDPViewer to re-mount on manual reconnect
   const [viewerKey, setViewerKey] = useState(0);
+
+  // STREAMING only means Chrome was detected; surface a stalled stream instead of a silent blank canvas.
+  const [hasFrame, setHasFrame] = useState(false);
+  const [frameTimedOut, setFrameTimedOut] = useState(false);
+  useEffect(() => {
+    if (!isReady || hasFrame) {
+      setFrameTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setFrameTimedOut(true), NO_FRAME_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isReady, hasFrame, viewerKey]);
 
   // Inspect mode state. The toggle is only usable while the stream is live (isReady).
   const [inspectMode, setInspectMode] = useState(false);
@@ -163,6 +177,7 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserT
 
   function handleReconnect() {
     setConnectionState('disconnected');
+    setHasFrame(false);
     setViewerKey((k) => k + 1);
   }
 
@@ -230,12 +245,23 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, cdpState }: BrowserT
                 </button>
               </div>
             )}
+            {isReady && !hasFrame && (
+              <div className={styles.placeholderOverlay} role="status" data-testid="waiting-first-frame">
+                <span>{frameTimedOut ? 'No frames received from the browser' : 'Waiting for first frame…'}</span>
+                {frameTimedOut && (
+                  <span style={{ fontSize: '0.85em', opacity: 0.7 }}>
+                    Chrome was detected but is not streaming. Try Reconnect, or check the server logs.
+                  </span>
+                )}
+              </div>
+            )}
             <CDPViewer
               key={viewerKey}
               wsUrl={wsUrl}
               isVisible={isVisible && isReady}
               onConnected={() => setConnectionState('connected')}
               onDisconnected={() => setConnectionState('reconnecting')}
+              onFrame={() => setHasFrame(true)}
               inspectMode={inspectMode}
               onInspectClick={handleInspectClick}
             />

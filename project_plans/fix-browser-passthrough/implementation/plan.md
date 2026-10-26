@@ -233,3 +233,21 @@ Recommendation: A for this PR (AC9 is explicit), and a follow-up backlog item fo
 ### Added risks
 - R-A: `STREAMING` is a false positive today; the frontend now trusts it (isReady) — spinner-less blank viewer until Task 4.
 - R-B: `PATH` wrapper (`cdp-bins`) can be defeated by shell rc files reordering `PATH`; Chrome then runs without the debug port and state sits at `NO_BROWSER`.
+
+### Revision 2 disposition (2026-10-25)
+- Owner decision (A vs B) is not available in this unattended run; Option A is taken because AC9 is explicit. B is filed as backlog item `36a72546-6b68-46dc-bf4c-9612a94978a4`.
+- Pre-mortem P1 mitigated within AC9: `CDPViewer` gained `onFrame`; `BrowserTab` shows "Waiting for first frame…" and, after 10 s, "No frames received from the browser" (3 new Jest tests; confirmed live on a fresh session).
+- Adversarial correction accepted: only AC5 needs the backend; AC6 (tab activates on STREAMING) is met by the frontend and was confirmed live. AC7/AC8 were not in the table.
+
+## Readiness gate (sdd:4-validate step 5), 2026-10-25
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Every requirement has a test case in validation.md | PASS (validation.md predates Rev 2; first-frame overlay tests added in `BrowserTab.test.tsx` but not yet listed there) |
+| 2 | No TODO/TBD in plan | PASS |
+| 3 | ADRs on disk | N/A (none referenced) |
+| 4 | No BLOCKER in adversarial-review.md | PASS (CONCERNS, 0 blockers) |
+| 5 | No BLOCKER in architecture-review.md | N/A (not dispatched; plan touches frontend files only) |
+| 6 | Migration plan for schema changes | N/A |
+| 7 | No open P1 in pre-mortem.md | PASS after mitigation above |
+| 8 | No cycle/layering problems | PASS (no new packages) |
+Verdict: CONCERNS (criterion 1 note; Option B owner decision pending). Triad review not run (complexity field absent in requirements.md; treated as 2).

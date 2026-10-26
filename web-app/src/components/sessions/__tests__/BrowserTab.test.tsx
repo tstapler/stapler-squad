@@ -13,6 +13,7 @@ function makeCdpState(partial: Partial<CDPState>): CDPState {
 // Capture the latest onDisconnected callback so tests can simulate disconnects
 let capturedOnDisconnected: (() => void) | undefined;
 let capturedOnConnected: (() => void) | undefined;
+let capturedOnFrame: (() => void) | undefined;
 let capturedInspectMode: boolean | undefined;
 let capturedOnInspectClick: ((x: number, y: number) => void) | undefined;
 
@@ -25,10 +26,11 @@ jest.mock('@/lib/api/transport', () => ({ getConnectTransport: () => ({}) }));
 // Mock CDPViewer — pure canvas component, no DOM APIs needed in tests
 jest.mock('../CDPViewer', () => ({
   __esModule: true,
-  default: jest.fn(({ wsUrl, onConnected, onDisconnected, inspectMode, onInspectClick }: { wsUrl: string; onConnected?: () => void; onDisconnected?: () => void; inspectMode?: boolean; onInspectClick?: (x: number, y: number) => void }) => {
+  default: jest.fn(({ wsUrl, onConnected, onDisconnected, onFrame, inspectMode, onInspectClick }: { wsUrl: string; onFrame?: () => void; onConnected?: () => void; onDisconnected?: () => void; inspectMode?: boolean; onInspectClick?: (x: number, y: number) => void }) => {
     capturedInspectMode = inspectMode;
     capturedOnInspectClick = onInspectClick;
     capturedOnConnected = onConnected;
+    capturedOnFrame = onFrame;
     capturedOnDisconnected = onDisconnected;
     return <canvas data-testid="cdp-viewer" data-ws-url={wsUrl} />;
   }),
@@ -328,5 +330,29 @@ describe('BrowserTab — inspect mode', () => {
     await act(async () => { capturedOnInspectClick?.(1, 1); });
     expect(await screen.findByRole('alert')).toHaveTextContent('CDP not connected');
     expect(screen.queryByTestId('inspect-result-panel')).not.toBeInTheDocument();
+  });
+
+  describe('first-frame feedback', () => {
+    const streaming = makeCdpState({ status: CDPStatus.CDP_STATUS_STREAMING });
+
+    afterEach(() => jest.useRealTimers());
+
+    it('shows "Waiting for first frame" while STREAMING with no frame yet', () => {
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/waiting for first frame/i);
+    });
+
+    it('shows a no-frames message after the timeout', () => {
+      jest.useFakeTimers();
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { jest.advanceTimersByTime(10_000); });
+      expect(screen.getByTestId('waiting-first-frame')).toHaveTextContent(/no frames received/i);
+    });
+
+    it('hides the message once a frame is painted', () => {
+      render(<BrowserTab {...readyProps} cdpState={streaming} />);
+      act(() => { capturedOnFrame?.(); });
+      expect(screen.queryByTestId('waiting-first-frame')).not.toBeInTheDocument();
+    });
   });
 });
