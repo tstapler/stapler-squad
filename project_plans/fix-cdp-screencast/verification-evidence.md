@@ -28,8 +28,16 @@ cdp: first screencast frame stored
 
 Same isolated setup (`PORT=62873`, session `4eb86825-...`, headless Chrome with `--remote-debugging-port=$CDP_PORT`). `GetSession` returned `"cdpState":{"status":"CDP_STATUS_STREAMING"}` on 4 consecutive polls. Log: `cdp: Chrome detected` → `cdp: attaching to page target ws_url=ws://127.0.0.1:42839/devtools/page/9A28...` → `cdp: screencast started` → `cdp: first screencast frame stored` (12 ms after attach). `cdp-stream` WebSocket: 1 binary message, 5789 bytes, magic `ff d8 ff`; decoded image is an orange page reading "CDP LIVE PROOF 2" (non-blank).
 
+### Re-run on rebased head (f7e65cabe, main + #1192), 2026-10-26
+
+Branch rebased onto main after #1192 landed the same page-target fix; `manager.go` is now main's, this branch adds tests and this doc. Isolated instance `PORT=62873 STAPLER_SQUAD_INSTANCE=cdp-screencast-proof STAPLER_SQUAD_TMUX_SOCKET=ssq-manual-2`, session `ad25fe4e-...`, headless Chrome (`google-chrome-stable`) with `--remote-debugging-port=$CDP_PORT`, page "CDP LIVE PROOF 3" on orange.
+
+- `GetSession` returned `"cdpState":{"status":"CDP_STATUS_STREAMING"}` on 6 of 6 polls.
+- Opened the session's **Browser tab** in the real UI: the `Remote browser display` canvas (780x441) had 6880/6880 sampled pixels non-white and renders the orange "CDP LIVE PROOF 3" page.
+
+Main's manager no longer logs the attach / first-frame lines, so the Streaming state itself (published only after a frame is stored) is the evidence.
+
 ## Gaps
 
-1. macOS was not run, since this host is Linux.
-2. The UI Browser tab canvas was not opened: the tab is gated on `vncState`, which is unavailable without Xvfb/x11vnc, and the frontend fix (`backlog/stapler-squad-fix-browser-passthrough`) is not an ancestor of this branch. The `cdp-stream` WebSocket frame stands in for the canvas.
-3. The cdp-bins PATH wrapper is still bypassed by shell rc files: `which google-chrome-stable` resolves to `/usr/bin`.
+1. macOS was not run, since this host is Linux; owner-side.
+2. The cdp-bins PATH wrapper is still bypassed by shell rc files: `which google-chrome-stable` resolves to `/usr/bin`.
