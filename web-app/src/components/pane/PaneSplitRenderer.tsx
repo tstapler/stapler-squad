@@ -440,7 +440,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
  * PaneSplitRenderer — root renderer for the pane tree.
  * Renders the full recursive pane layout.
  */
-export function PaneSplitRenderer({ state, dispatch, sessions, windowActive }: PaneSplitRendererProps) {
+export function PaneSplitRenderer({ state, dispatch, sessions, windowActive = true }: PaneSplitRendererProps) {
   const { isMobile, isFoldable } = useViewport();
   // Collapse split panes for any viewport below 900px (mobile + foldable) — BottomNav is
   // visible there and single-pane + MobilePaneTabStrip gives a better UX than cramped splits.
@@ -456,6 +456,8 @@ export function PaneSplitRenderer({ state, dispatch, sessions, windowActive }: P
   // (e.g. notification toasts) can clear it without hard-coding the pixel value.
   const stripRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    // The var is global: only the visible window may write it, or a hidden window's strip wins.
+    if (!windowActive) return;
     if (!showMobileTabStrip) {
       document.documentElement.style.setProperty("--mobile-pane-tab-strip-height", "0px");
       return;
@@ -472,7 +474,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions, windowActive }: P
     ro.observe(el);
     update();
     return () => ro.disconnect();
-  }, [showMobileTabStrip]);
+  }, [showMobileTabStrip, windowActive]);
 
   return (
     <div

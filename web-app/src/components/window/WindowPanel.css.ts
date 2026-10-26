@@ -8,4 +8,6 @@ export const windowPanel = style({
   flexDirection: "column",
   overflow: "hidden",
   outline: "none",
+  // An author `display` beats the UA `[hidden]` rule, so a keep-alive hidden window would stay visible without this.
+  selectors: { "&[hidden]": { display: "none" } },
 });
