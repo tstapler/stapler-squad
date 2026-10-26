@@ -58,20 +58,24 @@ const session = {
 
 installConsoleErrorSilencer();
 
+const renderView = (props: { isActive?: boolean; initialTab?: "files" } = {}) =>
+  render(
+    <SessionDetailView
+      session={session}
+      allSessions={[]}
+      actions={{} as ReturnType<typeof useSessionActions>}
+      onClose={jest.fn()}
+      {...props}
+    />,
+  );
+
 describe("SessionDetailView file-selection hash", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
   it("seeds FilesTab from #file= and never writes the hash itself", () => {
     window.history.replaceState(null, "", "/#file=a%2Fb.go");
     const replaceState = jest.spyOn(window.history, "replaceState");
-    render(
-      <SessionDetailView
-        session={session}
-        allSessions={[]}
-        actions={{} as ReturnType<typeof useSessionActions>}
-        onClose={jest.fn()}
-      />,
-    );
+    renderView({ initialTab: "files" });
     expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
 
     fireEvent.click(screen.getByText("select-file"));
@@ -79,5 +83,25 @@ describe("SessionDetailView file-selection hash", () => {
     expect(replaceState).not.toHaveBeenCalled();
     expect(window.location.hash).toBe("#file=a%2Fb.go");
     replaceState.mockRestore();
+  });
+
+  it("sessionDetailView_should_NotMountFilesTab_When_FilesTabNeverOpened", () => {
+    renderView();
+    expect(screen.queryByTestId("initial-path")).toBeNull();
+  });
+
+  it("sessionDetailView_should_MountFilesTabOnceAndRetainIt_When_FilesTabOpenedThenLeft", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
+    renderView();
+    fireEvent.click(screen.getByRole("tab", { name: /files/i }));
+    expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
+    fireEvent.click(screen.getByRole("tab", { name: /info/i }));
+    expect(screen.getByTestId("initial-path")).toBeTruthy();
+  });
+
+  it("sessionDetailView_should_NotSeedFilesSelectionFromHash_When_PaneNotFocused", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
+    renderView({ isActive: false, initialTab: "files" });
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
   });
 });

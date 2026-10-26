@@ -499,9 +499,14 @@ export function SessionDetailView({
   // The path is remembered with its session so a switch to another session never inherits it.
   const [filesSelection, setFilesSelection] = useState<{ sessionId: string; path: string | null }>(() => {
     const hash = typeof window === "undefined" ? "" : window.location.hash;
-    const path = hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
+    // Only the focused pane takes the hash, so N panes do not each read the same file.
+    const path = isActive && hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
     return { sessionId: session.id, path };
   });
+  // FilesTab mounts on first open (then stays mounted), so a hidden tab costs no listFiles/stat calls.
+  const [filesOpenedFor, setFilesOpenedFor] = useState<string | null>(initialTab === "files" ? session.id : null);
+  if (activeTab === "files" && filesOpenedFor !== session.id) setFilesOpenedFor(session.id);
+  const filesTabMounted = filesOpenedFor === session.id;
   const filesSelectedPath = filesSelection.sessionId === session.id ? filesSelection.path : null;
   const setFilesSelectedPath = useCallback(
     (path: string | null) => setFilesSelection({ sessionId: session.id, path }),
@@ -1198,16 +1203,18 @@ export function SessionDetailView({
           aria-hidden={activeTab !== "files"}
           data-active={activeTab === "files"}
         >
-          <FilesTab
-            key={session.id}
-            sessionId={session.id}
-            baseUrl={getApiBaseUrl()}
-            initialSelectedPath={filesSelectedPath}
-            onSelectedPathChange={setFilesSelectedPath}
-            sessionRunning={session.status === SessionStatus.RUNNING}
-            sessionName={session.title}
-            onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
-          />
+          {filesTabMounted && (
+            <FilesTab
+              key={session.id}
+              sessionId={session.id}
+              baseUrl={getApiBaseUrl()}
+              initialSelectedPath={filesSelectedPath}
+              onSelectedPathChange={setFilesSelectedPath}
+              sessionRunning={session.status === SessionStatus.RUNNING}
+              sessionName={session.title}
+              onResumeSession={session.status === SessionStatus.PAUSED ? handlePauseResume : undefined}
+            />
+          )}
         </div>
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
