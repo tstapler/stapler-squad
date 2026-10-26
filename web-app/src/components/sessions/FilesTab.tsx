@@ -35,6 +35,8 @@ interface FilesTabProps {
   /** Path to pre-select when the tab opens (e.g. from VCS panel cross-link). */
   initialSelectedPath?: string | null;
   onSelectedPathChange?: (path: string | null) => void;
+  /** Whether this tab owns the URL hash (visible tab of the focused pane); defaults to true. */
+  urlActive?: boolean;
   /** Whether the session's agent is running, for the "this may be the agent" stale-banner wording. */
   sessionRunning?: boolean;
   /** Shown in the Search panel's empty state. */
@@ -113,6 +115,7 @@ function FilesTabView({
   sessionId,
   baseUrl,
   initialSelectedPath,
+  urlActive,
   selectedPath,
   recentPaths,
   onOpen,
@@ -146,7 +149,7 @@ function FilesTabView({
     () => jumpTo && ((path: string, line = 1) => { jumpTo(path, line, { pinned: true, source: "deeplink" }); go("editor", "tap_hit"); }),
     [jumpTo, go],
   );
-  useFilesDeepLink({ initialSelectedPath, tree: fileTreeRef, selectedPath, onJump: onDeepLink });
+  useFilesDeepLink({ initialSelectedPath, tree: fileTreeRef, selectedPath, onJump: onDeepLink, active: urlActive });
   const openQuickOpen = useCallback(() => setIsQuickOpenOpen(true), []);
   const search = useSearchPane(v2, {
     expandPanel: panel.expand,
