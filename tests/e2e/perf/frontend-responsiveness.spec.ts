@@ -4,8 +4,9 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PerfPage } from '../pages/PerfPage';
-import { perfFixtureShape, perfInitScript, seedPerfFixture, SeededFixture, tmuxPaneDims } from './fixture';
+import { assertNotLiveInstance, perfFixtureShape, perfInitScript, seedPerfFixture, SeededFixture, tmuxPaneDims } from './fixture';
 import { summarizeProfile, CpuProfile } from './cpuProfile';
+import { budgetViolations, classifyViolations } from './budgets';
 
 /**
  * Frontend-responsiveness perf spec (Story 1.1.3). Run only via `--project=perf` against the isolated
@@ -168,15 +169,7 @@ async function loadShell({ page, perf }: Ctx, url: string) {
   await perf.dismissOverlays();
 }
 
-// ---- per-method request budgets (Story 1.1.3) ----
-const loadBudgets = (durationS: number): Record<string, number> => ({
-  GetFeatureFlags: 1,
-  ListProgramsConfig: 1,
-  LogClientEvents: Math.ceil(durationS / 5) + 1,
-  GetFileTransportCapabilities: 1,
-  ListWorkflows: 1,
-});
-
+// ---- per-method request budgets (Story 1.1.3): see ./budgets ----
 function readBaseline(): { expectedFail?: string[] } | null {
   try {
     return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
@@ -185,15 +178,10 @@ function readBaseline(): { expectedFail?: string[] } | null {
   }
 }
 
-function budgetViolations(s: ScenarioReport, durationS: number): string[] {
-  return Object.entries(loadBudgets(durationS))
-    .filter(([rpc, max]) => (s.requestsByRpc[rpc]?.median ?? 0) > max)
-    .map(([rpc]) => `${rpc}<=${loadBudgets(durationS)[rpc]}`);
-}
-
 test.describe('frontend responsiveness (perf)', () => {
   test.beforeAll(async () => {
     test.setTimeout(900000);
+    assertNotLiveInstance(BASE_URL);
     if (KEEP_ALIVE) {
       const resp = await fetch(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
         method: 'POST',
@@ -227,7 +215,7 @@ test.describe('frontend responsiveness (perf)', () => {
       },
       expectedFail: Object.entries(report.scenarios)
         .filter(([k]) => k.startsWith('load@'))
-        .flatMap(([, s]) => budgetViolations(s, LOAD_WINDOW_MS / 1000)),
+        .flatMap(([, s]) => budgetViolations(s.requestsByRpc, LOAD_WINDOW_MS / 1000)),
       ...report,
     };
     fs.mkdirSync('test-results', { recursive: true });
@@ -387,6 +375,42 @@ test.describe('frontend responsiveness (perf)', () => {
     });
   }
 
+  // SM6: p75 input-to-next-paint of the switch and nav interactions; gated like the retained-switch budget.
+  test('interactionToNextPaint_should_BeP75Under200ms_When_SwitchAndNavInteractionsRun', async () => {
+    const interactions = Object.entries(report.scenarios).filter(([k]) => /^(switchRetained|switchLeader|routeRoundTrip)@/.test(k));
+    test.skip(interactions.length === 0, 'no switch/nav scenario ran in this invocation');
+    for (const [key, s] of interactions) gateTarget(`SM6 ${key} event p75`, s.throttle, s.metrics.eventP75Ms?.median, 200);
+  });
+
+  test('perMethodCounts_should_MeetBudget_When_Load16sScenarioRuns', async () => {
+    const loads = Object.entries(report.scenarios).filter(([k]) => k.startsWith('load@'));
+    test.skip(loads.length === 0, 'load scenario did not run in this invocation');
+    for (const [, s] of loads) assertBudgets(s);
+  });
+
+  // Story 2.1.6: deferral/dedupe leaves at most one GetVCSStatus per session per mount.
+  test('vcsStatus_should_BeAtMostOnePerSessionPerMount_When_LoadScenarioRuns', async ({ browser }) => {
+    test.skip(!wanted('load'));
+    const { context, page, perf } = await openPage(browser, 1);
+    const perSession = new Map<string, number>();
+    page.on('request', (r) => {
+      if (rpcName(r.url()) !== 'GetVCSStatus') return;
+      const body = r.postData() ?? '';
+      const id = fixture.sessionIds.find((sid) => body.includes(sid));
+      if (id) perSession.set(id, (perSession.get(id) ?? 0) + 1);
+    });
+    try {
+      await page.goto('/');
+      await perf.waitForShell();
+      await perf.dismissOverlays();
+      await page.waitForFunction((ms) => performance.now() > ms, LOAD_WINDOW_MS, { polling: 'raf', timeout: 120000 });
+      const over = [...perSession].filter(([, n]) => n > 1).map(([id, n]) => `${id}: ${n}`);
+      expect(over, 'sessions with more than one GetVCSStatus in a single mount').toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
   // CDP Profiler pass: separate from the timing pass, unthrottled, one run each.
   test('criticalCalls_should_HaveZeroQueuedOver1s_When_LoadScenarioRuns', async () => {
     const loads = Object.entries(report.scenarios).filter(([k]) => k.startsWith('load@'));
@@ -449,11 +473,9 @@ function assertCriticalNeverQueued(s: ScenarioReport) {
 }
 
 function assertBudgets(s: ScenarioReport) {
-  const violations = budgetViolations(s, LOAD_WINDOW_MS / 1000);
+  const violations = budgetViolations(s.requestsByRpc, LOAD_WINDOW_MS / 1000);
   if (process.env.PERF_WRITE_BASELINE === '1') return; // baseline capture records violations as expectedFail
-  const known = new Set(readBaseline()?.expectedFail ?? []);
-  const unexpected = violations.filter((v) => !known.has(v));
-  const expectedFails = violations.filter((v) => known.has(v));
+  const { unexpected, expectedFails } = classifyViolations(violations, readBaseline()?.expectedFail ?? []);
   if (expectedFails.length) test.info().annotations.push({ type: 'expected-fail', description: expectedFails.join(', ') });
   expect(unexpected, `request budgets exceeded: ${unexpected.join(', ')}`).toEqual([]);
 }

@@ -147,3 +147,13 @@ export async function tmuxPaneDims(sessionName: string, socket = process.env.STA
   const { stdout } = await execFileAsync('tmux', socket ? ['-L', socket, ...args] : args);
   return stdout.trim();
 }
+
+const LIVE_INSTANCE_PORTS = ['8543', '8444'];
+
+/** Refuses to seed or drive the live deployed instance (REQ-15); perf runs only against the isolated global-setup server. */
+export function assertNotLiveInstance(baseUrl: string): void {
+  const port = new URL(baseUrl).port;
+  if (LIVE_INSTANCE_PORTS.includes(port)) {
+    throw new Error(`perf spec refuses to run against the live instance (${baseUrl}); use the isolated global-setup server`);
+  }
+}
