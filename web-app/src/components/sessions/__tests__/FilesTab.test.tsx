@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { createFilesTestHarness, installVirtualViewport } from "@/lib/files/__tests__/fixtures";
 import { fakeCodeEditorProps } from "@/lib/files/__tests__/fixtures/mockCodeEditor";
+import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { FilesTab } from "../FilesTab";
 import { storageKey } from "@/lib/hooks/useOpenBuffers";
 
@@ -30,7 +31,10 @@ function mount(flags: Record<string, boolean>, props: Partial<React.ComponentPro
 }
 
 describe("FilesTab", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetFlagStoreForTest();
+  });
 
   it("filesTab_should_ActivateInitialPathAndNotifyParent_When_ViewerV2On", async () => {
     const { h, onSelectedPathChange } = mount({ "files:viewer-v2": true }, { initialSelectedPath: "src/main.go" });
