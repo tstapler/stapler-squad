@@ -664,7 +664,14 @@ export function SessionDetailView({
       });
   };
 
-  useReviewNavKeys(keysEnabled, { isFullscreen, setIsFullscreen, showNavigation, onNext, onPrevious });
+  useReviewNavKeys(keysEnabled, {
+    isFullscreen,
+    setIsFullscreen,
+    showNavigation,
+    onNext,
+    onPrevious,
+    escapeEnabled: windowActive && isFullscreen,
+  });
 
   function makeStringFieldEditor(
     editValue: string,
