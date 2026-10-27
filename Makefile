@@ -237,8 +237,8 @@ web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
-# WEB_BUILD selects the bundler: next (default) or bun (web-app/build/, ADR-006). Both write web-app/out.
-WEB_BUILD ?= next
+# WEB_BUILD selects the bundler: bun (default, web-app/build/, ADR-006) or next (explicit opt-in until PR 9 deletes it). Both write web-app/out.
+WEB_BUILD ?= bun
 ifneq ($(filter $(WEB_BUILD),next bun),$(WEB_BUILD))
 $(error WEB_BUILD must be "next" or "bun", got "$(WEB_BUILD)")
 endif
@@ -260,7 +260,7 @@ endif
 
 # end of the WEB_BUILD seam block (scripts/__tests__/makefile-web-build.test.mjs extracts everything above)
 
-# Build the web UI to web-app/out (Next by default, Bun with WEB_BUILD=bun)
+# Build the web UI to web-app/out (Bun by default, Next with WEB_BUILD=next)
 web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(WEB_BUILD_INPUTS) $(WEB_BUILD_STAMP)
 ifeq ($(WEB_BUILD),bun)
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
@@ -291,7 +291,7 @@ server/web/dist: web-app/out
 	@touch server/web/dist # Update timestamp
 	@echo "✅ Web UI built and copied successfully"
 
-web-build: server/web/dist ## Build the web UI (Next by default; WEB_BUILD=bun for the Bun pipeline)
+web-build: server/web/dist ## Build the web UI (Bun by default; WEB_BUILD=next for the Next pipeline)
 
 build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
