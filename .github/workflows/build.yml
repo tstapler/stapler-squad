@@ -423,28 +423,32 @@ jobs:
       - name: Make binary executable
         run: chmod +x stapler-squad
 
+      # setup-bun unzips its download, the server and some specs shell out to tmux; install only
+      # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
+      # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
+      - name: Ensure unzip, tmux and git
+        timeout-minutes: 10
+        run: |
+          missing=()
+          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
+            for attempt in 1 2 3; do
+              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
+              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
+              sleep 10
+            done
+          fi
+          tmux -V; git --version
+
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
 
       - name: Install test dependencies
         run: cd tests/e2e && bun install --frozen-lockfile
 
-      # The server and some specs shell out to tmux; install only what the image lacks,
-      # with a bounded retry (apt mirrors stall -- see benchmark.yml).
-      - name: Ensure tmux and git
-        timeout-minutes: 10
-        run: |
-          missing=""
-          for tool in tmux git; do command -v "$tool" >/dev/null || missing="$missing $tool"; done
-          if [ -n "$missing" ]; then
-            for attempt in 1 2 3; do
-              if timeout 3m sh -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends$missing"; then break; fi
-              [ "$attempt" = 3 ] && { echo "::error::could not install$missing" >&2; exit 1; }
-              sleep 10
-            done
-          fi
-          tmux -V; git --version
-          npx --prefix tests/e2e playwright --version
+      - name: Check Playwright version
+        run: npx --prefix tests/e2e playwright --version
 
       # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
       # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
@@ -633,28 +637,32 @@ jobs:
       - name: Make binary executable
         run: chmod +x stapler-squad
 
+      # setup-bun unzips its download, the server and some specs shell out to tmux; install only
+      # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
+      # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
+      - name: Ensure unzip, tmux and git
+        timeout-minutes: 10
+        run: |
+          missing=()
+          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
+            for attempt in 1 2 3; do
+              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
+              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
+              sleep 10
+            done
+          fi
+          tmux -V; git --version
+
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
 
       - name: Install test dependencies
         run: cd tests/e2e && bun install --frozen-lockfile
 
-      # The server and some specs shell out to tmux; install only what the image lacks,
-      # with a bounded retry (apt mirrors stall -- see benchmark.yml).
-      - name: Ensure tmux and git
-        timeout-minutes: 10
-        run: |
-          missing=""
-          for tool in tmux git; do command -v "$tool" >/dev/null || missing="$missing $tool"; done
-          if [ -n "$missing" ]; then
-            for attempt in 1 2 3; do
-              if timeout 3m sh -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends$missing"; then break; fi
-              [ "$attempt" = 3 ] && { echo "::error::could not install$missing" >&2; exit 1; }
-              sleep 10
-            done
-          fi
-          tmux -V; git --version
-          npx --prefix tests/e2e playwright --version
+      - name: Check Playwright version
+        run: npx --prefix tests/e2e playwright --version
 
       # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
       # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
