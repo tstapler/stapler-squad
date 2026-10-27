@@ -422,16 +422,35 @@ func (s *unarySession) cancelCall(id uint32) {
 	s.writer.drop(id)
 }
 
+// finishCall marks the handler done but keeps id reserved (duplicate-id guard)
+// until releaseCall, i.e. until the response is fully queued/written or dropped.
 func (s *unarySession) finishCall(id uint32) (canceled bool) {
 	s.mu.Lock()
-	call := s.inflight[id]
-	delete(s.inflight, id)
-	if call != nil {
+	if call := s.inflight[id]; call != nil {
 		canceled = call.canceled
 	}
 	s.mu.Unlock()
 	s.b.metrics.inflightDelta(-1)
 	return canceled
+}
+
+func (s *unarySession) releaseCall(id uint32) {
+	s.mu.Lock()
+	delete(s.inflight, id)
+	s.mu.Unlock()
+}
+
+// enqueueUnlessCanceled closes the CANCEL window between finishCall and the
+// enqueue: cancelCall sets canceled under s.mu before its drop(), so holding
+// s.mu here means either we see the cancel or drop() sees our stream.
+func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, body []byte) (streamed, canceled bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if call := s.inflight[id]; call != nil && call.canceled {
+		return false, true, nil
+	}
+	streamed, err = s.writer.enqueueResponse(id, meta, body, func() { s.releaseCall(id) })
+	return streamed, false, err
 }
 
 // runCall re-enters the listener dispatcher with a request that carries the
@@ -440,6 +459,12 @@ func (s *unarySession) finishCall(id uint32) (canceled bool) {
 func (s *unarySession) runCall(ctx context.Context, handler http.Handler, f unaryFrame) {
 	rec := &unaryRecorder{header: http.Header{}}
 	panicked := s.serveRecorded(ctx, handler, f, rec)
+	streamed := false
+	defer func() {
+		if !streamed {
+			s.releaseCall(f.ID)
+		}
+	}()
 	if canceled := s.finishCall(f.ID); canceled || s.ctx.Err() != nil {
 		return // CANCEL or shutdown: no RESPONSE is written
 	}
@@ -452,7 +477,13 @@ func (s *unarySession) runCall(ctx context.Context, handler http.Handler, f unar
 		s.replyError(f.ID, f.Method, rec.errorBody())
 	default:
 		meta := rec.responseMeta()
-		if err := s.writer.enqueueResponse(f.ID, meta, rec.body.Bytes()); err != nil {
+		var canceled bool
+		var err error
+		streamed, canceled, err = s.enqueueUnlessCanceled(f.ID, meta, rec.body.Bytes())
+		if canceled {
+			return
+		}
+		if err != nil {
 			if errors.Is(err, errUnaryWriterOverflow) {
 				s.cancel()
 				return

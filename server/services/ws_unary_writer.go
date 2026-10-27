@@ -27,6 +27,7 @@ var errUnaryWriterOverflow = errors.New("unary writer queue full")
 type chunkStream struct {
 	id      uint32
 	payload []byte
+	onDone  func() // called once, outside w.mu, when the last CHUNK is popped or the stream is dropped
 }
 
 // unaryWriter is the socket's single writer. Whole frames (RESPONSE heads,
@@ -68,67 +69,84 @@ func (w *unaryWriter) enqueue(frame []byte) error {
 
 // enqueueResponse frames a fully buffered payload: one RESPONSE when it fits in
 // maxFrameBytes, otherwise a RESPONSE head (fin=0) plus round-robin CHUNKs.
-func (w *unaryWriter) enqueueResponse(id uint32, meta unaryResponseMeta, payload []byte) error {
+// When streamed is true, onDone runs later (last CHUNK popped, or drop); when
+// false (single frame or error) the caller owns cleanup and onDone never runs.
+func (w *unaryWriter) enqueueResponse(id uint32, meta unaryResponseMeta, payload []byte, onDone func()) (streamed bool, err error) {
 	total := uint32(len(payload))
 	probe, err := encodeUnaryResponse(id, total, false, meta, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	room := unaryMaxFrameBytes - len(probe)
 	if room <= 0 {
-		return errors.New("response meta exceeds frame size")
+		return false, errors.New("response meta exceeds frame size")
 	}
 	if len(payload) <= room {
 		head, err := encodeUnaryResponse(id, total, true, meta, payload)
 		if err != nil {
-			return err
+			return false, err
 		}
-		return w.enqueue(head)
+		return false, w.enqueue(head)
 	}
 	head, err := encodeUnaryResponse(id, total, false, meta, payload[:room])
 	if err != nil {
-		return err
+		return false, err
 	}
 	w.mu.Lock()
 	if len(w.ready) >= unaryReadyLimit || w.queued+len(payload)-room > unaryQueuedBytesLimit {
 		w.mu.Unlock()
-		return errUnaryWriterOverflow
+		return false, errUnaryWriterOverflow
 	}
 	w.ready = append(w.ready, head)
 	w.queued += len(payload) - room
-	w.streams = append(w.streams, &chunkStream{id: id, payload: payload[room:]})
+	w.streams = append(w.streams, &chunkStream{id: id, payload: payload[room:], onDone: onDone})
 	w.mu.Unlock()
 	w.wake()
-	return nil
+	return true, nil
 }
 
 // drop discards the unsent CHUNKs of id (CANCEL after the RESPONSE head).
 func (w *unaryWriter) drop(id uint32) {
+	var done []func()
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	kept := w.streams[:0]
 	for _, s := range w.streams {
 		if s.id != id {
 			kept = append(kept, s)
 		} else {
 			w.queued -= len(s.payload)
+			if s.onDone != nil {
+				done = append(done, s.onDone)
+			}
 		}
 	}
 	w.streams = kept
+	w.mu.Unlock()
+	for _, f := range done {
+		f()
+	}
 }
 
 // next pops the next frame to write, or nil when idle.
 func (w *unaryWriter) next() []byte {
+	frame, onDone := w.pop()
+	if onDone != nil {
+		onDone()
+	}
+	return frame
+}
+
+func (w *unaryWriter) pop() (frame []byte, onDone func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.ready) > 0 {
 		f := w.ready[0]
 		w.ready[0] = nil
 		w.ready = w.ready[1:]
-		return f
+		return f, nil
 	}
 	if len(w.streams) == 0 {
-		return nil
+		return nil, nil
 	}
 	s := w.streams[0]
 	n := unaryMaxFrameBytes - unaryFrameHeaderLen - 1
@@ -136,14 +154,16 @@ func (w *unaryWriter) next() []byte {
 	if fin {
 		n = len(s.payload)
 	}
-	frame := encodeUnaryChunk(s.id, fin, s.payload[:n])
+	frame = encodeUnaryChunk(s.id, fin, s.payload[:n])
 	s.payload = s.payload[n:]
 	w.queued -= n
 	w.streams = w.streams[1:]
 	if !fin {
 		w.streams = append(w.streams, s)
+	} else {
+		onDone = s.onDone
 	}
-	return frame
+	return frame, onDone
 }
 
 // run writes frames until ctx ends or a write fails.

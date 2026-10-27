@@ -354,9 +354,12 @@ func TestUnaryWsBridge_should_ReassembleLargeResponse(t *testing.T) {
 func TestUnaryWriter_should_SendSmallResponseBeforeLargeChunks_And_InterleaveChunks(t *testing.T) {
 	w := newUnaryWriter(nil)
 	big := make([]byte, 3*unaryMaxFrameBytes)
-	require.NoError(t, w.enqueueResponse(1, unaryResponseMeta{}, big))
-	require.NoError(t, w.enqueueResponse(3, unaryResponseMeta{}, big))
-	require.NoError(t, w.enqueueResponse(5, unaryResponseMeta{}, []byte("small")))
+	_, err := w.enqueueResponse(1, unaryResponseMeta{}, big, nil)
+	require.NoError(t, err)
+	_, err = w.enqueueResponse(3, unaryResponseMeta{}, big, nil)
+	require.NoError(t, err)
+	_, err = w.enqueueResponse(5, unaryResponseMeta{}, []byte("small"), nil)
+	require.NoError(t, err)
 
 	var order []string
 	for f := w.next(); f != nil; f = w.next() {
@@ -374,7 +377,8 @@ func TestUnaryWriter_should_SendSmallResponseBeforeLargeChunks_And_InterleaveChu
 
 func TestUnaryWriter_should_DropQueuedChunks_When_Canceled(t *testing.T) {
 	w := newUnaryWriter(nil)
-	require.NoError(t, w.enqueueResponse(1, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes)))
+	_, err := w.enqueueResponse(1, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes), nil)
+	require.NoError(t, err)
 	w.drop(1)
 	head := w.next()
 	require.NotNil(t, head)
@@ -539,4 +543,45 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 	assert.Equal(t, []UnaryWsDeniedCount{{Method: wsUnaryMethodOther, Count: 1}}, rep.DeniedTotal)
 	assert.Equal(t, []UnaryWsUpgradeDeniedCount{{Listener: ListenerLocal, Reason: "origin", Count: 1}}, rep.UpgradeDeniedTotal)
 	assert.Zero(t, rep.Inflight)
+}
+
+func TestUnarySession_should_KeepIDReserved_UntilLastChunkWritten(t *testing.T) {
+	s := &unarySession{inflight: map[uint32]*inflightCall{7: {cancel: func() {}}}, writer: newUnaryWriter(nil), b: &UnaryWsBridge{metrics: newUnaryMetrics()}}
+	require.False(t, s.finishCall(7))
+	streamed, canceled, err := s.enqueueUnlessCanceled(7, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes))
+	require.NoError(t, err)
+	require.True(t, streamed)
+	require.False(t, canceled)
+
+	has := func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.inflight[7] != nil }
+	for f := s.writer.next(); f != nil && has(); f = s.writer.next() {
+		d, derr := decodeUnaryFrame(f)
+		require.NoError(t, derr)
+		if d.Type == unaryFrameChunk && d.Fin {
+			break
+		}
+		assert.True(t, has(), "id stays reserved while chunks remain")
+	}
+	assert.False(t, has(), "id released once the last chunk is popped")
+}
+
+func TestUnarySession_should_SkipEnqueue_When_CancelArrivesAfterFinish(t *testing.T) {
+	s := &unarySession{inflight: map[uint32]*inflightCall{9: {cancel: func() {}}}, writer: newUnaryWriter(nil), b: &UnaryWsBridge{metrics: newUnaryMetrics()}}
+	s.finishCall(9)
+	s.cancelCall(9) // lands between finishCall and enqueue
+	streamed, canceled, err := s.enqueueUnlessCanceled(9, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes))
+	require.NoError(t, err)
+	assert.True(t, canceled)
+	assert.False(t, streamed)
+	assert.Nil(t, s.writer.next(), "cancelled response never reaches the writer")
+}
+
+func TestUnaryWriter_should_ReleaseStream_When_Dropped(t *testing.T) {
+	w := newUnaryWriter(nil)
+	released := 0
+	streamed, err := w.enqueueResponse(1, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes), func() { released++ })
+	require.NoError(t, err)
+	require.True(t, streamed)
+	w.drop(1)
+	assert.Equal(t, 1, released)
 }

@@ -8,7 +8,7 @@ func TestUnaryWriter_enqueueResponse_should_RejectTailsOverQueuedByteLimit(t *te
 	var err error
 	accepted := 0
 	for i := 0; i < 5 && err == nil; i++ {
-		err = w.enqueueResponse(uint32(i+1), unaryResponseMeta{}, payload)
+		_, err = w.enqueueResponse(uint32(i+1), unaryResponseMeta{}, payload, nil)
 		if err == nil {
 			accepted++
 		}
