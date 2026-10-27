@@ -19,6 +19,7 @@ export interface SharedBodyMeasurer {
 
 export function createSharedBodyMeasurer(): SharedBodyMeasurer {
   const subscribers = new Set<BodyMeasureSubscriber>();
+  const observedRefs = new Map<Element, number>();
   let frame = 0;
   let resizeObserver: ResizeObserver | null = null;
   let mutationObserver: MutationObserver | null = null;
@@ -34,6 +35,7 @@ export function createSharedBodyMeasurer(): SharedBodyMeasurer {
   const connect = () => {
     resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
     resizeObserver?.observe(document.body);
+    observedRefs.set(document.body, 1); // permanent ref so a subscriber listing body can't unobserve it
     mutationObserver = new MutationObserver(schedule);
     mutationObserver.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", schedule);
@@ -42,6 +44,7 @@ export function createSharedBodyMeasurer(): SharedBodyMeasurer {
     if (frame !== 0) cancelAnimationFrame(frame);
     frame = 0;
     resizeObserver?.disconnect();
+    observedRefs.clear();
     mutationObserver?.disconnect();
     resizeObserver = null;
     mutationObserver = null;
@@ -52,11 +55,23 @@ export function createSharedBodyMeasurer(): SharedBodyMeasurer {
     subscribe(subscriber) {
       if (subscribers.size === 0) connect();
       subscribers.add(subscriber);
-      subscriber.elements.forEach((el) => resizeObserver?.observe(el));
+      subscriber.elements.forEach((el) => {
+        const n = observedRefs.get(el) ?? 0;
+        observedRefs.set(el, n + 1);
+        if (n === 0) resizeObserver?.observe(el);
+      });
       subscriber.measure();
       return () => {
         if (!subscribers.delete(subscriber)) return;
-        subscriber.elements.forEach((el) => resizeObserver?.unobserve(el));
+        subscriber.elements.forEach((el) => {
+          const n = (observedRefs.get(el) ?? 1) - 1;
+          if (n > 0) {
+            observedRefs.set(el, n);
+          } else {
+            observedRefs.delete(el);
+            resizeObserver?.unobserve(el);
+          }
+        });
         if (subscribers.size === 0) disconnect();
       };
     },

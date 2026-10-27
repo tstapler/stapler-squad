@@ -79,4 +79,29 @@ describe("SharedBodyMeasurer", () => {
     jest.advanceTimersByTime(50);
     expect(measure).not.toHaveBeenCalled();
   });
+
+  it("unsubscribe_should_KeepObservingSharedElement_UntilLastSubscriberLeaves", () => {
+    const observe = jest.fn();
+    const unobserve = jest.fn();
+    const RO = (global as { ResizeObserver?: unknown }).ResizeObserver;
+    (global as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe = observe;
+      unobserve = unobserve;
+      disconnect = jest.fn();
+    };
+    try {
+      const measurer = createSharedBodyMeasurer();
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      const a = measurer.subscribe({ elements: [el], measure: jest.fn() });
+      const b = measurer.subscribe({ elements: [el], measure: jest.fn() });
+      expect(observe.mock.calls.filter(([e]) => e === el)).toHaveLength(1);
+      a();
+      expect(unobserve).not.toHaveBeenCalledWith(el);
+      b();
+      expect(unobserve).toHaveBeenCalledWith(el);
+    } finally {
+      (global as { ResizeObserver?: unknown }).ResizeObserver = RO;
+    }
+  });
 });
