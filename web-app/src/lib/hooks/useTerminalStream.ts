@@ -658,6 +658,7 @@ export function useTerminalStream({
       handleError(err);
       setIsConnected(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- flowControl is a fresh object each render; kept so connect's identity churn is unchanged
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput, onAppScrollback,
       onAltScreenActiveHint, flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
 

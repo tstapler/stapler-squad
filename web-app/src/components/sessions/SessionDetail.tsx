@@ -35,14 +35,7 @@ const SessionDetailView = lazyComponent(
 
 export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts" | "summary";
 
-interface SessionDetailProps {
-  session: Session;
-  onClose: () => void;
-  onFullscreenChange?: (isFullscreen: boolean) => void;
-  onTabChange?: (tab: SessionDetailTab) => void;
-  initialTab?: SessionDetailTab;
-  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
-  embedded?: boolean;
+interface SessionDetailNavigation {
   onNext?: () => void;
   onPrevious?: () => void;
   showNavigation?: boolean;
@@ -58,6 +51,16 @@ interface SessionDetailProps {
   onBack?: () => void;
   /** Whether back navigation is available. */
   canGoBack?: boolean;
+}
+
+interface SessionDetailProps extends SessionDetailNavigation {
+  session: Session;
+  onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
+  initialTab?: SessionDetailTab;
+  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
+  embedded?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
   /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */

@@ -46,6 +46,7 @@ export function BacklogItemPanel({
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const verdictBadge = item?.gateVerdict ? VERDICT_BADGE_CONFIG[item.gateVerdict] : undefined;
 
   const loadItem = useCallback(async () => {
     setLoading(true);
@@ -182,10 +183,10 @@ export function BacklogItemPanel({
                 {item.title}
               </AppLink>
 
-              {item.gateVerdict && VERDICT_BADGE_CONFIG[item.gateVerdict] && (
+              {verdictBadge && (
                 <div className={styles.header} data-testid="backlog-panel-verdict">
-                  <span className={VERDICT_BADGE_CONFIG[item.gateVerdict]!.className} title="Last review result">
-                    {VERDICT_BADGE_CONFIG[item.gateVerdict]!.label}
+                  <span className={verdictBadge.className} title="Last review result">
+                    {verdictBadge.label}
                   </span>
                   {item.gateVerdictSummary && (
                     <span className={styles.verdictSummary}>{item.gateVerdictSummary}</span>

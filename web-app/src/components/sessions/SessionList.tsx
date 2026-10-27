@@ -64,8 +64,7 @@ import {
 
 // Exported so SessionBoard.tsx can declare an identical prop surface — a caller (e.g. the
 // future SessionListPaneBody) can then spread the same props object into either component.
-export interface SessionListProps {
-  sessions: Session[];
+interface SessionListActionHandlers {
   onSessionClick?: (session: Session) => void;
   onSessionOpenInNewPane?: (session: Session) => void;
   onDeleteSession?: (sessionId: string) => Promise<void> | void;
@@ -91,6 +90,10 @@ export interface SessionListProps {
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernateSession?: (sessionId: string) => void;
   onResumeHibernatedSession?: (sessionId: string) => void;
+}
+
+export interface SessionListProps extends SessionListActionHandlers {
+  sessions: Session[];
   /**
    * Called when the "Show archived" toggle changes to true, so the parent can
    * re-fetch sessions with includeArchived via the session service. Turning the
@@ -708,7 +711,7 @@ export function SessionList({
       }
       return next;
     });
-  }, []);
+  }, [setCollapsedGroups]);
 
   // Bulk actions handlers
   const handleToggleSelectMode = () => {
@@ -1242,6 +1245,10 @@ export function SessionList({
             const item = flatItems[virtualItem.index];
             if (!item) return null;
             const isSessionItem = item.kind === "session";
+            // Bound once so event-handler closures keep the narrowed (non-undefined) values.
+            const headerProject = item.kind === "header" ? item.projectData : undefined;
+            const headerProjectId = headerProject?.id ?? "";
+            const headerProjectName = headerProject?.name ?? "";
             return (
               <div
                 key={virtualItem.key}
@@ -1274,16 +1281,16 @@ export function SessionList({
                       <form
                         aria-label={`Rename project ${item.displayName}`}
                         style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}
-                        onSubmit={async (e) => { e.preventDefault(); setRenameError(null); try { await handleProjectRename(item.projectData!.id, renameValue); } catch { setRenameError("Failed to rename — try again"); } }}
+                        onSubmit={async (e) => { e.preventDefault(); setRenameError(null); try { await handleProjectRename(headerProjectId, renameValue); } catch { setRenameError("Failed to rename — try again"); } }}
                       >
                         <input
                           autoFocus
                           type="text"
                           value={renameValue}
                           onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Escape") { const id = item.projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); } }}
+                          onKeyDown={(e) => { if (e.key === "Escape") { const id = headerProjectId; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); } }}
                           aria-label={`Rename project ${item.displayName}`}
-                          aria-describedby={renameError ? `row-rename-error-${item.projectData!.id}` : undefined}
+                          aria-describedby={renameError ? `row-rename-error-${headerProjectId}` : undefined}
                           style={{
                             padding: "2px 6px",
                             border: "1px solid var(--input-focus-border)",
@@ -1295,8 +1302,8 @@ export function SessionList({
                           }}
                         />
                         <button type="submit" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--success)", fontSize: "1rem" }} title="Save" aria-label="Save project name">✓</button>
-                        <button type="button" onClick={() => { const id = item.projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel" aria-label="Cancel rename">{/* analytics-exempt */}✕</button>
-                        {renameError && <span id={`row-rename-error-${item.projectData!.id}`} role="alert" style={{ color: "var(--error)", fontSize: "0.75rem", width: "100%" }}>{renameError}</span>}
+                        <button type="button" onClick={() => { const id = headerProjectId; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel" aria-label="Cancel rename">{/* analytics-exempt */}✕</button>
+                        {renameError && <span id={`row-rename-error-${headerProjectId}`} role="alert" style={{ color: "var(--error)", fontSize: "0.75rem", width: "100%" }}>{renameError}</span>}
                       </form>
                     ) : (
                       <>
@@ -1339,8 +1346,8 @@ export function SessionList({
                           <span style={{ marginLeft: "auto", display: "flex", gap: "4px", flexShrink: 0 }}>
                             <button
                               type="button"
-                              data-rename-btn={item.projectData!.id}
-                              onClick={() => { setRenamingProjectId(item.projectData!.id); setRenameValue(item.projectData!.name); setRenameError(null); }}
+                              data-rename-btn={headerProjectId}
+                              onClick={() => { setRenamingProjectId(headerProjectId); setRenameValue(headerProjectName); setRenameError(null); }}
                               title="Rename project"
                               aria-label={`Rename project ${item.displayName}`}
                               aria-expanded={false}
@@ -1353,7 +1360,7 @@ export function SessionList({
                                 <span role="alert" aria-atomic="true">Remove project? {item.groupSessions.length} session{item.groupSessions.length !== 1 ? "s" : ""} will become ungrouped.</span>
                                 <button
                                   type="button"
-                                  onClick={() => handleProjectDelete(item.projectData!.id)}
+                                  onClick={() => handleProjectDelete(headerProjectId)}
                                   aria-label={`Confirm delete project ${item.displayName}`}
                                   style={{ background: "var(--error)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem" }}
                                 >{/* analytics-exempt */}
@@ -1372,7 +1379,7 @@ export function SessionList({
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => setDeletingProjectId(item.projectData!.id)}
+                                onClick={() => setDeletingProjectId(headerProjectId)}
                                 title="Delete project"
                                 aria-label={`Delete project ${item.displayName}`}
                                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
@@ -1436,6 +1443,7 @@ export function SessionList({
             const projectData = isProjectGrouping
               ? projects.find((p) => p.id === groupKey || p.name === displayName)
               : undefined;
+            const projectId = projectData?.id ?? "";
             const isUngrouped = groupKey === "No Project";
             return (
               <div
@@ -1461,9 +1469,9 @@ export function SessionList({
                       type="text"
                       value={renameValue}
                       onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Escape") { const id = projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); } }}
+                      onKeyDown={(e) => { if (e.key === "Escape") { const id = projectId; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); } }}
                       aria-label={`Rename project ${displayName}`}
-                      aria-describedby={renameError ? `card-rename-error-${projectData!.id}` : undefined}
+                      aria-describedby={renameError ? `card-rename-error-${projectId}` : undefined}
                       style={{
                         padding: "2px 6px",
                         border: "1px solid var(--input-focus-border)",
@@ -1475,8 +1483,8 @@ export function SessionList({
                       }}
                     />
                     <button type="submit" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--success)", fontSize: "1rem" }} title="Save" aria-label="Save project name">✓</button>
-                    <button type="button" onClick={() => { const id = projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel" aria-label="Cancel rename">{/* analytics-exempt */}✕</button>
-                    {renameError && <span id={`card-rename-error-${projectData!.id}`} role="alert" style={{ color: "var(--error)", fontSize: "0.75rem", width: "100%" }}>{renameError}</span>}
+                    <button type="button" onClick={() => { const id = projectId; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel" aria-label="Cancel rename">{/* analytics-exempt */}✕</button>
+                    {renameError && <span id={`card-rename-error-${projectId}`} role="alert" style={{ color: "var(--error)", fontSize: "0.75rem", width: "100%" }}>{renameError}</span>}
                   </form>
                 ) : (
                   <>

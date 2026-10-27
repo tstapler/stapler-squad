@@ -144,10 +144,9 @@ export class ShortcutRegistry {
     // Longest sequences first so a branch always beats a leaf that is its prefix,
     // independent of React effect registration order.
     const entries = [...this.shortcuts.entries()]
-      .filter(([, sc]) => sc.sequence && !sc.hidden)
-      .sort(([, a], [, b]) => b.sequence!.length - a.sequence!.length);
-    for (const [id, shortcut] of entries) {
-      const seq = shortcut.sequence!;
+      .flatMap(([id, sc]) => (sc.sequence && !sc.hidden ? [{ id, shortcut: sc, seq: sc.sequence }] : []))
+      .sort((a, b) => b.seq.length - a.seq.length);
+    for (const { id, shortcut, seq } of entries) {
       let node = root;
       let skipped = false;
       for (let i = 0; i < seq.length; i++) {

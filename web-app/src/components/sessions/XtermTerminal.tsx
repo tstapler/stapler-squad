@@ -1578,7 +1578,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
       });
 
-      resizeObserver.observe(containerRef.current!);
+      const observedEl = containerRef.current;
+      if (observedEl) resizeObserver.observe(observedEl);
 
       // A backgrounded tab can lose WebGL glyph-atlas contents without a context-loss event,
       // leaving garbled glyphs over intact buffer text; repaint (clears the atlas) on return.
@@ -1629,6 +1630,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         serializeAddonRef.current = null;
         webglAddonRef.current = null;
         if (containerRef.current) {
+          // eslint-disable-next-line react-hooks/exhaustive-deps -- debug hook was set on the live element; must clear whatever the ref holds now, not a stale capture
           delete (containerRef.current as any).__staplerSquadForceCanvasFallback;
         }
       };

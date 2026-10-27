@@ -143,12 +143,13 @@ export function ConfigPageContent() {
 
     // Update Monaco editor markers
     if (monacoRef.current && editorRef.current) {
+      const monaco = monacoRef.current;
       const model = editorRef.current.getModel();
       if (model) {
         const markers = errors.map(err => ({
           severity: err.severity === 'error'
-            ? monacoRef.current!.MarkerSeverity.Error
-            : monacoRef.current!.MarkerSeverity.Warning,
+            ? monaco.MarkerSeverity.Error
+            : monaco.MarkerSeverity.Warning,
           startLineNumber: err.line,
           startColumn: err.column,
           endLineNumber: err.line,
@@ -253,11 +254,12 @@ export function ConfigPageContent() {
         setContent(response.config.content);
         setOriginalContent(response.config.content);
         // Cache the initial state
+        const initialContent = response.config.content;
         setFileStates(prev => ({
           ...prev,
           [filename]: {
-            content: response.config!.content,
-            originalContent: response.config!.content,
+            content: initialContent,
+            originalContent: initialContent,
           }
         }));
       }

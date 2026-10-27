@@ -300,16 +300,7 @@ const TerminalOutput = lazyComponent(
   }
 );
 
-export interface SessionDetailViewProps {
-  session: Session;
-  allSessions: Session[];
-  actions: ReturnType<typeof useSessionActions>;
-  onClose: () => void;
-  onFullscreenChange?: (isFullscreen: boolean) => void;
-  onTabChange?: (tab: SessionDetailTab) => void;
-  initialTab?: SessionDetailTab;
-  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
-  embedded?: boolean;
+interface SessionDetailViewNavigation {
   onNext?: () => void;
   onPrevious?: () => void;
   showNavigation?: boolean;
@@ -321,6 +312,18 @@ export interface SessionDetailViewProps {
   previousSessionName?: string;
   onBack?: () => void;
   canGoBack?: boolean;
+}
+
+export interface SessionDetailViewProps extends SessionDetailViewNavigation {
+  session: Session;
+  allSessions: Session[];
+  actions: ReturnType<typeof useSessionActions>;
+  onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
+  initialTab?: SessionDetailTab;
+  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
+  embedded?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
   /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
@@ -1385,7 +1388,7 @@ export function SessionDetailView({
                   </div>
                 ) : (
                   <span className={styles.infoValue}>
-                    {(session.tags ?? []).length > 0 ? session.tags!.join(", ") : <em style={{ opacity: 0.5 }}>None</em>}
+                    {(session.tags ?? []).length > 0 ? (session.tags ?? []).join(", ") : <em style={{ opacity: 0.5 }}>None</em>}
                     <button
                       onClick={() => { setTagsInputValue((session.tags ?? []).join(", ")); setIsEditingTags(true); }}
                       className={styles.editButton}
@@ -1501,7 +1504,7 @@ export function SessionDetailView({
                   <span className={styles.infoLabel}>Claude Conversation UUID:</span>
                   <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
                     {session.claudeSession.sessionId}
-                    <button onClick={() => handleCopy('claudeUuid', session.claudeSession!.sessionId)} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'claudeUuid' ? '✓' : '📋'}</button>
+                    <button onClick={() => handleCopy('claudeUuid', session.claudeSession?.sessionId ?? '')} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'claudeUuid' ? '✓' : '📋'}</button>
                   </span>
                 </div>
               )}
@@ -1543,7 +1546,7 @@ export function SessionDetailView({
                       <span className={styles.infoLabel}>Base Commit:</span>
                       <span className={styles.infoValue} style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>
                         {session.gitWorktree.baseCommitSha}
-                        <button onClick={() => handleCopy('baseCommit', session.gitWorktree!.baseCommitSha)} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'baseCommit' ? '✓' : '📋'}</button>
+                        <button onClick={() => handleCopy('baseCommit', session.gitWorktree?.baseCommitSha ?? '')} className={styles.editButton} title="Copy to clipboard">{/* analytics-exempt */}{copiedField === 'baseCommit' ? '✓' : '📋'}</button>
                       </span>
                     </div>
                   )}

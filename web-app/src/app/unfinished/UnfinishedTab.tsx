@@ -116,8 +116,12 @@ export function UnfinishedTab() {
   const groups = new Map<string, UnfinishedWorktree[]>();
   for (const wt of filtered) {
     const name = wt.repoName || wt.repoPath;
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name)!.push(wt);
+    let group = groups.get(name);
+    if (!group) {
+      group = [];
+      groups.set(name, group);
+    }
+    group.push(wt);
   }
 
   const chips: { label: string; value: FilterType }[] = [

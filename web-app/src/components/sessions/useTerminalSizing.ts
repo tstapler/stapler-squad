@@ -187,7 +187,9 @@ export function useTerminalResizeHandler({
     } else {
       resize(cols, rows);
     }
-  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, onTerminalResized, xtermRef]);
+  }, [isConnected, resize, connect, error, sessionId, clearBufferBeforeResize, onTerminalResized, xtermRef,
+      hasCachedDimensionsRef, hasInitiatedConnectionRef, isMountedRef, lastResizeRef, metricsRef,
+      setIsWaitingForStableSize, settleBypassPendingRef, sizeStabilityTimeoutRef]);
 }
 
 interface ConnectionBootstrapParams {
@@ -392,5 +394,6 @@ export function useSessionConnectionBootstrap({
       }
       // If no dims, the resize handler will fire and connect normally
     }
-  }, [isConnected, connect]);
+  }, [isConnected, connect, hasInitiatedConnectionRef, isMountedRef, lastResizeRef,
+      pendingConnectAfterDisconnectRef, setIsWaitingForStableSize]);
 }

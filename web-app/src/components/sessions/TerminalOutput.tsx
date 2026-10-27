@@ -1229,7 +1229,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       else netPagesUp.pageDown();
     }
     sendKey(bytes, countsTowardNetPages);
-  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking]);
+  }, [effectiveScroll.target, scrollOverride, ctrlActive, altActive, shiftActive, sendKey, netPagesUp, isInputChunking, xtermRef]);
 
   // Handle terminal resize with size stability detection
   const sizingRefs = {
@@ -1563,7 +1563,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         });
       },
     });
-  }, [netPagesUp]);
+  }, [netPagesUp, xtermRef]);
 
   const handleManualReconnect = useCallback(() => {
     console.log("[TerminalOutput] Manual reconnect requested");

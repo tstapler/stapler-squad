@@ -258,7 +258,7 @@ export function DirectoryRulesManager() {
               <span className={ruleMeta}>Auto-yes: on</span>
             )}
             {(rule.overrides?.tags?.length ?? 0) > 0 && (
-              <span className={ruleMeta}>Tags: {rule.overrides!.tags.join(", ")}</span>
+              <span className={ruleMeta}>Tags: {(rule.overrides?.tags ?? []).join(", ")}</span>
             )}
           </div>
           <div className={ruleActions}>

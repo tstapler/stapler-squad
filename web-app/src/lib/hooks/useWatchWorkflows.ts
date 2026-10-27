@@ -57,8 +57,11 @@ export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers, { enabled
   }, []);
 
   const subscribe = useCallback(
-    (afterSeq: bigint, signal: AbortSignal) =>
-      clientRef.current!.watchWorkflows(create(WatchWorkflowsRequestSchema, { afterSeq }), { signal }),
+    (afterSeq: bigint, signal: AbortSignal) => {
+      const client = clientRef.current;
+      if (!client) throw new Error("watchWorkflows client not initialised");
+      return client.watchWorkflows(create(WatchWorkflowsRequestSchema, { afterSeq }), { signal });
+    },
     []
   );
 

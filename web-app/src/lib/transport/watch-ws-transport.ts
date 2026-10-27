@@ -69,7 +69,8 @@ export async function* fromWebSocket(
           notify = r;
         });
       }
-      const item = queue.shift()!;
+      const item = queue.shift();
+      if (item === undefined) continue;
       if (item === null) return;
       if (item instanceof Error) throw item;
       yield item;
