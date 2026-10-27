@@ -17,6 +17,10 @@ const unaryWriteWait = 10 * time.Second
 // reading, and the socket is closed rather than buffering without limit.
 const unaryReadyLimit = 1024
 
+// unaryQueuedBytesLimit bounds unsent CHUNK bytes per socket; each tail can be
+// up to wsUnaryMaxResponseBytes, so the frame-count bound alone does not cap memory.
+const unaryQueuedBytesLimit = 64 << 20
+
 var errUnaryWriterOverflow = errors.New("unary writer queue full")
 
 // chunkStream is the unsent tail of a large response, sent one CHUNK at a time.
@@ -34,6 +38,7 @@ type unaryWriter struct {
 	mu      sync.Mutex
 	ready   [][]byte
 	streams []*chunkStream
+	queued  int // unsent bytes across streams
 	notify  chan struct{}
 }
 
@@ -85,11 +90,12 @@ func (w *unaryWriter) enqueueResponse(id uint32, meta unaryResponseMeta, payload
 		return err
 	}
 	w.mu.Lock()
-	if len(w.ready) >= unaryReadyLimit {
+	if len(w.ready) >= unaryReadyLimit || w.queued+len(payload)-room > unaryQueuedBytesLimit {
 		w.mu.Unlock()
 		return errUnaryWriterOverflow
 	}
 	w.ready = append(w.ready, head)
+	w.queued += len(payload) - room
 	w.streams = append(w.streams, &chunkStream{id: id, payload: payload[room:]})
 	w.mu.Unlock()
 	w.wake()
@@ -104,6 +110,8 @@ func (w *unaryWriter) drop(id uint32) {
 	for _, s := range w.streams {
 		if s.id != id {
 			kept = append(kept, s)
+		} else {
+			w.queued -= len(s.payload)
 		}
 	}
 	w.streams = kept
@@ -130,6 +138,7 @@ func (w *unaryWriter) next() []byte {
 	}
 	frame := encodeUnaryChunk(s.id, fin, s.payload[:n])
 	s.payload = s.payload[n:]
+	w.queued -= n
 	w.streams = w.streams[1:]
 	if !fin {
 		w.streams = append(w.streams, s)
