@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_MEMBERS } from "../ci/web-build-gate.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(here, "../ci/web-build-gate.mjs");
@@ -70,4 +71,20 @@ test("build.yml: web-build-gate has if: always() and no continue-on-error, and e
   for (const m of yml.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
     if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);
   }
+});
+
+// Story 3.2.1 ratchet: the secondary-browser job pair (Firefox/WebKit, informational-only)
+// must never enter gate membership, the exact mistake PR #1165 made with a one-time manual
+// grep instead of a test.
+test("secondary-browser jobs never enter web-build-gate membership", () => {
+  assert.ok(!DEFAULT_MEMBERS.includes("e2e-secondary-browsers-next"));
+  assert.ok(!DEFAULT_MEMBERS.includes("e2e-secondary-browsers-bun"));
+
+  const yml = readFileSync(WORKFLOW, "utf8");
+  const job = /\n  web-build-gate:\n([\s\S]*?)(?=\n  [a-z][\w-]*:\n|$)/.exec(yml)?.[1] ?? "";
+  assert.ok(job, "web-build-gate job missing");
+  const needsLine = /\n {4}needs: (\[[^\]]*\])/.exec(job)?.[1] ?? "";
+  assert.ok(needsLine, "web-build-gate needs: line missing");
+  assert.doesNotMatch(needsLine, /e2e-secondary-browsers-next/);
+  assert.doesNotMatch(needsLine, /e2e-secondary-browsers-bun/);
 });

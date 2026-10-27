@@ -32,9 +32,15 @@ jest.mock("@/lib/hooks/useShells", () => require("./sessionDetailViewTestFixture
 
 // Exposes the selection callbacks so the test can drive the file selection.
 jest.mock("../FilesTab", () => ({
-  FilesTab: (props: { initialSelectedPath: string | null; onSelectedPathChange: (p: string | null) => void; tabActive?: boolean }) => (
+  FilesTab: (props: {
+    initialSelectedPath: string | null;
+    urlActive?: boolean;
+    tabActive?: boolean;
+    onSelectedPathChange: (p: string | null) => void;
+  }) => (
     <div data-tab-active={String(props.tabActive)}>
       <span data-testid="initial-path">{props.initialSelectedPath}</span>
+      <span data-testid="url-active">{String(props.urlActive)}</span>
       <button onClick={() => props.onSelectedPathChange("a/b.go")}>select-file</button>
       <button onClick={() => props.onSelectedPathChange(null)}>clear-file</button>
     </div>
@@ -72,11 +78,24 @@ const renderView = (props: { isActive?: boolean; initialTab?: "files" } = {}) =>
 describe("SessionDetailView file-selection hash", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
+  it("does not seed FilesTab from #file= unless it is the focused pane opened on Files", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
+    const props = { session, allSessions: [], actions: {} as ReturnType<typeof useSessionActions>, onClose: jest.fn() };
+    const { unmount } = render(<SessionDetailView {...props} />);
+    // The Files tab mounts lazily, so a pane not opened on Files never sees the hash.
+    expect(screen.queryByTestId("initial-path")).toBeNull();
+    unmount();
+    render(<SessionDetailView {...props} initialTab="files" isActive={false} />);
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
+    expect(screen.getByTestId("url-active").textContent).toBe("false");
+  });
+
   it("seeds FilesTab from #file= and never writes the hash itself", () => {
     window.history.replaceState(null, "", "/#file=a%2Fb.go");
     const replaceState = jest.spyOn(window.history, "replaceState");
     renderView({ initialTab: "files" });
     expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
+    expect(screen.getByTestId("url-active").textContent).toBe("true");
 
     fireEvent.click(screen.getByText("select-file"));
     fireEvent.click(screen.getByText("clear-file"));
@@ -93,8 +112,10 @@ describe("SessionDetailView file-selection hash", () => {
   it("sessionDetailView_should_MountFilesTabOnceAndRetainIt_When_FilesTabOpenedThenLeft", () => {
     window.history.replaceState(null, "", "/#file=a%2Fb.go");
     renderView();
+    expect(screen.queryByTestId("initial-path")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: /files/i }));
-    expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
+    // Opened by click (not initialTab), so the hash is not adopted.
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
     fireEvent.click(screen.getByRole("tab", { name: /info/i }));
     expect(screen.getByTestId("initial-path")).toBeTruthy();
   });

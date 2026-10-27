@@ -18,7 +18,7 @@ import { BrowserTab } from "./BrowserTab";
 import { ArtifactsTab } from "./ArtifactsTab";
 import { SessionSummaryPanel } from "./SessionSummaryPanel";
 import { RetryHistoryList } from "./RetryHistoryList";
-import { VNCStatus } from "@/gen/session/v1/types_pb";
+import { CDPStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { getApiBaseUrl } from "@/lib/config";
@@ -497,9 +497,9 @@ export function SessionDetailView({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   // The path is remembered with its session so a switch to another session never inherits it.
   const [filesSelection, setFilesSelection] = useState<{ sessionId: string; path: string | null }>(() => {
-    const hash = typeof window === "undefined" ? "" : window.location.hash;
-    // Only the focused pane takes the hash, so N panes do not each read the same file.
-    const path = isActive && hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
+    // Only the focused pane opened on Files may adopt the global hash; others would fight over it.
+    const hash = typeof window === "undefined" || !isActive || initialTab !== "files" ? "" : window.location.hash;
+    const path = hash.startsWith("#file=") ? decodeURIComponent(hash.slice(6)) || null : null;
     return { sessionId: session.id, path };
   });
   // FilesTab mounts on first open (then stays mounted), so a hidden tab costs no listFiles/stat calls.
@@ -611,9 +611,9 @@ export function SessionDetailView({
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
-  const vncState = session.vncState;
-  const vncStatus = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
-  const isBrowserAvailable = vncStatus !== VNCStatus.VNC_STATUS_UNAVAILABLE && vncStatus !== VNCStatus.VNC_STATUS_UNSPECIFIED;
+  const cdpState = session.cdpState;
+  const cdpStatus = cdpState?.status ?? CDPStatus.CDP_STATUS_UNSPECIFIED;
+  const isBrowserAvailable = cdpStatus !== CDPStatus.CDP_STATUS_UNAVAILABLE && cdpStatus !== CDPStatus.CDP_STATUS_UNSPECIFIED;
 
   const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
     { id: "terminal", label: "Terminal", icon: Terminal },
@@ -909,7 +909,7 @@ export function SessionDetailView({
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const disabledReason = tab.disabled && tab.id === "browser"
-            ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool"
+            ? "Browser passthrough requires Chrome or Chromium installed on the host"
             : tab.disabled && tab.id === "summary"
               ? "Summary is generated after the session ends."
               : undefined;
@@ -1128,10 +1128,11 @@ export function SessionDetailView({
           style={{ display: activeTab === "browser" ? undefined : 'none' }}
         >
           <BrowserTab
+            key={session.id}
             sessionId={session.id}
             baseUrl={getApiBaseUrl()}
             isVisible={activeTab === "browser"}
-            vncState={vncState}
+            cdpState={cdpState}
           />
         </div>
 
@@ -1210,6 +1211,7 @@ export function SessionDetailView({
               baseUrl={getApiBaseUrl()}
               initialSelectedPath={filesSelectedPath}
               onSelectedPathChange={setFilesSelectedPath}
+              urlActive={isActive && activeTab === "files"}
               tabActive={activeTab === "files"}
               pollMode={pollMode}
               sessionRunning={session.status === SessionStatus.RUNNING}

@@ -123,6 +123,12 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Per-item high-water mark: the GitHub issue updated_at value most recently synced from GitHub into this item. Stops a forward-sync write from GitHub from being re-observed and re-synced back to GitHub on the next poll (loop prevention)."),
+		field.String("claiming_host_id").
+			Optional().
+			Comment("HostID of the host that created this item from an external issue (non-empty external_url); empty for locally-created items."),
+		field.String("github_last_progress_comment_status").
+			Optional().
+			Comment("Last item status for which a GitHub progress comment was posted; stops a re-entered status from commenting twice."),
 		field.String("shipped_file_stats").
 			Optional().
 			Comment("JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time"),

@@ -1835,6 +1835,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
               externalUrl={item.externalUrl}
               externalId={item.externalId}
               pluginId={item.pluginId}
+              claimingHostId={item.claimingHostId}
               labels={item.labels ?? []}
               defaultExpanded={sourceExpanded}
             />

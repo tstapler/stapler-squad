@@ -8,6 +8,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -44,6 +45,14 @@ type externalIssueCloser interface {
 // close, per the "no silent automated action" convention (pitfalls research
 // §7 / AC3 Story 1.1.2).
 const forwardSyncCloseComment = "Closed automatically — the linked backlog item was marked done in stapler-squad."
+
+// forwardSyncCloseCommentFor appends the claiming host when known.
+func forwardSyncCloseCommentFor(hostID string) string {
+	if hostID == "" {
+		return forwardSyncCloseComment
+	}
+	return strings.TrimSuffix(forwardSyncCloseComment, ".") + fmt.Sprintf(" on host `%s`.", hostID)
+}
 
 // forwardSyncStateComment is the equivalent comment for state-update trackers.
 const forwardSyncStateComment = "Moved to %q automatically — the linked backlog item was marked done in stapler-squad."
@@ -156,7 +165,7 @@ func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistr
 	)
 	switch p := plugin.(type) {
 	case externalIssueCloser:
-		poster, comment, failureSubject = p, forwardSyncCloseComment, "close"
+		poster, comment, failureSubject = p, forwardSyncCloseCommentFor(current.ClaimingHostID), "close"
 		update = func(config session.PluginConfig) (time.Time, error) {
 			return p.CloseIssue(ctx, config, current.ExternalID, current.Labels, source.ForwardSyncCloseLabel)
 		}
