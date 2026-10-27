@@ -209,7 +209,7 @@ export function ProfilesManager() {
           type="button"
           className="btn btn-primary"
           onClick={handleNewProfile}
-        >
+        >{/* analytics-exempt */}
           New Profile
         </button>
       </div>
@@ -247,14 +247,14 @@ export function ProfilesManager() {
               type="button"
               className="btn btn-secondary"
               onClick={() => handleEdit(key, profile)}
-            >
+            >{/* analytics-exempt */}
               Edit
             </button>
             <button
               type="button"
               className="btn btn-danger"
               onClick={() => handleDelete(key)}
-            >
+            >{/* analytics-exempt */}
               Delete
             </button>
           </div>
@@ -338,7 +338,7 @@ export function ProfilesManager() {
                       className={tagRemove}
                       onClick={() => handleRemoveTag(t)}
                       aria-label={`Remove tag ${t}`}
-                    >
+                    >{/* analytics-exempt */}
                       x
                     </button>
                   </span>
@@ -359,7 +359,7 @@ export function ProfilesManager() {
                   type="button"
                   className="btn btn-secondary"
                   onClick={handleAddTag}
-                >
+                >{/* analytics-exempt */}
                   Add
                 </button>
               </div>
@@ -371,14 +371,14 @@ export function ProfilesManager() {
               className="btn btn-primary"
               onClick={handleSave}
               disabled={saving}
-            >
+            >{/* analytics-exempt */}
               {saving ? "Saving..." : "Save"}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={handleCancel}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
           </div>

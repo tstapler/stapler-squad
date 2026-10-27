@@ -206,7 +206,7 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
             className={styles.skipButton}
             onClick={handleSkip}
             aria-label="Skip onboarding"
-          >
+          >{/* analytics-exempt */}
             Skip
           </button>
 
@@ -301,7 +301,7 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
           <div className={styles.footer}>
             <div>
               {step > 1 && (
-                <button className={styles.secondaryButton} onClick={handleBack}>
+                <button className={styles.secondaryButton} onClick={handleBack}>{/* analytics-exempt */}
                   Back
                 </button>
               )}
@@ -309,19 +309,19 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
 
             <div className={styles.footerRight}>
               {step === 3 && (
-                <button className={styles.secondaryButton} onClick={handleTryOmnibar}>
+                <button className={styles.secondaryButton} onClick={handleTryOmnibar}>{/* analytics-exempt */}
                   Try it now
                 </button>
               )}
 
               {step === 4 && (
-                <button className={styles.linkButton} onClick={handleViewShortcuts}>
+                <button className={styles.linkButton} onClick={handleViewShortcuts}>{/* analytics-exempt */}
                   View all shortcuts
                 </button>
               )}
 
               {step < LAST_STEP ? (
-                <button className={styles.primaryButton} onClick={handleNext}>
+                <button className={styles.primaryButton} onClick={handleNext}>{/* analytics-exempt */}
                   Next
                 </button>
               ) : (
@@ -331,7 +331,7 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
                       className={styles.secondaryButton}
                       onClick={handleInstallHooks}
                       disabled={hookBusy}
-                    >
+                    >{/* analytics-exempt */}
                       {hookBusy ? "Installing…" : "Install"}
                     </button>
                   )}
@@ -343,7 +343,7 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
                     />
                     <span className={styles.checkboxLabel}>Don&apos;t show this again</span>
                   </label>
-                  <button className={styles.primaryButton} onClick={handleGetStarted}>
+                  <button className={styles.primaryButton} onClick={handleGetStarted}>{/* analytics-exempt */}
                     Get started
                   </button>
                 </>

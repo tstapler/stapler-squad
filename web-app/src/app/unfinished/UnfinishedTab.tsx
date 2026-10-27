@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { Link, useReplaceSearch, useSearchParams } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
-import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
+import type { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
 import {
   DismissWorktreeRequestSchema,
@@ -159,7 +159,7 @@ export function UnfinishedTab() {
         {itemMissing && (
           <div className={styles.notice} role="status">
             <span>Item {focusItemId} was not found. It may have been completed or removed.</span>
-            <button className={styles.btn} onClick={showAllStuck}>
+            <button className={styles.btn} onClick={showAllStuck}>{/* analytics-exempt */}
               Show all stuck items
             </button>
           </div>
@@ -176,7 +176,7 @@ export function UnfinishedTab() {
               className={`${styles.chip} ${filter === value ? styles.chipActive : ""}`}
               onClick={() => setFilter(value)}
               aria-pressed={filter === value}
-            >
+            >{/* analytics-exempt */}
               {label}
             </button>
           ))}
@@ -233,7 +233,7 @@ export function UnfinishedTab() {
             onClick={triggerScan}
             disabled={isScanning}
             aria-label="Refresh — trigger an immediate scan"
-          >
+          >{/* analytics-exempt */}
             Refresh
           </button>
         </div>

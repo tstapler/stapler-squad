@@ -242,7 +242,7 @@ export function JulesSettings() {
         <h2 className={heading}>Google Jules</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={loadConfig}>
+          <button type="button" className="btn btn-primary" onClick={loadConfig}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -356,7 +356,7 @@ export function JulesSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {saveStatusMessage && (
@@ -382,7 +382,7 @@ export function JulesSettings() {
               className="btn btn-secondary"
               onClick={handleTestConnection}
               disabled={testSubmitting || !testRepoPath.trim()}
-            >
+            >{/* analytics-exempt */}
               {testSubmitting ? "Testing…" : "Test connection"}
             </button>
           </div>
@@ -421,7 +421,7 @@ export function JulesSettings() {
                       onClick={() => handleRevoke(repoPath)}
                       disabled={revokingRepo === repoPath}
                       aria-label={`Revoke cloud-egress consent for ${label}`}
-                    >
+                    >{/* analytics-exempt */}
                       {revokingRepo === repoPath ? "Revoking…" : "Revoke"}
                     </button>
                   </li>

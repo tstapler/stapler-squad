@@ -47,7 +47,7 @@ jest.mock("./TriageReviewPanel", () => ({
         type="button"
         data-testid="mock-triage-answer-question"
         onClick={() => props.onAnswerQuestion!("Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global")}
-      >
+      >{/* analytics-exempt */}
         Mock answer question
       </button>
     ) : null,

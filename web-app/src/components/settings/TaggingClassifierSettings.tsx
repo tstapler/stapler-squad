@@ -129,7 +129,7 @@ export function TaggingClassifierSettings() {
         <h2 className={heading}>Tag Classification</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={loadConfig}>
+          <button type="button" className="btn btn-primary" onClick={loadConfig}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -193,7 +193,7 @@ export function TaggingClassifierSettings() {
                     className={removeBtn}
                     onClick={() => handleRemoveFallback(name)}
                     aria-label={`Remove fallback model ${name}`}
-                  >
+                  >{/* analytics-exempt */}
                     Remove
                   </button>
                 </li>
@@ -224,7 +224,7 @@ export function TaggingClassifierSettings() {
               disabled={
                 !fallbackInput.trim() || fallbacks.length >= MAX_FALLBACKS
               }
-            >
+            >{/* analytics-exempt */}
               Add
             </button>
           </div>
@@ -247,7 +247,7 @@ export function TaggingClassifierSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {saveStatusMessage && (

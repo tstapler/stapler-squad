@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, RefObject } from "react";
+import type { RefObject } from "react";
+import { useCallback } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { PaneState } from "./paneTypes";
 import { getAdjacentLeaf } from "./paneUtils";

@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useCallback, useEffect } from "react";
-import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
+import type { TerminalData} from "@/gen/session/v1/events_pb";
+import { TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { generateSecureId } from "@/lib/pane/paneUtils";

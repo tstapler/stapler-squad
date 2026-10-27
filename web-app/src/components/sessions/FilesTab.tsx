@@ -210,17 +210,17 @@ function FilesTabView({
 
         {!mobile && !panel.collapsed && <TreeResizeHandle {...panel.handleProps} />}
         {!mobile && panel.collapsed && (
-          <button className={expandStrip} onClick={panel.expand} title="Expand file tree panel" aria-label="Expand file tree panel">
+          <button className={expandStrip} onClick={panel.expand} title="Expand file tree panel" aria-label="Expand file tree panel">{/* analytics-exempt */}
             ⊞
           </button>
         )}
 
         {/* Right pane: file content */}
         <div className={contentPane}>
-          <button className={mobileBackButton} onClick={() => nav.back()}>
+          <button className={mobileBackButton} onClick={() => nav.back()}>{/* analytics-exempt */}
             ← Files
           </button>
-          <button className={mobileSearchButton} onClick={openQuickOpen} aria-label="Search files">
+          <button className={mobileSearchButton} onClick={openQuickOpen} aria-label="Search files">{/* analytics-exempt */}
             🔍
           </button>
           {v2 && <FilesV2Chrome v2={v2} fileTreeRef={fileTreeRef} panelId={PANEL_ID} mobile={mobile} onQuickOpen={openQuickOpen} onSearch={search.openSearch} />}

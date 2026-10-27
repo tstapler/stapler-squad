@@ -41,8 +41,8 @@ jest.mock("../FilesTab", () => ({
     <div data-tab-active={String(props.tabActive)}>
       <span data-testid="initial-path">{props.initialSelectedPath}</span>
       <span data-testid="url-active">{String(props.urlActive)}</span>
-      <button onClick={() => props.onSelectedPathChange("a/b.go")}>select-file</button>
-      <button onClick={() => props.onSelectedPathChange(null)}>clear-file</button>
+      <button onClick={() => props.onSelectedPathChange("a/b.go")}>{/* analytics-exempt */}select-file</button>
+      <button onClick={() => props.onSelectedPathChange(null)}>{/* analytics-exempt */}clear-file</button>
     </div>
   ),
 }));

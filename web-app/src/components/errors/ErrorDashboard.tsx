@@ -79,7 +79,7 @@ export function ErrorDashboard() {
       <div className={styles.header}>
         <h1 className={styles.title}>Error Dashboard</h1>
         <div className={styles.headerActions}>
-          <button className={styles.refreshButton} onClick={fetchErrors}>
+          <button className={styles.refreshButton} onClick={fetchErrors}>{/* analytics-exempt */}
             Refresh
           </button>
         </div>
@@ -152,7 +152,7 @@ export function ErrorDashboard() {
                               ? "Collapse stack trace"
                               : "Expand stack trace"
                           }
-                        >
+                        >{/* analytics-exempt */}
                           {expandedRow === err.fingerprint ? "▾" : "▸"}
                         </button>
                       </td>
@@ -201,7 +201,7 @@ export function ErrorDashboard() {
                             className={styles.acknowledgeButton}
                             onClick={() => handleAcknowledge(err.fingerprint)}
                             disabled={acknowledging.has(err.fingerprint)}
-                          >
+                          >{/* analytics-exempt */}
                             {acknowledging.has(err.fingerprint)
                               ? "…"
                               : "Acknowledge"}

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
+import type { ReviewItem} from "@/gen/session/v1/types_pb";
+import { AttentionReason } from "@/gen/session/v1/types_pb";
 import {
   playNotificationSound,
   showBrowserNotification,

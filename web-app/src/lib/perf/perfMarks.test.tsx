@@ -78,8 +78,8 @@ function Harness() {
   useFocusOnNavigate(ref);
   return (
     <main ref={ref} tabIndex={-1}>
-      <button onClick={() => router.push("/backlog")}>nav</button>
-      <button onClick={() => router.push("/?window=a2")}>search</button>
+      <button onClick={() => router.push("/backlog")}>{/* analytics-exempt */}nav</button>
+      <button onClick={() => router.push("/?window=a2")}>{/* analytics-exempt */}search</button>
     </main>
   );
 }

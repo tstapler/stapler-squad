@@ -14,7 +14,7 @@ jest.mock("@/lib/contexts/SessionVcsContext", () => ({
 jest.mock("../FileTree", () => ({
   FileTree: forwardRef(function FileTreeStub({ onFileSelect }: { onFileSelect: (p: string) => void }, ref) {
     useImperativeHandle(ref, () => ({ revealPath: jest.fn(), collapseAll: jest.fn() }));
-    return <button data-testid="pick" onClick={() => onFileSelect("pick.go")}>pick</button>;
+    return <button data-testid="pick" onClick={() => onFileSelect("pick.go")}>{/* analytics-exempt */}pick</button>;
   }),
 }));
 

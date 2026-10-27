@@ -1,7 +1,9 @@
 "use client";
 
-import { createContext, useContext, ReactNode } from "react";
-import { useSessionVcs, SessionVcsState } from "@/lib/hooks/useSessionVcs";
+import type { ReactNode } from "react";
+import { createContext, useContext } from "react";
+import type { SessionVcsState } from "@/lib/hooks/useSessionVcs";
+import { useSessionVcs } from "@/lib/hooks/useSessionVcs";
 import type { PollMode } from "@/lib/hooks/pollMode";
 
 const SessionVcsContext = createContext<SessionVcsState | null>(null);

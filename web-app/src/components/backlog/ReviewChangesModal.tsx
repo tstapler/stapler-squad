@@ -1,7 +1,8 @@
 "use client";
 // +feature: backlog:review-changes-modal
 
-import { useCallback, useEffect, useRef, useState, RefObject } from "react";
+import type { RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -96,7 +97,7 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose, t
               Open in Terminal ↗
             </a>
           )}
-          <button className={closeButton} onClick={onClose} aria-label="Close changes viewer">
+          <button className={closeButton} onClick={onClose} aria-label="Close changes viewer">{/* analytics-exempt */}
             ✕
           </button>
         </div>

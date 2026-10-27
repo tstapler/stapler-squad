@@ -46,7 +46,7 @@ function Harness() {
           debugButtonTriggerRef.current = event.currentTarget;
           setIsOpen(true);
         }}
-      >
+      >{/* analytics-exempt */}
         Debug
       </button>
       <DebugMenu

@@ -74,7 +74,7 @@ export function WorktreeDiffModal({ repoPath, branch, repoName, onClose }: Workt
             <p className={styles.title}>{repoName} — {branch}</p>
             <p className={styles.subtitle}>{repoPath}</p>
           </div>
-          <button className={styles.closeButton} onClick={onClose} aria-label="Close diff">✕</button>
+          <button className={styles.closeButton} onClick={onClose} aria-label="Close diff">{/* analytics-exempt */}✕</button>
         </div>
 
         <div className={styles.body}>

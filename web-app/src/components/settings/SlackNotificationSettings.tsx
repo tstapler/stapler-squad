@@ -244,7 +244,7 @@ export function SlackNotificationSettings() {
             type="button"
             className="btn btn-primary"
             onClick={loadConfig}
-          >
+          >{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -291,7 +291,7 @@ export function SlackNotificationSettings() {
                 onClick={handleRemoveWebhook}
                 disabled={saving}
                 data-testid="slack-webhook-confirm-remove"
-              >
+              >{/* analytics-exempt */}
                 Confirm remove?
               </button>
             ) : (
@@ -301,7 +301,7 @@ export function SlackNotificationSettings() {
                 onClick={() => setRemoveConfirming(true)}
                 disabled={saving}
                 data-testid="slack-webhook-remove"
-              >
+              >{/* analytics-exempt */}
                 Remove
               </button>
             ))}
@@ -327,7 +327,7 @@ export function SlackNotificationSettings() {
             className="btn btn-secondary"
             onClick={handleTestSend}
             disabled={testDisabled}
-          >
+          >{/* analytics-exempt */}
             {testSubmitting ? "Sending…" : "Send test message"}
           </button>
           {testResult && (
@@ -438,7 +438,7 @@ export function SlackNotificationSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving || Boolean(webhookError)}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
         </div>

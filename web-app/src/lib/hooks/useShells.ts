@@ -2,8 +2,9 @@
 // +feature: shell-tabs
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Shell, ShellStatus } from "@/gen/session/v1/types_pb";
-import { SpawnShellRequest } from "@/gen/session/v1/session_pb";
+import type { Shell} from "@/gen/session/v1/types_pb";
+import { ShellStatus } from "@/gen/session/v1/types_pb";
+import type { SpawnShellRequest } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";

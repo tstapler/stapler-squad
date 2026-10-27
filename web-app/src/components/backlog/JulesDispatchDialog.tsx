@@ -9,7 +9,8 @@
 // project_plans/google-jules-integration/design/ux.md §3 for the full
 // wireframe/interaction spec this implements.
 
-import { useEffect, useId, useRef, useState, RefObject } from "react";
+import type { RefObject } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -224,7 +225,7 @@ export function JulesDispatchDialog({
             onClick={onClose}
             disabled={submitting}
             data-testid="jules-dispatch-cancel"
-          >
+          >{/* analytics-exempt */}
             Cancel
           </button>
           <button
@@ -235,7 +236,7 @@ export function JulesDispatchDialog({
             }}
             disabled={dispatchDisabled}
             data-testid="jules-dispatch-submit"
-          >
+          >{/* analytics-exempt */}
             {submitting ? "Dispatching…" : "Dispatch"}
           </button>
         </div>

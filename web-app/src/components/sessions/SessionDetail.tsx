@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { lazyComponent } from "@/lib/lazy";
-import { Session } from "@/gen/session/v1/types_pb";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionVcsProvider } from "@/lib/contexts/SessionVcsContext";
 import { useSessionDetailActivity } from "./useSessionDetailActivity";

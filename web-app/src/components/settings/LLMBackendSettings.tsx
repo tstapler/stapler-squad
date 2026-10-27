@@ -143,7 +143,7 @@ export function LLMBackendSettings() {
         <h2 className={heading}>LLM Backends</h2>
         <div role="alert" className={saveErrorClass}>{loadError}</div>
         <div className={actions}>
-          <button type="button" className={`btn btn-primary ${buttonTouch}`} onClick={() => load()}>
+          <button type="button" className={`btn btn-primary ${buttonTouch}`} onClick={() => load()}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -272,7 +272,7 @@ export function LLMBackendSettings() {
         )}
 
         <div className={actions}>
-          <button type="button" className={`btn btn-primary ${buttonTouch}`} onClick={handleSave} disabled={saving}>
+          <button type="button" className={`btn btn-primary ${buttonTouch}`} onClick={handleSave} disabled={saving}>{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {status && (

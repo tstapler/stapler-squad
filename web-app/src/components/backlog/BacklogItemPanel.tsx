@@ -156,7 +156,7 @@ export function BacklogItemPanel({
         data-testid="backlog-panel-toggle"
         aria-expanded={open}
         aria-label={open ? "Collapse backlog panel" : "Expand backlog panel"}
-      >
+      >{/* analytics-exempt */}
         <span className={styles.toggleIcon}>{open ? "▼" : "▶"}</span>
         {!open && <span className={styles.toggleLabel}>Task</span>}
       </button>

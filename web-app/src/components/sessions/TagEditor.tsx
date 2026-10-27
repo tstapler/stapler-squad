@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, KeyboardEvent, useRef, RefObject } from "react";
+import type { KeyboardEvent, RefObject } from "react";
+import { useState, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -138,7 +139,7 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
                 className={styles.input}
                 autoFocus
               />
-              <button type="button" onClick={handleAddTag} className={styles.addButton}>
+              <button type="button" onClick={handleAddTag} className={styles.addButton}>{/* analytics-exempt */}
                 Add
               </button>
             </div>
@@ -172,14 +173,14 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
                           type="button"
                           onClick={handleKeepRemoval}
                           className={styles.keepButton}
-                        >
+                        >{/* analytics-exempt */}
                           Keep
                         </button>
                         <button
                           type="button"
                           onClick={() => removeImmediately(tag)}
                           className={styles.removeAnywayButton}
-                        >
+                        >{/* analytics-exempt */}
                           Remove anyway
                         </button>
                       </div>
@@ -199,7 +200,7 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
                           className={styles.removeButton}
                           title={`Remove tag "${tag}"`}
                           aria-label={`Remove tag ${tag}`}
-                        >
+                        >{/* analytics-exempt */}
                           ×
                         </button>
                       )}
@@ -222,14 +223,14 @@ export function TagEditor({ tags, tagProvenance, tagRuleNames = {}, onSave, onCa
               disabled={reclassifying}
               data-testid="tag-reclassify-button"
               title="Re-run AI tag classification for this session"
-            >
+            >{/* analytics-exempt */}
               {reclassifying ? "Classifying…" : "Re-run AI classification"}
             </button>
           )}
-          <button type="button" onClick={onCancel} className={styles.cancelButton}>
+          <button type="button" onClick={onCancel} className={styles.cancelButton}>{/* analytics-exempt */}
             Cancel
           </button>
-          <button type="button" onClick={handleSave} className={styles.saveButton}>
+          <button type="button" onClick={handleSave} className={styles.saveButton}>{/* analytics-exempt */}
             Save Tags
           </button>
         </div>

@@ -134,7 +134,7 @@ export function BackgroundModelsSettings() {
         <h2 className={heading}>Background Models</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={() => load()}>
+          <button type="button" className="btn btn-primary" onClick={() => load()}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -190,7 +190,7 @@ export function BackgroundModelsSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {status && (

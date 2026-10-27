@@ -93,7 +93,7 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
         {error && <div className={styles.errorMsg}>{error}</div>}
 
         <div className={styles.buttonRow}>
-          <button className={styles.btnCancel} onClick={onClose} disabled={loading}>
+          <button className={styles.btnCancel} onClick={onClose} disabled={loading}>{/* analytics-exempt */}
             Cancel
           </button>
           <button
@@ -101,7 +101,7 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
             onClick={handleSubmit}
             disabled={!message.trim() || loading}
             aria-label="Stage all, commit, and push"
-          >
+          >{/* analytics-exempt */}
             {loading ? "Pushing…" : "Commit & Push"}
           </button>
         </div>

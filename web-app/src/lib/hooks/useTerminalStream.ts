@@ -2,7 +2,8 @@
 
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import type { TerminalData, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import { TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";

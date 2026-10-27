@@ -7,6 +7,7 @@
 import React from "react";
 import { render, act } from "@testing-library/react";
 import { PaneTilingContainer } from "../PaneTilingContainer";
+import type { Session } from "@/gen/session/v1/types_pb";
 import type { PaneState, LeafPane, SplitPane } from "@/lib/pane/paneTypes";
 
 // ─── Mock heavy dependencies ──────────────────────────────────────────────────
@@ -49,7 +50,7 @@ function makeSplit(id: string, first: LeafPane | SplitPane, second: LeafPane | S
 
 function makeSession(id: string) {
   // Minimal Session-like object; only `id` is accessed in triggerPicker.
-  return { id } as import("@/gen/session/v1/types_pb").Session;
+  return { id } as Session;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

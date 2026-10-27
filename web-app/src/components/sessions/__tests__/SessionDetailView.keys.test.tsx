@@ -6,7 +6,7 @@ import React from "react";
 import { render, fireEvent } from "@testing-library/react";
 import { SessionDetailView } from "../SessionDetailView";
 import { useReviewNavKeys } from "../useReviewNavKeys";
-import { useSessionActions } from "@/lib/hooks/useSessionActions";
+import type { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionStatus, InstanceType, SessionType } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { installConsoleErrorSilencer } from "./sessionDetailViewTestFixtures";

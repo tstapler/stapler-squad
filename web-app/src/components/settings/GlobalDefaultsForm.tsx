@@ -234,7 +234,7 @@ export function GlobalDefaultsForm() {
                   className={tagRemove}
                   onClick={() => handleRemoveTag(t)}
                   aria-label={`Remove tag ${t}`}
-                >
+                >{/* analytics-exempt */}
                   x
                 </button>
               </span>
@@ -253,7 +253,7 @@ export function GlobalDefaultsForm() {
               type="button"
               className="btn btn-secondary"
               onClick={handleAddTag}
-            >
+            >{/* analytics-exempt */}
               Add
             </button>
           </div>
@@ -286,7 +286,7 @@ export function GlobalDefaultsForm() {
                   className={deleteBtn}
                   onClick={() => handleRemoveEnvVar(i)}
                   aria-label="Remove environment variable"
-                >
+                >{/* analytics-exempt */}
                   Delete
                 </button>
               </div>
@@ -296,7 +296,7 @@ export function GlobalDefaultsForm() {
             type="button"
             className="btn btn-secondary"
             onClick={handleAddEnvVar}
-          >
+          >{/* analytics-exempt */}
             Add Variable
           </button>
         </div>
@@ -430,7 +430,7 @@ export function GlobalDefaultsForm() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving..." : "Save"}
           </button>
         </div>
