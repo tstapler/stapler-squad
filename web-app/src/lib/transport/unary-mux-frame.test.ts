@@ -13,6 +13,7 @@ import {
   setFrameId,
   type MuxFrame,
 } from "./unary-mux-frame";
+import { defined } from "@/lib/utils/defined";
 
 function toHex(b: Uint8Array): string {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
@@ -107,7 +108,7 @@ describe("unary-mux frame codec", () => {
   it("reassembly_should_ConcatenateChunksToVectorPayload_When_ResponseFin0ThenChunks", () => {
     for (const r of vectors.reassembly) {
       const parts = r.frames.map((n) => {
-        const f = vectors.frames.find((x) => x.name === n)!;
+        const f = defined(vectors.frames.find((x) => x.name === n));
         return decodeFrame(fromHex(f.hex));
       });
       let total = 0;

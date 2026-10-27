@@ -9,6 +9,7 @@ import {
   priorityKey,
   priorityOptions,
 } from "./requestPriority";
+import { defined } from "@/lib/utils/defined";
 
 type Call = { name: string; resolve: () => void };
 
@@ -62,7 +63,7 @@ describe("requestPriority", () => {
       drained++;
       await flush();
     }
-    started.find((s) => s.name === "GetFeatureFlags")!.resolve();
+    defined(started.find((s) => s.name === "GetFeatureFlags")).resolve();
     await Promise.all([...deferred, critical]);
     expect(started).toHaveLength(13);
   });

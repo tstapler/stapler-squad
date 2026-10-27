@@ -14,6 +14,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { useBrowserLogStream } from "../useBrowserLogStream";
 import { resetLogBufferForTest } from "@/lib/telemetry/logBuffer";
+import { defined } from "@/lib/utils/defined";
 
 // Mock the ConnectRPC dependencies so we don't need an actual server
 const mockLogClientEvents = jest.fn().mockResolvedValue({});
@@ -378,7 +379,7 @@ describe("useBrowserLogStream", () => {
       ([type]) => type === "unhandledrejection"
     );
     expect(unhandledCall).toBeTruthy();
-    const handler = unhandledCall![1] as EventListener;
+    const handler = defined(unhandledCall)[1] as EventListener;
 
     // Create a minimal mock PromiseRejectionEvent
     const fakeEvent = {

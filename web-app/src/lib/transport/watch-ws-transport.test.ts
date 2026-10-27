@@ -13,6 +13,7 @@ import type { ConnectTransportOptions } from "@connectrpc/connect-web";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { fromWebSocket, createSessionWatchTransport } from "./watch-ws-transport";
 import { installSsqPerf } from "@/lib/perf/perfDebug";
+import { defined } from "@/lib/utils/defined";
 
 // createSessionWatchTransport (via createWatchTransport, in the WS-bridge branch)
 // always constructs a createConnectTransport internally for its unary half, so the
@@ -62,7 +63,7 @@ describe("fromWebSocket", () => {
   it("fromWebSocket_should_RecordHighWatermark10000_And_CloseNoStream_When_ConsumerStalled", async () => {
     window.localStorage.setItem("ssq:perf", "1");
     delete window.__ssqPerf;
-    const perf = installSsqPerf()!;
+    const perf = defined(installSsqPerf());
     const ws = makeMockWS();
     const gen = fromWebSocket(ws as unknown as WebSocket, undefined);
     const first = gen.next(); // starts the generator so handlers are attached; consumer then stalls

@@ -1,4 +1,5 @@
 import { installSsqPerf, traceCall, withInFlightGauge } from "./perfDebug";
+import { defined } from "@/lib/utils/defined";
 
 describe("traceCall", () => {
   afterEach(() => {
@@ -52,7 +53,7 @@ describe("InFlightGauge", () => {
 
   it("gauge_should_ReportPeak10AndDupCount_When_10ConcurrentListFilesAgainst100msServer", async () => {
     window.localStorage.setItem("ssq:perf", "1");
-    const perf = installSsqPerf()!;
+    const perf = defined(installSsqPerf());
     const { impl, settleAll } = deferredFetch();
     const gauged = withInFlightGauge(impl);
     const body = new Uint8Array([1, 2, 3]);
@@ -72,7 +73,7 @@ describe("InFlightGauge", () => {
     await withInFlightGauge(plain)("http://x/a/B");
     expect(window.__ssqPerf).toBeUndefined();
     window.localStorage.setItem("ssq:perf", "1");
-    const perf = installSsqPerf()!;
+    const perf = defined(installSsqPerf());
     const failing = jest.fn(async () => {
       throw new TypeError("net");
     }) as unknown as typeof fetch;
@@ -99,7 +100,7 @@ describe("InFlightGauge", () => {
     (performance as unknown as Record<string, unknown>).getEntriesByType = () => entries;
     try {
       window.localStorage.setItem("ssq:perf", "1");
-      const perf = installSsqPerf()!;
+      const perf = defined(installSsqPerf());
       cb({ getEntries: () => entries } as never, {} as never);
       const direct = (performance.getEntriesByType("resource") as PerformanceResourceTiming[]).filter(
         (e) => e.requestStart - e.fetchStart > 1000,
@@ -132,7 +133,7 @@ describe("InFlightGauge", () => {
     } as never;
     try {
       window.localStorage.setItem("ssq:perf", "1");
-      const perf = installSsqPerf()!;
+      const perf = defined(installSsqPerf());
       cb({ getEntries: () => entries } as never, {} as never);
       expect(perf.queuedOver1sByClass).toEqual({ critical: 1, deferred: 2 });
       expect(perf.queuedOver1s).toBe(3);

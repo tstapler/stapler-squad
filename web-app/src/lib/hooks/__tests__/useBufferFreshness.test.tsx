@@ -7,6 +7,7 @@ import type { FileStat, FileTransportPort } from "@/lib/files/transport/fileTran
 import { StaleBanner } from "@/components/sessions/files/StaleBanner";
 import { useBufferFreshness, compareTokens } from "../useBufferFreshness";
 import type { PollMode } from "../pollMode";
+import { defined } from "@/lib/utils/defined";
 
 const T1 = "v1:5:1:h1";
 const MTIME_ONLY = "v1:5:2:h1";
@@ -181,10 +182,10 @@ describe("useBufferFreshness", () => {
     stat.mockResolvedValue(statOf(CHANGED));
     await act(async () => { window.dispatchEvent(new Event("focus")); });
     await tick(1_000);
-    expect(h.analytics.events.find((e) => e.name === "files.stale.shown")!.labels).toMatchObject({ dirty: "false", actor: "agent_likely" });
+    expect(defined(h.analytics.events.find((e) => e.name === "files.stale.shown")).labels).toMatchObject({ dirty: "false", actor: "agent_likely" });
     act(() => result.current.resolve("reload"));
     expect(result.current.stale).toBeNull();
-    expect(h.analytics.events.find((e) => e.name === "files.stale.action")!.labels).toMatchObject({ action: "reload" });
+    expect(defined(h.analytics.events.find((e) => e.name === "files.stale.action")).labels).toMatchObject({ action: "reload" });
   });
 
   it("useBufferFreshness_should_NotStat_When_PollModeOffForHiddenWindow", async () => {

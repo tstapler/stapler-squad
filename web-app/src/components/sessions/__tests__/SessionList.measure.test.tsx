@@ -4,6 +4,7 @@ import { render } from "@testing-library/react";
 import { SessionList } from "../SessionList";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { makeSession } from "./sessionListTestFixtures";
+import { defined } from "@/lib/utils/defined";
 
 jest.mock("@connectrpc/connect", () => ({
   createContextKey: (defaultValue: unknown) => ({ id: Symbol("ctx"), defaultValue }),
@@ -54,11 +55,11 @@ describe("SessionList row measurement", () => {
     // Steady state: every re-measure arrives with a ResizeObserver entry.
     for (let i = 0; i < 200; i++) {
       const entry = { borderBoxSize: [{ blockSize: 40 + i, inlineSize: 300 }] };
-      expect(measureElement!(el, entry)).toBe(40 + i);
+      expect(defined(measureElement)(el, entry)).toBe(40 + i);
     }
     // First measure of a mounted row has no entry; it must not use a rect read either.
     Object.defineProperty(el, "offsetHeight", { configurable: true, value: 64 });
-    expect(measureElement!(el)).toBe(64);
+    expect(defined(measureElement)(el)).toBe(64);
     expect(rectSpy).not.toHaveBeenCalled();
     rectSpy.mockRestore();
   });

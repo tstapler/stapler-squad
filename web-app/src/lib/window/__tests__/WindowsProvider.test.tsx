@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { render, screen, within } from "@testing-library/react";
 import { WindowsProvider, WindowHostSlot, useWindowsContext, type WindowHostInputs } from "../WindowsProvider";
 import type { NamedWindow } from "../windowTypes";
+import { defined } from "@/lib/utils/defined";
 
 let mockPathname = "/";
 let mockKeepAlive = true;
@@ -121,11 +122,11 @@ describe("WindowsProvider", () => {
       );
     };
     const { rerender } = render(view("/backlog"));
-    detailRef!.current = el;
-    focus!();
+    defined(detailRef).current = el;
+    defined(focus)();
     expect(document.activeElement).not.toBe(el);
     rerender(view("/"));
-    focus!();
+    defined(focus)();
     expect(document.activeElement).toBe(el);
     el.remove();
   });

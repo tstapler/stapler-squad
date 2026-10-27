@@ -23,6 +23,7 @@ import {
   buildChangedAncestorPrefixes,
 } from "../FileTree";
 import type { TreeNode } from "../FileTree";
+import { defined } from "@/lib/utils/defined";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -198,7 +199,7 @@ describe("buildTreeData", () => {
     const contents = new Map([["src", [child]]]);
     const result = buildTreeData([dir], contents);
     expect(result[0].children).toHaveLength(1);
-    expect(result[0].children![0].id).toBe("src/main.go");
+    expect(defined(result[0].children)[0].id).toBe("src/main.go");
   });
 
   it("recursively attaches nested loaded children", () => {
@@ -212,10 +213,10 @@ describe("buildTreeData", () => {
     const result = buildTreeData([root], contents);
     const srcNode = result[0];
     expect(srcNode.children).toHaveLength(1);
-    const subNode = srcNode.children![0];
+    const subNode = defined(srcNode.children)[0];
     expect(subNode.id).toBe("src/components");
     expect(subNode.children).toHaveLength(1);
-    expect(subNode.children![0].id).toBe("src/components/Button.tsx");
+    expect(defined(subNode.children)[0].id).toBe("src/components/Button.tsx");
   });
 
   it("mixes loaded and unloaded dirs correctly", () => {
@@ -263,7 +264,7 @@ describe("childrenAccessor logic", () => {
     const child = makeFileNode("src/main.go", false);
     const result = accessor(makeFileNode("src", true, [child]));
     expect(result).toHaveLength(1);
-    expect(result![0].id).toBe("src/main.go");
+    expect(defined(result)[0].id).toBe("src/main.go");
   });
 
   it("[] from accessor means isLeaf=false (Array.isArray([]) is true)", () => {
@@ -316,7 +317,7 @@ describe("FileTree – root loading", () => {
     await waitFor(() => {
       const srcNode = capturedData.find((n) => n.id === "src");
       expect(srcNode).toBeDefined();
-      expect(srcNode!.isDir).toBe(true);
+      expect(defined(srcNode).isDir).toBe(true);
     });
   });
 });
@@ -381,7 +382,7 @@ describe("FileTree – handleToggle loads directories", () => {
 
     // Simulate user toggling "src" directory.
     await act(async () => {
-      capturedOnToggle!("src");
+      defined(capturedOnToggle)("src");
     });
 
     await waitFor(() => {
@@ -410,11 +411,11 @@ describe("FileTree – handleToggle loads directories", () => {
     await waitForTreeWithNode("src");
 
     // First toggle loads src.
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     await waitFor(() => expect(srcLoadCount).toBe(1));
 
     // Second toggle should NOT reload (already in dirContents).
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     expect(srcLoadCount).toBe(1);
   });
 
@@ -434,11 +435,11 @@ describe("FileTree – handleToggle loads directories", () => {
     await waitForTreeWithNode("src");
 
     // First toggle — fails.
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     await waitFor(() => expect(srcLoadCount).toBe(1));
 
     // Second toggle — should retry because errorPaths contains "src".
-    await act(async () => { capturedOnToggle!("src"); });
+    await act(async () => { defined(capturedOnToggle)("src"); });
     await waitFor(() => expect(srcLoadCount).toBe(2));
   });
 
@@ -454,7 +455,7 @@ describe("FileTree – handleToggle loads directories", () => {
     await waitFor(() => expect(capturedOnToggle).toBeDefined());
 
     // Toggle a file node — should not trigger any directory fetch.
-    await act(async () => { capturedOnToggle!("README.md"); });
+    await act(async () => { defined(capturedOnToggle)("README.md"); });
 
     // No fetch beyond root should have happened.
     expect(nonDirLoadCount).toBe(0);
@@ -485,10 +486,10 @@ describe("FileTree – NodeRenderer click behavior", () => {
     const mockNode = makeMockNode(dirData, { isOpen: false });
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
-    fireEvent.click(container.querySelector("div")!);
+    fireEvent.click(defined(container.querySelector("div")));
 
     expect(mockNode.toggle).toHaveBeenCalledTimes(1);
     expect(mockNode.activate).not.toHaveBeenCalled();
@@ -501,10 +502,10 @@ describe("FileTree – NodeRenderer click behavior", () => {
     const mockNode = makeMockNode(fileData);
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
-    fireEvent.click(container.querySelector("div")!);
+    fireEvent.click(defined(container.querySelector("div")));
 
     expect(mockNode.activate).toHaveBeenCalledTimes(1);
     expect(mockNode.toggle).not.toHaveBeenCalled();
@@ -517,10 +518,10 @@ describe("FileTree – NodeRenderer click behavior", () => {
     const mockNode = makeMockNode(dirData, { isOpen: true });
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
-    fireEvent.click(container.querySelector("div")!);
+    fireEvent.click(defined(container.querySelector("div")));
 
     expect(mockNode.toggle).toHaveBeenCalledTimes(1);
     expect(mockNode.activate).not.toHaveBeenCalled();
@@ -579,7 +580,7 @@ describe("TreeRow – roving tabindex", () => {
 
   it("clicking the row delegates to node.handleClick", () => {
     const { container, node } = renderRow(true);
-    fireEvent.click(container.querySelector("[tabindex]")!);
+    fireEvent.click(defined(container.querySelector("[tabindex]")));
     expect(node.handleClick).toHaveBeenCalledTimes(1);
   });
 
@@ -596,7 +597,7 @@ describe("TreeRow – roving tabindex", () => {
       </div>
     );
 
-    fireEvent.focus(container.querySelector("[tabindex]")!);
+    fireEvent.focus(defined(container.querySelector("[tabindex]")));
 
     expect(parentOnFocus).not.toHaveBeenCalled();
   });
@@ -847,7 +848,7 @@ describe("sortTreeData", () => {
     const child1 = makeFileNode("src/a.go", false);
     const dir = makeFileNode("src", true, [child2, child1]);
     const result = sortTreeData([dir], "name");
-    expect(result[0].children!.map((c) => c.id)).toEqual(["src/a.go", "src/b.go"]);
+    expect(defined(result[0].children).map((c) => c.id)).toEqual(["src/a.go", "src/b.go"]);
   });
 });
 
@@ -884,7 +885,7 @@ describe("filterChangedTreeData", () => {
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("src");
     expect(result[0].children).toHaveLength(1);
-    expect(result[0].children![0].id).toBe("src/a.go");
+    expect(defined(result[0].children)[0].id).toBe("src/a.go");
   });
 
   it("keeps an ancestor directory visible even when it hasn't been loaded/expanded", () => {
@@ -933,7 +934,7 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const mockNode = makeMockNode(fileData);
 
     const { getByTitle } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
     expect(getByTitle("+3 -1")).toBeTruthy();
@@ -945,7 +946,7 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const mockNode = makeMockNode(fileData);
 
     const { queryByTitle } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
 
     expect(queryByTitle(/^\+\d+ -\d+$/)).toBeNull();
@@ -957,9 +958,9 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const mockNode = makeMockNode(fileData, { level: 2 });
 
     const { container } = render(
-      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: mockNode, style: {} })}</>
     );
-    const row = container.querySelector('[role="treeitem"]')!;
+    const row = defined(container.querySelector('[role="treeitem"]'));
     expect(row).not.toBeNull();
     expect(row.getAttribute("aria-level")).toBe("3");
     expect(row.getAttribute("aria-selected")).toBe("false");
@@ -971,16 +972,16 @@ describe("FileTree – NodeRenderer badges and ARIA", () => {
     const dirNode = makeMockNode(dirData, { isOpen: true });
 
     const { container: dirContainer } = render(
-      <>{capturedChildren!({ node: dirNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: dirNode, style: {} })}</>
     );
-    expect(dirContainer.querySelector('[role="treeitem"]')!.getAttribute("aria-expanded")).toBe("true");
+    expect(defined(dirContainer.querySelector('[role="treeitem"]')).getAttribute("aria-expanded")).toBe("true");
 
     const fileData = makeFileNode("main.go", false);
     const fileNode = makeMockNode(fileData);
     const { container: fileContainer } = render(
-      <>{capturedChildren!({ node: fileNode, style: {} })}</>
+      <>{defined(capturedChildren)({ node: fileNode, style: {} })}</>
     );
-    expect(fileContainer.querySelector('[role="treeitem"]')!.hasAttribute("aria-expanded")).toBe(false);
+    expect(defined(fileContainer.querySelector('[role="treeitem"]')).hasAttribute("aria-expanded")).toBe(false);
   });
 });
 

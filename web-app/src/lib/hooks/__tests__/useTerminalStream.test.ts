@@ -126,6 +126,7 @@ jest.mock('../useTerminalMetrics', () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 import { useTerminalStream } from '../useTerminalStream';
+import { defined } from "@/lib/utils/defined";
 
 // ---------------------------------------------------------------------------
 // Controllable stream factory
@@ -172,7 +173,7 @@ function makePushStream<T>(signal?: AbortSignal): PushStream<T> {
             await new Promise<void>((resolve, reject) => resolvers.push({ resolve, reject }));
           }
           if (queue.length > 0) {
-            return { value: queue.shift()!, done: false };
+            return { value: defined(queue.shift()), done: false };
           }
           return { value: undefined as any, done: true };
         },

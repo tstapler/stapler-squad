@@ -4,6 +4,7 @@ import { useRouter } from "@/lib/nav/impl.memory";
 import { renderWithNav } from "@/lib/nav/testing";
 import { useFocusOnNavigate } from "@/lib/nav/useFocusOnNavigate";
 import { markWindowSwitchEnd, markWindowSwitchStart, _resetPerfMarksForTesting } from "./perfMarks";
+import { defined } from "@/lib/utils/defined";
 
 jest.mock("@/lib/nav/impl.router", () => jest.requireActual("@/lib/nav/impl.memory"));
 
@@ -28,8 +29,8 @@ function installFakeUserTiming() {
       entries.push({ name, startTime: a.start, duration: a.end - a.start });
       return;
     }
-    const from = entries.find((e) => e.name === a)!;
-    const to = entries.find((e) => e.name === b)!;
+    const from = defined(entries.find((e) => e.name === a));
+    const to = defined(entries.find((e) => e.name === b));
     entries.push({ name, startTime: from.startTime, duration: to.startTime - from.startTime });
   };
   perf.getEntriesByName = (name: string) => entries.filter((e) => e.name === name);
