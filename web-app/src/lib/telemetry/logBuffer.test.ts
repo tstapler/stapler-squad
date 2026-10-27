@@ -1,4 +1,10 @@
-import { acquireConsolePatch, flushLogBuffer, resetLogBufferForTest, setFocusedSessionId } from "./logBuffer";
+import {
+  acquireConsolePatch,
+  flushLogBuffer,
+  releaseFocusedSessionId,
+  resetLogBufferForTest,
+  setFocusedSessionId,
+} from "./logBuffer";
 
 const mockLogClientEvents = jest.fn().mockResolvedValue({});
 const mockCreateClient = jest.fn((..._args: unknown[]) => ({ logClientEvents: mockLogClientEvents }));
@@ -117,6 +123,36 @@ describe("logBuffer / ConsolePatch", () => {
     flushLogBuffer();
 
     expect(sentEntries()[0].sessionId).toBe("s2");
+    release();
+  });
+
+  it("logBuffer_should_ClearTag_When_FocusSetToUndefinedOrNull", () => {
+    console.log = jest.fn();
+    const release = acquireConsolePatch();
+    setFocusedSessionId("s1");
+    setFocusedSessionId(undefined);
+    console.log("a");
+    setFocusedSessionId("s2");
+    setFocusedSessionId(null);
+    console.log("b");
+    flushLogBuffer();
+
+    expect(sentEntries().map((e) => e.sessionId)).toEqual(["", ""]);
+    release();
+  });
+
+  it("logBuffer_should_NotClearNewerClaimant_When_StaleSessionReleases", () => {
+    console.log = jest.fn();
+    const release = acquireConsolePatch();
+    setFocusedSessionId("s1");
+    setFocusedSessionId("s2");
+    releaseFocusedSessionId("s1");
+    console.log("kept");
+    releaseFocusedSessionId("s2");
+    console.log("cleared");
+    flushLogBuffer();
+
+    expect(sentEntries().map((e) => e.sessionId)).toEqual(["s2", ""]);
     release();
   });
 });

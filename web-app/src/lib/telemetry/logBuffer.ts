@@ -47,9 +47,14 @@ function argsToMessage(args: unknown[]): string {
   }
 }
 
-/** The tag follows the last session to claim focus. */
-export function setFocusedSessionId(sessionId: string | undefined): void {
-  if (sessionId !== undefined) focusedSessionId = sessionId;
+/** The tag follows the last session to claim focus; undefined/null clears it. */
+export function setFocusedSessionId(sessionId: string | null | undefined): void {
+  focusedSessionId = sessionId ?? undefined;
+}
+
+/** Clears the tag only if `sessionId` still holds it, so a newer claimant isn't wiped. */
+export function releaseFocusedSessionId(sessionId: string): void {
+  if (focusedSessionId === sessionId) focusedSessionId = undefined;
 }
 
 /** console.debug streams only while at least one consumer asked for it. */

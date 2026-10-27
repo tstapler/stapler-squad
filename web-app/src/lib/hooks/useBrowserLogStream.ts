@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import {
   acquireConsolePatch,
   setDebugConsumer,
+  releaseFocusedSessionId,
   setFocusedSessionId,
   type BrowserLogEntry,
 } from "@/lib/telemetry/logBuffer";
@@ -31,5 +32,8 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
   useEffect(() => setDebugConsumer(enabled), [enabled]);
   useEffect(() => {
     setFocusedSessionId(sessionId);
+    return () => {
+      if (sessionId !== undefined) releaseFocusedSessionId(sessionId);
+    };
   }, [sessionId]);
 }
