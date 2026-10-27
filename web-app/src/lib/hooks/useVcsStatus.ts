@@ -26,12 +26,13 @@ function getCached(sessionId: string): VcsCacheEntry | null {
   return null;
 }
 
+const vcsGeneration = new Map<string, number>();
 const vcsInflight = new Map<string, { promise: Promise<VcsCacheEntry>; focused: boolean }>();
 
 /**
  * Resolve a session's VCS status through the shared cache and a shared in-flight
  * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
- * `force` skips a fresh cache hit but still joins an in-flight request.
+ * `force` skips a fresh cache hit and never joins an in-flight request, which may predate the write that prompted it.
  * `focused` false marks the call deferred (Story 2.1.9); a focused caller never joins a deferred flight.
  * Rejects on RPC failure; callers own error handling.
  */
@@ -41,7 +42,9 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true):
     if (cached) return Promise.resolve(cached);
   }
   const existing = vcsInflight.get(sessionId);
-  if (existing && (existing.focused || !focused)) return existing.promise;
+  if (!force && existing && (existing.focused || !focused)) return existing.promise;
+  const generation = (vcsGeneration.get(sessionId) ?? 0) + 1;
+  vcsGeneration.set(sessionId, generation);
   const client = createClient(SessionService, getConnectTransport());
   // Shared by several callers, so no single caller's signal may cancel it; each
   // caller drops the result itself when its own signal has aborted.
@@ -54,7 +57,8 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true):
         error: response.error || null,
         timestamp: Date.now(),
       };
-      vcsCache.set(sessionId, entry);
+      // A superseded (older) flight must not overwrite a newer forced result.
+      if (vcsGeneration.get(sessionId) === generation) vcsCache.set(sessionId, entry);
       return entry;
     })
     .finally(() => {
@@ -73,6 +77,7 @@ export function invalidateVcsEntry(sessionId: string): void {
 export function resetVcsCacheForTests(): void {
   vcsCache.clear();
   vcsInflight.clear();
+  vcsGeneration.clear();
 }
 
 /**

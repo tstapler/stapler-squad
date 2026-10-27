@@ -89,6 +89,7 @@ interface WorkflowsSnapshot {
 let snapshot: WorkflowsSnapshot = { workflows: [], loading: false, error: null };
 let loaded = false;
 let inflight: Promise<void> | null = null;
+let fetchGeneration = 0;
 const listeners = new Set<() => void>();
 
 function patchSnapshot(patch: Partial<WorkflowsSnapshot>): void {
@@ -102,25 +103,29 @@ function updateWorkflows(fn: (prev: WorkflowProto[]) => WorkflowProto[]): void {
 
 const getClient = () => createClient(SessionService, getConnectTransport());
 
-/** One shared fetch: joins an in-flight request, and skips entirely once loaded unless `force`. */
+/** One shared fetch: joins an in-flight request unless `force` (which may predate a write), and skips entirely once loaded unless `force`. */
 function fetchWorkflowsShared(force = false): Promise<void> {
-  if (inflight) return inflight;
+  if (inflight && !force) return inflight;
   if (loaded && !force) return Promise.resolve();
   patchSnapshot({ loading: true, error: null });
+  const generation = ++fetchGeneration;
   const run = (async () => {
     try {
       // shared store fetch has no single owning component to cancel it
       // abort-signal-exempt
       const resp = await getClient().listWorkflows(create(ListWorkflowsRequestSchema, {}));
       loaded = true;
-      patchSnapshot({ workflows: resp.workflows ?? [] });
+      // A superseded (older) fetch must not overwrite a newer forced result.
+      if (generation === fetchGeneration) patchSnapshot({ workflows: resp.workflows ?? [] });
     } catch (err) {
       const e = err instanceof Error ? err : new Error("Failed to fetch workflows");
       patchSnapshot({ error: e });
       console.error("Failed to fetch workflows:", e);
     } finally {
-      inflight = null;
-      patchSnapshot({ loading: false });
+      if (generation === fetchGeneration) {
+        inflight = null;
+        patchSnapshot({ loading: false });
+      }
     }
   })();
   inflight = run;
