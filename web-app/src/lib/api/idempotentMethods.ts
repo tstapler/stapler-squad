@@ -52,6 +52,19 @@ export const IDEMPOTENT_METHODS = {
     "ListWorkflows",
     "ListProgramsConfig",
   ],
+  /**
+   * May join an HTTP request batch: cheap reads only, a subset of wsEligible and of the server's
+   * batchAllowed. GetVCSStatus, GetSessionDiff and GetFileContent are slow or bulk, and a batch
+   * answers only when every item is done, so they always travel alone.
+   */
+  batchEligible: [
+    "ListFiles",
+    "StatFile",
+    "GetFileTransportCapabilities",
+    "ListShells",
+    "ListWorkflows",
+    "ListProgramsConfig",
+  ],
   /** Kept in a client cache between calls; separate so enabling one purpose never enables another. */
   cacheable: ["GetFeatureFlags", "ListProgramsConfig", "GetFileTransportCapabilities"],
 } as const;
@@ -60,6 +73,12 @@ const COALESCIBLE = new Set<string>(IDEMPOTENT_METHODS.coalescible);
 
 export function isCoalescible(methodName: string): boolean {
   return COALESCIBLE.has(methodName);
+}
+
+const BATCH_ELIGIBLE = new Set<string>(IDEMPOTENT_METHODS.batchEligible);
+
+export function isBatchEligible(methodName: string): boolean {
+  return BATCH_ELIGIBLE.has(methodName);
 }
 
 /** Key for "identical call": the fully qualified method plus the canonical JSON of its request. */

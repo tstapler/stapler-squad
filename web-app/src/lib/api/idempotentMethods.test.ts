@@ -17,6 +17,15 @@ describe("idempotentMethodTable", () => {
     for (const name of wsEligible) expect(coalescible).toContain(name);
     expect([...wsEligible].sort()).toEqual([...allowlist.wsUnaryAllowed].sort());
     expect(wsEligible).not.toContain("GetFeatureFlags");
+    const { batchEligible } = IDEMPOTENT_METHODS;
+    for (const name of batchEligible) {
+      expect(known.has(name)).toBe(true);
+      expect(wsEligible).toContain(name);
+    }
+    for (const slow of ["GetVCSStatus", "GetSessionDiff", "GetFileContent"]) {
+      expect(batchEligible).not.toContain(slow);
+    }
+    expect([...batchEligible].sort()).toEqual([...allowlist.batchAllowed].sort());
     expect(isCoalescible("GetFeatureFlags")).toBe(true);
     expect(InsightsService.typeName).toBe("session.v1.InsightsService");
     for (const name of ["GetInsightsSummary", "ListAliases", "ListSessions", "ListPendingApprovals"]) {
