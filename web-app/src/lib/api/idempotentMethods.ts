@@ -5,7 +5,8 @@ import type { DescMessage, DescMethodUnary, MessageShape } from "@bufbuild/proto
  * Hand-maintained list of idempotent SessionService reads. `idempotency_level` is
  * absent from session.proto, so nothing is derived: a method is coalesced, replayed
  * or sent over the WebSocket only if it is named here. idempotentMethods.test.ts
- * checks every name against the generated service descriptor.
+ * checks every name against the generated service descriptors (SessionService and, for
+ * GetInsightsSummary, InsightsService).
  */
 export const IDEMPOTENT_METHODS = {
   /** Identical in-flight calls may share one request. */
@@ -20,6 +21,11 @@ export const IDEMPOTENT_METHODS = {
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
+    // Read-only, request body carries every filter (so the dedupe key is exact).
+    "GetInsightsSummary", // InsightsService, not SessionService
+    "ListAliases",
+    "ListSessions",
+    "ListPendingApprovals",
   ],
   /** Safe to re-send after a transport failure. */
   replayable: [

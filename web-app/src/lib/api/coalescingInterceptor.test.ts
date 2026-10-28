@@ -1,6 +1,7 @@
 import { create } from "@bufbuild/protobuf";
 import { Code, ConnectError, createContextValues } from "@connectrpc/connect";
 import type { UnaryRequest, UnaryResponse } from "@connectrpc/connect";
+import { priorityKey } from "./requestPriority";
 import {
   SessionService,
   GetFeatureFlagsRequestSchema,
@@ -8,9 +9,13 @@ import {
   GetVCSStatusRequestSchema,
   GetVCSStatusResponseSchema,
   ListFilesRequestSchema,
+  ListAliasesRequestSchema,
+  ListPendingApprovalsRequestSchema,
+  ListSessionsRequestSchema,
   UpdateFeatureFlagRequestSchema,
   WriteFileRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import { InsightsService, GetInsightsSummaryRequestSchema } from "@/gen/session/v1/insights_pb";
 import { createCoalescingInterceptor, resetCoalescingForTest } from "./coalescingInterceptor";
 
 type Deferred = { resolve: (r: UnaryResponse) => void; reject: (e: unknown) => void; req: UnaryRequest };
@@ -48,11 +53,24 @@ const vcsRes = (r: UnaryRequest): UnaryResponse =>
   ({ stream: false, method: r.method, service: r.service, header: new Headers(), trailer: new Headers(),
     message: create(GetVCSStatusResponseSchema, {}) }) as unknown as UnaryResponse;
 
+const withPriority = (r: UnaryRequest, priority: "critical" | "deferred"): UnaryRequest => {
+  r.contextValues.set(priorityKey, priority);
+  return r;
+};
+
 const flagsOf = (r: UnaryResponse) => r.message as unknown as { flags: { name: string }[] };
 
 beforeEach(() => resetCoalescingForTest());
 
 describe("coalescingInterceptor", () => {
+  it("coalesce_should_NotMergeCriticalCallerIntoDeferredFlight_When_PrioritiesDiffer", () => {
+    const { calls, run } = setup();
+    void run(withPriority(flagsReq(), "deferred"));
+    void run(withPriority(flagsReq(), "critical"));
+    void run(withPriority(flagsReq(), "deferred"));
+    expect(calls).toHaveLength(2);
+  });
+
   it("coalesce_should_IssueExactlyOneFetch_When_14IdenticalGetFeatureFlagsStartInSameTick", async () => {
     const { calls, run } = setup();
     const results = Array.from({ length: 14 }, () => run(flagsReq()));
@@ -142,5 +160,58 @@ describe("coalescingInterceptor", () => {
     void run(mk());
     void run(mk());
     expect(calls).toHaveLength(2);
+  });
+
+  describe("load-time duplicate reads (HAR perf-har-2)", () => {
+    const insightsReq = (includeOrphans = true) => ({
+      ...req(SessionService.method.listAliases, create(ListAliasesRequestSchema, {})),
+      service: InsightsService,
+      method: InsightsService.method.getInsightsSummary,
+      message: create(GetInsightsSummaryRequestSchema, { includeOrphans }),
+    }) as UnaryRequest;
+    const cases: [string, () => UnaryRequest, () => UnaryRequest][] = [
+      ["GetInsightsSummary", () => insightsReq(true), () => insightsReq(false)],
+      [
+        "ListAliases",
+        () => req(SessionService.method.listAliases, create(ListAliasesRequestSchema, {})),
+        () => req(SessionService.method.listAliases, create(ListAliasesRequestSchema, {})),
+      ],
+      [
+        "ListSessions",
+        () => req(SessionService.method.listSessions, create(ListSessionsRequestSchema, {})),
+        () => req(SessionService.method.listSessions, create(ListSessionsRequestSchema, { includeArchived: true })),
+      ],
+      [
+        "ListPendingApprovals",
+        () => req(SessionService.method.listPendingApprovals, create(ListPendingApprovalsRequestSchema, {})),
+        () => req(SessionService.method.listPendingApprovals, create(ListPendingApprovalsRequestSchema, { sessionId: "s1" })),
+      ],
+    ];
+
+    it.each(cases)("coalesce_should_Issue1Fetch_When_3Identical%sStartTogether", (name, same) => {
+      const { calls, run } = setup();
+      void run(same());
+      void run(same());
+      void run(same());
+      expect(calls).toHaveLength(1);
+      expect(calls[0].req.method.name).toBe(name);
+    });
+
+    // ListAliases has an empty request message: no body can differ.
+    it.each(cases.filter(([n]) => n !== "ListAliases"))("coalesce_should_NotMerge_When_%sBodiesDiffer", (_name, same, other) => {
+      const { calls, run } = setup();
+      void run(same());
+      void run(other());
+      expect(calls).toHaveLength(2);
+    });
+
+    it("coalesce_should_NotJoinPreWriteListPendingApprovals_When_ResolveApprovalRunsBetween", () => {
+      const { calls, run } = setup();
+      const list = () => req(SessionService.method.listPendingApprovals, create(ListPendingApprovalsRequestSchema, {}));
+      void run(list());
+      void run(req(SessionService.method.resolveApproval, {} as never));
+      void run(list());
+      expect(calls.filter((c) => c.req.method.name === "ListPendingApprovals")).toHaveLength(2);
+    });
   });
 });
