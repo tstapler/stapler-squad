@@ -1,4 +1,4 @@
-export type ShortcutContext = "global" | "session-list" | "approval" | "terminal" | "cockpit" | "omnibar";
+export type ShortcutContext = "global" | "session-list" | "approval" | "terminal" | "cockpit" | "omnibar" | "diff";
 
 export interface Shortcut {
   /**
@@ -112,6 +112,7 @@ export class ShortcutRegistry {
       terminal: [],
       cockpit: [],
       omnibar: [],
+      diff: [],
     };
     for (const shortcut of this.shortcuts.values()) {
       if (shortcut.hidden) continue;

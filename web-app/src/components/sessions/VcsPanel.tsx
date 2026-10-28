@@ -1,12 +1,14 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { fromSessionVcs } from "@/lib/vcs/adapters";
 import { getGitHubRateLimitMessage } from "@/lib/vcs/githubRateLimit";
 import { VcsWidget } from "@/components/shared/VcsWidget";
+import { FileDiffView } from "./FileDiffView";
+import { extractFileDiff } from "@/lib/diff/fileDiff";
 import * as styles from "./VcsPanel.css";
 
 interface VcsPanelProps {
@@ -21,8 +23,19 @@ interface VcsPanelProps {
 }
 
 export function VcsPanel({ onNavigateToFile, session, onBrowseFiles }: VcsPanelProps) {
-  const { status, statusLoading, error, refresh } = useSessionVcsContext();
+  const { status, statusLoading, error, refresh, diff, diffContextLines, setDiffContextLines } = useSessionVcsContext();
   const { track } = useAnalytics();
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const selectedDiff = useMemo(
+    () => (selectedFile ? extractFileDiff(diff?.content ?? "", selectedFile) : null),
+    [diff?.content, selectedFile],
+  );
+
+  // Fall back to the Files tab when the diff has nothing for this path (not loaded yet, binary, ignored).
+  const handleViewFileDiff = (path: string) => {
+    if (extractFileDiff(diff?.content ?? "", path)) setSelectedFile(path);
+    else onNavigateToFile?.(path);
+  };
 
   const handleRetry = () => {
     track({ name: "toolbar_button_click", category: "user_action", component: "VcsPanel", labels: { button: "retry" } });
@@ -65,12 +78,30 @@ export function VcsPanel({ onNavigateToFile, session, onBrowseFiles }: VcsPanelP
     );
   }
 
+  if (selectedFile && selectedDiff) {
+    return (
+      <div className={styles.container}>
+        <FileDiffView
+          path={selectedFile}
+          content={selectedDiff.content}
+          added={selectedDiff.added}
+          removed={selectedDiff.removed}
+          onBack={() => setSelectedFile(null)}
+          onOpenFile={onNavigateToFile}
+          contextLines={diffContextLines}
+          onContextLinesChange={setDiffContextLines}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={styles.container}>
       <VcsWidget
         data={fromSessionVcs(status, session)}
         mode="full"
         onNavigateToFile={onNavigateToFile}
+        onViewFileDiff={handleViewFileDiff}
         onRefresh={refresh}
         worktreePath={session?.gitWorktree?.worktreePath}
         onBrowseFiles={onBrowseFiles}

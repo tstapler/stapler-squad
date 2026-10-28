@@ -148,13 +148,21 @@ func (s *SessionService) GetSessionDiff(
 
 	var diffStats *git.DiffStats
 
+	contextLines := int(req.Msg.ContextLines)
+	customContext := contextLines != 0 // 0 = server default, served from the cached diff
+
 	instance := s.findInstance(req.Msg.Id)
 	if instance != nil {
-		// Live session: refresh (if the cached value is stale) and read.
-		if err := instance.RefreshDiffStatsIfStale(); err != nil {
-			log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
+		if wt, err := instance.GetGitWorktree(); customContext && err == nil && wt != nil {
+			// Non-default context bypasses the shared diff-stats cache, which only holds the default.
+			diffStats = wt.DiffWithContextLines(contextLines)
+		} else {
+			// Live session: refresh (if the cached value is stale) and read.
+			if err := instance.RefreshDiffStatsIfStale(); err != nil {
+				log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
+			}
+			diffStats = instance.GetDiffStats()
 		}
-		diffStats = instance.GetDiffStats()
 	} else {
 		// Completed session: reconstruct worktree from DB and compute diff on-demand.
 		allData, err := s.storage.ListInstanceData()
@@ -179,13 +187,13 @@ func (s *SessionService) GetSessionDiff(
 				found.Worktree.BranchName,
 				found.Worktree.BaseCommitSHA,
 			)
-			diffStats = wt.Diff()
+			diffStats = wt.DiffWithContextLines(contextLines)
 		} else if found.Path != "" {
 			// ponytail: directory sessions have no worktree; use the session path directly.
 			// resolveBaseCommitSHA() will find the merge-base with main/master as fallback.
 			wt := git.NewGitWorktreeFromStorage(found.Path, found.Path, found.Title, "", "")
 			if wt != nil {
-				diffStats = wt.Diff()
+				diffStats = wt.DiffWithContextLines(contextLines)
 			}
 		}
 	}

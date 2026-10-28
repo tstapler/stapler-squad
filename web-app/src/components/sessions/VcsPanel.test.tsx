@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { VCSStatusSchema, FileChangeSchema, SessionSchema, FileStatus } from "@/gen/session/v1/types_pb";
 import { VcsPanel } from "./VcsPanel";
@@ -8,6 +8,10 @@ import { rateLimitError } from "@/lib/vcs/__testUtils__/rateLimitFixtures";
 
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
   useSessionVcsContext: jest.fn(),
+}));
+
+jest.mock("./DiffPane", () => ({
+  DiffPane: ({ content }: { content: string }) => <pre data-testid="mock-diff-pane">{content}</pre>,
 }));
 
 jest.mock("@/lib/contexts/AnalyticsContext", () => ({
@@ -111,5 +115,52 @@ describe("VcsPanel", () => {
     render(<VcsPanel />);
 
     expect(screen.getByText(error.message)).toBeInTheDocument();
+  });
+
+  describe("inline file diff", () => {
+    const FOO_DIFF = ["diff --git a/src/foo.ts b/src/foo.ts", "--- a/src/foo.ts", "+++ b/src/foo.ts", "@@ -1,1 +1,1 @@", "-a", "+b", ""].join("\n");
+    const status = create(VCSStatusSchema, {
+      branch: "feat/x",
+      isClean: false,
+      unstagedFiles: [
+        create(FileChangeSchema, { path: "src/foo.ts", status: FileStatus.MODIFIED, additions: 1, deletions: 1 }),
+      ],
+    });
+    const mockContext = (diffContent: string | null) =>
+      mockUseSessionVcsContext.mockReturnValue({
+        status,
+        statusLoading: false,
+        error: null,
+        refresh: jest.fn(),
+        diff: diffContent === null ? null : { content: diffContent, added: 1, removed: 1 },
+        diffContextLines: 0,
+        setDiffContextLines: jest.fn(),
+      });
+
+    it("VcsPanel_should_ShowFileDiffInPlaceAndRestoreList_When_FileClickedThenBack", () => {
+      const onNavigateToFile = jest.fn();
+      mockContext(FOO_DIFF);
+      render(<VcsPanel onNavigateToFile={onNavigateToFile} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /src\/foo\.ts/ }));
+      expect(screen.getByTestId("file-diff-view")).toBeInTheDocument();
+      expect(screen.getByTestId("mock-diff-pane")).toHaveTextContent("+b");
+      expect(screen.queryByTestId("vcs-widget-loaded")).not.toBeInTheDocument();
+      expect(onNavigateToFile).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId("file-diff-back"));
+      expect(screen.queryByTestId("file-diff-view")).not.toBeInTheDocument();
+      expect(screen.getByTestId("vcs-widget-loaded")).toBeInTheDocument();
+    });
+
+    it("VcsPanel_should_FallBackToFilesTab_When_DiffHasNoSectionForFile", () => {
+      const onNavigateToFile = jest.fn();
+      mockContext(null);
+      render(<VcsPanel onNavigateToFile={onNavigateToFile} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /src\/foo\.ts/ }));
+      expect(onNavigateToFile).toHaveBeenCalledWith("src/foo.ts");
+      expect(screen.queryByTestId("file-diff-view")).not.toBeInTheDocument();
+    });
   });
 });
