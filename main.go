@@ -506,7 +506,7 @@ var (
 				var remoteAccess *remoteAccessResult
 				if remoteAccessFlag || cfg.PasskeyEnabled {
 					var raErr error
-					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag, coreDeps.Storage, backlogSvc)
+					remoteAccess, raErr = startRemoteAccess(ctx, srv, address, cfg, remotePortFlag, coreDeps.Storage, backlogSvc, coreDeps.SessionService)
 					if raErr != nil {
 						return fmt.Errorf("start remote access: %w", raErr)
 					}
@@ -1462,7 +1462,7 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 // project_plans/cross-host-claim-dedup/decisions/), and hands backlogSvc and
 // storage the claim checkers. backlogSvc may be nil. Failures disable gossip
 // with a warning rather than aborting remote access.
-func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) {
+func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService, sessionSvc *services.SessionService) {
 	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
 	if err != nil {
 		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
@@ -1483,6 +1483,7 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
 	serverauth.RegisterHostAdvertisementRoute(mux, hostIdentity, hostRegistry, advertiser, selfAddresses)
 	go advertiser.Run(ctx)
+	startSessionFederation(ctx, mux, hostIdentity, hostRegistry, sessionSvc)
 	pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
 	go func() {
 		defer pruneTicker.Stop()
@@ -1523,9 +1524,21 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	}
 }
 
+// startSessionFederation serves this host's own sessions to enrolled peers and
+// merges theirs into sessionSvc's ListSessions. sessionSvc may be nil.
+func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity session.HostIdentity, registry *session.HostRegistry, sessionSvc *services.SessionService) {
+	if sessionSvc == nil {
+		return
+	}
+	mux.HandleFunc("GET "+session.SessionFederationEndpointPath, services.SessionFederationHandler(registry, sessionSvc.LocalSessions))
+	federated := services.NewFederatedSessions(identity, registry)
+	sessionSvc.SetFederation(federated)
+	go federated.Run(ctx, services.DefaultFederationRefreshInterval)
+}
+
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService) (*remoteAccessResult, error) {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService, sessionSvc *services.SessionService) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
 	lanIPs := detectLANIPs(ctx)
@@ -1631,7 +1644,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	configDir, store, sessions, waHandler, setupMgr := auth.ConfigDir, auth.Store, auth.Sessions, auth.WAHandler, auth.SetupMgr
 
-	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage, backlogSvc)
+	startHostGossip(ctx, srv.Mux(), configDir, hostnames, lanIPs, remotePort, storage, backlogSvc, sessionSvc)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions, middleware.WithSelfAuthenticatedPaths(srv.SelfAuthenticatedPath)), middleware.AuthRequires(sessions)); err != nil {

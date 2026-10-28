@@ -70,6 +70,31 @@ func (s *SessionService) ListSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionsRequest],
 ) (*connect.Response[sessionv1.ListSessionsResponse], error) {
+	resp, err := s.listLocalSessions(ctx, req)
+	if err != nil || s.federation == nil || req.Msg.HiddenOnly {
+		return resp, err
+	}
+	resp.Msg.Sessions = append(resp.Msg.Sessions, s.federation.filtered(req.Msg)...)
+	return resp, nil
+}
+
+// LocalSessions lists only this instance's sessions with default filters. It is
+// what peers are served: the merged view would echo their own sessions back.
+func (s *SessionService) LocalSessions(ctx context.Context) ([]*sessionv1.Session, error) {
+	resp, err := s.listLocalSessions(ctx, connect.NewRequest(&sessionv1.ListSessionsRequest{}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Msg.Sessions, nil
+}
+
+// SetFederation enables merging peer sessions into ListSessions.
+func (s *SessionService) SetFederation(f *FederatedSessions) { s.federation = f }
+
+func (s *SessionService) listLocalSessions(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListSessionsRequest],
+) (*connect.Response[sessionv1.ListSessionsResponse], error) {
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
 	var instances []*session.Instance

@@ -386,6 +386,17 @@ message Session {
   // empty otherwise. A string (not an enum) so a new value never breaks
   // older clients, which treat anything unrecognized as unknown.
   string background_outcome = 99;
+
+  // Session federation: owning host of a session mirrored from a peer
+  // instance. Empty for sessions that live on this instance.
+  string host_id = 100;
+
+  // Human-readable label of the owning host (first advertised address).
+  string host_display_name = 101;
+
+  // True when the owning peer is currently unreachable and this entry is the
+  // last snapshot received from it.
+  bool host_stale = 102;
 }
 
 // PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
