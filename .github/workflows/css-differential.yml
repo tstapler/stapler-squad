@@ -66,6 +66,8 @@ jobs:
         run: bun run oracle:ve
 
       - name: Build with Next
+        env:
+          WEB_BUILD: next
         run: make web-build
 
       - name: Keep the Next output

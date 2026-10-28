@@ -179,6 +179,8 @@ jobs:
             nextjs-smoke-${{ runner.os }}-
 
       - name: make web-build (no manual pre-steps)
+        env:
+          WEB_BUILD: next
         run: make web-build
 
       - name: Verify proto bindings were generated
