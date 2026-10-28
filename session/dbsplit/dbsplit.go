@@ -77,7 +77,7 @@ func IsReadOnly(q string) bool {
 		return true
 	}
 	c := q[i+len(kw)]
-	return !(c == '_' || c >= '0' && c <= '9' || c|0x20 >= 'a' && c|0x20 <= 'z')
+	return c != '_' && (c < '0' || c > '9') && (c|0x20 < 'a' || c|0x20 > 'z')
 }
 
 func skipLeading(q string) int {

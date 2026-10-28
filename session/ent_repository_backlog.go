@@ -61,7 +61,7 @@ type statusEventInput struct {
 // recordStatusEvent appends an immutable BacklogStatusEvent audit row. Pass
 // r.client.BacklogStatusEvent for a standalone write, or tx.BacklogStatusEvent to
 // write inside an existing transaction — required when called from ReconcileStuckItems
-// since SQLite is capped to one connection (SetMaxOpenConns(1)) and calling back through
+// since the writer is capped to one connection (SetMaxOpenConns(1)) and a write through
 // the non-tx client would self-deadlock. A write failure is logged, not returned: an
 // audit-log gap must never block the status transition itself. in.stageNameSnapshot is
 // Epic 2.5's frozen-at-entry StageConfigSnapshot name (empty when the destination

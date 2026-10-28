@@ -52,7 +52,7 @@ func openReadPool(path string, n int) (*sql.DB, error) {
 // A non-nil readDB routes plain SELECTs to it (session/dbsplit); stats for
 // that pool are reported as "ent-read".
 func newInstrumentedEntClient(db, readDB *sql.DB) *ent.Client {
-	var drv dialect.Driver = dbobs.Wrap(entsql.OpenDB(dialect.SQLite, db), db, dbobs.ConfigFromEnv("ent"))
+	drv := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, db), db, dbobs.ConfigFromEnv("ent"))
 	if readDB != nil {
 		reader := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, readDB), readDB, dbobs.ConfigFromEnv("ent-read"))
 		drv = dbsplit.New(drv, reader)
