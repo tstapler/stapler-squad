@@ -1172,6 +1172,7 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 	if item.ExternalURL != "" {
 		p.ExternalUrl = &item.ExternalURL
 	}
+	p.ClaimingHostId = item.ClaimingHostID
 	if item.BaseBranch != "" {
 		p.BaseBranch = &item.BaseBranch
 	}

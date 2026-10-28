@@ -70,5 +70,17 @@ relaunch needs them again.
   That is weaker than a paste for prompts that exceed the agent's context anyway.
 - `--add-dir` exposes the whole prompt-cache directory (other sessions' prompt files) to that session. Same user and
   host; not isolated further.
-- Deliberately left: other agent kinds still receive no launch prompt, and the `InitialPrompt` driver path still
-  truncates at 4096 bytes. Fixing either needs the option-a write primitive and is a separate change.
+- Deliberately left: other agent kinds still receive no launch prompt.
+
+### Addendum: the live `InitialPrompt` driver path
+
+`sanitizeInitialPromptForTmux` used to cut the prompt typed into a running pane at 4096 bytes (an arbitrary constant,
+not a tmux or PTY limit: the write goes to the PTY master, which has no argv limit) and collapsed newlines to spaces,
+both silently. It is replaced by `ParseDriverPrompt` (`session/driver_prompt.go`), which has no size cap:
+
+- Text with a control byte (newline, tab, ESC) is wrapped in a bracketed paste so it arrives as text, not keystrokes.
+  Plain printable text is typed as before.
+- `SubmitDriverContent` writes in `maxInlinePromptBytes` chunks (this ADR's inline class), reporting bytes written on a
+  failure. There is no second threshold set, and no size at which a live prompt is refused.
+- Text containing the paste terminator `ESC[201~` is refused with `ErrPromptUndeliverable`; the driver logs an error,
+  adds the session to the review queue and stops retrying.

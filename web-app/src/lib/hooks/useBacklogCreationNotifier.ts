@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useRouter } from "@/lib/nav";
 import { useNotificationCommands } from "@/lib/contexts/notificationContexts";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { store } from "@/lib/store";
 import { upsertItem } from "@/lib/store/backlogItemsSlice";
@@ -28,7 +27,7 @@ async function hydrateItemIntoStore(itemId: string, signal: AbortSignal): Promis
   try {
     const client = createClient(
       BacklogService,
-      createConnectTransport({ baseUrl: getApiBaseUrl(), interceptors: [createAuthInterceptor()] })
+      getConnectTransport()
     );
     const resp = await client.getBacklogItem({ itemId }, { signal });
     if (resp.item) store.dispatch(upsertItem(resp.item));

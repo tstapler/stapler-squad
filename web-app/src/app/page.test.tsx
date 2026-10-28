@@ -14,6 +14,7 @@ import { initialPaneState } from "@/lib/pane/paneReducer";
 import { useWindowManager } from "@/lib/window/useWindowManager";
 import { useWindowUrlSync } from "@/lib/window/useWindowUrlSync";
 import { useWindowShortcuts } from "@/lib/window/useWindowShortcuts";
+import { WindowsProvider } from "@/lib/window/WindowsProvider";
 
 const mockUpdateSession = jest.fn();
 const mockGetSession = jest.fn();
@@ -58,6 +59,7 @@ jest.mock("@/lib/contexts/OmnibarContext", () => ({
 }));
 jest.mock("@/lib/nav", () => ({
   useSearchParams: () => mockSearchParams,
+  usePathname: () => "/",
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 jest.mock("@/components/sessions/ResumeSessionModal", () => ({
@@ -194,7 +196,7 @@ describe("HomeContent multi-window wiring", () => {
     expect(useWindowShortcuts).toHaveBeenCalledWith(
       windows,
       "win-1",
-      mockSwitchToWindow,
+      expect.any(Function), // the page's focus-recording wrapper around mockSwitchToWindow
       expect.any(Function),
       expect.any(Function)
     );
@@ -228,6 +230,24 @@ describe("HomeContent multi-window wiring", () => {
     mockDispatchPane.mockClear();
     lastPaneTilingContainerProps().dispatch(someAction);
     expect(mockDispatchPane).toHaveBeenCalledWith("win-1", someAction);
+  });
+
+  it("HomeContent_should_dispatchPaneActionsThroughThePage_When_insideWindowsProviderWithKeepAliveOff", () => {
+    const windows = [{ id: "win-1", name: "Window 1", paneState: initialPaneState() }];
+    mockWindowManagerReturning(windows);
+    mockUrlSyncResolvingTo("win-1");
+
+    // The provider never receives published inputs with keep-alive off, so its own dispatcher is a no-op;
+    // dropping it silently broke every pane action (deep-link session assign included).
+    render(
+      <WindowsProvider>
+        <Home />
+      </WindowsProvider>,
+    );
+
+    const action = { type: "ASSIGN_SESSION", paneId: "pane-1", sessionId: "s1" };
+    lastPaneTilingContainerProps().dispatch(action);
+    expect(mockDispatchPane).toHaveBeenCalledWith("win-1", action);
   });
 
   it("HomeContent_should_keepEachTabIndependentlyOnItsOwnWindow_When_twoInstancesResolveDifferentUrlParams", () => {

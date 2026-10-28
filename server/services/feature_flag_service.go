@@ -224,6 +224,10 @@ var knownFeatureFlags = []struct {
 		defaultValue: true,
 	},
 	{
+		name:        githubIssueProgressCommentsFlagName,
+		description: "Comment on the linked GitHub issue when a backlog item starts work (in_progress, naming the host) and when it opens a PR (review). The done-transition close comment is not gated by this flag. Default: off.",
+	},
+	{
 		name:         ChangelogFlagName,
 		description:  "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
 		defaultValue: true,
@@ -328,6 +332,23 @@ var knownFeatureFlags = []struct {
 	{
 		name:        piSupportFlagName,
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
+	},
+	{
+		name:         "request_coalescing",
+		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        "unary_over_ws",
+		description: "Send unary RPCs over the already-open WebSocket instead of separate HTTP requests, avoiding the browser's per-origin connection cap. Kill switch: turn off to fall back to HTTP fetch. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "unary_over_ws_remote",
+		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
+	},
+	{
+		name:        "window_keep_alive",
+		description: "Keep the web app's window state alive across route changes instead of remounting it. Kill switch: turn off to restore remount-on-navigate. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
 		name:         config.TriageGuidanceHaltFeatureFlag,

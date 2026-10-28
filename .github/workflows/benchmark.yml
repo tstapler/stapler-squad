@@ -49,7 +49,7 @@ jobs:
   #   - CircularBuffer (scrollback package)
   #   - SessionService_ListSessions, GetSession, StreamTerminal (services package)
   # On push to main: saves updated baseline to the "bench-tier1-" cache.
-  # On PR: restores the latest baseline from cache, runs benchstat, posts a comment.
+  # On PR: restores the latest baseline from cache, diffs with benchdiff (sticky PR comment).
   # ─────────────────────────────────────────────────────────────────────────────
   go-tier1:
     name: Go Benchmarks (Tier 1)
@@ -68,9 +68,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
-
-      - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
 
       - name: Install buf
         run: |
@@ -110,77 +107,22 @@ jobs:
           restore-keys: |
             bench-tier1-
 
+      # Same Mann-Whitney test benchstat used (alpha 0.05, count=8). The sticky
+      # comment replaces the old hand-written one and stays visible even when
+      # nothing regressed. fail-on-regression 20 mirrors the old 20% gate;
+      # continue-on-error keeps PRs advisory-only, as before (the step still
+      # shows red on a regression).
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
-        id: compare
-        run: |
-          if [ -f benchmarks/go/tier1-baseline.txt ]; then
-            # No -delta-test flag: the pinned benchstat's table-format rewrite
-            # dropped it in favor of an automatic alpha=0.05 significance test
-            # (insignificant deltas are marked "~" in the output already).
-            benchstat benchmarks/go/tier1-baseline.txt tier1-bench.txt > benchstat-tier1.txt 2>&1 || true
-            echo "## Go Benchmarks (Tier 1)" >> $GITHUB_STEP_SUMMARY
-            cat benchstat-tier1.txt >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No baseline yet — will be established on next push to main." > benchstat-tier1.txt
-          fi
-          # A bare `if <cmd>` is exempt from -e/pipefail, so a genuine crash
-          # in the gate script (require() failure, bad benchstat output) must
-          # be distinguished from a real "false" result — otherwise it's
-          # silently written as has_regression=false, exactly the kind of
-          # silently-suppressed comment pre-mortem.md names as this item's
-          # top risk.
-          if ! RESULT=$(node -e "console.log(require('./tools/ci-gates/benchmark-regression.js').hasGoTier1Regression(require('fs').readFileSync('benchstat-tier1.txt','utf8')))"); then
-            echo "::error::benchmark-regression.js failed to evaluate — failing loudly instead of silently suppressing the PR comment"
-            exit 1
-          fi
-          echo "has_regression=${RESULT}" >> "$GITHUB_OUTPUT"
-
-      - name: Post PR comment
-        if: github.event_name == 'pull_request'
-        continue-on-error: true # advisory comment; never fail the job if posting is denied
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
+        continue-on-error: true
+        uses: tstapler/benchdiff@3921c948d6d9cbc538a62d3808d979c06cc13a94 # v0.1.0
         with:
-          script: |
-            const marker = '<!-- benchmark-go-tier1 -->';
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-            if (process.env.HAS_REGRESSION !== 'true') {
-              if (existing) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                });
-              }
-              return;
-            }
-            const fs = require('fs');
-            const output = fs.existsSync('benchstat-tier1.txt')
-              ? fs.readFileSync('benchstat-tier1.txt', 'utf8').trim()
-              : 'No comparison available.';
-            const body = `${marker}\n## ⚠️ Go Benchmarks (Tier 1) — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
+          head: tier1-bench.txt
+          base: ${{ hashFiles('benchmarks/go/tier1-baseline.txt') != '' && 'benchmarks/go/tier1-baseline.txt' || '' }}
+          format: go
+          tag: go-tier1
+          title: Go Benchmarks (Tier 1)
+          fail-on-regression: 20
 
       - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -391,84 +333,21 @@ jobs:
           restore-keys: |
             bench-frontend-throughput-
 
+      # benchmark-results.json is github-action-benchmark "customBiggerIsBetter"
+      # JSON, which benchdiff reads natively as gab-bigger (no adapter needed).
+      # Single sample per metric, so judged by threshold only; fail-on-regression
+      # 50 mirrors the old "throughput halved" gate, advisory as before.
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
-        id: compare
-        run: |
-          if [ -f benchmarks/frontend/throughput-baseline.json ]; then
-            node -e "
-              const gate = require('./tools/ci-gates/benchmark-regression.js');
-              const baseline = JSON.parse(require('fs').readFileSync('benchmarks/frontend/throughput-baseline.json', 'utf8'));
-              const current  = JSON.parse(require('fs').readFileSync('web-app/benchmark-results.json', 'utf8'));
-              const pctNums = [];
-              const rows = current.map(c => {
-                const b = baseline.find(e => e.name === c.name);
-                if (!b) return c.name + ': no baseline';
-                const pctNum = (c.value - b.value) / b.value * 100;
-                pctNums.push(pctNum);
-                const pct = pctNum.toFixed(1);
-                const sign = pctNum >= 0 ? '+' : '';
-                const arrow = c.value >= b.value ? '▲' : '▼';
-                return c.name + ': ' + (c.value/1024).toFixed(0) + ' KB/s ' + arrow + ' ' + sign + pct + '% (baseline: ' + (b.value/1024).toFixed(0) + ' KB/s)';
-              });
-              require('fs').writeFileSync('throughput-comparison.txt', rows.join('\n'));
-              require('fs').appendFileSync(process.env.GITHUB_OUTPUT, 'has_regression=' + gate.hasThroughputRegression(pctNums) + '\n');
-              console.log(rows.join('\n'));
-            "
-            echo "## Frontend Terminal Throughput" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat throughput-comparison.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No baseline yet — will be established on next push to main." > throughput-comparison.txt
-            echo "has_regression=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Post PR comment
-        if: github.event_name == 'pull_request'
-        continue-on-error: true # advisory comment; never fail the job if posting is denied
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          HAS_REGRESSION: ${{ steps.compare.outputs.has_regression }}
+        continue-on-error: true
+        uses: tstapler/benchdiff@3921c948d6d9cbc538a62d3808d979c06cc13a94 # v0.1.0
         with:
-          script: |
-            const marker = '<!-- benchmark-frontend-throughput -->';
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-            if (process.env.HAS_REGRESSION !== 'true') {
-              if (existing) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                });
-              }
-              return;
-            }
-            const fs = require('fs');
-            const output = fs.existsSync('throughput-comparison.txt')
-              ? fs.readFileSync('throughput-comparison.txt', 'utf8').trim()
-              : 'No comparison available.';
-            const body = `${marker}\n## ⚠️ Frontend Terminal Throughput — Regression Detected\n\`\`\`\n${output}\n\`\`\`\n\n> This comment clears automatically once the regression is resolved.`;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
+          head: web-app/benchmark-results.json
+          base: ${{ hashFiles('benchmarks/frontend/throughput-baseline.json') != '' && 'benchmarks/frontend/throughput-baseline.json' || '' }}
+          format: gab-bigger
+          tag: frontend-throughput
+          title: Frontend Terminal Throughput
+          fail-on-regression: 50
 
       - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -482,69 +361,6 @@ jobs:
         with:
           path: benchmarks/frontend/throughput-baseline.json
           key: bench-frontend-throughput-${{ github.run_id }}
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Lighthouse CI: Advisory performance audit (non-blocking).
-  # Runs Core Web Vitals and performance audits; never blocks merge.
-  # ─────────────────────────────────────────────────────────────────────────────
-  lighthouse:
-    name: Lighthouse CI (Advisory)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: frontend-bundle
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          submodules: true
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: cd web-app && bun install --frozen-lockfile
-
-      - name: Install buf
-        run: |
-          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
-            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
-
-      - name: Generate protobuf code
-        run: buf generate proto
-
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-lighthouse-${{ runner.os }}-
-
-      - name: Build Next.js app
-        run: cd web-app && bun run build
-
-      - name: Run Lighthouse CI
-        run: cd web-app && bunx @lhci/cli autorun
-        continue-on-error: true  # Advisory only — never blocks merge
-
-      - name: Upload Lighthouse results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: lighthouse-results
-          path: web-app/.lighthouseci/
-          retention-days: 14
 
   # ─────────────────────────────────────────────────────────────────────────────
   # E2E Latency: Playwright RPC timing benchmarks.
@@ -753,3 +569,176 @@ jobs:
         with:
           path: benchmarks/e2e/latency-baseline.json
           key: bench-e2e-latency-${{ github.run_id }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # E2E Perf Budget: frontend-responsiveness Playwright `perf` project (Story 7.1.3).
+  # Runs tests/e2e/perf/ against an isolated server (global-setup.ts) with a
+  # 20-session tmux fixture, then tools/ci-gates/perf-budget.js compares medians
+  # to the baseline and checks per-method request-count budgets.
+  # Advisory by default: the check never fails on regressions. Flip
+  # PERF_BUDGET_BLOCKING to '1' (Task 7.1.3b, after the soak window and owner
+  # sign-off) to make only the count-based subset blocking; timing metrics stay
+  # advisory either way. The baseline lives in the "bench-e2e-perf-" cache
+  # (saved on push to main, so it is measured on the same runner class); the
+  # committed tests/e2e/perf/baseline.json is only a fallback when the cache is
+  # empty. With no baseline at all the job still runs and reports count budgets.
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-perf:
+    name: E2E Perf Budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: frontend-bundle
+    permissions:
+      contents: read
+      pull-requests: write # Post PR comment
+    env:
+      PERF_BUDGET_BLOCKING: '0'
+      PERF_RUNS: '3'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd web-app && bun install --frozen-lockfile
+          cd ../tests/e2e && bun install --frozen-lockfile
+
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        run: buf generate proto
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+      - name: Build web UI
+        run: bun run build
+        working-directory: web-app
+
+      - name: Copy web UI to dist
+        run: cp -r web-app/out server/web/dist
+
+      - name: Build Go binary
+        run: go build -o stapler-squad .
+
+      - name: Install tmux (fixture seeds real sessions)
+        run: command -v tmux >/dev/null || sudo apt-get install -y tmux
+
+      - name: Install Playwright browsers
+        run: |
+          cd tests/e2e
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
+
+      # Never fails the job: the spec hard-fails on its own budgets, but timing is
+      # runner-dependent. Blocking decisions are made by perf-budget.js below.
+      - name: Run perf project
+        id: perf
+        continue-on-error: true
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+        run: cd tests/e2e && timeout 35m npx playwright test --project=perf
+
+      - name: Assert perf results exist (blocking mode only)
+        if: env.PERF_BUDGET_BLOCKING == '1'
+        run: |
+          test -f tests/e2e/test-results/perf-results.json || { echo "perf-results.json was not produced" >&2; exit 1; }
+
+      - name: Upload perf results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: perf-results
+          path: tests/e2e/test-results/perf-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Restore perf baseline
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: benchmarks/e2e/perf-baseline.json
+          key: bench-e2e-perf-
+          restore-keys: |
+            bench-e2e-perf-
+
+      - name: Compare against baseline and check count budgets
+        id: gate
+        run: |
+          BASELINE=benchmarks/e2e/perf-baseline.json
+          [ -f "$BASELINE" ] || BASELINE=tests/e2e/perf/baseline.json
+          [ -f "$BASELINE" ] || BASELINE=""
+          node tools/ci-gates/perf-budget.js \
+            --results tests/e2e/test-results/perf-results.json \
+            ${BASELINE:+--baseline "$BASELINE"} \
+            --out-md perf-comment.md >/dev/null
+          cat perf-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('perf-comment.md')) return;
+            const body = fs.readFileSync('perf-comment.md', 'utf8');
+            const marker = '<!-- benchmark-perf-budget -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Save perf baseline (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('tests/e2e/test-results/perf-results.json') != ''
+        run: |
+          mkdir -p benchmarks/e2e
+          cp tests/e2e/test-results/perf-results.json benchmarks/e2e/perf-baseline.json
+
+      - name: Persist perf baseline to cache (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('tests/e2e/test-results/perf-results.json') != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: benchmarks/e2e/perf-baseline.json
+          key: bench-e2e-perf-${{ github.run_id }}

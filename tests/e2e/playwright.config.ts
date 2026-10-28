@@ -36,6 +36,33 @@ function webkitMobileProjects() {
 const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
 
+/**
+ * Frontend-responsiveness perf project (Story 1.1.3). Registered only when explicitly selected
+ * (`--project=perf` or PW_PERF=1): Playwright runs every registered project when none is named, and a
+ * 5-run, 4x-throttled, 20-session scenario cannot share a worker with other specs (global 30 s timeout,
+ * polluted timings).
+ */
+function perfProjects() {
+  const selected = process.env.PW_PERF === '1' || /--project[= ]perf(\s|$)/.test(process.argv.join(' '));
+  if (!selected) return [];
+  return [
+    {
+      name: 'perf',
+      testMatch: '**/perf/**/*.spec.ts',
+      timeout: 600000,
+      retries: 0,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1600, height: 900 },
+        // 4x CPU throttle on a 20-session fixture blows past the global 10 s / 15 s action and navigation budgets.
+        actionTimeout: 90000,
+        navigationTimeout: 180000,
+        launchOptions: { args: ['--use-gl=swiftshader', '--disable-gpu-sandbox'] },
+      },
+    },
+  ];
+}
+
 export default defineConfig({
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',
@@ -55,8 +82,8 @@ export default defineConfig({
     timeout: 5000,
   },
 
-  // Run tests sequentially
-  fullyParallel: false,
+  // --shard balances by individual test, not whole file; workers:1 below is unchanged.
+  fullyParallel: true,
 
   // Retry failed tests once
   retries: 1,
@@ -142,7 +169,7 @@ export default defineConfig({
     },
     {
       name: 'chromium',
-      testIgnore: '**/mobile-webkit.spec.ts',
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**'],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -187,7 +214,7 @@ export default defineConfig({
       //   if (typeof WebGL2RenderingContext !== 'undefined')
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
-      testIgnore: '**/mobile-webkit.spec.ts',
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**'],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -195,6 +222,7 @@ export default defineConfig({
         },
       },
     },
+    ...perfProjects(),
     ...webkitMobileProjects(),
   ],
 });

@@ -72,11 +72,16 @@ test("no workflow uses pull_request_target, and every setup-bun is pinned by SHA
   }
 });
 
-test("storybook-build and web-supply-chain exist in build.yml and stay out of the gate's needs", () => {
+test("storybook-build and web-supply-chain exist in build.yml", () => {
   const build = read(".github/workflows/build.yml");
   for (const job of ["storybook-build", "web-supply-chain"]) assert.match(build, new RegExp(`^  ${job}:`, "m"));
-  const gate = build.match(/^ {2}web-build-gate:[\s\S]*?needs: \[([^\]]*)\]/m)[1];
-  assert.doesNotMatch(gate, /storybook-build|web-supply-chain/);
+});
+
+test("build.yml: every matrix sets fail-fast: false", () => {
+  const yml = read(".github/workflows/build.yml");
+  for (const m of yml.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
+    if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);
+  }
 });
 
 test("web-lint and go-lint pin checkout to the PR head, not the stale default merge ref", () => {

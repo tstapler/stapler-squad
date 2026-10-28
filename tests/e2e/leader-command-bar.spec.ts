@@ -22,6 +22,8 @@ async function gotoHome(page: Page): Promise<void> {
   await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
   // The leader listener is attached in an effect; wait for the bar's readiness marker.
   await page.waitForSelector('body[data-command-bar-ready="true"]');
+  // The Windows group registers from the page's effects, which can land after the layout-level bar is ready.
+  await expect(page.getByRole('tablist', { name: 'Window switcher' })).toBeVisible();
 }
 
 const bar = (page: Page) => page.getByRole('dialog', { name: 'Command bar' });
