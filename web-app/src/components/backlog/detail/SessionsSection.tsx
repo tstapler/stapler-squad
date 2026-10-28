@@ -2,8 +2,10 @@
 // +feature: backlog:session-steer
 
 import { useEffect, useRef, useState } from "react";
+import type { Session } from "@/gen/session/v1/types_pb";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
+import { useAnalytics } from "@/lib/analytics";
 import { classifySessionKind, isSteerable, type SessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay, resolveExecutorProvenance } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -11,6 +13,7 @@ import { useShowMore } from "@/lib/hooks/useShowMore";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
+import { JumpToSessionPanel } from "./JumpToSessionPanel";
 import { JulesStatusBadge, type JulesSessionPhase } from "../JulesStatusBadge";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./SessionsSection.css";
@@ -90,6 +93,14 @@ export interface SessionsSectionProps {
    * unaffected.
    */
   authReconnectRequired?: boolean;
+  /**
+   * Fetches the full Session proto by id, for JumpToSessionPanel's real
+   * inline terminal. Optional (defaults to a no-op) so the many existing
+   * SessionsSection unit tests that predate this prop don't all need
+   * updating just to satisfy the type — the real caller (BacklogItemDetail)
+   * always supplies useSessionService's getSession.
+   */
+  getSession?: (id: string) => Promise<Session | null>;
 }
 
 const SHOW_MORE_CAP = 5;
@@ -114,7 +125,9 @@ export function SessionsSection({
   onSteerSession,
   steeringSessionId,
   authReconnectRequired = false,
+  getSession = async () => null,
 }: SessionsSectionProps) {
+  const { track } = useAnalytics();
   const { visible, hasMore, remaining, showAll } = useShowMore(
     item.id,
     "sessions",
@@ -178,6 +191,12 @@ export function SessionsSection({
     setSteerError(null);
     try {
       await onSteerSession(s, message);
+      track({
+        name: "backlog_steer_session",
+        category: "user_action",
+        component: "SessionsSection",
+        labels: { role: s.role },
+      });
       clearSteerDraft(s.sessionId);
       setOpenSteerFor(null);
       steerToggleRefs.current[s.sessionId]?.focus();
@@ -239,6 +258,11 @@ export function SessionsSection({
       defaultExpanded={defaultExpanded}
     >
       <div className={styles.section}>
+        <JumpToSessionPanel
+          linkedSessions={item.linkedSessions}
+          backlogItemId={item.id}
+          getSession={getSession}
+        />
         {/* Story 4.1.4: synthetic-session rows (Collapsible + SessionDiagnosticPanel)
             get their own local CollapsibleGroup, deliberately NOT the page-level
             CollapsibleGroup BacklogItemDetail.tsx wraps every top-level sibling
@@ -362,6 +386,9 @@ export function SessionsSection({
                         "work" for this role since it predates Jules, so this
                         guard is explicit rather than relying on isSynthetic. */}
                     {!isSynthetic && !isJulesWork && (
+                      // Opens the composer disclosure, not the steer action itself —
+                      // the real action is tracked where handleSteerSubmit calls track().
+                      // analytics-exempt
                       <button
                         type="button"
                         ref={(el) => {
@@ -393,6 +420,9 @@ export function SessionsSection({
                         onDeleteSession(s);
                       }}
                     >
+                      {/* The actual delete is tracked by the caller (handleDeleteSession
+                          in BacklogItemDetail.tsx already calls track()). */}
+                      {/* analytics-exempt */}
                       {deletingSessionId === s.sessionId ? "…" : "Delete"}
                     </button>
                   </div>
@@ -437,6 +467,9 @@ export function SessionsSection({
                         aria-busy={steeringSessionId === s.sessionId}
                         data-testid={`session-steer-submit-${s.sessionId}`}
                       >
+                        {/* handleSteerSubmit (above) calls track() itself on success —
+                            not visible to this rule across the function boundary. */}
+                        {/* analytics-exempt */}
                         {steeringSessionId === s.sessionId ? "Sending…" : "Send"}
                       </button>
                       <button
@@ -445,6 +478,8 @@ export function SessionsSection({
                         onClick={handleSteerCancel}
                         data-testid={`session-steer-cancel-${s.sessionId}`}
                       >
+                        {/* Closes the composer without taking any action. */}
+                        {/* analytics-exempt */}
                         Cancel
                       </button>
                       {steerError && (
@@ -531,6 +566,8 @@ export function SessionsSection({
         </CollapsibleGroup>
 
         {hasMore && (
+          // View-only disclosure, no tracked event.
+          // analytics-exempt
           <button
             type="button"
             className={sectionStyles.showMoreButton}

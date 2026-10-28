@@ -16,6 +16,12 @@ export interface StressTestMetrics {
   elapsed: number;
 }
 
+const TEST_STATUS_TESTID = 'test-status';
+const MS_UNIT = 'ms';
+const BYTES_PER_KB = 1024;
+const BYTES_PER_MB = BYTES_PER_KB * BYTES_PER_KB;
+const BYTES_PER_GB = BYTES_PER_KB * BYTES_PER_KB * BYTES_PER_KB;
+
 /**
  * Navigate to stress test page and wait for terminal to initialize
  */
@@ -25,7 +31,7 @@ export async function setupStressTestPage(page: Page): Promise<void> {
   await page.waitForSelector('[data-testid="start-test"]', { timeout: 5000 });
 
   // Verify page is ready
-  await expect(page.getByTestId('test-status')).toHaveText('idle');
+  await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('idle');
 }
 
 /**
@@ -41,7 +47,7 @@ export async function selectPreset(page: Page, preset: string): Promise<void> {
  */
 export async function startTest(page: Page): Promise<void> {
   await page.getByTestId('start-test').click();
-  await expect(page.getByTestId('test-status')).toHaveText('running', { timeout: 2000 });
+  await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('running', { timeout: 2000 });
 }
 
 /**
@@ -51,7 +57,7 @@ export async function stopTest(page: Page): Promise<void> {
   const stopButton = page.getByTestId('stop-test');
   if (await stopButton.isEnabled()) {
     await stopButton.click();
-    await expect(page.getByTestId('test-status')).toHaveText('completed', { timeout: 5000 });
+    await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('completed', { timeout: 5000 });
   }
 }
 
@@ -59,7 +65,7 @@ export async function stopTest(page: Page): Promise<void> {
  * Wait for test to complete naturally
  */
 export async function waitForTestCompletion(page: Page, timeoutMs: number = 60000): Promise<void> {
-  await expect(page.getByTestId('test-status')).toHaveText('completed', { timeout: timeoutMs });
+  await expect(page.getByTestId(TEST_STATUS_TESTID)).toHaveText('completed', { timeout: timeoutMs });
 }
 
 /**
@@ -78,10 +84,10 @@ export async function getMetrics(page: Page): Promise<StressTestMetrics> {
 
   return {
     framesRendered: parseInt(framesRendered?.replace(/,/g, '') || '0'),
-    avgFrameTime: parseFloat(avgFrameTime?.replace('ms', '') || '0'),
-    p95FrameTime: parseFloat(p95FrameTime?.replace('ms', '') || '0'),
-    p99FrameTime: parseFloat(p99FrameTime?.replace('ms', '') || '0'),
-    maxFrameTime: parseFloat(maxFrameTime?.replace('ms', '') || '0'),
+    avgFrameTime: parseFloat(avgFrameTime?.replace(MS_UNIT, '') || '0'),
+    p95FrameTime: parseFloat(p95FrameTime?.replace(MS_UNIT, '') || '0'),
+    p99FrameTime: parseFloat(p99FrameTime?.replace(MS_UNIT, '') || '0'),
+    maxFrameTime: parseFloat(maxFrameTime?.replace(MS_UNIT, '') || '0'),
     peakMemory: parseBytes(peakMemory || '0'),
     memoryGrowthRate: parseBytes(memoryGrowth?.replace('/s', '') || '0'),
     bytesGenerated: parseBytes(bytesGenerated || '0'),
@@ -100,9 +106,9 @@ function parseBytes(str: string): number {
   const unit = (match[2] || 'B').toUpperCase();
 
   switch (unit) {
-    case 'GB': return value * 1024 * 1024 * 1024;
-    case 'MB': return value * 1024 * 1024;
-    case 'KB': return value * 1024;
+    case 'GB': return value * BYTES_PER_GB;
+    case 'MB': return value * BYTES_PER_MB;
+    case 'KB': return value * BYTES_PER_KB;
     default: return value;
   }
 }
@@ -115,7 +121,7 @@ function parseTime(str: string): number {
   if (!match) return 0;
 
   const value = parseFloat(match[1]);
-  const unit = (match[2] || 'ms').toLowerCase();
+  const unit = (match[2] || MS_UNIT).toLowerCase();
 
   return unit === 's' ? value * 1000 : value;
 }
@@ -153,7 +159,7 @@ export function assertFrameRate(metrics: StressTestMetrics, targetFps: number, t
 /**
  * Assert no memory leaks (growth rate under threshold)
  */
-export function assertNoMemoryLeak(metrics: StressTestMetrics, maxGrowthBytesPerSec: number = 1024 * 1024): void {
+export function assertNoMemoryLeak(metrics: StressTestMetrics, maxGrowthBytesPerSec: number = BYTES_PER_MB): void {
   expect(metrics.memoryGrowthRate).toBeLessThan(maxGrowthBytesPerSec);
 }
 
@@ -214,7 +220,7 @@ export function analyzeMemoryTrend(snapshots: number[]): {
   const growthRate = totalGrowth / durationSec;
 
   // Consider it a leak if memory consistently grows more than 1MB/sec
-  const isLeak = growthRate > 1024 * 1024;
+  const isLeak = growthRate > BYTES_PER_MB;
 
   return {
     startMemory,

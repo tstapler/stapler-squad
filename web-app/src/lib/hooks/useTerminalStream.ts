@@ -2,7 +2,8 @@
 
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import type { TerminalData, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
+import { TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
@@ -13,6 +14,7 @@ import { useTerminalFlowControl, type ResizeOptions } from "./useTerminalFlowCon
 import { useTerminalMetrics } from "./useTerminalMetrics";
 import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
+import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
 
 interface ScrollbackMetadata {
   hasMore: boolean;
@@ -383,12 +385,12 @@ export function useTerminalStream({
         includeEscapes: true,
       });
 
-      if (targetCols !== undefined && targetRows !== undefined) {
+      if (targetCols !== undefined && targetRows !== undefined && isUsableTerminalSize(targetCols, targetRows)) {
         currentPaneReq.targetCols = targetCols;
         currentPaneReq.targetRows = targetRows;
         console.log(`[useTerminalStream] Sending handshake with dimensions: ${targetCols}x${targetRows}`);
       } else {
-        console.warn(`[useTerminalStream] No terminal dimensions available for handshake`);
+        console.warn(`[useTerminalStream] No usable terminal dimensions for handshake (${targetCols}x${targetRows})`);
       }
 
       messageQueueRef.current.push(
@@ -656,6 +658,7 @@ export function useTerminalStream({
       handleError(err);
       setIsConnected(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- flowControl is a fresh object each render; kept so connect's identity churn is unchanged
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput, onAppScrollback,
       onAltScreenActiveHint, flowControl, metrics, handleError, initialCols, initialRows, onInputDropped, clearConnectTimeout]);
 

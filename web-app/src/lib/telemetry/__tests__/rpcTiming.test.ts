@@ -1,5 +1,5 @@
 import { trace } from "@opentelemetry/api";
-import { createRpcTimingInterceptor } from "../rpcTiming";
+import { createRpcTimingInterceptor, createSharedRpcTimingInterceptor, setRpcTimingSink } from "../rpcTiming";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
 
 // Minimal ConnectRPC request stub
@@ -140,5 +140,20 @@ describe("createRpcTimingInterceptor", () => {
       const measureDetail = performanceMock.measure.mock.calls[0][1].detail;
       expect(measureDetail.queueDelayMs).toBeUndefined();
     });
+  });
+});
+
+describe("shared rpc timing sink", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("is a no-op until a sink is registered, then forwards rpc events to it", async () => {
+    const interceptor = createSharedRpcTimingInterceptor();
+    await callInterceptor(interceptor, "ListShells", false);
+
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    await callInterceptor(interceptor, "ListShells", false);
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track.mock.calls[0][0]).toMatchObject({ name: "rpc.ListShells", category: "rpc" });
   });
 });

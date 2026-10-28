@@ -2,9 +2,10 @@
 
 import { useEffect } from "react";
 import { lazyComponent } from "@/lib/lazy";
-import { Session } from "@/gen/session/v1/types_pb";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionVcsProvider } from "@/lib/contexts/SessionVcsContext";
+import { useSessionDetailActivity } from "./useSessionDetailActivity";
 import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
@@ -34,14 +35,7 @@ const SessionDetailView = lazyComponent(
 
 export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts" | "summary";
 
-interface SessionDetailProps {
-  session: Session;
-  onClose: () => void;
-  onFullscreenChange?: (isFullscreen: boolean) => void;
-  onTabChange?: (tab: SessionDetailTab) => void;
-  initialTab?: SessionDetailTab;
-  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
-  embedded?: boolean;
+interface SessionDetailNavigation {
   onNext?: () => void;
   onPrevious?: () => void;
   showNavigation?: boolean;
@@ -57,12 +51,24 @@ interface SessionDetailProps {
   onBack?: () => void;
   /** Whether back navigation is available. */
   canGoBack?: boolean;
+}
+
+interface SessionDetailProps extends SessionDetailNavigation {
+  session: Session;
+  onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
+  initialTab?: SessionDetailTab;
+  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
+  embedded?: boolean;
   /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
   backlogItemId?: string;
   /** Resolved backlog-origin index entry for this session, if dispatched by backlog automation. Drives the header badge. */
   backlogEntry?: BacklogIndexEntry;
-  /** Whether this session's pane currently has focus — forwarded to SessionVcsProvider. Defaults to true. */
+  /** Whether this session's pane currently has focus. Defaults to true. */
   isActive?: boolean;
+  /** Window is the visible one. Defaults to true. Gates polling, keys and measuring via useSessionDetailActivity. */
+  windowActive?: boolean;
 }
 
 export function SessionDetail({
@@ -86,7 +92,9 @@ export function SessionDetail({
   backlogItemId,
   backlogEntry,
   isActive,
+  windowActive,
 }: SessionDetailProps) {
+  const { pollMode } = useSessionDetailActivity({ isFocused: isActive ?? true, windowActive: windowActive ?? true });
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
   const sessionsError = useAppSelector(selectSessionsError);
@@ -138,6 +146,7 @@ export function SessionDetail({
       canGoBack={canGoBack}
       backlogItemId={backlogItemId}
       isActive={isActive}
+      windowActive={windowActive}
       backlogEntry={backlogEntry}
     />
   );
@@ -145,7 +154,7 @@ export function SessionDetail({
   // Read-only is decided from session.hidden (the server enforces the same rule, Story 5.1).
   // The wrapper exists only for hidden sessions so a visible session's layout is untouched.
   return (
-    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} isActive={isActive}>
+    <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()} pollMode={pollMode}>
       {session.hidden ? (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", minHeight: 0 }}>
           <ReadOnlyBanner replyCardPresent={pendingQuestion !== undefined} />

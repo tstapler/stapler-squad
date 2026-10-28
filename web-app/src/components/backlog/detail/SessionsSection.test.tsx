@@ -5,6 +5,9 @@ import type { SessionsSectionProps } from "./SessionsSection";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 
 jest.mock("../SessionMonitor", () => ({ SessionMonitor: () => null }));
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
 
 beforeEach(() => {
   localStorage.clear();
