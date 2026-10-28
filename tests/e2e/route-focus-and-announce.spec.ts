@@ -30,6 +30,14 @@ test.describe('route focus and announcements (Next baseline)', () => {
     await shell.navLink(/history/i).click({ force: true });
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
+    if (isBunBuild()) {
+      // The Bun RouteAnnouncer (role=status, ADR-001) clears its text after ~1s, so address it by
+      // test id rather than by the text it carries.
+      const announcer = page.getByTestId('route-announcer');
+      await expect(announcer).toHaveText(HISTORY_TITLE);
+      await expect(announcer).toHaveAttribute('role', 'status');
+      return;
+    }
     // Next's own announcer is the only live region that carries the title.
     await expect(shell.liveRegions.filter({ hasText: HISTORY_TITLE })).toHaveCount(1);
     const announcer = shell.liveRegions.filter({ hasText: HISTORY_TITLE }).first();
@@ -92,8 +100,7 @@ test.describe('route focus and announcements (Bun only)', () => {
     await shell.navLink(/history/i).click({ force: true });
     await expect(page).toHaveTitle(HISTORY_TITLE);
 
-    const announcer = shell.liveRegions.filter({ hasText: HISTORY_TITLE }).first();
-    await expect(announcer).toHaveAttribute('role', 'status');
+    await expect(page.getByTestId('route-announcer')).toHaveAttribute('role', 'status');
     await expect
       .poll(() => page.evaluate(() => document.activeElement === document.getElementById('main-content')))
       .toBe(true);

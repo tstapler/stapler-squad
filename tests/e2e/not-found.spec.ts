@@ -16,6 +16,7 @@ const MISSING_PATH = '/nonexistent';
 
 test.describe('not found (Next baseline)', () => {
   test('an unknown path answers 200 and ends on the recorded page', async ({ page }) => {
+    test.skip(isBunBuild(), 'Bun renders a dedicated not-found view at the unknown path (covered by the Bun-only block below) instead of landing on /');
     await new AppShellPage(page).skipOnboarding();
     const observed = await measureNotFound(page);
     expect(observed).toEqual(baseline.notFound);

@@ -79,6 +79,7 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
   });
 
   test('font variable classes survive every theme', async ({ browser }) => {
+    test.skip(isBunBuild(), 'Bun vendors fonts as global --font-* properties, not <html> classes; the Bun-only block below covers it');
     const fonts = new Map<string, string[]>();
     for (const theme of THEMES) {
       const context = await browser.newContext();
@@ -101,7 +102,10 @@ test.describe('theme FOUC prevention (Next baseline)', () => {
     });
     expect(facts.classes).toContain('e2e-custom-theme');
     expect(facts.style).toContain('--e2e-probe');
-    expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--e2e-probe'))).toBe('42px');
+    // Only the DOMContentLoaded snapshot is the first-paint contract: ThemeContext later confirms
+    // the theme against /api/themes and, for this unregistered id, clears the override, so a live
+    // read after load races that fetch (the Bun build wins the race, Next hydrates slower).
+    expect(facts.style).toContain('42px');
   });
 
   test('an unknown stored theme degrades to clean and the page stays usable', async ({ browser }) => {
