@@ -363,69 +363,6 @@ jobs:
           key: bench-frontend-throughput-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Lighthouse CI: Advisory performance audit (non-blocking).
-  # Runs Core Web Vitals and performance audits; never blocks merge.
-  # ─────────────────────────────────────────────────────────────────────────────
-  lighthouse:
-    name: Lighthouse CI (Advisory)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: frontend-bundle
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          submodules: true
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: cd web-app && bun install --frozen-lockfile
-
-      - name: Install buf
-        run: |
-          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
-            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
-
-      - name: Generate protobuf code
-        run: buf generate proto
-
-      # Same pattern as .github/actions/prepare/action.yml's "Cache Next.js
-      # build cache" step — see its comment for why the key includes both the
-      # lockfile and src hash, with restore-keys fallbacks.
-      - name: Cache Next.js build cache
-        if: env.WEB_BUILD != 'bun'
-        uses: actions/cache@v4
-        with:
-          path: web-app/.next/cache
-          key: nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-${{ hashFiles('web-app/src/**') }}
-          restore-keys: |
-            nextjs-lighthouse-${{ runner.os }}-${{ hashFiles('web-app/bun.lock') }}-
-            nextjs-lighthouse-${{ runner.os }}-
-
-      - name: Build Next.js app
-        run: cd web-app && bun run build
-
-      - name: Run Lighthouse CI
-        run: cd web-app && bunx @lhci/cli autorun
-        continue-on-error: true  # Advisory only — never blocks merge
-
-      - name: Upload Lighthouse results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: lighthouse-results
-          path: web-app/.lighthouseci/
-          retention-days: 14
-
-  # ─────────────────────────────────────────────────────────────────────────────
   # E2E Latency: Playwright RPC timing benchmarks.
   # Measures ListSessions TTFB, total RPC time, and React render time separately.
   # On push to main: saves updated baseline to the "bench-e2e-latency-" cache.
