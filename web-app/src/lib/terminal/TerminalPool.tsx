@@ -135,6 +135,8 @@ interface PoolEntry {
   onScrollModeChangeRef: React.RefObject<((mode: ScrollMode) => void) | null>;
   scrollGesture: ScrollGestureProps;
   stableOnScrollModeChange: (mode: ScrollMode) => void;
+  /** False while the consumer's window is hidden (keep-alive): the terminal skips fit and yields its WebGL slot. Docking is unaffected. */
+  windowActive: boolean;
 }
 
 interface TerminalPoolContextValue {
@@ -211,6 +213,7 @@ function createEntry(sessionId: string): PoolEntry {
     onScrollModeChangeRef,
     scrollGesture,
     stableOnScrollModeChange: (mode) => onScrollModeChangeRef.current?.(mode),
+    windowActive: true,
   };
 }
 
@@ -363,6 +366,7 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
             onScrollModeChange={entry.stableOnScrollModeChange}
             isAltScreenActive={entry.stableIsAltScreenActive}
             onAltScreenScrollUp={entry.stableOnAltScreenScrollUp}
+            windowActive={entry.windowActive}
           />
         </Suspense>,
         entry.hostEl
@@ -408,15 +412,25 @@ export interface UsePooledTerminalResult {
  * non-zero size AND `entry.handleRef` is populated (see usePooledTerminal's
  * docking effect for why neither is guaranteed on the frame docking
  * happens). Returns a cleanup function that cancels any pending retry.
+ *
+ * Stops polling (no rAF, no rect reads) while the anchor is hidden
+ * (ResizeObserver reports 0x0, i.e. `display:none`) or detached, and re-arms
+ * when the observer next reports a real size. FIT_ON_SHOW_MAX_ATTEMPTS still
+ * caps the visible-but-not-ready polling.
  */
 function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): () => void {
   let settled = false;
   let rafId: number | null = null;
   let attempts = 0;
+  let hidden = false;
 
   const tryFit = () => {
     rafId = null;
-    if (settled) return;
+    if (settled || hidden) return;
+    if (!anchor.isConnected) {
+      hidden = true;
+      return;
+    }
     const handle = entry.handleRef.current;
     const { width, height } = anchor.getBoundingClientRect();
     if (handle && width > 0 && height > 0) {
@@ -437,11 +451,20 @@ function fitOnShow(entry: PoolEntry, anchor: HTMLElement, sessionId: string): ()
   // Anchor size changing (including its first real layout, which fires once
   // even if it never changes again) is exactly the signal that a
   // previously-failed fit attempt might now succeed.
-  const observer = new ResizeObserver(() => {
-    if (rafId === null) rafId = requestAnimationFrame(tryFit);
+  const observer = new ResizeObserver((entries) => {
+    const last = entries[entries.length - 1];
+    hidden = !!last && last.contentRect.width === 0 && last.contentRect.height === 0;
+    if (hidden) {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      return;
+    }
+    if (rafId === null && !settled) rafId = requestAnimationFrame(tryFit);
   });
   observer.observe(anchor);
-  rafId = requestAnimationFrame(tryFit);
+  if (!hidden && rafId === null) rafId = requestAnimationFrame(tryFit);
 
   return () => {
     settled = true;
@@ -539,6 +562,8 @@ export interface PooledTerminalCallbacks {
   /** Scroll/gesture settings + callbacks (see ScrollGestureProps). Primitive changes re-render the pooled terminal. */
   scrollGesture?: ScrollGestureProps;
   onScrollModeChange?: (mode: ScrollMode) => void;
+  /** Defaults to true; false when the owning window is hidden (Story 4.1.3e). */
+  windowActive?: boolean;
 }
 
 /**
@@ -552,7 +577,7 @@ export interface PooledTerminalCallbacks {
 export function usePooledTerminalCallbacks(
   sessionId: string,
   isVisible: boolean,
-  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange }: PooledTerminalCallbacks
+  { onData, onResize, isAltScreenActive, onAltScreenScrollUp, scrollGesture, onScrollModeChange, windowActive = true }: PooledTerminalCallbacks
 ): void {
   const pool = useTerminalPoolContext();
   // Entry must already exist -- usePooledTerminal (called earlier in the
@@ -587,6 +612,12 @@ export function usePooledTerminalCallbacks(
       if (entry.onScrollModeChangeRef.current === onScrollModeChange) entry.onScrollModeChangeRef.current = null;
     };
   }, [entry, onScrollModeChange]);
+
+  useEffect(() => {
+    if (entry.windowActive === windowActive) return;
+    entry.windowActive = windowActive;
+    pool.registerEntry();
+  }, [entry, pool, windowActive]);
 
   // Callbacks flow through the source ref; only the primitives need a re-render of <XtermTerminal>.
   const scrollOverride = scrollGesture?.scrollOverride;

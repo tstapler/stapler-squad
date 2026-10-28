@@ -220,7 +220,9 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
       }
 
       // Also support 'n' key when not in an input
-      if (e.key === "n" && !isInputElement(e.target as Element)) {
+      // A diff pane owns bare 'n' (next change) while focused.
+      const inDiffPane = (e.target as Element | null)?.closest?.('[data-context="diff"]') != null;
+      if (e.key === "n" && !isInputElement(e.target as Element) && !inDiffPane) {
         e.preventDefault();
         open();
       }

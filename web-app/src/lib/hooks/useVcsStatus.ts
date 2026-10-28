@@ -4,8 +4,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
+import { deferUnless } from "@/lib/api/requestPriority";
 import type { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
+import { pollIntervalMs, type PollMode } from "@/lib/hooks/pollMode";
 
 interface VcsCacheEntry {
   data: VCSStatus | null;
@@ -24,24 +26,68 @@ function getCached(sessionId: string): VcsCacheEntry | null {
   return null;
 }
 
+const vcsGeneration = new Map<string, number>();
+const vcsInflight = new Map<string, { promise: Promise<VcsCacheEntry>; focused: boolean }>();
+
+/**
+ * Resolve a session's VCS status through the shared cache and a shared in-flight
+ * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
+ * `force` skips a fresh cache hit and never joins an in-flight request, which may predate the write that prompted it.
+ * `focused` false marks the call deferred (Story 2.1.9); a focused caller never joins a deferred flight.
+ * Rejects on RPC failure; callers own error handling.
+ */
+export function fetchVcsEntry(sessionId: string, force = false, focused = true): Promise<VcsCacheEntry> {
+  if (!force) {
+    const cached = getCached(sessionId);
+    if (cached) return Promise.resolve(cached);
+  }
+  const existing = vcsInflight.get(sessionId);
+  if (!force && existing && (existing.focused || !focused)) return existing.promise;
+  const generation = (vcsGeneration.get(sessionId) ?? 0) + 1;
+  vcsGeneration.set(sessionId, generation);
+  const client = createClient(SessionService, getConnectTransport());
+  // Shared by several callers, so no single caller's signal may cancel it; each
+  // caller drops the result itself when its own signal has aborted.
+  // abort-signal-exempt
+  const promise: Promise<VcsCacheEntry> = client
+    .getVCSStatus({ id: sessionId }, deferUnless(focused))
+    .then((response) => {
+      const entry: VcsCacheEntry = {
+        data: response.vcsStatus ?? null,
+        error: response.error || null,
+        timestamp: Date.now(),
+      };
+      // A superseded (older) flight must not overwrite a newer forced result.
+      if (vcsGeneration.get(sessionId) === generation) vcsCache.set(sessionId, entry);
+      return entry;
+    })
+    .finally(() => {
+      if (vcsInflight.get(sessionId)?.promise === promise) vcsInflight.delete(sessionId);
+    });
+  vcsInflight.set(sessionId, { promise, focused });
+  return promise;
+}
+
+/** Drop a session's cached status (session deleted). */
+export function invalidateVcsEntry(sessionId: string): void {
+  vcsCache.delete(sessionId);
+}
+
+/** Test-only: clear the module cache and in-flight map. */
+export function resetVcsCacheForTests(): void {
+  vcsCache.clear();
+  vcsInflight.clear();
+  vcsGeneration.clear();
+}
+
 /**
  * Warm the VCS cache for a session without rendering anything.
  * Call from SessionDetail when a session is selected.
  */
 export async function prefetchVcsStatus(sessionId: string, baseUrl: string): Promise<void> {
-  if (getCached(sessionId)) return;
+  void baseUrl;
   try {
-    const client = createClient(SessionService, getConnectTransport());
-    // One-shot cache warm with no component lifecycle to cancel against;
-    // the TTL cache above (not a signal) is what stops this from
-    // compounding on rapid session switches.
-    // abort-signal-exempt
-    const response = await client.getVCSStatus({ id: sessionId });
-    vcsCache.set(sessionId, {
-      data: response.vcsStatus ?? null,
-      error: response.error || null,
-      timestamp: Date.now(),
-    });
+    await fetchVcsEntry(sessionId);
   } catch {
     // Prefetch failures are silent – the hook will retry on mount.
   }
@@ -62,7 +108,8 @@ interface UseVcsStatusResult {
 export function useVcsStatus(
   sessionId: string,
   baseUrl: string,
-  pollIntervalMs = 15_000
+  fastPollMs = 15_000,
+  pollMode: PollMode = "fast",
 ): UseVcsStatusResult {
   const hit = getCached(sessionId);
   const [data, setData] = useState<VCSStatus | null>(hit?.data ?? null);
@@ -96,15 +143,8 @@ export function useVcsStatus(
 
       const signal = startFetch();
       try {
-        const client = createClient(SessionService, getConnectTransport());
-        const response = await client.getVCSStatus({ id: sessionId }, { signal });
+        const entry = await fetchVcsEntry(sessionId, skipCache);
         if (signal.aborted) return;
-        const entry: VcsCacheEntry = {
-          data: response.vcsStatus ?? null,
-          error: response.error || null,
-          timestamp: Date.now(),
-        };
-        vcsCache.set(sessionId, entry);
         setData(entry.data);
         setError(entry.error);
       } catch (err) {
@@ -126,6 +166,8 @@ export function useVcsStatus(
 
   useEffect(() => {
     stoppedRef.current = false;
+    const intervalMs = pollIntervalMs(pollMode, fastPollMs, fastPollMs * 10);
+    if (intervalMs === null) return; // hidden window: the effect reruns and refetches on activation
     fetchVcs();
     const interval = setInterval(() => {
       if (stoppedRef.current) {
@@ -133,9 +175,9 @@ export function useVcsStatus(
         return;
       }
       if (!document.hidden) fetchVcs();
-    }, pollIntervalMs);
+    }, intervalMs);
     return () => clearInterval(interval);
-  }, [sessionId, baseUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, baseUrl, pollMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { data, loading, error, refetch: () => fetchVcs(true) };
 }

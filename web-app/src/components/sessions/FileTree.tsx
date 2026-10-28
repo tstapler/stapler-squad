@@ -482,11 +482,20 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     return () => ro.disconnect();
   }, []);
 
+  // Aborted on unmount so pending listFiles calls are cancelled and never set state afterwards.
+  const lifeRef = useRef(new AbortController());
+  useEffect(() => {
+    lifeRef.current = new AbortController();
+    const life = lifeRef.current;
+    return () => life.abort();
+  }, []);
+
   // Load a directory's children.
   const loadDirectory = useCallback(
     async (dirPath: string) => {
       if (loadingPathsRef.current.has(dirPath)) return;
 
+      const { signal } = lifeRef.current;
       loadingPathsRef.current.add(dirPath);
       setLoadingPaths(new Set(loadingPathsRef.current));
       setErrorPaths((prev) => {
@@ -500,8 +509,10 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           sessionId,
           dirPath === "." ? "." : dirPath,
           includeIgnored,
-          baseUrl
+          baseUrl,
+          signal
         );
+        if (signal.aborted) return;
         const nodes = (response.files || []).map(fileNodeToTreeNode);
 
         setDirContents((prev) => {
@@ -510,11 +521,12 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           return next;
         });
       } catch (err) {
+        if (signal.aborted) return;
         const msg = err instanceof Error ? err.message : "Failed to load directory";
         setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
       } finally {
         loadingPathsRef.current.delete(dirPath);
-        setLoadingPaths(new Set(loadingPathsRef.current));
+        if (!signal.aborted) setLoadingPaths(new Set(loadingPathsRef.current));
       }
     },
     [sessionId, baseUrl, includeIgnored]
@@ -533,17 +545,22 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     setRootLoading(true);
     setRootError(null);
 
-    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
+    // Per-run controller: cancels on unmount and when session/ignore settings change.
+    const ctrl = new AbortController();
+    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl, ctrl.signal)
       .then((response) => {
+        if (ctrl.signal.aborted) return;
         const nodes = (response.files || []).map(fileNodeToTreeNode);
         setDirContents(new Map([[".", nodes]]));
       })
       .catch((err) => {
+        if (ctrl.signal.aborted) return;
         setRootError(err instanceof Error ? err.message : "Failed to load files");
       })
       .finally(() => {
-        setRootLoading(false);
+        if (!ctrl.signal.aborted) setRootLoading(false);
       });
+    return () => ctrl.abort();
   }, [sessionId, baseUrl, includeIgnored]);
 
   // Debounced backend search: fires when searchTerm changes.
@@ -837,10 +854,11 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   const retryRoot = () => {
     setRootLoading(true);
     setRootError(null);
-    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl)
-      .then((response) => setDirContents(new Map([[".", (response.files || []).map(fileNodeToTreeNode)]])))
-      .catch((err) => setRootError(err instanceof Error ? err.message : "Failed to load files"))
-      .finally(() => setRootLoading(false));
+    const { signal } = lifeRef.current;
+    fetchDirectoryFiles(sessionId, ".", includeIgnored, baseUrl, signal)
+      .then((response) => !signal.aborted && setDirContents(new Map([[".", (response.files || []).map(fileNodeToTreeNode)]])))
+      .catch((err) => !signal.aborted && setRootError(err instanceof Error ? err.message : "Failed to load files"))
+      .finally(() => !signal.aborted && setRootLoading(false));
   };
   const showTreePending = usePendingDelay(rootLoading);
 

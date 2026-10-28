@@ -6,12 +6,17 @@ import "@/lib/files/__tests__/fixtures/mockCodeEditor";
 import { FilesTab } from "../FilesTab";
 
 jest.mock("@/lib/contexts/SessionVcsContext", () => ({
-  useSessionVcsContext: () => ({ status: null, diff: null, statusLoading: false, refreshStatus: jest.fn() }),
+  useSessionVcsContext: () => ({ status: null, diff: null, statusLoading: false, refreshStatus: jest.fn(), ensureDiff: jest.fn() }),
 }));
 jest.mock("../FileTree", () => ({
   FileTree: forwardRef(function FileTreeStub({ onFileSelect }: { onFileSelect: (p: string) => void }, ref) {
     useImperativeHandle(ref, () => ({ revealPath: jest.fn(), collapseAll: jest.fn() }));
-    return <button data-testid="pick" onClick={() => onFileSelect("pkg/pick.go")}>pick</button>;
+    return (
+      <>
+        {// analytics-exempt
+        <button data-testid="pick" onClick={() => onFileSelect("pkg/pick.go")}>pick</button>}
+      </>
+    );
   }),
 }));
 

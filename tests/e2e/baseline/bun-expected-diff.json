@@ -1,15 +1,8 @@
 {
   "meta": {
     "story": "7.11c",
-    "note": "Created from a local Bun ManualInstance run before PR 7b opened (plan Task 7.11c), per the 3-run/comparator procedure in Story 7.10 and Story 0.1's gate rule. Every entry below reproduced identically on the Next build run at the same commit, so none is a Bun-only regression; they are listed because tests/e2e/baseline/next-e2e-baseline.json (Task 0.1e, Phase 0/PR 0) has not been committed yet in this repo, so the real comparator cannot classify them as a shared baseline-'fail' and exclude them automatically. Remove entries once that baseline exists and the comparator confirms the same-run e2e-next job shows them too (Story 0.1's gate rule).",
+    "note": "Created from a local Bun ManualInstance run before PR 7b opened (plan Task 7.11c), per the 3-run/comparator procedure in Story 7.10 and Story 0.1's gate rule. Every entry below reproduced identically on the Next build run at the same commit, so none is a Bun-only regression; they are listed because tests/e2e/baseline/next-e2e-baseline.json (Task 0.1e, Phase 0/PR 0) has not been committed yet in this repo, so the real comparator cannot classify them as a shared baseline-'fail' and exclude them automatically. Remove entries once that baseline exists and the comparator confirms the same-run e2e-next job shows them too (Story 0.1's gate rule). The scroll-policy Up Next entry was removed: it passes on Bun in run 40539331462 (both chromium projects), and the list may only shrink.",
     "generatedFrom": "3 local runs on a Bun ManualInstance, PORT=62871, commit c5891c617 (post-merge of origin/main PR 6a)"
   },
-  "entries": [
-    {
-      "spec": "scroll-policy.spec.ts",
-      "test": "switching the Up Next tab leaves scroll and the history length unchanged",
-      "issue": "https://github.com/tstapler/stapler-squad/issues/1136",
-      "reason": "Fails identically on the Next build at the same commit; not caused by the Bun migration."
-    }
-  ]
+  "entries": []
 }

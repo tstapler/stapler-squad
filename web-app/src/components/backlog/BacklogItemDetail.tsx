@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { MouseEvent } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport, getWatchTransport } from "@/lib/api/transport";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { useBacklogService, mapBacklogItem } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
@@ -19,7 +19,7 @@ import { formatDate } from "@/lib/backlog/formatDate";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { getApiBaseUrl } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -148,7 +148,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession, updateSession } = useSessionService();
+  const { deleteSession, updateSession, getSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -425,10 +425,8 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
 
     const watchTerminal = async () => {
       try {
-        const transport = createConnectTransport({
-          baseUrl: getApiBaseUrl(),
-          interceptors: [createAuthInterceptor()],
-        });
+        // Server stream: the unary transport's default 30s deadline would kill it.
+        const transport = getWatchTransport();
         const client = createClient(BacklogService, transport);
         const stream = client.watchBacklogItems(
           { statusFilter: [], categoryFilter: [], afterSeq: 0n },
@@ -714,10 +712,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     let cancelled = false;
     (async () => {
       try {
-        const transport = createConnectTransport({
-          baseUrl: getApiBaseUrl(),
-          interceptors: [createAuthInterceptor()],
-        });
+        const transport = getConnectTransport();
         const client = createClient(SessionService, transport);
         const resp = await client.getJulesConfig({});
         if (cancelled || !resp.config) return;
@@ -1901,6 +1896,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             onSteerSession={handleSteerSession}
             steeringSessionId={steeringSessionId}
             authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
+            getSession={getSession}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />

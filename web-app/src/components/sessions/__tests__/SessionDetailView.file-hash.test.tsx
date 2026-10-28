@@ -35,13 +35,14 @@ jest.mock("../FilesTab", () => ({
   FilesTab: (props: {
     initialSelectedPath: string | null;
     urlActive?: boolean;
+    tabActive?: boolean;
     onSelectedPathChange: (p: string | null) => void;
   }) => (
-    <div>
+    <div data-tab-active={String(props.tabActive)}>
       <span data-testid="initial-path">{props.initialSelectedPath}</span>
       <span data-testid="url-active">{String(props.urlActive)}</span>
-      <button onClick={() => props.onSelectedPathChange("a/b.go")}>select-file</button>
-      <button onClick={() => props.onSelectedPathChange(null)}>clear-file</button>
+      <button onClick={() => props.onSelectedPathChange("a/b.go")}>{/* analytics-exempt */}select-file</button>
+      <button onClick={() => props.onSelectedPathChange(null)}>{/* analytics-exempt */}clear-file</button>
     </div>
   ),
 }));
@@ -63,6 +64,17 @@ const session = {
 
 installConsoleErrorSilencer();
 
+const renderView = (props: { isActive?: boolean; initialTab?: "files" } = {}) =>
+  render(
+    <SessionDetailView
+      session={session}
+      allSessions={[]}
+      actions={{} as ReturnType<typeof useSessionActions>}
+      onClose={jest.fn()}
+      {...props}
+    />,
+  );
+
 describe("SessionDetailView file-selection hash", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
@@ -70,8 +82,8 @@ describe("SessionDetailView file-selection hash", () => {
     window.history.replaceState(null, "", "/#file=a%2Fb.go");
     const props = { session, allSessions: [], actions: {} as ReturnType<typeof useSessionActions>, onClose: jest.fn() };
     const { unmount } = render(<SessionDetailView {...props} />);
-    expect(screen.getByTestId("initial-path").textContent).toBe("");
-    expect(screen.getByTestId("url-active").textContent).toBe("false");
+    // The Files tab mounts lazily, so a pane not opened on Files never sees the hash.
+    expect(screen.queryByTestId("initial-path")).toBeNull();
     unmount();
     render(<SessionDetailView {...props} initialTab="files" isActive={false} />);
     expect(screen.getByTestId("initial-path").textContent).toBe("");
@@ -81,15 +93,7 @@ describe("SessionDetailView file-selection hash", () => {
   it("seeds FilesTab from #file= and never writes the hash itself", () => {
     window.history.replaceState(null, "", "/#file=a%2Fb.go");
     const replaceState = jest.spyOn(window.history, "replaceState");
-    render(
-      <SessionDetailView
-        session={session}
-        allSessions={[]}
-        actions={{} as ReturnType<typeof useSessionActions>}
-        onClose={jest.fn()}
-        initialTab="files"
-      />,
-    );
+    renderView({ initialTab: "files" });
     expect(screen.getByTestId("initial-path").textContent).toBe("a/b.go");
     expect(screen.getByTestId("url-active").textContent).toBe("true");
 
@@ -98,5 +102,34 @@ describe("SessionDetailView file-selection hash", () => {
     expect(replaceState).not.toHaveBeenCalled();
     expect(window.location.hash).toBe("#file=a%2Fb.go");
     replaceState.mockRestore();
+  });
+
+  it("sessionDetailView_should_NotMountFilesTab_When_FilesTabNeverOpened", () => {
+    renderView();
+    expect(screen.queryByTestId("initial-path")).toBeNull();
+  });
+
+  it("sessionDetailView_should_MountFilesTabOnceAndRetainIt_When_FilesTabOpenedThenLeft", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
+    renderView();
+    expect(screen.queryByTestId("initial-path")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /files/i }));
+    // Opened by click (not initialTab), so the hash is not adopted.
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
+    fireEvent.click(screen.getByRole("tab", { name: /info/i }));
+    expect(screen.getByTestId("initial-path")).toBeTruthy();
+  });
+
+  it("sessionDetailView_should_PassTabActiveFalse_When_FilesTabRetainedButHidden", () => {
+    const { container } = renderView({ initialTab: "files" });
+    expect(container.querySelector("[data-tab-active]")?.getAttribute("data-tab-active")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: /info/i }));
+    expect(container.querySelector("[data-tab-active]")?.getAttribute("data-tab-active")).toBe("false");
+  });
+
+  it("sessionDetailView_should_NotSeedFilesSelectionFromHash_When_PaneNotFocused", () => {
+    window.history.replaceState(null, "", "/#file=a%2Fb.go");
+    renderView({ isActive: false, initialTab: "files" });
+    expect(screen.getByTestId("initial-path").textContent).toBe("");
   });
 });
