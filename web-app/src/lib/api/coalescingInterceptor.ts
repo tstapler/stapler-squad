@@ -3,6 +3,7 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import type { Interceptor, UnaryRequest, UnaryResponse } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { buildDedupeKey, isCoalescible } from "./idempotentMethods";
+import { priorityKey } from "./requestPriority";
 
 /** The shared request runs on its own deadline: no single caller's signal may cancel the others. */
 const SHARED_TIMEOUT_MS = 30_000;
@@ -140,7 +141,8 @@ export function createCoalescingInterceptor(opts: { isEnabled: () => boolean }):
     if (!opts.isEnabled()) return unaryNext(unary);
     if (unary.signal.aborted) throw canceled();
 
-    const key = buildDedupeKey(unary.method, unary.message);
+    // A critical caller must not join a flight that is waiting in the deferred queue.
+    const key = `${buildDedupeKey(unary.method, unary.message)}|${unary.contextValues.get(priorityKey) ?? ""}`;
     let flight = flights.get(key);
     const stale =
       flight &&

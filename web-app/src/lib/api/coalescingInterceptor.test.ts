@@ -1,6 +1,7 @@
 import { create } from "@bufbuild/protobuf";
 import { Code, ConnectError, createContextValues } from "@connectrpc/connect";
 import type { UnaryRequest, UnaryResponse } from "@connectrpc/connect";
+import { priorityKey } from "./requestPriority";
 import {
   SessionService,
   GetFeatureFlagsRequestSchema,
@@ -52,11 +53,24 @@ const vcsRes = (r: UnaryRequest): UnaryResponse =>
   ({ stream: false, method: r.method, service: r.service, header: new Headers(), trailer: new Headers(),
     message: create(GetVCSStatusResponseSchema, {}) }) as unknown as UnaryResponse;
 
+const withPriority = (r: UnaryRequest, priority: "critical" | "deferred"): UnaryRequest => {
+  r.contextValues.set(priorityKey, priority);
+  return r;
+};
+
 const flagsOf = (r: UnaryResponse) => r.message as unknown as { flags: { name: string }[] };
 
 beforeEach(() => resetCoalescingForTest());
 
 describe("coalescingInterceptor", () => {
+  it("coalesce_should_NotMergeCriticalCallerIntoDeferredFlight_When_PrioritiesDiffer", () => {
+    const { calls, run } = setup();
+    void run(withPriority(flagsReq(), "deferred"));
+    void run(withPriority(flagsReq(), "critical"));
+    void run(withPriority(flagsReq(), "deferred"));
+    expect(calls).toHaveLength(2);
+  });
+
   it("coalesce_should_IssueExactlyOneFetch_When_14IdenticalGetFeatureFlagsStartInSameTick", async () => {
     const { calls, run } = setup();
     const results = Array.from({ length: 14 }, () => run(flagsReq()));

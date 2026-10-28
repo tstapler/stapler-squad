@@ -57,4 +57,17 @@ describe("useSessionVcs late session hydration", () => {
     await waitFor(() => expect(result.current.status).toEqual({ branch: "b" }));
     expect(mockGetVCSStatus).toHaveBeenCalledTimes(2);
   });
+
+  it("useSessionVcs_should_RefetchFresh_When_SessionHydratesAfterMountFetchSettled", async () => {
+    mockGetVCSStatus.mockResolvedValue({ vcsStatus: { branch: "old" }, error: "" });
+    const { result, rerender } = renderHook(() => useSessionVcs("s3", ""));
+    await waitFor(() => expect(result.current.statusLoading).toBe(false));
+    expect(mockGetVCSStatus).toHaveBeenCalledTimes(1);
+
+    mockState.sessions = [{ id: "s3", status: 1, updatedAt: { seconds: 100 } }];
+    mockGetVCSStatus.mockResolvedValue({ vcsStatus: { branch: "new" }, error: "" });
+    await act(async () => rerender());
+    await waitFor(() => expect(result.current.status).toEqual({ branch: "new" }));
+    expect(mockGetVCSStatus).toHaveBeenCalledTimes(2);
+  });
 });
