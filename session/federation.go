@@ -14,6 +14,10 @@ import (
 // Ed25519 signature from an enrolled host (SignPeerRequest).
 const SessionFederationEndpointPath = "/internal/session-federation/sessions"
 
+// SessionFederationTerminalPath streams one session's pane to an enrolled peer,
+// read-only: the peer receives snapshots and can send nothing back.
+const SessionFederationTerminalPath = "/internal/session-federation/terminal"
+
 // FederatedSessionIDSeparator joins the owning host and the session ID. HostID
 // is "host_<ULID>", which never contains it, so the first separator splits.
 const FederatedSessionIDSeparator = "/"

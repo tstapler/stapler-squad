@@ -1531,6 +1531,7 @@ func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity se
 		return
 	}
 	mux.HandleFunc("GET "+session.SessionFederationEndpointPath, services.SessionFederationHandler(registry, sessionSvc.LocalSessions))
+	mux.HandleFunc("GET "+session.SessionFederationTerminalPath, services.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
 	federated := services.NewFederatedSessions(identity, registry)
 	sessionSvc.SetFederation(federated)
 	go federated.Run(ctx, services.DefaultFederationRefreshInterval)

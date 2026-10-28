@@ -88,6 +88,19 @@ func (s *SessionService) LocalSessions(ctx context.Context) ([]*sessionv1.Sessio
 	return resp.Msg.Sessions, nil
 }
 
+// LocalPaneSnapshot captures the pane of a live local session, for serving a
+// peer's read-only terminal stream. It never starts or revives a session.
+func (s *SessionService) LocalPaneSnapshot(sessionID string) (string, error) {
+	if s.reviewQueuePoller == nil {
+		return "", fmt.Errorf("session not found")
+	}
+	inst := s.reviewQueuePoller.FindInstance(sessionID)
+	if inst == nil {
+		return "", fmt.Errorf("session not found")
+	}
+	return inst.CapturePaneContent()
+}
+
 // SetFederation enables merging peer sessions into ListSessions.
 func (s *SessionService) SetFederation(f *FederatedSessions) { s.federation = f }
 

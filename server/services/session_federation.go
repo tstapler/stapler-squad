@@ -46,14 +46,23 @@ type FederatedSessions struct {
 	identity session.HostIdentity
 	peers    FederationPeers
 	client   *http.Client
-	now      func() time.Time
+	// streamClient has no overall timeout (a terminal stream is long-lived); only
+	// the wait for response headers is bounded.
+	streamClient *http.Client
+	now          func() time.Time
 
 	mu    sync.RWMutex
 	hosts map[string]*peerSnapshot
 }
 
 func NewFederatedSessions(identity session.HostIdentity, peers FederationPeers) *FederatedSessions {
+	streamTransport := peerTLSTransport()
+	streamTransport.ResponseHeaderTimeout = peerFetchTimeout
 	return &FederatedSessions{
+		streamClient: &http.Client{
+			Transport:     streamTransport,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		identity: identity,
 		peers:    peers,
 		client: &http.Client{
