@@ -11,6 +11,32 @@ import analytics from "eslint-plugin-analytics";
 import rpcLifecycle from "eslint-plugin-rpc-lifecycle";
 import globals from "globals";
 
+const sharedTransportMessage =
+  "Build unary transports only in lib/api/transport.ts (getConnectTransport / getKeepaliveConnectTransport) or lib/transport/*, so every caller shares the auth, timing and in-flight-gauge interceptors and one connection pool.";
+
+const connectTransportImportBan = {
+  name: "@connectrpc/connect-web",
+  importNames: ["createConnectTransport"],
+  message: sharedTransportMessage,
+};
+
+// A rule of its own (not a no-restricted-syntax selector): later no-restricted-syntax blocks replace the
+// whole option list and downgrade it to "warn", which silently turned the dynamic-import ban into a warning.
+const transportBanPlugin = {
+  rules: {
+    "no-dynamic-connect-web-import": {
+      meta: { type: "problem", schema: [] },
+      create: (context) => ({
+        ImportExpression(node) {
+          if (node.source.value === "@connectrpc/connect-web") {
+            context.report({ node, message: sharedTransportMessage });
+          }
+        },
+      }),
+    },
+  },
+};
+
 export default [
   {
     files: ["src/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
@@ -196,6 +222,24 @@ export default [
     },
   },
   {
+    // Must precede the CodeMirror block below: a later block replaces this rule's options for files both match,
+    // so that block repeats connectTransportImportBan.
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: [
+      "src/lib/api/transport.ts",
+      "src/lib/transport/**",
+      "src/components/backlog/backlogItemDetailTestFixtures.ts",
+      "src/**/*.test.*",
+      "src/**/*.spec.*",
+      "src/**/__tests__/**",
+    ],
+    plugins: { "transport-ban": transportBanPlugin },
+    rules: {
+      "no-restricted-imports": ["error", { paths: [connectTransportImportBan] }],
+      "transport-ban/no-dynamic-connect-web-import": "error",
+    },
+  },
+  {
     files: [
       "src/components/sessions/**/*.ts",
       "src/components/sessions/**/*.tsx",
@@ -214,6 +258,7 @@ export default [
       "no-restricted-imports": [
         "error",
         {
+          paths: [connectTransportImportBan],
           patterns: [
             {
               group: ["@codemirror/*", "@replit/codemirror-vim", "@lezer/*", "codemirror"],

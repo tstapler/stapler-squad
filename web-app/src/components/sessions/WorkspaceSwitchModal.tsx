@@ -1,17 +1,19 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback, RefObject } from "react";
+import type { RefObject } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import {
+import type {
   AvailableWorkspaceTargets,
+  VCSInfo} from "@/gen/session/v1/types_pb";
+import {
   BookmarkTarget,
   RevisionTarget,
   WorktreeTarget,
-  VCSType,
-  VCSInfo,
+  VCSType
 } from "@/gen/session/v1/types_pb";
 import {
   WorkspaceSwitchType,
@@ -94,7 +96,7 @@ export function WorkspaceSwitchModal({
     () =>
       createClient(
         SessionService,
-        createConnectTransport({ baseUrl })
+        getConnectTransport({ baseUrl })
       ),
     [baseUrl]
   );
@@ -226,7 +228,7 @@ export function WorkspaceSwitchModal({
         <div className={styles.error}>
           <span className={styles.errorIcon}>⚠️</span>
           <span className={styles.errorMessage}>{error}</span>
-          <button className={styles.retryButton} onClick={fetchData}>
+          <button className={styles.retryButton} onClick={fetchData}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -482,7 +484,7 @@ export function WorkspaceSwitchModal({
             </span>
             Switch Workspace - {sessionName}
           </h2>
-          <button className={styles.closeButton} onClick={onClose}>
+          <button className={styles.closeButton} onClick={onClose}>{/* analytics-exempt */}
             ✕
           </button>
         </div>
@@ -494,14 +496,14 @@ export function WorkspaceSwitchModal({
         <div className={styles.footer}>
           <div />
           <div className={styles.footerButtons}>
-            <button className={styles.cancelButton} onClick={onClose}>
+            <button className={styles.cancelButton} onClick={onClose}>{/* analytics-exempt */}
               Cancel
             </button>
             <button
               className={styles.switchButton}
               disabled={!selectedTarget || isSwitching}
               onClick={handleSwitch}
-            >
+            >{/* analytics-exempt */}
               {isSwitching ? "Switching..." : "Switch Workspace"}
             </button>
           </div>

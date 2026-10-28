@@ -1150,6 +1150,13 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.
 	return nil
 }
 
+// plausibleNudgeSize rejects handshake sizes from a hidden (display:none)
+// keep-alive terminal. The minimum of 2 cols is a chosen guard: the nudge
+// resizes to cols-1 first, which must stay positive.
+func plausibleNudgeSize(cols, rows int) bool {
+	return cols >= 2 && rows >= 1
+}
+
 // performInitialResizeNudge resizes tmux to the handshake's dimensions before
 // the initial capture, using a ±1 nudge (resize.WithForcedRedraw) to
 // guarantee SIGWINCH even if tmux is already at the target size — otherwise
@@ -1157,7 +1164,7 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.
 // never redraws, leaving stale-dimension content that renders garbled in a
 // fresh xterm.js terminal. Runs unconditionally on every reconnect,
 // regardless of whether the browser's reported dimensions actually changed.
-func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer TerminalWriter, instance *session.Instance, sessionID string, streamGeneration int64, currentPaneReq *sessionv1.CurrentPaneRequest, quiescenceCh chan struct{}) {
+func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer TerminalWriter, instance panePTY, sessionID string, streamGeneration int64, currentPaneReq *sessionv1.CurrentPaneRequest, quiescenceCh chan struct{}) {
 	if writer == nil {
 		// Read-only attach: the nudge resizes the pane, which a viewer must never do.
 		return
@@ -1168,6 +1175,10 @@ func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer TerminalWr
 	}
 	targetCols := int(*currentPaneReq.TargetCols)
 	targetRows := int(*currentPaneReq.TargetRows)
+	if !plausibleNudgeSize(targetCols, targetRows) {
+		log.Warn("[streamViaControlMode] ignoring implausible handshake dimensions", "cols", targetCols, "rows", targetRows)
+		return
+	}
 
 	log.Info("[streamViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
 
@@ -3239,6 +3250,10 @@ func forceCapturePaneRedrawNudge(stream *connectWebSocketStream, target panePTY,
 	}
 	targetCols := int(*paneReq.TargetCols)
 	targetRows := int(*paneReq.TargetRows)
+	if !plausibleNudgeSize(targetCols, targetRows) {
+		log.Warn("[streamViaTmuxCapture] ignoring implausible handshake dimensions", "cols", targetCols, "rows", targetRows)
+		return
+	}
 
 	// Skip the nudge when the pane is already at the requested size — this is the
 	// common case for a reconnect (e.g. tab regains focus after a dropped idle

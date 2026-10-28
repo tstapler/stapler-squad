@@ -278,3 +278,42 @@ describe("PaneSplitRenderer — desktop layout", () => {
     }
   });
 });
+
+describe("PaneSplitRenderer — --mobile-pane-tab-strip-height ownership (Task 4.1.3b)", () => {
+  const readVar = () => document.documentElement.style.getPropertyValue("--mobile-pane-tab-strip-height");
+  let stripHeight = 0;
+  let offsetSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    mockIsMobile = true;
+    mockIsFoldable = false;
+    document.documentElement.style.removeProperty("--mobile-pane-tab-strip-height");
+    offsetSpy = jest.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => stripHeight);
+  });
+  afterEach(() => offsetSpy.mockRestore());
+
+  const renderWindow = (height: number, windowActive: boolean) => {
+    stripHeight = height;
+    return render(
+      <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} windowActive={windowActive} />
+    );
+  };
+
+  it("cssVar_should_EqualActiveWindowHeight_When_ActiveMountedBeforeHidden", () => {
+    renderWindow(40, true);
+    renderWindow(56, false);
+    expect(readVar()).toBe("40px");
+  });
+
+  it("cssVar_should_EqualActiveWindowHeight_When_HiddenMountedBeforeActive", () => {
+    renderWindow(56, false);
+    renderWindow(40, true);
+    expect(readVar()).toBe("40px");
+  });
+
+  it("cssVar_should_NotBeResetByHiddenWindow_When_HiddenHasNoTabStrip", () => {
+    renderWindow(40, true);
+    render(<PaneSplitRenderer state={singlePaneState} dispatch={jest.fn()} sessions={[]} windowActive={false} />);
+    expect(readVar()).toBe("40px");
+  });
+});

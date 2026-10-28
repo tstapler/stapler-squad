@@ -25,9 +25,8 @@ import {
   DeviceAuthStatus,
 } from "@/gen/session/v1/github_user_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import * as styles from "./GitHubPRsSection.css";
 import { PRGroupedList } from "./prs/PRGroupedList";
 
@@ -36,10 +35,7 @@ export { PRGroupedList };
 
 function useGitHubUserClient() {
   return useMemo(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
+    const transport = getConnectTransport();
     return createClient(GitHubUserService, transport);
   }, []);
 }

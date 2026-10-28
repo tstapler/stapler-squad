@@ -1,9 +1,22 @@
 import { createConnectTransport } from "@connectrpc/connect-web";
-import type { Transport } from "@connectrpc/connect";
+import { createContextValues } from "@connectrpc/connect";
+import type { Interceptor, Transport } from "@connectrpc/connect";
+import { createMethodUrl, runStreamingCall, runUnaryCall } from "@connectrpc/connect/protocol";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { createCoalescingInterceptor } from "./coalescingInterceptor";
+import { createPriorityInterceptor } from "./requestPriority";
+import { peekFlags, preloadFlagValue } from "@/lib/features/flagStore";
+import { withInFlightGauge } from "@/lib/perf/perfDebug";
+import { createSharedRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
 import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
+import { createUnaryWsTransport, type UnaryWsTransport } from "@/lib/transport/unary-ws-transport";
+import {
+  AuthAwareBreaker,
+  createAuthRequiredInterceptor,
+  createWsUnaryPolicyTransport,
+} from "@/lib/transport/wsUnaryPolicy";
 
-let _transport: Transport | null = null;
+const _transports = new Map<string, Transport>();
 let _watchTransport: Transport | null = null;
 let _keepaliveTransport: Transport | null = null;
 
@@ -17,8 +30,65 @@ let _keepaliveTransport: Transport | null = null;
  */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
+/** Server value once flags have loaded, else the pre-load default; the flag-store import cycle is safe because this runs per call. */
+function isRequestCoalescingEnabled(): boolean {
+  const loaded = peekFlags()?.find((f) => f.name === "request_coalescing");
+  return loaded ? loaded.enabled : (preloadFlagValue("request_coalescing") ?? true);
+}
+
 /**
- * Returns the shared ConnectRPC HTTP transport singleton.
+ * Runs `interceptors` and the default deadline once around `inner` (the policy transport),
+ * so they apply identically to HTTP and WebSocket calls. `inner` must carry neither.
+ */
+function withOuterInterceptors(
+  inner: Transport,
+  baseUrl: string,
+  interceptors: Interceptor[],
+  defaultTimeoutMs: number,
+): Transport {
+  return {
+    unary: (method, signal, timeoutMs, header, input, contextValues) =>
+      runUnaryCall({
+        interceptors,
+        signal,
+        timeoutMs: timeoutMs ?? defaultTimeoutMs,
+        req: {
+          stream: false,
+          service: method.parent,
+          method,
+          requestMethod: "POST",
+          url: createMethodUrl(baseUrl, method),
+          header: new Headers(header),
+          contextValues: contextValues ?? createContextValues(),
+          message: input,
+        } as never,
+        next: (req) =>
+          inner.unary(method, req.signal, timeoutMs ?? defaultTimeoutMs, req.header, req.message as never, req.contextValues),
+      }) as never,
+    stream: (method, signal, timeoutMs, header, input, contextValues) =>
+      runStreamingCall({
+        interceptors,
+        signal,
+        timeoutMs: timeoutMs ?? defaultTimeoutMs,
+        req: {
+          stream: true,
+          service: method.parent,
+          method,
+          requestMethod: "POST",
+          url: createMethodUrl(baseUrl, method),
+          header: new Headers(header),
+          contextValues: contextValues ?? createContextValues(),
+          message: input,
+        } as never,
+        next: (req) =>
+          inner.stream(method, req.signal, timeoutMs ?? defaultTimeoutMs, req.header, req.message as never, req.contextValues),
+      }) as never,
+  };
+}
+
+/**
+ * Returns the shared ConnectRPC HTTP transport, memoized per {baseUrl, timeoutMs}
+ * (default: one singleton).
  *
  * Every non-streaming hook should call this instead of constructing its own
  * transport. This ensures a single transport instance for all unary/streaming
@@ -29,15 +99,44 @@ const DEFAULT_RPC_TIMEOUT_MS = 30_000;
  * NOT use this singleton — it has its own reconnect logic. Use
  * getWatchTransport() for that.
  */
-export function getConnectTransport(): Transport {
-  if (!_transport) {
-    _transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      defaultTimeoutMs: DEFAULT_RPC_TIMEOUT_MS,
-      interceptors: [createAuthInterceptor()],
+export interface ConnectTransportOptions {
+  /** Overrides getApiBaseUrl(); rare (tests, cross-origin tooling). */
+  baseUrl?: string;
+  /** Overrides the default Connect-Timeout-Ms for long-running unary RPCs. */
+  timeoutMs?: number;
+}
+
+export function getConnectTransport(opts: ConnectTransportOptions = {}): Transport {
+  const baseUrl = opts.baseUrl ?? getApiBaseUrl();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+  const key = `${baseUrl}|${timeoutMs}`;
+  let transport = _transports.get(key);
+  if (!transport) {
+    // The inner HTTP transport carries no interceptors and no deadline: withOuterInterceptors owns both, once, for HTTP and WS calls alike.
+    const http = createConnectTransport({ baseUrl, fetch: withInFlightGauge() });
+    const breaker = new AuthAwareBreaker();
+    let ws: UnaryWsTransport | null = null;
+    const policy = createWsUnaryPolicyTransport({
+      http,
+      breaker,
+      getWs: () => (ws ??= createUnaryWsTransport({ baseUrl, fallback: http, defaultTimeoutMs: timeoutMs, breaker })),
     });
+    // Priority first (once per transport, ADR-002 item 7); coalescing next: one flight is one auth/timing/network pass, however many callers join it.
+    transport = withOuterInterceptors(
+      policy,
+      baseUrl,
+      [
+        createPriorityInterceptor(),
+        createCoalescingInterceptor({ isEnabled: isRequestCoalescingEnabled }),
+        createAuthInterceptor(),
+        createAuthRequiredInterceptor(),
+        createSharedRpcTimingInterceptor(),
+      ],
+      timeoutMs,
+    );
+    _transports.set(key, transport);
   }
-  return _transport;
+  return transport;
 }
 
 /**
@@ -79,7 +178,7 @@ export function getWatchTransport(): Transport {
 
 /** Reset the transport singletons (for testing only). */
 export function _resetTransportForTesting(): void {
-  _transport = null;
+  _transports.clear();
   _watchTransport = null;
   _keepaliveTransport = null;
 }

@@ -106,9 +106,13 @@ export function markAcknowledged(sessionId: string): void {
  * - Never notified before
  * - Previous notification expired (> TTL)
  * - Acknowledgment expired (> grace period)
+ *
+ * Pass `records` when checking many ids so localStorage is parsed once, not per id.
  */
-export function shouldNotify(sessionId: string): boolean {
-  const records = getNotifiedSessions();
+export function shouldNotify(
+  sessionId: string,
+  records: Map<string, NotificationRecord> = getNotifiedSessions(),
+): boolean {
   const record = records.get(sessionId);
 
   if (!record) {
