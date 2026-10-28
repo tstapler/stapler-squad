@@ -6,10 +6,11 @@
  *  - TC-2.2: SessionList is rendered inside the scroll wrapper (descendant, not sibling)
  *  - TC-2.3: Scroll wrapper does not set inline overflowX (REQ-2c)
  *  - TC-2.4: Non-session-list pane (session-detail) does not have the scroll wrapper
+ *  - TC-2.5: Scroll position survives unmount/remount of the session-list pane
  */
 
 import React from "react";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { PaneSplitRenderer } from "../PaneSplitRenderer";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
 import type { PaneState } from "@/lib/pane/paneTypes";
@@ -154,5 +155,40 @@ describe("SessionListPaneBody — scroll wrapper", () => {
       />
     );
     expect(queryByTestId("session-list-scroll")).toBeNull();
+  });
+
+  it("SessionListPaneBody_should_restoreScrollTop_When_mobileFocusSwitchesAwayAndBack", () => {
+    // Real mobile path: PaneSplitComponent renders only the focused child, so
+    // focusing the detail pane unmounts the list and refocusing remounts it.
+    const splitState = (focusedPaneId: string): PaneState => ({
+      root: {
+        type: "split",
+        id: "root",
+        direction: "vertical",
+        ratio: 0.5,
+        first: { type: "leaf", id: "list", viewKind: "session-list", sessionId: null, activeTab: "info" },
+        second: { type: "leaf", id: "detail", viewKind: "session-detail", sessionId: null, activeTab: "info" },
+      },
+      focusedPaneId,
+      zoomedPaneId: null,
+    });
+    const sessions = [makeSession("s1", "S1") as Session];
+    const tree = (focusedPaneId: string) => (
+      <SessionViewModeProvider value={{ viewMode: "list", setViewMode: jest.fn() }}>
+        <PaneSplitRenderer state={splitState(focusedPaneId)} dispatch={jest.fn()} sessions={sessions} />
+      </SessionViewModeProvider>
+    );
+
+    const view = render(tree("list"));
+    const el = view.getByTestId("session-list-scroll");
+    el.scrollTop = 300;
+    fireEvent.scroll(el);
+
+    view.rerender(tree("detail"));
+    expect(view.queryByTestId("session-list-scroll")).toBeNull();
+    expect(view.getByTestId("pane-leaf-detail")).toBeInTheDocument();
+
+    view.rerender(tree("list"));
+    expect(view.getByTestId("session-list-scroll").scrollTop).toBe(300);
   });
 });
