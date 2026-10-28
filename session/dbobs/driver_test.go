@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -174,10 +175,15 @@ func TestNormalizeStatement(t *testing.T) {
 		"SELECT `t1`.`id` FROM t1 WHERE x IN (?, ?)":       "SELECT `t1`.`id` FROM t1 WHERE x IN (?, ?)",
 		"UPDATE t SET n = 3.14 WHERE id = 7":               "UPDATE t SET n = ? WHERE id = ?",
 		"SELECT col2 FROM tab_3 WHERE x = 'unterminated":   "SELECT col2 FROM tab_3 WHERE x = ?",
+		"SELECT 1 FROM t WHERE k = 0xDEADBEEF":             "SELECT ? FROM t WHERE k = ?",
+		"SELECT 1 FROM t WHERE k = 1e10 AND j = 2.5E-3":    "SELECT ? FROM t WHERE k = ? AND j = ?",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, NormalizeStatement(in), in)
 	}
 	long := NormalizeStatement("SELECT " + strings.Repeat("a, ", 400) + "b FROM t")
 	assert.LessOrEqual(t, len(long), maxStatementLen+3)
+
+	multibyte := NormalizeStatement("SELECT " + strings.Repeat("é", 400) + " FROM t")
+	assert.True(t, utf8.ValidString(multibyte), "truncation must not split a rune")
 }

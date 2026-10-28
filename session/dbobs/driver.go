@@ -57,8 +57,8 @@ type collector struct {
 }
 
 type counters struct {
-	queries, slow, errors           atomic.Int64
-	totalNanos, maxNanos, waitNanos atomic.Int64
+	queries, slow, errors atomic.Int64
+	totalNanos, maxNanos  atomic.Int64
 }
 
 // Wrap instruments drv. db must be the pool drv was opened on (used for
@@ -151,7 +151,6 @@ func (c *collector) record(q string, elapsed, wait time.Duration, err error) {
 	s := &c.stat
 	s.queries.Add(1)
 	s.totalNanos.Add(int64(elapsed))
-	s.waitNanos.Add(int64(wait))
 	storeMax(&s.maxNanos, int64(elapsed))
 	if err != nil {
 		s.errors.Add(1)
