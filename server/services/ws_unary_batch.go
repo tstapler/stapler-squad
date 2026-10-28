@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -29,8 +30,11 @@ const (
 	batchMaxItemResponseBytes  = 2 << 20
 	batchMaxTotalResponseBytes = 8 << 20
 	batchMaxConcurrency        = 6
-	batchDefaultTimeoutMs      = 30_000
-	batchMaxTimeoutMs          = 60_000
+	batchMaxInFlight           = 4 // server-wide; excess is shed with 503 and the client falls back
+	// batchRawResponseBudget is batchMaxTotalResponseBytes before base64 (4/3) expansion.
+	batchRawResponseBudget = batchMaxTotalResponseBytes / 4 * 3
+	batchDefaultTimeoutMs  = 30_000
+	batchMaxTimeoutMs      = 60_000
 )
 
 // batchAllowed is the deny-by-default set of procedures a batch may dispatch: a
@@ -78,12 +82,15 @@ type batchResponse struct {
 // UnaryBatchHandler serves UnaryBatchPath.
 type UnaryBatchHandler struct {
 	dispatchers UnaryDispatchers
+	// slots bounds batch requests in flight server-wide; each runs up to
+	// batchMaxConcurrency items and buffers their responses.
+	slots chan struct{}
 }
 
 // NewUnaryBatchHandler builds the handler over the same per-listener dispatchers the
 // unary WebSocket bridge re-enters.
 func NewUnaryBatchHandler(dispatchers UnaryDispatchers) *UnaryBatchHandler {
-	return &UnaryBatchHandler{dispatchers: dispatchers}
+	return &UnaryBatchHandler{dispatchers: dispatchers, slots: make(chan struct{}, batchMaxInFlight)}
 }
 
 func (h *UnaryBatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +111,14 @@ func (h *UnaryBatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dispatcher := h.dispatchers(rec.Listener)
 	if dispatcher == nil {
 		http.Error(w, "listener dispatcher not ready", http.StatusServiceUnavailable)
+		return
+	}
+	select {
+	case h.slots <- struct{}{}:
+		defer func() { <-h.slots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many batches in flight", http.StatusServiceUnavailable)
 		return
 	}
 	req, status, err := decodeBatchRequest(w, r)
@@ -145,6 +160,7 @@ func decodeBatchRequest(w http.ResponseWriter, r *http.Request) (batchRequest, i
 // callers must not rely on completion order.
 func runBatch(src *http.Request, dispatcher http.Handler, calls []batchCall) []batchResult {
 	results := make([]batchResult, len(calls))
+	var budget atomic.Int64
 	sem := make(chan struct{}, batchMaxConcurrency)
 	var wg sync.WaitGroup
 	for i := range calls {
@@ -153,7 +169,7 @@ func runBatch(src *http.Request, dispatcher http.Handler, calls []batchCall) []b
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = runBatchCall(src, dispatcher, calls[i])
+			results[i] = runBatchCall(src, dispatcher, calls[i], &budget)
 		}(i)
 	}
 	wg.Wait()
@@ -167,7 +183,7 @@ func batchTimeout(ms int64) time.Duration {
 	return time.Duration(min(ms, batchMaxTimeoutMs)) * time.Millisecond
 }
 
-func runBatchCall(src *http.Request, dispatcher http.Handler, c batchCall) batchResult {
+func runBatchCall(src *http.Request, dispatcher http.Handler, c batchCall, budget *atomic.Int64) batchResult {
 	res := batchResult{ID: c.ID}
 	if !batchMethodAllowed(c.Method) {
 		res.Fallback = true
@@ -182,8 +198,9 @@ func runBatchCall(src *http.Request, dispatcher http.Handler, c batchCall) batch
 		res.Error = &unaryErrorBody{Code: codeInternal, Message: err.Error()}
 		return res
 	}
-	rec := &unaryRecorder{header: http.Header{}, maxBytes: batchMaxItemResponseBytes}
+	rec := &unaryRecorder{header: http.Header{}, maxBytes: batchMaxItemResponseBytes, budget: budget, budgetMax: batchRawResponseBudget}
 	if serveGuarded(dispatcher, rec, req, c.Method) {
+		res.Fallback = true // the client retries individually and sees the real outcome
 		res.Error = &unaryErrorBody{Code: codeInternal, Message: "handler panicked"}
 		return res
 	}

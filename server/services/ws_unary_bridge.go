@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -563,6 +564,10 @@ type unaryRecorder struct {
 	overflow bool
 	// maxBytes bounds the buffered body; zero means wsUnaryMaxResponseBytes.
 	maxBytes int
+	// budget, when set, is a total shared across recorders (a batch): writes past
+	// budgetMax overflow instead of buffering.
+	budget    *atomic.Int64
+	budgetMax int64
 }
 
 func (r *unaryRecorder) Header() http.Header { return r.header }
@@ -578,6 +583,10 @@ func (r *unaryRecorder) Write(p []byte) (int, error) {
 	limit := r.maxBytes
 	if limit == 0 {
 		limit = wsUnaryMaxResponseBytes
+	}
+	if r.budget != nil && r.budget.Add(int64(len(p))) > r.budgetMax {
+		r.overflow = true
+		return 0, io.ErrShortWrite
 	}
 	if r.body.Len()+len(p) > limit {
 		r.overflow = true

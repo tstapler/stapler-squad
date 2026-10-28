@@ -42,6 +42,8 @@ func (s *batchStub) ListFiles(ctx context.Context, req *connect.Request[sessionv
 	switch id {
 	case "missing":
 		return nil, connect.NewError(connect.CodeNotFound, assert.AnError)
+	case "panic":
+		panic("boom")
 	case "huge":
 		return connect.NewResponse(&sessionv1.ListFilesResponse{BasePath: strings.Repeat("x", batchMaxItemResponseBytes+1)}), nil
 	case "gate", "gate-peer":
@@ -351,4 +353,51 @@ func TestUnaryBatch_should_BoundServerConcurrency(t *testing.T) {
 	wg.Wait()
 	assert.LessOrEqual(t, h.stub.max.Load(), int32(batchMaxConcurrency))
 	assert.EqualValues(t, batchMaxCalls, h.stub.hits.Load())
+}
+
+func TestUnaryBatch_should_ShedLoad_When_TooManyBatchesAreInFlight(t *testing.T) {
+	h := newBatchHarness(t)
+	var wg sync.WaitGroup
+	for i := 0; i < batchMaxInFlight; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.post(context.Background(), t, "cs_auth=tok", listFilesCall(t, 1, "gate"))
+		}()
+	}
+	for i := 0; i < batchMaxInFlight; i++ {
+		<-h.stub.started
+	}
+
+	resp, _ := h.post(context.Background(), t, "cs_auth=tok", listFilesCall(t, 1, "a"))
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "the slot pool is full")
+	assert.NotEmpty(t, resp.Header.Get("Retry-After"))
+
+	close(h.stub.release)
+	wg.Wait()
+	resp, results := h.post(context.Background(), t, "cs_auth=tok", listFilesCall(t, 1, "a"))
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a freed slot admits the next batch")
+	assert.Equal(t, "ok:a", decodeBatchListFiles(t, resultByID(t, results, 1)))
+}
+
+func TestUnaryBatch_should_DeclineWithFallback_When_AHandlerPanics(t *testing.T) {
+	h := newBatchHarness(t)
+	_, results := h.post(context.Background(), t, "cs_auth=tok", listFilesCall(t, 1, "panic"), listFilesCall(t, 2, "a"))
+
+	panicked := resultByID(t, results, 1)
+	assert.True(t, panicked.Fallback)
+	require.NotNil(t, panicked.Error)
+	assert.Equal(t, "ok:a", decodeBatchListFiles(t, resultByID(t, results, 2)))
+}
+
+func TestUnaryRecorder_should_OverflowPastASharedBudget(t *testing.T) {
+	var budget atomic.Int64
+	a := &unaryRecorder{header: http.Header{}, budget: &budget, budgetMax: 10}
+	b := &unaryRecorder{header: http.Header{}, budget: &budget, budgetMax: 10}
+	_, err := a.Write(make([]byte, 8))
+	require.NoError(t, err)
+	_, err = b.Write(make([]byte, 8))
+	require.Error(t, err)
+	assert.True(t, b.overflow)
+	assert.False(t, a.overflow)
 }
