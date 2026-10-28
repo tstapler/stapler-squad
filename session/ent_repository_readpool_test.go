@@ -56,3 +56,19 @@ func TestEntRepository_ReadPoolDisabledByEnv(t *testing.T) {
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, <-done)
 }
+
+func TestIsOnDiskDatabase(t *testing.T) {
+	require.True(t, isOnDiskDatabase("/tmp/x/s.db"))
+	for _, p := range []string{"", ":memory:", "file:x?mode=memory&cache=shared", "file:/tmp/x.db"} {
+		require.False(t, isOnDiskDatabase(p), p)
+	}
+}
+
+// ":memory:" must stay single-pool: a second pool would open a separate empty database.
+func TestEntRepository_InMemoryDatabaseKeepsSchemaVisibleToReads(t *testing.T) {
+	repo, err := NewEntRepository(WithDatabasePath(":memory:"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = repo.Close() })
+	_, err = repo.client.Session.Query().Count(context.Background())
+	require.NoError(t, err)
+}

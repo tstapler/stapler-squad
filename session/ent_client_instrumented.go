@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -27,6 +28,13 @@ func readPoolSize() int {
 		return defaultReadPoolSize
 	}
 	return n
+}
+
+// isOnDiskDatabase reports whether path names a real file. In-memory databases
+// (":memory:", file: URIs) are per-connection or shared-cache and cannot be
+// reopened by a second pool.
+func isOnDiskDatabase(path string) bool {
+	return path != "" && path != ":memory:" && !strings.HasPrefix(path, "file:") && !strings.Contains(path, "mode=memory")
 }
 
 // openReadPool opens n query_only connections on the same WAL file as the writer.

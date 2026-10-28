@@ -185,7 +185,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// while the writer connection is busy. Seeded and URI (in-memory) databases
 	// stay single-pool.
 	var readDB *sql.DB
-	if repo.seedURI == "" && !strings.HasPrefix(expandedPath, "file:") {
+	if repo.seedURI == "" && isOnDiskDatabase(expandedPath) {
 		if n := readPoolSize(); n > 0 {
 			readDB, err = openReadPool(expandedPath, n)
 			if err != nil {
