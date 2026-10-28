@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"sync"
 	"time"
@@ -87,6 +89,11 @@ func NewUnaryBatchHandler(dispatchers UnaryDispatchers) *UnaryBatchHandler {
 func (h *UnaryBatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	// Requiring JSON forces a CORS preflight on cross-site POSTs (a text/plain form post would not).
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		http.Error(w, "application/json required", http.StatusUnsupportedMediaType)
 		return
 	}
 	rec, ok := RequestRecordFrom(r.Context())
@@ -208,9 +215,11 @@ func serveGuarded(h http.Handler, w http.ResponseWriter, r *http.Request, method
 func capBatchResponse(results []batchResult) {
 	total := 0
 	for i := range results {
-		total += len(results[i].Body)
-		if total > batchMaxTotalResponseBytes {
+		wire := base64.StdEncoding.EncodedLen(len(results[i].Body))
+		if total+wire > batchMaxTotalResponseBytes {
 			results[i] = batchResult{ID: results[i].ID, Fallback: true}
+			continue // a dropped item adds nothing, so later small ones can still fit
 		}
+		total += wire
 	}
 }

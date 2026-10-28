@@ -254,8 +254,26 @@ func TestUnaryBatch_should_RejectNonPost_And_UnstampedRequests(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 
 	rec := httptest.NewRecorder()
-	NewUnaryBatchHandler(func(string) http.Handler { return nil }).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, UnaryBatchPath, strings.NewReader("{}")))
+	unstamped := httptest.NewRequest(http.MethodPost, UnaryBatchPath, strings.NewReader("{}"))
+	unstamped.Header.Set("Content-Type", "application/json")
+	NewUnaryBatchHandler(func(string) http.Handler { return nil }).ServeHTTP(rec, unstamped)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "no listener record fails closed")
+}
+
+func TestUnaryBatch_should_RejectNonJsonContentType_And_DispatchNothing(t *testing.T) {
+	h := newBatchHarness(t)
+	body, err := json.Marshal(batchRequest{Calls: []batchCall{listFilesCall(t, 1, "a")}})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPost, h.srv.URL+UnaryBatchPath, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Cookie", "cs_auth=tok")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	assert.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode)
+	assert.EqualValues(t, 0, h.dispatched.Load())
 }
 
 func TestUnaryBatch_should_FallBackPerItem_When_ItemResponseExceedsCap(t *testing.T) {
@@ -269,13 +287,14 @@ func TestUnaryBatch_should_FallBackPerItem_When_ItemResponseExceedsCap(t *testin
 }
 
 func TestCapBatchResponse_should_FallBackItemsPastTheTotalCap(t *testing.T) {
-	chunk := make([]byte, batchMaxTotalResponseBytes/2+1)
-	results := []batchResult{{ID: 1, Body: chunk}, {ID: 2, Body: chunk}, {ID: 3}}
+	chunk := make([]byte, batchMaxTotalResponseBytes/2)
+	results := []batchResult{{ID: 1, Body: chunk}, {ID: 2, Body: chunk}, {ID: 3, Body: []byte("tiny")}}
 	capBatchResponse(results)
 
 	assert.False(t, results[0].Fallback)
-	assert.True(t, results[1].Fallback)
+	assert.True(t, results[1].Fallback, "base64 expansion pushes the second chunk over the cap")
 	assert.Empty(t, results[1].Body)
+	assert.False(t, results[2].Fallback, "a dropped item adds nothing, so a small later one still fits")
 }
 
 func TestUnaryBatch_should_IsolateItemDeadlines_When_OneCallTimesOut(t *testing.T) {
@@ -295,6 +314,7 @@ func TestUnaryBatch_should_CancelHandlers_When_ClientDropsTheRequest(t *testing.
 	require.NoError(t, err)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.srv.URL+UnaryBatchPath, bytes.NewReader(body))
 	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cookie", "cs_auth=tok")
 	done := make(chan struct{})
 	go func() {
