@@ -5,7 +5,8 @@ import type { DescMessage, DescMethodUnary, MessageShape } from "@bufbuild/proto
  * Hand-maintained list of idempotent SessionService reads. `idempotency_level` is
  * absent from session.proto, so nothing is derived: a method is coalesced, replayed
  * or sent over the WebSocket only if it is named here. idempotentMethods.test.ts
- * checks every name against the generated service descriptor.
+ * checks every name against the generated service descriptors (SessionService and, for
+ * GetInsightsSummary, InsightsService).
  */
 export const IDEMPOTENT_METHODS = {
   /** Identical in-flight calls may share one request. */
@@ -20,6 +21,11 @@ export const IDEMPOTENT_METHODS = {
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
+    // Read-only, request body carries every filter (so the dedupe key is exact).
+    "GetInsightsSummary", // InsightsService, not SessionService
+    "ListAliases",
+    "ListSessions",
+    "ListPendingApprovals",
   ],
   /** Safe to re-send after a transport failure. */
   replayable: [
@@ -46,6 +52,19 @@ export const IDEMPOTENT_METHODS = {
     "ListWorkflows",
     "ListProgramsConfig",
   ],
+  /**
+   * May join an HTTP request batch: cheap reads only, a subset of wsEligible and of the server's
+   * batchAllowed. GetVCSStatus, GetSessionDiff and GetFileContent are slow or bulk, and a batch
+   * answers only when every item is done, so they always travel alone.
+   */
+  batchEligible: [
+    "ListFiles",
+    "StatFile",
+    "GetFileTransportCapabilities",
+    "ListShells",
+    "ListWorkflows",
+    "ListProgramsConfig",
+  ],
   /** Kept in a client cache between calls; separate so enabling one purpose never enables another. */
   cacheable: ["GetFeatureFlags", "ListProgramsConfig", "GetFileTransportCapabilities"],
 } as const;
@@ -54,6 +73,12 @@ const COALESCIBLE = new Set<string>(IDEMPOTENT_METHODS.coalescible);
 
 export function isCoalescible(methodName: string): boolean {
   return COALESCIBLE.has(methodName);
+}
+
+const BATCH_ELIGIBLE = new Set<string>(IDEMPOTENT_METHODS.batchEligible);
+
+export function isBatchEligible(methodName: string): boolean {
+  return BATCH_ELIGIBLE.has(methodName);
 }
 
 /** Key for "identical call": the fully qualified method plus the canonical JSON of its request. */

@@ -131,6 +131,7 @@ func newChainHarnessWithRemoteAuth(t *testing.T, cc chainCase, remoteAuth bool) 
 	bridge := services.NewUnaryWsBridge(srv.unaryDispatcher,
 		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
 	srv.mux.Handle(services.UnaryWsPath, bridge)
+	srv.mux.Handle(services.UnaryBatchPath, services.NewUnaryBatchHandler(srv.unaryDispatcher))
 
 	hn := &chainHarness{chainCase: cc, stub: stub, validator: v, bridge: bridge}
 	if cc.listener == services.ListenerLocal {

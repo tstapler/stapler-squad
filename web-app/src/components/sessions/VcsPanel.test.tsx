@@ -22,6 +22,7 @@ const mockUseSessionVcsContext = useSessionVcsContext as jest.Mock;
 
 function mockVcsError(error: Error) {
   mockUseSessionVcsContext.mockReturnValue({
+    ensureDiff: jest.fn(),
     status: null,
     statusLoading: false,
     error,
@@ -45,6 +46,7 @@ describe("VcsPanel", () => {
       githubCheckConclusion: "success",
     });
     mockUseSessionVcsContext.mockReturnValue({
+    ensureDiff: jest.fn(),
       status,
       statusLoading: false,
       error: null,
@@ -63,6 +65,7 @@ describe("VcsPanel", () => {
 
   it("VcsPanel_should_RenderLoadingSkeletonNotStaleMarkup_When_VcsStatusNotYetResolved", () => {
     mockUseSessionVcsContext.mockReturnValue({
+    ensureDiff: jest.fn(),
       status: null,
       statusLoading: true,
       error: null,
@@ -128,6 +131,7 @@ describe("VcsPanel", () => {
     });
     const mockContext = (diffContent: string | null, diffLoading = false) =>
       mockUseSessionVcsContext.mockReturnValue({
+    ensureDiff: jest.fn(),
         status,
         statusLoading: false,
         error: null,

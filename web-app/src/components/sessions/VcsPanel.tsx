@@ -23,7 +23,9 @@ interface VcsPanelProps {
 }
 
 export function VcsPanel({ onNavigateToFile, session, onBrowseFiles }: VcsPanelProps) {
-  const { status, statusLoading, error, refresh, diff, diffLoading, diffContextLines, setDiffContextLines } = useSessionVcsContext();
+  const { status, statusLoading, error, refresh, diff, diffLoading, diffContextLines, setDiffContextLines, ensureDiff } = useSessionVcsContext();
+  // The panel is mounted only on the VCS tab; per-file diffs need the full diff.
+  useEffect(() => { ensureDiff(); }, [ensureDiff]);
   const { track } = useAnalytics();
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const freshDiff = useMemo(
