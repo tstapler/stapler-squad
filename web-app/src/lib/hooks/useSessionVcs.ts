@@ -79,6 +79,8 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // fallback interval below stops calling a deleted session forever.
   const stoppedRef = useRef(false);
   const mountedSessionRef = useRef<string | null>(null);
+  // Whether Redux knew this session when the effect last ran; its first appearance is hydration, not a change.
+  const sessionKnownRef = useRef(false);
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -193,7 +195,11 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     setStatusLoading(true);
     const firstForSession = mountedSessionRef.current !== sessionId;
     mountedSessionRef.current = sessionId;
-    void loadStatus(!firstForSession);
+    // Redux hydrating the session mid-fetch must join the mount fetch, not force a duplicate;
+    // only a change to a session we already knew warrants a forced (never-joining) refetch.
+    const hydrating = !firstForSession && !sessionKnownRef.current && sessionUpdatedAt !== null;
+    sessionKnownRef.current = sessionUpdatedAt !== null;
+    void loadStatus(!firstForSession && !hydrating);
     const fallback = setInterval(() => {
       if (stoppedRef.current) {
         clearInterval(fallback);
