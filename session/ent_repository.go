@@ -32,8 +32,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 
-	"entgo.io/ent/dialect"
-	entsql "entgo.io/ent/dialect/sql"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -194,8 +192,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
 
 	// Create Ent client with the existing database connection
-	drv := entsql.OpenDB(dialect.SQLite, db)
-	client := ent.NewClient(ent.Driver(drv))
+	client := newInstrumentedEntClient(db)
 
 	// Run automatic schema migration. entSchemaCreateMu serializes this call
 	// process-wide: even though each caller opens its own isolated SQLite
