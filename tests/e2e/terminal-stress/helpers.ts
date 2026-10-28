@@ -20,6 +20,8 @@ export interface StressTestMetrics {
  * Navigate to stress test page and wait for terminal to initialize
  */
 export async function setupStressTestPage(page: Page): Promise<void> {
+  // The first-run onboarding modal opens 800ms after mount and its overlay intercepts clicks.
+  await page.addInitScript(() => localStorage.setItem('stapler-squad:onboarded', 'true'));
   await page.goto('/test/terminal-stress');
   await page.waitForSelector('[data-testid="terminal-container"]', { timeout: 10000 });
   await page.waitForSelector('[data-testid="start-test"]', { timeout: 5000 });
