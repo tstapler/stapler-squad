@@ -386,3 +386,34 @@ Add a backend unit test asserting that a `GetSessionDiff` request with `context_
 **Scenario:** New `// +feature: vcs-diff` markers in `FileDiffView.tsx` and updated markers in `VcsPanel.tsx` overlap with an existing `vcs` feature entry in `docs/registry/features/`. `make registry-generate` emits a new per-feature file that conflicts with a pre-existing one, breaking `make registry-diff`.
 
 **Mitigation:** Before adding any `// +feature:` markers, run `make registry-diff` to inspect the current state of the registry. Use the same feature ID slug already used for existing VCS components (inspect `docs/registry/features/` to confirm the naming pattern). If a new `vcs-diff` feature entry is warranted, create the per-feature JSON file before adding the markers and confirm `make registry-generate` is idempotent on a second run.
+
+---
+
+## Implementation Notes (post-implementation)
+
+### Deviations from the plan (all intentional)
+
+| Plan | As built | Why |
+|---|---|---|
+| D1: hunk state in `DiffViewer` | New `components/sessions/DiffPane.tsx` owns hunk cursor, `n`/`p`/`s` shortcuts, view mode, highlighter; used by `DiffViewer` and `FileDiffView` | One implementation shared by the Diff tab and the inline file diff |
+| T7: `FileDiffView` in `shared/vcs-widget/`, takes a `DiffFile` | `components/sessions/FileDiffView.tsx`, takes the file's raw diff text | `DiffPane`/`LezerHighlighter` live in `sessions/`; eslint `boundaries` forbids `shared/` → `sessions/` |
+| T11: synchronized scroll | None needed | Split view is one grid per hunk, so both sides share a scroll container (per adversarial Risk 1) |
+| T14: `IntersectionObserver` lazy tokenizing | Hunks tokenized sequentially with a macrotask yield, results published in batches of 8 | Simpler; **deferred**: viewport gating for very large diffs |
+| T16: `Instance.RefreshDiffWithContextLines` | Handler calls `GitWorktree.DiffWithContextLines` directly for non-default context (bypasses the diff-stats cache); `Diff()` unchanged | Keeps the 5+ other `Diff()` callers untouched (validation Gap 1) |
+| T17: state in `SessionVcsContext.tsx` | State in `useSessionVcs` (`diffContextLines`/`setDiffContextLines`), exposed through the existing context | The context just forwards the hook's value |
+| T18: per-hunk expand callbacks | One global `contextLines` value; every "Show N more lines" click adds 10 lines of context to all hunks; reset to default when the diff view unmounts | Matches the proto (a single `context_lines`); a per-gap fetch would need a richer RPC |
+
+### sdd:6-verify review disposition
+
+Four reviewers (architecture, refactor candidates, TS/React idioms, Go/proto idioms) ran against the feature diff. No BLOCKER and no MUST FIX that survived; findings were handled as follows.
+
+**Fixed:** `context_lines` validated in the handler (< -1 → `InvalidArgument`, > 10 000 → whole file) with a unit test; whole-file sentinel halved (`MaxInt32/2`) to avoid go-git overflow; diff errors on the cache-bypass path now surface as `Internal` instead of an empty success; `DiffPane` no longer steals focus on mount (opt-in `autoFocus`, set by the Diff tab and the inline file view), has a `:focus-visible` ring, `role="region"` and an accessible name; token state published in batches instead of one `Map` copy per hunk; `buildHunkList` computed once; `pairSplitRows` returns line indices (identity `Map` removed); `prefers-reduced-motion` respected for hunk scrolling; refresh button `aria-label`/`type`; hunk counter is a live region; inline toolbar style moved to vanilla-extract; `viewMode` prop honoured (no half-controlled state); `Highlighter`/`TokenSpan` single definition in `lib/highlight/types.ts`; token class names single definition in `lib/highlight/tokenClasses.ts`; context-line constants in `lib/diff/contextLines.ts`; `extractFileDiff` matches on `+++ b/` / `--- a/` (handles deleted files and paths containing ` b/`); `VcsPanel` leaves the inline diff if a refresh drops the file; "Expand all" no longer sticks after the diff view goes away.
+
+**Deferred (not required by the acceptance criteria):**
+- Splitting `DiffRenderer.tsx` (~500 lines) into `HunkView`/toolbar/`useHunkTokens` modules — structural refactor, tracked as follow-up.
+- Viewport-gated tokenizing (`IntersectionObserver`) — only matters for multi-hundred-hunk diffs.
+- Moving `detectLanguage` out of `FileContentViewer.tsx` into `engine/languages.ts`.
+- Live directory sessions ignore `context_lines` (documented in the proto comment); a pre-existing unsynchronized `baseCommitSHA` write in `GitWorktree` (not introduced here) is untouched.
+- A service-level `GetSessionDiff` test with a live-instance fake; the clamp helper and the git-level behaviour are unit-tested.
+- Split view conveys add/delete by background tint only (the `+`/`-` prefix is dropped); revisit with a marker column.
+- Duplicate shortcut ids are not an issue today: the Diff tab and the VCS tab never mount together (`SessionDetailView` renders them conditionally).

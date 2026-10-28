@@ -87,7 +87,8 @@ func (g *GitWorktree) DiffWithContextLines(contextLines int) *DiffStats {
 	case contextLines == 0:
 		contextLines = fdiff.DefaultContextLines
 	case contextLines < 0:
-		contextLines = math.MaxInt32
+		// Half of MaxInt32: go-git doubles the count internally, which must not overflow a 32-bit int.
+		contextLines = math.MaxInt32 / 2
 	}
 	stats := &DiffStats{}
 
