@@ -53,6 +53,9 @@ test.describe('history behaviour', () => {
       await shell.goto('/');
       const tray = new NotificationTray(page);
       await expect(tray.entryOpen).toBeVisible();
+      // useWindowUrlSync self-heals `?window=<id>` once windows restore; capture the URL after it
+      // settles or Back would be compared against the pre-heal URL.
+      await expect(page).toHaveURL(/[?&]window=/);
       const urlBefore = page.url();
       await tray.entryOpen.click();
       await tray.expectOpen();
