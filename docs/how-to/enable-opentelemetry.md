@@ -43,6 +43,15 @@ receiver.
 - `http.server.connections_open` / `http.server.connections_hijacked_total` and `rpc.server_streams.open` — see "Connection concurrency metrics" below.
 - `session_backend_operation_duration_ms` (histogram, `backend`/`operation` labels — `session/backend_observability.go`) — latency of `ProcessManager.Start`/`RestoreWithWorkDir`/`Attach`, labeled `backend="tmux"`/`"tymux"` so the two can be compared directly; `session.backend.tymux_daemon_ready` is a tymux-only nested span isolating daemon cold-start latency from the rest of `Start`. Added to close BUG-108 (no way to tell whether tymux performs acceptably against tmux before making it a default).
 
+## Database observability
+
+The ent/SQLite client is instrumented by default (`session/dbobs`). The pool is capped at one connection, so every query serializes; pool wait is the contention signal.
+
+- **Slow-query log:** queries at or above `STAPLER_SQUAD_SLOW_QUERY_MS` (default `100`; `0` disables) log `slow database query` at WARN with `duration_ms`, `pool_wait_ms` and a normalized statement. Bind values and literals are never logged.
+- **Stats:** `GET /actuator/db` returns `sql.DBStats` (`wait_count`, `wait_duration_ms`, `in_use`, `open_connections`) plus query, slow and error counters; `/actuator/metrics` embeds the same under `db`. The same values export as OTel gauges `db.pool.*` / `db.slow_queries_total` and histogram `db.query.duration` (ms).
+- **Spans:** when a `TracerProvider` is configured, each query under an RPC span is a `db.<VERB>` child span (`db.statement` normalized, `db.pool_wait_ms`). Queries with no parent span are not traced.
+- `pool_wait_ms` is the delta of the pool-wide `WaitDuration`, so under concurrency it can include queue time caused by other callers; treat it as a hint.
+
 ## Connection concurrency metrics
 
 Added 2026-09 after root-causing a `ConnectError: [deadline_exceeded]` class of
