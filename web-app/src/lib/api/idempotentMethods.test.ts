@@ -18,6 +18,7 @@ describe("idempotentMethodTable", () => {
     expect([...wsEligible].sort()).toEqual([...allowlist.wsUnaryAllowed].sort());
     expect(wsEligible).not.toContain("GetFeatureFlags");
     expect(isCoalescible("GetFeatureFlags")).toBe(true);
+    expect(InsightsService.typeName).toBe("session.v1.InsightsService");
     for (const name of ["GetInsightsSummary", "ListAliases", "ListSessions", "ListPendingApprovals"]) {
       expect(isCoalescible(name)).toBe(true);
       expect(replayable).not.toContain(name);
