@@ -147,6 +147,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
 
   const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
+  // "<session>:<contextLines>" the diff was last requested for; null until a
+  // consumer asks. Keyed on contextLines so changing it refetches, as before.
+  const diffRequestedForRef = useRef<string | null>(null);
   const fetchDiff = useCallback(async () => {
     if (stoppedRef.current) {
       setDiffLoading(false);
@@ -173,14 +176,12 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
       }
       // Diff errors are non-fatal — status error is the primary signal.
       console.error("useSessionVcs: failed to load diff:", err);
+      diffRequestedForRef.current = null; // let the next ensureDiff() retry
     } finally {
       if (!signal.aborted) setDiffLoading(false);
     }
   }, [sessionId, getClient, startDiff, diffContextLines]);
 
-  // "<session>:<contextLines>" the diff was last requested for; null until a
-  // consumer asks. Keyed on contextLines so changing it refetches, as before.
-  const diffRequestedForRef = useRef<string | null>(null);
   const diffKey = `${sessionId}:${diffContextLines}`;
   const ensureDiff = useCallback(() => {
     if (pollMode === "off" || diffRequestedForRef.current === diffKey) return;
@@ -237,7 +238,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     setDiffLoading(true);
     // Cleanup runs before the next session's consumers re-request, so it only
     // aborts a stale in-flight fetch of the previous session.
-    return () => { startDiff(); };
+    return () => {
+      startDiff();
+      diffRequestedForRef.current = null; // an aborted fetch must be re-requested on remount (StrictMode)
+    };
   }, [sessionId, startDiff]);
 
   return {

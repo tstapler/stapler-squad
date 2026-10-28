@@ -1,4 +1,5 @@
 /** GetSessionDiff is the heaviest reload-path read: it must fire only when a consumer is visible. */
+import { StrictMode, useEffect } from "react";
 import { renderHook, act } from "@testing-library/react";
 
 const mockGetVCSStatus = jest.fn();
@@ -90,5 +91,33 @@ describe("useSessionVcs lazy diff", () => {
     await flush();
     expect(mockGetSessionDiff).toHaveBeenCalledTimes(2);
     expect(mockGetSessionDiff).toHaveBeenLastCalledWith({ id: "s7", contextLines: -1 }, expect.anything());
+  });
+
+  it("useSessionVcs_should_ResolveDiff_When_ConsumerEnsuresInsideStrictModeMount", async () => {
+    const { result } = renderHook(
+      () => {
+        const vcs = useSessionVcs("s4", "", "fast");
+        const { ensureDiff } = vcs;
+        useEffect(() => { ensureDiff(); }, [ensureDiff]);
+        return vcs;
+      },
+      { wrapper: StrictMode },
+    );
+    await flush();
+    await flush();
+    expect(result.current.diff?.content).toBe("d");
+    expect(result.current.diffLoading).toBe(false);
+  });
+
+  it("useSessionVcs_should_RetryDiff_When_PreviousRequestFailed", async () => {
+    mockGetSessionDiff.mockRejectedValueOnce(new Error("timeout"));
+    const { result } = renderHook(() => useSessionVcs("s5", "", "fast"));
+    act(() => result.current.ensureDiff());
+    await flush();
+    expect(result.current.diff).toBeNull();
+    act(() => result.current.ensureDiff());
+    await flush();
+    expect(mockGetSessionDiff).toHaveBeenCalledTimes(2);
+    expect(result.current.diff?.content).toBe("d");
   });
 });
