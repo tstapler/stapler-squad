@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // countingStore counts GetAll calls, i.e. real aggregate computations.
@@ -227,4 +228,27 @@ func TestDismissFinding_WhenSummaryCached_ExpectNextSummaryRecomputed(t *testing
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
+}
+
+func TestWatchInsights_WhenTokenStoreNotifies_ExpectSummaryCacheInvalidated(t *testing.T) {
+	t.Parallel()
+	svc, store, _ := newCachedFixture(t)
+	ch := make(chan *tokens.ParseResult, 1)
+	store.subscribeCh = ch
+
+	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	require.NoError(t, err)
+
+	sender := &fakeInsightsEventSender{}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	t.Cleanup(runCancel)
+	done := runWatchInsights(runCtx, svc, sender)
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+	ch <- nil
+	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
+
+	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, store.getAllCalls.Load())
+	requireCleanReturn(t, runCancel, done)
 }

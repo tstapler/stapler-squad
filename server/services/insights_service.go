@@ -1091,6 +1091,9 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 			if !ok {
 				return nil
 			}
+			// The client refetches the summary on this event; drop the cache first
+			// so that refetch is not served pre-change data for up to the TTL.
+			s.summaries.invalidate()
 			var evt *sessionv1.InsightsEvent
 			if result != nil {
 				var snapshot []tokens.SessionRecord
