@@ -6,7 +6,7 @@ import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { AppLink } from "@/components/ui/AppLink";
 import { useBacklogService, mapBacklogItem, type BacklogItem } from "@/lib/hooks/useBacklogService";
-import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
 import { useAppSelector } from "@/lib/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
@@ -86,7 +86,7 @@ export function BacklogItemPanel({
   // (plan.md) confirmed SessionDetail/SessionDetailView/SessionDetailBar have
   // no existing session-level "Live" indicator to reuse instead, so this
   // panel needs its own (ux.md §4 UX AC #15/#20).
-  const { connectionState } = useWatchBacklogItems();
+  const { connectionState } = useBacklogStream();
   const liveRawItem = useAppSelector((state) => selectBacklogItemById(state, backlogItemId));
 
   useEffect(() => {

@@ -202,8 +202,13 @@ export function useWatchBacklogItems(
 
   // On mount, immediately issue the REST snapshot fetch alongside (not
   // gated behind) opening the stream below — Task 4.2.1a/pitfalls.md #1.
+  // Skipped on a warm mount (store already populated): the stream opened
+  // below replays a full snapshot, so the one-shot REST call is redundant and
+  // only delays first paint on list<->board navigation.
+  const storeHasItemsRef = useRef(items.length > 0);
+  storeHasItemsRef.current = items.length > 0;
   useEffect(() => {
-    void refresh();
+    if (!storeHasItemsRef.current) void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilterKey]);
 

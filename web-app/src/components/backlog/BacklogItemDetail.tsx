@@ -18,7 +18,7 @@ import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
-import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { GuidanceRequestPanel } from "@/components/guidance/GuidanceRequestPanel";
@@ -346,7 +346,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
   // entry changes, unlike the hook's fully-remapped `items` array).
   // Task 6.2.1c: connectionState is captured here to mount the
   // ConnectionIndicator in this panel's header (ux.md §3 wireframe, UX AC #20).
-  const { connectionState } = useWatchBacklogItems();
+  const { connectionState } = useBacklogStream();
   const liveRawItem = useAppSelector((state) => selectBacklogItemById(state, itemId));
 
   // Buffered-update state (Story 5.3.2): while editMode is true, an incoming
