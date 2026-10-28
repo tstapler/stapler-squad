@@ -6,6 +6,7 @@
 import React from "react";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
+import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { ROUTE_META } from "../route-meta";
 import BacklogLayout from "../backlog/layout";
 import BacklogSourcesSettingsLayout from "../settings/backlog-sources/layout";
@@ -43,6 +44,7 @@ function renderLayout(Layout: React.ComponentType<{ children: React.ReactNode }>
 
 describe.each(cases)("%s", (_file, flag, path, Layout) => {
   beforeEach(() => {
+    resetFlagStoreForTest();
     mockPathname = path;
     mockReplace.mockClear();
     mockGetFeatureFlags.mockReset();

@@ -101,6 +101,13 @@ func (s *Server) localChain() http.Handler {
 // localChainWith builds localChain over an explicit guard set so tests can
 // exercise a profile before a real procedure registers in it.
 func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) http.Handler {
+	return wrapOuterMiddleware(s.localDispatcherWith(procedures), s.origins)
+}
+
+// localDispatcherWith is the stamp -> HostGuard -> [auth | LocalWriteGuard] -> mux
+// composition without Logging/CORS/Compress: what the unary WebSocket bridge
+// re-enters for each call so every guard behaves as it does for HTTP.
+func (s *Server) localDispatcherWith(procedures map[string]middleware.GuardProfile) http.Handler {
 	inner := http.Handler(s)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
@@ -111,6 +118,11 @@ func (s *Server) localChainWith(procedures map[string]middleware.GuardProfile) h
 		})(inner)
 	}
 	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(
-		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))))
+	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(inner)
+}
+
+// wrapOuterMiddleware adds the HTTP-only outer layers (Logging, CORS, gzip)
+// around a dispatcher.
+func wrapOuterMiddleware(dispatcher http.Handler, origins []string) http.Handler {
+	return middleware.Logging(middleware.CORSWithOrigins(origins)(middleware.Compress(dispatcher)))
 }

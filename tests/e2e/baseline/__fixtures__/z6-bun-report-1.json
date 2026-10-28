@@ -1,0 +1,25 @@
+{
+ "suites": [
+  {
+   "title": "not-found.spec.ts",
+   "file": "not-found.spec.ts",
+   "specs": [
+    {
+     "file": "not-found.spec.ts",
+     "title": "f1 test",
+     "tests": [
+      {
+       "projectName": "chromium",
+       "results": [
+        {
+         "retry": 0,
+         "status": "skipped"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

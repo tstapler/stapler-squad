@@ -1,5 +1,28 @@
 /** @type {import('jest').Config} */
 module.exports = {
+  // Active only under --coverage (jest ignores it otherwise). Directories that hold only new
+  // frontend-responsiveness modules are keyed by directory; mixed directories (legacy files at 0%
+  // from component-only coverage) are keyed by the new files so the gate measures new code only.
+  // requestPriority.ts (73% lines) is deliberately not keyed yet.
+  // Phase 6 command:
+  //   bunx jest --coverage --collectCoverageFrom='src/lib/{api,transport,perf,layout,backlog,telemetry,window,features}/**/*.{ts,tsx}' --no-cache
+  coverageThreshold: Object.fromEntries(
+    [
+      "perf/",
+      "layout/",
+      "backlog/",
+      "window/",
+      "features/",
+      "api/coalescingInterceptor.ts",
+      "api/idempotentMethods.ts",
+      "transport/unary-mux-frame.ts",
+      "transport/unary-ws-transport.ts",
+      "transport/wsUnaryPolicy.ts",
+      "telemetry/logBuffer.ts",
+      "telemetry/clientLogShipper.ts",
+      "telemetry/rpcTiming.ts",
+    ].map((path) => [`./src/lib/${path}`, { lines: 80 }]),
+  ),
   projects: [
     {
       displayName: "web-app",

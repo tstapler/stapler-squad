@@ -150,6 +150,10 @@ async function readDropdownGeometry(page: import('@playwright/test').Page): Prom
     const overlayEl = document.querySelector('[role="dialog"][aria-labelledby="omnibar-title"]');
     const modalEl = overlayEl?.firstElementChild as HTMLElement | null;
     const dropdownEl = document.querySelector('[data-testid="path-completion-dropdown"]');
+    // The panel scrolls (max-height 80vh), and how far down the field sits depends on how many
+    // history rows the shared server has accumulated. Measure where a user would see it after
+    // scrolling it into view, so the check is about clipping, not about that count.
+    dropdownEl?.scrollIntoView({ block: 'nearest' });
     const rows = dropdownEl ? Array.from(dropdownEl.querySelectorAll('[role="option"]')) : [];
     return {
       dropdown: dropdownEl?.getBoundingClientRect().toJSON(),

@@ -2,7 +2,7 @@ name: CSS differential
 
 # Story 5.10: proves vanilla-extract output under Bun equals Node's (oracle) and that the Bun build's CSS
 # matches the Next build's (census) on every Bun bump. A separate workflow, not a build.yml job: a nightly
-# schedule on build.yml would rerun every job in it. Not part of web-build-gate.
+# schedule on build.yml would rerun every job in it.
 on:
   schedule:
     - cron: '17 6 * * *'

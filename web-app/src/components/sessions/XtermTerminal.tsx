@@ -246,6 +246,12 @@ export interface XtermTerminalProps {
   isAltScreenActive?: () => boolean;
   /** Story 1.4.0 (Task 1.4.0c) — see useTerminalGestures's identically-named option. */
   onAltScreenScrollUp?: (lines: number) => void;
+  /**
+   * Story 4.1.3e: false while the owning window is hidden (keep-alive). A hidden terminal skips every
+   * fit()/sampler pass, yields its WebGL slot first, and refits once when this turns true. The stream
+   * keeps writing to xterm either way.
+   */
+  windowActive?: boolean;
 }
 
 export interface XtermTerminalHandle {
@@ -300,7 +306,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   onScrollModeChange,
   isAltScreenActive,
   onAltScreenScrollUp,
+  windowActive = true,
 }, ref) => {
+  const windowActiveRef = useRef(windowActive);
+  windowActiveRef.current = windowActive;
+  // Set when a fit was skipped while hidden; consumed by the activation refit below.
+  const fitDeferredRef = useRef(false);
   // Re-render on Settings > Appearance changes so the font/cursor effects below pick them up.
   const [, setConfigVersion] = useState(0);
   useEffect(() => {
@@ -641,7 +652,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     let postFallbackRafId: number | null = null;
 
     const webglSlot: WebglSlot = {
-      isVisible: () => document.visibilityState === "visible" && (containerRef.current?.clientWidth ?? 0) > 0,
+      isVisible: () => windowActiveRef.current && document.visibilityState === "visible" && (containerRef.current?.clientWidth ?? 0) > 0,
       release: () => {
         if (cancelled || rendererRef.current !== "webgl") return;
         console.log("[XtermTerminal] WebGL budget exceeded, moving this pane to the canvas renderer");
@@ -673,6 +684,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         // not-yet-initialized renderer).
         postFallbackRafId = requestAnimationFrame(() => {
           postFallbackRafId = null;
+          if (!windowActiveRef.current) {
+            fitDeferredRef.current = true;
+            return;
+          }
           const proposed = fitAddonRef.current?.proposeDimensions();
           if (fitAddonRef.current && isFiniteResizeDimensions(proposed)) {
             fitAddonRef.current.fit();
@@ -879,6 +894,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           if (containerEl) {
             const rect = containerEl.getBoundingClientRect();
             console.log(`[XtermTerminal] Container size before fit: ${rect.width}px × ${rect.height}px`);
+          }
+
+          if (!windowActiveRef.current) {
+            fitDeferredRef.current = true;
+            return;
           }
 
           // Log what FitAddon will see
@@ -1292,6 +1312,14 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       const sampleTick = () => {
+        if (!windowActiveRef.current) {
+          fitDeferredRef.current = true;
+          consumeRepaintRequest();
+          anchorBottom = false;
+          stopSampler();
+          flushFitted(true);
+          return;
+        }
         if (!fitAddonRef.current || !terminalRef.current) {
           consumeRepaintRequest();
           pendingFitCallbacks = []; // disposed: nothing left to report
@@ -1448,6 +1476,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       requestFitRef.current = (requested) => {
         // Registered once here; the zero-size retry re-enters with the callback stripped.
         const { onFitted, ...opts } = requested;
+        if (!windowActiveRef.current) {
+          fitDeferredRef.current = true;
+          onFitted?.({ cols: terminal.cols, rows: terminal.rows, stale: true });
+          return;
+        }
         const el = containerRef.current;
         if (!el) {
           onFitted?.({ cols: terminal.cols, rows: terminal.rows, stale: true }); // nothing will fit; release the caller's pending state
@@ -1474,6 +1507,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
         if (!fitAddonRef.current || !terminalRef.current) return;
+        if (!windowActiveRef.current) {
+          fitDeferredRef.current = true;
+          return;
+        }
 
         const entry = entries[0];
         if (!entry) return;
@@ -1485,6 +1522,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         // matches lastContainerSize, which would otherwise dedupe it away.
         if (width === 0 || height === 0) {
           wasZero = true;
+          // Hidden: drop the pending debounce and any running sampler; the restore path above re-fits.
+          if (resizeTimeout) {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = null;
+          }
+          if (samplerActive) {
+            consumeRepaintRequest();
+            anchorBottom = false;
+            stopSampler();
+            flushFitted(true);
+          }
         } else if (wasZero || pendingRefit) {
           const reason: RefitReason = "visibility";
           wasZero = false;
@@ -1530,7 +1578,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
       });
 
-      resizeObserver.observe(containerRef.current!);
+      const observedEl = containerRef.current;
+      if (observedEl) resizeObserver.observe(observedEl);
 
       // A backgrounded tab can lose WebGL glyph-atlas contents without a context-loss event,
       // leaving garbled glyphs over intact buffer text; repaint (clears the atlas) on return.
@@ -1581,6 +1630,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         serializeAddonRef.current = null;
         webglAddonRef.current = null;
         if (containerRef.current) {
+          // eslint-disable-next-line react-hooks/exhaustive-deps -- debug hook was set on the live element; must clear whatever the ref holds now, not a stale capture
           delete (containerRef.current as any).__staplerSquadForceCanvasFallback;
         }
       };
@@ -1651,6 +1701,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current.options.cursorBlink = cursorBlink;
     }
   }, [cursorStyle, cursorBlink]);
+
+  // Hidden -> active: one refit for whatever was skipped while hidden.
+  useEffect(() => {
+    if (!windowActive || !fitDeferredRef.current) return;
+    fitDeferredRef.current = false;
+    requestFitRef.current({ forceRepaint: true, reason: "visibility" });
+  }, [windowActive]);
 
   // Expose terminal methods via ref
   // CRITICAL: Use getter for terminal property to return current ref value

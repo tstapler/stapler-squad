@@ -2,6 +2,10 @@ import { trace } from "@opentelemetry/api";
 import type { Interceptor } from "@connectrpc/connect";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
 
+// jsdom (Jest) defines `performance` without mark/measure.
+const canMeasure = () =>
+  typeof performance !== "undefined" && typeof performance.mark === "function" && typeof performance.measure === "function";
+
 /**
  * Network-queueing-delay attribute name set on the active OTel span (see
  * getNetworkQueueDelayMs below). Named to sort next to the standard
@@ -77,7 +81,7 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
     const method = req.method.name;
     const startMark = `rpc:${method}:start`;
 
-    if (typeof performance !== "undefined") {
+    if (canMeasure()) {
       performance.mark(startMark);
     }
     const wallStart = Date.now();
@@ -92,7 +96,7 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
       const durationMs = Date.now() - wallStart;
       const queueDelayMs = getNetworkQueueDelayMs(req.url);
 
-      if (typeof performance !== "undefined") {
+      if (canMeasure()) {
         try {
           performance.measure(`rpc:${method}`, {
             start: startMark,
@@ -125,4 +129,22 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
       });
     }
   };
+}
+
+type RpcTimingSink = Pick<AnalyticsProvider, "track">;
+let rpcTimingSink: RpcTimingSink | undefined;
+
+/** Registered once by the analytics provider; shared-transport rpc events are dropped until then. */
+export function setRpcTimingSink(sink: RpcTimingSink | undefined): void {
+  rpcTimingSink = sink;
+}
+
+/** rpc-timing interceptor for the shared transport; reads the sink at call time since the transport outlives React context. */
+export function createSharedRpcTimingInterceptor(): Interceptor {
+  return createRpcTimingInterceptor({ track: (event) => rpcTimingSink?.track(event) });
+}
+
+/** Emits a non-RPC event (e.g. `ws_unary_fallback_total`) to the same sink; dropped until one is registered. */
+export function trackSharedEvent(event: Parameters<RpcTimingSink["track"]>[0]): void {
+  rpcTimingSink?.track(event);
 }

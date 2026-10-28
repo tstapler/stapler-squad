@@ -7,6 +7,7 @@
 import React from "react";
 import { render, act } from "@testing-library/react";
 import { PaneTilingContainer } from "../PaneTilingContainer";
+import type { Session } from "@/gen/session/v1/types_pb";
 import type { PaneState, LeafPane, SplitPane } from "@/lib/pane/paneTypes";
 
 // ─── Mock heavy dependencies ──────────────────────────────────────────────────
@@ -18,6 +19,11 @@ jest.mock("@/lib/pane/usePaneShortcuts", () => ({
 // PaneSplitRenderer is a complex recursive component; replace with a stub.
 jest.mock("../PaneSplitRenderer", () => ({
   PaneSplitRenderer: () => <div data-testid="pane-split-renderer" />,
+}));
+
+// Desktop viewport: the provider-less default is mobile, which uses the bottom sheet instead of the key picker.
+jest.mock("@/components/providers/ViewportProvider", () => ({
+  useViewport: () => ({ isMobile: false, isFoldable: false, isInnerScreen: true, isLandscape: false }),
 }));
 
 // PaneContext is consumed by PaneSplitRenderer (mocked) — no need to mock it.
@@ -44,7 +50,7 @@ function makeSplit(id: string, first: LeafPane | SplitPane, second: LeafPane | S
 
 function makeSession(id: string) {
   // Minimal Session-like object; only `id` is accessed in triggerPicker.
-  return { id } as import("@/gen/session/v1/types_pb").Session;
+  return { id } as Session;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -226,5 +232,72 @@ describe("triggerPicker", () => {
     expect(dispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "CANCEL_PICKER" })
     );
+  });
+});
+
+describe("windowActive gating (Story 4.1.3a)", () => {
+  async function renderWithPendingPicker(windowActive: boolean) {
+    const root = makeSplit("split-1", makeLeaf("pane-1", "session-detail"), makeLeaf("pane-2", "session-detail"));
+    const { state, dispatch } = setupReducerMock(root, "pane-1");
+    const session = makeSession("session-X");
+    const ui = (active: boolean, assign: { sessionId: string; version: number } | null) => (
+      <PaneTilingContainer
+        sessions={[session]}
+        paneState={state}
+        dispatch={dispatch}
+        externalSessionAssign={assign}
+        windowActive={active}
+      />
+    );
+    const view = render(ui(true, null));
+    await act(async () => {
+      view.rerender(ui(true, { sessionId: "session-X", version: 1 }));
+    });
+    if (!windowActive) {
+      await act(async () => {
+        view.rerender(ui(false, { sessionId: "session-X", version: 1 }));
+      });
+    }
+    return { dispatch, ...view };
+  }
+
+  it("pickerKeys_should_NotStopPropagation_When_ContainerInHiddenWindow", async () => {
+    const { dispatch } = await renderWithPendingPicker(false);
+    const bubbled = jest.fn();
+    document.addEventListener("keydown", bubbled);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "v", bubbles: true, cancelable: true }));
+    document.removeEventListener("keydown", bubbled);
+    expect(bubbled).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("pickerKeys_should_HandleKey_When_ContainerInActiveWindow", async () => {
+    const { dispatch } = await renderWithPendingPicker(true);
+    const bubbled = jest.fn();
+    document.addEventListener("keydown", bubbled);
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "v", bubbles: true, cancelable: true }));
+    });
+    document.removeEventListener("keydown", bubbled);
+    expect(bubbled).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "SPLIT_AND_ASSIGN_SESSION", direction: "vertical" }));
+  });
+
+  it("externalAssign_should_NotBeConsumed_When_WindowHidden", async () => {
+    const listPane = makeLeaf("pane-list", "session-list");
+    const detailPane = makeLeaf("pane-detail", "session-detail");
+    const { state, dispatch } = setupReducerMock(makeSplit("s", listPane, detailPane), "pane-list");
+    const session = makeSession("session-X");
+    render(
+      <PaneTilingContainer
+        sessions={[session]}
+        paneState={state}
+        dispatch={dispatch}
+        externalSessionAssign={{ sessionId: "session-X", version: 1 }}
+        windowActive={false}
+      />,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

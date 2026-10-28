@@ -62,7 +62,7 @@ func (b *StreamingWSBridge) Handler(apiPrefix string) http.Handler {
 }
 
 func (b *StreamingWSBridge) handleWebSocket(w http.ResponseWriter, r *http.Request, apiPrefix string) {
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	conn, err := upgradeWebSocket(w, r, isAllowedOrigin, 0)
 	if err != nil {
 		log.Warn("[WSBridge] upgrade failed", "path", r.URL.Path, "err", err)
 		return

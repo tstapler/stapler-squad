@@ -11,8 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import {
   container,
   heading,
@@ -76,7 +75,7 @@ export function TaggingClassifierSettings() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadConfig();
   }, [loadConfig]);
@@ -130,7 +129,7 @@ export function TaggingClassifierSettings() {
         <h2 className={heading}>Tag Classification</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={loadConfig}>
+          <button type="button" className="btn btn-primary" onClick={loadConfig}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -194,7 +193,7 @@ export function TaggingClassifierSettings() {
                     className={removeBtn}
                     onClick={() => handleRemoveFallback(name)}
                     aria-label={`Remove fallback model ${name}`}
-                  >
+                  >{/* analytics-exempt */}
                     Remove
                   </button>
                 </li>
@@ -225,7 +224,7 @@ export function TaggingClassifierSettings() {
               disabled={
                 !fallbackInput.trim() || fallbacks.length >= MAX_FALLBACKS
               }
-            >
+            >{/* analytics-exempt */}
               Add
             </button>
           </div>
@@ -248,7 +247,7 @@ export function TaggingClassifierSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {saveStatusMessage && (
