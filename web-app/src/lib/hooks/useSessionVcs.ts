@@ -41,8 +41,15 @@ export interface SessionVcsState extends AsyncResult {
    */
   diffContextLines: number;
   setDiffContextLines: (contextLines: number) => void;
-  /** Refresh both status and diff. */
+  /** Refresh status, plus the diff only if a consumer has asked for it. */
   refresh: () => void;
+  /**
+   * Fetch the diff once per session when a consumer that can show it is
+   * visible. The diff is the heaviest read on the reload path (multi-MB, 5-12 s),
+   * so nothing fetches it on mount; DiffViewer and FilesTab call this. A no-op
+   * when already requested or when pollMode is "off" (hidden window).
+   */
+  ensureDiff: () => void;
 }
 
 
@@ -143,6 +150,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
 
   const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
+  // "<session>:<contextLines>" the diff was last requested for; null until a
+  // consumer asks. Keyed on contextLines so changing it refetches, as before.
+  const diffRequestedForRef = useRef<string | null>(null);
   const fetchDiff = useCallback(async () => {
     if (stoppedRef.current) {
       setDiffLoading(false);
@@ -169,15 +179,23 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
       }
       // Diff errors are non-fatal — status error is the primary signal.
       console.error("useSessionVcs: failed to load diff:", err);
+      diffRequestedForRef.current = null; // let the next ensureDiff() retry
     } finally {
       if (!signal.aborted) setDiffLoading(false);
     }
   }, [sessionId, getClient, startDiff, diffContextLines]);
 
+  const diffKey = `${sessionId}:${diffContextLines}`;
+  const ensureDiff = useCallback(() => {
+    if (pollMode === "off" || diffRequestedForRef.current === diffKey) return;
+    diffRequestedForRef.current = diffKey;
+    void fetchDiff();
+  }, [pollMode, diffKey, fetchDiff]);
+
   const refresh = useCallback(() => {
     fetchStatus();
-    fetchDiff();
-  }, [fetchStatus, fetchDiff]);
+    if (diffRequestedForRef.current === diffKey) void fetchDiff();
+  }, [fetchStatus, fetchDiff, diffKey]);
 
   // Watch session state from the Redux store so VCS data re-fetches whenever
   // the session is updated by the server-pushed watchSessions stream, instead
@@ -227,11 +245,19 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 
-  // Diff: fetch once on mount; consumers call refreshDiff() when needed.
-  // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.
+  // Diff is lazy: consumers call ensureDiff() when visible and refreshDiff()
+  // to reload. Cancellation on unmount/re-run is handled by startDiff.
+  // A session switch drops the previous session's diff.
   useEffect(() => {
-    fetchDiff();
-  }, [fetchDiff]);
+    setDiff(null);
+    setDiffLoading(true);
+    // Cleanup runs before the next session's consumers re-request, so it only
+    // aborts a stale in-flight fetch of the previous session.
+    return () => {
+      startDiff();
+      diffRequestedForRef.current = null; // an aborted fetch must be re-requested on remount (StrictMode)
+    };
+  }, [sessionId, startDiff]);
 
   return {
     status,
@@ -245,5 +271,6 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     diffContextLines,
     setDiffContextLines,
     refresh,
+    ensureDiff,
   };
 }

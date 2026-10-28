@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { DiffPane } from "./DiffPane";
 import { CIStatusBadge } from "./CIStatusBadge";
-import { Session } from "@/gen/session/v1/types_pb";
+import type { Session } from "@/gen/session/v1/types_pb";
 import { diffHeader } from "./DiffViewer.css";
 
 interface DiffViewerProps {
@@ -12,8 +13,10 @@ interface DiffViewerProps {
 
 /** Session-aware diff viewer — reads from SessionVcsContext. */
 export function DiffViewer({ session }: DiffViewerProps) {
-  const { diff: rawDiff, diffLoading: loading, refreshDiff, diffContextLines, setDiffContextLines } =
+  const { diff: rawDiff, diffLoading: loading, refreshDiff, ensureDiff, diffContextLines, setDiffContextLines } =
     useSessionVcsContext();
+  // Mounted only while the diff tab is shown, so this is the "tab is visible" trigger.
+  useEffect(() => { ensureDiff(); }, [ensureDiff]);
 
   return (
     <DiffPane
