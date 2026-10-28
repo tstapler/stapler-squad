@@ -90,11 +90,22 @@ export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; a
   return out;
 }
 
-/** True when this run's result for the spec is NOT a clean attempt-0 pass (a failure, or a retry that then passed). */
-export function failedOrRetried(attempts: Attempt[]): boolean {
+/** Specs whose Next-baseline tests deliberately `test.skip(isBunBuild())`; a Bun-only block there asserts the decided difference. */
+export const BUN_SKIP_ALLOWED_SPECS: ReadonlySet<string> = new Set(["not-found.spec.ts", "theme-fouc.spec.ts"]);
+
+/**
+ * True when this run's result for the spec is NOT a clean attempt-0 pass (a failure, or a retry that then passed).
+ * A lone `skipped` attempt is clean only for BUN_SKIP_ALLOWED_SPECS; anywhere else a skip is an unintended gap and counts as a
+ * failure. (A test that never reported at all also counts as failed.)
+ */
+export function failedOrRetried(attempts: Attempt[], spec = ""): boolean {
   if (attempts.length === 0) return true; // did not run this run -- treated as a failure to run
-  return !(attempts.length === 1 && attempts[0].status === "passed");
+  if (attempts.length !== 1) return true;
+  const status = attempts[0].status;
+  return !(status === "passed" || (status === "skipped" && BUN_SKIP_ALLOWED_SPECS.has(spec)));
 }
+
+const specOfKey = (ks: string): string => ks.split(" :: ")[0];
 
 export function finalStatus(attempts: Attempt[]): string {
   if (attempts.length === 0) return "missing";
@@ -194,13 +205,13 @@ function evaluateBaselinePassSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
   const ks = keyString({ spec: b.spec, project: b.project, title: b.title });
   const runs = ctx.bunAttemptsFor(ks);
   const n = runs.length;
-  const failCount = runs.filter(failedOrRetried).length;
+  const failCount = runs.filter((a) => failedOrRetried(a, specOfKey(ks))).length;
   if (failCount === 0) return null; // still clean on Bun
 
   const diffEntry = ctx.expectedDiffKeys.get(`${b.spec} :: ${b.title}`);
   if (diffEntry) ctx.expectedDiffSeen.add(`${b.spec} :: ${b.title}`);
   const nextEntry = ctx.nextAttempts.get(ks);
-  const sharedFlake = nextEntry ? failedOrRetried(nextEntry.attempts) : false;
+  const sharedFlake = nextEntry ? failedOrRetried(nextEntry.attempts, specOfKey(ks)) : false;
 
   if (sharedFlake) {
     return { severity: "report", spec: b.spec, title: b.title, message: `Shared flake: fails on both e2e-next and e2e-bun this run (${failCount}/${n} Bun runs).` };
@@ -237,7 +248,7 @@ function evaluateBaselineFailSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
   const ks = keyString({ spec: b.spec, project: b.project, title: b.title });
   const runs = ctx.bunAttemptsFor(ks);
   const n = runs.length;
-  const failCount = runs.filter(failedOrRetried).length;
+  const failCount = runs.filter((a) => failedOrRetried(a, specOfKey(ks))).length;
   if (n > 0 && failCount === 0) {
     return { severity: "report", spec: b.spec, title: b.title, message: `baseline class 'fail' now passes cleanly on Bun (${n}/${n} runs) -- reported, not a gate requirement.` };
   }
@@ -263,10 +274,10 @@ function evaluateSpecsMissingFromBaseline(bunKeys: Set<string>, baselineKeys: Se
   for (const ks of bunKeys) {
     if (baselineKeys.has(ks)) continue; // handled by evaluateBaselineSpecs
     const runs = ctx.bunAttemptsFor(ks);
-    const failCount = runs.filter(failedOrRetried).length;
+    const failCount = runs.filter((a) => failedOrRetried(a, specOfKey(ks))).length;
     if (failCount === 0) continue;
     const nextEntry = ctx.nextAttempts.get(ks);
-    const nextFailed = nextEntry ? failedOrRetried(nextEntry.attempts) : false;
+    const nextFailed = nextEntry ? failedOrRetried(nextEntry.attempts, specOfKey(ks)) : false;
     findings.push(nextFailed ? missingSpecBothFailFinding(ks) : missingSpecBunOnlyFailFinding(ks, failCount, runs.length));
   }
   return findings;
@@ -299,7 +310,7 @@ function evaluateExpectedDiffShrink(entries: ExpectedDiffEntry[], bunKeys: Set<s
       continue;
     }
     const runs = ctx.bunAttemptsFor(matchKey);
-    const failCount = runs.filter(failedOrRetried).length;
+    const failCount = runs.filter((a) => failedOrRetried(a, specOfKey(matchKey))).length;
     if (failCount === 0) {
       findings.push({ severity: "fail", spec: e.spec, title: e.test, message: `bun-expected-diff.json entry (${dk}) now passes ${runs.length}/${runs.length} on Bun and was not removed -- the list may only shrink.` });
     }

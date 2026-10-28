@@ -80,4 +80,15 @@ describe("useSessionVcs lazy diff", () => {
     unmount();
     expect(signal?.aborted).toBe(true);
   });
+
+  it("useSessionVcs_should_RefetchDiff_When_ContextLinesChangeAfterRequest", async () => {
+    const { result } = renderHook(() => useSessionVcs("s7", "", "fast"));
+    act(() => result.current.ensureDiff());
+    await flush();
+    act(() => result.current.setDiffContextLines(-1));
+    act(() => result.current.ensureDiff());
+    await flush();
+    expect(mockGetSessionDiff).toHaveBeenCalledTimes(2);
+    expect(mockGetSessionDiff).toHaveBeenLastCalledWith({ id: "s7", contextLines: -1 }, expect.anything());
+  });
 });

@@ -35,6 +35,12 @@ export interface SessionVcsState extends AsyncResult {
   refreshStatus: () => void;
   /** Trigger a fresh diff fetch (shared across all consumers). */
   refreshDiff: () => void;
+  /**
+   * Unchanged lines of context requested per hunk: 0 = server default (3),
+   * -1 = whole file. Changing it refetches the diff.
+   */
+  diffContextLines: number;
+  setDiffContextLines: (contextLines: number) => void;
   /** Refresh status, plus the diff only if a consumer has asked for it. */
   refresh: () => void;
   /**
@@ -80,6 +86,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   const [diff, setDiff] = useState<SessionDiff | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(true);
+  const [diffContextLines, setDiffContextLines] = useState(0);
   const [error, setError] = useState<Error | null>(null);
 
   // Set once GetVCSStatus reports the session no longer exists, so the 60s
@@ -148,7 +155,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     const signal = startDiff();
     setDiffLoading(true);
     try {
-      const response = await getClient().getSessionDiff({ id: sessionId }, { signal });
+      const response = await getClient().getSessionDiff({ id: sessionId, contextLines: diffContextLines }, { signal });
       if (signal.aborted) return;
       if (response.diffStats) {
         setDiff({
@@ -169,20 +176,22 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     } finally {
       if (!signal.aborted) setDiffLoading(false);
     }
-  }, [sessionId, getClient, startDiff]);
+  }, [sessionId, getClient, startDiff, diffContextLines]);
 
-  // Session id the diff was last requested for; null until a consumer asks.
+  // "<session>:<contextLines>" the diff was last requested for; null until a
+  // consumer asks. Keyed on contextLines so changing it refetches, as before.
   const diffRequestedForRef = useRef<string | null>(null);
+  const diffKey = `${sessionId}:${diffContextLines}`;
   const ensureDiff = useCallback(() => {
-    if (pollMode === "off" || diffRequestedForRef.current === sessionId) return;
-    diffRequestedForRef.current = sessionId;
+    if (pollMode === "off" || diffRequestedForRef.current === diffKey) return;
+    diffRequestedForRef.current = diffKey;
     void fetchDiff();
-  }, [pollMode, sessionId, fetchDiff]);
+  }, [pollMode, diffKey, fetchDiff]);
 
   const refresh = useCallback(() => {
     fetchStatus();
-    if (diffRequestedForRef.current === sessionId) void fetchDiff();
-  }, [fetchStatus, fetchDiff, sessionId]);
+    if (diffRequestedForRef.current === diffKey) void fetchDiff();
+  }, [fetchStatus, fetchDiff, diffKey]);
 
   // Watch session state from the Redux store so VCS data re-fetches whenever
   // the session is updated by the server-pushed watchSessions stream, instead
@@ -240,6 +249,8 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     error,
     refreshStatus: fetchStatus,
     refreshDiff: fetchDiff,
+    diffContextLines,
+    setDiffContextLines,
     refresh,
     ensureDiff,
   };

@@ -112,11 +112,11 @@ test.describe("insights-session-route", () => {
 
     await insights.getSessionRow(/orphan-project/i).click();
 
-    // next.config.ts's trailingSlash: true rewrites this static-export route's
-    // href to a trailing "/" before the query string.
+    // Next's trailingSlash: true (next.config.ts) puts a "/" before the query string; the Bun
+    // router has no such setting. Both resolve to the same route, so the slash is optional.
     await expect(detail.getInsightsOpenFullPageLink()).toHaveAttribute(
       "href",
-      "/insights/session-detail/?sessionId=conv-999"
+      /^\/insights\/session-detail\/?\?sessionId=conv-999$/
     );
   });
 
