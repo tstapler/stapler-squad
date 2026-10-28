@@ -55,8 +55,8 @@ export default defineConfig({
     timeout: 5000,
   },
 
-  // Run tests sequentially
-  fullyParallel: false,
+  // --shard balances by individual test, not whole file; workers:1 below is unchanged.
+  fullyParallel: true,
 
   // Retry failed tests once
   retries: 1,
