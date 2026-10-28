@@ -244,6 +244,7 @@ export const categoryTitle = style({
   // Story 4.3: sticky group headers — stick to top of scrolling column
   position: "sticky",
   top: 0,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 10,
   background: vars.color.surfaceSubtle,
   borderLeft: `4px solid ${vars.color.primary}`,

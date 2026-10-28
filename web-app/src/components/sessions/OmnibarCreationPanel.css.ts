@@ -60,6 +60,7 @@ export const slashDropdownWrapper = style({
   bottom: "calc(100% + 2px)",
   left: 0,
   right: 0,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 50,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,

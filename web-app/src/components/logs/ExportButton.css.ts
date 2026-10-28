@@ -39,6 +39,7 @@ export const dropdown = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: "6px",
   boxShadow: vars.shadow.md,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 100,
   minWidth: "180px",
   overflow: "hidden",

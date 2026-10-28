@@ -11,6 +11,7 @@ export const modalOverlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   padding: "20px",
 });

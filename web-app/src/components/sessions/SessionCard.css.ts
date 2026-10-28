@@ -552,6 +552,7 @@ export const overflowMenu = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.lg,
   boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   padding: "4px",
   display: "flex",
@@ -667,6 +668,7 @@ export const renameDialog = style({
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   animationName: fadeIn,
   animationDuration: "0.2s",

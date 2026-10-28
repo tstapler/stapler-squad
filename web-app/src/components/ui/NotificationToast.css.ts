@@ -728,6 +728,7 @@ export const overflowMenu = style({
   position: "absolute",
   right: "16px",
   bottom: "56px",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1,
   display: "flex",
   flexDirection: "column",
