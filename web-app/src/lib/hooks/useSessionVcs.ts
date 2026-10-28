@@ -35,8 +35,15 @@ export interface SessionVcsState extends AsyncResult {
   refreshStatus: () => void;
   /** Trigger a fresh diff fetch (shared across all consumers). */
   refreshDiff: () => void;
-  /** Refresh both status and diff. */
+  /** Refresh status, plus the diff only if a consumer has asked for it. */
   refresh: () => void;
+  /**
+   * Fetch the diff once per session when a consumer that can show it is
+   * visible. The diff is the heaviest read on the reload path (multi-MB, 5-12 s),
+   * so nothing fetches it on mount; DiffViewer and FilesTab call this. A no-op
+   * when already requested or when pollMode is "off" (hidden window).
+   */
+  ensureDiff: () => void;
 }
 
 
@@ -164,10 +171,18 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     }
   }, [sessionId, getClient, startDiff]);
 
+  // Session id the diff was last requested for; null until a consumer asks.
+  const diffRequestedForRef = useRef<string | null>(null);
+  const ensureDiff = useCallback(() => {
+    if (pollMode === "off" || diffRequestedForRef.current === sessionId) return;
+    diffRequestedForRef.current = sessionId;
+    void fetchDiff();
+  }, [pollMode, sessionId, fetchDiff]);
+
   const refresh = useCallback(() => {
     fetchStatus();
-    fetchDiff();
-  }, [fetchStatus, fetchDiff]);
+    if (diffRequestedForRef.current === sessionId) void fetchDiff();
+  }, [fetchStatus, fetchDiff, sessionId]);
 
   // Watch session state from the Redux store so VCS data re-fetches whenever
   // the session is updated by the server-pushed watchSessions stream, instead
@@ -205,11 +220,16 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 
-  // Diff: fetch once on mount; consumers call refreshDiff() when needed.
-  // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.
+  // Diff is lazy: consumers call ensureDiff() when visible and refreshDiff()
+  // to reload. Cancellation on unmount/re-run is handled by startDiff.
+  // A session switch drops the previous session's diff.
   useEffect(() => {
-    fetchDiff();
-  }, [fetchDiff]);
+    setDiff(null);
+    setDiffLoading(true);
+    // Cleanup runs before the next session's consumers re-request, so it only
+    // aborts a stale in-flight fetch of the previous session.
+    return () => { startDiff(); };
+  }, [sessionId, startDiff]);
 
   return {
     status,
@@ -221,5 +241,6 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     refreshStatus: fetchStatus,
     refreshDiff: fetchDiff,
     refresh,
+    ensureDiff,
   };
 }
