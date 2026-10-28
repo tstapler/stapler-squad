@@ -418,6 +418,7 @@ jobs:
       # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
       - name: Ensure unzip, tmux and git
         timeout-minutes: 10
+        shell: bash
         run: |
           missing=()
           for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
@@ -634,6 +635,7 @@ jobs:
       # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
       - name: Ensure unzip, tmux and git
         timeout-minutes: 10
+        shell: bash
         run: |
           missing=()
           for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
