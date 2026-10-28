@@ -1,5 +1,19 @@
 # Plan: Backlog Page Performance
 
+## Root Cause
+
+The page is slow for several independent structural reasons, none profiled end to end. Per-cause contribution to load time is **UNVERIFIED** (no before/after timing was taken); each cause below is VERIFIED only as present in code at the cited location before the fix.
+
+| # | Cause | Evidence | Impact on load time |
+|---|---|---|---|
+| 1 | Backend N+1: `annotateDuplicatePending` called `storage.ListItemSessions` once per review-status item, though `ListBacklogItemSummaries` had already batch-loaded `item_sessions` (`server/services/backlog_service_query.go`) | VERIFIED in code; see Phase 2 | UNVERIFIED |
+| 2 | No composite index for the default `ORDER BY priority ASC, updated_at DESC` sort (`session/ent/schema/backlog_item.go`) | VERIFIED: only single-column and `status`-led indexes existed | UNVERIFIED (depends on table size) |
+| 3 | `sortedItems`/groups recomputed every render, and `BacklogTableRow` unmemoized, so any live stream update re-rendered every row (`web-app/src/app/backlog/page.tsx`) | VERIFIED in code; see Phase 1 | UNVERIFIED |
+| 4 | Mount always issued `listBacklogItems` even when the Redux store was already populated, duplicating the stream's initial snapshot (`useWatchBacklogItems.ts`) | VERIFIED in code; see Phase 3 | UNVERIFIED |
+| 5 | `useWatchBacklogItems` lived in the page, so list↔board switching tore down and re-opened the stream and refetched (`backlog/layout.tsx`) | VERIFIED in code; see Phase 4 | UNVERIFIED |
+
+Causes 3–5 explain slow view switching; causes 1–2 explain slow cold load. That split is INFERRED from code structure, not measured.
+
 ## Phased Approach
 
 Fix the highest-impact, lowest-risk items first (render path), then backend queries, then view switching architecture.
