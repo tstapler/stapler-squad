@@ -90,10 +90,14 @@ export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; a
   return out;
 }
 
-/** True when this run's result for the spec is NOT a clean attempt-0 pass (a failure, or a retry that then passed). */
+/**
+ * True when this run's result for the spec is NOT a clean attempt-0 pass (a failure, or a retry that then passed).
+ * A lone `skipped` attempt is clean: Next-baseline specs deliberately `test.skip(isBunBuild())` where a
+ * Bun-only block asserts the decided difference. (A test that never reported at all still counts as failed.)
+ */
 export function failedOrRetried(attempts: Attempt[]): boolean {
   if (attempts.length === 0) return true; // did not run this run -- treated as a failure to run
-  return !(attempts.length === 1 && attempts[0].status === "passed");
+  return !(attempts.length === 1 && (attempts[0].status === "passed" || attempts[0].status === "skipped"));
 }
 
 export function finalStatus(attempts: Attempt[]): string {
