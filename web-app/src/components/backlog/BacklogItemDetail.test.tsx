@@ -21,6 +21,7 @@ import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { VCSStatusSchema } from "@/gen/session/v1/types_pb";
 import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { defined } from "@/lib/utils/defined";
 
 // Heavy children pull their own hooks/timers; stub them out so this test is
 // focused on BacklogItemDetail's own render behavior.
@@ -46,8 +47,8 @@ jest.mock("./TriageReviewPanel", () => ({
       <button
         type="button"
         data-testid="mock-triage-answer-question"
-        onClick={() => props.onAnswerQuestion!("Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global")}
-      >
+        onClick={() => defined(props.onAnswerQuestion)("Q: Should retries be per-workflow or global?\nA: Per-workflow, default to global")}
+      >{/* analytics-exempt */}
         Mock answer question
       </button>
     ) : null,
@@ -207,6 +208,7 @@ jest.mock("@connectrpc/connect", () => ({
       })(),
   }),
 }));
+jest.mock("@/lib/api/transport", () => ({ getWatchTransport: () => ({}), getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect-web", () => ({
   createConnectTransport: jest.fn().mockReturnValue({}),
 }));

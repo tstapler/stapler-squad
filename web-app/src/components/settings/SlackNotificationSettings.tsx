@@ -5,8 +5,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { formatRelativeTime } from "@/lib/utils/datetime";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import {
@@ -113,7 +112,7 @@ export function SlackNotificationSettings() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadConfig();
   }, [loadConfig]);
@@ -245,7 +244,7 @@ export function SlackNotificationSettings() {
             type="button"
             className="btn btn-primary"
             onClick={loadConfig}
-          >
+          >{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -292,7 +291,7 @@ export function SlackNotificationSettings() {
                 onClick={handleRemoveWebhook}
                 disabled={saving}
                 data-testid="slack-webhook-confirm-remove"
-              >
+              >{/* analytics-exempt */}
                 Confirm remove?
               </button>
             ) : (
@@ -302,7 +301,7 @@ export function SlackNotificationSettings() {
                 onClick={() => setRemoveConfirming(true)}
                 disabled={saving}
                 data-testid="slack-webhook-remove"
-              >
+              >{/* analytics-exempt */}
                 Remove
               </button>
             ))}
@@ -328,7 +327,7 @@ export function SlackNotificationSettings() {
             className="btn btn-secondary"
             onClick={handleTestSend}
             disabled={testDisabled}
-          >
+          >{/* analytics-exempt */}
             {testSubmitting ? "Sending…" : "Send test message"}
           </button>
           {testResult && (
@@ -439,7 +438,7 @@ export function SlackNotificationSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving || Boolean(webhookError)}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
         </div>

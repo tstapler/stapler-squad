@@ -941,3 +941,39 @@ func f(c *C) { c.GetFeatureFlagWithDefault(a, featureFlagDefault(a)) }`)
 	files := dfltParseRepoSources(t)
 	require.Empty(t, dfltDefaultViolations(files, dfltStringConsts(files)))
 }
+
+func flagStates(t *testing.T, svc *FeatureFlagService) map[string]bool {
+	t.Helper()
+	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, f := range resp.Msg.GetFlags() {
+		got[f.GetName()] = f.GetEnabled()
+	}
+	return got
+}
+
+func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAliveFalse_WhenFreshConfig(t *testing.T) {
+	withIsolatedStateDir(t)
+	got := flagStates(t, NewFeatureFlagService())
+
+	for name, want := range map[string]bool{
+		"request_coalescing":   true,
+		"unary_over_ws":        false,
+		"unary_over_ws_remote": false,
+		"window_keep_alive":    false,
+	} {
+		enabled, registered := got[name]
+		require.True(t, registered, "%s is registered", name)
+		require.Equal(t, want, enabled, name)
+	}
+}
+
+func TestKnownFeatureFlags_ShouldReportKeepAliveFalse_WhenFreshConfig_AndTrueAfterFlip(t *testing.T) {
+	withIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	require.False(t, flagStates(t, svc)["window_keep_alive"])
+
+	require.NoError(t, flagUpdate(svc, "window_keep_alive", true))
+	require.True(t, flagStates(t, svc)["window_keep_alive"])
+}

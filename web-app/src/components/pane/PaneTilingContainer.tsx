@@ -8,6 +8,7 @@ import { usePaneShortcuts } from "@/lib/pane/usePaneShortcuts";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
 import type { PaneState, PaneAction, SplitDirection } from "@/lib/pane/paneTypes";
 import { PaneSplitRenderer } from "./PaneSplitRenderer";
+import { usePanePickerKeys } from "./usePanePickerKeys";
 import { PaneContext } from "./PaneContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
@@ -39,6 +40,8 @@ interface PaneTilingContainerProps {
     forceNewPane?: boolean;
     version: number;
   } | null;
+  /** False when this container's window is retained but hidden (keep-alive); gates keys, focus and external assign. */
+  windowActive?: boolean;
 }
 
 /**
@@ -52,6 +55,7 @@ export function PaneTilingContainer({
   paneState,
   dispatch,
   externalSessionAssign,
+  windowActive = true,
 }: PaneTilingContainerProps) {
   const state = paneState;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -140,75 +144,31 @@ export function PaneTilingContainer({
   );
 
   // Register keyboard shortcuts
-  usePaneShortcuts(state, dispatch, containerRef);
+  usePaneShortcuts(state, dispatch, containerRef, windowActive);
 
-  // Keyboard handler for the pane picker: Escape cancels, A–Z selects the nth eligible pane.
-  useEffect(() => {
-    if (!pickerPendingSession) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        cancelPicker();
-        return;
-      }
-      const upper = e.key.toUpperCase();
-      if (upper === "M") {
-        e.stopPropagation();
-        setPeekSession(pickerPendingSession);
-        cancelPicker();
-        return;
-      }
-      if (upper === "V") {
-        e.stopPropagation();
-        dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "vertical" });
-        cancelPicker();
-        return;
-      }
-      if (upper === "H") {
-        e.stopPropagation();
-        dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "horizontal" });
-        cancelPicker();
-        return;
-      }
-      if (upper.length === 1 && upper >= "A" && upper <= "Z") {
-        const allLeaves = getAllLeaves(state.root);
-        const eligiblePanes = allLeaves.filter((l) => l.viewKind !== "session-list");
-        const idx = upper.charCodeAt(0) - 65;
-        const target = eligiblePanes[idx];
-        if (target) {
-          e.stopPropagation();
-          dispatch({ type: "ASSIGN_SESSION", paneId: target.id, sessionId: pickerPendingSession.id });
-          dispatch({ type: "ASSIGN_TAB", paneId: target.id, tab: "terminal" });
-          cancelPicker();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [pickerPendingSession, state.root, state.focusedPaneId, dispatch, cancelPicker]);
+  const openPeek = useCallback((session: Session) => setPeekSession(session), []);
+  usePanePickerKeys(windowActive, { pickerPendingSession, state, dispatch, cancelPicker, openPeek });
 
   // Focus the mobile sheet when it opens so keyboard and screen reader users can interact.
   useEffect(() => {
-    if (mobilePickerSession) {
+    if (windowActive && mobilePickerSession) {
       mobilePickerSheetRef.current?.focus();
     }
-  }, [mobilePickerSession]);
+  }, [windowActive, mobilePickerSession]);
 
   // Focus the first button in the picker action bar when it appears, so keyboard
   // and screen reader users can immediately interact without hunting for focus.
   useEffect(() => {
-    if (pickerPendingSession && pickerBarRef.current) {
+    if (windowActive && pickerPendingSession && pickerBarRef.current) {
       const firstBtn = pickerBarRef.current.querySelector<HTMLButtonElement>("button");
       firstBtn?.focus();
     }
-  }, [pickerPendingSession]);
+  }, [windowActive, pickerPendingSession]);
 
   // When externalSessionAssign fires (omnibar, URL nav, keyboard), route through
   // triggerPicker so the user gets the same pane-picker UX as session-list clicks.
   useEffect(() => {
-    if (!externalSessionAssign) return;
+    if (!windowActive || !externalSessionAssign) return;
     if (externalSessionAssign.version === prevVersionRef.current) return;
     prevVersionRef.current = externalSessionAssign.version;
 
@@ -219,7 +179,7 @@ export function PaneTilingContainer({
     } else {
       triggerPicker(session, externalSessionAssign.tab);
     }
-  }, [externalSessionAssign, sessions, triggerPicker, triggerPickerForceNew]);
+  }, [windowActive, externalSessionAssign, sessions, triggerPicker, triggerPickerForceNew]);
 
   const allLeaves = pickerPendingSession ? getAllLeaves(state.root) : [];
   const listPane = allLeaves.find((l) => l.viewKind === "session-list") ?? null;
@@ -235,6 +195,7 @@ export function PaneTilingContainer({
           state={state}
           dispatch={dispatch}
           sessions={sessions}
+          windowActive={windowActive}
         />
         {/* Aria-live region: always in DOM, announces picker appearance to screen readers */}
         <div
