@@ -2,6 +2,7 @@
 // +feature: backlog:session-steer
 
 import { useEffect, useRef, useState } from "react";
+import type { Session } from "@/gen/session/v1/types_pb";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
 import { classifySessionKind, isSteerable, type SessionKind } from "@/lib/backlog/sessionKind";
@@ -11,6 +12,7 @@ import { useShowMore } from "@/lib/hooks/useShowMore";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
+import { JumpToSessionPanel } from "./JumpToSessionPanel";
 import { JulesStatusBadge, type JulesSessionPhase } from "../JulesStatusBadge";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./SessionsSection.css";
@@ -90,6 +92,14 @@ export interface SessionsSectionProps {
    * unaffected.
    */
   authReconnectRequired?: boolean;
+  /**
+   * Fetches the full Session proto by id, for JumpToSessionPanel's real
+   * inline terminal. Optional (defaults to a no-op) so the many existing
+   * SessionsSection unit tests that predate this prop don't all need
+   * updating just to satisfy the type — the real caller (BacklogItemDetail)
+   * always supplies useSessionService's getSession.
+   */
+  getSession?: (id: string) => Promise<Session | null>;
 }
 
 const SHOW_MORE_CAP = 5;
@@ -114,6 +124,7 @@ export function SessionsSection({
   onSteerSession,
   steeringSessionId,
   authReconnectRequired = false,
+  getSession = async () => null,
 }: SessionsSectionProps) {
   const { visible, hasMore, remaining, showAll } = useShowMore(
     item.id,
@@ -239,6 +250,11 @@ export function SessionsSection({
       defaultExpanded={defaultExpanded}
     >
       <div className={styles.section}>
+        <JumpToSessionPanel
+          linkedSessions={item.linkedSessions}
+          backlogItemId={item.id}
+          getSession={getSession}
+        />
         {/* Story 4.1.4: synthetic-session rows (Collapsible + SessionDiagnosticPanel)
             get their own local CollapsibleGroup, deliberately NOT the page-level
             CollapsibleGroup BacklogItemDetail.tsx wraps every top-level sibling
