@@ -44,6 +44,7 @@ export function FileDiffView({
       </div>
       <div className={styles.diff}>
         <DiffPane
+          autoFocus
           content={content}
           added={added}
           removed={removed}

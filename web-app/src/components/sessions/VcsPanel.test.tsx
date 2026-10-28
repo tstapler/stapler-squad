@@ -126,13 +126,14 @@ describe("VcsPanel", () => {
         create(FileChangeSchema, { path: "src/foo.ts", status: FileStatus.MODIFIED, additions: 1, deletions: 1 }),
       ],
     });
-    const mockContext = (diffContent: string | null) =>
+    const mockContext = (diffContent: string | null, diffLoading = false) =>
       mockUseSessionVcsContext.mockReturnValue({
         status,
         statusLoading: false,
         error: null,
         refresh: jest.fn(),
         diff: diffContent === null ? null : { content: diffContent, added: 1, removed: 1 },
+        diffLoading,
         diffContextLines: 0,
         setDiffContextLines: jest.fn(),
       });
@@ -151,6 +152,18 @@ describe("VcsPanel", () => {
       fireEvent.click(screen.getByTestId("file-diff-back"));
       expect(screen.queryByTestId("file-diff-view")).not.toBeInTheDocument();
       expect(screen.getByTestId("vcs-widget-loaded")).toBeInTheDocument();
+    });
+
+    it("VcsPanel_should_KeepFileDiffOpen_When_DiffBlankedWhileRefetching", () => {
+      mockContext(FOO_DIFF);
+      const { rerender } = render(<VcsPanel />);
+      fireEvent.click(screen.getByRole("button", { name: /src\/foo\.ts/ }));
+      expect(screen.getByTestId("file-diff-view")).toBeInTheDocument();
+
+      mockContext(null, true);
+      rerender(<VcsPanel />);
+      expect(screen.getByTestId("file-diff-view")).toBeInTheDocument();
+      expect(screen.getByTestId("mock-diff-pane")).toHaveTextContent("+b");
     });
 
     it("VcsPanel_should_FallBackToFilesTab_When_DiffHasNoSectionForFile", () => {

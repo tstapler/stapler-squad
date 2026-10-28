@@ -46,29 +46,29 @@ describe("hunkDomId", () => {
 describe("pairSplitRows", () => {
   it("duplicates context onto both sides", () => {
     const c = l("context", " a");
-    expect(pairSplitRows([c])).toEqual([{ left: c, right: c }]);
+    expect(pairSplitRows([c])).toEqual([{ left: c, right: c, leftIdx: 0, rightIdx: 0 }]);
   });
   it("pads the right side for delete-only runs", () => {
     const d = l("delete", "-a");
-    expect(pairSplitRows([d])).toEqual([{ left: d, right: null }]);
+    expect(pairSplitRows([d])).toEqual([{ left: d, right: null, leftIdx: 0, rightIdx: -1 }]);
   });
   it("pads the left side for add-only runs", () => {
     const a = l("add", "+a");
-    expect(pairSplitRows([a])).toEqual([{ left: null, right: a }]);
+    expect(pairSplitRows([a])).toEqual([{ left: null, right: a, leftIdx: -1, rightIdx: 0 }]);
   });
   it("pairs a mixed 3-delete / 1-add run index by index", () => {
     const [d1, d2, d3] = [l("delete", "-1"), l("delete", "-2"), l("delete", "-3")];
     const a1 = l("add", "+1");
     expect(pairSplitRows([d1, d2, d3, a1])).toEqual([
-      { left: d1, right: a1 },
-      { left: d2, right: null },
-      { left: d3, right: null },
+      { left: d1, right: a1, leftIdx: 0, rightIdx: 3 },
+      { left: d2, right: null, leftIdx: 1, rightIdx: -1 },
+      { left: d3, right: null, leftIdx: 2, rightIdx: -1 },
     ]);
   });
   it("keeps rows aligned after an asymmetric block", () => {
     const c = l("context", " c");
     const rows = pairSplitRows([l("delete", "-1"), l("delete", "-2"), l("add", "+1"), c]);
     expect(rows).toHaveLength(3);
-    expect(rows[2]).toEqual({ left: c, right: c });
+    expect(rows[2]).toEqual({ left: c, right: c, leftIdx: 3, rightIdx: 3 });
   });
 });

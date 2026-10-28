@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parseDiff } from "@/lib/utils/parseDiff";
+import { CONTEXT_SERVER_DEFAULT } from "@/lib/diff/contextLines";
 import { buildHunkList, hunkDomId, stepHunkIndex } from "@/lib/diff/diffNavigation";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { DiffRenderer, type DiffViewMode } from "@/components/shared/DiffRenderer";
@@ -18,6 +19,8 @@ interface DiffPaneProps {
   contextLines?: number;
   onContextLinesChange?: (contextLines: number) => void;
   header?: ReactNode;
+  /** Take keyboard focus on mount so n/p/s work immediately; set when the user just opened the pane. */
+  autoFocus?: boolean;
 }
 
 /**
@@ -34,6 +37,7 @@ export function DiffPane({
   contextLines,
   onContextLinesChange,
   header,
+  autoFocus = false,
 }: DiffPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const highlighter = useMemo(() => new LezerHighlighter(), []);
@@ -42,15 +46,15 @@ export function DiffPane({
 
   const hunks = useMemo(() => buildHunkList(parseDiff(content)), [content]);
 
-  // The diff changed underneath the cursor (refresh, context change): drop a now-invalid index.
-  useEffect(() => {
-    setActiveHunk((cur) => (cur !== null && cur >= hunks.length ? null : cur));
-  }, [hunks.length]);
+  // Context expansion lives in shared session state; don't leave "Expand all" sticky after this view goes away.
+  const contextChangeRef = useRef(onContextLinesChange);
+  contextChangeRef.current = onContextLinesChange;
+  useEffect(() => () => contextChangeRef.current?.(CONTEXT_SERVER_DEFAULT), []);
 
   // n/p only dispatch while focus is inside a [data-context="diff"] element.
   useEffect(() => {
-    paneRef.current?.focus({ preventScroll: true });
-  }, []);
+    if (autoFocus) paneRef.current?.focus({ preventScroll: true });
+  }, [autoFocus]);
 
   const navigate = useCallback(
     (direction: "next" | "prev") => setActiveHunk((cur) => stepHunkIndex(cur, hunks.length, direction)),
@@ -64,11 +68,12 @@ export function DiffPane({
   useShortcut("diff.hunk.prev", { key: "p", context: "diff", label: "Previous change", action: prev });
   useShortcut("diff.view.toggle", { key: "s", context: "diff", label: "Toggle split / unified view", action: toggleMode });
 
+  // A refresh can shrink the hunk list under the cursor; an out-of-range index just means "none".
   const activeRef = activeHunk === null ? undefined : hunks[activeHunk];
   const activeHunkId = activeRef ? hunkDomId(activeRef.fileIndex, activeRef.hunkIndex) : null;
 
   return (
-    <div ref={paneRef} className={pane} data-context="diff" tabIndex={0} data-testid="diff-pane">
+    <div ref={paneRef} className={pane} data-context="diff" tabIndex={0} role="region" aria-label="Diff" data-testid="diff-pane">
       {header}
       <DiffRenderer
         content={content}

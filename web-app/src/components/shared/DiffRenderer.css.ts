@@ -1,5 +1,6 @@
 import { globalStyle, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { TOKEN_CLASS } from "@/lib/highlight/tokenClasses";
 
 // DiffViewer uses a dark code-editor aesthetic regardless of theme.
 // Terminal tokens from the theme contract are used for structural colors.
@@ -444,11 +445,17 @@ export const syntaxScope = style({});
 const tok = (name: string, color: string, extra: Record<string, string> = {}) =>
   globalStyle(`${syntaxScope} .${name}`, { color, ...extra });
 
-tok("ssq-tok-keyword", vars.color.primary);
-tok("ssq-tok-string", vars.color.success);
-tok("ssq-tok-comment", vars.color.terminalTextMuted, { fontStyle: "italic" });
-tok("ssq-tok-number", vars.color.warning);
-tok("ssq-tok-function", vars.color.accentText);
-tok("ssq-tok-type", vars.color.primary);
-tok("ssq-tok-tag", vars.color.gitModified);
-tok("ssq-tok-invalid", vars.color.error);
+tok(TOKEN_CLASS.keyword, vars.color.primary);
+tok(TOKEN_CLASS.string, vars.color.success);
+tok(TOKEN_CLASS.comment, vars.color.terminalTextMuted, { fontStyle: "italic" });
+tok(TOKEN_CLASS.number, vars.color.warning);
+tok(TOKEN_CLASS.function, vars.color.accentText);
+tok(TOKEN_CLASS.type, vars.color.primary);
+tok(TOKEN_CLASS.tag, vars.color.gitModified);
+tok(TOKEN_CLASS.invalid, vars.color.error);
+
+export const toolbarActions = style({
+  display: "flex",
+  gap: "0.5rem",
+  alignItems: "center",
+});

@@ -17,6 +17,7 @@ export function DiffViewer({ session }: DiffViewerProps) {
 
   return (
     <DiffPane
+      autoFocus
       header={
         session?.githubPrNumber ? (
           <div className={diffHeader}>

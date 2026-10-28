@@ -27,6 +27,9 @@ export function stepHunkIndex(current: number | null, count: number, direction: 
 export interface SplitRow {
   left: DiffLine | null;
   right: DiffLine | null;
+  /** Index of each side's line within the hunk's `lines` (-1 for a placeholder). */
+  leftIdx: number;
+  rightIdx: number;
 }
 
 /**
@@ -39,16 +42,25 @@ export function pairSplitRows(lines: DiffLine[]): SplitRow[] {
   let i = 0;
   while (i < lines.length) {
     if (lines[i].type === "context") {
-      rows.push({ left: lines[i], right: lines[i] });
+      rows.push({ left: lines[i], right: lines[i], leftIdx: i, rightIdx: i });
       i++;
       continue;
     }
-    const deletes: DiffLine[] = [];
-    const adds: DiffLine[] = [];
-    while (i < lines.length && lines[i].type === "delete") deletes.push(lines[i++]);
-    while (i < lines.length && lines[i].type === "add") adds.push(lines[i++]);
+    const deletes: number[] = [];
+    const adds: number[] = [];
+    while (i < lines.length && lines[i].type === "delete") deletes.push(i++);
+    while (i < lines.length && lines[i].type === "add") adds.push(i++);
     const n = Math.max(deletes.length, adds.length);
-    for (let k = 0; k < n; k++) rows.push({ left: deletes[k] ?? null, right: adds[k] ?? null });
+    for (let k = 0; k < n; k++) {
+      const leftIdx = deletes[k] ?? -1;
+      const rightIdx = adds[k] ?? -1;
+      rows.push({
+        left: leftIdx >= 0 ? lines[leftIdx] : null,
+        right: rightIdx >= 0 ? lines[rightIdx] : null,
+        leftIdx,
+        rightIdx,
+      });
+    }
   }
   return rows;
 }

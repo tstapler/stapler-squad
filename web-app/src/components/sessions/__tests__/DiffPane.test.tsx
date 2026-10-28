@@ -18,11 +18,11 @@ const DIFF = [
 
 const press = (key: string) => fireEvent.keyDown(document.activeElement ?? document.body, { key });
 const activeIds = () =>
-  Array.from(document.querySelectorAll('[data-active="true"]')).map((e) => e.id);
+  Array.from(document.querySelectorAll('[data-active="true"]')).map((e) => e.getAttribute("data-hunk-id"));
 
 describe("DiffPane", () => {
   it("DiffPane_should_stepAcrossFilesAndWrap_When_NAndPPressed", () => {
-    render(<DiffPane content={DIFF} added={3} removed={3} />);
+    render(<DiffPane autoFocus content={DIFF} added={3} removed={3} />);
     expect(screen.getByTestId("diff-pane")).toHaveFocus();
     expect(activeIds()).toEqual([]);
 
@@ -37,6 +37,19 @@ describe("DiffPane", () => {
     expect(activeIds()).toEqual(["diff-hunk-1-0"]); // wrapped backwards
   });
 
+  it("DiffPane_should_notTakeFocus_When_AutoFocusOmitted", () => {
+    render(<DiffPane content={DIFF} added={3} removed={3} />);
+    expect(screen.getByTestId("diff-pane")).not.toHaveFocus();
+  });
+
+  it("DiffPane_should_resetContextToDefault_When_Unmounted", () => {
+    const onChange = jest.fn();
+    const { unmount } = render(<DiffPane content={DIFF} added={3} removed={3} contextLines={-1} onContextLinesChange={onChange} />);
+    expect(onChange).not.toHaveBeenCalled();
+    unmount();
+    expect(onChange).toHaveBeenCalledWith(0);
+  });
+
   it("DiffPane_should_stepViaButtons", () => {
     render(<DiffPane content={DIFF} added={3} removed={3} />);
     fireEvent.click(screen.getByTestId("diff-next-hunk"));
@@ -47,7 +60,7 @@ describe("DiffPane", () => {
   });
 
   it("DiffPane_should_toggleSplit_When_SPressed", () => {
-    render(<DiffPane content={DIFF} added={3} removed={3} />);
+    render(<DiffPane autoFocus content={DIFF} added={3} removed={3} />);
     press("s");
     expect(screen.getAllByTestId("diff-split-grid").length).toBeGreaterThan(0);
     press("s");

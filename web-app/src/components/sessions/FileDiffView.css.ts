@@ -32,7 +32,7 @@ export const path = style({
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
-  fontFamily: "monospace",
+  fontFamily: "inherit",
 });
 
 export const diff = style({

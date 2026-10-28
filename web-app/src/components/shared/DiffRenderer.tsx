@@ -3,6 +3,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parseDiff, type DiffFile, type DiffHunk, type DiffLine } from "@/lib/utils/parseDiff";
 import { buildHunkList, hunkDomId, pairSplitRows } from "@/lib/diff/diffNavigation";
+import type { Highlighter, TokenSpan } from "@/lib/highlight/types";
+import { CONTEXT_SERVER_DEFAULT, CONTEXT_WHOLE_FILE, DEFAULT_CONTEXT_LINES } from "@/lib/diff/contextLines";
 import {
   container,
   toolbar,
@@ -39,6 +41,7 @@ import {
   errorState,
   errorRetryButton,
   hunkActive,
+  toolbarActions,
   hunkNavButtons,
   hunkNavButton,
   hunkCounter,
@@ -56,21 +59,9 @@ import {
 
 export type DiffViewMode = "unified" | "split";
 
-/** Token range within a tokenized text; structurally matches the editor engine's `TokenSpan`. */
-export interface TokenSpan {
-  from: number;
-  to: number;
-  className: string;
-}
-
-/** Structurally matches the editor engine's `Highlighter`, so shared/ need not import from sessions/. */
-export interface Highlighter {
-  tokenize(range: { startLine: number; endLine: number; text: string }, languageId: string): Promise<TokenSpan[]>;
-}
 
 /** Lines revealed per "Show N more lines" click. */
 export const EXPAND_STEP = 10;
-const DEFAULT_CONTEXT = 3;
 
 export interface DiffRendererProps {
   /** Raw unified diff string from git. */
@@ -105,10 +96,37 @@ export interface DiffRendererProps {
 }
 
 interface HunkTokens {
-  spans: TokenSpan[];
   /** Offset of each line's text (prefix stripped) within the tokenized hunk text. */
   lineStarts: number[];
+  /** Spans overlapping each line, bucketed once so rendering a line doesn't rescan the hunk's spans. */
+  spansByLine: TokenSpan[][];
 }
+
+/** Index of the last line whose start is <= offset (lineStarts is ascending). */
+function lineIndexAt(lineStarts: number[], offset: number): number {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+function bucketSpansByLine(spans: TokenSpan[], lineStarts: number[]): TokenSpan[][] {
+  const buckets: TokenSpan[][] = lineStarts.map(() => []);
+  for (const span of spans) {
+    if (span.to <= span.from) continue;
+    for (let li = lineIndexAt(lineStarts, span.from); li < lineStarts.length && lineStarts[li] < span.to; li++) {
+      buckets[li].push(span);
+    }
+  }
+  return buckets;
+}
+
+/** Hunks tokenized between re-renders. */
+const TOKEN_BATCH = 8;
 
 const hunkKey = (fi: number, hi: number) => `${fi}:${hi}`;
 
@@ -118,8 +136,7 @@ function renderTokens(text: string, lineStart: number, spans: TokenSpan[]): Reac
   const out: ReactNode[] = [];
   let cursor = lineStart;
   for (const span of spans) {
-    if (span.to <= lineStart) continue;
-    if (span.from >= end) break;
+    if (span.to <= lineStart || span.from >= end) continue;
     const from = Math.max(span.from, lineStart);
     const to = Math.min(span.to, end);
     if (from > cursor) out.push(text.slice(cursor - lineStart, from - lineStart));
@@ -139,9 +156,17 @@ function useHunkTokens(files: DiffFile[], highlighter?: Highlighter, languageFor
   const [tokens, setTokens] = useState<Map<string, HunkTokens>>(new Map());
 
   useEffect(() => {
-    setTokens(new Map());
+    setTokens((prev) => (prev.size ? new Map() : prev));
     if (!highlighter || !languageForFile) return;
     let cancelled = false;
+    // Publish in batches: a state update per hunk re-renders the whole diff each time.
+    const acc = new Map<string, HunkTokens>();
+    let unpublished = 0;
+    const publish = () => {
+      if (unpublished === 0) return;
+      unpublished = 0;
+      setTokens(new Map(acc));
+    };
     (async () => {
       for (let fi = 0; fi < files.length && !cancelled; fi++) {
         const languageId = languageForFile(files[fi].filename);
@@ -164,10 +189,14 @@ function useHunkTokens(files: DiffFile[], highlighter?: Highlighter, languageFor
             // Highlighting is cosmetic; leave the hunk plain.
           }
           if (cancelled) return;
-          if (spans.length > 0) setTokens((prev) => new Map(prev).set(hunkKey(fi, hi), { spans, lineStarts }));
+          if (spans.length > 0) {
+            acc.set(hunkKey(fi, hi), { lineStarts, spansByLine: bucketSpansByLine(spans, lineStarts) });
+            if (++unpublished >= TOKEN_BATCH) publish();
+          }
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
       }
+      if (!cancelled) publish();
     })();
     return () => {
       cancelled = true;
@@ -177,7 +206,7 @@ function useHunkTokens(files: DiffFile[], highlighter?: Highlighter, languageFor
   return tokens;
 }
 
-/** Pure diff display component — no context coupling, no data fetching. */
+/** Diff display component — no context coupling, no data fetching. Hunk cursor and view mode are owned by the caller (see DiffPane). */
 export function DiffRenderer({
   content,
   added,
@@ -197,21 +226,25 @@ export function DiffRenderer({
 }: DiffRendererProps) {
   const diff = useMemo(() => parseDiff(content), [content]);
   const fileRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [activeFileIndex, setActiveFileIndex] = useState<number | null>(null);
   const [localViewMode, setLocalViewMode] = useState<DiffViewMode>("unified");
-  const viewMode = onViewModeChange ? (viewModeProp ?? "unified") : localViewMode;
-  const setViewMode = onViewModeChange ?? setLocalViewMode;
+  // A `viewMode` prop makes the mode controlled; without one the renderer keeps its own.
+  const viewMode = viewModeProp ?? localViewMode;
+  const setViewMode = (mode: DiffViewMode) => {
+    setLocalViewMode(mode);
+    onViewModeChange?.(mode);
+  };
   const tokens = useHunkTokens(diff, highlighter, languageForFile);
-  const hunkTotal = useMemo(() => buildHunkList(diff).length, [diff]);
-  const activeHunkNumber = useMemo(() => {
-    if (!activeHunkId) return null;
-    const idx = buildHunkList(diff).findIndex((r) => hunkDomId(r.fileIndex, r.hunkIndex) === activeHunkId);
-    return idx < 0 ? null : idx + 1;
-  }, [diff, activeHunkId]);
+  const hunkIds = useMemo(() => buildHunkList(diff).map((r) => hunkDomId(r.fileIndex, r.hunkIndex)), [diff]);
+  const hunkTotal = hunkIds.length;
+  const activeHunkNumber = activeHunkId ? hunkIds.indexOf(activeHunkId) + 1 || null : null;
 
   useEffect(() => {
     if (!activeHunkId) return;
-    document.getElementById(activeHunkId)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    // Scoped to this renderer: hunk ids are not unique across mounted renderers.
+    rootRef.current?.querySelector(`[data-hunk-id="${activeHunkId}"]`)?.scrollIntoView?.({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
   }, [activeHunkId]);
 
   const getLineClass = (type: DiffLine["type"]) => {
@@ -233,13 +266,13 @@ export function DiffRenderer({
     return (
       <>
         {prefix}
-        {renderTokens(text, t.lineStarts[li], t.spans)}
+        {renderTokens(text, t.lineStarts[li], t.spansByLine[li])}
       </>
     );
   };
 
-  const currentContext = contextLines > 0 ? contextLines : DEFAULT_CONTEXT;
-  const fullyExpanded = contextLines < 0;
+  const currentContext = contextLines > 0 ? contextLines : DEFAULT_CONTEXT_LINES;
+  const fullyExpanded = contextLines === CONTEXT_WHOLE_FILE;
   const expandable = !!onContextLinesChange && !fullyExpanded;
 
   const hiddenAbove = (file: DiffFile, hi: number): number => {
@@ -275,11 +308,10 @@ export function DiffRenderer({
   );
 
   const renderSplitLines = (h: DiffHunk, fi: number, hi: number) => {
-    const indexOf = new Map(h.lines.map((l, i) => [l, i]));
     return (
       <div className={splitGrid} data-testid="diff-split-grid">
         {pairSplitRows(h.lines).map((row, ri) => {
-          const cell = (l: DiffLine | null, side: "left" | "right") => {
+          const cell = (l: DiffLine | null, idx: number, side: "left" | "right") => {
             const tint = !l ? splitPlaceholder : l.type === "add" ? splitAdd : l.type === "delete" ? splitDelete : "";
             const num = side === "left" ? l?.oldLineNumber : l?.newLineNumber;
             return (
@@ -290,15 +322,15 @@ export function DiffRenderer({
                   data-testid={l ? undefined : "diff-split-placeholder"}
                   data-side={side}
                 >
-                  {l ? lineText(fi, hi, indexOf.get(l) ?? 0, l, false) : ""}
+                  {l ? lineText(fi, hi, idx, l, false) : ""}
                 </span>
               </Fragment>
             );
           };
           return (
             <Fragment key={ri}>
-              {cell(row.left, "left")}
-              {cell(row.right, "right")}
+              {cell(row.left, row.leftIdx, "left")}
+              {cell(row.right, row.rightIdx, "right")}
             </Fragment>
           );
         })}
@@ -342,7 +374,7 @@ export function DiffRenderer({
   }
 
   return (
-    <div className={container}>
+    <div className={container} ref={rootRef}>
       <div className={toolbar}>
         <div className={stats}>
           <span className={filesChanged}>
@@ -351,7 +383,7 @@ export function DiffRenderer({
           <span className={additions}>+{added}</span>
           <span className={deletions}>-{removed}</span>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <div className={toolbarActions}>
           {(onPrevHunk || onNextHunk) && (
             <div className={hunkNavButtons}>
               <button
@@ -365,7 +397,7 @@ export function DiffRenderer({
               >
                 ↑ Prev
               </button>
-              <span className={hunkCounter} data-testid="diff-hunk-counter">
+              <span className={hunkCounter} data-testid="diff-hunk-counter" role="status" aria-live="polite">
                 {activeHunkNumber ?? "–"}/{hunkTotal}
               </span>
               <button
@@ -385,7 +417,7 @@ export function DiffRenderer({
             <button
               type="button"
               className={hunkNavButton}
-              onClick={() => onContextLinesChange(fullyExpanded ? 0 : -1)}
+              onClick={() => onContextLinesChange(fullyExpanded ? CONTEXT_SERVER_DEFAULT : CONTEXT_WHOLE_FILE)}
               title={fullyExpanded ? "Back to default context" : "Show the full file around each change"}
               data-testid="diff-expand-all"
             >
@@ -393,7 +425,7 @@ export function DiffRenderer({
             </button>
           )}
           {onRefresh && (
-            <button className={viewModeButton} onClick={onRefresh} title="Refresh diff">↺</button>
+            <button type="button" className={viewModeButton} onClick={onRefresh} title="Refresh diff" aria-label="Refresh diff">↺</button>
           )}
           <div className={viewModeToggle} role="group" aria-label="Diff view mode">
             <button
@@ -458,7 +490,7 @@ export function DiffRenderer({
                 return (
                   <div
                     key={hi}
-                    id={id}
+                    data-hunk-id={id}
                     data-testid={id}
                     data-active={activeHunkId === id ? "true" : undefined}
                     className={`${hunk} ${syntaxScope} ${activeHunkId === id ? hunkActive : ""}`}

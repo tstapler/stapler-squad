@@ -103,6 +103,19 @@ describe("DiffRenderer context expansion", () => {
     expect(onChange).toHaveBeenCalledWith(13); // default 3 + step 10
   });
 
+  it("DiffRenderer_should_requestMoreContext_When_ExpandBelowClicked", () => {
+    const onChange = jest.fn();
+    render(<DiffRenderer {...base} contextLines={5} onContextLinesChange={onChange} />);
+    fireEvent.click(screen.getByTestId("diff-expand-below"));
+    expect(onChange).toHaveBeenCalledWith(15);
+  });
+
+  it("DiffRenderer_should_omitExpandBelow_When_LastHunkIsDeletedFile", () => {
+    const deleted = ["diff --git a/g.go b/g.go", "deleted file mode 100644", "--- a/g.go", "+++ /dev/null", "@@ -1,2 +0,0 @@", "-a", "-b", ""].join("\n");
+    render(<DiffRenderer content={deleted} added={0} removed={2} onContextLinesChange={jest.fn()} />);
+    expect(screen.queryByTestId("diff-expand-below")).not.toBeInTheDocument();
+  });
+
   it("DiffRenderer_should_requestWholeFile_When_ExpandAllClicked_And_ResetWhenCollapsed", () => {
     const onChange = jest.fn();
     const { rerender } = render(<DiffRenderer {...base} onContextLinesChange={onChange} />);
@@ -148,5 +161,32 @@ describe("DiffRenderer syntax highlighting", () => {
     );
     await waitFor(() => expect(failing.tokenize).toHaveBeenCalled());
     expect(container.textContent).toContain("package a");
+  });
+});
+
+describe("DiffRenderer stale tokenization", () => {
+  const mk = (path: string) =>
+    ["diff --git a/" + path + " b/" + path, "--- a/" + path, "+++ b/" + path, "@@ -1,1 +1,2 @@", " package a", "+var x = 1", ""].join("\n");
+
+  it("DiffRenderer_should_discardStaleSpans_When_ContentChangesBeforeTokenizeResolves", async () => {
+    const resolvers: Array<(s: { from: number; to: number; className: string }[]) => void> = [];
+    const highlighter: Highlighter = {
+      tokenize: jest.fn(() => new Promise((resolve) => { resolvers.push(resolve); })),
+    };
+    const lang = () => "go";
+    const { container, rerender } = render(
+      <DiffRenderer content={mk("a.go")} added={1} removed={0} highlighter={highlighter} languageForFile={lang} />,
+    );
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+    rerender(<DiffRenderer content={mk("b.go")} added={1} removed={0} highlighter={highlighter} languageForFile={lang} />);
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+
+    resolvers[0]([{ from: 0, to: 7, className: "stale-tok" }]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(container.querySelector(".stale-tok")).toBeNull();
+
+    resolvers[1]([{ from: 0, to: 7, className: "fresh-tok" }]);
+    await waitFor(() => expect(container.querySelector(".fresh-tok")).not.toBeNull());
+    expect(container.querySelector(".stale-tok")).toBeNull();
   });
 });
