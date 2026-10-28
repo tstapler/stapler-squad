@@ -12,7 +12,8 @@ const SRC = path.resolve(__dirname, "../..");
 // Files (relative to src/) allowed to keep an all-property transition. Only ever shrink this.
 const ALLOWLIST = new Set<string>([]);
 
-const ALL_TRANSITION = /transition(?:Property)?\s*:\s*["'`]\s*all\b/;
+// Matches `all` as any token in a single-line transition/transitionProperty string, any case.
+const ALL_TRANSITION = /transition(?:Property)?\s*:\s*["'`][^"'`]*\ball\b/i;
 
 function cssTsFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -39,6 +40,9 @@ describe("no all-property transitions", () => {
   it("matches the shapes it is meant to catch", () => {
     expect(ALL_TRANSITION.test('  transition: "all 0.2s ease",')).toBe(true);
     expect(ALL_TRANSITION.test('  transitionProperty: "all",')).toBe(true);
+    expect(ALL_TRANSITION.test('  transition: "opacity 1s, all 1s",')).toBe(true);
+    expect(ALL_TRANSITION.test('  transitionProperty: "opacity, ALL",')).toBe(true);
     expect(ALL_TRANSITION.test('  transition: "background-color 0.2s ease",')).toBe(false);
+    expect(ALL_TRANSITION.test('  transition: "overall-fade 1s",')).toBe(false);
   });
 });
