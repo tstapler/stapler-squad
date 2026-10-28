@@ -1,0 +1,21 @@
+{
+  "id": "backlog:jump-to-session",
+  "type": "frontend",
+  "description": "Single button + role picker on a backlog item's Sessions section that opens a real, interactive terminal for its most recent linked session, expanded inline in the detail pane with no page navigation",
+  "component": "JumpToSessionPanel",
+  "path": "web-app/src/components/backlog/detail/JumpToSessionPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "JumpToSessionPanel_should_RenderNothing_When_NoJumpableSessionExists",
+    "JumpToSessionPanel_should_HideRoleMenu_When_OnlyOneRoleIsJumpable",
+    "JumpToSessionPanel_should_FetchAndRenderTerminal_When_ButtonClicked",
+    "JumpToSessionPanel_should_ShowError_When_GetSessionReturnsNull",
+    "JumpToSessionPanel_should_CollapsePanel_When_ClickedAgain",
+    "JumpToSessionPanel_should_SwitchTargetSession_When_DifferentRoleChosenFromMenu",
+    "tests/e2e/jump-to-session.spec.ts (opens a real terminal for the most recent session in place, with no page navigation)",
+    "tests/e2e/jump-to-session.spec.ts (switches the open terminal to a different role via the role picker)",
+    "tests/e2e/jump-to-session.spec.ts (renders a touch-sized jump button at mobile width)"
+  ],
+  "lastModified": "2026-10-27T00:00:00Z"
+}

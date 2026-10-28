@@ -148,7 +148,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     listPipelineModes,
     lastError,
   } = useBacklogService();
-  const { deleteSession, updateSession } = useSessionService();
+  const { deleteSession, updateSession, getSession } = useSessionService();
   const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1896,6 +1896,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             onSteerSession={handleSteerSession}
             steeringSessionId={steeringSessionId}
             authReconnectRequired={julesConfig?.authReconnectRequired ?? false}
+            getSession={getSession}
           />
 
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
