@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -144,12 +143,12 @@ func TestGitWorktreeDiffWithContextLines(t *testing.T) {
 	path := filepath.Join(wt.GetWorktreePath(), "ctx.txt")
 	require.NoError(t, os.WriteFile(path, []byte(base.String()), 0644))
 	for _, args := range [][]string{{"add", "ctx.txt"}, {"commit", "-m", "base", "--no-gpg-sign"}} {
-		cmd := exec.Command("git", args...)
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = wt.GetWorktreePath()
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))
 	}
-	head := exec.Command("git", "rev-parse", "HEAD")
+	head := safeexec.CommandContext(context.Background(), "git", "rev-parse", "HEAD")
 	head.Dir = wt.GetWorktreePath()
 	sha, err := head.Output()
 	require.NoError(t, err)
