@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -546,5 +547,40 @@ func TestHandleActuatorUnfinishedScanner_ShouldServeCounterJSON_WithoutTelemetry
 		if _, ok := caches[c]; !ok {
 			t.Errorf("missing cache %q", c)
 		}
+	}
+}
+
+func TestHandleActuatorWsUnary_ShouldServeEmptyReport_WhenBridgeNotBuilt(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	handleActuatorWsUnary(func() *services.UnaryWsBridge { return nil })(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, k := range []string{"ws_unary_calls_total", "ws_unary_denied_total", "ws_unary_upgrade_denied_total", "ws_unary_inflight"} {
+		if _, ok := body[k]; !ok {
+			t.Errorf("missing key %q in %v", k, body)
+		}
+	}
+}
+
+func TestRegisterActuatorRoutes_ShouldServeWsUnary_WhenBridgeStoredAfterRegistration(t *testing.T) {
+	s := &Server{mux: http.NewServeMux()}
+	s.registerActuatorRoutes()
+	s.wsUnaryBridge.Store(services.NewUnaryWsBridge(func(string) http.Handler { return nil }))
+
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ws_unary_inflight":0`) {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

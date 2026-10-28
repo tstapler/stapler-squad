@@ -3,11 +3,10 @@
 
 import { useEffect, useState, useRef, useCallback, Fragment } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { ErrorEventRecord } from "@/gen/session/v1/session_pb";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl } from "@/lib/config";
 import { formatTimestamp } from "@/lib/utils/datetime";
 import * as styles from "./ErrorDashboard.css";
 
@@ -22,7 +21,7 @@ export function ErrorDashboard() {
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   }, []);
 
@@ -80,7 +79,7 @@ export function ErrorDashboard() {
       <div className={styles.header}>
         <h1 className={styles.title}>Error Dashboard</h1>
         <div className={styles.headerActions}>
-          <button className={styles.refreshButton} onClick={fetchErrors}>
+          <button className={styles.refreshButton} onClick={fetchErrors}>{/* analytics-exempt */}
             Refresh
           </button>
         </div>
@@ -153,7 +152,7 @@ export function ErrorDashboard() {
                               ? "Collapse stack trace"
                               : "Expand stack trace"
                           }
-                        >
+                        >{/* analytics-exempt */}
                           {expandedRow === err.fingerprint ? "▾" : "▸"}
                         </button>
                       </td>
@@ -202,7 +201,7 @@ export function ErrorDashboard() {
                             className={styles.acknowledgeButton}
                             onClick={() => handleAcknowledge(err.fingerprint)}
                             disabled={acknowledging.has(err.fingerprint)}
-                          >
+                          >{/* analytics-exempt */}
                             {acknowledging.has(err.fingerprint)
                               ? "…"
                               : "Acknowledge"}

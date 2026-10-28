@@ -46,14 +46,18 @@ export async function fetchDirectoryFiles(
   sessionId: string,
   path: string,
   includeIgnored: boolean,
-  baseUrl: string
+  baseUrl: string,
+  signal?: AbortSignal
 ): Promise<ListFilesResponse> {
   const client = createFileClient(baseUrl);
-  return await client.listFiles({
-    sessionId,
-    path: path || ".",
-    includeIgnored,
-  });
+  return await client.listFiles(
+    {
+      sessionId,
+      path: path || ".",
+      includeIgnored,
+    },
+    { signal }
+  );
 }
 
 /**

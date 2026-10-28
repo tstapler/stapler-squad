@@ -3642,3 +3642,45 @@ func TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn(t 
 
 	require.True(t, reachedGate, "AppScrollGate must be reached (and attempt to dereference p.instance) when the flag is on")
 }
+
+// TestResizeNudge_ShouldNotCallResizePTY_WhenHandshake0x0_0xN_Or1x1_OnBothNudgePaths
+// pins the server-side zero-size guard: a hidden (display:none) keep-alive
+// terminal can send a 0x0 handshake, which must never reach tmux.
+func TestResizeNudge_ShouldNotCallResizePTY_WhenHandshake0x0_0xN_Or1x1_OnBothNudgePaths(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		cols, rows int32
+	}{
+		{"0x0", 0, 0},
+		{"0xN", 0, 24},
+		{"1x1", 1, 1},
+		{"Nx0", 80, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cols, rows := tc.cols, tc.rows
+
+			t.Run("initial", func(t *testing.T) {
+				fake := &fakePanePTY{cols: 80, rows: 24}
+				h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+				h.performInitialResizeNudge(testWriter(), fake, "guard-test", 1,
+					&sessionv1.CurrentPaneRequest{TargetCols: &cols, TargetRows: &rows}, nil)
+				require.Zero(t, fake.resizePTYCalled)
+			})
+
+			t.Run("capture_pane", func(t *testing.T) {
+				fake := &fakePanePTY{cols: 80, rows: 24}
+				handshake, err := proto.Marshal(&sessionv1.TerminalData{
+					Data: &sessionv1.TerminalData_CurrentPaneRequest{
+						CurrentPaneRequest: &sessionv1.CurrentPaneRequest{TargetCols: &cols, TargetRows: &rows},
+					},
+				})
+				require.NoError(t, err)
+				forceCapturePaneRedrawNudge(&connectWebSocketStream{requestMsg: handshake}, fake, testWriter())
+				require.Zero(t, fake.resizePTYCalled)
+			})
+		})
+	}
+}

@@ -80,7 +80,7 @@ describe("useWindowShortcuts", () => {
     pressKey("2");
 
     expect(switchToWindow).toHaveBeenCalledTimes(1);
-    expect(switchToWindow).toHaveBeenCalledWith(win2.id);
+    expect(switchToWindow).toHaveBeenCalledWith(win2.id, "leader");
 
     // Sequence is consumed: a later bare "2" does nothing shortcut-related.
     pressKey("2");
@@ -143,7 +143,7 @@ describe("useWindowShortcuts", () => {
     pressKey("n");
 
     expect(switchToWindow).toHaveBeenCalledTimes(1);
-    expect(switchToWindow).toHaveBeenCalledWith(win1.id);
+    expect(switchToWindow).toHaveBeenCalledWith(win1.id, "leader");
 
     unmount();
   });
@@ -159,7 +159,7 @@ describe("useWindowShortcuts", () => {
     pressKey("p");
 
     expect(switchToWindow).toHaveBeenCalledTimes(1);
-    expect(switchToWindow).toHaveBeenCalledWith(win3.id);
+    expect(switchToWindow).toHaveBeenCalledWith(win3.id, "leader");
 
     unmount();
   });

@@ -90,69 +90,14 @@ This replaces "or record the decision to accept loss" as the *only* escape
 hatch that existed before this story: the decision must now be an explicit,
 typed `ACCEPT_SESSION_LOSS=1` on the command line, not an unenforced note.
 
-### 4. If the Bun jobs had joined `web-build-gate`, remove them
+### 4. No aggregate gate to edit
 
-The required check name never changes — only the aggregate `web-build-gate`
-is a required status check (decision 10 in the plan). Membership in that
-aggregate is a **repository variable**, not a branch-protection edit, so
-removing the Bun jobs from the gate needs no workflow edit, no PR, and no
-branch-protection change:
+The `web-build-gate` aggregate job and its `WEB_BUILD_GATE_MEMBERS` variable
+were removed (`main` has no branch protection, so nothing required it). A
+rollback needs no CI-gate change; if branch protection is added later, require
+the specific jobs (for example `e2e (Bun build)`) directly.
 
-```bash
-gh variable set WEB_BUILD_GATE_MEMBERS --body "detect-changes,web-build-smoke-next,e2e-next" --repo tstapler/stapler-squad
-gh variable get WEB_BUILD_GATE_MEMBERS --repo tstapler/stapler-squad
-```
-
-Always read back the variable after setting it — a `PUT`/`set` that reports
-success is not confirmation the value actually changed (see CLAUDE.md's
-"read a mutation back before claiming it happened").
-
-This same command, run with the Bun jobs added back in, is the only way a
-Bun job joins the gate in the first place.
-
-### 5. Only if the gate itself must go: the tested `gh api` removal command
-
-Removing `web-build-gate` entirely from branch protection's required checks
-is a much bigger step than step 4 above and should not be needed for an
-ordinary rollback — step 4 (repository-variable membership) is almost always
-sufficient, since the required check's *name* never changes. Use this only
-if branch protection on `main` must be relaxed entirely.
-
-```bash
-printf '["web-build-gate"]' | gh api -X DELETE repos/<owner>/<repo>/branches/main/protection/required_status_checks/contexts --input -
-gh api repos/<owner>/<repo>/branches/main/protection/required_status_checks --jq .contexts
-```
-
-`--input -` reads the request body from stdin; the earlier
-`--input <(echo ...)` form uses shell process substitution, which is not
-portable to every shell (e.g. POSIX `sh`) — use `--input -` with `printf`
-piped in, as above.
-
-**Verified (Task 8.5c, 2026-10-22)** against a scratch repository
-(`tstapler/ssq-story85-scratch-1792668727`, created solely for this
-rehearsal and deleted afterward — main of `tstapler/stapler-squad` itself
-has no branch protection today, confirmed via
-`gh api repos/tstapler/stapler-squad/branches/main/protection/required_status_checks`
-returning 404, so this command can only be rehearsed on a throwaway repo).
-Setup (branch protection with `web-build-gate` as the sole required check),
-the removal command, and the read-back, verbatim:
-
-```
-$ gh api repos/tstapler/ssq-story85-scratch-1792668727/branches/main/protection/required_status_checks --jq .contexts
-["web-build-gate"]
-
-$ printf '["web-build-gate"]' | gh api -X DELETE repos/tstapler/ssq-story85-scratch-1792668727/branches/main/protection/required_status_checks/contexts --input -
-[]
-
-$ gh api repos/tstapler/ssq-story85-scratch-1792668727/branches/main/protection/required_status_checks --jq .contexts
-[]
-```
-
-The command removed `web-build-gate` and the read-back confirms an empty
-contexts list. Substitute the real `<owner>/<repo>` (`tstapler/stapler-squad`)
-and the real required check name when running this for real.
-
-### 6. Post-checks
+### 5. Post-checks
 
 After the restart:
 

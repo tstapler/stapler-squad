@@ -1,7 +1,8 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
-export const panel = style({ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 });
+// Scrolls so a short phone with Filters open (or a banner above) can still reach the results instead of clipping them away.
+export const panel = style({ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0, overflowY: "auto" });
 
 export const header = style({ display: "flex", gap: "2px", padding: "4px 6px", borderBottom: `1px solid ${vars.color.borderColor}` });
 export const headerTab = style({
@@ -69,7 +70,15 @@ export const note = style({ padding: "4px 10px", fontSize: "12px", color: vars.c
 export const helper = style({ padding: "12px 10px", fontSize: "13px", color: vars.color.textSecondary, display: "flex", flexDirection: "column", gap: "6px" });
 export const emptyMessage = style({ padding: "12px 10px", fontSize: "13px", color: vars.color.textSecondary, display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start" });
 
-export const tree = style({ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", outline: "none" });
+// minHeight keeps three rows: a zero-height scroller makes the virtualizer render no rows at all.
+export const tree = style({
+  flex: 1,
+  minHeight: "72px",
+  overflowY: "auto",
+  position: "relative",
+  outline: "none",
+  "@media": { "(pointer: coarse)": { minHeight: "132px" } },
+});
 export const treeDimmed = style({ opacity: 0.55 });
 export const treeInner = style({ position: "relative", width: "100%" });
 export const rowBase = style({
@@ -115,6 +124,7 @@ export const chip = style({
       position: "fixed",
       right: "12px",
       bottom: "calc(64px + env(safe-area-inset-bottom, 0px))",
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing sticky offset, no matching theme slot
       zIndex: 35,
       border: `1px solid ${vars.color.borderMuted}`,
       borderRadius: vars.radii.md,
