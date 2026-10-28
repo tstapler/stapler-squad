@@ -35,6 +35,12 @@ export interface SessionVcsState extends AsyncResult {
   refreshStatus: () => void;
   /** Trigger a fresh diff fetch (shared across all consumers). */
   refreshDiff: () => void;
+  /**
+   * Unchanged lines of context requested per hunk: 0 = server default (3),
+   * -1 = whole file. Changing it refetches the diff.
+   */
+  diffContextLines: number;
+  setDiffContextLines: (contextLines: number) => void;
   /** Refresh both status and diff. */
   refresh: () => void;
 }
@@ -73,6 +79,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   const [diff, setDiff] = useState<SessionDiff | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(true);
+  const [diffContextLines, setDiffContextLines] = useState(0);
   const [error, setError] = useState<Error | null>(null);
 
   // Set once GetVCSStatus reports the session no longer exists, so the 60s
@@ -141,7 +148,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     const signal = startDiff();
     setDiffLoading(true);
     try {
-      const response = await getClient().getSessionDiff({ id: sessionId }, { signal });
+      const response = await getClient().getSessionDiff({ id: sessionId, contextLines: diffContextLines }, { signal });
       if (signal.aborted) return;
       if (response.diffStats) {
         setDiff({
@@ -162,7 +169,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     } finally {
       if (!signal.aborted) setDiffLoading(false);
     }
-  }, [sessionId, getClient, startDiff]);
+  }, [sessionId, getClient, startDiff, diffContextLines]);
 
   const refresh = useCallback(() => {
     fetchStatus();
@@ -220,6 +227,8 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     error,
     refreshStatus: fetchStatus,
     refreshDiff: fetchDiff,
+    diffContextLines,
+    setDiffContextLines,
     refresh,
   };
 }

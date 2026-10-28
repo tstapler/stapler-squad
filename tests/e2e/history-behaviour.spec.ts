@@ -15,13 +15,6 @@ const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 const pathOf = (url: string) => new URL(url).pathname.replace(/(.)\/$/, '$1');
 
-/** useWindowUrlSync stamps `?window=<id>` once the window list restores, which can land after a URL snapshot. */
-const withoutWindowParam = (url: string) => {
-  const parsed = new URL(url);
-  parsed.searchParams.delete('window');
-  return parsed.toString();
-};
-
 test.describe('history behaviour', () => {
   test.describe('desktop Back and Forward', () => {
     test('Back twice then Forward once retraces / -> /history?sessionId=a -> /logs', async ({ page }) => {
@@ -60,13 +53,16 @@ test.describe('history behaviour', () => {
       await shell.goto('/');
       const tray = new NotificationTray(page);
       await expect(tray.entryOpen).toBeVisible();
+      // useWindowUrlSync self-heals `?window=<id>` once windows restore; capture the URL after it
+      // settles or Back would be compared against the pre-heal URL.
+      await expect(page).toHaveURL(/[?&]window=/);
       const urlBefore = page.url();
       await tray.entryOpen.click();
       await tray.expectOpen();
 
       await page.goBack();
       await tray.expectClosed();
-      expect(withoutWindowParam(page.url())).toBe(withoutWindowParam(urlBefore));
+      expect(page.url()).toBe(urlBefore);
     });
   });
 

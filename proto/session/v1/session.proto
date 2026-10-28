@@ -1074,6 +1074,11 @@ message WatchSessionsRequest {
 message GetSessionDiffRequest {
   // Session identifier.
   string id = 1;
+  // Unchanged lines of context around each hunk.
+  // 0 = server default (3). -1 = whole file (expand all). Positive = literal count (above 10000 = whole file).
+  // Values below -1 are rejected with INVALID_ARGUMENT. Applies to worktree sessions; directory
+  // sessions always return the default context.
+  int32 context_lines = 2;
 }
 
 message GetSessionDiffResponse {

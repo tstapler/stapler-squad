@@ -1,6 +1,6 @@
 {
  "meta": {
-  "note": "Root-cause triage of the 529 baseline rows of class fail (one row per spec x project), 2026-10-25. Categories come from the Next report of main Build run 40184788547 plus a local Bun chromium run of every spec file holding a fail row. Counts are rows.",
+  "note": "Root-cause triage of the 529 baseline rows of class fail (one row per spec x project), 2026-10-25. Categories come from the Next report of main Build run 40184788547 plus a local Bun chromium run of every spec file holding a fail row. Counts are rows. Counts predate #1208 (Bun parity); rows in specs listed under coveredBy1208 were changed there and are expected to pass or move on the next baseline re-record.",
   "baseline": "next-e2e-baseline.json"
  },
  "categories": [
@@ -58,7 +58,12 @@
     "triage-related-work.spec.ts": 4,
     "vcs-widget.spec.ts": 2,
     "workspace-management.spec.ts": 2
-   }
+   },
+   "coveredBy1208": [
+    "backlog-copy-link.spec.ts",
+    "backlog-detail-live-updates.spec.ts",
+    "enter-detection.spec.ts"
+   ]
   },
   {
    "id": "fixed-by-this-pr-verified-locally",
@@ -83,7 +88,8 @@
     "terminal-stress/log-flood.spec.ts": 6,
     "terminal-stress/memory-leak.spec.ts": 10,
     "triggers-panel.spec.ts": 2
-   }
+   },
+   "coveredBy1208": []
   },
   {
    "id": "omnibar-session-creation-drift",
@@ -101,7 +107,8 @@
     "session-create-new-worktree.spec.ts": 4,
     "session-creation-async.spec.ts": 2,
     "touch-targets.spec.ts": 18
-   }
+   },
+   "coveredBy1208": []
   },
   {
    "id": "session-list-fixtures-or-ui-drift",
@@ -125,7 +132,8 @@
     "session-program-change.spec.ts": 4,
     "shell-tabs.spec.ts": 4,
     "smoke.spec.ts": 4
-   }
+   },
+   "coveredBy1208": []
   },
   {
    "id": "terminal-pages-and-perf",
@@ -141,7 +149,8 @@
     "terminal-resync-feature-flags.spec.ts": 2,
     "terminal-stress/ascii-video.spec.ts": 6,
     "terminal-stress/large-payload.spec.ts": 4
-   }
+   },
+   "coveredBy1208": []
   },
   {
    "id": "backlog-flows",
@@ -160,7 +169,11 @@
     "backlog-rich-text.spec.ts": 2,
     "backlog-sources-settings.spec.ts": 8,
     "backlog.spec.ts": 6
-   }
+   },
+   "coveredBy1208": [
+    "backlog-copy-link.spec.ts",
+    "backlog-detail-live-updates.spec.ts"
+   ]
   },
   {
    "id": "notification-tray-drift",
@@ -174,7 +187,8 @@
     "notification-tray-bulk.spec.ts": 2,
     "notification-tray-variants.spec.ts": 3,
     "notifications-needs-decision.spec.ts": 2
-   }
+   },
+   "coveredBy1208": []
   },
   {
    "id": "environment-and-misc",
@@ -188,7 +202,11 @@
     "local-file-browser.spec.ts": 4,
     "route-focus-and-announce.spec.ts": 2,
     "visual-regression.spec.ts": 11
-   }
+   },
+   "coveredBy1208": [
+    "route-focus-and-announce.spec.ts",
+    "visual-regression.spec.ts"
+   ]
   }
  ]
 }
