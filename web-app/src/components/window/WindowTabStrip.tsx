@@ -6,6 +6,8 @@ import { WindowPreviewCard, type SessionTitleLookup } from "./WindowLayoutPrevie
 import * as overviewStyles from "@/styles/window/windowOverview.css";
 import { GESTURE_MOVEMENT_THRESHOLD_PX } from "@/lib/window/windowGestureConstants";
 import { useWindowSwipe } from "@/lib/window/useWindowSwipe";
+import type { WindowSwitchTrigger } from "@/lib/window/useWindowFocusMemory";
+import { windowPanelDomId, windowTabDomId } from "@/lib/window/windowDomIds";
 import {
   windowTabStrip,
   windowTabList,
@@ -43,7 +45,7 @@ export interface WindowTabStripHandle {
 interface WindowTabStripProps {
   windows: NamedWindow[];
   currentWindowId: WindowId;
-  onSwitch: (id: WindowId) => void;
+  onSwitch: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
   onCreate: () => void;
   onClose: (id: WindowId) => void;
   onRename: (id: WindowId, name: string) => void;
@@ -117,7 +119,7 @@ interface WindowTabProps {
   isEditing: boolean;
   draftName: string;
   showClose: boolean;
-  onSwitch: (id: WindowId) => void;
+  onSwitch: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
   onClose: (id: WindowId) => void;
   onBeginEdit: (id: WindowId, name: string) => void;
   onDraftChange: (value: string) => void;
@@ -207,11 +209,18 @@ function WindowTabCloseButton({
   );
 }
 
+/** `detail === 0` is a synthesized activation (assistive tech "activate"), treated like Enter/Space. */
+function clickTrigger(e: React.MouseEvent): WindowSwitchTrigger {
+  const pointerType = (e.nativeEvent as Partial<PointerEvent>).pointerType;
+  if (pointerType === "touch" || pointerType === "pen") return "touch";
+  return e.detail === 0 ? "tab-key" : "mouse";
+}
+
 interface WindowTabButtonProps {
   window: NamedWindow;
   isActive: boolean;
   showClose: boolean;
-  onSwitch: (id: WindowId) => void;
+  onSwitch: (id: WindowId, trigger?: WindowSwitchTrigger) => void;
   onClose: (id: WindowId) => void;
   onBeginEdit: (id: WindowId, name: string) => void;
   longPress: ReturnType<typeof useLongPress>;
@@ -252,21 +261,28 @@ function WindowTabButton({
       // A native <button> auto-activates on Enter/Space; this element is a
       // <div> (see doc comment above), so that activation is wired up here.
       e.preventDefault();
-      onSwitch(w.id);
+      onSwitch(w.id, "tab-key");
     }
+  };
+
+  const handleClick = (e: React.MouseEvent) => {
+    onSwitch(w.id, clickTrigger(e));
   };
 
   return (
     <div
       ref={(el) => tabRef(w.id, el)}
       role="tab"
+      id={windowTabDomId(w.id)}
       aria-selected={isActive}
+      // Only the selected tab's panel is guaranteed to be in the DOM (the keep-alive host adds the rest).
+      aria-controls={isActive ? windowPanelDomId(w.id) : undefined}
       aria-label={w.name}
       tabIndex={isActive ? 0 : -1}
       data-testid={`window-tab-${w.id}`}
       className={windowTabButton({ active: isActive })}
       title={w.name}
-      onClick={() => onSwitch(w.id)}
+      onClick={handleClick}
       onDoubleClick={() => onBeginEdit(w.id, w.name)}
       onKeyDown={handleKeyDown}
       onTouchStart={(e) => longPress.onTouchStart(e, w.id, w.name)}
@@ -408,7 +424,7 @@ const WindowTabStripInner = forwardRef<
         dir === "next"
           ? (idx + 1) % windows.length
           : (idx - 1 + windows.length) % windows.length;
-      onSwitch(windows[nextIdx].id);
+      onSwitch(windows[nextIdx].id, "swipe");
     },
   });
 
@@ -441,7 +457,7 @@ const WindowTabStripInner = forwardRef<
     if (targetIdx === null) return;
     e.preventDefault();
     const target = windows[targetIdx];
-    onSwitch(target.id);
+    onSwitch(target.id, "tab-key");
     tabNodesRef.current.get(target.id)?.focus();
   };
 
@@ -528,7 +544,7 @@ const WindowTabStripInner = forwardRef<
                 className={overviewStyles.popoverCard}
                 onSelect={(id) => {
                   setPreviewWindows(null);
-                  onSwitch(id);
+                  onSwitch(id, "mouse");
                 }}
               />
             ))}

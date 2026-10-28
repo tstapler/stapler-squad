@@ -46,7 +46,7 @@ function dispatchWorkflowEvent(event: WorkflowEvent, handlers: UseWatchWorkflows
  * change the workflow definition list and are ignored, as is the
  * content-free snapshot_complete marker.
  */
-export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers): void {
+export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers, { enabled = true }: { enabled?: boolean } = {}): void {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
@@ -57,8 +57,11 @@ export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers): void {
   }, []);
 
   const subscribe = useCallback(
-    (afterSeq: bigint, signal: AbortSignal) =>
-      clientRef.current!.watchWorkflows(create(WatchWorkflowsRequestSchema, { afterSeq }), { signal }),
+    (afterSeq: bigint, signal: AbortSignal) => {
+      const client = clientRef.current;
+      if (!client) throw new Error("watchWorkflows client not initialised");
+      return client.watchWorkflows(create(WatchWorkflowsRequestSchema, { afterSeq }), { signal });
+    },
     []
   );
 
@@ -73,5 +76,6 @@ export function useWatchWorkflows(handlers: UseWatchWorkflowsHandlers): void {
     getSeq: (event) => event.seq,
     getDeployId: (event) => event.deployId,
     name: "workflows",
+    enabled,
   });
 }

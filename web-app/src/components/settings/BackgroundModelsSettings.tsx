@@ -8,8 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import {
   container,
   heading,
@@ -64,7 +63,7 @@ export function BackgroundModelsSettings() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     load();
   }, [load]);
@@ -135,7 +134,7 @@ export function BackgroundModelsSettings() {
         <h2 className={heading}>Background Models</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={() => load()}>
+          <button type="button" className="btn btn-primary" onClick={() => load()}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -191,7 +190,7 @@ export function BackgroundModelsSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {status && (

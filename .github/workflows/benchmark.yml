@@ -569,3 +569,176 @@ jobs:
         with:
           path: benchmarks/e2e/latency-baseline.json
           key: bench-e2e-latency-${{ github.run_id }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # E2E Perf Budget: frontend-responsiveness Playwright `perf` project (Story 7.1.3).
+  # Runs tests/e2e/perf/ against an isolated server (global-setup.ts) with a
+  # 20-session tmux fixture, then tools/ci-gates/perf-budget.js compares medians
+  # to the baseline and checks per-method request-count budgets.
+  # Advisory by default: the check never fails on regressions. Flip
+  # PERF_BUDGET_BLOCKING to '1' (Task 7.1.3b, after the soak window and owner
+  # sign-off) to make only the count-based subset blocking; timing metrics stay
+  # advisory either way. The baseline lives in the "bench-e2e-perf-" cache
+  # (saved on push to main, so it is measured on the same runner class); the
+  # committed tests/e2e/perf/baseline.json is only a fallback when the cache is
+  # empty. With no baseline at all the job still runs and reports count budgets.
+  # ─────────────────────────────────────────────────────────────────────────────
+  e2e-perf:
+    name: E2E Perf Budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: frontend-bundle
+    permissions:
+      contents: read
+      pull-requests: write # Post PR comment
+    env:
+      PERF_BUDGET_BLOCKING: '0'
+      PERF_RUNS: '3'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd web-app && bun install --frozen-lockfile
+          cd ../tests/e2e && bun install --frozen-lockfile
+
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        run: buf generate proto
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+      - name: Build web UI
+        run: bun run build
+        working-directory: web-app
+
+      - name: Copy web UI to dist
+        run: cp -r web-app/out server/web/dist
+
+      - name: Build Go binary
+        run: go build -o stapler-squad .
+
+      - name: Install tmux (fixture seeds real sessions)
+        run: command -v tmux >/dev/null || sudo apt-get install -y tmux
+
+      - name: Install Playwright browsers
+        run: |
+          cd tests/e2e
+          for attempt in 1 2 3; do
+            if timeout 8m npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install attempt $attempt failed or timed out; retrying..."
+            sleep 10
+          done
+          echo "Playwright install failed after 3 attempts" >&2
+          exit 1
+
+      # Never fails the job: the spec hard-fails on its own budgets, but timing is
+      # runner-dependent. Blocking decisions are made by perf-budget.js below.
+      - name: Run perf project
+        id: perf
+        continue-on-error: true
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+        run: cd tests/e2e && timeout 35m npx playwright test --project=perf
+
+      - name: Assert perf results exist (blocking mode only)
+        if: env.PERF_BUDGET_BLOCKING == '1'
+        run: |
+          test -f tests/e2e/test-results/perf-results.json || { echo "perf-results.json was not produced" >&2; exit 1; }
+
+      - name: Upload perf results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: perf-results
+          path: tests/e2e/test-results/perf-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Restore perf baseline
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: benchmarks/e2e/perf-baseline.json
+          key: bench-e2e-perf-
+          restore-keys: |
+            bench-e2e-perf-
+
+      - name: Compare against baseline and check count budgets
+        id: gate
+        run: |
+          BASELINE=benchmarks/e2e/perf-baseline.json
+          [ -f "$BASELINE" ] || BASELINE=tests/e2e/perf/baseline.json
+          [ -f "$BASELINE" ] || BASELINE=""
+          node tools/ci-gates/perf-budget.js \
+            --results tests/e2e/test-results/perf-results.json \
+            ${BASELINE:+--baseline "$BASELINE"} \
+            --out-md perf-comment.md >/dev/null
+          cat perf-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true # advisory comment; never fail the job if posting is denied
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('perf-comment.md')) return;
+            const body = fs.readFileSync('perf-comment.md', 'utf8');
+            const marker = '<!-- benchmark-perf-budget -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Save perf baseline (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('tests/e2e/test-results/perf-results.json') != ''
+        run: |
+          mkdir -p benchmarks/e2e
+          cp tests/e2e/test-results/perf-results.json benchmarks/e2e/perf-baseline.json
+
+      - name: Persist perf baseline to cache (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('tests/e2e/test-results/perf-results.json') != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: benchmarks/e2e/perf-baseline.json
+          key: bench-e2e-perf-${{ github.run_id }}

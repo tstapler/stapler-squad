@@ -4,11 +4,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
-import { VCSStatus } from "@/gen/session/v1/types_pb";
+import type { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import type { AsyncResult } from "@/lib/types/asyncResult";
 import { useAbortableRequest } from "@/lib/hooks/useAbortableRequest";
+import { fetchVcsEntry, invalidateVcsEntry } from "@/lib/hooks/useVcsStatus";
+import { pollIntervalMs, type PollMode } from "@/lib/hooks/pollMode";
 
 /** Parsed diff stats returned by getSessionDiff. */
 export interface SessionDiff {
@@ -60,14 +62,13 @@ const INACTIVE_STATUS_POLL_MS = 600_000;
  * useSessionVcsContext(). This eliminates the 3 independent, uncached fetches
  * those components previously made independently.
  *
- * @param isActive - Whether this session's pane currently has focus.
- * Defaults to true (matches prior always-poll-every-60s behavior) so every
- * caller except a multi-pane layout is unaffected. A multi-pane layout
- * should pass the focused pane's own focus state so unfocused panes fall
- * back to INACTIVE_STATUS_POLL_MS instead of polling as if the user were
- * watching them.
+ * @param pollMode - "fast" (default; matches the prior always-poll-every-60s
+ * behavior) for a focused pane, "slow" (INACTIVE_STATUS_POLL_MS) for a visible
+ * unfocused pane, "off" for a pane in a hidden window: no fetch at all until
+ * the mode changes (the effect refetches on activation).
  */
-export function useSessionVcs(sessionId: string, baseUrl: string, isActive = true): SessionVcsState {
+export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: PollMode = "fast"): SessionVcsState {
+  const isActive = pollMode === "fast";
   const [status, setStatus] = useState<VCSStatus | null>(null);
   const [diff, setDiff] = useState<SessionDiff | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -77,6 +78,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   // Set once GetVCSStatus reports the session no longer exists, so the 60s
   // fallback interval below stops calling a deleted session forever.
   const stoppedRef = useRef(false);
+  const mountedSessionRef = useRef<string | null>(null);
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -96,26 +98,29 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   const startStatus = useAbortableRequest();
   const startDiff = useAbortableRequest();
 
-  const fetchStatus = useCallback(async () => {
+  // `force` skips a fresh prefetch-cache hit; the first fetch after mount reads
+  // the cache and joins any in-flight prefetch (Story 2.1.6a).
+  const loadStatus = useCallback(async (force: boolean) => {
     if (stoppedRef.current) {
       setStatusLoading(false);
       return;
     }
     const signal = startStatus();
     try {
-      const response = await getClient().getVCSStatus({ id: sessionId }, { signal });
+      const entry = await fetchVcsEntry(sessionId, force, isActive);
       if (signal.aborted) return;
-      if (response.error) {
-        setError(new Error(response.error));
+      if (entry.error) {
+        setError(new Error(entry.error));
         setStatus(null);
       } else {
-        setStatus(response.vcsStatus ?? null);
+        setStatus(entry.data);
         setError(null);
       }
     } catch (err) {
       if (signal.aborted) return;
       if (err instanceof ConnectError && err.code === Code.NotFound) {
         stoppedRef.current = true;
+        invalidateVcsEntry(sessionId);
         setError(err);
         setStatus(null);
         return;
@@ -124,7 +129,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     } finally {
       if (!signal.aborted) setStatusLoading(false);
     }
-  }, [sessionId, getClient, startStatus]);
+  }, [sessionId, startStatus, isActive]);
+
+  const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
 
   const fetchDiff = useCallback(async () => {
     if (stoppedRef.current) {
@@ -176,14 +183,17 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
   // VCS status: re-fetch on mount and whenever the session changes in Redux.
   // Event-driven is the primary trigger; the fallback interval catches git
   // commits that happen mid-session without changing the session's status
-  // field. isActive controls the fallback's cadence, not whether it fires —
+  // field. pollMode controls the fallback's cadence, not whether it fires —
   // a backgrounded pane still needs a backstop, just not one tuned for a
   // user actively watching it.
   useEffect(() => {
     stoppedRef.current = false;
+    const pollMs = pollIntervalMs(pollMode, ACTIVE_STATUS_POLL_MS, INACTIVE_STATUS_POLL_MS);
+    if (pollMs === null) return;
     setStatusLoading(true);
-    fetchStatus();
-    const pollMs = isActive ? ACTIVE_STATUS_POLL_MS : INACTIVE_STATUS_POLL_MS;
+    const firstForSession = mountedSessionRef.current !== sessionId;
+    mountedSessionRef.current = sessionId;
+    void loadStatus(!firstForSession);
     const fallback = setInterval(() => {
       if (stoppedRef.current) {
         clearInterval(fallback);
@@ -193,7 +203,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, isActive = tru
     }, pollMs);
     return () => clearInterval(fallback);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchStatus, sessionStatus, sessionUpdatedAt, isActive]);
+  }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 
   // Diff: fetch once on mount; consumers call refreshDiff() when needed.
   // Cancellation on unmount/re-run is handled by startDiff's useAbortableRequest.

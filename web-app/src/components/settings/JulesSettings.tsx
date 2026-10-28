@@ -10,8 +10,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
   container,
@@ -138,7 +137,7 @@ export function JulesSettings() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadConfig();
   }, [loadConfig]);
@@ -243,7 +242,7 @@ export function JulesSettings() {
         <h2 className={heading}>Google Jules</h2>
         <div role="alert">{loadError}</div>
         <div className={actions}>
-          <button type="button" className="btn btn-primary" onClick={loadConfig}>
+          <button type="button" className="btn btn-primary" onClick={loadConfig}>{/* analytics-exempt */}
             Retry
           </button>
         </div>
@@ -357,7 +356,7 @@ export function JulesSettings() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving…" : "Save"}
           </button>
           {saveStatusMessage && (
@@ -383,7 +382,7 @@ export function JulesSettings() {
               className="btn btn-secondary"
               onClick={handleTestConnection}
               disabled={testSubmitting || !testRepoPath.trim()}
-            >
+            >{/* analytics-exempt */}
               {testSubmitting ? "Testing…" : "Test connection"}
             </button>
           </div>
@@ -422,7 +421,7 @@ export function JulesSettings() {
                       onClick={() => handleRevoke(repoPath)}
                       disabled={revokingRepo === repoPath}
                       aria-label={`Revoke cloud-egress consent for ${label}`}
-                    >
+                    >{/* analytics-exempt */}
                       {revokingRepo === repoPath ? "Revoking…" : "Revoke"}
                     </button>
                   </li>

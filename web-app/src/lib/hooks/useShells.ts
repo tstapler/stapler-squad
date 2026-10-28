@@ -1,15 +1,13 @@
 "use client";
 // +feature: shell-tabs
 
-import { useState, useEffect, useCallback, useRef, useContext } from "react";
-import { Shell, ShellStatus } from "@/gen/session/v1/types_pb";
-import { SpawnShellRequest } from "@/gen/session/v1/session_pb";
+import { useState, useEffect, useCallback, useRef } from "react";
+import type { Shell} from "@/gen/session/v1/types_pb";
+import { ShellStatus } from "@/gen/session/v1/types_pb";
+import type { SpawnShellRequest } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
-import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
-import { AnalyticsContext } from "@/lib/contexts/AnalyticsContext";
+import { getConnectTransport } from "@/lib/api/transport";
 
 export type ShellTab = {
   id: string;
@@ -47,21 +45,10 @@ interface UseShellsReturn {
 export function useShells(sessionId: string): UseShellsReturn {
   const [shells, setShells] = useState<ShellTab[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  // Use context directly so useShells works in test environments without AnalyticsContextProvider
-  const analyticsCtx = useContext(AnalyticsContext);
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
-    // Guard: createAuthInterceptor may be undefined in test environments where @/lib/config
-    // is partially mocked (e.g. only getApiBaseUrl is exported).
-    const authInterceptor = typeof createAuthInterceptor === "function" ? createAuthInterceptor() : null;
-    const interceptors = analyticsCtx
-      ? [authInterceptor, createRpcTimingInterceptor(analyticsCtx)].filter(Boolean)
-      : [authInterceptor].filter(Boolean);
-    const transport = createSessionWatchTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: interceptors as Parameters<typeof createSessionWatchTransport>[0]["interceptors"],
-    });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
