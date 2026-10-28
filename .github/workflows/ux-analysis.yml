@@ -44,8 +44,9 @@ jobs:
     name: UX Analysis (Axe + Lighthouse + Claude)
     runs-on: ubuntu-latest
     needs: prepare
-    # This job runs in parallel with other jobs, never blocks main build
-    timeout-minutes: 10
+    # This job runs in parallel with other jobs, never blocks main build.
+    # Typical runtime is 6-9 min; 10 min cancelled otherwise-green runs (#1221, #1206).
+    timeout-minutes: 15
     env:
       # Job-level env so it's available in step if: conditions (secrets context not allowed there)
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
