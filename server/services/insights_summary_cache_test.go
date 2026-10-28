@@ -252,3 +252,52 @@ func TestWatchInsights_WhenTokenStoreNotifies_ExpectSummaryCacheInvalidated(t *t
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
 	requireCleanReturn(t, runCancel, done)
 }
+
+func TestSummaryCache_WhenCallerArrivesAfterInvalidation_ExpectFreshComputeNotOldFlight(t *testing.T) {
+	t.Parallel()
+	var c summaryCache
+	req := &sessionv1.GetInsightsSummaryRequest{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var computes atomic.Int32
+	compute := func(context.Context) (*sessionv1.GetInsightsSummaryResponse, error) {
+		if computes.Add(1) == 1 {
+			close(started)
+			<-release
+			return &sessionv1.GetInsightsSummaryResponse{TotalInputTokens: 1}, nil
+		}
+		return &sessionv1.GetInsightsSummaryResponse{TotalInputTokens: 2}, nil
+	}
+
+	oldDone := make(chan struct{})
+	go func() {
+		defer close(oldDone)
+		_, _ = c.get(context.Background(), req, notLoading, compute)
+	}()
+	<-started
+	c.invalidate() // e.g. DismissFinding lands while the old compute is running
+	fresh, err := c.get(context.Background(), req, notLoading, compute)
+	require.NoError(t, err)
+	close(release)
+	<-oldDone
+
+	assert.EqualValues(t, 2, fresh.TotalInputTokens, "a caller after invalidation must not join the pre-invalidation flight")
+}
+
+func TestSummaryCache_WhenResponseMarkedLoading_ExpectNotCached(t *testing.T) {
+	t.Parallel()
+	var c summaryCache
+	req := &sessionv1.GetInsightsSummaryRequest{}
+	var computes int
+	compute := func(context.Context) (*sessionv1.GetInsightsSummaryResponse, error) {
+		computes++
+		return &sessionv1.GetInsightsSummaryResponse{IsLoading: true}, nil
+	}
+
+	_, err := c.get(context.Background(), req, notLoading, compute) // store finished loading after compute stamped IsLoading
+	require.NoError(t, err)
+	_, err = c.get(context.Background(), req, notLoading, compute)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, computes, "a partial summary must not be cached even if the store reports loaded afterwards")
+}

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -90,16 +91,18 @@ func (c *summaryCache) get(
 		return compute(ctx)
 	}
 	key := string(raw)
-	if resp, _, ok := c.lookup(key); ok {
-		return resp, nil
+	cached, gen, ok := c.lookup(key)
+	if ok {
+		return cached, nil
 	}
-	ch := c.flight.DoChan(key, func() (any, error) {
-		_, gen, _ := c.lookup(key)
+	// The generation is part of the flight key so a caller arriving after an
+	// invalidation starts a fresh compute instead of joining a pre-invalidation one.
+	ch := c.flight.DoChan(strconv.FormatUint(gen, 10)+":"+key, func() (any, error) {
 		resp, err := compute(context.WithoutCancel(ctx))
 		if err != nil {
 			return nil, err
 		}
-		if !isLoading() {
+		if !resp.GetIsLoading() && !isLoading() {
 			c.store(key, gen, resp)
 		}
 		return resp, nil
