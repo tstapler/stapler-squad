@@ -17,7 +17,7 @@ export const button = style({
   cursor: "pointer",
   fontSize: "0.85rem",
   fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   selectors: {
     "&:hover:not(:disabled)": {
       backgroundColor: vars.color.hoverBackground,

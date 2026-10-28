@@ -257,7 +257,7 @@ export const button = style({
   fontSize: 14,
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.15s",
+  transition: "background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s, box-shadow 0.15s",
   border: "none",
 });
 

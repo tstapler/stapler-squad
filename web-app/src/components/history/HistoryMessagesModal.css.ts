@@ -95,7 +95,7 @@ export const modalCloseButton = style({
   padding: "4px 12px",
   color: vars.color.textSecondary,
   borderRadius: "6px",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   flexShrink: 0,
 
   selectors: {

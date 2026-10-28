@@ -71,7 +71,7 @@ export const closeButton = style({
   alignItems: "center",
   justifyContent: "center",
   borderRadius: "4px",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -262,7 +262,7 @@ export const doneButton = style({
   fontSize: "14px",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.primaryHover,
@@ -307,7 +307,7 @@ export const snapshotButton = style({
   fontSize: "15px",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",

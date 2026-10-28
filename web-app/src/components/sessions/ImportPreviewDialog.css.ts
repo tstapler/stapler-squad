@@ -176,7 +176,7 @@ export const candidateOption = style({
   border: `1px solid ${vars.color.borderMuted}`,
   borderRadius: "6px",
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       borderColor: vars.color.borderStrong,
@@ -244,7 +244,7 @@ export const cancelButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
@@ -266,7 +266,7 @@ export const confirmButton = style({
   fontSize: "14px",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.primaryHover,

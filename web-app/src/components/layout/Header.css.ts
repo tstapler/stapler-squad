@@ -128,7 +128,7 @@ export const navLink = style({
   fontWeight: "500",
   color: vars.color.textSecondary,
   textDecoration: "none",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   position: "relative",
 
   selectors: {
@@ -197,7 +197,7 @@ export const newSessionButton = style({
   color: vars.color.primaryText,
   background: vars.color.primary,
   textDecoration: "none",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   border: "none",
   cursor: "pointer",
 
@@ -249,7 +249,7 @@ const iconButtonBase = style({
   background: "transparent",
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
 
   selectors: {
     "&:hover": {
