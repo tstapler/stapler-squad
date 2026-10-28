@@ -33,6 +33,7 @@ test.describe('Backlog item Copy Link', () => {
   test.beforeEach(async ({ context, page }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:onboarded', 'true');
       localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
     });
   });
