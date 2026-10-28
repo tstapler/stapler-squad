@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
+import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { FeatureGuard } from "./FeatureGuard";
 
 const mockReplace = jest.fn();
@@ -27,6 +28,7 @@ function renderGuard(flag: "backlog" | "changelog") {
 
 describe("FeatureGuard", () => {
   beforeEach(() => {
+    resetFlagStoreForTest();
     mockReplace.mockClear();
     mockGetFeatureFlags.mockReset();
   });

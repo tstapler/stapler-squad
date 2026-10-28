@@ -334,6 +334,23 @@ var knownFeatureFlags = []struct {
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
+		name:         "request_coalescing",
+		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        "unary_over_ws",
+		description: "Send unary RPCs over the already-open WebSocket instead of separate HTTP requests, avoiding the browser's per-origin connection cap. Kill switch: turn off to fall back to HTTP fetch. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "unary_over_ws_remote",
+		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
+	},
+	{
+		name:        "window_keep_alive",
+		description: "Keep the web app's window state alive across route changes instead of remounting it. Kill switch: turn off to restore remount-on-navigate. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		name:         config.TriageGuidanceHaltFeatureFlag,
 		defaultValue: config.TriageGuidanceHaltDefault,
 		description:  "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",

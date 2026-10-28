@@ -3,9 +3,8 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
 import { useAnalytics } from "@/lib/analytics";
 import * as styles from "./HookStatusPanel.css";
 
@@ -28,7 +27,7 @@ export function HookStatusPanel() {
   const [hookMessage, setHookMessage] = useState<string | null>(null);
 
   const client = useMemo(
-    () => createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() })),
+    () => createClient(SessionService, getConnectTransport()),
     []
   );
 

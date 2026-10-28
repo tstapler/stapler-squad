@@ -20,6 +20,7 @@ import {
   endStreamFlag,
   endStreamFromJson,
 } from "@connectrpc/connect/protocol-connect";
+import { recordReaderQueueDepth } from "@/lib/perf/perfDebug";
 
 function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
   const buf = new Uint8Array(5 + data.length);
@@ -38,6 +39,7 @@ export async function* fromWebSocket(
 
   const push = (item: Uint8Array | null | Error) => {
     queue.push(item);
+    recordReaderQueueDepth(queue.length);
     notify?.();
     notify = null;
   };
@@ -67,7 +69,8 @@ export async function* fromWebSocket(
           notify = r;
         });
       }
-      const item = queue.shift()!;
+      const item = queue.shift();
+      if (item === undefined) continue;
       if (item === null) return;
       if (item instanceof Error) throw item;
       yield item;

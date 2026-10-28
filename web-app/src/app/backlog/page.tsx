@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css";
 import { useRouter, useSearchParams } from "@/lib/nav";
 import { useAnalytics } from "@/lib/analytics";
@@ -18,7 +18,6 @@ import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
 import { ClaimedElsewhereNotice, type ClaimedElsewhereEntry } from "@/components/backlog/ClaimedElsewhereNotice";
 import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import {
   useBacklogService,
@@ -354,10 +353,7 @@ function BacklogPageInner() {
   // re-adding a full listBacklogItems fetch-on-every-mutation path.
   const rawClientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
+    const transport = getConnectTransport();
     rawClientRef.current = createClient(BacklogService, transport);
   }, []);
 

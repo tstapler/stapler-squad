@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -33,6 +34,7 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
 	s.mux.HandleFunc("/actuator/nudge-outcomes", handleActuatorNudgeOutcomes)
 	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
+	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
 }
 
 // handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
@@ -40,6 +42,15 @@ func (s *Server) registerActuatorRoutes() {
 func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(session.DefaultNudgeOutcomes().Snapshot())
+}
+
+// handleActuatorWsUnary serves the unary WebSocket bridge counters as JSON. The bridge is
+// resolved per request because it may be built after the routes are registered.
+func handleActuatorWsUnary(bridge func() *services.UnaryWsBridge) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(bridge().Report())
+	}
 }
 
 // handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read

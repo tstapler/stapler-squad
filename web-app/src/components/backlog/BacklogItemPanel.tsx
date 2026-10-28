@@ -3,13 +3,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getWatchTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
 import { useBacklogService, mapBacklogItem, type BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { useAppSelector } from "@/lib/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -47,6 +46,7 @@ export function BacklogItemPanel({
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const verdictBadge = item?.gateVerdict ? VERDICT_BADGE_CONFIG[item.gateVerdict] : undefined;
 
   const loadItem = useCallback(async () => {
     setLoading(true);
@@ -110,10 +110,8 @@ export function BacklogItemPanel({
 
     const watchTerminal = async () => {
       try {
-        const transport = createConnectTransport({
-          baseUrl: getApiBaseUrl(),
-          interceptors: [createAuthInterceptor()],
-        });
+        // Server stream: the unary transport's default 30s deadline would kill it.
+        const transport = getWatchTransport();
         const client = createClient(BacklogService, transport);
         const stream = client.watchBacklogItems(
           { statusFilter: [], categoryFilter: [], afterSeq: 0n },
@@ -159,7 +157,7 @@ export function BacklogItemPanel({
         data-testid="backlog-panel-toggle"
         aria-expanded={open}
         aria-label={open ? "Collapse backlog panel" : "Expand backlog panel"}
-      >
+      >{/* analytics-exempt */}
         <span className={styles.toggleIcon}>{open ? "▼" : "▶"}</span>
         {!open && <span className={styles.toggleLabel}>Task</span>}
       </button>
@@ -185,10 +183,10 @@ export function BacklogItemPanel({
                 {item.title}
               </AppLink>
 
-              {item.gateVerdict && VERDICT_BADGE_CONFIG[item.gateVerdict] && (
+              {verdictBadge && (
                 <div className={styles.header} data-testid="backlog-panel-verdict">
-                  <span className={VERDICT_BADGE_CONFIG[item.gateVerdict]!.className} title="Last review result">
-                    {VERDICT_BADGE_CONFIG[item.gateVerdict]!.label}
+                  <span className={verdictBadge.className} title="Last review result">
+                    {verdictBadge.label}
                   </span>
                   {item.gateVerdictSummary && (
                     <span className={styles.verdictSummary}>{item.gateVerdictSummary}</span>

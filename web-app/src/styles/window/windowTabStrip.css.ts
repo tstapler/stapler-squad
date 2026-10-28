@@ -113,9 +113,12 @@ export const windowTabButton = recipe({
     textOverflow: "ellipsis",
     maxWidth: "160px",
     flexShrink: 0,
-    transition: "background 100ms, color 100ms, border-color 100ms",
     "@media": {
       [touchMediaQuery]: {
+        height: "44px",
+        minWidth: "44px",
+      },
+      "(pointer: coarse)": {
         height: "44px",
         minWidth: "44px",
       },
@@ -166,7 +169,6 @@ export const windowTabCloseButton = recipe({
     lineHeight: "16px",
     color: "inherit",
     opacity: 0,
-    transition: "opacity 100ms, background 100ms",
     selectors: {
       "&:hover": {
         background: vars.color.hoverBackground,
