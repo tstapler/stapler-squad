@@ -35,6 +35,8 @@ interface VcsWidgetProps {
   data: VcsWidgetData;
   mode: VcsWidgetMode;
   onNavigateToFile?: (path: string) => void;
+  /** Clicking a changed file opens its diff in place (takes precedence over onNavigateToFile for file rows). */
+  onViewFileDiff?: (path: string) => void;
   onViewDiff?: (event: MouseEvent<HTMLButtonElement>) => void;
   onRefresh?: () => void;
   activeSessionCount?: number;
@@ -61,6 +63,7 @@ export function VcsWidget({
   data,
   mode,
   onNavigateToFile,
+  onViewFileDiff,
   onViewDiff,
   onRefresh,
   activeSessionCount,
@@ -181,7 +184,7 @@ export function VcsWidget({
       )}
 
       {mode === "full" && (
-        <VcsWidgetFileList fileChanges={data.fileChanges} onNavigateToFile={onNavigateToFile} />
+        <VcsWidgetFileList fileChanges={data.fileChanges} onNavigateToFile={onNavigateToFile} onViewFileDiff={onViewFileDiff} />
       )}
 
       <VcsWidgetCommitList
