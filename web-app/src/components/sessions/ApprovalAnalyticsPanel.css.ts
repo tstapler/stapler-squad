@@ -46,7 +46,7 @@ export const refreshButton = style({
   fontSize: 16,
   cursor: "pointer",
   color: vars.color.textPrimary,
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.accentHover,
@@ -72,7 +72,7 @@ export const windowBtn = style({
   fontSize: 13,
   cursor: "pointer",
   color: vars.color.textSecondary,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.accentHover,
