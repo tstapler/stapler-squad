@@ -193,8 +193,10 @@ function HomeContent() {
   // survive navigating away; the local controller only serves trees rendered without a provider.
   const windowsContext = useWindowsContext();
   const localController = useWindowsController({ currentWindowId: currentWindow.id, dispatchPane });
+  // The provider's controller dispatches through inputs the page only publishes with keep-alive on; with it
+  // off that dispatch is a no-op, so the page must drive its own controller.
   const { keepAlive, paneDispatchFor, detailRefFor, focusActiveDetail } =
-    windowsContext?.controller ?? localController;
+    windowsContext?.controller.keepAlive ? windowsContext.controller : localController;
 
   // Focus detail panel when session opens; return focus on close
   useEffect(() => {
