@@ -4,7 +4,7 @@
  },
  "specs": [
   {
-   "spec": "f1.spec.ts",
+   "spec": "not-found.spec.ts",
    "project": "chromium",
    "title": "f1 test",
    "class": "pass"

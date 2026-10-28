@@ -121,6 +121,11 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     expect(r.exitCode).toBe(0);
   });
 
+  test("F8: a baseline-pass spec that skips on Bun outside the deliberate-skip allowlist is a failure, not a clean pass", () => {
+    const r = run({ baseline: "f8-baseline.json", expectedDiff: "f8-expected-diff.json", nextReport: "f8-next-report.json", bunReports: ["f8-bun-report-1.json"] });
+    expect(r.exitCode).not.toBe(0);
+  });
+
   test("a comparator stub that always exits 0 would fail F1-F7 (adversarial framing, documented not executed)", () => {
     // This test exists to make the claim checkable without actually swapping the script: each
     // F-case above independently asserts a non-zero exit, which is exactly what an always-0 stub

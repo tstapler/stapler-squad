@@ -1,11 +1,11 @@
 {
  "suites": [
   {
-   "title": "f1.spec.ts",
-   "file": "f1.spec.ts",
+   "title": "not-found.spec.ts",
+   "file": "not-found.spec.ts",
    "specs": [
     {
-     "file": "f1.spec.ts",
+     "file": "not-found.spec.ts",
      "title": "f1 test",
      "tests": [
       {
