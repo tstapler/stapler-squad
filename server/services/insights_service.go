@@ -81,6 +81,9 @@ type InsightsService struct {
 	// summary request. If the token store is still empty then, nothing is stamped
 	// and the next process start retries.
 	backfillOnce sync.Once
+
+	// summaries caches GetInsightsSummary responses (see summaryCache).
+	summaries summaryCache
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -396,15 +399,26 @@ func buildSessionSummary(
 	snapshot []tokens.SessionRecord,
 	sessionMeta map[string]SessionMeta,
 ) (*sessionv1.SessionTokenSummary, SessionMeta) {
+	rec, isOrphan := tokens.SessionRecord{}, true
+	if associator != nil {
+		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
+	}
+	return buildSessionSummaryForRecord(r, pt, rec, isOrphan, sessionMeta)
+}
+
+// buildSessionSummaryForRecord is buildSessionSummary with the association
+// already resolved, so a caller that has associated r (GetInsightsSummary's
+// filter pass) does not scan the session snapshot a second time.
+func buildSessionSummaryForRecord(
+	r *tokens.ParseResult,
+	pt *tokens.PricingTable,
+	rec tokens.SessionRecord,
+	isOrphan bool,
+	sessionMeta map[string]SessionMeta,
+) (*sessionv1.SessionTokenSummary, SessionMeta) {
 	firstTs, lastTs := sessionTimestamps(r)
 
-	sessionID, isOrphan := "", true
-	var tags []string
-	if associator != nil {
-		var rec tokens.SessionRecord
-		rec, isOrphan = associator.AssociateRecordWithSnapshot(r, snapshot)
-		sessionID, tags = rec.SessionID, rec.Tags
-	}
+	sessionID, tags := rec.SessionID, rec.Tags
 	attributed, byConversation := metaFor(sessionMeta, sessionID, r)
 	if byConversation {
 		isOrphan = false
@@ -467,10 +481,26 @@ func buildSessionSummary(
 }
 
 // GetInsightsSummary returns aggregated token and cost data for a time range.
+// Results are served from a short-TTL cache with singleflight coalescing; see
+// summaryCache.
 func (s *InsightsService) GetInsightsSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetInsightsSummaryRequest],
 ) (*connect.Response[sessionv1.GetInsightsSummaryResponse], error) {
+	resp, err := s.summaries.get(ctx, req.Msg, s.store.IsLoading, func(ctx context.Context) (*sessionv1.GetInsightsSummaryResponse, error) {
+		return s.computeInsightsSummary(ctx, req.Msg)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// computeInsightsSummary is the uncached aggregate over the token store.
+func (s *InsightsService) computeInsightsSummary(
+	ctx context.Context,
+	msg *sessionv1.GetInsightsSummaryRequest,
+) (*sessionv1.GetInsightsSummaryResponse, error) {
 	s.backfillOnce.Do(func() {
 		go func() {
 			bctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -481,7 +511,6 @@ func (s *InsightsService) GetInsightsSummary(
 		}()
 	})
 	results := s.store.GetAll()
-	msg := req.Msg
 
 	// Extract time filter bounds.
 	var fromTime, toTime time.Time
@@ -568,10 +597,11 @@ func (s *InsightsService) GetInsightsSummary(
 		}
 
 		// Determine session ID and orphan status.
-		sessionID, isOrphan := "", true
+		rec, isOrphan := tokens.SessionRecord{}, true
 		if s.associator != nil {
-			sessionID, isOrphan = s.associator.AssociateWithSnapshot(r, sessionSnapshot)
+			rec, isOrphan = s.associator.AssociateRecordWithSnapshot(r, sessionSnapshot)
 		}
+		sessionID := rec.SessionID
 		attributed, byConversation := metaFor(sessionMeta, sessionID, r)
 		if byConversation {
 			isOrphan = false // a deleted session's transcript, still attributable by conversation UUID
@@ -613,7 +643,7 @@ func (s *InsightsService) GetInsightsSummary(
 			}
 		}
 
-		summary, groupedMeta := buildSessionSummary(r, s.pricing, s.associator, sessionSnapshot, sessionMeta)
+		summary, groupedMeta := buildSessionSummaryForRecord(r, s.pricing, rec, isOrphan, sessionMeta)
 		costUSD, unpriced := summary.EstimatedCostUsd, summary.UnpricedModels
 		sessionUnpriced := len(unpriced) > 0
 		for _, f := range unpriced {
@@ -889,7 +919,7 @@ func (s *InsightsService) GetInsightsSummary(
 		RoleBreakdown:        roleBreakdown,
 	}
 
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
 // ListSessionTokens returns per-session token summaries with pagination.
@@ -1148,6 +1178,7 @@ func (s *InsightsService) DismissFinding(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dismiss finding: %w", err))
 	}
+	s.summaries.invalidate() // dismissed findings must disappear from the next summary
 
 	return connect.NewResponse(&sessionv1.DismissFindingResponse{Success: true}), nil
 }
