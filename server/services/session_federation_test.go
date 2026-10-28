@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -93,4 +94,17 @@ func TestSessionFederationHandler_should_Reject_When_RequestUnsigned(t *testing.
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, session.SessionFederationEndpointPath, nil))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestSessionService_GetSession_should_ServeMirroredSession_When_RemoteID(t *testing.T) {
+	f, _, hostID := federationFixture(t)
+	f.Refresh(context.Background())
+	svc := &SessionService{federation: f}
+
+	resp, err := svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{Id: hostID.String() + "/work"}))
+	require.NoError(t, err)
+	assert.Equal(t, hostID.String(), resp.Msg.Session.HostId)
+
+	_, err = svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{Id: hostID.String() + "/missing"}))
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }

@@ -245,3 +245,13 @@ func (f *FederatedSessions) filtered(req *sessionv1.ListSessionsRequest) []*sess
 	}
 	return out
 }
+
+// Session returns one mirrored session by its host-qualified ID.
+func (f *FederatedSessions) Session(id string) (*sessionv1.Session, bool) {
+	for _, s := range f.Sessions() {
+		if s.Id == id {
+			return s, true
+		}
+	}
+	return nil, false
+}

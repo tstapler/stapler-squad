@@ -8,8 +8,15 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// federatedReadProcedures are served for remote IDs by the handler itself, from
+// the mirrored snapshot, so the guard lets them through.
+var federatedReadProcedures = map[string]struct{}{
+	sessionv1connect.SessionServiceGetSessionProcedure: {},
+}
 
 // sessionIDFields are the request fields that name a session.
 var sessionIDFields = []protoreflect.Name{"id", "session_id"}

@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 )
 
 const testRemoteHost = "host_01J00000000000000000000000"
@@ -33,8 +34,15 @@ func TestFederatedSessionGuard_RejectsRemoteIDs(t *testing.T) {
 	if code, rejected := guardCode(t, &sessionv1.DeleteSessionRequest{Id: testRemoteHost + "/abc"}); !rejected || code != connect.CodeUnimplemented {
 		t.Fatalf("remote delete: rejected=%v code=%v", rejected, code)
 	}
+}
+
+func TestFederatedSessionGuard_ReadsPassWhenHandlerServesThem(t *testing.T) {
+	// A bare request has no procedure, so GetSession is not exempt and is rejected.
 	if _, rejected := guardCode(t, &sessionv1.GetSessionRequest{Id: testRemoteHost + "/abc"}); !rejected {
-		t.Fatal("remote get should be rejected")
+		t.Fatal("unlisted procedure with remote id should be rejected")
+	}
+	if _, ok := federatedReadProcedures[sessionv1connect.SessionServiceGetSessionProcedure]; !ok {
+		t.Fatal("GetSession must be exempt so the handler can serve the mirrored session")
 	}
 }
 

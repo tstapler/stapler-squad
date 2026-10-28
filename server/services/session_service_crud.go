@@ -225,6 +225,15 @@ func (s *SessionService) GetSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
+	if !session.ParseFederatedSessionID(req.Msg.Id).IsLocal() {
+		if s.federation != nil {
+			if remote, ok := s.federation.Session(req.Msg.Id); ok {
+				return connect.NewResponse(&sessionv1.GetSessionResponse{Session: remote}), nil
+			}
+		}
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
 	if s.reviewQueuePoller != nil {
