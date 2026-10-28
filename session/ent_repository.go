@@ -174,12 +174,26 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// SQLite supports only one writer at a time; serialise all access through a
-	// single connection to eliminate "database is locked" contention.
-	// WAL mode still allows concurrent reads via the same connection pool.
+	// SQLite supports only one writer at a time; serialise all writes (and
+	// every transaction) through a single connection to eliminate "database is
+	// locked" contention and keep the Go-side dedup/CAS transactions atomic.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
+
+	// Plain SELECTs run on a separate query_only pool: WAL lets them proceed
+	// while the writer connection is busy. Seeded and URI (in-memory) databases
+	// stay single-pool.
+	var readDB *sql.DB
+	if repo.seedURI == "" && isOnDiskDatabase(expandedPath) {
+		if n := readPoolSize(); n > 0 {
+			readDB, err = openReadPool(expandedPath, n)
+			if err != nil {
+				_ = db.Close()
+				return nil, err
+			}
+		}
+	}
 
 	if repo.seedURI != "" {
 		return newSeededEntRepository(db, repo)
@@ -192,7 +206,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
 
 	// Create Ent client with the existing database connection
-	client := newInstrumentedEntClient(db)
+	client := newInstrumentedEntClient(db, readDB)
 
 	// Run automatic schema migration. entSchemaCreateMu serializes this call
 	// process-wide: even though each caller opens its own isolated SQLite

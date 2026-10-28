@@ -1,9 +1,9 @@
 // Package dbobs instruments ent's dialect.Driver: per-query timing, a
 // slow-query WARN, OTel spans/metrics and database/sql pool stats.
 //
-// The pool is capped at one connection (session/ent_repository.go), so every
-// query serializes; time spent queued behind another query is the contention
-// signal this package exists to expose.
+// The writer pool is capped at one connection (session/ent_repository.go), so
+// writes serialize; reads use a separate pool (session/dbsplit). Time spent
+// queued behind another query is the contention signal this package exists to expose.
 package dbobs
 
 import (
