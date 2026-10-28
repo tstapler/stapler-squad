@@ -84,6 +84,19 @@ test("build.yml: every matrix sets fail-fast: false", () => {
   }
 });
 
+test("build.yml detect-changes regex and push paths treat e2e-only edits as relevant", () => {
+  const yml = read(".github/workflows/build.yml");
+  const regex = yml.match(/grep -qE '([^']+)'; then/)?.[1];
+  assert.ok(regex, "detect-changes grep regex not found");
+  for (const p of ["^tests/e2e/", "^web-app/tests/e2e/"]) assert.ok(regex.includes(p), `detect-changes regex is missing ${p}`);
+  const re = new RegExp(regex);
+  assert.ok(re.test("tests/e2e/playwright.config.ts"));
+  assert.ok(re.test("web-app/tests/e2e/terminal-stress/helpers.ts"));
+  assert.ok(!re.test("tests/e2e-sharding-helper/foo.ts"));
+  const pushPaths = yml.split("\n  workflow_dispatch:")[0];
+  for (const p of ["tests/e2e/**", "web-app/tests/e2e/**"]) assert.ok(pushPaths.includes(`- '${p}'`), `push paths is missing ${p}`);
+});
+
 test("web-lint and go-lint pin checkout to the PR head, not the stale default merge ref", () => {
   // actions/checkout defaults to GitHub's synthetic refs/pull/N/merge for pull_request
   // events, which tracks main's CURRENT tip independently of base.sha (captured once, at
