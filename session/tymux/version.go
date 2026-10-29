@@ -155,6 +155,12 @@ func processExe(ctx context.Context, pid int) (string, error) {
 // DetectDaemonVersions probes the running daemon and the configured binary. Individual
 // probe failures leave the matching field empty rather than failing the whole call.
 func DetectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionInfo {
+	info := detectDaemonVersions(ctx, cfg)
+	recordVersionMismatch(info.Direction)
+	return info
+}
+
+func detectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionInfo {
 	info := DaemonVersionInfo{}
 	if v, err := binaryVersionFn(ctx, cfg.BinaryPath); err == nil {
 		info.InstalledVersion = v
@@ -233,7 +239,7 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 			return before, err
 		}
 	}
-	if _, err := EnsureDaemonRunning(ctx, cfg); err != nil {
+	if _, err := ensureDaemonRunning(ctx, cfg, daemonRestartReplace); err != nil {
 		return before, err
 	}
 	log.Info("[tymux] replaced tymuxd", "from", before.RunningVersion, "to", cfg.BinaryPath)

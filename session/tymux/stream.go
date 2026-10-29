@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -30,31 +28,6 @@ func clampResizeDim(v int) uint32 {
 		return math.MaxUint32
 	}
 	return uint32(v)
-}
-
-// reconnectMetrics backs tymux_attach_stream_reconnects_total (Task
-// 2.5.2c, Observability Plan) — a process-wide hand-rolled counter
-// matching session/tmux/fork_metrics.go's existing atomic.Int64
-// convention (no metrics-library dependency), keyed by cause
-// ("error" for a transport drop that triggered ReconnectLoop,
-// "output_gap" for an in-stream resync that never reopened Attach) since
-// a single aggregate count would conflate two different situations the
-// Observability Plan wants distinguishable.
-var reconnectMetrics = struct {
-	mu     sync.Mutex
-	counts map[string]*atomic.Int64
-}{counts: make(map[string]*atomic.Int64)}
-
-// recordReconnect increments tymux_attach_stream_reconnects_total{cause}.
-func recordReconnect(cause string) {
-	reconnectMetrics.mu.Lock()
-	c, ok := reconnectMetrics.counts[cause]
-	if !ok {
-		c = new(atomic.Int64)
-		reconnectMetrics.counts[cause] = c
-	}
-	reconnectMetrics.mu.Unlock()
-	c.Add(1)
 }
 
 // openStandingStream opens the one Attach stream that backs a
@@ -102,7 +75,10 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 	// wrapping, not a replacement, context — proven by
 	// TestStartGeneration_DerivedContext_PropagatesParentCancellation in
 	// session/lifecycle/observability_test.go).
+	s.markStreamEvent()
+	registerLiveStream(s, done)
 	go func() {
+		defer unregisterLiveStream(s, done)
 		genCtx, span := lifecycle.StartGeneration(ctx, "tymux_stream")
 		reason := s.readAttachLoop(genCtx, paneID, stream, done)
 		lifecycle.EndGeneration(span, "tymux_stream", reason)
@@ -176,6 +152,7 @@ func (s *tymuxGRPCSession) readAttachLoop(ctx context.Context, paneID string, st
 			}
 			continue
 		}
+		s.markStreamEvent()
 		s.handleAttachEvent(event)
 	}
 }
@@ -224,8 +201,13 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 		s.liveness = v1.Liveness_LIVENESS_DEAD
 		s.mu.Unlock()
 		s.deliverExit(exitReason(p.Exited))
+	case *v1.AttachEvent_GapExceeded:
+		// The daemon follows GapExceeded with a priming Snapshot (the
+		// reconnect resync path redraws from it); nothing to do but count.
+		recordAttachEvent(attachEventGapExceeded)
 	case *v1.AttachEvent_OutputGap:
 		recordReconnect("output_gap")
+		recordAttachEvent(attachEventOutputGap)
 		count := s.outputGapCount.Add(1)
 		log.Warn("tymux: output_gap received, resyncing via CapturePane", "session_id", s.GetSessionIdentifier(), "count", count)
 		ctx, cancel := s.interruptibleContext()
@@ -524,6 +506,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		daemonRestarted := errors.Is(err, errPaneDead)
 		if err != nil && daemonRestarted {
 			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
+			recordDaemonRestart(daemonRestartDetected)
 			s.mu.Lock()
 			s.backendRestarted = true
 			s.backendRestartedAt = time.Now()
@@ -558,6 +541,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		s.reconnectAttempt = 0
 		s.reconnectCause = ""
 		s.mu.Unlock()
+		s.markStreamEvent() // the reattach's priming Snapshot just arrived
 
 		log.Info("tymux: standing Attach stream reconnect succeeded", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt)
 		return stream, first, true, lifecycle.ReasonUnknown
