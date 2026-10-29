@@ -312,6 +312,9 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:unary_over_ws_remote": {
 		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on remote-access origins on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
+	"flag:batch_unary": {
+		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
+	},
 	"flag:window_keep_alive": {
 		exempt: "client-only: no Go reader; the web client gates window keep-alive on it (client reader lands with the window keep-alive story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},

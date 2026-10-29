@@ -1,5 +1,6 @@
-import { style } from "@vanilla-extract/css";
+import { globalStyle, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { TOKEN_CLASS } from "@/lib/highlight/tokenClasses";
 
 // DiffViewer uses a dark code-editor aesthetic regardless of theme.
 // Terminal tokens from the theme contract are used for structural colors.
@@ -343,4 +344,118 @@ export const errorRetryButton = style({
   selectors: {
     "&:hover": { background: vars.color.terminalHoverBg },
   },
+});
+
+// ---- Hunk navigation ----
+
+export const hunkActive = style({
+  boxShadow: `inset 3px 0 0 ${vars.color.primary}`,
+  background: vars.color.terminalHoverBg,
+});
+
+export const hunkNavButtons = style({
+  display: "flex",
+  gap: "0.25rem",
+  alignItems: "center",
+});
+
+export const hunkNavButton = style({
+  padding: "0.4rem 0.6rem",
+  background: "transparent",
+  border: `1px solid ${vars.color.terminalBorder}`,
+  borderRadius: "3px",
+  color: vars.color.terminalForeground,
+  fontSize: "0.8rem",
+  cursor: "pointer",
+  selectors: {
+    "&:hover:not(:disabled)": { background: vars.color.terminalHoverBg },
+    "&:disabled": { opacity: 0.4, cursor: "not-allowed" },
+  },
+});
+
+export const hunkCounter = style({
+  color: vars.color.terminalTextMuted,
+  fontSize: "0.8rem",
+  minWidth: "3.5rem",
+  textAlign: "center",
+});
+
+// ---- Context expansion ----
+
+export const expandRow = style({
+  display: "flex",
+  justifyContent: "center",
+  background: vars.color.terminalHeaderBg,
+  borderTop: `1px solid ${vars.color.terminalBorder}`,
+});
+
+export const expandButton = style({
+  width: "100%",
+  padding: "0.25rem 1rem",
+  background: "transparent",
+  border: "none",
+  color: vars.color.terminalTextMuted,
+  fontSize: "0.8rem",
+  fontFamily: "inherit",
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { background: vars.color.terminalHoverBg, color: vars.color.terminalForeground },
+  },
+});
+
+// ---- Split (side-by-side) view ----
+// One grid per hunk: each row holds both sides, so asymmetric hunks stay
+// aligned and the whole diff scrolls as a single container.
+
+export const splitGrid = style({
+  display: "grid",
+  gridTemplateColumns: "50px minmax(0, 1fr) 50px minmax(0, 1fr)",
+  background: vars.color.terminalBackground,
+  fontSize: "13px",
+  lineHeight: 1.6,
+});
+
+export const splitNumber = style({
+  padding: "0 0.5rem",
+  textAlign: "right",
+  color: vars.color.terminalTextMuted,
+  userSelect: "none",
+  borderLeft: "3px solid transparent",
+});
+
+export const splitContent = style({
+  padding: "0 0.75rem",
+  whiteSpace: "pre",
+  overflowX: "auto",
+  minWidth: 0,
+});
+
+export const splitRightBorder = style({
+  borderLeft: `1px solid ${vars.color.terminalBorder}`,
+});
+
+export const splitAdd = style({ background: vars.color.successBg });
+export const splitDelete = style({ background: vars.color.errorBg });
+export const splitPlaceholder = style({ background: vars.color.terminalHeaderBg });
+
+// ---- Syntax highlighting (class names come from LezerHighlighter) ----
+
+export const syntaxScope = style({});
+
+const tok = (name: string, color: string, extra: Record<string, string> = {}) =>
+  globalStyle(`${syntaxScope} .${name}`, { color, ...extra });
+
+tok(TOKEN_CLASS.keyword, vars.color.primary);
+tok(TOKEN_CLASS.string, vars.color.success);
+tok(TOKEN_CLASS.comment, vars.color.terminalTextMuted, { fontStyle: "italic" });
+tok(TOKEN_CLASS.number, vars.color.warning);
+tok(TOKEN_CLASS.function, vars.color.accentText);
+tok(TOKEN_CLASS.type, vars.color.primary);
+tok(TOKEN_CLASS.tag, vars.color.gitModified);
+tok(TOKEN_CLASS.invalid, vars.color.error);
+
+export const toolbarActions = style({
+  display: "flex",
+  gap: "0.5rem",
+  alignItems: "center",
 });

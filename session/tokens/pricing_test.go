@@ -626,3 +626,12 @@ func TestEstimateCost_FastSpeedMultipliesTurnCost(t *testing.T) {
 	cost, _ := pt.EstimateCost(r)
 	assert.InDelta(t, 2.0, cost, 1e-9) // 100k * $10/MTok * 2x
 }
+
+func TestNormalizeModelFamily_WhenCalledRepeatedly_ExpectSameResultFromMemo(t *testing.T) {
+	t.Parallel()
+	const id = "claude-sonnet-4-6-20250514"
+	first := NormalizeModelFamily(id)
+	assert.Equal(t, "claude-sonnet-4", first)
+	assert.Equal(t, first, NormalizeModelFamily(id))
+	assert.Equal(t, "", NormalizeModelFamily(""))
+}

@@ -3,6 +3,7 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import type { Interceptor, UnaryRequest, UnaryResponse } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { buildDedupeKey, isCoalescible } from "./idempotentMethods";
+import { priorityKey } from "./requestPriority";
 
 /** The shared request runs on its own deadline: no single caller's signal may cancel the others. */
 const SHARED_TIMEOUT_MS = 30_000;
@@ -15,6 +16,11 @@ interface Flight {
   globalGen: number;
   sessionGen: number;
 }
+
+/** Services whose methods may appear in IDEMPOTENT_METHODS.coalescible (string, so a partial gen mock in a test cannot break module load). */
+const INSIGHTS_SERVICE_TYPE_NAME = "session.v1.InsightsService";
+const isCoalescingService = (typeName: string) =>
+  typeName === SessionService.typeName || typeName === INSIGHTS_SERVICE_TYPE_NAME;
 
 const flights = new Map<string, Flight>();
 // Bumped when a write starts and again when it ends, so a read started mid-write never joins a pre-write flight.
@@ -124,7 +130,7 @@ export function createCoalescingInterceptor(opts: { isEnabled: () => boolean }):
     const unaryNext = next as (r: UnaryRequest) => Promise<UnaryResponse>;
     const sessionId = sessionIdOf(unary.message);
 
-    if (unary.service.typeName !== SessionService.typeName || !isCoalescible(unary.method.name)) {
+    if (!isCoalescingService(unary.service.typeName) || !isCoalescible(unary.method.name)) {
       bumpGenerations(sessionId);
       try {
         return await unaryNext(unary);
@@ -135,7 +141,8 @@ export function createCoalescingInterceptor(opts: { isEnabled: () => boolean }):
     if (!opts.isEnabled()) return unaryNext(unary);
     if (unary.signal.aborted) throw canceled();
 
-    const key = buildDedupeKey(unary.method, unary.message);
+    // A critical caller must not join a flight that is waiting in the deferred queue.
+    const key = `${buildDedupeKey(unary.method, unary.message)}|${unary.contextValues.get(priorityKey) ?? ""}`;
     let flight = flights.get(key);
     const stale =
       flight &&

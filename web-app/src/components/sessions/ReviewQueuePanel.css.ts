@@ -47,7 +47,7 @@ export const refreshButton = style({
   padding: `${vars.space["2"]} 12px`,
   fontSize: "20px",
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
@@ -104,7 +104,7 @@ export const filterButton = style({
   fontSize: "13px",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
@@ -159,7 +159,7 @@ export const item = style({
   borderRadius: vars.radii.lg,
   display: "flex",
   gap: vars.space["3"],
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       borderColor: vars.color.borderHover,
@@ -449,7 +449,7 @@ export const retryButton = style({
   fontSize: vars.fontSize.base,
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -486,7 +486,7 @@ export const newItemsBanner = style({
   fontWeight: 600,
   textAlign: "center",
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.primary,
@@ -529,7 +529,7 @@ export const filterToggle = style({
   fontSize: vars.fontSize.base,
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -558,7 +558,7 @@ export const filterClear = style({
   color: vars.color.textSecondary,
   fontSize: vars.fontSize.sm,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,

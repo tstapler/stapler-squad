@@ -347,6 +347,10 @@ var knownFeatureFlags = []struct {
 		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
 	},
 	{
+		name:        "batch_unary",
+		description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		name:        "window_keep_alive",
 		description: "Keep the web app's window state alive across route changes instead of remounting it. Kill switch: turn off to restore remount-on-navigate. Read by the web client; applies on next page load. Default: off.",
 	},

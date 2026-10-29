@@ -225,7 +225,7 @@ export const discardButton = style({
   fontSize: vars.fontSize.sm,
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.accentHover,

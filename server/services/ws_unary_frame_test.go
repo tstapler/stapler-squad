@@ -46,6 +46,7 @@ type unaryVectors struct {
 
 type unaryAllowlist struct {
 	WsUnaryAllowed []string `json:"wsUnaryAllowed"`
+	BatchAllowed   []string `json:"batchAllowed"`
 	ClientHeaders  []string `json:"clientHeaders"`
 	MaxInFlight    int      `json:"maxInFlight"`
 }

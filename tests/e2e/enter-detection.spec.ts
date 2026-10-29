@@ -166,14 +166,28 @@ test.describe("enter-detection", () => {
   // Smoke test: the page loads without JS errors (always runs, no fixture needed)
   test("enter-detection_smoke_should_loadPageWithoutErrors", async ({ page }) => {
     const consoleErrors: string[] = [];
+    const failedAssets: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    // A bare "Failed to load resource: 404" console line carries no URL, so judge resource failures
+    // from responses. /api/ calls are excluded: the backlog index RPC answers not_found whenever
+    // another spec has the backlog flag off, which is unrelated to page load.
+    page.on("response", (res) => {
+      const { pathname } = new URL(res.url());
+      if (res.status() >= 400 && !pathname.startsWith("/api/") && !pathname.includes("favicon")) {
+        failedAssets.push(`${res.status()} ${pathname}`);
+      }
     });
 
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
     await page.waitForSelector("body", { timeout: 15000 });
 
     // No JS errors on page load
-    expect(consoleErrors.filter(e => !e.includes("favicon"))).toHaveLength(0);
+    const jsErrors = consoleErrors.filter(
+      (e) => !e.includes("favicon") && !e.startsWith("Failed to load resource") && !e.includes("[useBacklogSessionIndex]"),
+    );
+    expect(jsErrors).toHaveLength(0);
+    expect(failedAssets).toEqual([]);
   });
 });

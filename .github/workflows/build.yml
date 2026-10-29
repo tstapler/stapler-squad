@@ -78,7 +78,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/|^tests/e2e/|^web-app/tests/e2e/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -181,6 +181,8 @@ jobs:
             nextjs-smoke-${{ runner.os }}-
 
       - name: make web-build (no manual pre-steps)
+        env:
+          WEB_BUILD: next
         run: make web-build
 
       - name: Verify proto bindings were generated

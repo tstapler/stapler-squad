@@ -537,6 +537,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
 	srv.wsUnaryBridge.Store(unaryBridge)
 	srv.mux.Handle(services.UnaryWsPath, unaryBridge)
+	// HTTP request batching (flag batch_unary): same per-call re-entry as the bridge.
+	srv.mux.Handle(services.UnaryBatchPath, services.NewUnaryBatchHandler(srv.unaryDispatcher))
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
