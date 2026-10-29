@@ -1,0 +1,3 @@
+Tokens: 8.2k sent, 612 received. Cost: $0.03 message, $0.11 session.
+Applied edit to src/auth.py
+Commit 3f2a1bc refactor: use JWT tokens for session auth

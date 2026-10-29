@@ -1,0 +1,4 @@
+$ go build ./...
+$ git status --short
+ M main.go
+user@host:~/project$ 

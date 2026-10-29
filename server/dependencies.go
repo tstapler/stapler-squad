@@ -446,6 +446,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller := session.NewReviewQueuePoller(
 		core.ReviewQueue, statusManager, core.Storage,
 	)
+	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
 	prStatusPoller := session.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
@@ -1118,6 +1119,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		time.Sleep(500 * time.Millisecond)
 		contentProvider := session.NewPollerContentProvider()
 		scanner := session.NewStartupScanner(statusManager, contentProvider)
+		scanner.SetOptionsSource(attentionOptionsSource)
 		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()

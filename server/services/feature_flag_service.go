@@ -456,6 +456,30 @@ var knownFeatureFlags = []struct {
 		name:        filesEditLargeFlagName,
 		description: "Files large-file editing: allow editing files over the 1 MiB cap through ranged reads and delta writes (ADR-036). Applies at once; global only. Default: off.",
 	},
+	{
+		name:        attentionProseQuestionDetectionFlagName,
+		description: "Attention prose-question detection: treat a turn that ends in a plain-prose question as needing you (an Asked a question item). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        sessionEventLogFlagName,
+		description: "Session event log: record per-session attention events (turn ends, state changes) for the timeline. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionAckBypassFixFlagName,
+		description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionIdleClockOutputFlagName,
+		description: "Attention idle clock from output: measure idleness and waiting-for-agent time from the last meaningful output instead of any touch. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionLLMTiebreakFlagName,
+		description: "Attention prose-question LLM tiebreak: ask a model to settle borderline prose-question detections. Needs prose-question detection on. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionInboxConsolidationFlagName,
+		description: "Attention inbox consolidation: show the unified Attention list in place of the separate review queue views. Applies at once; global only. Default: off.",
+	},
 }
 
 // workflowEngineModeTTL is how long a resolved engine mode is reused, so the

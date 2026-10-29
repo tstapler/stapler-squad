@@ -191,6 +191,26 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:attention_ack_bypass_fix": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_idle_clock_output": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_inbox_consolidation": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_prose_question_detection": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:attention_prose_question_llm_tiebreak": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:autonomous_stall_nudge_enabled": {
 		testName:   "TestConfigSurfaceProof_AutonomyNudgeFlags_ChangeEffectiveReaders",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -320,6 +340,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	},
 	"flag:review:block-approval-on-ci-failure": {
 		testName:   "TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
+	"flag:session_event_log": {
+		testName:   "TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
 	"flag:session:workspace-peers-nudge": {
