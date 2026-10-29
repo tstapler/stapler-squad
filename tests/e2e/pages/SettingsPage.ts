@@ -18,16 +18,25 @@ export class SettingsPage {
     await this.page.getByRole("button", { name: "New Alias" }).click();
   }
 
+  async clickAliasFormSave() {
+    await this.aliasFormSave().click();
+  }
+
   async fillAliasName(name: string) {
-    await this.page.getByLabel("Name").fill(name);
+    await this.page.getByRole("textbox", { name: /^Name(?! prefix)/ }).fill(name);
   }
 
   async fillAliasDescription(description: string) {
     await this.page.getByLabel("Description").fill(description);
   }
 
+  /** The alias form's Save button; the General tab behind the form has its own Save. */
+  private aliasFormSave() {
+    return this.page.getByLabel(/^(New|Edit) Alias/).getByRole("button", { name: "Save" });
+  }
+
   async saveAlias() {
-    await this.page.getByRole("button", { name: "Save" }).click();
+    await this.aliasFormSave().click();
     await expect(this.page.getByText(/saved/i)).toBeVisible({ timeout: 5000 });
   }
 

@@ -36,7 +36,7 @@ test.describe('new worktree session creation', () => {
   test('branch field is read-only while use-title-as-branch is checked', async ({ page }) => {
     await openInCreationMode(page);
 
-    await page.getByLabel('Session Name').fill('my-feature');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('my-feature');
     const branchInput = page.getByLabel(/Git Branch/i);
     await expect(branchInput).toBeVisible();
     await expect(branchInput).toBeDisabled();

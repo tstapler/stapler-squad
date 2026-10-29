@@ -25,7 +25,7 @@ test.describe("session-notes", () => {
       await page.getByRole("radio", { name: /temporary \(no git\)/i }).click();
 
       const sessionTitle = `e2e-notes-${Date.now()}`;
-      await page.getByLabel("Session Name").fill(sessionTitle);
+      await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
 
       const createRequest = page.waitForRequest(
         (req) => req.url().includes("CreateSession") && req.method() === "POST",

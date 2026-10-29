@@ -49,7 +49,7 @@ test.describe('existing worktree session creation', () => {
 
     // Provide path + name — but no existingWorktree path
     await page.locator('input[aria-label="Session source input"]').fill('/tmp');
-    await page.getByLabel('Session Name').fill('my-worktree-session');
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill('my-worktree-session');
 
     // canSubmit requires existingWorktree.trim() to be non-empty for this mode
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeDisabled();
@@ -61,7 +61,7 @@ test.describe('existing worktree session creation', () => {
 
     await page.locator('input[aria-label="Session source input"]').fill('/tmp');
     // Wait for detection (auto-fills session name, but does NOT enable submit yet — worktree required)
-    await expect(page.getByLabel('Session Name')).not.toHaveValue('', { timeout: 3000 });
+    await expect(page.getByRole('textbox', { name: /^Session Name/ })).not.toHaveValue('', { timeout: 3000 });
 
     // Fill the existing worktree path (text input, no worktrees pre-seeded in test server)
     await page.getByLabel('Existing Worktree Path').fill('/tmp/worktree');

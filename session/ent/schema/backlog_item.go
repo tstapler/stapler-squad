@@ -256,6 +256,7 @@ func (BacklogItem) Edges() []ent.Edge {
 // session_id).
 func (BacklogItem) Indexes() []ent.Index {
 	return []ent.Index{
+		index.Fields("priority", "updated_at"),
 		index.Fields("status", "priority"),
 		index.Fields("status", "updated_at"),
 		index.Fields("status", "queued_at"),

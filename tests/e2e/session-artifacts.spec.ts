@@ -5,7 +5,7 @@ test.describe("session-artifacts", () => {
   test("T-E2E-ARTIFACTS-001 Artifacts tab visible in session detail", async ({
     page,
   }) => {
-    await page.goto("http://localhost:8544");
+    await page.goto("/");
 
     // Navigate to first available session — skip test if none present.
     const firstSession = page.getByRole("listitem").first();
