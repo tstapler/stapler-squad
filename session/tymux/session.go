@@ -350,21 +350,14 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 }
 
 // paneColorEnv returns the TERM/COLORTERM overrides CreateSessionRequest.Env
-// layers over tymuxd's own environment. stapler-squad normally runs headless
-// under systemd with no TERM set at all, which tymuxd then passes straight
-// through to the pane's shell — the shell sees no TERM, assumes a dumb
-// terminal, and never emits ANSI/SGR color codes. Mirrors
-// tmux.go's buildAttachCommand, which solves the identical problem for the
-// classic tmux backend.
+// layers over tymuxd's own environment. They are forced, not inherited:
+// stapler-squad often runs headless with no TERM (the shell then assumes a
+// dumb terminal and emits no color), and when launched from a developer's
+// terminal its TERM (xterm-kitty, ghostty) would leak into panes that the
+// browser's xterm.js renders. Matches tmux, whose panes get their own TERM
+// independent of the launcher's.
 func paneColorEnv() map[string]string {
-	env := make(map[string]string, 2)
-	if os.Getenv("TERM") == "" {
-		env["TERM"] = "xterm-256color"
-	}
-	if os.Getenv("COLORTERM") == "" {
-		env["COLORTERM"] = "truecolor"
-	}
-	return env
+	return map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}
 }
 
 // launchEnv builds the create request's base env. Precedence, lowest to

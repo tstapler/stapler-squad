@@ -62,3 +62,23 @@ func TestTymuxGRPCSession_Start_MergesAppendedEnv(t *testing.T) {
 		})
 	}
 }
+
+// A developer launching stapler-squad from kitty/ghostty must not leak that terminal's TERM into
+// panes: the browser's xterm.js renders them, and tmux panes get their own TERM regardless of the
+// launcher's. AppendEnv still overrides.
+func TestTymuxGRPCSession_Start_ForcesPaneTermDespiteLauncherEnv(t *testing.T) {
+	t.Setenv("TERM", "xterm-kitty")
+	t.Setenv("COLORTERM", "24bit")
+	dir := t.TempDir()
+	var gotReq *v1.CreateSessionRequest
+	sess := NewTymuxGRPCSession(captureCreateSessionRequest(dir, &gotReq))
+	require.NoError(t, sess.Start(dir))
+	assert.Equal(t, map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}, gotReq.GetEnv())
+
+	var overridden *v1.CreateSessionRequest
+	sess = NewTymuxGRPCSession(captureCreateSessionRequest(dir, &overridden))
+	sess.AppendEnv("TERM=screen-256color")
+	require.NoError(t, sess.Start(dir))
+	assert.Equal(t, "screen-256color", overridden.GetEnv()["TERM"])
+	assert.Equal(t, "truecolor", overridden.GetEnv()["COLORTERM"])
+}
