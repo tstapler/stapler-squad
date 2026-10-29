@@ -38,6 +38,7 @@ var pinnedCallers = map[string]callerRow{
 	"server/services:PaneReplyCore.writeSequenceUnderLease":          {kind: kindAcquirer, reason: "the multi-key Reply chain's acquirer: audit line first, then Try lease, before-first-byte checks, SubmitReplySequence (visible sessions only)"},
 	"server/services:PaneReplyCore.writeUnderLease":                  {kind: kindAcquirer, reason: "the Reply chain's acquirer: audit line first, then Try lease, before-first-byte checks, SubmitReply"},
 	"server/services:SessionService.ackCapture":                      {kind: kindAcquirer, reason: "answer-ack capture: takes the reply lease only to read the pane without racing a writer; types nothing"},
+	"server:prwatchSteerer.Steer":                                    {kind: kindChain, reason: "PR watch steer: refuses a hidden target, then SteerSessionGuarded; no IsReadyForSteer pre-check"},
 	"server:instancePane.Lock":                                       {kind: kindAcquirer, reason: "wake write: one Try lease with LeaseWriterSteer, released by instanceLease"},
 	"server:instanceLease.Submit":                                    {kind: kindReceiver, reason: "wake submit under the lease instancePane.Lock took, after the pane-ownership check"},
 	"server/services:SessionService.runBypassSteer":                  {kind: kindChain, reason: "guards-off steer of a non-qualifying hidden target: guard_bypass line first, then steerUnderLease"},
