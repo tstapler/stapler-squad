@@ -411,7 +411,36 @@ Recounted: 14 M-class tasks (1,820k), 12 S (660k), 7 XS counted at 20k (140k); 3
 
 ## Baseline results (task 0.3)
 
-Not yet run. To be filled by task 0.3: count of ad-hoc PR sessions, per-repo hook coverage, E for kill criterion 1, and for each question the source used or `UNMEASURED` with the reason.
+Run 2026-10-28. Counts and repo names only; no logins or comment text recorded. Decision rule: calibrates thresholds, not a gate.
+
+**Route used (read-only).** Not the server API. Copied `~/.stapler-squad/workspaces/d685c4b1a423cca3/sessions.db` plus its `-wal` to a scratch directory and queried the copy with `sqlite3` (the live server and its files were not touched; `~/.stapler-squad/sessions.db` is a stale file with 0 sessions). Newest `ItemSession` per session by `created_at`, joined to `backlog_items.status`. Hooks read from `~/.config/gh-signal/config.d/95-webhooks.toml` with secret-like lines filtered out; the inbox token file was not read.
+
+**Ad-hoc PR sessions (VERIFIED, sqlite3 on the copy).** 613 sessions in the store; 271 have `github_pr_number > 0`. After the host filter (`github_host` empty or `github.com`) and non-empty owner/repo: 268; newest ItemSession absent 25, linked to a non-`pr_pending` item 240, linked to `pr_pending` 3 (excluded). **Ad-hoc: 265 sessions, 156 distinct PRs**; the store spans 2026-04-15 to 2026-10-28. Last 28 days (created on or after 2026-09-30): 184 sessions.
+
+| Repo | Ad-hoc sessions, all-time | Last 28 days | Hooked |
+|---|---|---|---|
+| tstapler/stapler-squad | 145 | 89 | yes |
+| tstapler/stelekit | 87 | 75 | no |
+| tstapler/kibitzer | 20 | 13 | no |
+| tstapler/stapler-mcp | 7 | 4 | no |
+| tstapler/gh-signal | 1 | 1 | yes |
+| tymux, steam-controls, dotfiles, consolette, benchdiff (1 each) | 5 | 1 | no |
+
+Fork exclusion: the store has no fork field, so no session was excluded as a fork. All 10 repos are owned by `tstapler`, so forks are unlikely (INFERRED). Sessions with empty or malformed owner/repo were dropped (D8 `no_owner_repo`).
+
+**(b) Hook coverage (VERIFIED, `95-webhooks.toml`).** Hooked repos: `tstapler/stapler-squad`, `tstapler/gh-signal`. By repo: 2 of 10 (20%). By ad-hoc sessions: 146 of 265 all-time (55%); 90 of 184 in the last 28 days (49%). stelekit (75 sessions in 28 days) is the largest unhooked repo, so initial coverage sits at the criterion 2 line of 50% until P0 or a stelekit hook lands. Read criterion 2 with that in mind.
+
+**Hooked ad-hoc sessions per 4 weeks (VERIFIED).** 90 sessions (72 distinct PRs) in the last 28 days; 146 sessions (112 distinct PRs) since 2026-08-07.
+
+**Idle-time / arrival-time question (VERIFIED by schema and code check; answer: not queryable).** Squad persists no per-comment arrival times and no idle periods. `sessions` keeps only the latest `last_meaningful_output`, `last_terminal_update` and `last_user_response`; `PRStatusPoller` stores aggregate review state (`session/pr_status_poller.go:501`); PR comments are fetched on demand (`session/pr_tracking.go:39`) and not stored. The 5 newest log files contain no comment-arrival lines (older gz logs not searched). "Feedback landed while idle" is therefore **UNMEASURED**.
+
+**Sample (VERIFIED, `gh pr view <n> --repo <r> --json author,comments,reviews,statusCheckRollup`, jq counts only).** The 20 most recent distinct PRs with ad-hoc sessions in the two hooked repos. Non-author events: 54 comments, all from one account that GitHub's `/users/<login>` returns 404 for (a GitHub App bot, INFERRED), and 1 review from a non-bot account. Under D7's bot filter the 54 do not steer. PRs with at least one failing check: 4 of 20 (14 failing check entries in total).
+
+- Mean actionable events per PR = (1 human review + 4 PRs with a failing check) / 20 = **0.25**. INFERRED lower bound: check entries carry no head SHA here, so a PR with several failing pushes counts once.
+- **(a) E = 90 x 0.25 = 22.5 steers per 4 weeks. Kill criterion 1 threshold = max(5, ceil(0.25 x 22.5)) = max(5, 6) = 6** (INFERRED from the sample). Sensitivity: using distinct PRs (72) gives E = 18 and threshold 5; counting the 54 bot comments as actionable gives about 3 events per PR, E near 265 and threshold near 67, which is not the intended reading because D7 drops bot actors.
+- **(c) Event shape, actionable events only:** 1 of 5 comment-shaped (20%), 4 of 5 CI-shaped (80%). Counting bot comments, comment-shaped would be 55 of 59 (93%), but those are filtered. For the alt-4 bet (criterion 6) this says human text events are rare in this sample, so criterion 6's 30% bar is at risk; n=20 is small.
+
+**UNMEASURED:** feedback timing against session idleness (not stored); per-head-SHA CI event counts; event rates in unhooked repos (stelekit, kibitzer), since the sample was drawn from hooked repos only.
 
 ## Risks (post-revision)
 
