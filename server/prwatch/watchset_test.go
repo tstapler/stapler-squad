@@ -200,3 +200,12 @@ func TestWatchSet_should_SanitizeTitle_When_ItHasControlCharsNewlinesOrIsLong(t 
 		t.Fatalf("no ellipsis: %q", long)
 	}
 }
+
+func TestWatchSet_should_SkipAsPRTerminal_When_SessionPRIsMergedOrClosed(t *testing.T) {
+	f := okFacts("a")
+	f.Terminal = true
+	got := compute(t, nil, nil, f, okFacts("b"))
+	if got["a"].SkipReason != SkipPRTerminal || got["b"].SkipReason != "" {
+		t.Fatalf("a=%q b=%q", got["a"].SkipReason, got["b"].SkipReason)
+	}
+}

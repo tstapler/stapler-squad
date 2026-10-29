@@ -299,3 +299,50 @@ func TestReconcile_should_LogNowWatchingAndDiscoveredToSubscribedLatency_When_Su
 	require.NotNil(t, found)
 	require.Equal(t, []any{"discovered_to_subscribed_seconds", 7.0}, found.KV)
 }
+
+func TestReconcile_should_UnsubscribeTerminalPR_When_SessionSkippedAsPRTerminal(t *testing.T) {
+	e := newReconcileEnv(t)
+	e.sessions.Set(liveSession("a", "acme/widget", 7))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	e.sessions.Set(SessionRef{UUID: "a", Repo: "acme/widget", PR: 7, State: StateLive, SkipReason: SkipPRTerminal})
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Equal(t, []string{"unsubscribe:sub-acme/widget#7"}, e.callsWithPrefix("unsubscribe:"))
+}
+
+func TestReconcile_should_KeepSubscriptionAndNotSubscribeNew_When_BacklogLookupFails(t *testing.T) {
+	e := newReconcileEnv(t)
+	e.sessions.Set(liveSession("a", "acme/widget", 7))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+
+	failed := func(uuid, repo string, pr int) SessionRef {
+		r := liveSession(uuid, repo, pr)
+		r.SkipReason = SkipBacklogLookupFailed
+		return r
+	}
+	e.sessions.Set(failed("a", "acme/widget", 7), failed("b", "acme/gadget", 9))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Empty(t, e.callsWithPrefix("unsubscribe:"))
+	require.Len(t, e.callsWithPrefix("watch:"), 1, "no new subscription for the failed session")
+	require.Empty(t, e.coalescer.evicted, "pending coalescer state survives a transient failure")
+}
+
+func TestReconcile_should_UnsubscribeAndStayRetired_When_PullRequestClosedEvent(t *testing.T) {
+	e := newReconcileEnv(t)
+	e.sessions.Set(liveSession("a", "acme/widget", 7))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+
+	e.rec.RetirePR(context.Background(), "Acme/Widget", 7)
+	require.Equal(t, []string{"unsubscribe:sub-acme/widget#7"}, e.callsWithPrefix("unsubscribe:"))
+
+	// The snapshot still lists the PR as open: it is not resubscribed.
+	e.clock.Advance(5 * time.Second)
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Len(t, e.callsWithPrefix("watch:"), 1)
+
+	// Once no session lists it, the retirement is forgotten.
+	e.sessions.Set()
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	e.sessions.Set(liveSession("a", "acme/widget", 7))
+	require.NoError(t, e.rec.Reconcile(context.Background()))
+	require.Len(t, e.callsWithPrefix("watch:"), 2)
+}

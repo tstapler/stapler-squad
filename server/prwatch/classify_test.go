@@ -151,3 +151,9 @@ func FuzzClassify(f *testing.F) {
 		}
 	})
 }
+
+func TestIsPullRequestClosed_should_MatchOnlyClosedPullRequestEvents(t *testing.T) {
+	assert.True(t, isPullRequestClosed(ev("pull_request", "closed", "")))
+	assert.False(t, isPullRequestClosed(ev("pull_request", "synchronize", "")))
+	assert.False(t, isPullRequestClosed(ev("comment", "closed", "")))
+}

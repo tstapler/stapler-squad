@@ -28,6 +28,7 @@ type Reconciler struct {
 	subs        map[string]*trackedSub // by watchKey
 	owners      map[string]string      // session UUID -> watchKey, from the last good tick
 	firstSeen   map[string]time.Time   // watchKey -> first tick that saw the PR
+	closed      map[string]bool        // PRs retired by a closed event, until no session lists them
 	listed      bool                   // a subscription listing has succeeded
 	lastListing time.Time
 }
@@ -46,7 +47,7 @@ func NewReconciler(in Inbox, sessions Sessions, coverage *Coverage, coalescer Co
 	return &Reconciler{
 		in: in, sessions: sessions, coverage: coverage, coalescer: coalescer,
 		clock: clock, log: log, settings: settings,
-		subs: map[string]*trackedSub{}, owners: map[string]string{}, firstSeen: map[string]time.Time{},
+		subs: map[string]*trackedSub{}, owners: map[string]string{}, firstSeen: map[string]time.Time{}, closed: map[string]bool{},
 	}
 }
 
@@ -68,6 +69,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return err
 	}
 	desired, owners := retainedSet(refs)
+	held := lookupFailedKeys(refs)
+	for uuid, key := range lookupFailedOwners(refs) {
+		owners[uuid] = key
+	}
+	r.dropClosed(desired, held)
 	now := r.clock.Now()
 
 	if r.listingDue(now) {
@@ -86,7 +92,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 	}
 	r.subscribeMissing(ctx, desired, now)
-	r.unsubscribeUndesired(ctx, desired)
+	r.unsubscribeUndesired(ctx, desired, held)
 	r.evictChangedOwners(owners)
 	r.owners = owners
 	for key := range r.firstSeen {
@@ -180,10 +186,10 @@ func (r *Reconciler) logNowWatching(key, repo string, pr int, now time.Time) {
 		"discovered_to_subscribed_seconds", now.Sub(seen).Seconds())
 }
 
-func (r *Reconciler) unsubscribeUndesired(ctx context.Context, desired map[string]string) {
+func (r *Reconciler) unsubscribeUndesired(ctx context.Context, desired map[string]string, held map[string]bool) {
 	var drop []string
 	for key := range r.subs {
-		if _, ok := desired[key]; !ok {
+		if _, ok := desired[key]; !ok && !held[key] {
 			drop = append(drop, key)
 		}
 	}
@@ -243,4 +249,54 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// lookupFailedKeys returns the PRs of sessions skipped only because the
+// backlog lookup failed. Their existing subscriptions are kept (a transient
+// failure must not discard pending items); new ones are not made.
+func lookupFailedKeys(refs []SessionRef) map[string]bool {
+	keys := map[string]bool{}
+	for _, key := range lookupFailedOwners(refs) {
+		keys[key] = true
+	}
+	return keys
+}
+
+func lookupFailedOwners(refs []SessionRef) map[string]string {
+	owners := map[string]string{}
+	for _, s := range refs {
+		if s.SkipReason == SkipBacklogLookupFailed && s.State != StateGone && s.Repo != "" && s.PR > 0 {
+			owners[s.UUID] = watchKey(s.Repo, s.PR)
+		}
+	}
+	return owners
+}
+
+// dropClosed removes PRs retired by a closed event from desired, and forgets
+// the retirement once no session lists the PR any more.
+func (r *Reconciler) dropClosed(desired map[string]string, held map[string]bool) {
+	for key := range r.closed {
+		_, listed := desired[key]
+		if !listed && !held[key] {
+			delete(r.closed, key)
+			continue
+		}
+		delete(desired, key)
+	}
+}
+
+// RetirePR handles a pull_request closed event (D7): it unsubscribes the PR
+// and keeps it out of the desired set until no session lists it. A failed
+// unsubscribe is retried by the next Reconcile.
+func (r *Reconciler) RetirePR(ctx context.Context, repo string, pr int) {
+	key := watchKey(repo, pr)
+	r.closed[key] = true
+	if t := r.subs[key]; t != nil && t.id != "" {
+		if err := r.in.Unsubscribe(ctx, t.id); err != nil {
+			r.log.Warn("prwatch.unsubscribe_failed")
+			return
+		}
+		delete(r.subs, key)
+		r.log.Info("prwatch.unsubscribed", "repo", repo)
+	}
 }

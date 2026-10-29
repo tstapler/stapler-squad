@@ -48,6 +48,12 @@ func classify(ev inbox.Event) (kinds []Kind, reason DropReason, ok bool) {
 	return nil, DropUnknownKind, false
 }
 
+// isPullRequestClosed reports a pull_request event with action closed (merged
+// or not); D7 retires the PR from the watch set on it.
+func isPullRequestClosed(ev inbox.Event) bool {
+	return ev.Kind == "pull_request" && ev.Action == "closed"
+}
+
 func classifyCI(details json.RawMessage) ([]Kind, DropReason, bool) {
 	switch detailString(details, "ci_kind") {
 	case "check_suite", "workflow_run":

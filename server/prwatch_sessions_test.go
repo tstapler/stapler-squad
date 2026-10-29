@@ -18,8 +18,8 @@ type fakeSessionView struct {
 }
 
 func (f fakeSessionView) SessionProgram(id string) (string, bool) { return "claude-" + id, id != "" }
-func (f fakeSessionView) IsHiddenSession(id string) bool           { return f.hidden[id] }
-func (f fakeSessionView) IsReadyForSteer(id string) bool           { return f.ready[id] }
+func (f fakeSessionView) IsHiddenSession(id string) bool          { return f.hidden[id] }
+func (f fakeSessionView) IsReadyForSteer(id string) bool          { return f.ready[id] }
 
 func prSnap(id string, st session.Status) *session.InstanceSnapshot {
 	return &session.InstanceSnapshot{
@@ -131,4 +131,13 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 	_, failed, err = (&prwatchBacklogLinks{store: store}).Pending(ctx, []string{d})
 	require.NoError(t, err)
 	assert.True(t, failed[d])
+}
+
+func TestPRWatchSessions_should_SkipAsPRTerminal_When_SnapshotPRIsTerminal(t *testing.T) {
+	snap := prSnap("a", session.Active)
+	snap.GitHub.GitHubPRStatusTerminal = true
+	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
+	refs, err := s.List(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, prwatch.SkipPRTerminal, refs[0].SkipReason)
 }

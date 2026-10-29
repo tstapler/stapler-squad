@@ -38,6 +38,7 @@ type SessionFacts struct {
 	Host      string // "" is github.com
 	PR        int
 	Fork      bool
+	Terminal  bool // the session's PR is merged or closed
 }
 
 // BacklogLinks answers D4. Contract: Pending reports, for the given session
@@ -144,6 +145,8 @@ func skipReasonFor(f SessionFacts, state SessionState, ignore map[string]bool) S
 		return SkipNoOwnerRepo
 	case f.PR <= 0:
 		return SkipNoPR
+	case f.Terminal:
+		return SkipPRTerminal
 	case ignore[strings.ToLower(f.Owner+"/"+f.Repo)]:
 		return SkipIgnoreRepos
 	}

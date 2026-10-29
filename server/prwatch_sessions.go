@@ -80,7 +80,7 @@ func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionF
 	f := prwatch.SessionFacts{
 		UUID: sn.UUID, Title: sn.Title, Lifecycle: lifecycleOf(sn.Status), Hidden: sn.Hidden,
 		Owner: gh.GitHubOwner, Repo: gh.GitHubRepo, Host: gh.GitHubHost,
-		PR: gh.GitHubPRNumber, Fork: gh.GitHubIsFork,
+		PR: gh.GitHubPRNumber, Fork: gh.GitHubIsFork, Terminal: gh.GitHubPRStatusTerminal,
 	}
 	if f.PR > 0 && (f.Owner == "" || f.Repo == "") && f.Lifecycle != prwatch.LifeGone {
 		f.Owner, f.Repo, f.Host = s.remoteOf(sn)
@@ -120,11 +120,15 @@ func (s *prwatchSessions) Program(sessionUUID string) string {
 	return p
 }
 
-func (s *prwatchSessions) IsHidden(sessionUUID string) bool { return s.view.IsHiddenSession(sessionUUID) }
+func (s *prwatchSessions) IsHidden(sessionUUID string) bool {
+	return s.view.IsHiddenSession(sessionUUID)
+}
 
 // IsBusy is the negation of IsReadyForSteer (D17), so a session with no live
 // instance or status source also reads as busy.
-func (s *prwatchSessions) IsBusy(sessionUUID string) bool { return !s.view.IsReadyForSteer(sessionUUID) }
+func (s *prwatchSessions) IsBusy(sessionUUID string) bool {
+	return !s.view.IsReadyForSteer(sessionUUID)
+}
 
 // prwatchBacklogLinks implements prwatch.BacklogLinks (D4): one batched link
 // query, then at most one GetBacklogItem per distinct linked item.
