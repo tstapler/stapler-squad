@@ -14,6 +14,13 @@ describe("NAV_PAGES", () => {
   });
 });
 
+describe("NAV_PAGES owner inbox", () => {
+  it("registers the Owner Inbox in the work group", () => {
+    const page = NAV_PAGES.find((p) => p.href === routes.ownerInbox);
+    expect(page?.group).toBe("work");
+  });
+});
+
 describe("groupNavPages", () => {
   it("groupNavPages_should_placeItemsInCorrectBucket_When_givenFullNavPages", () => {
     const groups = groupNavPages(NAV_PAGES);
