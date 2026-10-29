@@ -12,7 +12,7 @@
     "source": "Measured on the Bun 1.4.3 minified build 2026-10-21: 1,494,183 B (the entry chunk), x 1.05."
   },
   "maxWallMs": {
-    "limit": 10000,
-    "source": "plan Story 5.5 / REQ-M1; measured about 1,100 ms warm on 2026-10-21"
+    "limit": 30000,
+    "source": "plan Story 5.5 / REQ-M1; measured about 1,100 ms warm on 2026-10-21; raised from 10000 on 2026-10-28 after contended-host builds took 13-42 s"
   }
 }
