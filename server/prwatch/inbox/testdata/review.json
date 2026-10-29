@@ -1,0 +1,33 @@
+{
+  "items": [
+    {
+      "id": "inb_review",
+      "subscription_id": "sub_1",
+      "created_at": "2026-09-04T19:00:01Z",
+      "event": {
+        "version": 1,
+        "id": "evt_4ce42549ff757c37b00ddeef",
+        "delivery_id": "d-review",
+        "source": "github",
+        "source_event_type": "pull_request_review",
+        "repository": "acme-corp/widget-api",
+        "pull_request": 123,
+        "kind": "review",
+        "action": "submitted",
+        "actor": "reviewer",
+        "occurred_at": "2026-09-04T19:00:00Z",
+        "head_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "reviewer submitted pull-request review",
+        "fingerprint": "4ce42549ff757c37b00ddeef16cbcc5e65635120273e5b89b5cef3c65649dfcc",
+        "trust": "untrusted",
+        "details": {
+          "resource_id": 789,
+          "state": "changes_requested",
+          "body": "needs tests",
+          "body_truncated": false,
+          "url": "https://github.com/acme-corp/widget-api/pull/123#pullrequestreview-789"
+        }
+      }
+    }
+  ]
+}
