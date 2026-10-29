@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, type RefObject } from "react";
+import { sharedBodyMeasurer } from "@/lib/layout/sharedBodyMeasurer";
 import { setDeckTopOffset, setStackTopOffset } from "@/lib/utils/toastDock";
 
 /**
@@ -9,7 +10,8 @@ import { setDeckTopOffset, setStackTopOffset } from "@/lib/utils/toastDock";
  * The row's own size rarely changes when the memory banner above it appears,
  * wraps or is dismissed; its position does. So this re-measures on the row's and
  * the body's resize, on DOM insertions and removals, and on window resize,
- * coalescing bursts into one frame.
+ * coalescing bursts into one frame through the shared body measurer (one set of
+ * observers for every subscriber).
  */
 export function usePublishStackTopOffset(ref: RefObject<HTMLElement | null>, enabled = true): void {
   usePublishBottomEdge(ref, undefined, enabled, setStackTopOffset, false);
@@ -45,31 +47,16 @@ function usePublishBottomEdge(
     const el = ref.current;
     if (!enabled || !el) return;
 
-    let frame = 0;
     const measure = () => {
-      frame = 0;
       const rect = el.getBoundingClientRect();
       const extra = extraRef?.current?.getBoundingClientRect();
       const bottom = extra && extra.height > 0 ? Math.max(rect.bottom, extra.bottom) : rect.bottom;
       publish(nullWhenHidden && rect.height === 0 ? null : Math.round(bottom));
     };
-    const schedule = () => {
-      if (frame === 0) frame = requestAnimationFrame(measure);
-    };
-
-    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
-    resizeObserver?.observe(el);
-    resizeObserver?.observe(document.body);
-    const mutationObserver = new MutationObserver(schedule);
-    mutationObserver.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener("resize", schedule);
-    measure();
-
+    const elements = extraRef?.current ? [el, extraRef.current] : [el];
+    const unsubscribe = sharedBodyMeasurer.subscribe({ elements, measure });
     return () => {
-      if (frame !== 0) cancelAnimationFrame(frame);
-      resizeObserver?.disconnect();
-      mutationObserver.disconnect();
-      window.removeEventListener("resize", schedule);
+      unsubscribe();
       publish(null);
     };
   }, [ref, extraRef, enabled, publish, nullWhenHidden]);

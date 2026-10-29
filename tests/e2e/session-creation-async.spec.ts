@@ -174,7 +174,7 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
 
     await sessionsPage.newSessionButton.click({ timeout: 20000 });
     await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-    await page.getByLabel('Session Name').fill(sessionTitle);
+    await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
     await page.getByText('Advanced Options').click();
     await page.getByLabel('Program', { exact: true }).selectOption('bash');
 
@@ -236,7 +236,7 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
       // the exact same title below.
       await sessionsPage.newSessionButton.click({ timeout: 20000 });
       await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-      await page.getByLabel('Session Name').fill(sessionTitle);
+      await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
       await page.getByText('Advanced Options').click();
       await page.getByLabel('Program', { exact: true }).selectOption('bash');
       await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });
@@ -264,7 +264,7 @@ test.describe('async session creation (Epic 5.1: omnibar early-close)', () => {
 
       await sessionsPage.newSessionButton.click({ timeout: 20000 });
       await page.getByRole('radio', { name: /temporary \(no git\)/i }).click({ timeout: 15000 });
-      await page.getByLabel('Session Name').fill(sessionTitle);
+      await page.getByRole('textbox', { name: /^Session Name/ }).fill(sessionTitle);
       await page.getByText('Advanced Options').click();
       await page.getByLabel('Program', { exact: true }).selectOption('bash');
       await expect(sessionsPage.createSessionSubmitButton).toBeEnabled({ timeout: 5000 });

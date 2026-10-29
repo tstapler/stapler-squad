@@ -21,6 +21,8 @@ import { test, expect } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
+  // The onboarding modal opens 800ms after mount; without this the shot depends on load speed.
+  await page.addInitScript(() => localStorage.setItem("stapler-squad:onboarded", "true"));
 });
 
 test("session list empty state", async ({ page }) => {

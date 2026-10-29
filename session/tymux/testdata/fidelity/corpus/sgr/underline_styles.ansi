@@ -1,0 +1,8 @@
+sgr/underline_styles -- kitty underlines.rst; libvterm 30state_pen !Underline;
+[4m4 single[0m [21m21 double[0m [24m24 off[0m
+[4:0mnone[0m [4:1msingle[0m [4:2mdouble[0m [4:3mcurly[0m [4:4mdotted[0m [4:5mdashed[0m
+[4:3mcurly[24m-then-24[0m [4m4[4:0m-then-4:0[0m
+[4:3mcurly [4mthen-plain-4[0m
+[4:2mdouble [4:4mthen-dotted[0m
+[4:3;1mcurly+bold[0m [4:3;3mcurly+italic[0m [4:3;7mcurly+reverse[0m
+[4:3;38;5;196mcurly-red-fg[0m [4:5;48;5;22mdashed-greenbg[0m

@@ -12,6 +12,7 @@ export const header = style({
   padding: `0 ${vars.space["4"]}`,
   position: "sticky",
   top: 0,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1100,
   backdropFilter: "blur(8px)",
   backgroundColor: "rgba(15, 17, 23, 0.95)",
@@ -103,6 +104,7 @@ export const nav = style({
       backgroundColor: "rgba(20, 20, 20, 0.98)",
       borderBottom: `1px solid ${vars.color.borderColor}`,
       padding: `${vars.space["2"]} 0`,
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
       zIndex: 1000,
       backdropFilter: "blur(8px)",
       boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
@@ -128,7 +130,7 @@ export const navLink = style({
   fontWeight: "500",
   color: vars.color.textSecondary,
   textDecoration: "none",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   position: "relative",
 
   selectors: {
@@ -197,7 +199,7 @@ export const newSessionButton = style({
   color: vars.color.primaryText,
   background: vars.color.primary,
   textDecoration: "none",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   border: "none",
   cursor: "pointer",
 
@@ -249,7 +251,7 @@ const iconButtonBase = style({
   background: "transparent",
   color: vars.color.textSecondary,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
 
   selectors: {
     "&:hover": {

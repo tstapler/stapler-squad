@@ -1,0 +1,4 @@
+modes/title_osc0_osc2_bel_and_st -- xterm ctlseqs OSC Ps ; Pt (0 sets icon+title, 2 sets title); last title wins
+]0;first-titlevisible text after OSC 0 (BEL)
+]2;second-title\visible text after OSC 2 (ST)
+]2;final title with spacesdone

@@ -82,14 +82,14 @@ test.describe("alias-settings", () => {
 
   test("AC-09 save with empty name shows inline error", async ({ page }) => {
     await settings.clickNewAlias();
-    await page.getByRole("button", { name: "Save" }).click();
+    await settings.clickAliasFormSave();
     await expect(page.getByText("Name is required.")).toBeVisible();
   });
 
   test("AC-10 save with invalid name shows regex error", async ({ page }) => {
     await settings.clickNewAlias();
-    await page.getByLabel("Name").fill("my project");
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("textbox", { name: /^Name(?! prefix)/ }).fill("my project");
+    await settings.clickAliasFormSave();
     await expect(page.getByText(/letters, digits, hyphens, and underscores/i)).toBeVisible();
   });
 

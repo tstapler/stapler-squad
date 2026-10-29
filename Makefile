@@ -237,8 +237,8 @@ web-app/node_modules/.ssq-install-stamp: web-app/package.json web-app/bun.lock $
 .PHONY: FORCE-node-modules-migration
 FORCE-node-modules-migration: ;
 
-# WEB_BUILD selects the bundler: next (default) or bun (web-app/build/, ADR-006). Both write web-app/out.
-WEB_BUILD ?= next
+# WEB_BUILD selects the bundler: bun (default, web-app/build/, ADR-006) or next (explicit opt-in until PR 9 deletes it). Both write web-app/out.
+WEB_BUILD ?= bun
 ifneq ($(filter $(WEB_BUILD),next bun),$(WEB_BUILD))
 $(error WEB_BUILD must be "next" or "bun", got "$(WEB_BUILD)")
 endif
@@ -260,7 +260,7 @@ endif
 
 # end of the WEB_BUILD seam block (scripts/__tests__/makefile-web-build.test.mjs extracts everything above)
 
-# Build the web UI to web-app/out (Next by default, Bun with WEB_BUILD=bun)
+# Build the web UI to web-app/out (Bun by default, Next with WEB_BUILD=next)
 web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(WEB_BUILD_INPUTS) $(WEB_BUILD_STAMP)
 ifeq ($(WEB_BUILD),bun)
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
@@ -291,7 +291,7 @@ server/web/dist: web-app/out
 	@touch server/web/dist # Update timestamp
 	@echo "✅ Web UI built and copied successfully"
 
-web-build: server/web/dist ## Build the web UI (Next by default; WEB_BUILD=bun for the Bun pipeline)
+web-build: server/web/dist ## Build the web UI (Bun by default; WEB_BUILD=next for the Next pipeline)
 
 build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
@@ -356,12 +356,16 @@ install-mux: ensure-tools ## Build and install claude-mux to ~/.local/bin
 	@./scripts/install-mux.sh
 
 # ── Pinned tmux binary (for test isolation) ────────────────────────────────
-# Builds tmux 3.4 from the third_party/tmux git submodule.
+# Builds tmux 3.8 from the third_party/tmux git submodule.
 # Tests use TMUX_BIN=bin/tmux to run against the pinned binary instead of the
 # system tmux, ensuring reproducible results across developer machines and CI.
 
 BIN_TMUX        := bin/tmux
-TMUX_BUILD_STAMP := .tmux-build.stamp
+# Keep TMUX_PIN in step with the third_party/tmux submodule and scripts/build-tmux.sh;
+# it is in the stamp name so bumping the pin forces a rebuild (and rebuilds bin/tmux
+# before build-tmux-embed copies it into a release).
+TMUX_PIN := 3.8
+TMUX_BUILD_STAMP := .tmux-build-$(TMUX_PIN).stamp
 
 # Stamp-file approach: only rebuild when submodule source changes
 $(BIN_TMUX): $(TMUX_BUILD_STAMP)
@@ -377,7 +381,7 @@ $(TMUX_BUILD_STAMP):
 init-submodules: ## Initialize git submodules (required once after clone)
 	git submodule update --init --recursive
 
-build-tmux: ## Build pinned tmux 3.4 binary from third_party/tmux submodule
+build-tmux: ## Build pinned tmux 3.8 binary from third_party/tmux submodule
 	@./scripts/build-tmux.sh
 
 build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build -tags embed_tmux
@@ -401,7 +405,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.8.0
+TYMUX_VERSION ?= v1.9.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 

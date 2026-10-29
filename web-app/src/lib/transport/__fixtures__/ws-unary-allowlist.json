@@ -1,0 +1,23 @@
+{
+  "wsUnaryAllowed": [
+    "GetVCSStatus",
+    "GetSessionDiff",
+    "ListFiles",
+    "GetFileContent",
+    "StatFile",
+    "GetFileTransportCapabilities",
+    "ListShells",
+    "ListWorkflows",
+    "ListProgramsConfig"
+  ],
+  "batchAllowed": [
+    "ListFiles",
+    "StatFile",
+    "GetFileTransportCapabilities",
+    "ListShells",
+    "ListWorkflows",
+    "ListProgramsConfig"
+  ],
+  "clientHeaders": ["Connect-Protocol-Version"],
+  "maxInFlight": 6
+}

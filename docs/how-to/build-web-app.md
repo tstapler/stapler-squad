@@ -1,12 +1,14 @@
 # Build the web UI (Next or Bun)
 
-`WEB_BUILD` selects the bundler. Unset means `next`, the deployed build; `bun` runs the pipeline in `web-app/build/` (plan: `project_plans/web-app-bun-build/`, ADR-006). Both write `web-app/out/`, and `make web-build` copies it to `server/web/dist`.
+`WEB_BUILD` selects the bundler. Unset means `bun` (the `make` default since PR 8, unminified), which runs the pipeline in `web-app/build/`; `next` is an explicit opt-in until PR 9 deletes it (plan: `project_plans/web-app-bun-build/`, ADR-006). Both write `web-app/out/`, and `make web-build` copies it to `server/web/dist`.
 
 ```bash
-make web-build                    # Next, as before
-WEB_BUILD=bun make web-build      # Bun; unminified unless WEB_MINIFY=1 is passed
+make web-build                    # Bun (default); unminified unless WEB_MINIFY=1 is passed
+WEB_BUILD=next make web-build     # Next, explicit opt-in
 cd web-app && bun build/build.ts  # the pipeline alone; minified unless WEB_MINIFY=0
 ```
+
+`make install-service` ships whichever mode is current, so the first install after the flip swaps the deployed UI to the Bun build; it restarts the service, so do it in a planned window (the preflight requires `--tmux-keep-server`).
 
 Switching `WEB_BUILD` rebuilds `web-app/out` once (the stamp `web-app/.web-build-mode` changes) and recopies `server/web/dist`; repeating the same mode is a no-op.
 
@@ -37,7 +39,7 @@ Stages, in order: `guard` (the vanilla-extract `eval` patch is applied), `clean`
 
 | Variable | Values | Effect |
 |---|---|---|
-| `WEB_BUILD` | `next` (default), `bun` | Picks the bundler for `make web-build` and `bun run build`. Anything else fails the Makefile. |
+| `WEB_BUILD` | `bun` (default for `make`), `next` | Picks the bundler for `make web-build`; `bun run build` inside `web-app/` still defaults to `next` when `WEB_BUILD` is unset (package.json, removed in PR 9). Anything else fails the Makefile. |
 | `WEB_MINIFY` | `0`, `1` | `make` passes `0` by default (the cutover build ships unminified, ADR-004). `bun build/build.ts` run directly minifies unless `0`. Byte budgets are enforced only for minified output. |
 | `WEB_DEV_HMR` | `0`, `1` | Hot reload of the Bun dev server. The server itself arrives in PR 5b; the flag is documented here so the name is reserved. |
 
@@ -82,7 +84,7 @@ Flip the Makefile/CI default back and rebuild:
 WEB_BUILD=next make web-build   # confirms Next still builds during the Soak
 ```
 
-then edit `WEB_BUILD ?= next` back in the `Makefile` (and the equivalent CI job default), and restart the deployed service during a planned window (`make install-service`) — never to try a change, only to realize an already-decided revert; see the manual-instance section above for trying things without touching `:8543`. This is valid only until PR 9 merges (Migration Plan rollback ladder); the full step-by-step runbook, including the `--tmux-keep-server` precondition and the `WEB_BUILD_GATE_MEMBERS` removal, is Story 8.5's `docs/how-to/rollback-web-build.md`, written separately. Each realized revert is one of the "zero reverts" the exit criteria below count.
+then edit `WEB_BUILD ?= bun` back to `next` in the `Makefile` (and the equivalent CI job default), and restart the deployed service during a planned window (`make install-service`) — never to try a change, only to realize an already-decided revert; see the manual-instance section above for trying things without touching `:8543`. This is valid only until PR 9 merges (Migration Plan rollback ladder); the full step-by-step runbook, including the `--tmux-keep-server` precondition and the `WEB_BUILD_GATE_MEMBERS` removal, is Story 8.5's `docs/how-to/rollback-web-build.md`, written separately. Each realized revert is one of the "zero reverts" the exit criteria below count.
 
 ### T3 counting rule (Vite 8 fallback trigger)
 

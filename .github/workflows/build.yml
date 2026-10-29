@@ -24,21 +24,15 @@ on:
       - '.github/actions/prepare/**'
       - '.gitmodules'
       - 'third_party/tmux/**'
+      - 'tests/e2e/**'
+      - 'web-app/tests/e2e/**'
   workflow_dispatch:
-  # No paths: filter here (unlike push above) — branch protection requires the
-  # "Test" job's status check, and a workflow that never triggers for a given
-  # PR never posts ANY status for that check, which leaves GitHub's required-
-  # check gate permanently "expected, never reported" instead of skipped-and-
-  # passing — blocking merge forever regardless of what else passed (see PR
-  # #618/#619). A job *skipped* via `if:` counts as a passing status for
-  # required checks (documented GitHub Actions behavior; already relied on by
-  # e2e-video.yml's detect-feature-changes gate), so detect-changes below
-  # moves the same path-relevance check from the trigger into a job condition
-  # instead, preserving "skip the expensive jobs for an irrelevant PR" while
-  # still letting the required check resolve to something GitHub can read.
-  # push (above) keeps its paths: filter untouched — a push to main that
-  # never triggers this workflow at all isn't blocked by anything, since
-  # there's no PR being merged for it to gate.
+  # No paths: filter here (unlike push above): detect-changes below moves the
+  # path-relevance check from the trigger into a job condition, so an irrelevant
+  # PR still gets a resolved (skipped) status for each job instead of none.
+  # push (above) keeps its paths: filter; a push to main that never triggers
+  # this workflow isn't gating any PR. main has no branch protection, so no
+  # check in this file is currently required.
   pull_request:
     branches: [ main ]
 
@@ -84,7 +78,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -187,6 +181,8 @@ jobs:
             nextjs-smoke-${{ runner.os }}-
 
       - name: make web-build (no manual pre-steps)
+        env:
+          WEB_BUILD: next
         run: make web-build
 
       - name: Verify proto bindings were generated
@@ -203,8 +199,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # web-build-smoke-bun: the same clean-checkout proof for the Bun pipeline
   # (WEB_BUILD=bun, web-app/build/). Runs and reports from its first appearance but
-  # is NOT a member of web-build-gate until the repository variable
-  # WEB_BUILD_GATE_MEMBERS says so (plan decision 10); it is not continue-on-error.
+  # is not continue-on-error.
   # No matrix: a matrix leg has no needs.<job>.result of its own, and fail-fast would
   # cancel the Next job when Bun fails.
   # ─────────────────────────────────────────────────────────────────────────────
@@ -298,7 +293,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # built-assets-guard: every file of the Bun build must be auth-exempt or on the public
   # allowlist (server/middleware/built_assets_test.go). REQUIRE_BUILT_OUT makes a missing
-  # artifact a failure instead of a skip. Not in web-build-gate's needs: it joins by variable.
+  # artifact a failure instead of a skip.
   # ─────────────────────────────────────────────────────────────────────────────
   built-assets-guard:
     name: Go auth-exemption walk of the Bun build
@@ -331,24 +326,44 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # e2e-next: the full Playwright suite (every spec under tests/e2e/, every project) against
   # the Next build, using the harness's own isolated global-setup (dynamic free port,
-  # PID-scoped temp dir -- never :8543). A default member of web-build-gate from day one
-  # (web-app/scripts/ci/web-build-gate.mjs's DEFAULT_MEMBERS already names it), unlike
-  # e2e-bun below, which opts in later via the WEB_BUILD_GATE_MEMBERS repository variable
-  # (plan decision 10, Story 5.11). Uploads its Playwright JSON report with if: always() so
-  # e2e-bun's comparator can read it even when this job itself fails (plan Story 0.1's gate
-  # rule judges a spec missing from the baseline against this same-run report).
+  # PID-scoped temp dir -- never :8543). Runs on push to main / workflow_dispatch only, not on
+  # pull_request: e2e-bun is the single PR e2e. Uploads its Playwright JSON report with
+  # if: always() so e2e-bun's comparator can read it even when this job itself fails (plan
+  # Story 0.1's gate rule judges a spec missing from the baseline against this same-run
+  # report). Firefox/WebKit coverage lives in nightly.yml.
   # ─────────────────────────────────────────────────────────────────────────────
-  e2e-next-shard:
-    name: e2e (Next build) shard ${{ matrix.shard }}/10
+  # Resolves the Playwright version pinned by tests/e2e/bun.lock so the shards can run in the
+  # matching official image (browsers + OS libraries preinstalled) instead of `apt-get` +
+  # `playwright install --with-deps` on every one of the 20 shard runners.
+  e2e-env:
+    name: e2e environment (Playwright image tag)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    timeout-minutes: 5
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    outputs:
+      playwright-version: ${{ steps.pw.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/e2e/bun.lock
+          sparse-checkout-cone-mode: false
+
+      - name: Read pinned Playwright version
+        id: pw
+        run: |
+          v=$(grep -oE '"@playwright/test@[0-9]+\.[0-9]+\.[0-9]+"' tests/e2e/bun.lock | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          [ -n "$v" ] || { echo "::error::could not read @playwright/test version from tests/e2e/bun.lock" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  # Builds the Next-mode e2e binary once; the 10 Next shards download it instead of each running
+  # `go build` (prepare's artifact is already a Next-mode build, so a plain `go build` suffices).
+  e2e-binary-next:
+    name: e2e binary (Next build)
     runs-on: ubuntu-latest
     needs: [detect-changes, prepare]
-    # always() for the same reason as web-build-smoke-next above.
-    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
-    timeout-minutes: 50
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    timeout-minutes: 20
+    if: always() && github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -365,57 +380,77 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      # prepare's shared artifact is already a Next-mode build (WEB_BUILD unset there too), so
-      # a plain `go build` suffices -- no `make` rebuild needed, mirroring e2e-video.yml's
-      # build-binary job.
       - name: Build binary (Next build, from prepare's shared artifact)
         run: go build -o stapler-squad .
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-binary-next
+          path: stapler-squad
+          if-no-files-found: error
+          retention-days: 1
+
+  e2e-next-shard:
+    name: e2e (Next build) shard ${{ matrix.shard }}/10
+    runs-on: ubuntu-latest
+    needs: [detect-changes, e2e-env, e2e-binary-next]
+    if: always() && github.event_name != 'pull_request'
+    timeout-minutes: 50
+    # Official Playwright image: browsers and OS libraries are baked in, so there is no
+    # apt-get / `playwright install` per shard. The tag comes from bun.lock via e2e-env.
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.e2e-env.outputs.playwright-version }}-noble
+      options: --init --ipc=host
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Next binary
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-binary-next
+
+      - name: Make binary executable
+        run: chmod +x stapler-squad
+
+      # setup-bun unzips its download, the server and some specs shell out to tmux; install only
+      # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
+      # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
+      - name: Ensure unzip, tmux and git
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          missing=()
+          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
+            for attempt in 1 2 3; do
+              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
+              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
+              sleep 10
+            done
+          fi
+          tmux -V; git --version
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      - name: Install test dependencies
+        run: cd tests/e2e && bun install --frozen-lockfile
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
-
-      # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
-      # e2e-secondary-browsers-next/-bun jobs below — see their own comment for why.
-      - name: Install Playwright + test dependencies
-        # --with-deps runs apt-get, which stalls on mirror connections (see
-        # benchmark.yml); an unbounded stall ate the whole 50m job timeout and
-        # surfaced as a cancelled shard. Bound each attempt and retry.
-        timeout-minutes: 20
-        run: |
-          cd tests/e2e
-          bun install --frozen-lockfile
-          for attempt in 1 2 3; do
-            if timeout 6m npx playwright install chromium --with-deps; then
-              exit 0
-            fi
-            echo "::warning::Playwright install attempt $attempt failed or timed out; retrying..."
-            # timeout(1) only signals the npx process it forked directly; apt-get (spawned as
-            # root underneath it) survives and keeps the dpkg lock held into the next attempt,
-            # which then fails immediately with "Could not get lock /var/lib/dpkg/lock-frontend"
-            # instead of retrying the install. Clear any such orphan before sleeping.
-            sudo pkill -9 -f 'apt-get|dpkg' 2>/dev/null || true
-            sleep 10
-          done
-          echo "Playwright install failed after 3 attempts" >&2
-          exit 1
+      - name: Check Playwright version
+        run: npx --prefix tests/e2e playwright --version
 
       # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
       # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
       # Only a blown budget or a harness crash (no blob report) fails a shard. The soft timeout
       # fires before the job's hard 50m.
       # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
-      # e2e-secondary-browsers-next/-bun jobs below — see their own comment for why.
+      # nightly.yml's secondary-browser jobs — see its header for why.
       - name: Run e2e shard ${{ matrix.shard }}/10 (Next build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
@@ -441,90 +476,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # e2e-secondary-browsers-{next,bun}: Firefox/WebKit coverage split out of the 20 gating
-  # shard jobs (Story 3.2.1) so those jobs don't pay a 3x browser-install cost for coverage
-  # that's informational on every project but Chromium. continue-on-error at the job level, and
-  # never added to e2e-next's/e2e-bun's needs: gating role -- only web-build-gate's needs:
-  # list determines gate membership, and these two are not in it. webkit-mobile (not
-  # mobile-webkit, a separate Files-viewer-mobile project gated by PW_WEBKIT=1) carries the 6
-  # next-e2e-baseline.json baseline-"pass" entries and must not be dropped; mobile-webkit's own
-  # coverage is preserved here too via PW_WEBKIT=1. Blob artifact names
-  # (e2e-next-blob-secondary / e2e-bun-blob-secondary) match e2e-next's/e2e-bun's existing
-  # e2e-*-blob-* download globs, so no merge-step edit is needed to pick them up.
-  # ─────────────────────────────────────────────────────────────────────────────
-  e2e-secondary-browsers-next:
-    name: e2e secondary browsers (Next build)
-    runs-on: ubuntu-latest
-    needs: [detect-changes, prepare]
-    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
-    continue-on-error: true
-    timeout-minutes: 50
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Download generated files
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact-name }}
-
-      # prepare's shared artifact is already a Next-mode build (WEB_BUILD unset there too), so
-      # a plain `go build` suffices -- mirrors e2e-next-shard's own build step.
-      - name: Build binary (Next build, from prepare's shared artifact)
-        run: go build -o stapler-squad .
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-secondary-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
-
-      - name: Install Playwright + test dependencies
-        run: |
-          cd tests/e2e
-          bun install --frozen-lockfile
-          npx playwright install firefox webkit --with-deps
-
-      - name: Run e2e secondary browsers (Next build)
-        env:
-          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
-          WEB_BUILD: next
-          # Enables the mobile-webkit project (playwright.config.ts) so its Files-viewer-mobile
-          # coverage runs here too, alongside webkit-mobile's baseline-tracked specs.
-          PW_WEBKIT: '1'
-        run: |
-          cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob --project=desktop-firefox --project=desktop-webkit --project=webkit-mobile --project=mobile-webkit
-
-      - name: Upload blob report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-next-blob-secondary
-          path: tests/e2e/blob-report
-          if-no-files-found: error
-          retention-days: 1
-
   e2e-next:
     name: e2e (Next build)
     runs-on: ubuntu-latest
-    needs: [detect-changes, e2e-next-shard, e2e-secondary-browsers-next]
+    needs: [detect-changes, e2e-next-shard]
     if: always() && needs.e2e-next-shard.result != 'skipped'
     timeout-minutes: 15
     steps:
@@ -577,24 +532,22 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # e2e-bun: the same full suite against the Bun build, scored against the recorded Next
-  # baseline (tests/e2e/baseline/next-e2e-baseline.json, Task 0.1e) and the expected-diff list
-  # (tests/e2e/baseline/bun-expected-diff.json, Story 7.11) by scripts/e2e-baseline-compare.ts
-  # (Task 7.10c) -- the job's result is the comparator's verdict, not Playwright's raw exit
-  # code, so a listed/expected failure never fails this job before the comparator runs. Runs
-  # even when e2e-next failed (needs its report either way); only skips if e2e-next itself was
-  # skipped or cancelled, since then there is no same-run report to judge missing specs against.
+  # e2e-bun: the single PR e2e. The same full suite against the Bun build, scored against the
+  # recorded Next baseline (tests/e2e/baseline/next-e2e-baseline.json, Task 0.1e) and the
+  # expected-diff list (tests/e2e/baseline/bun-expected-diff.json, Story 7.11) by
+  # scripts/e2e-baseline-compare.ts (Task 7.10c) -- on push/dispatch the job's result is the
+  # comparator's verdict, not Playwright's raw exit code. The comparator needs the same-run Next
+  # report, which only exists off pull_request, so on PRs it is skipped and the job fails only
+  # on a failed/incomplete shard.
   # ─────────────────────────────────────────────────────────────────────────────
-  e2e-bun-shard:
-    name: e2e (Bun build) shard ${{ matrix.shard }}/10
+  # Builds the Bun-mode e2e binary once (web UI rebuilt for Bun); the 10 Bun shards download it
+  # instead of each repeating buf setup, the node_modules restore and `make stapler-squad`.
+  e2e-binary-bun:
+    name: e2e binary (Bun build)
     runs-on: ubuntu-latest
     needs: [detect-changes, prepare]
+    timeout-minutes: 30
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
-    timeout-minutes: 50
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -647,43 +600,74 @@ jobs:
           WEB_BUILD: bun
         run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
+          name: e2e-binary-bun
+          path: stapler-squad
+          if-no-files-found: error
+          retention-days: 1
 
-      # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
-      # e2e-secondary-browsers-next/-bun jobs below — see their own comment for why.
-      - name: Install Playwright + test dependencies
-        # --with-deps runs apt-get, which stalls on mirror connections (see
-        # benchmark.yml); an unbounded stall ate the whole 50m job timeout and
-        # surfaced as a cancelled shard. Bound each attempt and retry.
-        timeout-minutes: 20
+  e2e-bun-shard:
+    name: e2e (Bun build) shard ${{ matrix.shard }}/10
+    runs-on: ubuntu-latest
+    needs: [detect-changes, e2e-env, e2e-binary-bun]
+    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    timeout-minutes: 50
+    # Official Playwright image: browsers and OS libraries are baked in, so there is no
+    # apt-get / `playwright install` per shard. The tag comes from bun.lock via e2e-env.
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.e2e-env.outputs.playwright-version }}-noble
+      options: --init --ipc=host
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Bun binary
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-binary-bun
+
+      - name: Make binary executable
+        run: chmod +x stapler-squad
+
+      # setup-bun unzips its download, the server and some specs shell out to tmux; install only
+      # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
+      # orphan apt-get holding the dpkg lock and fail every retry with exit 100.
+      - name: Ensure unzip, tmux and git
+        timeout-minutes: 10
+        shell: bash
         run: |
-          cd tests/e2e
-          bun install --frozen-lockfile
-          for attempt in 1 2 3; do
-            if timeout 6m npx playwright install chromium --with-deps; then
-              exit 0
-            fi
-            echo "::warning::Playwright install attempt $attempt failed or timed out; retrying..."
-            # timeout(1) only signals the npx process it forked directly; apt-get (spawned as
-            # root underneath it) survives and keeps the dpkg lock held into the next attempt,
-            # which then fails immediately with "Could not get lock /var/lib/dpkg/lock-frontend"
-            # instead of retrying the install. Clear any such orphan before sleeping.
-            sudo pkill -9 -f 'apt-get|dpkg' 2>/dev/null || true
-            sleep 10
-          done
-          echo "Playwright install failed after 3 attempts" >&2
-          exit 1
+          missing=()
+          for tool in unzip tmux git; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60)
+            for attempt in 1 2 3; do
+              if apt-get "${apt_opts[@]}" update -qq && apt-get "${apt_opts[@]}" install -y -qq --no-install-recommends "${missing[@]}"; then break; fi
+              [ "$attempt" = 3 ] && { echo "::error::could not install ${missing[*]}" >&2; exit 1; }
+              sleep 10
+            done
+          fi
+          tmux -V; git --version
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install test dependencies
+        run: cd tests/e2e && bun install --frozen-lockfile
+
+      - name: Check Playwright version
+        run: npx --prefix tests/e2e playwright --version
 
       # Report-only: the recorded baseline already holds hundreds of failing specs, so raw
       # Playwright failures must not fail the shard; the merge job / comparator is the verdict.
       # Only a blown budget or a harness crash (no blob report) fails a shard. The soft timeout
       # fires before the job's hard 50m.
       # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
-      # e2e-secondary-browsers-next/-bun jobs below — see their own comment for why.
+      # nightly.yml's secondary-browser jobs — see its header for why.
       - name: Run e2e shard ${{ matrix.shard }}/10 (Bun build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
@@ -709,102 +693,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # See e2e-secondary-browsers-next's header comment above (Story 3.2.1) -- same shape, Bun build.
-  e2e-secondary-browsers-bun:
-    name: e2e secondary browsers (Bun build)
-    runs-on: ubuntu-latest
-    needs: [detect-changes, prepare]
-    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
-    continue-on-error: true
-    timeout-minutes: 50
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache buf binary
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.tool_cache }}/buf
-          key: buf-1.41.0-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Set up buf
-        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
-        with:
-          version: '1.41.0'
-          setup_only: 'true'
-
-      # proto/ent code generation is not WEB_BUILD-dependent, so this still saves the buf/ent
-      # steps below even though the web UI itself is rebuilt for Bun (next step's `make`) --
-      # mirrors e2e-bun-shard's own step exactly.
-      - name: Download generated files (proto/ent; web UI rebuilt below for Bun)
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact-name }}
-
-      # Exact key, no restore-keys: see web-build-smoke-bun's identical step for why.
-      - name: Cache shared node_modules
-        uses: actions/cache@v4
-        with:
-          path: ~/.stapler-squad/shared-node-modules
-          key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
-
-      - name: Build binary (Bun build)
-        env:
-          WEB_BUILD: bun
-        run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-secondary-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
-
-      - name: Install Playwright + test dependencies
-        run: |
-          cd tests/e2e
-          bun install --frozen-lockfile
-          npx playwright install firefox webkit --with-deps
-
-      - name: Run e2e secondary browsers (Bun build)
-        env:
-          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
-          WEB_BUILD: bun
-          # Enables the mobile-webkit project (playwright.config.ts) so its Files-viewer-mobile
-          # coverage runs here too, alongside webkit-mobile's baseline-tracked specs.
-          PW_WEBKIT: '1'
-        run: |
-          cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob --project=desktop-firefox --project=desktop-webkit --project=webkit-mobile --project=mobile-webkit
-
-      - name: Upload blob report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-bun-blob-secondary
-          path: tests/e2e/blob-report
-          if-no-files-found: error
-          retention-days: 1
-
   e2e-bun:
     name: e2e (Bun build)
     runs-on: ubuntu-latest
-    needs: [detect-changes, e2e-bun-shard, e2e-next, e2e-secondary-browsers-bun]
-    if: always() && needs.e2e-bun-shard.result != 'skipped' && needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'
+    needs: [detect-changes, e2e-bun-shard, e2e-next]
+    if: >-
+      always() && needs.e2e-bun-shard.result != 'skipped' &&
+      (github.event_name == 'pull_request' ||
+      (needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'))
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -847,7 +743,7 @@ jobs:
           exit 1
 
       - name: Download e2e-next's Playwright JSON report
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
         with:
           name: e2e-next-report
@@ -855,7 +751,7 @@ jobs:
         continue-on-error: true
 
       - name: Run the baseline comparator
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         # pipefail: without it, the step's exit status is tee's (always 0), masking a
         # comparator failure -- this job's result must be the comparator's verdict.
         run: |
@@ -868,34 +764,7 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # web-build-gate: the only check meant for branch protection. Membership comes from the
-  # repository variable WEB_BUILD_GATE_MEMBERS (see web-app/scripts/ci/web-build-gate.mjs),
-  # so a Bun job joins or leaves with `gh variable set`, never a workflow edit. e2e-next is a
-  # DEFAULT_MEMBERS member from its first appearance; e2e-bun is not (plan decision 10) --
-  # both are listed in needs: below only so the gate can report their result, same as
-  # web-build-smoke-bun already does for the Bun smoke job.
-  # if: always() is required: with a failed need the job would otherwise be skipped,
-  # and a skipped required check passes silently.
-  # ─────────────────────────────────────────────────────────────────────────────
-  web-build-gate:
-    name: web-build-gate
-    runs-on: ubuntu-latest
-    needs: [detect-changes, web-build-smoke-next, web-build-smoke-bun, e2e-next, e2e-bun]
-    if: always()
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: web-app/scripts/ci
-
-      - name: Evaluate gate
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
-          MEMBERS: ${{ vars.WEB_BUILD_GATE_MEMBERS }}
-        run: node web-app/scripts/ci/web-build-gate.mjs
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # storybook-build: non-blocking (not in web-build-gate's needs:). Storybook stays on
+  # storybook-build: non-blocking. Storybook stays on
   # react-webpack5 (ADR-002); this catches a story or nav-facade change that breaks it.
   # ─────────────────────────────────────────────────────────────────────────────
   storybook-build:
@@ -1039,14 +908,19 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
         with:
           install-socat: 'true'
 
+      - name: Set up the tymux fidelity oracle (xterm.js via Bun)
+        uses: ./.github/actions/setup-fidelity-oracle
+
       - name: Run affected-package tests
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
+          # session/tymux's xterm.js fidelity corpus must run here, not skip (see setup-fidelity-oracle).
+          FIDELITY_REQUIRE_ORACLE: "1"
         run: |
           # On push-to-main/workflow_dispatch, test-tmux/test-rest (below)
           # always run the full suite regardless of what this job does, so
@@ -1288,7 +1162,7 @@ jobs:
   # sharing a runner's CPUs with TMUX_TEST_PKGS's real tmux subprocesses at
   # all. `test` (below) merges both coverage profiles and runs the gate.
   #
-  # Merging test/pty-race-regression/integration-coverage into one job was
+  # Merging test/pty-race-regression/integration-coverage (now in nightly.yml) into one job was
   # considered and rejected (plan.md Epic 3.5): they run in parallel today, and
   # merging would serialize their combined runtime, hurting wall-clock
   # time-to-green — this plan's actual success metric — for a total-compute
@@ -1332,10 +1206,10 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
 
-      - name: Run tests with coverage (pinned tmux 3.4)
+      - name: Run tests with coverage (pinned tmux 3.8)
         # STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: production default is 10s
         # (session/tmux/tmux.go's sessionCreateTimeoutDefault) -- this only
         # widens the budget for this CI job, where a fully-loaded runner
@@ -1482,14 +1356,18 @@ jobs:
       # running -- see remoteApprovalWriteTool's doc comment
       # (server/services/hook_injector.go) for the production bug this
       # class of test exists to catch.
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
         with:
           install-socat: 'true'
 
-      - name: Run tests with coverage (pinned tmux 3.4)
+      - name: Set up the tymux fidelity oracle (xterm.js via Bun)
+        uses: ./.github/actions/setup-fidelity-oracle
+
+      - name: Run tests with coverage (pinned tmux 3.8)
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
+          FIDELITY_REQUIRE_ORACLE: "1"
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {
@@ -1609,7 +1487,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
 
       - name: Install go-stress
@@ -1662,86 +1540,6 @@ jobs:
           timeout 14m bash -c run_pty_race_regression || { echo "::error::CI-BUDGET-EXCEEDED: 'pty-race-regression' exceeded its 14m budget"; echo "CI-BUDGET-EXCEEDED: 'pty-race-regression' exceeded its 14m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # integration-coverage: advisory `-tags integration` run, split out of the
-  # `test` job so it runs in parallel with the main coverage run instead of
-  # stacking behind it. Never gates the build (always continue-on-error) — see
-  # server/services' integration test docs for scope.
-  #
-  # Previously built and launched a separate `stapler-squad-cov` binary under
-  # GOCOVERDIR to capture runtime coverage from a live process. Removed
-  # 2026-08-22: none of the `//go:build integration` test files actually talk
-  # to that background process over HTTP -- server/mcp/server_integration_test.go
-  # builds and launches its own binary directly, and the tmux/tymux/mcp
-  # integration tests shell out to the real `tmux`/`tymuxd` binaries, not to a
-  # live stapler-squad server. The background binary was only ever measuring
-  # its own idle startup path. Standard in-process `-coverprofile` (same
-  # mechanism the `test` job already uses) captures everything these tests
-  # actually exercise, with no live process to launch or reap.
-  #
-  # session/tymux/supervise_integration_test.go (added alongside BUG-106/
-  # BUG-110) and its sibling integration_test.go's daemon-restart drill both
-  # gate on findTymuxdBinary, which silently t.Skip()s without a real tymuxd
-  # binary -- exactly how these bugs went uncaught until they hit production
-  # (see docs/bugs/fixed/BUG-110-*.md). Fetched below via ADR-001's pinned-
-  # release-download path (no cargo/rustc toolchain needed) and pointed at via
-  # TYMUXD_BIN, so these actually run instead of skip. NOT fixed by this:
-  # integration_test.go's TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose
-  # has no skip guard at all and assumes an externally-managed daemon already
-  # listening -- it still fails here the same way it always has; harmless
-  # only because this job is advisory (continue-on-error below).
-  # ─────────────────────────────────────────────────────────────────────────────
-  integration-coverage:
-    name: Integration coverage (advisory)
-    runs-on: ubuntu-latest
-    needs: prepare
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Download generated files
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact-name }}
-
-      - name: Build pinned tmux 3.4
-        uses: ./.github/actions/build-tmux
-        with:
-          install-socat: 'true'
-
-      - name: Fetch pinned tymuxd binary
-        uses: ./.github/actions/fetch-tymuxd
-
-      - name: Integration coverage (advisory)
-        # Same tmux-under-CPU-contention rationale as the "test" job's "Run tests
-        # with coverage" step -- this step's `-tags integration` run spawns real
-        # tmux servers under the same contention.
-        env:
-          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
-        run: |
-          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
-          TMUX_BIN="$(pwd)/bin/tmux" TYMUXD_BIN="$(pwd)/session/tymux/embed/tymuxd" timeout 20m go test -race -tags integration \
-            -coverprofile=integration.out -covermode=atomic ./... \
-            || { echo "::error::CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget"; echo "CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
-        continue-on-error: true
-
-      - name: Upload integration coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-coverage
-          path: integration.out
-          if-no-files-found: ignore
-          retention-days: 30
-
-  # ─────────────────────────────────────────────────────────────────────────────
   # build: cross-compiles for all supported platforms in parallel.
   # Needs only prepare (not test) so binary artifacts are always uploaded.
   # ─────────────────────────────────────────────────────────────────────────────
@@ -1751,7 +1549,7 @@ jobs:
     needs: prepare
     timeout-minutes: 15
     strategy:
-      # Legs are independent platforms; one failing must not hide the others (asserted by web-build-gate.test.mjs).
+      # Legs are independent platforms; one failing must not hide the others (asserted by web-app/scripts/__tests__/workflow-paths.test.mjs).
       fail-fast: false
       # PRs only exercise the platform actually validated downstream
       # (goreleaser-check.yml's native-only smoke test); the full 5-way
@@ -1874,7 +1672,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
 
       - name: Run benchmarks (count=5 for significance)

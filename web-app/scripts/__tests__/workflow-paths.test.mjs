@@ -72,11 +72,29 @@ test("no workflow uses pull_request_target, and every setup-bun is pinned by SHA
   }
 });
 
-test("storybook-build and web-supply-chain exist in build.yml and stay out of the gate's needs", () => {
+test("storybook-build and web-supply-chain exist in build.yml", () => {
   const build = read(".github/workflows/build.yml");
   for (const job of ["storybook-build", "web-supply-chain"]) assert.match(build, new RegExp(`^  ${job}:`, "m"));
-  const gate = build.match(/^ {2}web-build-gate:[\s\S]*?needs: \[([^\]]*)\]/m)[1];
-  assert.doesNotMatch(gate, /storybook-build|web-supply-chain/);
+});
+
+test("build.yml: every matrix sets fail-fast: false", () => {
+  const yml = read(".github/workflows/build.yml");
+  for (const m of yml.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
+    if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);
+  }
+});
+
+test("build.yml detect-changes regex and push paths treat e2e-only edits as relevant", () => {
+  const yml = read(".github/workflows/build.yml");
+  const regex = yml.match(/grep -qE '([^']+)'; then/)?.[1];
+  assert.ok(regex, "detect-changes grep regex not found");
+  for (const p of ["^tests/e2e/", "^web-app/tests/e2e/"]) assert.ok(regex.includes(p), `detect-changes regex is missing ${p}`);
+  const re = new RegExp(regex);
+  assert.ok(re.test("tests/e2e/playwright.config.ts"));
+  assert.ok(re.test("web-app/tests/e2e/terminal-stress/helpers.ts"));
+  assert.ok(!re.test("tests/e2e-sharding-helper/foo.ts"));
+  const pushPaths = yml.split("\n  workflow_dispatch:")[0];
+  for (const p of ["tests/e2e/**", "web-app/tests/e2e/**"]) assert.ok(pushPaths.includes(`- '${p}'`), `push paths is missing ${p}`);
 });
 
 test("web-lint and go-lint pin checkout to the PR head, not the stale default merge ref", () => {

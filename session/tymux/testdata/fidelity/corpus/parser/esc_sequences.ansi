@@ -1,0 +1,7 @@
+parser/esc_sequences -- libvterm 02parser.test (ESC); esctest2 decaln.py ind.p
+[1;1H=keypad-app >keypad-num 6back-index? 9fwd-index? Zdecid-ignored
+[3;1H Fs7c1t  Gs8c1t  Lansi-conf  Mansi-level text-after
+[5;1H#3dbl-top [6;1H#4dbl-bot [7;1H#5single [8;1H#6dbl-width
+[11;1H(Bascii (0gfx(B )A *B text
+[13;1H%Gutf8 %@latin1-switch-ignored? é %G é
+[15;1H\stray-st esc-del ztext

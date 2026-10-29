@@ -1,0 +1,4 @@
+edit/insert_delete_lines -- esctest2 il.py dl.py; libvterm 13state_edit IL/DL
+[1;1Hline01[2;1Hline02[3;1Hline03[4;1Hline04[5;1Hline05[6;1Hline06[7;1Hline07[8;1Hline08[9;1Hline09[10;1Hline10[11;1Hline11[12;1Hline12[3;1H[2L[8;1H[M[10;5H[0L[12;1H[0M
+[14;1H[99Lclear-below-via-IL[16;1Htail
+[18;1Haa[19;1Hbb[18;2H[L-cursor-col-resets[22;1Hcc[23;1Hdd[22;1H[99M-DL-all-below

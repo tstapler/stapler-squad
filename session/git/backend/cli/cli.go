@@ -236,7 +236,9 @@ func truncateKeepingEnds(s string, max int) string {
 
 func sentinelFor(lower, original string) error {
 	switch {
-	case strings.Contains(lower, "not a git repository"):
+	case strings.Contains(lower, "not a git repository"),
+		// git 2.56 says this, instead of "not a git repository", for a gitfile whose admin dir is gone.
+		strings.Contains(lower, "gitfile does not point to a valid repository"):
 		return backend.ErrNotARepo
 	case strings.Contains(lower, "does not have any commits yet"):
 		return backend.ErrUnborn

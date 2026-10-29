@@ -1,0 +1,22 @@
+{
+  "label": "executing",
+  "source": "captured",
+  "detected_status": "Executing",
+  "label_matched": true,
+  "no_controller": {
+    "action": "remove",
+    "reason": "",
+    "priority": "Priority(0)",
+    "context": "",
+    "claude_status": "Executing",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "skip",
+    "reason": "",
+    "priority": "Priority(0)",
+    "context": "",
+    "claude_status": "Executing",
+    "clean_worktree": false
+  }
+}

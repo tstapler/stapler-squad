@@ -49,3 +49,8 @@ v1.8.0 aarch64-apple-darwin 99343fe7a73c79c8006416a1cc9e18b22394e16a1691fb539c65
 v1.8.0 x86_64-apple-darwin 44b1db3b5e17c42c38b931160acdce9d17333aadd56a2606f76275a910448128
 v1.8.0 x86_64-unknown-linux-musl 9f8882b58fca4b4f73ea0b133741114530d9ba964010f84db037b655fde665c1
 v1.8.0 aarch64-unknown-linux-musl 5ad5f714d8cc58680d491bcf5e1d6a07559f6455defb2f33a54112de2d1e3c88
+# v1.9.0: snapshots carry full cell attributes and terminal state (tstapler/tymux#69).
+v1.9.0 aarch64-apple-darwin 1015ba6a7cd1a1346911c307ffa92298ba8b8558682fb83a5b5a2f62ff17dbf5
+v1.9.0 x86_64-apple-darwin f1d67b16531bd0251002cbdc0676b782d30e7fb91439e3de5f436f3397572980
+v1.9.0 x86_64-unknown-linux-musl 861a9eeddc9ff898f7eaa656552924e895826a2343e929302703c114d7e15bb7
+v1.9.0 aarch64-unknown-linux-musl 52cd9ad0add0ce1c6bf9588be1cdd55bae89cb0a9b95c653bfa4b3c9422afb32

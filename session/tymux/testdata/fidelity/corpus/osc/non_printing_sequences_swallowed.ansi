@@ -1,0 +1,5 @@
+osc/non_printing_sequences_swallowed -- esctest2 apc.py pm.py sos.py dcs.py; x
+a]0;title-zero\b]2;title-twoc]1;icon\d]52;c;SGVsbG8=e]4;1;rgb:ff/00/00\f]104\g]112\h]10;?\i
+_apc-data-swallowed\1^pm-data-swallowed\2Xsos-data-swallowed\3Pdcs-data-swallowed\4
+Pq#0;2;0;0;0#0~~~~\after-sixel-ishP$qm\after-decrqssP1$r0m\after-decrpss
+]777;notify;title;body\osc777 ]9;4;1;50\osc9-progress ]1337;SetMark\osc1337 ]133;A\prompt-mark ]133;B\

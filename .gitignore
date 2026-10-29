@@ -102,7 +102,7 @@ build/
 
 # Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
 # so its contents don't need ignore rules).
-.tmux-build.stamp
+.tmux-build*.stamp
 
 # Pinned tymuxd fetch stamp (records the last-fetched TYMUX_VERSION; see
 # scripts/fetch-tymuxd.sh and ADR-001).

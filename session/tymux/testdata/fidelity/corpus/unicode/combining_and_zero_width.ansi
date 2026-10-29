@@ -1,0 +1,12 @@
+unicode/combining_and_zero_width -- libvterm 10state_putglyph; UAX #29; xterm 
+Combining: é ä ñ ẓ̆ ộ́ (stacked)
+Precomposed vs decomposed: é é ñ ñ Å Å
+Leading combining (no base): ́x ̈y
+ZWJ alone: a‍b  ZWSP: a​b  ZWNJ: a‌b  WJ: a⁠b  BOM: a﻿b
+Soft hyphen: a­b  LRM/RLM: a‎b‏c
+Hebrew/Arabic (bidi not applied): שלום مرحبا
+Thai: สวัสดี  Devanagari: नमस्ते  Tamil: தமிழ்
+Combining after wide: 世́界  Combining after emoji: 😀́
+Variation selector: ∅︀ ∅︁ a️
+Combining at col 80: [12;80Hé[13;79Hab́
+Many combining: à́̂̃̄̅̆̇̈ end

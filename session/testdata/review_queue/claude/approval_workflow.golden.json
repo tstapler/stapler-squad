@@ -1,0 +1,22 @@
+{
+  "label": "approval",
+  "source": "captured",
+  "detected_status": "Input Required",
+  "label_matched": false,
+  "no_controller": {
+    "action": "add",
+    "reason": "input_required",
+    "priority": "Medium",
+    "context": "Selection prompt with numbered options",
+    "claude_status": "Input Required",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "add",
+    "reason": "input_required",
+    "priority": "Medium",
+    "context": "Selection prompt with numbered options",
+    "claude_status": "Input Required",
+    "clean_worktree": false
+  }
+}

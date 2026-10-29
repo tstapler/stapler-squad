@@ -4,8 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService, type AliasProto } from "@/gen/session/v1/session_pb";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { ALIAS_NAME_RE } from "@/lib/omnibar/detectors/AliasDetector";
@@ -132,7 +131,7 @@ export function AliasesManager() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadAliases();
   }, [loadAliases]);
@@ -327,7 +326,7 @@ export function AliasesManager() {
           className="btn btn-primary"
           onClick={handleNewAlias}
           disabled={saving}
-        >
+        >{/* analytics-exempt */}
           New Alias
         </button>
       </div>
@@ -360,7 +359,7 @@ export function AliasesManager() {
               type="button"
               className="btn btn-secondary"
               onClick={() => handleEdit(alias)}
-            >
+            >{/* analytics-exempt */}
               Edit
             </button>
             {pendingDeleteName === alias.name ? (
@@ -370,7 +369,7 @@ export function AliasesManager() {
                 onClick={() => handleDeleteConfirm(alias.name)}
                 aria-label={`Confirm delete alias ${alias.name}`}
                 data-testid={`alias-confirm-delete-${alias.name}`}
-              >
+              >{/* analytics-exempt */}
                 Confirm delete?
               </button>
             ) : (
@@ -380,7 +379,7 @@ export function AliasesManager() {
                 onClick={() => handleDeleteClick(alias.name)}
                 aria-label={`Delete alias ${alias.name}`}
                 data-testid={`alias-delete-${alias.name}`}
-              >
+              >{/* analytics-exempt */}
                 Delete
               </button>
             )}
@@ -557,7 +556,7 @@ export function AliasesManager() {
                         className={tagRemove}
                         onClick={() => handleRemoveTag(t)}
                         aria-label={`Remove tag ${t}`}
-                      >
+                      >{/* analytics-exempt */}
                         x
                       </button>
                     </span>
@@ -572,7 +571,7 @@ export function AliasesManager() {
                     onChange={(e) => setForm({ ...form, tagInput: e.target.value })}
                     onKeyDown={handleTagKeyDown}
                   />
-                  <button type="button" className="btn btn-secondary" onClick={handleAddTag}>
+                  <button type="button" className="btn btn-secondary" onClick={handleAddTag}>{/* analytics-exempt */}
                     Add
                   </button>
                 </div>
@@ -619,7 +618,7 @@ export function AliasesManager() {
                             className={deleteBtn}
                             onClick={() => handleRemoveEnvVar(i)}
                             aria-label={`Remove environment variable ${ev.key || String(i + 1)}`}
-                          >
+                          >{/* analytics-exempt */}
                             Remove
                           </button>
                         </div>
@@ -629,7 +628,7 @@ export function AliasesManager() {
                       type="button"
                       className="btn btn-secondary"
                       onClick={handleAddEnvVar}
-                    >
+                    >{/* analytics-exempt */}
                       Add variable
                     </button>
                   </div>
@@ -658,14 +657,14 @@ export function AliasesManager() {
                 className="btn btn-primary"
                 onClick={handleSave}
                 disabled={saving}
-              >
+              >{/* analytics-exempt */}
                 {saving ? "Saving..." : "Save"}
               </button>
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={handleCancel}
-              >
+              >{/* analytics-exempt */}
                 Cancel
               </button>
             </div>

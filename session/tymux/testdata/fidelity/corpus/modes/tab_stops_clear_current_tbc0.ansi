@@ -1,0 +1,2 @@
+modes/tab_stops_clear_current_tbc0 -- xterm ctlseqs TBC CSI 0 g clears the stop at the cursor
+[1;9H[0g[3;1H	x	y tab stop at col 8 cleared

@@ -1,0 +1,6 @@
+unicode/c1_controls_as_utf8 -- libvterm 03encoding_utf8 (C1 as U+0080-009F); E
+U+0085 NEL: []x
+U+009B CSI: []1mbold?0m plain
+U+009D OSC: []0;title after
+U+0090 DCS: []q after
+U+0080 PAD: [] U+009F APC: []x

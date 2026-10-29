@@ -1,4 +1,4 @@
-export type ShortcutContext = "global" | "session-list" | "approval" | "terminal" | "cockpit" | "omnibar";
+export type ShortcutContext = "global" | "session-list" | "approval" | "terminal" | "cockpit" | "omnibar" | "diff";
 
 export interface Shortcut {
   /**
@@ -95,8 +95,9 @@ export class ShortcutRegistry {
       console.warn(`[ShortcutRegistry] Duplicate shortcut id: "${id}" — overwriting.`);
     }
     this.shortcuts.set(id, shortcut);
+    // Owner-token cleanup: a stale registration (e.g. a hidden window unmounting) must not delete a later overwrite.
     return () => {
-      this.shortcuts.delete(id);
+      if (this.shortcuts.get(id) === shortcut) this.shortcuts.delete(id);
     };
   }
 
@@ -112,6 +113,7 @@ export class ShortcutRegistry {
       terminal: [],
       cockpit: [],
       omnibar: [],
+      diff: [],
     };
     for (const shortcut of this.shortcuts.values()) {
       if (shortcut.hidden) continue;
@@ -143,10 +145,9 @@ export class ShortcutRegistry {
     // Longest sequences first so a branch always beats a leaf that is its prefix,
     // independent of React effect registration order.
     const entries = [...this.shortcuts.entries()]
-      .filter(([, sc]) => sc.sequence && !sc.hidden)
-      .sort(([, a], [, b]) => b.sequence!.length - a.sequence!.length);
-    for (const [id, shortcut] of entries) {
-      const seq = shortcut.sequence!;
+      .flatMap(([id, sc]) => (sc.sequence && !sc.hidden ? [{ id, shortcut: sc, seq: sc.sequence }] : []))
+      .sort((a, b) => b.seq.length - a.seq.length);
+    for (const { id, shortcut, seq } of entries) {
       let node = root;
       let skipped = false;
       for (let i = 0; i < seq.length; i++) {

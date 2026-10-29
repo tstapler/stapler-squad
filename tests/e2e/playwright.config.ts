@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { defineConfig, devices, webkit } from '@playwright/test';
 
 /**
@@ -33,8 +34,38 @@ function webkitMobileProjects() {
 // Story 1.3.5c: the chord spec also runs on desktop Firefox and WebKit, informational only (real accelerator
 // delivery is the owner's manual check, Story 2.5.2). CI installs the browsers with `npx playwright install
 // firefox webkit --with-deps` and runs these two projects with `continue-on-error`; Chromium stays gating.
+// Run by playwright.dev-mode.config.ts against a live dev server (HMR overlay edits real source files);
+// under this config's production-build server they can only fail.
+const DEV_SERVER_SPECS = '**/dev-mode-hmr.spec.ts';
 const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
+
+/**
+ * Frontend-responsiveness perf project (Story 1.1.3). Registered only when explicitly selected
+ * (`--project=perf` or PW_PERF=1): Playwright runs every registered project when none is named, and a
+ * 5-run, 4x-throttled, 20-session scenario cannot share a worker with other specs (global 30 s timeout,
+ * polluted timings).
+ */
+function perfProjects() {
+  const selected = process.env.PW_PERF === '1' || /--project[= ]perf(\s|$)/.test(process.argv.join(' '));
+  if (!selected) return [];
+  return [
+    {
+      name: 'perf',
+      testMatch: '**/perf/**/*.spec.ts',
+      timeout: 600000,
+      retries: 0,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1600, height: 900 },
+        // 4x CPU throttle on a 20-session fixture blows past the global 10 s / 15 s action and navigation budgets.
+        actionTimeout: 90000,
+        navigationTimeout: 180000,
+        launchOptions: { args: ['--use-gl=swiftshader', '--disable-gpu-sandbox'] },
+      },
+    },
+  ];
+}
 
 export default defineConfig({
   globalSetup: './global-setup.ts',
@@ -79,6 +110,23 @@ export default defineConfig({
     // Base URL for tests — dynamically assigned by global-setup; override with TEST_SERVER_URL
     baseURL: process.env.TEST_SERVER_URL || 'http://localhost:8544',
 
+    // Both first-visit tours (app-wide + backlog) open a modal that aria-hides the page and intercepts
+    // pointer events, which fails every spec that forgets to dismiss them. Specs that exercise a tour
+    // clear the flag themselves (onboarding-hook-install.spec.ts); visual-* projects keep their own
+    // theme storageState below.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: new URL(process.env.TEST_SERVER_URL || 'http://localhost:8544').origin,
+          localStorage: [
+            { name: 'stapler-squad:onboarded', value: 'true' },
+            { name: 'stapler-squad:backlog-onboarded', value: 'true' },
+          ],
+        },
+      ],
+    },
+
     // Browser trace on failure
     trace: 'on-first-retry',
 
@@ -108,7 +156,7 @@ export default defineConfig({
       name: 'visual-matrix',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/matrix-theme.json',
+        storageState: path.join(__dirname, 'fixtures', 'matrix-theme.json'),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -117,7 +165,7 @@ export default defineConfig({
       name: 'visual-cyberpunk77',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/cyberpunk77-theme.json',
+        storageState: path.join(__dirname, 'fixtures', 'cyberpunk77-theme.json'),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -126,7 +174,7 @@ export default defineConfig({
       name: 'visual-wh40k',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/wh40k-theme.json',
+        storageState: path.join(__dirname, 'fixtures', 'wh40k-theme.json'),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -135,14 +183,14 @@ export default defineConfig({
       name: 'visual-clean',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/clean-theme.json',
+        storageState: path.join(__dirname, 'fixtures', 'clean-theme.json'),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
     },
     {
       name: 'chromium',
-      testIgnore: '**/mobile-webkit.spec.ts',
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -187,7 +235,7 @@ export default defineConfig({
       //   if (typeof WebGL2RenderingContext !== 'undefined')
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
-      testIgnore: '**/mobile-webkit.spec.ts',
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -195,6 +243,7 @@ export default defineConfig({
         },
       },
     },
+    ...perfProjects(),
     ...webkitMobileProjects(),
   ],
 });

@@ -1,0 +1,22 @@
+{
+  "label": "prose_question",
+  "source": "captured",
+  "detected_status": "Unknown",
+  "label_matched": false,
+  "no_controller": {
+    "action": "skip",
+    "reason": "",
+    "priority": "Priority(0)",
+    "context": "",
+    "claude_status": "Unknown",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "skip",
+    "reason": "",
+    "priority": "Priority(0)",
+    "context": "",
+    "claude_status": "Unknown",
+    "clean_worktree": false
+  }
+}

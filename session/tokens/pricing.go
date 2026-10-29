@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/pricing"
@@ -48,9 +50,29 @@ func LoadPricingOverride(configPath string) (*PricingTable, error) {
 
 // NormalizeModelFamily strips date suffixes and normalizes a raw model ID to a
 // pricing-table key; see pricing.NormalizeModelFamily.
+//
+// Results are memoized: the regex pipeline dominated GetInsightsSummary (it runs
+// per turn, over a handful of distinct model IDs). The cache stops growing at
+// normalizeCacheMax entries so arbitrary transcript content cannot bloat it.
 func NormalizeModelFamily(modelID string) string {
-	return pricing.NormalizeModelFamily(modelID, providers)
+	if v, ok := normalizeCache.Load(modelID); ok {
+		return v.(string)
+	}
+	family := pricing.NormalizeModelFamily(modelID, providers)
+	if normalizeCacheSize.Load() < normalizeCacheMax {
+		if _, loaded := normalizeCache.LoadOrStore(modelID, family); !loaded {
+			normalizeCacheSize.Add(1)
+		}
+	}
+	return family
 }
+
+const normalizeCacheMax = 4096
+
+var (
+	normalizeCache     sync.Map // modelID -> family
+	normalizeCacheSize atomic.Int64
+)
 
 // CategoryCosts is a session's estimated cost split by token category. Input +
 // Output + CacheCreation + CacheRead equals the EstimateCost total for a

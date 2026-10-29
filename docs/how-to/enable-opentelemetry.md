@@ -41,7 +41,16 @@ receiver.
 - `safeexec.sigkill_escalations` (counter) — increments once per confirmed SIGKILL escalation in `CommandContextPG` (i.e. the process group ignored SIGTERM within `sigkillGrace`); not incremented on ESRCH/already-exited
 - `cgroup_memory_*` (gauges/counters, Linux only, `telemetry/cgroup_linux.go`) — reads the running process's own cgroup v2 memory files fresh every collection: `cgroup_memory_current_bytes`/`_high_bytes`/`_max_bytes` (`memory.current`/`.high`/`.max`), `cgroup_memory_events_{high,max,oom,oom_kill}_total` (`memory.events`, kernel-cumulative), `cgroup_memory_pressure_{some,full}_avg10` (`memory.pressure` PSI, % stalled over the last 10s). Added 2026-08-25 to get dashboard visibility into `MemoryHigh`/`MemoryMax` throttling (see `scripts/install-service.sh`'s cgroup cap comment) while investigating live-instance terminal type-ahead reports — correlate these against symptom reports before deciding whether to change the caps.
 - `http.server.connections_open` / `http.server.connections_hijacked_total` and `rpc.server_streams.open` — see "Connection concurrency metrics" below.
-- `session_backend_operation_duration_ms` (histogram, `backend`/`operation` labels — `session/backend_observability.go`) — latency of `ProcessManager.Start`/`RestoreWithWorkDir`/`Attach`, labeled `backend="tmux"`/`"tymux"` so the two can be compared directly; `session.backend.tymux_daemon_ready` is a tymux-only nested span isolating daemon cold-start latency from the rest of `Start`. Added to close BUG-108 (no way to tell whether tymux performs acceptably against tmux before making it a default).
+- `session_backend_operation_duration_ms` (histogram, `backend`/`operation` labels — `session/backend_observability.go`) — latency of `ProcessManager.Start`/`RestoreWithWorkDir`/`Attach`, labeled `backend="tmux"`/`"tymux"` so the two can be compared directly; `session.backend.tymux_daemon_ready` is a tymux-only nested span isolating daemon cold-start latency from the rest of `Start`. Added to close BUG-108 (no way to tell whether tymux performs acceptably against tmux before making it a default). It also carries `send_keys`/`write_stdin`/`capture_pane`/`resize` series for both backends. The remaining tymux metrics (`tymux_attach_*`, `tymux_daemon_*`, `session_backend_info`) and the `ssq-tymux-backend` dashboard are listed in `docs/observability/README.md`.
+
+## Database observability
+
+The ent/SQLite client is instrumented by default (`session/dbobs`). The pool is capped at one connection, so every query serializes; pool wait is the contention signal.
+
+- **Slow-query log:** queries at or above `STAPLER_SQUAD_SLOW_QUERY_MS` (default `100`; `0` disables) log `slow database query` at WARN with `duration_ms`, `pool_wait_ms` and a normalized statement. Bind values and literals are never logged.
+- **Stats:** `GET /actuator/db` returns `sql.DBStats` (`wait_count`, `wait_duration_ms`, `in_use`, `open_connections`) plus query, slow and error counters; `/actuator/metrics` embeds the same under `db`. The same values export as OTel gauges `db.pool.*` / `db.slow_queries_total` and histogram `db.query.duration` (ms).
+- **Spans:** when a `TracerProvider` is configured, each query under an RPC span is a `db.<VERB>` child span (`db.statement` normalized, `db.pool_wait_ms`). Queries with no parent span are not traced.
+- `pool_wait_ms` is the delta of the pool-wide `WaitDuration`, so under concurrency it can include queue time caused by other callers; treat it as a hint.
 
 ## Connection concurrency metrics
 

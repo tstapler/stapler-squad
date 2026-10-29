@@ -409,14 +409,9 @@ func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
 // --- GetMessagesFromConversationFile (via real session history) ---------------
 
 func TestGetMessagesFromConversationFile_NotFound(t *testing.T) {
-	// findConversationFilePath walks the real $HOME/.claude/projects tree and
-	// substring-matches sessionID against file contents, so it must run against
-	// an isolated HOME — otherwise a coincidental match in the developer's own
-	// project history (e.g. this test's sessionID literal showing up in an
-	// unrelated session transcript) makes the test flakily pass. t.Setenv
-	// forbids t.Parallel() in the same test, so this test can't be parallel.
-	t.Setenv("HOME", t.TempDir())
-	_, err := findConversationFilePath(context.Background(), "nonexistent-session-id-xyz")
+	// Inject an empty projects root so a coincidental match in the developer's
+	// real ~/.claude/projects can't make this test flakily pass.
+	_, err := findConversationFilePath(context.Background(), t.TempDir(), "nonexistent-session-id-xyz")
 	if err == nil {
 		t.Fatal("expected error for non-existent session")
 	}

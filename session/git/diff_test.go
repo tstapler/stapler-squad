@@ -2,8 +2,10 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -121,4 +123,55 @@ func TestGitWorktreeDiff_SanitizesInvalidUTF8_When_DiffContainsNonUTF8Bytes(t *t
 	require.NoError(t, stats.Error)
 	assert.True(t, utf8.ValidString(stats.Content), "Diff().Content must always be valid UTF-8")
 	assert.NotEmpty(t, stats.Content)
+}
+
+// TestGitWorktreeDiffWithContextLines covers the context_lines contract:
+// 0 = default (3), positive = literal count, negative = whole file.
+func TestGitWorktreeDiffWithContextLines(t *testing.T) {
+	t.Parallel()
+	repoDir := setupTestRepo(t)
+
+	wt, _, err := NewGitWorktree(repoDir, "test-diff-context")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+	defer func() { _ = wt.Cleanup() }()
+
+	var base strings.Builder
+	for i := 1; i <= 41; i++ {
+		fmt.Fprintf(&base, "line %d\n", i)
+	}
+	path := filepath.Join(wt.GetWorktreePath(), "ctx.txt")
+	require.NoError(t, os.WriteFile(path, []byte(base.String()), 0644))
+	for _, args := range [][]string{{"add", "ctx.txt"}, {"commit", "-m", "base", "--no-gpg-sign"}} {
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = wt.GetWorktreePath()
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	head := safeexec.CommandContext(context.Background(), "git", "rev-parse", "HEAD")
+	head.Dir = wt.GetWorktreePath()
+	sha, err := head.Output()
+	require.NoError(t, err)
+	wt.baseCommitSHA = strings.TrimSpace(string(sha))
+
+	// Change only line 21 so every other line is context.
+	changed := strings.Replace(base.String(), "line 21\n", "LINE 21\n", 1)
+	require.NoError(t, os.WriteFile(path, []byte(changed), 0644))
+
+	contextOf := func(n int) int {
+		stats := wt.DiffWithContextLines(n)
+		require.NoError(t, stats.Error)
+		count := 0
+		for _, l := range strings.Split(stats.Content, "\n") {
+			if strings.HasPrefix(l, " ") {
+				count++
+			}
+		}
+		return count
+	}
+
+	assert.Equal(t, 6, contextOf(0), "0 must mean the default of 3 lines on each side")
+	assert.Equal(t, wt.Diff().Content, wt.DiffWithContextLines(0).Content, "Diff() must equal the default context diff")
+	assert.Equal(t, 20, contextOf(10), "positive values are literal counts per side")
+	assert.Equal(t, 40, contextOf(-1), "negative means every unchanged line")
 }

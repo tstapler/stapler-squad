@@ -99,7 +99,7 @@ function useStuckBacklogItemsImpl(
 
   // Memoized transport/client — the explicit pitfall this hook must NOT
   // reproduce from useUnfinishedWork.ts (which builds a new
-  // createConnectTransport/createClient pair on every render).
+  // transport/createClient pair on every render).
   const transport = useMemo(() => getConnectTransport(), []);
   const client = useMemo(() => createClient(BacklogService, transport), [transport]);
 

@@ -3,7 +3,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
-import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
 import { filterBacklogItems, type BacklogFilterState } from "@/lib/hooks/useBacklogFilters";
 import { useBacklogStages, BUILTIN_BACKLOG_STAGES } from "@/lib/hooks/useBacklogStages";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
@@ -217,7 +217,7 @@ export function BacklogBoard({
   // board-specific fetch") rather than receiving items as props — a status-
   // change event moves an item's column membership purely by this filter
   // re-evaluating on the updated item, no board-specific refetch involved.
-  const { items, connectionState } = useWatchBacklogItems();
+  const { items, connectionState } = useBacklogStream();
   // Only show the skeleton on a genuinely empty first paint — a disconnect/
   // reconnect must keep showing last-known state, not blank/spinner-out
   // (ux.md §1 "Error / edge cases", shared by this surface per §2).

@@ -1,0 +1,2 @@
+modes/origin_mode_left_on_with_region -- xterm ctlseqs DECOM left set at snapshot time
+[5;10r[?6h[2;3Hcursor in region, origin mode left on

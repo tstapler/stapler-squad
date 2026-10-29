@@ -1,0 +1,4 @@
+modes/title_changed_then_cleared -- xterm ctlseqs OSC 2 with empty text clears the title
+]2;abcset abc
+]2;defset def
+]2;cleared with empty OSC 2

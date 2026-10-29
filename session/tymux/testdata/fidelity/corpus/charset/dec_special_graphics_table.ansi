@@ -1,0 +1,9 @@
+charset/dec_special_graphics_table -- xterm ctlseqs ESC ( 0; libvterm 14state_
+ASCII  : `abcdefghijklmnopqrstuvwxyz{|}~
+GRAPHICS: (0`abcdefghijklmnopqrstuvwxyz{|}~(B
+(0lqqqwqqqk(B  (0lqwqk(B
+(0x(B   (0x(B   (0x(B  (0x x x(B
+(0tqqqnqqqu(B  (0tqnqu(B
+(0mqqqvqqqj(B  (0mqvqj(B
+(0` a f g h i j k l m n o p q r s t u v w x y z { | } ~(B
+(0[31;1mlqqk[0m(B [7m(0qq(B[0m [4m(0xx(B[0m

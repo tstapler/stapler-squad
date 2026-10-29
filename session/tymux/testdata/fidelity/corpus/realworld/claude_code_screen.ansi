@@ -1,0 +1,16 @@
+realworld/claude_code_screen -- Claude Code TUI (the screenshot that motivated
+[1m⏺[0m Reading [2m(ctrl+o to expand)[0m
+  [2m⎿  Read 42 lines[0m
+
+[1mThe fix[0m is in [36mrender.go[0m:
+
+  [2m1[0m  [32m+[0m[48;5;22m func cellText() string {[0m
+  [2m2[0m  [31m-[0m[48;5;52m return c.GetText()[0m
+
+[38;5;244m✻ Cogitated for 1h 49m 37s · done 3:29 PM[0m
+
+[2m────────────────────────────────────────────────────────────────────────────────[0m
+❯[1C[7mr[0meview #102 with independent reviewers and round 2
+[2m────────────────────────────────────────────────────────────────────────────────[0m
+[38;5;244m  ⏵⏵ auto mode on[0m[2m (shift+tab to cycle)[0m
+Words[1C[1Cwith[1Cgaps[1Cbetween[1Cthem[3Cand[0Cx

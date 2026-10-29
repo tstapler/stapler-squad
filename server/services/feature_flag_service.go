@@ -334,6 +334,27 @@ var knownFeatureFlags = []struct {
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
+		name:         "request_coalescing",
+		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
+		defaultValue: true,
+	},
+	{
+		name:        "unary_over_ws",
+		description: "Send unary RPCs over the already-open WebSocket instead of separate HTTP requests, avoiding the browser's per-origin connection cap. Kill switch: turn off to fall back to HTTP fetch. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "unary_over_ws_remote",
+		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
+	},
+	{
+		name:        "batch_unary",
+		description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "window_keep_alive",
+		description: "Keep the web app's window state alive across route changes instead of remounting it. Kill switch: turn off to restore remount-on-navigate. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		name:         config.TriageGuidanceHaltFeatureFlag,
 		defaultValue: config.TriageGuidanceHaltDefault,
 		description:  "Automated triage halts and asks a durable guidance request instead of guessing when a backlog item is genuinely ambiguous. Default: off — baseline guess-and-proceed triage behavior is unchanged until enabled.",
@@ -434,6 +455,30 @@ var knownFeatureFlags = []struct {
 	{
 		name:        filesEditLargeFlagName,
 		description: "Files large-file editing: allow editing files over the 1 MiB cap through ranged reads and delta writes (ADR-036). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionDetectionFlagName,
+		description: "Attention prose-question detection: treat a turn that ends in a plain-prose question as needing you (an Asked a question item). Applies at once; global only. Default: off.",
+	},
+	{
+		name:        sessionEventLogFlagName,
+		description: "Session event log: record per-session attention events (turn ends, state changes) for the timeline. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionAckBypassFixFlagName,
+		description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionIdleClockOutputFlagName,
+		description: "Attention idle clock from output: measure idleness and waiting-for-agent time from the last meaningful output instead of any touch. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionProseQuestionLLMTiebreakFlagName,
+		description: "Attention prose-question LLM tiebreak: ask a model to settle borderline prose-question detections. Needs prose-question detection on. Applies at once; global only. Default: off.",
+	},
+	{
+		name:        attentionInboxConsolidationFlagName,
+		description: "Attention inbox consolidation: show the unified Attention list in place of the separate review queue views. Applies at once; global only. Default: off.",
 	},
 }
 

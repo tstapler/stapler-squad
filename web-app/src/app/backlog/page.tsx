@@ -1,9 +1,9 @@
 "use client";
 // +feature: backlog:list-page
 
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { memo, useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
+import { getConnectTransport } from "@/lib/api/transport";
 import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css";
 import { useRouter, useSearchParams } from "@/lib/nav";
 import { useAnalytics } from "@/lib/analytics";
@@ -18,7 +18,6 @@ import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
 import { ClaimedElsewhereNotice, type ClaimedElsewhereEntry } from "@/components/backlog/ClaimedElsewhereNotice";
 import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
-import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import {
   useBacklogService,
@@ -27,7 +26,7 @@ import {
   type BacklogItemInput,
   type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
-import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
 import { usePersistedViewState, type PersistedFieldsConfig } from "@/lib/hooks/usePersistedViewState";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 import { toggleSelection, selectAll, clearSelection, selectionAfterBulk } from "@/lib/store/backlogBulkSelectionSlice";
@@ -139,7 +138,7 @@ function formatDateShort(iso?: string): string {
 // (used by the Kanban board) already has. Extracted into its own component,
 // mirroring BacklogItemCard's exact flash-tracking hook, since a plain row
 // function has no hook of its own to track the previous liveVersion.
-function BacklogTableRow({
+const BacklogTableRow = memo(function BacklogTableRow({
   item,
   isActive,
   isExiting,
@@ -244,7 +243,7 @@ function BacklogTableRow({
       </td>
     </tr>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Main page
@@ -270,7 +269,7 @@ function BacklogPageInner() {
   // chip changes. The hook already returns domain-shaped BacklogItem[]
   // (mapped internally, see useWatchBacklogItems.ts's file-header note 3),
   // so no further proto->domain mapping is needed here.
-  const { items, connectionState } = useWatchBacklogItems();
+  const { items, connectionState } = useBacklogStream();
   // Only the very first connect (before any items have ever loaded) shows a
   // loading state — a reconnect must keep showing last-known data, not blank
   // or spinner out (design/ux.md Surface 1 "Error / edge cases").
@@ -354,10 +353,7 @@ function BacklogPageInner() {
   // re-adding a full listBacklogItems fetch-on-every-mutation path.
   const rawClientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-      interceptors: [createAuthInterceptor()],
-    });
+    const transport = getConnectTransport();
     rawClientRef.current = createClient(BacklogService, transport);
   }, []);
 
@@ -482,7 +478,7 @@ function BacklogPageInner() {
   }, [filteredItems, exitingItems]);
 
   // Sort items client-side
-  const sortedItems = [...visibleItems].sort((a, b) => {
+  const sortedItems = useMemo(() => [...visibleItems].sort((a, b) => {
     let cmp = 0;
     if (sortCol === "title") {
       cmp = a.title.localeCompare(b.title);
@@ -496,11 +492,14 @@ function BacklogPageInner() {
       cmp = compareByRepoPath(a, b);
     }
     return sortAsc ? cmp : -cmp;
-  });
+  }), [visibleItems, sortCol, sortAsc]);
 
   // Grouping is applied after sorting so items within each group keep the
   // currently selected sort order (mirrors SessionList's sort-then-group).
-  const groups = groupBy === "repoPath" ? groupByRepoPath(sortedItems) : null;
+  const groups = useMemo(
+    () => (groupBy === "repoPath" ? groupByRepoPath(sortedItems) : null),
+    [groupBy, sortedItems],
+  );
 
   const handleSortClick = (col: SortColumn) => {
     if (sortCol === col) {
@@ -518,11 +517,14 @@ function BacklogPageInner() {
     }
   };
 
-  const handleRowClick = (itemId: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("item", itemId);
-    router.push(`/backlog?${params.toString()}`);
-  };
+  const handleRowClick = useCallback(
+    (itemId: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("item", itemId);
+      router.push(`/backlog?${params.toString()}`);
+    },
+    [searchParams, router],
+  );
 
   const handleDetailClose = () => {
     const params = new URLSearchParams(searchParams.toString());

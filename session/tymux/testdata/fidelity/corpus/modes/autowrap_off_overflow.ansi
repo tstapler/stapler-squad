@@ -1,0 +1,3 @@
+modes/autowrap_off_overflow -- xterm ctlseqs DECAWM ?7l
+[?7lxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx|right-edge overwrites, no wrap
+next line

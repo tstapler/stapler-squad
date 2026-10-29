@@ -29,7 +29,7 @@ export const toast = style({
   opacity: 1,
   // Entrance is a keyframe (not a post-mount class flip) so the card needs no timer.
   animation: `${enter} 0.3s cubic-bezier(0.4, 0, 0.2, 1)`,
-  transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+  transition: "background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   "@media": {
     // On mobile the bottom nav + optional pane tab strip must be cleared.
     // --bottom-nav-height is published by BottomNav; --mobile-pane-tab-strip-height by PaneSplitRenderer.
@@ -187,7 +187,7 @@ export const closeButton = style({
   alignItems: "center",
   justifyContent: "center",
   borderRadius: "4px",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   flexShrink: 0,
   selectors: {
     "&:hover": {
@@ -255,7 +255,7 @@ const baseActionButton = style({
   fontSize: "14px",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
 });
 
 export const viewButton = style([baseActionButton, {
@@ -728,6 +728,7 @@ export const overflowMenu = style({
   position: "absolute",
   right: "16px",
   bottom: "56px",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1,
   display: "flex",
   flexDirection: "column",

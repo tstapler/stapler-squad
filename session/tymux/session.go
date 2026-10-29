@@ -112,6 +112,10 @@ type tymuxGRPCSession struct {
 	// tymux_attach_stream_reconnects_total{output_gap} metric.
 	outputGapCount atomic.Int64
 
+	// lastEventUnixNano is when the standing stream last delivered any
+	// AttachEvent (heartbeats included); feeds tymux_attach_heartbeat_age_seconds.
+	lastEventUnixNano atomic.Int64
+
 	// exitCallback is invoked at most once, by whichever of
 	// readAttachLoop's Exited handling (stream.go's deliverExit) or
 	// SetOnExitCallback observes the exit second — the check-before-and-
@@ -681,7 +685,7 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
 // CapturePaneContentRaw returns the live screen with SGR preserved, as the
@@ -693,7 +697,7 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument

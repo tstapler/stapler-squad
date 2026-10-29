@@ -1,0 +1,7 @@
+edit/repeat_char_rep -- esctest2 rep.py; libvterm 31state_rep
+a[bno-arg a[0bzero [1;31mx[3b[0m y[2bbold-red-x-repeats-attrs
+[3;1Hé[3b [4;1H世[2b [5;1Hé[2b-combining
+[7;1Hz[999bz-overflow-clamps-at-edge
+[9;1HaD[2brep-after-control-resets?[11;1Hab[2Cc[2b
+[13;1Hx[2b[2bcumulative [15;1Hq[15;1H[2b-after-cup
+[17;1Hw[44m[2b[0m-bg-on-repeats[19;1H[2b-no-prior-char

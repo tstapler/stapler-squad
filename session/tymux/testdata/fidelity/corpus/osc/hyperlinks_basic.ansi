@@ -1,0 +1,8 @@
+osc/hyperlinks_basic -- xterm ctlseqs OSC 8; kitty/iTerm2 hyperlink spec (gist
+]8;;https://example.com/a\plain link]8;;\ ]8;id=b1;https://example.com/b\with id]8;;\ no-link ]8;;file:///tmp/x y\file uri]8;;\
+]8;;https://e.com/1\adj-1]8;;\]8;;https://e.com/2\adj-2]8;;\]8;;https://e.com/3\adj-3]8;;\
+BEL-terminated: ]8;;https://e.com/belbel]8;; ST-terminated: ]8;;https://e.com/st\st]8;;\
+Empty-uri closes: ]8;;https://e.com/open\open]8;;\closed ]8;id=zz;\also-closed
+Params: ]8;id=p1:foo=bar;https://e.com/p\extra-param]8;;\ ]8;foo=bar;https://e.com/np\no-id]8;;\
+Query/frag: ]8;;https://e.com/s?a=1&b=2#frag;x=1\semicolon-in-uri]8;;\ ]8;;https://e.com/ü/世\unicode-uri]8;;\
+Same id twice: ]8;id=sid;https://e.com/same\part-1]8;;\ gap ]8;id=sid;https://e.com/same\part-2]8;;\

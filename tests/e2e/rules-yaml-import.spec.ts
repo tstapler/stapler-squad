@@ -244,7 +244,7 @@ test.describe("rules-yaml-import", () => {
     await page.goto(`${BASE_URL}/rules`, { waitUntil: "domcontentloaded" });
 
     // Switch to "Custom" (user) filter to get an isolated empty state.
-    const customTab = page.getByRole("button", { name: /Custom/ });
+    const customTab = page.getByRole("button", { name: /^Custom \(/ });
     await expect(customTab).toBeVisible({ timeout: 10000 });
     await customTab.click();
 

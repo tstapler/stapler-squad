@@ -1,0 +1,2 @@
+modes/alt_screen -- xterm ctlseqs ?47/?1047/?1049; esctest2 decset.py
+[1;1HL01-primary[2;1HL02-primary[3;1HL03-primary[4;1HL04-primary[5;1HL05-primary[6;1HL06-primary[7;1HL07-primary[8;1HL08-primary[?1049h[1;1Halt-screen-content[5;5H[1;31malt-red[0m[?1049l[12;1Hback-on-primary-after-1049l

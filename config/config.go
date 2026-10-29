@@ -372,6 +372,9 @@ type Config struct {
 	// agent wake triggers; zero values keep the defaults and every value is
 	// clamped to the ceilings compiled into server/wakes.
 	WakeLimits WakeLimitsConfig `json:"wake_limits,omitempty"`
+	// InboxPRWatch configures the PR-watch inbox consumer (flag "inbox_pr_watch");
+	// resolve with InboxPRWatchSettings.
+	InboxPRWatch InboxPRWatchConfig `json:"inbox_pr_watch,omitempty"`
 	// HeadlessTriageModel is the model for triage when the item's pipeline mode does
 	// not pin one: a concrete ID or "family:<alias>". "" = family:sonnet; "none" = account default.
 	HeadlessTriageModel string `json:"headless_triage_model,omitempty"`
@@ -2008,6 +2011,8 @@ const FeatureWebhookManagement = "webhook_management"
 //	  item, instead of waiting for PRStatusPoller's next tick. Independently toggleable from
 //	  "webhook_triggers", but has no effect unless "webhook_triggers" is also enabled (that
 //	  flag gates whether the route is registered at all).
+//	"inbox_pr_watch" (FeatureInboxPRWatch) — PR-watch inbox consumer: polls the gh-signal
+//	  inbox and steers idle ad-hoc PR sessions on new PR activity. Off by default.
 //	"webhook_management" (FeatureWebhookManagement) — registers the credential-authenticated
 //	  webhook-registration API under /api/integrations/webhooks/v1/. Off by default, and its
 //	  reconcile refuses to create endpoints unless "webhook_triggers" is also on.

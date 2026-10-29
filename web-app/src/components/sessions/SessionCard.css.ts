@@ -389,7 +389,7 @@ export const editTagsButton = style({
   borderRadius: vars.radii.full,
   cursor: "pointer",
   opacity: 0,
-  transition: "all 0.2s ease, opacity 0.15s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease, opacity 0.15s ease",
   "@media": {
     "(hover: none)": { opacity: 1 },
   },
@@ -552,6 +552,7 @@ export const overflowMenu = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.lg,
   boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   padding: "4px",
   display: "flex",
@@ -603,7 +604,7 @@ export const actionButton = style({
   fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.hoverBackground,
@@ -667,6 +668,7 @@ export const renameDialog = style({
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   animationName: fadeIn,
   animationDuration: "0.2s",
@@ -736,7 +738,7 @@ export const submitButton = style({
   fontSize: "0.875rem",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   border: `1px solid ${vars.color.primary}`,
   background: vars.color.primary,
   color: vars.color.primaryText,
@@ -755,7 +757,7 @@ export const cancelButton = style({
   fontSize: "0.875rem",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   background: vars.color.cardBackground,
   color: vars.color.textPrimary,
   border: `1px solid ${vars.color.borderColor}`,
@@ -773,7 +775,7 @@ export const dangerButton = style({
   fontSize: "0.875rem",
   fontWeight: 600,
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   background: vars.color.error,
   color: vars.color.primaryText,
   border: `1px solid ${vars.color.error}`,
