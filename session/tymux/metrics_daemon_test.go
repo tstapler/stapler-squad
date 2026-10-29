@@ -141,9 +141,12 @@ func TestReplaceDaemon_RecordsReplaceRestart(t *testing.T) {
 	checkDaemonHealthyFn = func(context.Context, DaemonConfig) bool { return spawned }
 	stopTymuxdFn = func() error { return nil }
 	before := counterByLabel(t, "tymux_daemon_restarts_total", "reason", "replace")
+	coldBefore := counterByLabel(t, "tymux_daemon_restarts_total", "reason", "cold_start")
 
 	_, err := ReplaceDaemon(context.Background(), DaemonConfig{BinaryPath: "/installed/tymuxd"}, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, before+1, counterByLabel(t, "tymux_daemon_restarts_total", "reason", "replace"))
+	assert.Equal(t, coldBefore, counterByLabel(t, "tymux_daemon_restarts_total", "reason", "cold_start"),
+		"a deliberate replace must not also count as a cold start")
 }

@@ -22,7 +22,7 @@ session or pane id as a label.
 
 | Metric | Type | Labels | Source |
 |---|---|---|---|
-| `session_backend_operation_duration_ms` | histogram | `backend`, `operation` | `session/backend_observability.go`; lifecycle ops (`start`, `restore`, `attach`) plus per-call `send_keys`, `write_stdin`, `capture_pane`, `resize` on both backends. The hot-path four are metric-only (no span). |
+| `session_backend_operation_duration_ms` | histogram | `backend`, `operation` | `session/backend_observability.go`; lifecycle ops (`start`, `restore`, `attach`) plus per-call `send_keys`, `write_stdin`, `capture_pane`, `resize` on both backends. The hot-path four are metric-only (no span of their own); the unary `capture_pane` RPC still gets an otelconnect client span, subject to the trace sampler. |
 | `session_backend_info` | gauge (always 1) | `backend`, `source` (`global`/`session_override`) | `session/backend_info_metric.go`; refreshed on backend resolution and the rollout status RPC |
 | `tymux_attach_stream_reconnects_total` | counter | `cause` (`error`, `output_gap`) | `session/tymux/stream.go` |
 | `tymux_attach_events_total` | counter | `kind` (`output_gap`, `gap_exceeded`, `snapshot_redraw`) | `session/tymux/stream.go`, `resync.go` |

@@ -239,10 +239,9 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 			return before, err
 		}
 	}
-	if _, err := EnsureDaemonRunning(ctx, cfg); err != nil {
+	if _, err := ensureDaemonRunning(ctx, cfg, daemonRestartReplace); err != nil {
 		return before, err
 	}
-	recordDaemonRestart(daemonRestartReplace)
 	log.Info("[tymux] replaced tymuxd", "from", before.RunningVersion, "to", cfg.BinaryPath)
 	return DetectDaemonVersions(ctx, cfg), nil
 }
