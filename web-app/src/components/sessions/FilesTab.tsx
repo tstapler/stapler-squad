@@ -86,6 +86,7 @@ function BufferedFilesTab({ sessionId, initialSelectedPath, onSelectedPathChange
   return (
     <FilesTabView
       {...rest}
+      tabActive={tabActive}
       sessionId={sessionId}
       initialSelectedPath={initialSelectedPath}
       selectedPath={v2.buffers.selectedPath}
@@ -121,6 +122,7 @@ function FilesTabView({
   baseUrl,
   initialSelectedPath,
   urlActive,
+  tabActive = true,
   selectedPath,
   recentPaths,
   onOpen,
@@ -139,7 +141,9 @@ function FilesTabView({
   const mobile = layout === "mobile";
   const nav = useMobilePane(mobile);
   const { go } = nav;
-  const { diff } = useSessionVcsContext();
+  const { diff, ensureDiff } = useSessionVcsContext();
+  // Diff only feeds gutter marks; skip it until the Files tab is actually shown.
+  useEffect(() => { if (tabActive) ensureDiff(); }, [tabActive, ensureDiff]);
 
   const handleFileSelect = useCallback(
     (path: string, source?: OpenSource) => {

@@ -89,11 +89,38 @@ func TestHandleActuatorMetrics_ReturnsExpectedShape(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"blob_cache", "fork_pressure", "runtime", "workflow_engine_bypass_total"} {
+	for _, key := range []string{"blob_cache", "fork_pressure", "runtime", "workflow_engine_bypass_total", "db"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("missing top-level key %q in /actuator/metrics response", key)
 		}
 	}
+}
+
+func TestHandleActuatorDB_ReportsEntPool(t *testing.T) {
+	repo := session.NewTestEntRepository(t) // opens through newInstrumentedEntClient
+	if _, err := repo.List(context.Background()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handleActuatorDB(rec, httptest.NewRequest(http.MethodGet, "/actuator/db", nil))
+
+	var body struct {
+		Pools []struct {
+			Name    string `json:"name"`
+			MaxOpen int    `json:"max_open"`
+			Queries int64  `json:"queries_total"`
+		} `json:"pools"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, p := range body.Pools {
+		if p.Name == "ent" && p.MaxOpen == 1 && p.Queries > 0 {
+			return
+		}
+	}
+	t.Fatalf("no ent pool with max_open=1 and queries>0 in %+v", body.Pools)
 }
 
 func TestHandleActuatorMetrics_ShowsEngineBypassCounter(t *testing.T) {

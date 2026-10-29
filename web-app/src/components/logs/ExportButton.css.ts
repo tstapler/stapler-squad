@@ -17,7 +17,7 @@ export const button = style({
   cursor: "pointer",
   fontSize: "0.85rem",
   fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
   selectors: {
     "&:hover:not(:disabled)": {
       backgroundColor: vars.color.hoverBackground,
@@ -39,6 +39,7 @@ export const dropdown = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: "6px",
   boxShadow: vars.shadow.md,
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 100,
   minWidth: "180px",
   overflow: "hidden",

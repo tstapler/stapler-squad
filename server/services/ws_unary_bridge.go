@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -520,15 +521,23 @@ var handshakeHeaders = map[string]bool{
 }
 
 func (s *unarySession) synthesize(ctx context.Context, f unaryFrame) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "/api"+f.Method, bytes.NewReader(f.Body))
+	return synthesizeUnaryRequest(ctx, s.upgrade, f.Method, f.Body, f.RequestMeta)
+}
+
+// synthesizeUnaryRequest builds the dispatcher request for one call, carrying src's
+// identity (Host, RemoteAddr, TLS, Origin, Cookie, proxy headers) so every guard
+// reaches the same verdict as for a direct HTTP call. src is the WebSocket upgrade
+// request or, for the batch endpoint, the batch request itself.
+func synthesizeUnaryRequest(ctx context.Context, src *http.Request, method string, body []byte, meta unaryRequestMeta) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "/api"+method, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.RequestURI = req.URL.RequestURI()
-	req.Host = s.upgrade.Host
-	req.RemoteAddr = s.upgrade.RemoteAddr
-	req.TLS = s.upgrade.TLS
-	for k, vv := range s.upgrade.Header {
+	req.Host = src.Host
+	req.RemoteAddr = src.RemoteAddr
+	req.TLS = src.TLS
+	for k, vv := range src.Header {
 		ck := http.CanonicalHeaderKey(k)
 		if handshakeHeaders[ck] || strings.HasPrefix(ck, "Sec-Websocket-") || strings.HasPrefix(ck, "Connect-") {
 			continue
@@ -538,10 +547,10 @@ func (s *unarySession) synthesize(ctx context.Context, f unaryFrame) (*http.Requ
 	req.Header.Set("Content-Type", "application/proto")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Connect-Protocol-Version", "1")
-	for k, v := range f.RequestMeta.Headers { // already validated against the allowlist
+	for k, v := range meta.Headers { // already validated against the allowlist
 		req.Header.Set(k, v)
 	}
-	if ms := f.RequestMeta.TimeoutMs; ms > 0 {
+	if ms := meta.TimeoutMs; ms > 0 {
 		req.Header.Set("Connect-Timeout-Ms", strconv.FormatInt(ms, 10))
 	}
 	return req, nil
@@ -553,6 +562,12 @@ type unaryRecorder struct {
 	status   int
 	body     bytes.Buffer
 	overflow bool
+	// maxBytes bounds the buffered body; zero means wsUnaryMaxResponseBytes.
+	maxBytes int
+	// budget, when set, is a total shared across recorders (a batch): writes past
+	// budgetMax overflow instead of buffering.
+	budget    *atomic.Int64
+	budgetMax int64
 }
 
 func (r *unaryRecorder) Header() http.Header { return r.header }
@@ -565,7 +580,15 @@ func (r *unaryRecorder) WriteHeader(code int) {
 
 func (r *unaryRecorder) Write(p []byte) (int, error) {
 	r.WriteHeader(http.StatusOK)
-	if r.body.Len()+len(p) > wsUnaryMaxResponseBytes {
+	limit := r.maxBytes
+	if limit == 0 {
+		limit = wsUnaryMaxResponseBytes
+	}
+	if r.budget != nil && r.budget.Add(int64(len(p))) > r.budgetMax {
+		r.overflow = true
+		return 0, io.ErrShortWrite
+	}
+	if r.body.Len()+len(p) > limit {
 		r.overflow = true
 		return 0, io.ErrShortWrite
 	}

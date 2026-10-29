@@ -521,17 +521,23 @@ func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 }
 
 // signalingLogHandler wraps a slog.Handler and signals sigCh (non-blocking)
-// after each Handle call completes. Used instead of polling the underlying
+// after each Handle call for a record whose message contains match completes. Matching matters:
+// the slog default is process-global, so unrelated goroutines (e.g. another parallel test's tmux
+// cleanup) also log through it, and signalling on those woke the test before its own record existed. Used instead of polling the underlying
 // buffer from another goroutine, which would race with slog's own writes
 // (bytes.Buffer is not safe for concurrent use) — receiving from sigCh
 // establishes a happens-before edge, so reading the buffer afterward is race-free.
 type signalingLogHandler struct {
 	slog.Handler
 	sigCh chan struct{}
+	match string
 }
 
 func (h *signalingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	err := h.Handler.Handle(ctx, r)
+	if !strings.Contains(r.Message, h.match) {
+		return err
+	}
 	select {
 	case h.sigCh <- struct{}{}:
 	default:
@@ -549,6 +555,7 @@ func TestSlackNotifier_RecoversFromPanic_And_LogsError(t *testing.T) {
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(&signalingLogHandler{
 		Handler: slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		sigCh:   sigCh,
+		match:   "recovered from panic",
 	}))
 	t.Cleanup(func() {
 		ssqlog.SetSlogDefaultForTest(prev)
