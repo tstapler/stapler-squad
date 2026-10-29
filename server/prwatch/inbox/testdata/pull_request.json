@@ -1,0 +1,31 @@
+{
+  "items": [
+    {
+      "id": "inb_pull_request",
+      "subscription_id": "sub_1",
+      "created_at": "2026-09-04T19:00:01Z",
+      "event": {
+        "version": 1,
+        "id": "evt_7e76900b35ced6a249e11677",
+        "delivery_id": "d-pull_request",
+        "source": "github",
+        "source_event_type": "pull_request",
+        "repository": "acme-corp/widget-api",
+        "pull_request": 123,
+        "kind": "pull_request",
+        "action": "synchronize",
+        "actor": "reviewer",
+        "occurred_at": "2026-09-04T19:00:00Z",
+        "head_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Pull request #123 synchronize",
+        "fingerprint": "7e76900b35ced6a249e11677e8e8ae7cc783f5f0c63b17aec66ce85f187955e1",
+        "trust": "untrusted",
+        "details": {
+          "state": "open",
+          "draft": false,
+          "merged": false
+        }
+      }
+    }
+  ]
+}

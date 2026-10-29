@@ -1,8 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -199,5 +203,126 @@ func TestSetFeatureFlag_UpdatesExistingMap(t *testing.T) {
 	}
 	if reloaded.GetFeatureFlag("backlog") {
 		t.Error("persisted config still shows backlog as true after disabling")
+	}
+}
+
+func TestGetFeatureFlag_should_ReturnFalse_When_InboxPRWatchNeverSet(t *testing.T) {
+	var nilCfg *Config
+	if nilCfg.GetFeatureFlag(FeatureInboxPRWatch) {
+		t.Fatal("nil config: inbox_pr_watch must be off")
+	}
+	if FeatureInboxPRWatch != "inbox_pr_watch" {
+		t.Fatalf("flag constant = %q", FeatureInboxPRWatch)
+	}
+	cfg := &Config{FeatureFlags: map[string]bool{"other": true}}
+	if cfg.GetFeatureFlag(FeatureInboxPRWatch) {
+		t.Fatal("unset flag must be off")
+	}
+	cfg.FeatureFlags[FeatureInboxPRWatch] = true
+	if !cfg.GetFeatureFlag(FeatureInboxPRWatch) {
+		t.Fatal("flag set true must be on")
+	}
+}
+
+func intp(v int) *int { return &v }
+
+func TestInboxPRWatchConfig_should_ApplyDefaults_When_KeysAbsentOrInvalid(t *testing.T) {
+	s, corr := ResolveInboxPRWatch(nil)
+	if len(corr) != 0 {
+		t.Fatalf("defaults produce corrections: %v", corr)
+	}
+	want := InboxPRWatchSettings{
+		URL: "http://127.0.0.1:8789", TokenPath: "~/.local/state/gh-signal/inbox.token",
+		PollIntervalSeconds: 5, ReconcileIntervalSecs: 60, CoverageRecheckMinutes: 10,
+		MinSteerIntervalSeconds: 300, HeldNoticeAfterMinutes: 60, HeldAgeCeilingHours: 24,
+		StateNotifyGraceSeconds: 120, LeaderRetrySeconds: 30, FollowupObserveSeconds: 120,
+		IgnoreBotActors: true, HumanFeedbackMode: "all", EffectiveHumanFeedbackMode: "all",
+		StrangerNoticeThreshold: 3,
+	}
+	if !reflect.DeepEqual(s, want) {
+		t.Fatalf("defaults:\n got %+v\nwant %+v", s, want)
+	}
+
+	s, corr = ResolveInboxPRWatch(&InboxPRWatchConfig{
+		PollIntervalSeconds: -3, ReconcileIntervalSecs: 4, CoverageRecheckMinutes: -1,
+		HeldNoticeAfterMinutes: -5, StrangerNoticeThreshold: -2,
+		MinSteerIntervalSeconds: intp(5000),
+	})
+	if s.PollIntervalSeconds != 5 || s.ReconcileIntervalSecs != 10 || s.CoverageRecheckMinutes != 10 ||
+		s.HeldNoticeAfterMinutes != 60 || s.StrangerNoticeThreshold != 3 || s.MinSteerIntervalSeconds != 1800 {
+		t.Fatalf("invalid values not corrected: %+v", s)
+	}
+	if len(corr) != 6 {
+		t.Fatalf("want 6 corrections, got %d: %v", len(corr), corr)
+	}
+
+	s, corr = ResolveInboxPRWatch(&InboxPRWatchConfig{MinSteerIntervalSeconds: intp(0)})
+	if s.MinSteerIntervalSeconds != 0 || len(corr) != 0 {
+		t.Fatalf("min_steer 0 must be honored: %d %v", s.MinSteerIntervalSeconds, corr)
+	}
+
+	s, _ = ResolveInboxPRWatch(&InboxPRWatchConfig{IgnoreRepos: []string{"Acme/Widget", "bad", "a/b/c", "/x", "acme/widget"}})
+	if !reflect.DeepEqual(s.IgnoreRepos, []string{"acme/widget"}) {
+		t.Fatalf("ignore_repos = %v", s.IgnoreRepos)
+	}
+}
+
+func TestInboxPRWatchConfig_should_FailClosedAndWarn_When_HumanFeedbackModeInvalidOrAllowlistEmptyOrIgnored(t *testing.T) {
+	if DefaultHumanFeedbackMode != HumanFeedbackAll {
+		t.Fatalf("default mode = %q", DefaultHumanFeedbackMode)
+	}
+	s, corr := ResolveInboxPRWatch(&InboxPRWatchConfig{HumanFeedbackMode: "everyone"})
+	if s.EffectiveHumanFeedbackMode != "off" || len(corr) != 1 || corr[0].Key != "human_feedback_mode" {
+		t.Fatalf("invalid mode: %+v %v", s, corr)
+	}
+	s, corr = ResolveInboxPRWatch(&InboxPRWatchConfig{HumanFeedbackMode: "allowlist"})
+	if s.HumanFeedbackMode != "allowlist" || s.EffectiveHumanFeedbackMode != "off" || len(corr) != 1 {
+		t.Fatalf("empty allowlist: %+v %v", s, corr)
+	}
+	s, corr = ResolveInboxPRWatch(&InboxPRWatchConfig{HumanFeedbackMode: "allowlist", ActorAllowlist: []string{"alice"}})
+	if s.EffectiveHumanFeedbackMode != "allowlist" || len(corr) != 0 {
+		t.Fatalf("valid allowlist: %+v %v", s, corr)
+	}
+	_, corr = ResolveInboxPRWatch(&InboxPRWatchConfig{ActorAllowlist: []string{"alice"}})
+	if len(corr) != 1 || corr[0].Key != "actor_allowlist" {
+		t.Fatalf("all + allowlist must warn: %v", corr)
+	}
+	if !s.AllowlistContainsLogin("ALICE") || s.AllowlistContainsLogin("bob") {
+		t.Fatal("AllowlistContainsLogin")
+	}
+}
+
+func TestInboxPRWatchConfig_should_ListEveryCorrectionAndLogOneWarnEach_When_ValuesAreInvalidOrClamped(t *testing.T) {
+	_, corr := ResolveInboxPRWatch(&InboxPRWatchConfig{
+		PollIntervalSeconds: -1, ReconcileIntervalSecs: 1, MinSteerIntervalSeconds: intp(9999),
+		IgnoreRepos: []string{"bad"}, HumanFeedbackMode: "nope",
+	})
+	if len(corr) != 5 {
+		t.Fatalf("want 5 corrections, got %v", corr)
+	}
+	var warns []string
+	LogInboxPRWatchCorrections(corr, func(msg string, kv ...any) {
+		warns = append(warns, fmt.Sprint(kv...))
+	})
+	if len(warns) != len(corr) {
+		t.Fatalf("warns = %d, corrections = %d", len(warns), len(corr))
+	}
+	for i, c := range corr {
+		if !strings.Contains(warns[i], c.Key) || !strings.Contains(warns[i], c.Effective) {
+			t.Errorf("warn %q lacks key/effective of %v", warns[i], c)
+		}
+	}
+
+	keys := InboxPRWatchConfigKeys()
+	typ := reflect.TypeOf(InboxPRWatchConfig{})
+	var tags []string
+	for i := 0; i < typ.NumField(); i++ {
+		tags = append(tags, strings.Split(typ.Field(i).Tag.Get("json"), ",")[0])
+	}
+	sort.Strings(tags)
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	if !reflect.DeepEqual(tags, sorted) || len(keys) != 17 {
+		t.Fatalf("keys %v do not match struct json tags %v", sorted, tags)
 	}
 }

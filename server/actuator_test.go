@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -609,5 +610,68 @@ func TestRegisterActuatorRoutes_ShouldServeWsUnary_WhenBridgeStoredAfterRegistra
 
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ws_unary_inflight":0`) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func getInboxPRWatch(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	srv := &Server{mux: http.NewServeMux()}
+	srv.registerActuatorRoutes()
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/actuator/inbox-pr-watch"+query, nil))
+	return rec
+}
+
+func TestActuatorInboxPRWatch_should_ServeJSONAndTextFormat_When_Requested(t *testing.T) {
+	SetPRWatchStatusProvider(func() prwatch.Status {
+		return prwatch.Status{Enabled: true, Polls: true, InboxState: prwatch.InboxStateOK, LoginResolved: true,
+			FirstRunLine: "Not watching any PRs."}
+	})
+	t.Cleanup(func() { SetPRWatchStatusProvider(nil) })
+
+	rec := getInboxPRWatch(t, "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("json: code=%d type=%q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got["enabled"] != true {
+		t.Fatalf("json body = %s (err %v)", rec.Body.String(), err)
+	}
+
+	rec = getInboxPRWatch(t, "?format=text")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("text: code=%d type=%q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	for _, want := range []string{"Feature flag: on", "This process polls: yes", "Not watching any PRs."} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("text missing %q in:\n%s", want, rec.Body.String())
+		}
+	}
+}
+
+func TestActuatorInboxPRWatch_should_AnswerFeatureFlagOffNotNotFound_When_NoProviderOrFlagOff(t *testing.T) {
+	SetPRWatchStatusProvider(nil)
+
+	rec := getInboxPRWatch(t, "?format=text")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no provider text: code=%d", rec.Code)
+	}
+	for _, want := range []string{"Feature flag: off", "PR watch is not running in this process", "feature_flags.inbox_pr_watch"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	rec = getInboxPRWatch(t, "")
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"enabled":false}` {
+		t.Fatalf("no provider json: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	SetPRWatchStatusProvider(func() prwatch.Status { return prwatch.Status{Enabled: false, Polls: false} })
+	t.Cleanup(func() { SetPRWatchStatusProvider(nil) })
+	rec = getInboxPRWatch(t, "?format=text")
+	body = rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "Feature flag: off") || !strings.Contains(body, "This process polls: no") {
+		t.Fatalf("flag off live: code=%d body=%s", rec.Code, body)
 	}
 }
