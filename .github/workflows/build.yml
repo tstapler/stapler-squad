@@ -911,9 +911,14 @@ jobs:
         with:
           install-socat: 'true'
 
+      - name: Set up the tymux fidelity oracle (xterm.js via Bun)
+        uses: ./.github/actions/setup-fidelity-oracle
+
       - name: Run affected-package tests
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
+          # session/tymux's xterm.js fidelity corpus must run here, not skip (see setup-fidelity-oracle).
+          FIDELITY_REQUIRE_ORACLE: "1"
         run: |
           # On push-to-main/workflow_dispatch, test-tmux/test-rest (below)
           # always run the full suite regardless of what this job does, so
@@ -1354,9 +1359,13 @@ jobs:
         with:
           install-socat: 'true'
 
+      - name: Set up the tymux fidelity oracle (xterm.js via Bun)
+        uses: ./.github/actions/setup-fidelity-oracle
+
       - name: Run tests with coverage (pinned tmux 3.4)
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
+          FIDELITY_REQUIRE_ORACLE: "1"
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           run_test_suite() {

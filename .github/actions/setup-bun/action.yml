@@ -17,6 +17,6 @@ runs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
       with:
         path: ~/.bun/install/cache
-        key: bun-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'tests/e2e/bun.lock', 'website/bun.lock', 'tools/*/bun.lock', 'tools/scanner/frontend/bun.lock') }}
+        key: bun-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'tests/e2e/bun.lock', 'website/bun.lock', 'tools/*/bun.lock', 'tools/scanner/frontend/bun.lock', 'session/tymux/testdata/fidelity/oracle/bun.lock') }}
         restore-keys: |
           bun-${{ runner.os }}-

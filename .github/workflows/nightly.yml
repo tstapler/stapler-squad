@@ -211,12 +211,17 @@ jobs:
       - name: Fetch pinned tymuxd binary
         uses: ./.github/actions/fetch-tymuxd
 
+      - name: Set up the tymux fidelity oracle (xterm.js via Bun)
+        uses: ./.github/actions/setup-fidelity-oracle
+
       - name: Integration coverage (advisory)
         # Same tmux-under-CPU-contention rationale as the "test" job's "Run tests
         # with coverage" step -- this step's `-tags integration` run spawns real
         # tmux servers under the same contention.
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
+          # the daemon-backed fidelity corpus (session/tymux) needs the oracle; fail if it's missing
+          FIDELITY_REQUIRE_ORACLE: "1"
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
           TMUX_BIN="$(pwd)/bin/tmux" TYMUXD_BIN="$(pwd)/session/tymux/embed/tymuxd" timeout 20m go test -race -tags integration \
