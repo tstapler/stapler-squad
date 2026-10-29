@@ -34,11 +34,12 @@ type diagnoseHandlers struct {
 // diagnostic_service.go): a genuine defect, an inconclusive/informational
 // note, a successful nudge, or (added for completeness) no action needed at
 // all.
-var diagnoseOutcomeValues = []string{"BUG_FILED", "NOTE_ONLY", "NUDGED", "NO_ACTION"}
+var diagnoseOutcomeValues = []string{"BUG_FILED", "NOTE_ONLY", "NUDGED", "REMEDIATION_RESET", "NO_ACTION"}
 
 func registerDiagnoseTools(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
 	registerSubmitDiagnosisResultTool(s, dh)
 	registerDiagnoseNudgeSessionTool(s, dh)
+	registerDiagnoseResetRemediationTool(s, dh)
 }
 
 func registerSubmitDiagnosisResultTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
@@ -86,6 +87,62 @@ func registerDiagnoseNudgeSessionTool(s *mcpserver.MCPServer, dh *diagnoseHandle
 		),
 		dh.nudgeSession,
 	)
+}
+
+func registerDiagnoseResetRemediationTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
+	s.AddTool(
+		mcpgo.NewTool("diagnose_reset_remediation",
+			mcpgo.WithDescription("Re-arm automated remediation for a parked stuck row so the next reconcile tick spawns a fresh fix session. Use when the item has NO live session to nudge (e.g. a pr_pending item whose PR just needs a rebase) and the stuck row's automated retries are exhausted. Role: diagnose only. Shares the per-item nudge cap/cooldown, so it cannot loop. Declines (does not error loudly) if no open row matches or the cap is spent."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("stuck_reason",
+				mcpgo.Description("The domain.StuckReason value of the open row to re-arm, e.g. pr_needs_fix"),
+				mcpgo.Required(),
+			),
+		),
+		dh.resetRemediation,
+	)
+}
+
+func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+	args := req.GetArguments()
+	itemID, _ := args["item_id"].(string)
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+	reasonStr, _ := args["stuck_reason"].(string)
+	reason := domain.StuckReason(reasonStr)
+	if !reason.IsValid() {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid stuck_reason %q", reasonStr), ""), nil
+	}
+	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID); errRes != nil {
+		return errRes, nil
+	}
+
+	allowed, disallowReason, gateErr := dh.storage.DiagnoseNudgeAllowed(ctx, itemID, reason)
+	if gateErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("check re-arm eligibility: %v", gateErr), ""), nil
+	}
+	if !allowed {
+		return errResult(ErrPermissionDenied, disallowReason, declineToDiagnoseRemediation), nil
+	}
+	applied, resetErr := dh.storage.ResetStuckRemediation(ctx, itemID, reason)
+	if resetErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("reset remediation: %v", resetErr), ""), nil
+	}
+	if !applied {
+		return errResult(ErrItemNotFound, fmt.Sprintf("no open %s row for item %s", reason, itemID), declineToDiagnoseRemediation), nil
+	}
+	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, itemID, reason); recErr != nil {
+		log.Warn("[diagnose_reset_remediation] failed to charge nudge cap", "item", itemID, "err", recErr)
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf("Re-armed %s remediation for item %s; the next reconcile tick will retry", reason, itemID)), nil
 }
 
 // resolveDiagnoseItemLink is resolveItemLink's diagnose-role counterpart:
@@ -151,10 +208,11 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 // operator-facing title, keyed the same as the note AppendActivityNote
 // records, so the notification and the activity log agree on what happened.
 var diagnosisOutcomeTitles = map[string]string{
-	"BUG_FILED": "Diagnosis: bug filed",
-	"NOTE_ONLY": "Diagnosis: note added",
-	"NUDGED":    "Diagnosis: session nudged",
-	"NO_ACTION": "Diagnosis: no action needed",
+	"BUG_FILED":         "Diagnosis: bug filed",
+	"NOTE_ONLY":         "Diagnosis: note added",
+	"NUDGED":            "Diagnosis: session nudged",
+	"REMEDIATION_RESET": "Diagnosis: automated retry re-armed",
+	"NO_ACTION":         "Diagnosis: no action needed",
 }
 
 // notifyDiagnosisResult publishes an operator-facing notification for a

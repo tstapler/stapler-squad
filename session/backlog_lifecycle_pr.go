@@ -1497,7 +1497,7 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 // an active session skips the backoff gate entirely for that tick (it always
 // steers, never spawns). Only the no-active-session (spawn) path is gated by
 // RemediationDue.
-func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string) (attempted bool, err error) {
+func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string, conflictOnly bool) (attempted bool, err error) {
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
 	if markErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuck item=%s: %v", itemID, markErr)
@@ -1549,6 +1549,12 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
+	}
+	// A conflict-only PR is a cheap, mechanical fix that must never park behind
+	// the 5-attempt/7-day budget meant for failing CI: it gets an hourly retry
+	// instead, still bounded by the rework cap in autoReopenForPRFix.
+	if conflictOnly && l.conflictRetries.take(itemID, time.Now(), conflictRetryInterval) {
+		due = true
 	}
 	if !due {
 		log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: pr_needs_fix remediation backoff not yet due, skipping fix spawn", itemID)
@@ -1766,7 +1772,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
 			// call that never happened: nothing was attempted, so nothing
@@ -1858,6 +1864,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// PRReadyUnmerged handling immediately above).
 		l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRNeedsFix, "ReconcilePRPending/healthy")
 		l.ciReruns.clear(item.ID.String())
+		l.conflictRetries.clear(item.ID.String())
 		return
 	}
 
@@ -1906,7 +1913,8 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		logFeedbackBatchCoverage(item.ID.String(), prStatus)
 	}
 
-	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+	conflictOnly := prStatus.HasConflicts && !prStatus.CIFailing && !prStatus.HasBlockingReviews && !hasNewFeedback
+	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, conflictOnly)
 	if fixErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
 	} else if attempted && hasNewFeedback {

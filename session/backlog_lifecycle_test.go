@@ -1505,6 +1505,56 @@ func TestReconcilePRPending_RespawnsFixSession_When_BackoffElapses(t *testing.T)
 	assert.Equal(t, 2, fakeSpawner.callCount, "once the backoff window has elapsed, the next tick must retry")
 }
 
+// parkPRNeedsFixRow drives itemID's pr_needs_fix row to the parked state (fast
+// backoff exhausted, cold retry a week out) after the first tick created it.
+func parkPRNeedsFixRow(t *testing.T, storage *Storage, itemID string) {
+	t.Helper()
+	coldAt := time.Now().Add(remediationColdRetryInterval)
+	_, err := storage.RecordRemediationAttempt(context.Background(), itemID, domain.StuckReasonPRNeedsFix, MaxRemediationAttempts, &coldAt)
+	require.NoError(t, err)
+}
+
+// A conflict-only PR must keep getting fix sessions (hourly) after its
+// pr_needs_fix row parks; a CI-failing PR in the same state must not.
+func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		status    *git.PRStatus
+		wantCalls int
+	}{
+		{"conflict only", &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"}, 2},
+		{"ci failing", &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n"}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			ctx := context.Background()
+			item := newPRPendingTestItem(t, storage, 9301)
+
+			listener := NewBacklogLifecycleListener(storage)
+			overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: tc.status})
+			fakeSpawner := &fakePRFixSpawner{}
+			listener.SetPRFixSpawner(fakeSpawner)
+
+			listener.ReconcilePRPending(ctx, storage.repo)
+			require.Equal(t, 1, fakeSpawner.callCount)
+			parkPRNeedsFixRow(t, storage, item.ID)
+
+			// Pretend the hourly conflict throttle has elapsed.
+			listener.conflictRetries.clear(item.ID)
+			listener.ReconcilePRPending(ctx, storage.repo)
+			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount)
+
+			// Inside the hourly window the conflict path is throttled too.
+			listener.ReconcilePRPending(ctx, storage.repo)
+			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount, "throttle must hold within conflictRetryInterval")
+		})
+	}
+}
+
 // TestRemediatePRFixWithBackoffGate_ThreadsHasActiveWorkSessionResult_IntoKnownSessionCall
 // is the TOCTOU-fix regression test (PR #645 Gate 2 review finding #1):
 // remediatePRFixWithBackoffGate must call AutoReopenForPRFixWithKnownSession

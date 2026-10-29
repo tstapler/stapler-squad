@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
@@ -252,4 +253,58 @@ func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
 	assert.Contains(t, errObj["message"], "context canceled")
 	assert.NotContains(t, errObj["message"], "not idle")
 	assert.Empty(t, pm.writes())
+}
+
+func TestResetRemediation_should_ReArmParkedRow_ThenRefuseOnceCapSpent(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	itemID, sessUUID := setupDiagnoseSession(t, storage)
+	ctx := context.Background()
+	reason := domain.StuckReasonBouncing
+
+	applied, err := repo.MarkStuck(ctx, itemID, reason, session.BacklogStatusReview, "bouncing")
+	require.NoError(t, err)
+	require.True(t, applied)
+	parkedAt := time.Now().Add(time.Hour)
+	_, err = storage.RecordRemediationAttempt(ctx, itemID, reason, session.MaxRemediationAttempts, &parkedAt)
+	require.NoError(t, err)
+
+	dh := &diagnoseHandlers{storage: storage}
+	reqCtx := WithSessionUUID(ctx, sessUUID)
+	req := makeToolReq(map[string]interface{}{"item_id": itemID, "stuck_reason": string(reason)})
+
+	first := mustCall(t, dh.resetRemediation, reqCtx, req)
+	require.False(t, first.IsError, "first re-arm of a parked row must succeed: %+v", first.Content)
+
+	rows, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	for _, r := range rows {
+		if r.ItemID == itemID && r.Reason == reason {
+			assert.Zero(t, r.RemediationAttempts, "reset must clear the attempt counter so the gate is due again")
+		}
+	}
+
+	// The re-arm is charged against the shared nudge cap, so it cannot loop.
+	m := parseResult(t, mustCall(t, dh.resetRemediation, reqCtx, req))
+	require.False(t, m["success"].(bool), "an immediate second re-arm must hit the cap/cooldown")
+}
+
+func TestResetRemediation_should_RejectWrongRole(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupReviewSession(t, storage)
+	dh := &diagnoseHandlers{storage: storage}
+	req := makeToolReq(map[string]interface{}{"item_id": itemID, "stuck_reason": string(domain.StuckReasonBouncing)})
+
+	m := parseResult(t, mustCall(t, dh.resetRemediation, WithSessionUUID(context.Background(), sessUUID), req))
+	require.False(t, m["success"].(bool))
+	assert.Equal(t, ErrPermissionDenied, m["error"].(map[string]interface{})["code"])
+}
+
+func mustCall(t *testing.T, h func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error), ctx context.Context, req mcpgo.CallToolRequest) *mcpgo.CallToolResult {
+	t.Helper()
+	res, err := h(ctx, req)
+	require.NoError(t, err)
+	return res
 }
