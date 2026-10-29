@@ -23,6 +23,7 @@ import (
 	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -661,6 +662,9 @@ func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLI
 	require.NoError(t, err)
 	newShutdownOnCleanupServer(t, "localhost:0", deps)
 
-	assert.Nil(t, currentPRWatchStatusProvider(), "a non-loopback URL builds no poller")
+	// No poller, but status reports why instead of staying silent.
+	provider := currentPRWatchStatusProvider()
+	require.NotNil(t, provider, "status must show the non-loopback state")
+	assert.Equal(t, prwatch.InboxStateNonLoopback, provider().InboxState)
 	assert.NotNil(t, deps.SessionService, "the server still boots")
 }

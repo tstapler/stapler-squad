@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -86,6 +87,18 @@ func newPRWatchModule(w prwatchWiring) *prwatchModule {
 		poller: poller, leader: leader, login: login, status: status, counters: counters,
 		enabled: w.Enabled, interval: s.PollInterval,
 	}
+}
+
+// reportPRWatchNonLoopback records InboxStateNonLoopback so the notification
+// and the status output show why no poller runs. No inbox call is made.
+func reportPRWatchNonLoopback(w prwatchWiring) *prwatch.StatusTracker {
+	status := prwatch.NewStatusTracker(w.Clock, prwatch.NewCounterSet())
+	status.SetSettings(w.Settings, w.Corrections)
+	status.SetEnabled(true, 0)
+	status.SetInbox(prwatch.InboxStateNonLoopback, "non_loopback_url")
+	notes := prwatch.NewNotifications(w.Notifier, w.Clock, w.Settings, session.SanitizeUntrusted)
+	prwatch.NewInboxStateTracker(notes, w.Clock, w.Log, w.Settings).Observe(prwatch.InboxStateNonLoopback)
+	return status
 }
 
 // Start runs the poller, the leader-lock release and the self-login resolver
@@ -195,7 +208,20 @@ func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
 	settings := prwatchSettings(cs, host, prwatchStatusURL(srv.GetAddr()), prwatchGuidePath(), lockPath)
 	client, err := inbox.NewClient(inbox.Config{URL: settings.URL, TokenPath: settings.TokenPath, ConsumerID: settings.ConsumerID})
 	if err != nil {
-		log.Warn("prwatch not started: invalid inbox url", "error", err.Error())
+		if errors.Is(err, inbox.ErrNonLoopbackURL) {
+			// The error text carries the raw URL; log only a host-less description.
+			log.Warn("prwatch not started: inbox url is not a loopback address")
+			if prwatchEnabled() {
+				status := reportPRWatchNonLoopback(prwatchWiring{
+					Settings: settings, Notifier: prwatchNotifier{bus: deps.EventBus},
+					Clock: prwatchClock{}, Log: prwatchLogger{},
+				})
+				SetPRWatchStatusProvider(func() prwatch.Status { return status.Snapshot(nil) })
+				srv.shutdownHooks = append(srv.shutdownHooks, func() { SetPRWatchStatusProvider(nil) })
+			}
+			return
+		}
+		log.Warn("prwatch not started: invalid inbox url")
 		return
 	}
 	var sc []prwatch.SettingCorrection

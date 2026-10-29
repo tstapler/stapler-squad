@@ -3,8 +3,6 @@ package prwatch
 import (
 	"context"
 	"errors"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +20,6 @@ const (
 	CoverageStateUnknown CoverageState = "unknown"
 )
 
-const coverageReasonMax = 200
-
 type repoCoverage struct {
 	state     CoverageState
 	pr        int       // the PR re-checked while unavailable
@@ -36,7 +32,7 @@ type repoCoverage struct {
 // repo and re-checks unavailable repos until the gap clears (D9, D15).
 type Coverage struct {
 	in       Inbox
-	notifier Notifier
+	notes    *Notifications
 	clock    Clock
 	log      Logger
 	settings Settings
@@ -52,7 +48,28 @@ func NewCoverage(in Inbox, notifier Notifier, clock Clock, log Logger, settings 
 	if settings.CoverageRecheck <= 0 {
 		settings.CoverageRecheck = 10 * time.Minute
 	}
-	return &Coverage{in: in, notifier: notifier, clock: clock, log: log, settings: settings, repos: map[string]*repoCoverage{}}
+	return &Coverage{
+		in: in, notes: NewNotifications(notifier, clock, settings, nil), clock: clock, log: log,
+		settings: settings, repos: map[string]*repoCoverage{},
+	}
+}
+
+// UseNotifications swaps in the shared builders (server sanitizer, one dedupe
+// map). Call before the first Watch.
+func (c *Coverage) UseNotifications(n *Notifications) {
+	if n != nil {
+		c.notes = n
+	}
+}
+
+// Reason is the recorded (unsanitized) gh-signal reason for a repo's gap.
+func (c *Coverage) Reason(repo string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if rc, ok := c.repos[repo]; ok {
+		return rc.reason
+	}
+	return ""
 }
 
 // Watch registers interest in one PR. It calls /v1/watch and, when the inbox
@@ -137,7 +154,7 @@ func (c *Coverage) apply(repo string, pr int, res inbox.WatchResult) CoverageSta
 		c.repos[repo] = rc
 	}
 	rc.lastCheck = now
-	var raise bool
+	var raise, restored bool
 	if res.Coverage == inbox.CoverageUnavailable {
 		rc.state = CoverageStateUnavailable
 		rc.reason = res.Reason
@@ -147,6 +164,7 @@ func (c *Coverage) apply(repo string, pr int, res inbox.WatchResult) CoverageSta
 		raise = !rc.notified
 		rc.notified = true
 	} else {
+		restored = rc.notified
 		rc.state = CoverageStateCovered
 		rc.pr = pr
 		rc.reason = ""
@@ -156,50 +174,12 @@ func (c *Coverage) apply(repo string, pr int, res inbox.WatchResult) CoverageSta
 	c.mu.Unlock()
 
 	if raise {
-		n := coverageGapNotification(repo, notifyPR, reason, c.settings)
-		if err := c.notifier.Notify(n); err != nil {
-			c.log.Warn("prwatch.notify_failed", "kind", string(n.Kind))
+		if err := c.notes.CoverageGap(repo, notifyPR, reason); err != nil {
+			c.log.Warn("prwatch.notify_failed", "kind", string(NotifyCoverageGap))
 		}
 	}
+	if restored {
+		c.notes.CoverageRestored(repo)
+	}
 	return state
-}
-
-func coverageDedupeKey(repo string) string { return "prwatch-coverage:" + repo }
-
-func coverageGapNotification(repo string, pr int, reason string, s Settings) Notification {
-	reason = strings.TrimSpace(reason)
-	if r := []rune(reason); len(r) > coverageReasonMax {
-		reason = string(r[:coverageReasonMax])
-	}
-	var b strings.Builder
-	b.WriteString("Squad cannot watch PR #" + strconv.Itoa(pr) + " in " + repo +
-		" because no GitHub webhook reaches gh-signal for that repository, so sessions on its PRs will not be steered.")
-	if reason != "" {
-		b.WriteString(" gh-signal said: " + reason + ".")
-	}
-	b.WriteString(" " + coverageNextStep(repo, pr, reason, s.ConsumerID))
-	b.WriteString(" To stop this notice instead, add " + repo + " to inbox_pr_watch.ignore_repos.")
-	if s.StatusURL != "" {
-		b.WriteString(" Status: " + s.StatusURL)
-	}
-	return Notification{
-		Kind:      NotifyCoverageGap,
-		DedupeKey: coverageDedupeKey(repo),
-		Title:     strings.ReplaceAll(TitleCoverageGap, "<owner>/<repo>", repo),
-		Message:   b.String(),
-	}
-}
-
-// coverageNextStep varies the advice by P0's reason string.
-func coverageNextStep(repo string, pr int, reason, consumerID string) string {
-	cmd := "gh-signal inbox watch " + repo + " " + strconv.Itoa(pr) + " --consumer " + consumerID
-	lower := strings.ToLower(reason)
-	switch {
-	case strings.Contains(lower, "admin") || strings.Contains(lower, "permission"):
-		return "Next step: ask a repository admin to add the webhook (or grant your account admin access), then run " + cmd + "."
-	case strings.Contains(lower, "auth") || strings.Contains(lower, "token") || strings.Contains(lower, "login"):
-		return "Next step: fix gh authentication (gh auth status), then run " + cmd + "."
-	default:
-		return "Next step: run " + cmd + "."
-	}
 }

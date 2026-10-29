@@ -81,7 +81,7 @@ func TestCoverage_should_RaiseCoverageGapOncePerRepoWithReason_When_WatchUnavail
 		g.Title != "PR watch: no webhook coverage for other/repo" {
 		t.Fatalf("bad notification: %+v", g)
 	}
-	for _, want := range []string{"PR #42", "gh-signal said: no admin access to the repository.", "ignore_repos", "repository admin", "Status: http://localhost:8543"} {
+	for _, want := range []string{"PR #42", "gh-signal said: no admin access to the repository.", "ignore_repos", "Next step: run gh-signal inbox watch other/repo 42", "\nGuide: ", "Status: http://localhost:8543"} {
 		if !strings.Contains(g.Message, want) {
 			t.Errorf("message missing %q: %s", want, g.Message)
 		}
@@ -153,5 +153,20 @@ func TestCoverage_should_HonorConfiguredRecheckInterval_When_SettingDiffers(t *t
 	c.Recheck(context.Background())
 	if countCalls(in, "watch:") != 2 {
 		t.Fatalf("calls: %v", in.Calls())
+	}
+}
+
+func TestCoverage_should_SanitizeReasonAndVaryNextStep_When_GapBuiltByNotifications(t *testing.T) {
+	c, in, n, _, _ := newCovFixture(0)
+	in.watchResult = inbox.WatchResult{Coverage: inbox.CoverageUnavailable, Reason: "\x1b[31mtoken\x1b[0m rejected\nby host"}
+	c.Watch(context.Background(), "a/b", 7)
+	m := n.Sent()[0].Message
+	if strings.Contains(m, "\x1b") || !strings.Contains(m, "gh-signal said: token rejected by host.") ||
+		!strings.Contains(m, "Next step: fix gh authentication (gh auth status), then run gh-signal inbox watch a/b 7") ||
+		!strings.Contains(m, "\nGuide: ") {
+		t.Fatalf("bad message: %q", m)
+	}
+	if got := c.Reason("a/b"); got == "" {
+		t.Fatal("Reason must expose the recorded gap reason")
 	}
 }

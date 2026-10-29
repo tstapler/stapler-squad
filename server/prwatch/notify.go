@@ -195,6 +195,9 @@ func (x *Notifications) CoverageGap(repo string, pr int, reason string) error {
 	if strings.Contains(strings.ToLower(reason), "rate limit") {
 		next = fmt.Sprintf("wait; Squad checks again every 10 minutes and the notice clears once the webhook is in place. To stop this notice instead, add %s to inbox_pr_watch.ignore_repos.", repo)
 	}
+	if lower := strings.ToLower(reason); strings.Contains(lower, "auth") || strings.Contains(lower, "token") || strings.Contains(lower, "login") {
+		next = fmt.Sprintf("fix gh authentication (gh auth status), then run gh-signal inbox watch %[1]s %[2]d --consumer %[3]s. To stop this notice instead, add %[1]s to inbox_pr_watch.ignore_repos.", repo, pr, x.s.ConsumerID)
+	}
 	return x.send(Notification{
 		Kind:      NotifyCoverageGap,
 		DedupeKey: coverageKey(repo),

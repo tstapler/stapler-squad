@@ -584,6 +584,46 @@ func TestPoller_should_PublishStatus_When_TickRuns(t *testing.T) {
 	assert.Equal(t, 1, st.Counts.Watched)
 }
 
+func TestPoller_should_RaiseCIOnlyNoticeOnce_When_EffectiveModeIsCIOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(*Settings)
+		want int
+	}{
+		{"off", func(s *Settings) { s.HumanFeedbackMode = ModeOff }, 1},
+		{"allowlist_empty", func(s *Settings) { s.HumanFeedbackMode = ModeAllowlist }, 1},
+		{"allowlist_listed", func(s *Settings) { s.HumanFeedbackMode = ModeAllowlist; s.ActorAllowlist = []string{"bob"} }, 0},
+		{"all", func(s *Settings) { s.HumanFeedbackMode = ModeAll }, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newLoopHarness(t, func(h *loopHarness) { tc.mut(&h.settings) })
+			h.start(nil)
+			h.tick()
+			h.tick()
+			got := 0
+			for _, n := range h.notifier.Sent() {
+				if n.Title == TitleCIOnly {
+					got++
+				}
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestPoller_should_PublishCoverageReasonToStatus_When_WatchUnavailable(t *testing.T) {
+	h := newLoopHarness(t, nil)
+	h.inbox.watchResult = inbox.WatchResult{Coverage: inbox.CoverageUnavailable, Reason: "no admin access"}
+	status := NewStatusTracker(h.clock, nil)
+	h.start(func(d *LoopDeps) { d.Status = status })
+	h.tick()
+	st := status.Snapshot(h.coalescer)
+	require.Len(t, st.Repos, 1)
+	assert.Equal(t, CoverageStateUnavailable, st.Repos[0].Coverage)
+	assert.Equal(t, "no admin access", st.Repos[0].Reason)
+}
+
 func TestDeliver_should_ApplySessionGate_When_SessionIsSuspendedOrNotTracked(t *testing.T) {
 	cases := []struct {
 		name     string

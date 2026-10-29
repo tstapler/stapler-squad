@@ -109,3 +109,21 @@ func TestPRWatchSettings_should_MapConfigOntoSettings_When_Resolved(t *testing.T
 	assert.Equal(t, prwatch.ModeOff, s.HumanFeedbackMode, "allowlist with an empty list maps to the effective mode off")
 	assert.Equal(t, "http://localhost:8543/actuator/inbox-pr-watch?format=text", prwatchStatusURL("localhost:8543"))
 }
+
+type recordingNotifier struct{ sent []prwatch.Notification }
+
+func (r *recordingNotifier) Notify(n prwatch.Notification) error {
+	r.sent = append(r.sent, n)
+	return nil
+}
+
+func TestPRWatchModule_should_RaiseNonLoopbackNoticeAndShowItInStatus_When_URLIsNotLoopback(t *testing.T) {
+	rec := &recordingNotifier{}
+	status := reportPRWatchNonLoopback(prwatchWiring{
+		Settings: prwatch.Settings{ConsumerID: "squad:test", URL: "http://example.com:7777", HumanFeedbackMode: prwatch.ModeOff},
+		Notifier: rec, Clock: prwatchClock{}, Log: prwatchLogger{},
+	})
+	require.Len(t, rec.sent, 1)
+	assert.Equal(t, prwatch.TitleNonLoopbackURL, rec.sent[0].Title)
+	assert.Equal(t, prwatch.InboxStateNonLoopback, status.Snapshot(nil).InboxState)
+}

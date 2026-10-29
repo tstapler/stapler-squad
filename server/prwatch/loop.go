@@ -75,6 +75,8 @@ type LoopDeps struct {
 	Log       Logger
 	Clock     Clock
 	Settings  Settings
+	// Notes builds the D15 notices; nil builds one over Notifier.
+	Notes *Notifications
 
 	Catchup  *Catchup
 	Leader   *Leadership
@@ -105,6 +107,7 @@ type Poller struct {
 	// Touched only by the goroutine holding inFlight.
 	lastWarn     map[string]time.Time
 	failing      bool
+	ciOnlyDone   bool
 	backoffUntil time.Time
 }
 
@@ -114,11 +117,18 @@ func NewPoller(d LoopDeps) *Poller {
 	if d.Settings.PollInterval <= 0 {
 		d.Settings.PollInterval = defaultPollInterval
 	}
+	if d.Notes == nil {
+		d.Notes = NewNotifications(d.Notifier, d.Clock, d.Settings, nil)
+	}
 	p := &Poller{LoopDeps: d, lastWarn: map[string]time.Time{}}
 	p.watched = &watchObserver{Inbox: d.Inbox, done: map[string]bool{}}
 	p.sessions = &tickSessions{Sessions: d.Sessions}
 	p.coverage = NewCoverage(p.watched, d.Notifier, d.Clock, d.Log, d.Settings)
+	p.coverage.UseNotifications(d.Notes)
 	p.reconciler = NewReconciler(p.watched, p.sessions, p.coverage, d.Coalescer, d.Clock, d.Log, d.Settings)
+	if d.Engine != nil && d.Engine.OnPRClosed == nil {
+		d.Engine.OnPRClosed = p.reconciler.RetirePR
+	}
 	return p
 }
 
@@ -189,6 +199,7 @@ func (p *Poller) tick(ctx context.Context) {
 	if p.Status != nil {
 		p.Status.SetLeaderHeld(true)
 	}
+	p.noteCIOnly()
 	if p.Followup != nil {
 		p.Followup.Tick()
 	}
@@ -242,6 +253,26 @@ func (p *Poller) catchUp(ctx context.Context, refs []SessionRef) {
 	p.Catchup.Tick(ctx, refs)
 }
 
+// effectiveCIOnly mirrors the status view: human feedback never steers when
+// the mode is off, or allowlist with no allowlisted human.
+func effectiveCIOnly(s Settings) bool {
+	return s.HumanFeedbackMode == ModeOff ||
+		(s.HumanFeedbackMode == ModeAllowlist && len(s.ActorAllowlist) == 0)
+}
+
+// noteCIOnly raises the CI-only notice once per process; CIOnlyMode retries
+// after a failed delivery.
+func (p *Poller) noteCIOnly() {
+	if p.ciOnlyDone || !effectiveCIOnly(p.Settings) {
+		return
+	}
+	if err := p.Notes.CIOnlyMode(); err != nil {
+		p.Log.Warn("prwatch.notify_failed", "kind", string(NotifyInboxState))
+		return
+	}
+	p.ciOnlyDone = true
+}
+
 func (p *Poller) publishSubscriptionStatus(refs []SessionRef) {
 	if p.Status == nil {
 		return
@@ -255,7 +286,7 @@ func (p *Poller) publishSubscriptionStatus(refs []SessionRef) {
 		if !seenRepo[r.Repo] {
 			seenRepo[r.Repo] = true
 			if st, ok := p.coverage.State(r.Repo); ok {
-				p.Status.SetCoverage(r.Repo, st, "")
+				p.Status.SetCoverage(r.Repo, st, p.coverage.Reason(r.Repo))
 			}
 		}
 	}
