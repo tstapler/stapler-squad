@@ -22,10 +22,11 @@ func writeConversationFixture(t *testing.T, root, project, name, content string)
 func TestFindConversationFilePath_FoundAmongMultipleProjects(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	// WalkDir is lexical, so decoys sort before the real match to be visited first.
 	writeConversationFixture(t, root, "proj-a", "a.jsonl", "{\"sessionId\":\"other-session\"}\n")
-	want := writeConversationFixture(t, root, "proj-b", "b.jsonl", "{\"x\":1}\n{\"sessionId\":\"target-session\"}\n")
-	writeConversationFixture(t, root, "proj-c", "agent-c.jsonl", "{\"sessionId\":\"target-session\"}\n") // agent files are skipped
-	writeConversationFixture(t, root, "proj-d", "d.txt", "target-session\n")                             // non-jsonl is skipped
+	writeConversationFixture(t, root, "proj-b", "agent-b.jsonl", "{\"sessionId\":\"target-session\"}\n") // agent files are skipped
+	writeConversationFixture(t, root, "proj-c", "c.txt", "{\"sessionId\":\"target-session\"}\n")         // non-jsonl is skipped
+	want := writeConversationFixture(t, root, "proj-d", "d.jsonl", "{\"x\":1}\n{\"sessionId\":\"target-session\"}\n")
 
 	got, err := findConversationFilePath(context.Background(), root, "target-session")
 	require.NoError(t, err)
