@@ -356,12 +356,16 @@ install-mux: ensure-tools ## Build and install claude-mux to ~/.local/bin
 	@./scripts/install-mux.sh
 
 # ── Pinned tmux binary (for test isolation) ────────────────────────────────
-# Builds tmux 3.4 from the third_party/tmux git submodule.
+# Builds tmux 3.8 from the third_party/tmux git submodule.
 # Tests use TMUX_BIN=bin/tmux to run against the pinned binary instead of the
 # system tmux, ensuring reproducible results across developer machines and CI.
 
 BIN_TMUX        := bin/tmux
-TMUX_BUILD_STAMP := .tmux-build.stamp
+# Keep TMUX_PIN in step with the third_party/tmux submodule and scripts/build-tmux.sh;
+# it is in the stamp name so bumping the pin forces a rebuild (and rebuilds bin/tmux
+# before build-tmux-embed copies it into a release).
+TMUX_PIN := 3.8
+TMUX_BUILD_STAMP := .tmux-build-$(TMUX_PIN).stamp
 
 # Stamp-file approach: only rebuild when submodule source changes
 $(BIN_TMUX): $(TMUX_BUILD_STAMP)
@@ -377,7 +381,7 @@ $(TMUX_BUILD_STAMP):
 init-submodules: ## Initialize git submodules (required once after clone)
 	git submodule update --init --recursive
 
-build-tmux: ## Build pinned tmux 3.4 binary from third_party/tmux submodule
+build-tmux: ## Build pinned tmux 3.8 binary from third_party/tmux submodule
 	@./scripts/build-tmux.sh
 
 build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build -tags embed_tmux

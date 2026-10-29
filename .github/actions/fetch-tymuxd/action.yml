@@ -9,7 +9,7 @@ runs:
       with:
         path: session/tymux/embed/tymuxd
         # Version is hardcoded, not derived from the Makefile's TYMUX_VERSION
-        # default -- mirrors build-tmux's own tmux-3.4-${{ runner.os }}-v1
+        # default -- mirrors build-tmux's own tmux-3.8-${{ runner.os }}-v1
         # cache key exactly (same manual-bump convention: bump this alongside
         # TYMUX_VERSION in the Makefile, nothing enforces the two staying in
         # sync automatically -- see that variable's own doc comment).

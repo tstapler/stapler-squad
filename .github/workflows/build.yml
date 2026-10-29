@@ -908,7 +908,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
         with:
           install-socat: 'true'
@@ -1206,10 +1206,10 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
 
-      - name: Run tests with coverage (pinned tmux 3.4)
+      - name: Run tests with coverage (pinned tmux 3.8)
         # STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: production default is 10s
         # (session/tmux/tmux.go's sessionCreateTimeoutDefault) -- this only
         # widens the budget for this CI job, where a fully-loaded runner
@@ -1356,7 +1356,7 @@ jobs:
       # running -- see remoteApprovalWriteTool's doc comment
       # (server/services/hook_injector.go) for the production bug this
       # class of test exists to catch.
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
         with:
           install-socat: 'true'
@@ -1364,7 +1364,7 @@ jobs:
       - name: Set up the tymux fidelity oracle (xterm.js via Bun)
         uses: ./.github/actions/setup-fidelity-oracle
 
-      - name: Run tests with coverage (pinned tmux 3.4)
+      - name: Run tests with coverage (pinned tmux 3.8)
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
           FIDELITY_REQUIRE_ORACLE: "1"
@@ -1487,7 +1487,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
 
       - name: Install go-stress
@@ -1672,7 +1672,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
 
       - name: Run benchmarks (count=5 for significance)

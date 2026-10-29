@@ -203,7 +203,7 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
-      - name: Build pinned tmux 3.4
+      - name: Build pinned tmux 3.8
         uses: ./.github/actions/build-tmux
         with:
           install-socat: 'true'
