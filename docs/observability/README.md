@@ -11,10 +11,30 @@ living in an unrelated repo.
 | `http-rpc-connections.json` | `ssq-http-rpc-connections` | RED-method HTTP/RPC connection saturation (`http.server.connections_*`, `rpc.server_streams.open`) |
 | `pprof-profiles.json` | `ssq-pprof-profiles` | Pyroscope flamegraphs (CPU/heap/goroutines), scraped from the pprof server |
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
+| `tymux-backend.json` | `ssq-tymux-backend` | tymux vs tmux operation latency (RED), attach stream health, backend mix, tymuxd supervision |
 
-None of these cover the tymux backend yet — `session_backend_operation_duration_ms`
-(added closing BUG-108) has no panel. Building one is a natural follow-up now
-that the metric exists; see that bug's "Out of scope" note.
+## tymux backend metrics
+
+OTel names below are as written in code; VictoriaMetrics appends the unit and
+`_total`/`_bucket` suffixes (`tymux_daemon_start_duration_ms` is queried as
+`tymux_daemon_start_duration_ms_milliseconds_bucket`). No metric carries a
+session or pane id as a label.
+
+| Metric | Type | Labels | Source |
+|---|---|---|---|
+| `session_backend_operation_duration_ms` | histogram | `backend`, `operation` | `session/backend_observability.go`; lifecycle ops (`start`, `restore`, `attach`) plus per-call `send_keys`, `write_stdin`, `capture_pane`, `resize` on both backends. The hot-path four are metric-only (no span). |
+| `session_backend_info` | gauge (always 1) | `backend`, `source` (`global`/`session_override`) | `session/backend_info_metric.go`; refreshed on backend resolution and the rollout status RPC |
+| `tymux_attach_stream_reconnects_total` | counter | `cause` (`error`, `output_gap`) | `session/tymux/stream.go` |
+| `tymux_attach_events_total` | counter | `kind` (`output_gap`, `gap_exceeded`, `snapshot_redraw`) | `session/tymux/stream.go`, `resync.go` |
+| `tymux_attach_heartbeat_age_seconds` | gauge | none | max seconds since any event on a live stream; 0 when none are live |
+| `tymux_daemon_restarts_total` | counter | `reason` (`cold_start`, `replace`, `detected_restart`) | `session/tymux/supervise.go`, `version.go`, `stream.go`; `detected_restart` counts once per affected stream |
+| `tymux_daemon_start_duration_ms` | histogram | `outcome` (`ok`, `failed`) | spawn until healthy |
+| `tymux_daemon_version_mismatch` | gauge | none | 1 when the running tymuxd differs from the installed binary; updated by `DetectDaemonVersions` |
+
+stapler-squad's calls to tymuxd carry a W3C `traceparent` header (an
+`otelconnect` client interceptor in `session/tymux/transport.go`), so a trace
+that starts in stapler-squad continues into tymuxd once the daemon extracts
+it. tymuxd does not export spans yet.
 
 ## Viewing them
 
