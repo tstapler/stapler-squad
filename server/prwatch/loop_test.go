@@ -626,3 +626,278 @@ func TestDeliver_should_DropNotTracked_When_SessionListedGoneAfterSteerAttempt(t
 	assert.Equal(t, HoldNotTracked, res[0].Hold, "transient while listed live")
 	assert.Equal(t, ActionHold, res[0].Action)
 }
+
+// logText flattens every fakeLog line for sentinel scans.
+func (h *loopHarness) logText() string {
+	var b strings.Builder
+	for _, l := range h.log.Lines() {
+		b.WriteString(l.Level + " " + l.Msg + " " + fmt.Sprint(l.KV...) + "\n")
+	}
+	return b.String()
+}
+
+func (h *loopHarness) metricText() string {
+	h.metrics.mu.Lock()
+	defer h.metrics.mu.Unlock()
+	var b strings.Builder
+	for _, c := range h.metrics.calls {
+		b.WriteString(c.Name + fmt.Sprint(c.Labels) + "\n")
+	}
+	return b.String()
+}
+
+func logKV(l LogLine, key string) (any, bool) {
+	for i := 0; i+1 < len(l.KV); i += 2 {
+		if l.KV[i] == key {
+			return l.KV[i+1], true
+		}
+	}
+	return nil, false
+}
+
+func (h *loopHarness) linesNamed(msg string) []LogLine {
+	var out []LogLine
+	for _, l := range h.log.Lines() {
+		if l.Msg == msg {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func TestPoller_should_NeverLogOrReturnToken_When_EveryErrorPathRuns(t *testing.T) {
+	const sentinel = "tok-SENTINEL-9f3a"
+	errs := []error{
+		fmt.Errorf("%w: status 401 Authorization: Bearer %s", inbox.ErrUnauthorized, sentinel),
+		fmt.Errorf("%w: status 502 body echoes Authorization: Bearer %s", inbox.Err5xx, sentinel),
+		fmt.Errorf("%w: dial %s", inbox.ErrTransport, sentinel),
+		fmt.Errorf("%w: bad json near %s", inbox.ErrDecode, sentinel),
+		fmt.Errorf("%w: /path/%s mode 0644", inbox.ErrTokenPermissions, sentinel),
+		fmt.Errorf("%w: status 400 %s", inbox.ErrRejected, sentinel),
+	}
+	h := newLoopHarness(t, nil)
+	status := NewStatusTracker(h.clock, nil)
+	h.start(func(d *LoopDeps) { d.Status = status })
+	for _, e := range errs {
+		h.inbox.mu.Lock()
+		h.inbox.errs = map[string]error{"events": e}
+		h.inbox.mu.Unlock()
+		h.clock.Advance(unauthorizedBackoff + warnInterval)
+		h.tick()
+	}
+	// Ack failure after a confirmed steer.
+	h.inbox.mu.Lock()
+	h.inbox.errs = map[string]error{"ack": fmt.Errorf("%w: Bearer %s", inbox.Err5xx, sentinel)}
+	h.inbox.items = []inbox.Item{comment("i1")}
+	h.inbox.mu.Unlock()
+	h.clock.Advance(unauthorizedBackoff)
+	h.tick()
+
+	require.NotEmpty(t, h.log.Lines())
+	assert.NotContains(t, h.logText(), sentinel)
+	assert.NotContains(t, h.metricText(), sentinel)
+	st := status.Snapshot(h.coalescer)
+	assert.NotContains(t, fmt.Sprintf("%+v", st), sentinel)
+	assert.NotContains(t, RenderText(st, h.clock.Now(), "host"), sentinel)
+	for _, n := range h.notifier.Sent() {
+		assert.NotContains(t, fmt.Sprintf("%+v", n), sentinel)
+	}
+}
+
+func TestPoller_should_CountSteeredHeldDroppedAndInboxErrorsByType_When_ScenariosRun(t *testing.T) {
+	h := newLoopHarness(t, func(h *loopHarness) {
+		for _, u := range []string{"s2", "s3"} {
+			h.sessions.programs[u] = "claude"
+		}
+		h.sessions.hidden = map[string]bool{"s3": true}
+		h.sessions.Set(
+			SessionRef{UUID: dSession, Repo: dRepo, PR: dPR, State: StateLive},
+			SessionRef{UUID: "s2", Repo: dRepo, PR: 8, State: StateLive},
+			SessionRef{UUID: "s3", Repo: dRepo, PR: 9, State: StateLive},
+		)
+		h.steerer.outcome = map[string]Outcome{"s2": OutcomeBusy}
+	})
+	onPR := func(it inbox.Item, pr int) inbox.Item { it.Event.PullRequest = pr; return it }
+	unknown := dItem("i4", "mystery", "created", "alice", "")
+	h.inbox.items = []inbox.Item{comment("i1"), onPR(comment("i2"), 8), onPR(comment("i3"), 9), unknown}
+	h.start(nil)
+	h.tick()
+
+	assert.Equal(t, 1, h.metricLabelled(MetricSteers, "kind", string(KindComment)))
+	assert.Equal(t, 1, h.metrics.Count(MetricSteers))
+	assert.Equal(t, 1, h.metricLabelled(MetricHeld, "hold_reason", string(HoldBusy)))
+	assert.Equal(t, 1, h.metrics.Count(MetricHeld))
+	assert.Equal(t, 1, h.metricLabelled(MetricDropped, "drop_reason", string(DropHiddenSession)))
+	assert.Equal(t, 1, h.metricLabelled(MetricDropped, "drop_reason", string(DropUnknownKind)))
+	assert.Equal(t, 2, h.metrics.Count(MetricDropped))
+
+	h.inbox.mu.Lock()
+	h.inbox.errs = map[string]error{"events": fmt.Errorf("%w: status 401", inbox.ErrUnauthorized)}
+	h.inbox.mu.Unlock()
+	h.clock.Advance(time.Minute)
+	h.tick()
+	h.inbox.mu.Lock()
+	h.inbox.errs = map[string]error{"events": fmt.Errorf("%w: refused", inbox.ErrTransport)}
+	h.inbox.mu.Unlock()
+	h.clock.Advance(time.Minute)
+	h.tick()
+	assert.Equal(t, 1, h.metricLabelled(MetricInboxErrors, "error_class", errClassUnauthorized))
+	assert.Equal(t, 1, h.metricLabelled(MetricInboxErrors, "error_class", errClassTransport))
+	assert.Equal(t, 2, h.metrics.Count(MetricInboxErrors))
+}
+
+func TestLog_should_EmitActorClassAndNeverALoginOrText_When_HumanFeedbackEventsAreSteeredDroppedOrHeld(t *testing.T) {
+	const login, body = "SENTINEL-login-ab12", "SENTINEL-body-cd34"
+	h := newLoopHarness(t, func(h *loopHarness) {
+		h.steerer.outcome = map[string]Outcome{}
+	})
+	mk := func(id, kind, actor string) inbox.Item {
+		it := dItem(id, kind, "created", actor, `{"summary":"`+body+`","body":"`+body+`","title":"`+body+`"}`)
+		it.Event.Summary = body
+		return it
+	}
+	// steered (other), dropped (self), held (busy).
+	h.inbox.items = []inbox.Item{mk("i1", "comment", login), mk("i2", "comment", "me")}
+	h.start(nil)
+	h.tick()
+	h.steerer.outcome[dSession] = OutcomeBusy
+	h.inbox.mu.Lock()
+	h.inbox.items = append(h.inbox.items, mk("i3", "review_comment", login+"-2"))
+	h.inbox.mu.Unlock()
+	h.tick()
+
+	for msg, class := range map[string]string{"prwatch.steer": string(ActorOther), "prwatch.drop": string(ActorSelf), "prwatch.held": string(ActorOther)} {
+		lines := h.linesNamed(msg)
+		require.Len(t, lines, 1, msg)
+		got, ok := logKV(lines[0], "actor_class")
+		require.True(t, ok, msg)
+		assert.Equal(t, class, got, msg)
+	}
+	for _, s := range []string{login, "me\n", body} {
+		assert.NotContains(t, h.logText(), s)
+		assert.NotContains(t, h.metricText(), s)
+	}
+	assert.NotContains(t, h.metricText(), login)
+}
+
+func TestLog_should_EmitStructuredSteerAndHeldLinesWithoutPRText_When_SteerAndHoldHappen(t *testing.T) {
+	const hostile = "SENTINEL-hostile-ef56"
+	h := newLoopHarness(t, nil)
+	it := comment("i1")
+	it.Event.Summary = hostile
+	it.Event.Actor = hostile
+	held := comment("i2")
+	held.Event.PullRequest = 8
+	held.Event.Summary = hostile
+	h.sessions.programs["s2"] = "claude"
+	h.sessions.Set(
+		SessionRef{UUID: dSession, Repo: dRepo, PR: dPR, State: StateLive},
+		SessionRef{UUID: "s2", Repo: dRepo, PR: 8, State: StateLive},
+	)
+	h.steerer.outcome = map[string]Outcome{"s2": OutcomeBusy}
+	h.inbox.items = []inbox.Item{it, held}
+	h.start(nil)
+	h.tick()
+	h.tick()
+	h.tick()
+
+	steer := h.linesNamed("prwatch.steer")
+	require.Len(t, steer, 1)
+	for _, k := range []string{"session", "repo", "pr", "kind", "outcome"} {
+		_, ok := logKV(steer[0], k)
+		assert.True(t, ok, "steer line has %s", k)
+	}
+	heldLines := h.linesNamed("prwatch.held")
+	require.Len(t, heldLines, 1, "held logged on first hold only")
+	for _, k := range []string{"session", "repo", "pr", "kind", "outcome"} {
+		_, ok := logKV(heldLines[0], k)
+		assert.True(t, ok, "held line has %s", k)
+	}
+	assert.NotContains(t, h.logText(), hostile)
+}
+
+func TestLog_should_EmitItemToSteerSecondsOnEveryDeliveredSteer_When_SteersAreDelivered(t *testing.T) {
+	h := newLoopHarness(t, nil)
+	older := comment("i1")
+	older.CreatedAt = h.clock.Now().Add(-9 * time.Second)
+	newer := dItem("i2", "comment", "created", "bob", "")
+	newer.CreatedAt = h.clock.Now().Add(-4 * time.Second)
+	h.inbox.items = []inbox.Item{newer}
+	h.start(nil)
+	h.tick()
+	lines := h.linesNamed("prwatch.steer")
+	require.Len(t, lines, 1)
+	v, ok := logKV(lines[0], "item_to_steer_seconds")
+	require.True(t, ok)
+	assert.EqualValues(t, 4, v)
+
+	// A folded steer logs the oldest folded item's delta.
+	h2 := newLoopHarness(t, nil)
+	older.CreatedAt = h2.clock.Now().Add(-9 * time.Second)
+	newer.CreatedAt = h2.clock.Now().Add(-4 * time.Second)
+	h2.inbox.items = []inbox.Item{newer, older}
+	h2.start(nil)
+	h2.tick()
+	lines = h2.linesNamed("prwatch.steer")
+	require.Len(t, lines, 1)
+	v, _ = logKV(lines[0], "item_to_steer_seconds")
+	assert.EqualValues(t, 9, v)
+}
+
+func TestLog_should_ClassifyAlt4_When_CommentInlineReviewAndCISteersAreDelivered(t *testing.T) {
+	cases := []struct {
+		name string
+		item inbox.Item
+		age  time.Duration
+		want Alt4Class
+	}{
+		{"comment", comment("i"), time.Second, Alt4TextEvent},
+		{"inline_comment", dItem("i", "review_comment", "created", "alice", ""), time.Second, Alt4TextEvent},
+		{"commented_review", dItem("i", "review", "submitted", "alice", `{"state":"commented"}`), time.Second, Alt4TextEvent},
+		{"ci_fast", ciFailure("i", "sha1"), 10 * time.Second, Alt4CISubminute},
+		{"ci_slow", ciFailure("i", "sha1"), 30 * time.Second, Alt4CIOther},
+		{"changes_requested", dItem("i", "review", "submitted", "alice", `{"state":"changes_requested"}`), time.Second, Alt4CIOther},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newLoopHarness(t, nil)
+			tc.item.CreatedAt = h.clock.Now().Add(-tc.age)
+			h.inbox.items = []inbox.Item{tc.item}
+			h.start(nil)
+			h.tick()
+			lines := h.linesNamed("prwatch.steer")
+			require.Len(t, lines, 1)
+			got, ok := logKV(lines[0], "alt4_class")
+			require.True(t, ok)
+			assert.Equal(t, string(tc.want), got)
+		})
+	}
+}
+
+func TestPoller_should_ExcludeCatchUpSteersFromLatencyAndAlt4_When_CatchUpDelivers(t *testing.T) {
+	h := newLoopHarness(t, nil)
+	snaps := &fakePRSnapshot{snapshots: map[string]PRSnapshot{
+		dSession: {CheckConclusion: "failure", CheckedAt: h.clock.Now()},
+	}}
+	h.start(func(d *LoopDeps) {
+		d.Catchup = NewCatchup(CatchupDeps{
+			Snapshots: snaps, Steerer: h.steerer, Coalescer: h.coalescer,
+			Metrics: h.metrics, Log: h.log, Settings: h.settings,
+		})
+	})
+	h.tick()
+	assert.Equal(t, 1, h.metrics.Count(MetricCatchupSteers))
+	assert.Zero(t, h.metrics.Count(MetricSteers))
+	assert.NotContains(t, h.logText(), "alt4_class")
+	assert.NotContains(t, h.logText(), "item_to_steer_seconds")
+}
+
+func TestPoller_should_ApplySelfActorFilter_When_BuiltThroughNewPoller(t *testing.T) {
+	h := newLoopHarness(t, nil)
+	h.inbox.items = []inbox.Item{dItem("i1", "comment", "created", "me", "")}
+	h.start(nil)
+	h.tick()
+	assert.Empty(t, h.steerer.Requests())
+	assert.Equal(t, []string{"i1"}, ackedIDs(h))
+	assert.Equal(t, 1, h.metricLabelled(MetricDropped, "drop_reason", string(DropSelfActor)))
+}

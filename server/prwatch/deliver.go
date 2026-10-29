@@ -106,6 +106,8 @@ type candidate struct {
 	sha   string
 	class ActorClass
 	key   CoalesceKey
+	// changesRequested marks a changes-requested review (alt4 ci_other).
+	changesRequested bool
 }
 
 type steerBatch struct {
@@ -249,7 +251,7 @@ func (d *Deliverer) screen(res *DeliverResult, it inbox.Item, ref SessionRef, fo
 		sha = *ev.HeadSHA
 	}
 	return candidate{
-		kind: kind, sha: sha, class: class,
+		kind: kind, sha: sha, class: class, changesRequested: changesRequested,
 		key: CoalesceKey{SessionUUID: ref.UUID, Repo: ref.Repo, PR: ref.PR, Class: kind.Class()},
 	}, true
 }
@@ -336,10 +338,7 @@ func (d *Deliverer) delivered(items []inbox.Item, results []DeliverResult, b *st
 			At: now, Kind: c.kind, Repo: b.ref.Repo, PR: b.ref.PR, SessionUUID: b.ref.UUID,
 			ActorClass: c.class, Disposition: DispositionSteered,
 		})
-		cls := steerClassCI
-		if c.class != "" {
-			cls = string(c.class)
-		}
+		cls := actorClassLabel(c.class)
 		d.Metrics.Inc(MetricSteers, map[string]string{"kind": string(c.kind), "actor_class": cls})
 		if d.Stranger != nil && c.kind.Class() == ClassHumanFeedback {
 			d.Stranger.RecordSteer(b.ref.Repo, b.ref.PR, c.class)
@@ -351,8 +350,51 @@ func (d *Deliverer) delivered(items []inbox.Item, results []DeliverResult, b *st
 	if d.Followup != nil {
 		d.Followup.Track(b.ref.UUID, b.ref.Repo, b.ref.PR)
 	}
-	d.Log.Info("prwatch.steer", "session", b.ref.UUID, "pr", b.ref.PR, "items", len(b.cands),
-		"kinds", len(kinds), "item_to_steer_seconds", int64(now.Sub(oldest)/time.Second))
+	latency := now.Sub(oldest)
+	d.Log.Info("prwatch.steer", "session", b.ref.UUID, "repo", b.ref.Repo, "pr", b.ref.PR,
+		"kind", string(b.cands[0].kind), "outcome", string(OutcomeDelivered),
+		"actor_class", actorClassLabel(b.cands[0].class), "items", len(b.cands), "kinds", len(kinds), "item_to_steer_seconds", int64(latency/time.Second),
+		"alt4_class", string(alt4Class(b.cands, latency)))
+}
+
+// actorClassLabel is the only actor form that reaches logs and counters.
+func actorClassLabel(c ActorClass) string {
+	if c == "" {
+		return steerClassCI
+	}
+	return string(c)
+}
+
+// Alt4Class buckets a delivered steer for the alt-4 (60s poller) counterfactual.
+type Alt4Class string
+
+const (
+	Alt4TextEvent   Alt4Class = "text_event"
+	Alt4CISubminute Alt4Class = "ci_subminute"
+	Alt4CIOther     Alt4Class = "ci_other"
+
+	// ciSubminuteBelow is the latency under which a CI steer would not have
+	// gained from a faster path than a 60s poller.
+	ciSubminuteBelow = 30 * time.Second
+)
+
+// alt4Class: any plain text event makes the steer text_event; otherwise a
+// changes-requested review or a slow CI steer is ci_other. Catch-up steers
+// never reach here (no inbox timestamp).
+func alt4Class(cands []candidate, latency time.Duration) Alt4Class {
+	changes := false
+	for _, c := range cands {
+		switch {
+		case c.changesRequested:
+			changes = true
+		case c.kind != KindCI:
+			return Alt4TextEvent
+		}
+	}
+	if changes || latency >= ciSubminuteBelow {
+		return Alt4CIOther
+	}
+	return Alt4CISubminute
 }
 
 // duplicate applies the Duplicate row of D5: ack, except a CI item with a head
@@ -385,6 +427,8 @@ func (d *Deliverer) drop(r *DeliverResult, reason DropReason, class ActorClass) 
 		kind = r.Kinds[0]
 	}
 	d.Metrics.Inc(MetricDropped, map[string]string{"drop_reason": string(reason)})
+	d.Log.Info("prwatch.drop", "session", r.SessionUUID, "repo", r.Repo, "pr", r.PR,
+		"kind", string(kind), "outcome", "dropped", "reason", string(reason), "actor_class", actorClassLabel(class))
 	d.Recorder.Record(Disposition{
 		At: d.Clock.Now(), Kind: kind, Repo: r.Repo, PR: r.PR, SessionUUID: r.SessionUUID,
 		ActorClass: class, Disposition: DispositionDropped, Reason: string(reason),
@@ -404,6 +448,8 @@ func (d *Deliverer) hold(r *DeliverResult, reason HoldReason, class ActorClass) 
 		kind = r.Kinds[0]
 	}
 	d.Metrics.Inc(MetricHeld, map[string]string{"hold_reason": string(reason)})
+	d.Log.Info("prwatch.held", "session", r.SessionUUID, "repo", r.Repo, "pr", r.PR,
+		"kind", string(kind), "outcome", "held", "reason", string(reason), "actor_class", actorClassLabel(class))
 	d.Recorder.Record(Disposition{
 		At: d.Clock.Now(), Kind: kind, Repo: r.Repo, PR: r.PR, SessionUUID: r.SessionUUID,
 		ActorClass: class, Disposition: DispositionHeld, Reason: string(reason),
