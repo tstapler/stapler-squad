@@ -187,8 +187,8 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 //     question_text) inside the transaction; if found, that row's ID is what
 //     this call resolves to — no new row is created. If not found, Create()
 //     a new row with a caller-chosen candidate ID. This is safe without an
-//     OnConflict upsert because every transaction is serialized process-wide
-//     (session/ent_repository.go's SetMaxOpenConns(1)) — no concurrent
+//     OnConflict upsert because every transaction runs on the single writer connection
+//     (session/ent_repository.go's SetMaxOpenConns(1)), so they serialize process-wide — no concurrent
 //     transaction can race this read-then-create.
 //  3. Comparing the resolved ID against the candidate ID is how the caller
 //     distinguishes "created new" from "resolved to existing".

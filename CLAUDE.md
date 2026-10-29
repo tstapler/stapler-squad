@@ -338,6 +338,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Backlog dependencies: RPCs, MCP tools, `/api` prefix for direct Connect calls | `docs/reference/backlog-dependencies.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
+| Unary request batching (`batch_unary` flag, `POST /api/batch/unary`, allow-list, fallback) | `docs/reference/unary-request-batching.md` |
 | Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |
@@ -382,3 +383,4 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Flag-default flip PR checklist for the four notification-actions flags | `docs/how-to/flag-default-flip-pr-template.md` |
 | Run the notification usability script (T1-T10) and read the soak metrics | `docs/how-to/run-notification-usability-script.md` |
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
+| Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |

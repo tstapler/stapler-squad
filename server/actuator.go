@@ -6,7 +6,9 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -29,10 +31,19 @@ const highGoroutineCountThreshold = 100
 func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/health", handleActuatorHealth)
 	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
+	s.mux.HandleFunc("/actuator/db", handleActuatorDB)
 	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
 	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
 	s.mux.HandleFunc("/actuator/nudge-outcomes", handleActuatorNudgeOutcomes)
 	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
+	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
+}
+
+// handleActuatorDB serves per-pool sql.DBStats and query counters (session/dbobs).
+// With the single-connection pool, wait_count/wait_duration_ms rising is DB queueing.
+func handleActuatorDB(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"pools": dbobs.Snapshot()})
 }
 
 // handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
@@ -40,6 +51,15 @@ func (s *Server) registerActuatorRoutes() {
 func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(session.DefaultNudgeOutcomes().Snapshot())
+}
+
+// handleActuatorWsUnary serves the unary WebSocket bridge counters as JSON. The bridge is
+// resolved per request because it may be built after the routes are registered.
+func handleActuatorWsUnary(bridge func() *services.UnaryWsBridge) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(bridge().Report())
+	}
 }
 
 // handleActuatorUnfinishedScanner serves the unfinished-work scanner's counters as JSON, read
@@ -162,6 +182,7 @@ func handleActuatorMetrics(w http.ResponseWriter, _ *http.Request) {
 			"total_zombies":      fp.TotalZombies,
 		},
 		"workflow_engine_bypass_total": session.EngineBypassSnapshot(),
+		"db":                           dbobs.Snapshot(),
 		"runtime": map[string]any{
 			"goroutines":    runtime.NumGoroutine(),
 			"heap_inuse_mb": float64(m.HeapInuse) / 1024 / 1024,

@@ -118,7 +118,7 @@ export const sortOrderButton = style({
   color: vars.color.textPrimary,
   fontSize: "16px",
   cursor: "pointer",
-  transition: "all 0.2s",
+  transition: "background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s, box-shadow 0.2s",
 
   selectors: {
     "&:hover": {
@@ -145,7 +145,7 @@ export const searchModeButton = style({
   background: "transparent",
   border: "none",
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   display: "flex",
   alignItems: "center",
   gap: "6px",

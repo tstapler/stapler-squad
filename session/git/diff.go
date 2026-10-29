@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -75,6 +76,20 @@ func (g *GitWorktree) resolveBaseCommitSHA() string {
 // of this feature that deliberately stays on the git CLI by default (ref resolution, not
 // diff content — a real go-git race documented elsewhere in this package).
 func (g *GitWorktree) Diff() *DiffStats {
+	return g.DiffWithContextLines(fdiff.DefaultContextLines)
+}
+
+// DiffWithContextLines is Diff with a caller-chosen number of unchanged context
+// lines around each hunk; 0 means the default, negative means the whole file
+// (every line is context).
+func (g *GitWorktree) DiffWithContextLines(contextLines int) *DiffStats {
+	switch {
+	case contextLines == 0:
+		contextLines = fdiff.DefaultContextLines
+	case contextLines < 0:
+		// Half of MaxInt32: go-git doubles the count internally, which must not overflow a 32-bit int.
+		contextLines = math.MaxInt32 / 2
+	}
 	stats := &DiffStats{}
 
 	// Check if the worktree path exists
@@ -135,7 +150,7 @@ func (g *GitWorktree) Diff() *DiffStats {
 	}
 
 	var buf bytes.Buffer
-	if err := fdiff.NewUnifiedEncoder(&buf, fdiff.DefaultContextLines).Encode(patch); err != nil {
+	if err := fdiff.NewUnifiedEncoder(&buf, contextLines).Encode(patch); err != nil {
 		stats.Error = fmt.Errorf("failed to encode diff: %w", err)
 		return stats
 	}

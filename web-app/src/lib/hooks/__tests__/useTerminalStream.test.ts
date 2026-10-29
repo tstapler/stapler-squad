@@ -126,6 +126,7 @@ jest.mock('../useTerminalMetrics', () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 import { useTerminalStream } from '../useTerminalStream';
+import { defined } from "@/lib/utils/defined";
 
 // ---------------------------------------------------------------------------
 // Controllable stream factory
@@ -172,7 +173,7 @@ function makePushStream<T>(signal?: AbortSignal): PushStream<T> {
             await new Promise<void>((resolve, reject) => resolvers.push({ resolve, reject }));
           }
           if (queue.length > 0) {
-            return { value: queue.shift()!, done: false };
+            return { value: defined(queue.shift()), done: false };
           }
           return { value: undefined as any, done: true };
         },
@@ -1714,5 +1715,69 @@ describe('useTerminalStream — foreground connect-timeout', () => {
     expect(streams.length).toBe(3);
     await act(async () => { jest.advanceTimersByTime(1); });
     await waitFor(() => expect(streams.length).toBe(4));
+  });
+});
+
+describe('useTerminalStream — handshake zero-size guard (Task 3.1.2d)', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+    mockMessageQueueInstances.length = 0;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const handshakeOf = (index: number) =>
+    (mockMessageQueueInstances[index].queue[0] as { data: { value: Record<string, unknown> } }).data.value;
+
+  it.each([
+    ['0x0 override', 0, 0],
+    ['0xN override', 0, 24],
+    ['1x1 override', 1, 1],
+  ])('connect_should_NotSendHandshakeDimensions_When_ContainerIsZeroSize (%s)', async (_label, cols, rows) => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream.iterable);
+    const { result } = renderHook(() => useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }));
+
+    await act(async () => {
+      result.current.connect(cols, rows);
+    });
+
+    const req = handshakeOf(0);
+    expect(req.targetCols).toBeUndefined();
+    expect(req.targetRows).toBeUndefined();
+    stream.end();
+  });
+
+  it('connect_should_NotSendHandshakeDimensions_When_HiddenTerminalReportsZeroSize', async () => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream.iterable);
+    const getTerminal = () => ({ cols: 0, rows: 0 }) as never;
+    const { result } = renderHook(() => useTerminalStream({ ...BASE_OPTIONS, autoConnect: false, getTerminal }));
+
+    await act(async () => {
+      result.current.connect();
+    });
+
+    expect(handshakeOf(0).targetCols).toBeUndefined();
+    stream.end();
+  });
+
+  it('connect_should_SendHandshakeDimensions_When_SizeIsReal', async () => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream.iterable);
+    const { result } = renderHook(() => useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }));
+
+    await act(async () => {
+      result.current.connect(120, 40);
+    });
+
+    expect(handshakeOf(0)).toMatchObject({ targetCols: 120, targetRows: 40 });
+    stream.end();
   });
 });

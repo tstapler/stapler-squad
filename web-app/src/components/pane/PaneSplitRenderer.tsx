@@ -28,6 +28,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { MobilePaneTabStrip } from "./MobilePaneTabStrip";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { containsPaneId, hasVerticalSplit } from "@/lib/pane/paneUtils";
+import { useScrollRestore } from "@/lib/hooks/useScrollRestore";
 import {
   splitContainer,
   leafContainer,
@@ -96,6 +97,7 @@ interface PaneSplitRendererProps {
   state: PaneState;
   dispatch: React.Dispatch<PaneAction>;
   sessions: Session[];
+  windowActive?: boolean;
 }
 
 interface PaneNodeProps {
@@ -105,9 +107,11 @@ interface PaneNodeProps {
   sessions: Session[];
   isMobile: boolean;
   hasSplits: boolean;
+  /** Window is the visible one; plumbed to SessionDetail (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
-function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplits }: PaneNodeProps) {
+function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplits, windowActive }: PaneNodeProps) {
   if (node.type === "leaf") {
     return (
       <PaneLeafComponent
@@ -117,6 +121,7 @@ function PaneNodeComponent({ node, state, dispatch, sessions, isMobile, hasSplit
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
     );
   }
@@ -140,9 +145,11 @@ interface PaneSplitProps {
   sessions: Session[];
   isMobile: boolean;
   hasSplits: boolean;
+  /** Window is the visible one; plumbed to SessionDetail (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
-function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneSplitProps) {
+function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSplits, windowActive }: PaneSplitProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // On narrow screens every split collapses to the focused pane, so each pane is a
@@ -159,6 +166,7 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
     );
   }
@@ -176,6 +184,7 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
       {/* Draggable resize is a desktop affordance — touch dragging a 6px divider is
           impractical, and mobile horizontal splits use a fixed 50/50 ratio instead. */}
@@ -195,6 +204,7 @@ function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile, hasSpli
         sessions={sessions}
         isMobile={isMobile}
         hasSplits={hasSplits}
+        windowActive={windowActive}
       />
     </div>
   );
@@ -207,6 +217,8 @@ interface PaneLeafProps {
   sessions: Session[];
   isMobile: boolean;
   hasSplits: boolean;
+  /** Window is the visible one; plumbed to SessionDetail (no-op until Task 4.1.3b). */
+  windowActive?: boolean;
 }
 
 function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: React.Dispatch<PaneAction> }) {
@@ -214,6 +226,8 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   const { sessions, loading, error, listSessions, hibernateSession, resumeHibernatedSession } = useSessionServiceContext();
   const { triggerPicker, triggerPickerForceNew, backlogIndex } = usePaneContext();
   const { viewMode, setViewMode } = useSessionViewModeContext();
+  // Mobile swaps this pane for the terminal and remounts it on return; restore the scroll.
+  const scrollRef = useScrollRestore(`session-list-scroll-${pane.id}`);
   if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
   // `error` is useSessionServiceContext's single shared Redux field -- ANY
   // session-mutating RPC (createSession, updateSession, cancelSessionCreation,
@@ -305,7 +319,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
       >
         {viewMode === "board" ? `Board view, showing ${sessions.length} sessions` : `List view, showing ${sessions.length} sessions`}
       </div>
-      <div className={sessionListScroll} data-testid="session-list-scroll">
+      <div ref={scrollRef} className={sessionListScroll} data-testid="session-list-scroll">
         {viewMode === "board" ? (
           <SessionBoard {...sharedProps} />
         ) : (
@@ -316,7 +330,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   );
 }
 
-function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits }: PaneLeafProps) {
+function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplits, windowActive }: PaneLeafProps) {
   const { pickerPendingSession, cancelPicker, backlogIndex } = usePaneContext();
   const isFocused = state.focusedPaneId === pane.id;
   const isZoomed = state.zoomedPaneId === pane.id;
@@ -393,6 +407,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
             initialTab={pane.activeTab}
             embedded={true}
             isActive={isFocused}
+            windowActive={windowActive}
             backlogItemId={sessionBacklogEntry?.itemId}
             backlogEntry={sessionBacklogEntry}
           />
@@ -428,7 +443,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
  * PaneSplitRenderer — root renderer for the pane tree.
  * Renders the full recursive pane layout.
  */
-export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRendererProps) {
+export function PaneSplitRenderer({ state, dispatch, sessions, windowActive = true }: PaneSplitRendererProps) {
   const { isMobile, isFoldable } = useViewport();
   // Collapse split panes for any viewport below 900px (mobile + foldable) — BottomNav is
   // visible there and single-pane + MobilePaneTabStrip gives a better UX than cramped splits.
@@ -444,6 +459,8 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
   // (e.g. notification toasts) can clear it without hard-coding the pixel value.
   const stripRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    // The var is global: only the visible window may write it, or a hidden window's strip wins.
+    if (!windowActive) return;
     if (!showMobileTabStrip) {
       document.documentElement.style.setProperty("--mobile-pane-tab-strip-height", "0px");
       return;
@@ -460,7 +477,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
     ro.observe(el);
     update();
     return () => ro.disconnect();
-  }, [showMobileTabStrip]);
+  }, [showMobileTabStrip, windowActive]);
 
   return (
     <div
@@ -492,6 +509,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
           sessions={sessions}
           isMobile={isNarrow}
           hasSplits={hasMultiplePanes}
+          windowActive={windowActive}
         />
       </div>
 

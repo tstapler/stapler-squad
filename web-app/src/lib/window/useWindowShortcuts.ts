@@ -5,6 +5,7 @@ import type { RefObject } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { registry, isInputElement } from "@/lib/shortcuts/shortcutRegistry";
 import { commandBarController } from "@/lib/shortcuts/commandBarController";
+import type { WindowSwitchTrigger } from "./useWindowFocusMemory";
 import type { NamedWindow, WindowId } from "./windowTypes";
 
 /**
@@ -47,7 +48,7 @@ const FOLLOWUP_KEYS = new Set<string>([...DIGIT_KEYS, "n", "p", ",", "o", "Escap
 interface LeaderRefs {
   windows: RefObject<NamedWindow[]>;
   currentWindowId: RefObject<WindowId>;
-  switchToWindow: RefObject<(id: WindowId) => void>;
+  switchToWindow: RefObject<(id: WindowId, trigger?: WindowSwitchTrigger) => void>;
   onRenameRequest: RefObject<(id: WindowId) => void>;
   onOverviewRequest: RefObject<() => void>;
   followupCleanups: RefObject<Array<() => void>>;
@@ -70,7 +71,7 @@ function disarmLeader(refs: LeaderRefs): void {
 
 function switchToOneIndexed(refs: LeaderRefs, oneIndexedPosition: number): void {
   const target = refs.windows.current[oneIndexedPosition - 1];
-  if (target) refs.switchToWindow.current(target.id);
+  if (target) refs.switchToWindow.current(target.id, "leader");
 }
 
 function cycle(refs: LeaderRefs, delta: 1 | -1): void {
@@ -79,7 +80,7 @@ function cycle(refs: LeaderRefs, delta: 1 | -1): void {
   const currentIndex = list.findIndex((w) => w.id === refs.currentWindowId.current);
   const base = currentIndex === -1 ? 0 : currentIndex;
   const nextIndex = (base + delta + list.length) % list.length;
-  refs.switchToWindow.current(list[nextIndex].id);
+  refs.switchToWindow.current(list[nextIndex].id, "leader");
 }
 
 function registerFollowup(refs: LeaderRefs, id: string, key: string, action: () => void): void {
@@ -157,7 +158,7 @@ function armLeader(refs: LeaderRefs): void {
 function useLeaderRefs(
   windows: NamedWindow[],
   currentWindowId: WindowId,
-  switchToWindow: (id: WindowId) => void,
+  switchToWindow: (id: WindowId, trigger?: WindowSwitchTrigger) => void,
   onRenameRequest: (id: WindowId) => void,
   onOverviewRequest: () => void
 ): LeaderRefs {
@@ -190,7 +191,7 @@ function useLeaderRefs(
 export function useWindowShortcuts(
   windows: NamedWindow[],
   currentWindowId: WindowId,
-  switchToWindow: (id: WindowId) => void,
+  switchToWindow: (id: WindowId, trigger?: WindowSwitchTrigger) => void,
   onRenameRequest: (id: WindowId) => void,
   onOverviewRequest: () => void = noop
 ): void {

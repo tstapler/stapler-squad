@@ -1283,6 +1283,9 @@ func (i *Instance) WriteToPTY(data []byte) (int, error) {
 // ResizePTY resizes the terminal dimensions.
 // This is used when clients resize their terminal windows.
 func (i *Instance) ResizePTY(cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("invalid terminal size %dx%d", cols, rows)
+	}
 	if !i.started.Load() {
 		return fmt.Errorf("session not started")
 	}

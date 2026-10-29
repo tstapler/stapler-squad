@@ -8,6 +8,7 @@ import { TmuxVersionMismatchBanner } from "@/components/system/TmuxVersionMismat
 import { ForkPressureStatusBanner } from "@/components/system/ForkPressureStatusBanner";
 import { ViewportProvider } from "@/components/providers/ViewportProvider";
 import { CockpitShell } from "@/components/layout/CockpitShell";
+import { WindowsProvider } from "@/lib/window/WindowsProvider";
 import { mainContent } from "./layout.css";
 
 /**
@@ -21,15 +22,17 @@ export function RootShell({ children, mainRef }: { children: ReactNode; mainRef?
         <AuthProvider>
           <Providers>
             <CockpitShell>
-              <a href="#main-content" className="skip-link">Skip to main content</a>
-              <main id="main-content" ref={mainRef} tabIndex={-1} className={mainContent}>
-                <TmuxVersionMismatchBanner />
-                <ForkPressureStatusBanner />
-                {children}
-              </main>
-              <TrayErrorBoundary>
-                <NotificationPanel />
-              </TrayErrorBoundary>
+              <WindowsProvider>
+                <a href="#main-content" className="skip-link">Skip to main content</a>
+                <main id="main-content" ref={mainRef} tabIndex={-1} className={mainContent}>
+                  <TmuxVersionMismatchBanner />
+                  <ForkPressureStatusBanner />
+                  {children}
+                </main>
+                <TrayErrorBoundary>
+                  <NotificationPanel />
+                </TrayErrorBoundary>
+              </WindowsProvider>
             </CockpitShell>
           </Providers>
         </AuthProvider>

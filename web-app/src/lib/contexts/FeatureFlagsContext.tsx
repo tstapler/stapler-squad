@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { useRouter } from "@/lib/nav";
 import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
+import { loadFlags, recordFlagWrite } from "@/lib/features/flagStore";
 import { FlagMutation, SessionService } from "@/gen/session/v1/session_pb";
 import type { FeatureFlag } from "@/gen/session/v1/session_pb";
 import { GLOBAL_SCOPE } from "./featureFlagScopes";
@@ -99,15 +100,16 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const minAcceptable = useRef(0);
 
   // quiet: a background re-read after a failed write must not turn a loaded list into a load failure.
-  const fetchFlags = useCallback(async (opts?: { quiet?: boolean }) => {
+  // Mount reads through the shared store (TTL + in-flight); reload/refresh bypass the TTL but still share an in-flight read.
+  const fetchFlags = useCallback(async (opts?: { quiet?: boolean; force?: boolean }) => {
     const mine = ++seq.current;
     try {
-      const res = await client.getFeatureFlags({});
+      const loaded = await loadFlags(Date.now, { force: opts?.force });
       if (mine < minAcceptable.current) return;
       minAcceptable.current = mine;
       const map: Record<string, boolean> = {};
       const list: FeatureFlagMeta[] = [];
-      for (const f of res.flags) {
+      for (const f of loaded) {
         map[f.name] = f.enabled;
         list.push(metaOf(f));
       }
@@ -121,14 +123,14 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [client]);
+  }, []);
 
   useEffect(() => { fetchFlags(); }, [fetchFlags]);
 
   const reload = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
-    await fetchFlags();
+    await fetchFlags({ force: true });
   }, [fetchFlags]);
 
   // The displayed state is always the server's read-back, never an optimistic
@@ -158,21 +160,25 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
         }
       }
       minAcceptable.current = ++seq.current;
+      const scoped = typeof change !== "boolean" && change.mutation === "set" && change.scope !== GLOBAL_SCOPE;
+      recordFlagWrite(flag.name, scoped ? (change as { enabled: boolean }).enabled : flag.enabled, scoped ? (change as { scope: string }).scope : undefined);
       setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
       setFlagList((prev) => prev.map((f) => (f.name === flag.name ? { ...f, ...metaOf(flag) } : f)));
       return { ok: true };
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
       // Re-read first: a successful fetch clears the error, and this one must outlive it.
-      await fetchFlags({ quiet: true });
+      await fetchFlags({ quiet: true, force: true });
       setError("Failed to update feature flag");
       return { ok: false, error: err instanceof Error ? err.message : "request failed" };
     }
   }, [client, fetchFlags]);
 
+  const refresh = useCallback((opts?: { quiet?: boolean }) => fetchFlags({ ...opts, force: true }), [fetchFlags]);
+
   const value = useMemo(
-    () => ({ flags, flagList, isLoading, error, loadError, reload, setFlag, refresh: fetchFlags }),
-    [flags, flagList, isLoading, error, loadError, reload, setFlag, fetchFlags]
+    () => ({ flags, flagList, isLoading, error, loadError, reload, setFlag, refresh }),
+    [flags, flagList, isLoading, error, loadError, reload, setFlag, refresh]
   );
 
   return (

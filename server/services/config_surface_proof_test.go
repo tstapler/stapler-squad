@@ -323,6 +323,21 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:request_coalescing": {
+		exempt: "client-only: no Go reader; the web client reads it through flagStore (web-app/src/lib/features/flagStore.ts, preloadFlagValue pins the pre-load default to ON), covered by web-app/src/lib/features/flagStore.test.ts `flagStore_should_UseFixedOnConstantForRequestCoalescing_And_UndefinedForUnlistedFlags` and `flagStore_should_IssueOneGetFeatureFlags_When_ProviderAnd5HookConsumersMountTogether`, and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:unary_over_ws": {
+		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:unary_over_ws_remote": {
+		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on remote-access origins on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:batch_unary": {
+		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
+	},
+	"flag:window_keep_alive": {
+		exempt: "client-only: no Go reader; the web client gates window keep-alive on it (client reader lands with the window keep-alive story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
 	"flag:review:block-approval-on-ci-failure": {
 		testName:   "TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",

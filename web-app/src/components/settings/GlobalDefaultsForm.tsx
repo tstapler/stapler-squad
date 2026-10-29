@@ -3,8 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { PROGRAMS } from "@/lib/constants/programs";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import {
@@ -85,7 +84,7 @@ export function GlobalDefaultsForm() {
   }, []);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const transport = getConnectTransport();
     clientRef.current = createClient(SessionService, transport);
     loadDefaults();
   }, [loadDefaults]);
@@ -235,7 +234,7 @@ export function GlobalDefaultsForm() {
                   className={tagRemove}
                   onClick={() => handleRemoveTag(t)}
                   aria-label={`Remove tag ${t}`}
-                >
+                >{/* analytics-exempt */}
                   x
                 </button>
               </span>
@@ -254,7 +253,7 @@ export function GlobalDefaultsForm() {
               type="button"
               className="btn btn-secondary"
               onClick={handleAddTag}
-            >
+            >{/* analytics-exempt */}
               Add
             </button>
           </div>
@@ -287,7 +286,7 @@ export function GlobalDefaultsForm() {
                   className={deleteBtn}
                   onClick={() => handleRemoveEnvVar(i)}
                   aria-label="Remove environment variable"
-                >
+                >{/* analytics-exempt */}
                   Delete
                 </button>
               </div>
@@ -297,7 +296,7 @@ export function GlobalDefaultsForm() {
             type="button"
             className="btn btn-secondary"
             onClick={handleAddEnvVar}
-          >
+          >{/* analytics-exempt */}
             Add Variable
           </button>
         </div>
@@ -431,7 +430,7 @@ export function GlobalDefaultsForm() {
             className="btn btn-primary"
             onClick={handleSave}
             disabled={saving}
-          >
+          >{/* analytics-exempt */}
             {saving ? "Saving..." : "Save"}
           </button>
         </div>
