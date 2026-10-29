@@ -53,7 +53,7 @@ func TestNewClient_should_MakeZeroNetworkCalls_When_URLRefused(t *testing.T) {
 type fakeResolver map[string][]net.IP
 
 func (f fakeResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
-	var out []net.IPAddr
+	out := make([]net.IPAddr, 0, len(f[host]))
 	for _, ip := range f[host] {
 		out = append(out, net.IPAddr{IP: ip})
 	}

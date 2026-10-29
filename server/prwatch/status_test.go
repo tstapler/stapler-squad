@@ -76,7 +76,7 @@ func TestStatus_should_ReportFlagInboxTokenWatchedSkippedHeldAndLastSteer_When_S
 
 func TestStatus_should_ReportEverySkipReason_When_SessionsAreIneligible(t *testing.T) {
 	tr, _, _ := newTestTracker()
-	var refs []SessionRef
+	refs := make([]SessionRef, 0, len(AllSkipReasons()))
 	for i, r := range AllSkipReasons() {
 		refs = append(refs, SessionRef{UUID: "uuid-skip-" + string(rune('a'+i)), SkipReason: r})
 	}

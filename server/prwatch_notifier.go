@@ -8,7 +8,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 // prwatchNotifier publishes PR-watch operator notifications on the event bus
@@ -51,12 +50,6 @@ func (n prwatchNotifier) Notify(note prwatch.Notification) error {
 		sessionID, "", note.DedupeKey, int32(ntype), int32(priority), note.Title, note.Message, meta,
 	))
 	return nil
-}
-
-// newPRWatchNotifications builds the notification builders over the bus. The
-// CoverageGap reason (third-party text) goes through session.SanitizeUntrusted.
-func newPRWatchNotifications(bus *events.EventBus, clock prwatch.Clock, s prwatch.Settings) *prwatch.Notifications {
-	return prwatch.NewNotifications(prwatchNotifier{bus: bus}, clock, s, session.SanitizeUntrusted)
 }
 
 // prwatchGuidePath returns the absolute path of the operator doc. buildinfo

@@ -25,7 +25,7 @@ type guardedFile struct {
 func (g guardedFile) inInbox() bool { return strings.HasPrefix(g.rel, "inbox/") }
 
 func (g guardedFile) imports() []string {
-	var out []string
+	out := make([]string, 0, len(g.file.Imports))
 	for _, imp := range g.file.Imports {
 		p, _ := strconv.Unquote(imp.Path.Value)
 		out = append(out, p)

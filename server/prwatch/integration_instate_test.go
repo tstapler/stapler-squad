@@ -78,7 +78,7 @@ func TestInStateTracker_should_RaiseTokenMissingThenPermissions_When_TokenFileBr
 
 	require.NoError(t, os.Remove(f.TokenPath))
 	pollOnce(t, cfg, tr)
-	titles := []string{}
+	titles := make([]string, 0, len(n.Sent()))
 	for _, x := range n.Sent() {
 		titles = append(titles, x.Title)
 	}

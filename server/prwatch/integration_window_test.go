@@ -56,7 +56,7 @@ func TestPollerOverHTTPInbox_should_DeliverOneSteerAtWindowClose_When_SecondComm
 func TestPollerOverHTTPInbox_should_BoundWindowHoldsByCapAndInterval_When_FourKeysFloodAtOnce(t *testing.T) {
 	const floodKeys, perKey = 4, 100
 	l := windowLoop(t, nil)
-	var refs []SessionRef
+	refs := make([]SessionRef, 0, floodKeys+1)
 	for k := range floodKeys + 1 {
 		uuid := fmt.Sprintf("flood-%d", k)
 		l.sessions.programs[uuid] = "claude"

@@ -64,8 +64,9 @@ func TestClient_should_NeverLeakToken_When_EveryFailurePathRunsUnderLogCapture(t
 			_, _ = w.Write(msg)
 		}
 	}
-	var errs []error
-	for _, h := range []http.HandlerFunc{echo(401), echo(500), echo(400), jsonEcho(401), jsonEcho(400), reply(200, `{"items":`), reply(307, "")} {
+	handlers := []http.HandlerFunc{echo(401), echo(500), echo(400), jsonEcho(401), jsonEcho(400), reply(200, `{"items":`), reply(307, "")}
+	errs := make([]error, 0, 2*len(handlers))
+	for _, h := range handlers {
 		f := newFakeInbox(t, h)
 		_, err := clientFor(t, f, tokenFile(t)).Events(context.Background(), 5)
 		errs = append(errs, err)

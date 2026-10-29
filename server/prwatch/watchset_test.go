@@ -188,7 +188,7 @@ func TestWatchSet_should_StartSuspendedSessionUnresumed_When_FirstSeenSuspendedT
 }
 
 func TestWatchSet_should_SanitizeTitle_When_ItHasControlCharsNewlinesOrIsLong(t *testing.T) {
-	got := SanitizeTitle("  fix\x1b[31m\nthe\tbug‮  now ")
+	got := SanitizeTitle("  fix\x1b[31m\nthe\tbug\u202e  now ")
 	if got != "fix[31m the bug now" {
 		t.Fatalf("got %q", got)
 	}

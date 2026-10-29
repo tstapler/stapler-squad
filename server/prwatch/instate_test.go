@@ -139,7 +139,7 @@ func TestInboxState_should_KeepTwoStatesDistinct_When_LeaderStateAndInboxStateBo
 	c.Advance(130 * time.Second)
 	tr.Observe(InboxStateLeaderNotHeld)
 	tr.Observe(InboxStateTokenMissing) // implies this process polls: leader state clears
-	var keys []string
+	keys := make([]string, 0, len(n.Sent()))
 	for _, s := range n.Sent() {
 		keys = append(keys, fmt.Sprintf("%s|%s", s.DedupeKey, s.Title))
 	}

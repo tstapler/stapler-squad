@@ -24,11 +24,11 @@ func (p pagedInbox) Watch(ctx context.Context, consumerID, repo string, pr int) 
 	if err != nil {
 		return res, err
 	}
-	p.fakeInbox.mu.Lock()
-	p.fakeInbox.subs = append(p.fakeInbox.subs, inbox.Subscription{
+	p.mu.Lock()
+	p.subs = append(p.subs, inbox.Subscription{
 		ID: "sub-" + repo + "#" + itoa(pr), ConsumerID: consumerID, Repository: repo, PullRequest: pr, Active: true,
 	})
-	p.fakeInbox.mu.Unlock()
+	p.mu.Unlock()
 	return res, nil
 }
 
@@ -292,7 +292,7 @@ func TestPoller_should_WarnAndBackOff_When_TokenRejectedWith401(t *testing.T) {
 
 func TestPoller_should_IssueOneEventsRequestPerTick_When_NSessionsWatched(t *testing.T) {
 	h := newLoopHarness(t, func(h *loopHarness) {
-		var refs []SessionRef
+		refs := make([]SessionRef, 0, 5)
 		for i := range 5 {
 			refs = append(refs, SessionRef{UUID: fmt.Sprintf("s%d", i), Repo: dRepo, PR: 10 + i, State: StateLive})
 		}

@@ -35,7 +35,7 @@ func newTestPRWatchSessions(snaps []*session.InstanceSnapshot, store prwatchBack
 type noBacklog struct{}
 
 func (noBacklog) ListItemSessionsBySessionUUIDs(context.Context, []string) (map[string]session.ItemSessionSummary, error) {
-	return nil, nil
+	return map[string]session.ItemSessionSummary{}, nil
 }
 func (noBacklog) GetItemSessionBySessionUUID(context.Context, string) (session.ItemSessionSummary, error) {
 	return session.ItemSessionSummary{}, session.ErrNotFound
