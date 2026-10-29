@@ -134,8 +134,9 @@ const dirtyTerminalPrefix = esc + "[?2004h" + esc + "[?1004h" + esc + "[?1h" + e
 	esc + "[?1049h" + "ALT SCREEN CONTENT" // alt screen with content
 
 // TestFidelityGolden_RedrawFromDirtyTerminal replays the redraw into a terminal that is in the
-// state above and expects exactly the golden state, so dropping any reset in RenderSnapshotRedraw
-// fails here (a redraw into a pristine terminal can't tell a missing reset from a no-op).
+// state above and expects exactly the golden state, so dropping a reset in RenderSnapshotRedraw
+// fails here (a redraw into a pristine terminal can't tell a missing reset from a no-op). The
+// neutral-prefix resets for IRM, DECOM and SI are redundant with later writes and are not pinned.
 func TestFidelityGolden_RedrawFromDirtyTerminal(t *testing.T) {
 	dir := requireOracle(t)
 	goldens := loadGoldens(t)

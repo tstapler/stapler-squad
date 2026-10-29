@@ -143,6 +143,6 @@ func settledRender(t *testing.T, s *tymuxGRPCSession) (snap *v1.PaneSnapshot, ro
 			return true
 		}
 		return false
-	}, 15*time.Second, 40*time.Millisecond, "pane never settled; last snapshot %v", last)
+	}, 15*time.Second, 40*time.Millisecond, "pane never settled: its snapshot kept changing or stayed blank")
 	return snap, len(snap.GetGrid()), len(snap.GetGrid()[0].GetCells())
 }
