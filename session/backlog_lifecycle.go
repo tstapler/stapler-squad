@@ -158,6 +158,9 @@ type BacklogLifecycleListener struct {
 	ciRerunner ciRerunClient
 	ciReruns   ciRerunLedger
 
+	// conflictRetries throttles conflict-only PR fixes (see remediatePRFixWithBackoffGate).
+	conflictRetries conflictRetryLedger
+
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
 	prCreatorMu      sync.RWMutex
 	prCreatorFactory func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator
