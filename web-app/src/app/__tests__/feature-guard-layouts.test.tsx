@@ -5,8 +5,11 @@
  */
 import React from "react";
 import { render, screen, waitFor, act } from "@testing-library/react";
+import { Provider } from "react-redux";
+import { configureStore } from "@reduxjs/toolkit";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { resetFlagStoreForTest } from "@/lib/features/flagStore";
+import backlogItemsReducer from "@/lib/store/backlogItemsSlice";
 import { ROUTE_META } from "../route-meta";
 import BacklogLayout from "../backlog/layout";
 import BacklogSourcesSettingsLayout from "../settings/backlog-sources/layout";
@@ -21,9 +24,15 @@ jest.mock("@/lib/nav", () => ({
   usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
-jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
+jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}), getWatchTransport: () => ({}) }));
 jest.mock("@connectrpc/connect", () => ({
-  createClient: () => ({ getFeatureFlags: mockGetFeatureFlags }),
+  createClient: () => ({
+    getFeatureFlags: mockGetFeatureFlags,
+    // backlog/layout.tsx's BacklogStreamProvider opens a live backlog subscription unconditionally;
+    // this test only characterises the feature-flag guard, so give it an inert client.
+    listBacklogItems: jest.fn().mockResolvedValue({ items: [] }),
+    watchBacklogItems: jest.fn(async function* () {}),
+  }),
 }));
 
 const cases: Array<[string, string, string, React.ComponentType<{ children: React.ReactNode }>]> = [
@@ -33,12 +42,15 @@ const cases: Array<[string, string, string, React.ComponentType<{ children: Reac
 ];
 
 function renderLayout(Layout: React.ComponentType<{ children: React.ReactNode }>) {
+  const store = configureStore({ reducer: { backlogItems: backlogItemsReducer } });
   return render(
-    <FeatureFlagsProvider>
-      <Layout>
-        <span>guarded child</span>
-      </Layout>
-    </FeatureFlagsProvider>,
+    <Provider store={store}>
+      <FeatureFlagsProvider>
+        <Layout>
+          <span>guarded child</span>
+        </Layout>
+      </FeatureFlagsProvider>
+    </Provider>,
   );
 }
 
