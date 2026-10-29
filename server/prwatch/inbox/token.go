@@ -30,16 +30,10 @@ func ReadToken(path string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrTokenMissing, path)
 	}
 
-	// Lstat first: a FIFO or symlink must be refused before any open can block or follow.
-	info, err := os.Lstat(path)
+	info, err := checkTokenFile(path)
+	// kibitzer:ignore go-error-context -- checkTokenFile already wraps with the path
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrTokenMissing, path)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return "", fmt.Errorf("%w: %s has mode %s", ErrTokenPermissions, path, info.Mode())
-	}
-	if !ownedByCurrentUser(info) {
-		return "", fmt.Errorf("%w: %s is not owned by the current user", ErrTokenPermissions, path)
+		return "", err
 	}
 
 	f, err := os.Open(path)
@@ -63,6 +57,22 @@ func ReadToken(path string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrTokenMissing, path)
 	}
 	return token, nil
+}
+
+// checkTokenFile Lstats first: a FIFO or symlink must be refused before any
+// open can block or follow.
+func checkTokenFile(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrTokenMissing, path)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return nil, fmt.Errorf("%w: %s has mode %s", ErrTokenPermissions, path, info.Mode())
+	}
+	if !ownedByCurrentUser(info) {
+		return nil, fmt.Errorf("%w: %s is not owned by the current user", ErrTokenPermissions, path)
+	}
+	return info, nil
 }
 
 func expandTilde(path string) (string, error) {
