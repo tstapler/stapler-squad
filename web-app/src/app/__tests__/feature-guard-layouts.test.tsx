@@ -21,6 +21,10 @@ jest.mock("@/lib/nav", () => ({
   usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
+// The backlog layout wraps children in a Redux-backed stream provider; this suite only tests the guard.
+jest.mock("@/components/backlog/BacklogStreamContext", () => ({
+  BacklogStreamProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({ getFeatureFlags: mockGetFeatureFlags }),
