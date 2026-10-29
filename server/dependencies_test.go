@@ -629,3 +629,38 @@ func TestParseShadowVerifyEvery(t *testing.T) {
 		assert.Equal(t, tc.wantSet, set, "raw=%q", tc.raw)
 	}
 }
+
+// TestBuildRuntimeDeps_should_WirePRWatchStatusProviderAndClearOnShutdown_When_ServerBoots
+// is the wiring assertion for startPRWatch (R21): a forgotten call leaves the
+// status route answering "not running" even though the module compiled.
+func TestBuildRuntimeDeps_should_WirePRWatchStatusProviderAndClearOnShutdown_When_ServerBoots(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	SetPRWatchStatusProvider(nil)
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	srv := NewServerWithDeps("localhost:0", deps)
+	require.NotNil(t, currentPRWatchStatusProvider(), "startPRWatch must install the status provider")
+	st := currentPRWatchStatusProvider()()
+	assert.False(t, st.Polls, "flag defaults off: nothing polls")
+
+	require.NoError(t, srv.Shutdown())
+	assert.Nil(t, currentPRWatchStatusProvider(), "shutdown must clear the provider")
+}
+
+// TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLIsNotLoopback (R7).
+func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLIsNotLoopback(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	SetPRWatchStatusProvider(nil)
+	cfg := config.LoadConfig()
+	cfg.InboxPRWatch.URL = "http://example.com:8789"
+	cfg.FeatureFlags = map[string]bool{config.FeatureInboxPRWatch: true}
+	require.NoError(t, config.SaveConfig(cfg))
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	assert.Nil(t, currentPRWatchStatusProvider(), "a non-loopback URL builds no poller")
+	assert.NotNil(t, deps.SessionService, "the server still boots")
+}
