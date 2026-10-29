@@ -223,6 +223,38 @@ func altScreenActiveForSnapshot(inst *session.Instance) bool {
 	return inst.IsAlternateScreenActiveBootstrap()
 }
 
+// fullStateCaptureTimeout bounds one full-state redraw capture (a single CapturePane RPC to the
+// daemon), so a wedged backend can't hold a connection's first paint past the client's watchdog.
+const fullStateCaptureTimeout = 3 * time.Second
+
+// snapshotFrame is one full-screen snapshot ready to send, with the alt-screen flag stamped on it.
+type snapshotFrame struct {
+	data      string
+	altScreen bool
+}
+
+// fullStateFrame returns pane's full-state redraw when its backend provides one (tymux), else
+// ok=false and the caller builds the legacy text snapshot (tmux, shell tabs, targets that don't
+// implement streamhub.FullStateSnapshotter). The redraw is complete as-is: it resets state,
+// positions the cursor and arms a pending wrap, so none of ansiSnapshotPrefix,
+// prepareSnapshotContent or withCursorSync may be applied on top. A failed capture is logged and
+// reported as ok=false so the connection still gets a (text) paint instead of nothing.
+func fullStateFrame(ctx context.Context, pane any) (snapshotFrame, bool) {
+	f, isCapable := pane.(streamhub.FullStateSnapshotter)
+	if !isCapable {
+		return snapshotFrame{}, false
+	}
+	snap, ok, err := f.CapturePaneRedraw(ctx)
+	if err != nil {
+		log.Warn("full-state redraw capture failed, falling back to text snapshot", "err", err)
+		return snapshotFrame{}, false
+	}
+	if !ok {
+		return snapshotFrame{}, false
+	}
+	return snapshotFrame{data: snap.Data, altScreen: snap.AltScreen}, true
+}
+
 // newTerminalOutputData wraps content in the TerminalData_Output frame sent for
 // sessionID. Shared by the control-mode and tmux-capture-pane initial/resize
 // snapshot send paths, which all build this identical envelope around whatever
@@ -724,22 +756,49 @@ func drainAndResetTimer(t *time.Timer, d time.Duration) {
 // transient state (i.e. a concurrent Instance.Resume() may be mid-restore), giving up
 // immediately once the status settles into one that means capture will never succeed.
 func waitForPaneContent(instance *session.Instance) (string, error) {
+	content, err := pollWhileResuming(instance, instance.CapturePaneContentRaw)
+	return string(content), err
+}
+
+// waitForFullStateFrame is waitForPaneContent for a backend's full-state redraw. ok is false when
+// the backend has none (the caller then runs the legacy text path) or the capture never succeeded.
+func waitForFullStateFrame(instance *session.Instance) (snapshotFrame, bool) {
+	type capture struct {
+		frame snapshotFrame
+		ok    bool
+	}
+	c, err := pollWhileResuming(instance, func() (capture, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), fullStateCaptureTimeout)
+		defer cancel()
+		snap, ok, err := instance.CapturePaneRedraw(ctx)
+		return capture{snapshotFrame{data: snap.Data, altScreen: snap.AltScreen}, ok}, err
+	})
+	if err != nil {
+		log.Warn("full-state redraw never became available, falling back to text snapshot", "err", err)
+		return snapshotFrame{}, false
+	}
+	return c.frame, c.ok
+}
+
+// pollWhileResuming retries capture while instance is in a transient state, giving up as soon as
+// its status means capture will never succeed.
+func pollWhileResuming[T any](instance *session.Instance, capture func() (T, error)) (T, error) {
 	const (
 		pollInterval = 150 * time.Millisecond
 		maxWait      = 5 * time.Second
 	)
 	deadline := time.Now().Add(maxWait)
 	for {
-		content, err := instance.CapturePaneContentRaw()
+		content, err := capture()
 		if err == nil {
-			return string(content), nil
+			return content, nil
 		}
 		switch instance.Snapshot().Status {
 		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
-			return "", err
+			return content, err
 		}
 		if time.Now().After(deadline) {
-			return "", err
+			return content, err
 		}
 		time.Sleep(pollInterval)
 	}
@@ -1213,6 +1272,12 @@ func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer TerminalWr
 // first WS message arrives, so withholding that message turns a misleading
 // "stopped" flash into a visible "still resuming" wait.
 func (h *ConnectRPCWebSocketHandler) captureAndSendInitialSnapshot(stream *connectWebSocketStream, instance *session.Instance, sessionID string) error {
+	// A full-state redraw is captured fresh on every attach, never via the snapshot cache: the
+	// cache holds text only, and a redraw also carries the modes/title/scroll-region a new
+	// terminal has never seen.
+	if frame, ok := waitForFullStateFrame(instance); ok {
+		return sendFullStateFrame(stream, instance, sessionID, frame)
+	}
 	initialContent, err := h.getOrRefreshSnapshot(sessionID, func() (string, error) {
 		return waitForPaneContent(instance)
 	})
@@ -1226,6 +1291,22 @@ func (h *ConnectRPCWebSocketHandler) captureAndSendInitialSnapshot(stream *conne
 		return nil
 	}
 	return sendInitialSnapshotContent(stream, instance, sessionID, initialContent)
+}
+
+// sendFullStateFrame sends a backend full-state redraw as the initial snapshot, byte for byte:
+// the legacy ansiSnapshotPrefix/prepareSnapshotContent/withCursorSync steps are skipped because
+// the redraw already resets state, positions the cursor and arms pending wrap.
+func sendFullStateFrame(stream *connectWebSocketStream, instance *session.Instance, sessionID string, frame snapshotFrame) error {
+	dataBytes, err := proto.Marshal(newTerminalOutputData(sessionID, frame.data, frame.altScreen))
+	if err != nil {
+		return fmt.Errorf("failed to marshal full-state snapshot: %w", err)
+	}
+	if err := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes)); err != nil {
+		return fmt.Errorf("failed to send full-state snapshot: %w", err)
+	}
+	log.Info("[streamViaControlMode] sent full-state snapshot", "bytes", len(frame.data), "session", sessionID)
+	instance.UpdateTerminalTimestamps(frame.data, true)
+	return nil
 }
 
 // sendInitialSnapshotContent marshals and sends initialContent as the
@@ -1628,6 +1709,13 @@ func sendControlModeResizeQuiescence(stream *connectWebSocketStream, sessionID s
 // dimensions so the client display is immediately correct without waiting
 // for the next PTY event (R1.3 — post-resize snapshot).
 func (h *ConnectRPCWebSocketHandler) sendPostResizeSnapshot(p controlModeResizeCoalescerParams, r resizeReq) {
+	ctx, cancel := context.WithTimeout(context.Background(), fullStateCaptureTimeout)
+	defer cancel()
+	if frame, ok := fullStateFrame(ctx, p.instance); ok {
+		h.markSnapshotDirty(p.sessionID)
+		_ = sendFullStateFrame(p.stream, p.instance, p.sessionID, frame)
+		return
+	}
 	snapContent, snapErr := p.instance.CapturePaneContentRaw()
 	if snapErr != nil || snapContent == "" {
 		return
@@ -2066,6 +2154,11 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 // reason (2026-09-01: skipping it left the client spinning forever with
 // nothing to signal a way out).
 func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSocketStream, instance *session.Instance, sessionID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), fullStateCaptureTimeout)
+	defer cancel()
+	if frame, ok := fullStateFrame(ctx, instance); ok {
+		return sendFullStateFrame(stream, instance, sessionID, frame)
+	}
 	content, captureErr := instance.CapturePaneContentRaw()
 	if captureErr != nil {
 		log.Warn("[streamViaHub] failed to capture initial content, sending empty snapshot instead", "session", sessionID, "err", captureErr)
@@ -2652,6 +2745,15 @@ func handleCurrentPaneRequest(ctx context.Context, sessionID string, target pane
 	step := fastLaneStep{target: target, ctx: ctx, fastLane: opts.UseFastLane, writer: opts.Writer}
 
 	resizeBeforeCaptureIfNeeded(sessionID, step, req, opts)
+
+	// A backend full-state redraw replaces the text snapshot as-is (see fullStateFrame).
+	if frame, ok := fullStateFrame(ctx, target); ok {
+		return &sessionv1.TerminalOutput{
+			Data:            []byte(frame.data),
+			AltScreenActive: &frame.altScreen,
+			ResyncId:        resolveResyncID(sessionID, req, opts),
+		}, nil
+	}
 
 	// Raw (unjoined) capture, not the -J "joined" variant: this content is
 	// replayed straight into the client's xterm.js terminal below, which needs
