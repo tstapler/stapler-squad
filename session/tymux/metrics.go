@@ -33,7 +33,17 @@ const (
 // liveStreams is the set of sessions with a running standing-stream reader
 // goroutine, read by the heartbeat-age gauge callback. A set rather than a
 // per-session label keeps the gauge's cardinality at one series.
-var liveStreams sync.Map // *tymuxGRPCSession -> struct{}
+// The value is the generation's done channel: a late exit from an old generation must not
+// unregister the stream that replaced it.
+var liveStreams sync.Map // *tymuxGRPCSession -> chan struct{} (generation token)
+
+func registerLiveStream(s *tymuxGRPCSession, generation chan struct{}) {
+	liveStreams.Store(s, generation)
+}
+
+func unregisterLiveStream(s *tymuxGRPCSession, generation chan struct{}) {
+	liveStreams.CompareAndDelete(s, generation)
+}
 
 func (s *tymuxGRPCSession) markStreamEvent() {
 	s.lastEventUnixNano.Store(time.Now().UnixNano())

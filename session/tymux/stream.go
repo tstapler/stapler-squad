@@ -76,9 +76,9 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 	// TestStartGeneration_DerivedContext_PropagatesParentCancellation in
 	// session/lifecycle/observability_test.go).
 	s.markStreamEvent()
-	liveStreams.Store(s, struct{}{})
+	registerLiveStream(s, done)
 	go func() {
-		defer liveStreams.Delete(s)
+		defer unregisterLiveStream(s, done)
 		genCtx, span := lifecycle.StartGeneration(ctx, "tymux_stream")
 		reason := s.readAttachLoop(genCtx, paneID, stream, done)
 		lifecycle.EndGeneration(span, "tymux_stream", reason)

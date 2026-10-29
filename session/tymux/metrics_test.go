@@ -120,3 +120,16 @@ func TestReconnectLoop_RecordsReconnectCounterWithCause(t *testing.T) {
 
 	assert.Equal(t, before+1, counterByLabel(t, "tymux_attach_stream_reconnects_total", "cause", "error"))
 }
+
+func TestLiveStreams_LateExitOfOldGeneration_DoesNotUnregisterReplacementStream(t *testing.T) {
+	s := &tymuxGRPCSession{}
+	oldGen, newGen := make(chan struct{}), make(chan struct{})
+	registerLiveStream(s, oldGen)
+	registerLiveStream(s, newGen) // reopened before the old reader goroutine exited
+	t.Cleanup(func() { unregisterLiveStream(s, newGen) })
+
+	unregisterLiveStream(s, oldGen) // the abandoned reader's deferred exit
+
+	_, live := liveStreams.Load(s)
+	require.True(t, live, "the replacement stream must stay registered")
+}
