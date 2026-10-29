@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -53,6 +54,7 @@ func daemonVersionProto(info tymux.DaemonVersionInfo) *sessionv1.TymuxdVersionIn
 // all four RPCs since each returns the post-mutation status.
 func (s *TymuxRolloutService) status() *sessionv1.TymuxRolloutStatus {
 	cfg := config.LoadConfig()
+	session.RecordBackendInfo(cfg)
 
 	var rehearsalCompletedAt *timestamppb.Timestamp
 	if cfg.TymuxRollbackRehearsalCompletedAt != nil && !cfg.TymuxRollbackRehearsalCompletedAt.IsZero() {

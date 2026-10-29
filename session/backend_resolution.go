@@ -14,6 +14,7 @@ import (
 // sessionName must be the sanitized tmux session name (see tmux.NewSessionName),
 // not the raw request title — that's the key TymuxSessionOverrides is keyed by.
 func ResolveSessionBackend(cfg *config.Config, sessionName string, requestOverride ProcessManagerBackend) ProcessManagerBackend {
+	RecordBackendInfo(cfg)
 	if requestOverride != "" {
 		return requestOverride
 	}

@@ -25,6 +25,7 @@ func (s *tymuxGRPCSession) applySnapshotResync(snap *v1.PaneSnapshot) error {
 		return fmt.Errorf("tymux: resync: RenderSnapshotRedraw: %w", err)
 	}
 	s.fanout.Broadcast([]byte(redraw))
+	recordAttachEvent(attachEventSnapshotRedraw)
 	return nil
 }
 

@@ -315,6 +315,13 @@ func ensureDaemonRunningWithRetry(healthy func() bool, attempts int, backoffStar
 // a fresh context.Background()-derived timeout inside the closure rather
 // than depending on any one caller's context.
 func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, error) {
+	return ensureDaemonRunning(ctx, cfg, daemonRestartColdStart)
+}
+
+// ensureDaemonRunning is EnsureDaemonRunning with the tymux_daemon_restarts_total reason to
+// record when it has to spawn, so a deliberate replace counts once as "replace", not also as
+// "cold_start".
+func ensureDaemonRunning(ctx context.Context, cfg DaemonConfig, spawnReason string) (TymuxdReady, error) {
 	if sharedDaemonBlockedInTest(cfg.Addr) {
 		return TymuxdReady{}, ErrSharedDaemonInTest
 	}
@@ -341,9 +348,11 @@ func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, er
 			log.Warn("[tymux] failed to stop unhealthy tymuxd before respawn attempt", "err", stopErr)
 		}
 
+		spawnedAt := time.Now()
 		if _, spawnErr := startDaemonAttemptFn(cfg); spawnErr != nil {
 			return nil, fmt.Errorf("tymux: failed to spawn tymuxd at %s: %w", cfg.Addr, spawnErr)
 		}
+		recordDaemonRestart(spawnReason)
 
 		// Independent of any one caller's ctx (see doc comment above) --
 		// each checkDaemonHealthy call still self-bounds via
@@ -354,8 +363,10 @@ func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, er
 			daemonStartAttempts, daemonStartBackoffStart, daemonStartBackoffMax,
 		)
 		if healthy {
+			recordDaemonStartDuration(time.Since(spawnedAt), daemonStartOK)
 			return TymuxdReady{Spawned: true}, nil
 		}
+		recordDaemonStartDuration(time.Since(spawnedAt), daemonStartFailed)
 
 		// The health-check retry loop exhausted without the daemon becoming
 		// healthy. The process spawnAttemptFn just started (if any) is about
