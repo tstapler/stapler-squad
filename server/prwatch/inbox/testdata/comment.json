@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "id": "inb_comment",
+      "subscription_id": "sub_1",
+      "created_at": "2026-09-04T19:00:01Z",
+      "event": {
+        "version": 1,
+        "id": "evt_60e35f888f32e3867c16f010",
+        "delivery_id": "d-comment",
+        "source": "github",
+        "source_event_type": "issue_comment",
+        "repository": "acme-corp/widget-api",
+        "pull_request": 123,
+        "kind": "comment",
+        "action": "created",
+        "actor": "reviewer",
+        "occurred_at": "2026-09-04T19:00:00Z",
+        "head_sha": null,
+        "summary": "reviewer created PR comment 456",
+        "fingerprint": "60e35f888f32e3867c16f01048192296ca0ed7ece812e4eb61b66c3367ec80e9",
+        "trust": "untrusted",
+        "details": {
+          "comment_id": 456,
+          "body": "please rename this",
+          "body_truncated": false,
+          "url": "https://github.com/acme-corp/widget-api/pull/123#issuecomment-456"
+        },
+        "future_field": {
+          "x": 1
+        }
+      }
+    }
+  ]
+}
