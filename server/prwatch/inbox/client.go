@@ -167,9 +167,10 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	var token string
 	if auth {
-		token, err := ReadToken(c.tokenPath)
-		if err != nil {
+		var err error
+		if token, err = ReadToken(c.tokenPath); err != nil {
 			return err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -191,7 +192,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return statusError(method, path, resp.StatusCode, data)
+		return statusError(method, path, resp.StatusCode, redactToken(data, token))
 	}
 	if out == nil {
 		return nil
@@ -200,6 +201,15 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return fmt.Errorf("%w: %s %s: %v", ErrDecode, method, path, err)
 	}
 	return nil
+}
+
+// redactToken keeps a server that echoes the Authorization header from putting
+// the bearer token into an error message.
+func redactToken(data []byte, token string) []byte {
+	if token == "" {
+		return data
+	}
+	return bytes.ReplaceAll(data, []byte(token), []byte("[redacted]"))
 }
 
 func statusError(method, path string, status int, data []byte) error {
