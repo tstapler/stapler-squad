@@ -448,6 +448,9 @@ func TestExitStatusMapping(t *testing.T) {
 	_, err = cli.New(nil).RepoRoot(ctx, loc(newFake().on("rev-parse --show-toplevel", "fatal: not a git repository (or any of the parent directories): .git\n", exitErr{128})))
 	assert.ErrorIs(t, err, backend.ErrNotARepo)
 
+	_, err = cli.New(nil).RepoRoot(ctx, loc(newFake().on("rev-parse --show-toplevel", "fatal: gitfile does not point to a valid repository: /wt/.git\n", exitErr{128})))
+	assert.ErrorIs(t, err, backend.ErrNotARepo, "git 2.56 wording for a dangling worktree gitfile")
+
 	err = cli.New(nil).Add(ctx, loc(newFake().on("add -A", "fatal: Unable to create '/r/.git/index.lock': File exists.\n", exitErr{128})), backend.AddRequest{All: true})
 	assert.ErrorIs(t, err, backend.ErrLocked{})
 	var locked backend.ErrLocked
