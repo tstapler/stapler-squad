@@ -22,6 +22,10 @@ jest.mock("@/lib/nav", () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
+// The backlog layout's stream provider needs a redux store; this test only characterises the guard.
+jest.mock("@/components/backlog/BacklogStreamContext", () => ({
+  BacklogStreamProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({ getFeatureFlags: mockGetFeatureFlags }),
 }));
