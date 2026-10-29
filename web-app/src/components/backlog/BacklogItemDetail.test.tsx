@@ -27,6 +27,13 @@ import { defined } from "@/lib/utils/defined";
 // focused on BacklogItemDetail's own render behavior.
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
+// Stub the guidance panel (it owns the "Waiting for your decision" badge, tested in its own file)
+// to assert only that the detail view mounts it scoped to this item.
+jest.mock("@/components/guidance/GuidanceRequestPanel", () => ({
+  GuidanceRequestPanel: ({ scope, scopeKey }: { scope: string; scopeKey: string }) => (
+    <div data-testid="guidance-panel-stub">{`${scope}:${scopeKey}`}</div>
+  ),
+}));
 // Off by default; the action-reachability tests flip it so the real gate
 // section's position relative to ActionsSection can be asserted.
 let mockShowGateSection = false;
@@ -343,6 +350,13 @@ describe("BacklogItemDetail — LivenessLine wiring (backlog telemetry-to-UI)", 
   it("BacklogItemDetail_should_RenderLivenessLine_When_ItemDetailMounts", async () => {
     await renderWithSession(makeSession(), []);
     expect(screen.getByTestId("liveness-line")).toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemDetail — owner-action request surface", () => {
+  it("BacklogItemDetail_should_MountGuidancePanelScopedToItem_When_ItemDetailMounts", async () => {
+    await renderWithSession(makeSession(), []);
+    expect(screen.getByTestId("guidance-panel-stub")).toHaveTextContent("backlog-item:item-1");
   });
 });
 
