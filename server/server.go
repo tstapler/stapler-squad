@@ -791,6 +791,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("WorkflowScheduler started")
 	}
 	startWakes(serverCtx, srv, deps, guidanceRequestSvc, wakeTriggerSvc) // ADR-006 wake timer; server/wakes_module.go
+	startPRWatch(serverCtx, srv, deps)                                   // PR watch inbox consumer; server/prwatch_module.go
 
 	// Register BacklogService shutdown so in-flight triage goroutines are signalled
 	// to stop acquiring new semaphore slots and existing calls can complete cleanly.
