@@ -66,6 +66,70 @@ func init() {
 	}
 }
 
+// Daemon supervision metrics. tymux_daemon_restarts_total{reason}:
+// cold_start = a spawn because no healthy daemon answered; replace = an
+// operator-requested ReplaceDaemon; detected_restart = a stream observed the
+// daemon had restarted underneath it (counted once per affected stream).
+const (
+	daemonRestartColdStart = "cold_start"
+	daemonRestartReplace   = "replace"
+	daemonRestartDetected  = "detected_restart"
+)
+
+var (
+	daemonRestartCounter = mustInt64Counter("tymux_daemon_restarts_total",
+		metric.WithDescription("tymuxd spawns/restarts observed by this process, by reason (cold_start, replace, detected_restart)"))
+	daemonStartDuration = mustFloat64Histogram("tymux_daemon_start_duration_ms",
+		metric.WithDescription("Time from spawning tymuxd until it answers health checks (or the retry budget is exhausted), by outcome"),
+		metric.WithUnit("ms"),
+		metric.WithExplicitBucketBoundaries(50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000))
+	daemonVersionMismatch = mustInt64Gauge("tymux_daemon_version_mismatch",
+		metric.WithDescription("1 when the running tymuxd version differs from the binary stapler-squad would spawn, 0 when they match"))
+)
+
+const (
+	daemonStartOK     = "ok"
+	daemonStartFailed = "failed"
+)
+
+func recordDaemonRestart(reason string) {
+	daemonRestartCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", reason)))
+}
+
+func recordDaemonStartDuration(d time.Duration, outcome string) {
+	daemonStartDuration.Record(context.Background(), float64(d.Microseconds())/1000,
+		metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// recordVersionMismatch leaves the gauge untouched when the direction is
+// unknown (a version could not be read): reporting 0 there would hide a
+// mismatch behind a probe failure.
+func recordVersionMismatch(d VersionDirection) {
+	switch d {
+	case VersionSame:
+		daemonVersionMismatch.Record(context.Background(), 0)
+	case VersionUpgrade, VersionDowngrade:
+		daemonVersionMismatch.Record(context.Background(), 1)
+	case VersionUnknown:
+	}
+}
+
+func mustFloat64Histogram(name string, opts ...metric.Float64HistogramOption) metric.Float64Histogram {
+	h, err := telemetry.GetMeter().Float64Histogram(name, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+func mustInt64Gauge(name string, opts ...metric.Int64GaugeOption) metric.Int64Gauge {
+	g, err := telemetry.GetMeter().Int64Gauge(name, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return g
+}
+
 func mustInt64Counter(name string, opts ...metric.Int64CounterOption) metric.Int64Counter {
 	c, err := telemetry.GetMeter().Int64Counter(name, opts...)
 	if err != nil {

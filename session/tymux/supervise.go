@@ -341,9 +341,11 @@ func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, er
 			log.Warn("[tymux] failed to stop unhealthy tymuxd before respawn attempt", "err", stopErr)
 		}
 
+		spawnedAt := time.Now()
 		if _, spawnErr := startDaemonAttemptFn(cfg); spawnErr != nil {
 			return nil, fmt.Errorf("tymux: failed to spawn tymuxd at %s: %w", cfg.Addr, spawnErr)
 		}
+		recordDaemonRestart(daemonRestartColdStart)
 
 		// Independent of any one caller's ctx (see doc comment above) --
 		// each checkDaemonHealthy call still self-bounds via
@@ -354,8 +356,10 @@ func EnsureDaemonRunning(ctx context.Context, cfg DaemonConfig) (TymuxdReady, er
 			daemonStartAttempts, daemonStartBackoffStart, daemonStartBackoffMax,
 		)
 		if healthy {
+			recordDaemonStartDuration(time.Since(spawnedAt), daemonStartOK)
 			return TymuxdReady{Spawned: true}, nil
 		}
+		recordDaemonStartDuration(time.Since(spawnedAt), daemonStartFailed)
 
 		// The health-check retry loop exhausted without the daemon becoming
 		// healthy. The process spawnAttemptFn just started (if any) is about

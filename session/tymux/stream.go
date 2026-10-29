@@ -506,6 +506,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		daemonRestarted := errors.Is(err, errPaneDead)
 		if err != nil && daemonRestarted {
 			log.Warn("tymux: daemon restart detected, reviving session", "session_id", sessionID, "pane_id", paneID)
+			recordDaemonRestart(daemonRestartDetected)
 			s.mu.Lock()
 			s.backendRestarted = true
 			s.backendRestartedAt = time.Now()
