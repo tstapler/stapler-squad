@@ -107,6 +107,8 @@ func TestWatchSet_should_ExcludeSession_When_OwnerRepoOrNumberMissingOrHostIsNot
 		mk("noowner", func(f *SessionFacts) { f.Owner = "" }),
 		mk("badrepo", func(f *SessionFacts) { f.Repo = "a/b" }),
 		mk("ghe", func(f *SessionFacts) { f.Host = "ghe.example.com" }),
+		mk("explicit-gh", func(f *SessionFacts) { f.Host = "github.com" }),
+		mk("explicit-gh-upper", func(f *SessionFacts) { f.Host = "GitHub.com" }),
 		mk("fork", func(f *SessionFacts) { f.Fork = true }),
 		mk("hidden", func(f *SessionFacts) { f.Hidden = true }),
 		mk("gone", func(f *SessionFacts) { f.Lifecycle = LifeGone }),
@@ -115,6 +117,7 @@ func TestWatchSet_should_ExcludeSession_When_OwnerRepoOrNumberMissingOrHostIsNot
 	want := map[string]SkipReason{
 		"nopr": SkipNoPR, "noowner": SkipNoOwnerRepo, "badrepo": SkipNoOwnerRepo, "ghe": SkipGHEHost,
 		"fork": SkipFork, "hidden": SkipHidden, "gone": SkipNotLive, "ok": "",
+		"explicit-gh": "", "explicit-gh-upper": "",
 	}
 	for u, w := range want {
 		if got[u].SkipReason != w {

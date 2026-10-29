@@ -131,13 +131,19 @@ func ComputeWatchSet(ctx context.Context, in WatchSetInput) []SessionRef {
 	return refs
 }
 
+// isGitHubDotCom: sessions created through MCP create_session_for_pr store the
+// host explicitly as "github.com", while hand-made ones leave it empty.
+func isGitHubDotCom(host string) bool {
+	return host == "" || strings.EqualFold(host, "github.com")
+}
+
 func skipReasonFor(f SessionFacts, state SessionState, ignore map[string]bool) SkipReason {
 	switch {
 	case state == StateGone:
 		return SkipNotLive
 	case f.Hidden:
 		return SkipHidden
-	case f.Host != "":
+	case !isGitHubDotCom(f.Host):
 		return SkipGHEHost
 	case f.Fork:
 		return SkipFork
