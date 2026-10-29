@@ -9,6 +9,7 @@ import { webBuildMode } from './web-build';
 
 const execPromise = promisify(exec);
 
+// Throwaway probe: comment-only edit to verify e2e shards run on tests/e2e-only PRs.
 function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
