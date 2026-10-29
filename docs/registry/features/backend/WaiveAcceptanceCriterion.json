@@ -1,0 +1,11 @@
+{
+  "id": "WaiveAcceptanceCriterion",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "WaiveAcceptanceCriterion",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-10-28T21:40:15.172987923-07:00"
+}

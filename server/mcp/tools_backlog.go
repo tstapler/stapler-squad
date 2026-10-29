@@ -1168,6 +1168,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 	}
 
 	if err := h.storage.UpdateAcCriterionStatus(ctx, itemID, criteriaIndex, acStatus, note); err != nil {
+		if errors.Is(err, session.ErrAcCriterionWaived) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d was waived by the owner and needs no further work", criteriaIndex), ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
 	}
 
@@ -1786,7 +1789,7 @@ func unmetAcCriteriaError(item *session.BacklogItemData) error {
 	}
 	var unmet []string
 	for _, c := range criteria {
-		if c.Status != session.AcStatusDone {
+		if !c.Status.IsSatisfied() {
 			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
 		}
 	}

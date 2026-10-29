@@ -1380,8 +1380,47 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 
 // --- AC criterion update ---
 
+// ErrAcCriterionWaived is returned when an agent-driven status update targets a
+// criterion the owner has waived; only the owner's waiver RPC changes it.
+var ErrAcCriterionWaived = errors.New("acceptance criterion was waived by the owner")
+
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, func(c *AcCriterion) error {
+		if c.Status == AcStatusWaived {
+			return ErrAcCriterionWaived
+		}
+		c.Status = AcStatus(status)
+		if note != "" {
+			c.Note = note
+		}
+		return nil
+	})
+}
+
+// ErrAcCriterionOutOfRange is returned when a criterion index does not exist on the item.
+var ErrAcCriterionOutOfRange = errors.New("acceptance criterion index out of range")
+
+// ErrWaiverReasonRequired is returned when a waiver carries a blank reason.
+var ErrWaiverReasonRequired = errors.New("a waiver needs a non-empty reason")
+
+// WaiveAcCriterion marks a criterion waived with the owner's non-empty reason.
+// Idempotent: re-waiving replaces the reason.
+func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, criterionIndex int, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ErrWaiverReasonRequired
+	}
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, func(c *AcCriterion) error {
+		c.Status = AcStatusWaived
+		c.WaiverReason = reason
+		return nil
+	})
+}
+
+// mutateAcCriterion loads the item's criteria, applies mutate to the one at
+// criterionIndex, and persists the result.
+func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, mutate func(*AcCriterion) error) error {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
@@ -1401,12 +1440,11 @@ func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID stri
 	}
 
 	if criterionIndex < 0 || criterionIndex >= len(criteria) {
-		return fmt.Errorf("criterion index %d out of bounds (len=%d)", criterionIndex, len(criteria))
+		return fmt.Errorf("%w: index %d (len=%d)", ErrAcCriterionOutOfRange, criterionIndex, len(criteria))
 	}
 
-	criteria[criterionIndex].Status = AcStatus(status)
-	if note != "" {
-		criteria[criterionIndex].Note = note
+	if err := mutate(&criteria[criterionIndex]); err != nil {
+		return err
 	}
 
 	serialized, serErr := SerializeAcCriteria(criteria)

@@ -483,7 +483,7 @@ func buildFallbackPRBody(item *BacklogItemData, origin PRFooterOrigin) string {
 		sb.WriteString("\n## Test plan\n")
 		for _, c := range criteria {
 			box := "[ ]"
-			if c.Status == domain.AcStatusDone {
+			if c.Status.IsSatisfied() {
 				box = "[x]"
 			}
 			fmt.Fprintf(&sb, "- %s %s\n", box, sanitizeField(c.Text, 300))

@@ -18,7 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-var newToolNames = []string{toolScheduleWake, toolListWakes, toolCancelWake, toolRequestHelp, toolAnswerHelp}
+var newToolNames = []string{toolScheduleWake, toolListWakes, toolCancelWake, toolRequestHelp, toolAnswerHelp, toolRequestOwnerAction}
 
 // probeArgs satisfies every tool's argument validation, so a call that reaches
 // the handler would act.
@@ -38,12 +38,12 @@ func refusesUnverified(t *testing.T, s *mcpserver.MCPServer, name string) bool {
 	return resultCode(parseResult(t, res)) == CodeIdentityUnverified
 }
 
-func TestIdentityGatedTools_should_BeExactlyTheFiveToolsWithTheAdr007Allowlist(t *testing.T) {
+func TestIdentityGatedTools_should_BeExactlyTheSixToolsWithTheAdr007Allowlist(t *testing.T) {
 	t.Parallel()
 	assert.ElementsMatch(t, newToolNames, slices.Collect(maps.Keys(identityGatedTools)))
 	hidden := []callerRole{roleTriage, roleReview, roleDiagnose}
 	for tool, allowed := range identityGatedTools {
-		assert.Contains(t, allowed, roleWork, "%s: work sessions may use all five tools", tool)
+		assert.Contains(t, allowed, roleWork, "%s: work sessions may use all six tools", tool)
 		for _, role := range hidden {
 			want := tool == toolRequestHelp || tool == toolListWakes
 			assert.Equal(t, want, slices.Contains(allowed, role), "%s for %s", tool, role)

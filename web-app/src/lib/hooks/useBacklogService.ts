@@ -31,12 +31,14 @@ export type KnownBacklogStatus = "idea" | "refining" | "ready" | "queued" | "in_
 // accepting unknown statuses returned by newer server versions.
 export type BacklogItemStatus = KnownBacklogStatus | (string & {});
 
-export type AcCriterionStatus = "pending" | "in_progress" | "done";
+export type AcCriterionStatus = "pending" | "in_progress" | "done" | "waived";
 
 export interface AcCriterion {
   index: number;
   text: string;
   status: AcCriterionStatus;
+  /** Owner's justification; set when status is "waived". */
+  waiverReason?: string;
 }
 
 export interface TriageSuggestion {
@@ -474,6 +476,7 @@ function mapAcCriterion(c: AcCriterionProto): AcCriterion {
     index: c.index,
     text: c.text,
     status: (c.status || "pending") as AcCriterionStatus,
+    waiverReason: c.waiverReason || undefined,
   };
 }
 
@@ -727,6 +730,7 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
     index: c.index,
     text: c.text,
     status: c.status,
+    waiverReason: c.waiverReason ?? "",
   }));
 }
 
@@ -841,6 +845,8 @@ interface UseBacklogServiceReturn {
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
+  /** Owner-only: waive one acceptance criterion with a mandatory reason. Returns the refreshed item. */
+  waiveAcceptanceCriterion: (id: string, criterionIndex: number, reason: string) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
@@ -1070,6 +1076,22 @@ export function useBacklogService(): UseBacklogServiceReturn {
       } catch (err) {
         console.error("[useBacklogService] updateBacklogItem:", err);
         setLastError(new Error(getErrorMessage(err, "Failed to update backlog item.")));
+        return null;
+      }
+    },
+    []
+  );
+
+  const waiveAcceptanceCriterion = useCallback(
+    async (id: string, criterionIndex: number, reason: string): Promise<BacklogItem | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.waiveAcceptanceCriterion({ itemId: id, criterionIndex, reason });
+        return resp.item ? mapBacklogItem(resp.item) : null;
+      } catch (err) {
+        console.error("[useBacklogService] waiveAcceptanceCriterion:", err);
+        setLastError(new Error(getErrorMessage(err, "Failed to waive criterion.")));
         return null;
       }
     },
@@ -1533,6 +1555,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,
+      waiveAcceptanceCriterion,
       archiveBacklogItem,
       unarchiveBacklogItem,
       deleteBacklogItem,

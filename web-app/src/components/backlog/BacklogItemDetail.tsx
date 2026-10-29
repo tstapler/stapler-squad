@@ -145,6 +145,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     unarchiveBacklogItem,
     deleteBacklogItem,
     updateBacklogItem,
+    waiveAcceptanceCriterion,
     listPipelineModes,
     lastError,
   } = useBacklogService();
@@ -915,6 +916,15 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
       if (mountedRef.current) setActionLoading(null);
     }
   }, [item, notesValue, updateBacklogItem, currentFlags]);
+
+  const handleWaiveCriterion = useCallback(
+    async (criterionIndex: number, reason: string) => {
+      if (!item) return;
+      const updated = await waiveAcceptanceCriterion(item.id, criterionIndex, reason);
+      if (updated) setItem(updated);
+    },
+    [item, waiveAcceptanceCriterion]
+  );
 
   const handleUpdateItem = useCallback(
     async (data: BacklogItemInput) => {
@@ -1843,7 +1853,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
 
           <DescriptionSection item={item} defaultExpanded={descriptionExpanded} />
 
-          <AcCriteriaSection item={item} defaultExpanded={acCriteriaExpanded} />
+          <AcCriteriaSection item={item} defaultExpanded={acCriteriaExpanded} onWaive={handleWaiveCriterion} />
 
           {item.planArtifactsPath && (
             <PlanArtifactsSection item={item} defaultExpanded={planArtifactsExpanded} />

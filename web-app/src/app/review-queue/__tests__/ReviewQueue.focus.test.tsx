@@ -37,6 +37,10 @@ jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
   useWatchBacklogItems: jest.fn(() => ({ items: [], connectionState: "live" })),
 }));
 
+jest.mock("@/lib/api/guidanceApi", () => ({
+  useListAllPendingGuidanceRequestsQuery: () => ({ data: [] }),
+}));
+
 let capturedOnSessionClick: ((sessionId: string) => void) | undefined;
 
 jest.mock("@/components/sessions/ReviewQueuePanel", () => ({

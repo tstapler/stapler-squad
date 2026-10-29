@@ -43,6 +43,20 @@ beforeEach(() => {
 });
 
 describe("GuidanceRequestPanel", () => {
+  it("labels a pending request_owner_action request 'Waiting for your decision' and strips the marker", () => {
+    mockRequests = [row({ questionText: "[Owner action] macOS proof waived?", questionType: "multiple-choice", options: ["record waiver"] })];
+    render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+    expect(screen.getByTestId("guidance-request-status")).toHaveTextContent("Waiting for your decision");
+    expect(screen.getByText("macOS proof waived?")).toBeInTheDocument();
+    expect(screen.queryByText(/\[Owner action\]/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the plain 'Pending' label for an ordinary guidance request", () => {
+    mockRequests = [row({})];
+    render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+    expect(screen.getByTestId("guidance-request-status")).toHaveTextContent("Pending");
+  });
+
   it("renders nothing when there are no requests for the scope", () => {
     const { container } = render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
     expect(container).toBeEmptyDOMElement();

@@ -9,6 +9,7 @@ import { deliveryView, snapshotOf } from "@/lib/guidance/deliveryView";
 import { GuidanceDeliveryLine } from "./GuidanceDeliveryLine";
 import { GuidanceQuestionForm, formatAnswers } from "./GuidanceQuestionForm";
 import { LegacyAnswerForm } from "./LegacyAnswerForm";
+import { isOwnerActionRequest, ownerActionQuestion } from "@/lib/guidance/ownerAction";
 import * as styles from "./GuidanceRequestPanel.css";
 
 export interface GuidanceRequestPanelProps {
@@ -104,17 +105,21 @@ function GuidanceRequestItem({
   onSubmit: (answer: string) => void;
 }) {
   const isPending = request.status === "pending";
+  const ownerAction = isOwnerActionRequest(request);
   if ((request.questions?.length ?? 0) > 0) return <StructuredRequestItem request={request} busy={busy} onSubmit={onSubmit} />;
   return (
-    <li className={styles.item} data-testid={`guidance-request-${request.id}`}>
+    <li
+      className={`${styles.item} ${ownerAction && isPending ? styles.ownerActionItem : ""}`}
+      data-testid={`guidance-request-${request.id}`}
+    >
       <div className={styles.itemHeader}>
         <span
           className={isPending ? styles.badgePending : styles.badgeAnswered}
           data-testid="guidance-request-status"
         >
-          {isPending ? "Pending" : "Answered"}
+          {isPending ? (ownerAction ? "Waiting for your decision" : "Pending") : "Answered"}
         </span>
-        <p className={styles.questionText}>{request.questionText}</p>
+        <p className={styles.questionText}>{ownerActionQuestion(request)}</p>
       </div>
       {isPending ? (
         <LegacyAnswerForm request={request} busy={busy} onSubmit={onSubmit} />

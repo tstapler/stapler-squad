@@ -7,6 +7,7 @@ import {
   AnswerGuidanceRequestRequestSchema,
   GetGuidanceRequestRequestSchema,
   ListSavedGuidanceAnswersRequestSchema,
+  ListAllPendingGuidanceRequestsRequestSchema,
 } from "@/gen/session/v1/guidance_request_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { toPlainObject } from "@/lib/api/serialization";
@@ -81,6 +82,18 @@ export const guidanceApi = connectApi.injectEndpoints({
       },
       providesTags: (_result, _error, id) => [{ type: "GuidanceRequests", id }],
     }),
+    listAllPendingGuidanceRequests: builder.query<PlainGuidanceRequest[], void>({
+      queryFn: async () => {
+        try {
+          const response = await getClient().listAllPendingGuidanceRequests(create(ListAllPendingGuidanceRequestsRequestSchema, {}));
+          return { data: response.requests.map((r) => toPlainObject(r) as unknown as PlainGuidanceRequest) };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Failed to fetch pending guidance requests";
+          return { error: { status: -1, error: msg } };
+        }
+      },
+      providesTags: ["GuidanceRequests"],
+    }),
     listSavedGuidanceAnswers: builder.query<PlainGuidanceRequest[], void>({
       queryFn: async () => {
         try {
@@ -118,4 +131,5 @@ export const {
   useAnswerGuidanceRequestMutation,
   useGetGuidanceRequestQuery,
   useListSavedGuidanceAnswersQuery,
+  useListAllPendingGuidanceRequestsQuery,
 } = guidanceApi;

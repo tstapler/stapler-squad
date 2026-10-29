@@ -126,3 +126,9 @@ export const shortAnswerInput = style({
   color: vars.color.textPrimary,
   fontSize: vars.fontSize.sm,
 });
+
+/** Pending request_owner_action: only the owner can unblock the agent, so it gets a warning edge. */
+export const ownerActionItem = style({
+  borderLeft: `3px solid ${vars.color.warningText}`,
+  paddingLeft: vars.space["3"],
+});

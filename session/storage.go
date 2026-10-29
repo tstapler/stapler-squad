@@ -1606,6 +1606,11 @@ func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, cr
 	return s.repo.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
 }
 
+// WaiveAcCriterion records an owner waiver (status waived + reason) on one criterion.
+func (s *Storage) WaiveAcCriterion(ctx context.Context, itemID string, criterionIndex int, reason string) error {
+	return s.repo.WaiveAcCriterion(ctx, itemID, criterionIndex, reason)
+}
+
 // AppendProgressNote records a single report_progress call as an immutable history
 // entry, in addition to the current-note-per-criterion updated by UpdateAcCriterionStatus.
 func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {

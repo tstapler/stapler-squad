@@ -1096,6 +1096,8 @@ func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
+
+					WaiverReason: c.WaiverReason,
 				}
 			}
 			p.AcceptanceCriteria = protoAC
@@ -1209,6 +1211,8 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 					Index:  int32(c.Index),
 					Text:   c.Text,
 					Status: string(c.Status),
+
+					WaiverReason: c.WaiverReason,
 				}
 			}
 			p.AcceptanceCriteria = protoAC

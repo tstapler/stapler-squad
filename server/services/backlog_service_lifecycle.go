@@ -117,6 +117,8 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON,
 			Index:  int(c.Index),
 			Text:   c.Text,
 			Status: session.AcStatus(c.Status),
+
+			WaiverReason: c.WaiverReason,
 		}
 	}
 	b, err := json.Marshal(criteria)
@@ -574,6 +576,41 @@ func (s *BacklogService) UnarchiveBacklogItem(
 
 	return connect.NewResponse(&sessionv1.UnarchiveBacklogItemResponse{
 		Item: backlogItemToProto(unarchived, s.engine, s.buildCostLookup()),
+	}), nil
+}
+
+// --- WaiveAcceptanceCriterion ---
+
+// WaiveAcceptanceCriterion records the owner's waiver of one acceptance criterion. Only
+// reachable over the operator RPC surface; no MCP tool exposes it, so an agent cannot
+// waive its own criteria.
+// +api: backlog:waive-criterion
+func (s *BacklogService) WaiveAcceptanceCriterion(
+	ctx context.Context,
+	req *connect.Request[sessionv1.WaiveAcceptanceCriterionRequest],
+) (*connect.Response[sessionv1.WaiveAcceptanceCriterionResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	m := req.Msg
+	if strings.TrimSpace(m.Reason) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, session.ErrWaiverReasonRequired)
+	}
+	err := s.storage.WaiveAcCriterion(ctx, m.ItemId, int(m.CriterionIndex), m.Reason)
+	switch {
+	case errors.Is(err, session.ErrNotFound):
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
+	case errors.Is(err, session.ErrWaiverReasonRequired), errors.Is(err, session.ErrAcCriterionOutOfRange):
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	case err != nil:
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to waive criterion: %w", err))
+	}
+	item, err := s.storage.GetBacklogItem(ctx, m.ItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload item: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.WaiveAcceptanceCriterionResponse{
+		Item: backlogItemToProto(item, s.engine, s.buildCostLookup()),
 	}), nil
 }
 

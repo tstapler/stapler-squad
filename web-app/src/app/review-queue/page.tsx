@@ -13,6 +13,8 @@ import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
+import { useListAllPendingGuidanceRequestsQuery } from "@/lib/api/guidanceApi";
+import { isOwnerActionRequest, ownerActionQuestion } from "@/lib/guidance/ownerAction";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
@@ -72,6 +74,13 @@ function ReviewQueueContent() {
   const planReviewItems = useMemo(
     () => backlogItems.filter((item) => getAvailableActions(item).actions.has("approve_plan")),
     [backlogItems]
+  );
+
+  // Agent requests only the owner can unblock (request_owner_action) — second entry point beside Notifications.
+  const { data: pendingGuidance } = useListAllPendingGuidanceRequestsQuery(undefined, { pollingInterval: 10000 });
+  const ownerActionRequests = useMemo(
+    () => (pendingGuidance ?? []).filter((r) => isOwnerActionRequest(r) && r.scope === "backlog-item" && r.itemId),
+    [pendingGuidance]
   );
 
   // Backlog-origin index for the badge shown on backlog-automation-dispatched sessions
@@ -295,6 +304,28 @@ function ReviewQueueContent() {
   return (
     <div className={styles.page}>
       <div id="main-content" className={styles.main}>
+        {ownerActionRequests.length > 0 && (
+          <section className={styles.inlineSection} aria-label="Pending questions" data-testid="owner-action-section">
+            <h3 className={styles.inlineSectionTitle}>
+              Pending Questions
+              <span className={styles.inlineSectionCount}>{ownerActionRequests.length}</span>
+            </h3>
+            <div className={styles.inlineSectionList}>
+              {ownerActionRequests.map((r) => (
+                <button
+                  key={r.id}
+                  className={styles.inlineSectionRow}
+                  onClick={() => router.push(`/backlog?item=${r.itemId}`)}
+                  data-testid={`owner-action-item-${r.id}`}
+                >{/* analytics-exempt */}
+                  <span>{ownerActionQuestion(r)}</span>
+                  <span className={styles.inlineSectionRowMeta}>Waiting for your decision</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {planReviewItems.length > 0 && (
           <section className={styles.inlineSection} aria-label="Plan reviews" data-testid="plan-review-section">
             <h3 className={styles.inlineSectionTitle}>
