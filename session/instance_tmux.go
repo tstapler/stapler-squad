@@ -1468,6 +1468,31 @@ func (i *Instance) CapturePaneContentRawContext(ctx context.Context) (streamhub.
 	return i.CapturePaneContentRawPriority(ctx)
 }
 
+// CapturePaneRedraw captures a first paint that restores terminal state (modes, title, alt
+// screen, scroll region, cursor) when the backend can produce one, so an attaching client's keys,
+// paste and mouse work immediately. ok is false for backends that only have a text capture (tmux),
+// leaving callers on CapturePaneContentRaw's legacy paint; that case never touches the pane.
+// Satisfies streamhub.FullStateSnapshotter.
+func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSnapshot, bool, error) {
+	c, ok := capabilityOf[RedrawCapturer](i.pm())
+	if !ok {
+		return streamhub.FullStateSnapshot{}, false, nil
+	}
+	if !i.started.Load() || i.Status == Paused {
+		return streamhub.FullStateSnapshot{}, false, streamhub.ErrSessionNotStarted
+	}
+	data, altScreen, err := c.CapturePaneRedraw(ctx)
+	if err != nil {
+		return streamhub.FullStateSnapshot{}, false, err
+	}
+	// The daemon's emulator is the authority on alt screen; keep the live-tracked flag that
+	// AppScrollGate reads in step, as IsAlternateScreenActiveBootstrap does for tmux.
+	if !i.GetAltScreenBootstrapped() || i.GetAltScreenActive() != altScreen {
+		i.SetAltScreenActiveBootstrap(altScreen)
+	}
+	return streamhub.FullStateSnapshot{Data: data, AltScreen: altScreen}, true, nil
+}
+
 // GetCurrentPaneContent captures the current visible tmux pane content.
 // Delegates to processManager.CaptureViewport.
 func (i *Instance) GetCurrentPaneContent(lines int) (string, error) {

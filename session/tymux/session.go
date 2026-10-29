@@ -700,6 +700,21 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
+// CapturePaneRedraw is the full-state first paint: unlike CapturePaneContentRaw's text capture it
+// restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
+// mouse work in a freshly attached client before the app re-sets any of them.
+func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (string, bool, error) {
+	snap, err := s.capturePane(ctx, 0)
+	if err != nil {
+		return "", false, err
+	}
+	data, err := RenderSnapshotRedraw(snap)
+	if err != nil {
+		return "", false, err
+	}
+	return data, snap.GetAltScreen(), nil
+}
+
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument
 // (a literal offset, or "-"/"" meaning "as far as available"/"the live
 // screen") onto tymux's single non-negative scrollback_offset. Anything
