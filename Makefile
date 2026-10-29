@@ -361,7 +361,11 @@ install-mux: ensure-tools ## Build and install claude-mux to ~/.local/bin
 # system tmux, ensuring reproducible results across developer machines and CI.
 
 BIN_TMUX        := bin/tmux
-TMUX_BUILD_STAMP := .tmux-build.stamp
+# Keep TMUX_PIN in step with the third_party/tmux submodule and scripts/build-tmux.sh;
+# it is in the stamp name so bumping the pin forces a rebuild (and rebuilds bin/tmux
+# before build-tmux-embed copies it into a release).
+TMUX_PIN := 3.8
+TMUX_BUILD_STAMP := .tmux-build-$(TMUX_PIN).stamp
 
 # Stamp-file approach: only rebuild when submodule source changes
 $(BIN_TMUX): $(TMUX_BUILD_STAMP)
