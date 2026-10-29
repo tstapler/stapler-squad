@@ -14,8 +14,6 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
@@ -57,7 +55,10 @@ func TestNewTymuxClient_PropagatesTraceContextToDaemon(t *testing.T) {
 	handler := &traceCapturingHandler{}
 	mux := http.NewServeMux()
 	mux.Handle(tymuxv1connect.NewTymuxServiceHandler(handler))
-	srv := httptest.NewUnstartedServer(h2c.NewHandler(mux, &http2.Server{}))
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Config.Protocols = new(http.Protocols)
+	srv.Config.Protocols.SetHTTP1(true)
+	srv.Config.Protocols.SetUnencryptedHTTP2(true) // tymuxd speaks plaintext h2c
 	srv.Start()
 	t.Cleanup(srv.Close)
 

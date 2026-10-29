@@ -103,7 +103,7 @@ func TestTymuxInstruments_NamesUnitsAndLabelKeys(t *testing.T) {
 			seen[m.Name] = true
 			assert.Equal(t, exp.unit, m.Unit, m.Name)
 			for _, set := range dataPointAttributes(m) {
-				var keys []string
+				keys := make([]string, 0, set.Len())
 				for _, kv := range set.ToSlice() {
 					keys = append(keys, string(kv.Key))
 				}
