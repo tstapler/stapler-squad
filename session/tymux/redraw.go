@@ -29,31 +29,43 @@ func RenderSnapshotRedraw(snap *v1.PaneSnapshot) (string, error) {
 	}
 	var b strings.Builder
 
-	// Known base: leave any alt screen the client was in, then enter it if the snapshot is alt.
-	b.WriteString(csi + "?1049l")
-	if snap.GetAltScreen() {
-		b.WriteString(csi + "?1049h")
+	// A daemon older than v1.9 sends no terminal state at all; its zero values would read as
+	// "everything off" and reset modes the app set (mouse, paste, alt screen). Paint the grid
+	// and cursor only.
+	hasState := snap.GetModes() != nil
+
+	if hasState {
+		// Known base: leave any alt screen the client was in, then enter it if the snapshot is alt.
+		b.WriteString(csi + "?1049l")
+		if snap.GetAltScreen() {
+			b.WriteString(csi + "?1049h")
+		}
+		// Neutral painting state, then clear.
+		b.WriteString(csi + "0m" + csi + "4l" + csi + "?6l" + csi + "?7h" + csi + "?25l" + csi + "r")
+		b.WriteString(esc + "(B" + esc + ")B" + esc + "*B" + esc + "+B\x0f")
+	} else {
+		b.WriteString(csi + "0m" + csi + "?25l")
 	}
-	// Neutral painting state, then clear.
-	b.WriteString(csi + "0m" + csi + "4l" + csi + "?6l" + csi + "?7h" + csi + "?25l" + csi + "r")
-	b.WriteString(esc + "(B" + esc + ")B" + esc + "*B" + esc + "+B\x0f")
 	b.WriteString(csi + "2J" + csi + "H")
 
-	b.WriteString(csi + "3g") // TBC: clear all tab stops
-	for _, col := range snap.GetTabStops() {
-		b.WriteString(csi + "1;" + strconv.Itoa(int(col)+1) + "H" + esc + "H") // HTS at that column
+	if hasState {
+		b.WriteString(csi + "3g") // TBC: clear all tab stops
+		for _, col := range snap.GetTabStops() {
+			b.WriteString(csi + "1;" + strconv.Itoa(int(col)+1) + "H" + esc + "H") // HTS at that column
+		}
+		b.WriteString(csi + "H") // HTS positioning moved the cursor; paint from the top-left
 	}
-	b.WriteString(csi + "H") // HTS positioning moved the cursor; paint from the top-left
 
 	b.WriteString(strings.ReplaceAll(grid, "\n", "\r\n"))
 
-	writeCharsets(&b, snap.GetCharsets())
-	if top, bottom := snap.GetScrollTop(), snap.GetScrollBottom(); top != 0 || bottom != 0 {
-		b.WriteString(csi + strconv.Itoa(int(top)) + ";" + strconv.Itoa(int(bottom)) + "r")
+	if hasState {
+		if top, bottom := snap.GetScrollTop(), snap.GetScrollBottom(); top != 0 || bottom != 0 {
+			b.WriteString(csi + strconv.Itoa(int(top)) + ";" + strconv.Itoa(int(bottom)) + "r")
+		}
+		writeModes(&b, snap.GetModes())
+		b.WriteString(csi + strconv.Itoa(int(snap.GetCursorStyle())) + " q")
+		b.WriteString(esc + "]2;" + stripControl(snap.GetTitle(), "") + st)
 	}
-	writeModes(&b, snap.GetModes())
-	b.WriteString(csi + strconv.Itoa(int(snap.GetCursorStyle())) + " q")
-	b.WriteString(esc + "]2;" + stripControl(snap.GetTitle(), "") + st)
 
 	row := int(snap.GetCursorRow())
 	if snap.GetModes().GetOrigin() { // CUP is relative to the scroll region's top under DECOM
@@ -61,9 +73,17 @@ func RenderSnapshotRedraw(snap *v1.PaneSnapshot) (string, error) {
 			row -= top - 1
 		}
 	}
+	if row < 0 {
+		row = 0
+	}
 	b.WriteString(csi + strconv.Itoa(row+1) + ";" + strconv.Itoa(int(snap.GetCursorCol())+1) + "H")
 	if snap.GetCursorPendingWrap() {
-		writePendingWrap(&b, snap)
+		writePendingWrap(&b, snap, row+1)
+	}
+	// Designations come after every character this function prints: the paint and the
+	// pending-wrap re-print must run under the neutral ASCII sets set above.
+	if hasState {
+		writeCharsets(&b, snap.GetCharsets())
 	}
 	b.WriteString(csi + "?25" + map[bool]string{true: "l", false: "h"}[snap.GetCursorHidden()])
 	return b.String(), nil
@@ -71,8 +91,11 @@ func RenderSnapshotRedraw(snap *v1.PaneSnapshot) (string, error) {
 
 // writePendingWrap re-prints the last-column cell under the cursor, which re-arms the terminal's
 // deferred autowrap: CUP can only reach the last column, not the parked "past it" state.
-// The cell keeps its own attributes (and ends with a reset), so the repaint changes nothing visible.
-func writePendingWrap(b *strings.Builder, snap *v1.PaneSnapshot) {
+// The cell keeps its own attributes (and ends with a reset), so the repaint changes nothing
+// visible. When the last cell is a wide glyph's empty continuation, the glyph itself is
+// re-printed from its left half (printing at the continuation would overwrite it). cupRow is the
+// 1-based CUP row (already origin-mode adjusted).
+func writePendingWrap(b *strings.Builder, snap *v1.PaneSnapshot, cupRow int) {
 	row := int(snap.GetCursorRow())
 	grid := snap.GetGrid()
 	if row < 0 || row >= len(grid) {
@@ -83,11 +106,11 @@ func writePendingWrap(b *strings.Builder, snap *v1.PaneSnapshot) {
 		return
 	}
 	last := cells[len(cells)-1]
-	text, err := CellsToSGR([]*v1.Row{{Cells: []*v1.Cell{last}}}, snap.GetHyperlinks())
-	if err != nil {
-		return
+	if len(cells) >= 2 && cellTextOf(last) == "" && isWide(cellTextOf(cells[len(cells)-2])) {
+		b.WriteString(csi + strconv.Itoa(cupRow) + ";" + strconv.Itoa(len(cells)-1) + "H")
+		last = cells[len(cells)-2]
 	}
-	b.WriteString(text)
+	b.WriteString(renderCells([]*v1.Cell{last}, snap.GetHyperlinks(), false))
 }
 
 // charsetFinal is the SCS final byte for a Charsets designation: 0 ASCII, 1 DEC graphics, 2 UK.

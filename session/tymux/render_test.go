@@ -223,7 +223,7 @@ func TestCellSGRRenderer_ShouldEmitExactBytes_ForExtendedAttributes(t *testing.T
 			"\x1b]8;id=k1;https://example.com/a?x=1;y=2\x1b\\a\x1b]8;;file:///tmp/b\x1b\\b\x1b]8;;\x1b\\"},
 		{"hyperlink survives SGR change", []*v1.Cell{styledCell("a", 0, 0, 0, 2), styledCell("b", attrBold, 0, 0, 2)},
 			"\x1b]8;;file:///tmp/b\x1b\\a\x1b[1mb\x1b]8;;\x1b\\\x1b[0m"},
-		{"out-of-range link index prints plain", []*v1.Cell{styledCell("a", 0, 0, 0, 9)}, "\x1b]8;;\x1b\\a\x1b]8;;\x1b\\"},
+		{"out-of-range link index prints plain", []*v1.Cell{styledCell("a", 0, 0, 0, 9)}, "a"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,4 +241,50 @@ func TestCellSGRRenderer_ShouldNotLetDaemonStringsInjectEscapes_WhenHyperlinkHas
 
 	require.NoError(t, err)
 	assert.Equal(t, "\x1b]8;id=abc;http://x/[2Jevil\x1b\\a\x1b]8;;\x1b\\", out)
+}
+
+func TestCellSGRRenderer_ShouldDropTrailingNeverWrittenCells_ButKeepLiteralSpacesAndStyledCells(t *testing.T) {
+	bg := packIndexed(1)
+	cases := []struct {
+		name string
+		row  *v1.Row
+		want string
+	}{
+		{"trailing empty cells", row(cell("a", 0, 0, 0), cell("", 0, 0, 0), cell("", 0, 0, 0)), "a"},
+		{"empty cell in the middle still becomes a space", row(cell("a", 0, 0, 0), cell("", 0, 0, 0), cell("b", 0, 0, 0)), "a b"},
+		{"literal trailing space is kept", row(cell("a", 0, 0, 0), cell(" ", 0, 0, 0)), "a "},
+		{"styled trailing empty cell is kept", row(cell("a", 0, 0, 0), cell("", 0, bg, 0)), "a\x1b[48;5;1m \x1b[0m"},
+		{"wide glyph continuation at the end", row(cell("世", 0, 0, 0), cell("", 0, 0, 0)), "世"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := CellsToSGR([]*v1.Row{c.row}, nil)
+
+			require.NoError(t, err)
+			assert.Equal(t, c.want, out)
+		})
+	}
+}
+
+func TestCellSGRRenderer_ShouldNeverEmitEscapes_WhenCellTextCarriesControlBytes(t *testing.T) {
+	out, err := CellsToSGR([]*v1.Row{row(cell("\x1b[31mX\u009b", 0, 0, 0), cell("\a", 0, 0, 0), cell("y", 0, 0, 0))}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "[31mX y", out, "controls are stripped; a cell left empty by that prints as a space")
+	assert.NotContains(t, out, "\x1b")
+	assert.NotContains(t, out, "\u009b")
+}
+
+func TestCellSGRRenderer_ShouldDropHyperlinksWhoseURIExceedsTheCap(t *testing.T) {
+	long := "https://example.com/" + strings.Repeat("a", maxHyperlinkURIBytes)
+	ok := "https://example.com/" + strings.Repeat("b", maxHyperlinkURIBytes-len("https://example.com/"))
+	linked := func(idx uint32) *v1.Cell { return &v1.Cell{Text: "x", Hyperlink: idx} }
+
+	over, err := CellsToSGR([]*v1.Row{{Cells: []*v1.Cell{linked(1)}}}, []*v1.Hyperlink{{Uri: long}})
+	require.NoError(t, err)
+	atCap, err := CellsToSGR([]*v1.Row{{Cells: []*v1.Cell{linked(1)}}}, []*v1.Hyperlink{{Uri: ok}})
+	require.NoError(t, err)
+
+	assert.Equal(t, "x", over, "an over-long URI is dropped, not truncated into a wrong link")
+	assert.Contains(t, atCap, "\x1b]8;;"+ok+"\x1b\\")
 }

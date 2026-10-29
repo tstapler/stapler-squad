@@ -92,23 +92,43 @@ func CellsToSGR(grid []*v1.Row, links []*v1.Hyperlink) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// rowToSGR renders one row's cells, diffing each cell's SGR state against
-// the previous cell's (implicitly the terminal's default state at the
-// start of the row) and emitting a sequence only on change.
+// rowToSGR renders one row for text capture: trailing never-written cells are dropped so rows
+// aren't padded to the pane width.
 func rowToSGR(row *v1.Row, links []*v1.Hyperlink) string {
+	return renderCells(row.GetCells(), links, true)
+}
+
+// renderCells renders cells, diffing each cell's SGR state against the previous cell's
+// (implicitly the terminal's default state at the start of the row) and emitting a sequence only
+// on change. With trimTrailing, trailing cells that are empty, unstyled and unlinked are dropped
+// (a literal " " is kept: the daemon sent it); the pending-wrap re-print needs them untrimmed.
+func renderCells(cells []*v1.Cell, links []*v1.Hyperlink, trimTrailing bool) string {
+	if trimTrailing {
+		for len(cells) > 0 {
+			last := cells[len(cells)-1]
+			if cellTextOf(last) != "" || cellState(last) != (sgrState{}) {
+				break
+			}
+			cells = cells[:len(cells)-1]
+		}
+	}
 	var b strings.Builder
 	prev := sgrState{}
 	afterWide := false
-	for _, c := range row.GetCells() {
+	for _, c := range cells {
 		cur := cellState(c)
+		if _, _, ok := linkTarget(cur.link, links); !ok {
+			cur.link = 0 // an unusable link renders as plain text, not as an open/close pair
+		}
 		if cur.sgr() != prev.sgr() {
 			b.WriteString(sgrSequence(prev.sgr(), cur.sgr()))
 		}
 		if cur.link != prev.link {
 			b.WriteString(hyperlinkSequence(cur.link, links))
 		}
-		b.WriteString(cellText(c, afterWide))
-		afterWide = isWide(c.GetText())
+		text := cellTextOf(c)
+		b.WriteString(printedText(text, afterWide))
+		afterWide = isWide(text)
 		prev = cur
 	}
 	// Leave the line in the default state so whatever follows (the next
@@ -123,21 +143,33 @@ func rowToSGR(row *v1.Row, links []*v1.Hyperlink) string {
 	return b.String()
 }
 
-// hyperlinkSequence opens the OSC 8 hyperlink at 1-based index idx of links, or closes the
-// current one when idx is 0 or out of range. SGR 0 doesn't end a hyperlink, so closing is explicit.
-func hyperlinkSequence(idx uint32, links []*v1.Hyperlink) string {
-	const closeLink = "\x1b]8;;\x1b\\"
+// maxHyperlinkURIBytes caps a rendered OSC 8 URI (matches common emulator limits); the URI is
+// re-emitted on every link change, so an unbounded one amplifies the broadcast.
+const maxHyperlinkURIBytes = 2048
+
+// linkTarget resolves 1-based index idx of links to the sanitized OSC 8 parameters and URI.
+// ok is false for no link, an out-of-range index, an empty URI, or one over the cap.
+func linkTarget(idx uint32, links []*v1.Hyperlink) (params, uri string, ok bool) {
 	if idx == 0 || int(idx) > len(links) || links[idx-1] == nil {
-		return closeLink
+		return "", "", false
 	}
 	l := links[idx-1]
-	uri := stripControl(l.GetUri(), "")
-	if uri == "" {
-		return closeLink
+	uri = stripControl(l.GetUri(), "")
+	if uri == "" || len(uri) > maxHyperlinkURIBytes {
+		return "", "", false
 	}
-	params := ""
 	if id := stripControl(l.GetId(), ";:"); id != "" {
 		params = "id=" + id
+	}
+	return params, uri, true
+}
+
+// hyperlinkSequence opens the OSC 8 hyperlink at 1-based index idx of links, or closes the
+// current one when idx doesn't resolve. SGR 0 doesn't end a hyperlink, so closing is explicit.
+func hyperlinkSequence(idx uint32, links []*v1.Hyperlink) string {
+	params, uri, ok := linkTarget(idx, links)
+	if !ok {
+		return "\x1b]8;;\x1b\\"
 	}
 	return "\x1b]8;" + params + ";" + uri + "\x1b\\"
 }
@@ -153,14 +185,21 @@ func stripControl(s, extra string) string {
 	}, s)
 }
 
-// cellText returns the text to print for c. The daemon leaves a cell's Text
-// empty when the cursor skipped over it (CSI C, which Claude Code's renderer
-// uses instead of printing spaces) — printing "" would glue the words on either
-// side together. An empty cell is the 2nd half of a wide glyph only when the
-// preceding cell is wide, and that one prints nothing.
-func cellText(c *v1.Cell, afterWide bool) string {
-	if t := c.GetText(); t != "" {
-		return t
+// cellTextOf is a cell's text with control bytes removed: cell text comes from the daemon's
+// view of arbitrary program output and is replayed into browser terminals, so it must never
+// carry escapes.
+func cellTextOf(c *v1.Cell) string {
+	return stripControl(c.GetText(), "")
+}
+
+// printedText returns the text to print for a cell whose sanitized text is text. The daemon
+// leaves a cell's Text empty when the cursor skipped over it (CSI C, which Claude Code's renderer
+// uses instead of printing spaces) — printing "" would glue the words on either side together.
+// An empty cell is the 2nd half of a wide glyph only when the preceding cell is wide, and that
+// one prints nothing.
+func printedText(text string, afterWide bool) string {
+	if text != "" {
+		return text
 	}
 	if afterWide {
 		return ""

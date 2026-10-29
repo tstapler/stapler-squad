@@ -12,6 +12,9 @@ import (
 
 func redrawOf(t *testing.T, snap *v1.PaneSnapshot) string {
 	t.Helper()
+	if snap.Modes == nil { // a snapshot without Modes is an old daemon's (see the legacy test)
+		snap.Modes = &v1.TerminalModes{}
+	}
 	out, err := RenderSnapshotRedraw(snap)
 	require.NoError(t, err)
 	return out
@@ -205,4 +208,65 @@ func TestRedraw_ShouldNotRePrintLastCell_WhenWrapIsNotPending(t *testing.T) {
 	out := redrawOf(t, snap)
 
 	assert.NotContains(t, out[strings.Index(out, "\x1b[1;2H"):], "z", "nothing is re-printed after the final CUP")
+}
+
+func TestRedraw_ShouldReprintTheWideGlyphItself_WhenPendingWrapFollowsAWideGlyphAtTheLastColumn(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid:              []*v1.Row{row(cell("a", 0, 0, 0), cell("世", 0, 0, 0), cell("", 0, 0, 0))},
+		CursorCol:         2,
+		CursorPendingWrap: true,
+		Modes:             &v1.TerminalModes{},
+	}
+
+	out := redrawOf(t, snap)
+
+	// The continuation cell must not be overwritten with a space; the glyph is re-printed from its left half.
+	indexOrdered(t, out, "\x1b[1;3H", "\x1b[1;2H世", "\x1b[?25h")
+	assert.NotContains(t, out[strings.LastIndex(out, "\x1b[1;3H"):], " \x1b[?25h")
+}
+
+func TestRedraw_ShouldReprintPendingWrapCellUnderAscii_WhenCharsetsAreRestored(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid:              []*v1.Row{row(cell("a", 0, 0, 0), cell("q", 0, 0, 0))},
+		CursorCol:         1,
+		CursorPendingWrap: true,
+		Modes:             &v1.TerminalModes{},
+		Charsets:          &v1.Charsets{G0: 1},
+	}
+
+	out := redrawOf(t, snap)
+
+	reprint := strings.LastIndex(out, "\x1b[1;2Hq")
+	require.GreaterOrEqual(t, reprint, 0, "pending-wrap re-print missing: %q", out)
+	designate := strings.LastIndex(out, "\x1b(0")
+	require.GreaterOrEqual(t, designate, 0, "DEC graphics designation missing: %q", out)
+	assert.Greater(t, designate, reprint, "G0 must switch to DEC graphics only after the ASCII re-print, or 'q' becomes a line")
+}
+
+func TestRedraw_ShouldClampCursorRowAtOne_WhenOriginModeRegionStartsBelowTheCursor(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid:         oneCell(),
+		CursorRow:    0,
+		ScrollTop:    5,
+		ScrollBottom: 10,
+		Modes:        &v1.TerminalModes{Origin: true},
+	}
+
+	out := redrawOf(t, snap)
+
+	assert.NotContains(t, out, "\x1b[-", "a negative CUP row is an invalid CSI")
+	assert.Contains(t, out, "\x1b[1;1H")
+}
+
+func TestRedraw_ShouldSkipStateResets_WhenSnapshotHasNoModes(t *testing.T) {
+	// An older daemon doesn't send terminal state; zero values must not be applied as if real.
+	snap := &v1.PaneSnapshot{Grid: oneCell(), CursorCol: 3}
+
+	out, err := RenderSnapshotRedraw(snap)
+	require.NoError(t, err)
+
+	for _, resetOrState := range []string{"?1049", "?2004", "?1000", "?1006", "?1004", "\x1b]2;", " q", "\x1b(B", "\x1b[4l", "\x1b[20l", "?7h", "?6l"} {
+		assert.NotContains(t, out, resetOrState, "no daemon state => no %q", resetOrState)
+	}
+	indexOrdered(t, out, "\x1b[2J", "a", "\x1b[1;4H", "\x1b[?25h")
 }
