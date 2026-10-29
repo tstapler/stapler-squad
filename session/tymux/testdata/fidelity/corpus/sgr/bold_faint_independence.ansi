@@ -1,0 +1,8 @@
+sgr/bold_faint_independence -- xterm ctlseqs SGR 1/2/22; esctest2 sgr.py
+[1mbold [2m+faint (both)[0m
+[2mfaint [1m+bold (both)[0m
+[1;2m1;2 together[22m cleared by 22[0m
+[1mbold[22m[2mfaint-only[22mplain[0m
+[1mbold[2m[22mafter-22-nothing[0m
+[2mfaint[1m[22mafter-22-nothing[0m
+[1;2;3mbold+faint+italic[22m italic-stays[0m

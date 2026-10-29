@@ -1,0 +1,6 @@
+cursor/tab_stops -- esctest2 hts.py tbc.py cht.py cbt.py; libvterm 21state_tab
+[1;1H[3g[2;1Hdefault stops	1	2	3	4	5	6	7	8	9
+[4;1H[3g[4;5HH[4;15HH[4;40HH[5;1H	custom-5	15	40	(past-last-goes-to-col80)
+[7;1H[0g[7;5H[0g[7;6HH[8;1H	a[9;1Hclear-at-current-col
+[11;1H[2I[11;30Hcht2[12;60H[2Zcbt2[12;1H[Zcbt-default
+[14;1H[3g[14;1H[0g[14;1Htbc-sequences-leave-text-alone[3g

@@ -1,0 +1,6 @@
+cursor/save_restore_decsc -- esctest2 save_restore_cursor.py scorc.py; libvter
+[2;5H7[6;20Hmoved8saved-pos
+[8;1H[1;31;3m7[0m[9;1Hplain-after-reset8restored-attrs[0m
+[11;1H7[12;1H88restore-twice-same
+[14;5H[s[15;1Hx[uCSI-s/u[17;1H(07(B8lqk restored G0 graphics
+[19;1H8[32mrestore-with-no-fresh-save[0m

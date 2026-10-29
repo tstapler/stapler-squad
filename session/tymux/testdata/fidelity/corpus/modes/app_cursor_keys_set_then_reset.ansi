@@ -1,0 +1,2 @@
+modes/app_cursor_keys_set_then_reset -- xterm ctlseqs DECCKM ?1h / ?1l
+[?1hset[?1l then reset: back to normal cursor keys

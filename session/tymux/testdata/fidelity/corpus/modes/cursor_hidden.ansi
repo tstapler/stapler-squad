@@ -1,0 +1,2 @@
+modes/cursor_hidden -- xterm ctlseqs ?25l
+[?25lcursor hidden (DECTCEM)

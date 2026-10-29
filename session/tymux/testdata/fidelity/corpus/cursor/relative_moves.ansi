@@ -1,0 +1,7 @@
+cursor/relative_moves -- esctest2 cuu.py cud.py cuf.py cub.py cnl.py cpl.py; l
+[5;10HX[2A^up2[5;10H[3B[1Cv[2Ddown3-left2
+[10;1Ha[1Cb[2Cc[3Cd[0Ce[Cf (CUF 1,2,3,0,default)
+[11;20Habcdef[3Dxy (CUB 3 overwrite)[12;10Hq[0Dr [Ds (CUB 0,default)
+[14;5Hstart[2Ecnl2[14;5H[2Fcpl2-from-col5-to-row12
+[17;1H[0Azero-up-is-one[20;1H[0Bzero-down-is-one
+[22;40Hmid[99Aclamp-top[22;40H[99Bclamp-bottom

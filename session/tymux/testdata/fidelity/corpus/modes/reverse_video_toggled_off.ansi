@@ -1,0 +1,2 @@
+modes/reverse_video_toggled_off -- xterm ctlseqs DECSCNM ?5l
+[?5hon[?5l then off again

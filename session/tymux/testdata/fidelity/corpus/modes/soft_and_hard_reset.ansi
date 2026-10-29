@@ -1,0 +1,3 @@
+modes/soft_and_hard_reset -- esctest2 ris.py decstr.py; xterm RIS/DECSTR
+[1;1HL01-primary[2;1HL02-primary[3;1HL03-primary[4;1HL04-primary[5;1HL05-primary[1;31;42m[3;3Hcoloredcafter-RIS-screen-cleared[1;1Hplain-after-RIS
+[5;1H[1;31mattr[!pafter-DECSTR-attrs-reset[7;1Htext-kept?[?7l[!pwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww

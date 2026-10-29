@@ -1,0 +1,2 @@
+modes/mouse_reset_returns_to_off -- xterm ctlseqs ?1000l
+[?1000h[?1006h[?1000lprotocol reset, SGR encoding still set

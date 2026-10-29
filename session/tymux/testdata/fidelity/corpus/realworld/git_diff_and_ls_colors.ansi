@@ -1,0 +1,12 @@
+realworld/git_diff_and_ls_colors -- git diff --color / ls --color / grep --col
+[1mdiff --git a/f b/f[0m
+[1m--- a/f[0m
+[1m+++ b/f[0m
+[36m@@ -1,3 +1,3 @@[0m
+ context
+[31m-removed line[0m
+[32m+added line[0m
+
+[1;34mdir/[0m  [1;32mscript.sh[0m  [1;36mlink[0m  [31marchive.tar.gz[0m  [30;43mtmp[0m  [1;31;47mbroken[0m  [35mimg.png[0m
+file.txt:12:some text with a [1;31mmatch[0m in the middle and [1;31manother[0m[0m[K
+[7m$ [0mls[14;1H[38;5;208mwarn:[0m [38;5;244m(dim)[0m [1;38;2;255;128;0morange-bold[0m

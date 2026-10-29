@@ -1,0 +1,2 @@
+modes/app_keypad_deckpam -- xterm ctlseqs DECKPAM ESC =
+=DECKPAM on (application keypad)
