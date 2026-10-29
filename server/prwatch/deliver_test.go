@@ -551,3 +551,101 @@ func TestDeliver_should_RecordSteeredDispositionWithoutLoginOrText_When_Delivere
 	assert.Equal(t, 1, stranger.OtherCount(dRepo), "only the human-feedback item counts")
 	assert.Equal(t, 2, h.metrics.Count(MetricSteers))
 }
+
+func TestDeliver_should_SteerEverySessionOnPR_When_TwoSessionsSubscribed(t *testing.T) {
+	h := newDeliverHarness(t, 0)
+	h.sessions.programs["sess-2"] = "claude"
+	h.sessions.Set(
+		SessionRef{UUID: dSession, Repo: dRepo, PR: dPR, State: StateLive},
+		SessionRef{UUID: "sess-2", Repo: dRepo, PR: dPR, State: StateLive},
+	)
+	res := h.run(comment("i1"))
+	reqs := h.steerer.Requests()
+	require.Len(t, reqs, 2)
+	assert.ElementsMatch(t, []string{dSession, "sess-2"}, []string{reqs[0].SessionUUID, reqs[1].SessionUUID})
+	assert.Equal(t, ActionAck, res[0].Action)
+	assert.True(t, res[0].Steered)
+	assert.Equal(t, []string{"i1"}, h.ackCalls())
+}
+
+func TestDeliver_should_HoldItemAndNotDoubleSteer_When_OneOfTwoSessionsBusy(t *testing.T) {
+	h := newDeliverHarness(t, 0)
+	h.sessions.programs["sess-2"] = "claude"
+	h.sessions.Set(
+		SessionRef{UUID: dSession, Repo: dRepo, PR: dPR, State: StateLive},
+		SessionRef{UUID: "sess-2", Repo: dRepo, PR: dPR, State: StateLive},
+	)
+	h.steerer.outcome = map[string]Outcome{"sess-2": OutcomeBusy}
+	res := h.run(comment("i1"))
+	assert.Equal(t, ActionHold, res[0].Action)
+	assert.Equal(t, HoldBusy, res[0].Hold)
+	assert.Empty(t, h.ackCalls())
+	assert.Len(t, h.steerer.Requests(), 2)
+
+	h.steerer.outcome = nil
+	res = h.run(comment("i1"))
+	assert.Equal(t, ActionAck, res[0].Action)
+	assert.Equal(t, []string{"i1"}, h.ackCalls())
+	var toFirst int
+	for _, r := range h.steerer.Requests() {
+		if r.SessionUUID == dSession {
+			toFirst++
+		}
+	}
+	assert.Equal(t, 1, toFirst, "the delivered session is not steered again on retry")
+	assert.Len(t, h.steerer.Requests(), 3)
+}
+
+func TestDeliver_should_DropRepoMismatch_When_SessionSkippedForRepo(t *testing.T) {
+	h := newDeliverHarness(t, 0)
+	h.sessions.Set(SessionRef{UUID: dSession, Repo: dRepo, PR: dPR, State: StateLive, SkipReason: SkipIgnoreRepos})
+	res := h.run(comment("i1"))
+	assert.Equal(t, ActionAck, res[0].Action)
+	assert.Equal(t, DropRepoMismatch, res[0].Drop)
+	assert.Empty(t, h.steerer.Requests())
+}
+
+func TestDeliver_should_DropWithoutRecordingRepo_When_EventRepositoryInvalid(t *testing.T) {
+	h := newDeliverHarness(t, 0)
+	it := comment("i1")
+	it.Event.Repository = "evil\nrepo/x y"
+	res := h.run(it)
+	assert.Equal(t, DropRepoMismatch, res[0].Drop)
+	assert.Equal(t, ActionAck, res[0].Action)
+	assert.Empty(t, res[0].Repo)
+	for _, rec := range h.recorder.Records() {
+		assert.Empty(t, rec.Repo)
+	}
+	for _, l := range h.log.Lines() {
+		assert.NotContains(t, fmt.Sprint(l), "evil")
+	}
+	assert.Empty(t, h.steerer.Requests())
+}
+
+func TestDeliver_should_RetirePR_When_PullRequestClosedEventArrives(t *testing.T) {
+	h := newDeliverHarness(t, 16)
+	type retired struct {
+		repo string
+		pr   int
+	}
+	var got []retired
+	h.d.OnPRClosed = func(_ context.Context, repo string, pr int) { got = append(got, retired{repo, pr}) }
+
+	res := h.run(dItem("c1", "pull_request", "closed", "alice", ""))
+
+	assert.Equal(t, []retired{{dRepo, dPR}}, got)
+	assert.Equal(t, ActionAck, res[0].Action, "the closed event itself is a policy drop")
+	assert.Empty(t, h.steerer.requests)
+}
+
+func TestDeliver_should_NotRetirePR_When_ClosedEventHasInvalidRepository(t *testing.T) {
+	h := newDeliverHarness(t, 16)
+	called := false
+	h.d.OnPRClosed = func(context.Context, string, int) { called = true }
+	it := dItem("c2", "pull_request", "closed", "alice", "")
+	it.Event.Repository = "not a repo"
+
+	h.run(it)
+
+	assert.False(t, called)
+}

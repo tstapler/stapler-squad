@@ -75,13 +75,14 @@ const (
 	SkipIgnoreRepos         SkipReason = "ignore_repos"
 	SkipHidden              SkipReason = "hidden"
 	SkipNotLive             SkipReason = "not_live"
+	SkipPRTerminal          SkipReason = "pr_terminal"
 )
 
 // AllSkipReasons lists every SkipReason (D8).
 func AllSkipReasons() []SkipReason {
 	return []SkipReason{
 		SkipNoPR, SkipNoOwnerRepo, SkipGHEHost, SkipFork, SkipBacklogPRPending,
-		SkipBacklogLookupFailed, SkipIgnoreRepos, SkipHidden, SkipNotLive,
+		SkipBacklogLookupFailed, SkipIgnoreRepos, SkipHidden, SkipNotLive, SkipPRTerminal,
 	}
 }
 

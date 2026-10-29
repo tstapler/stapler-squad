@@ -69,6 +69,10 @@ func (f *ActorFilter) Evaluate(kind Kind, actor string) FilterResult {
 		return FilterResult{Verdict: VerdictSteer}
 	}
 	login, ok := f.login.Cached()
+	if !ok && f.effectivelyOff {
+		// Off needs no login: dropping beats holding a feed that can never steer.
+		return FilterResult{Verdict: VerdictDrop, Drop: DropHumanFeedbackOff, Class: f.class(actor, "")}
+	}
 	if !ok {
 		return FilterResult{Verdict: VerdictHold, Hold: HoldLoginUnresolved, Class: f.class(actor, "")}
 	}

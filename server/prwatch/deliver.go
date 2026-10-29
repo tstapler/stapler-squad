@@ -74,6 +74,9 @@ type DeliverDeps struct {
 	Followup FollowupObserver
 	// DedupCapacity defaults to DefaultDedupCapacity.
 	DedupCapacity int
+	// OnPRClosed, when set, is told about a pull_request closed event so the
+	// reconciler can unsubscribe the PR.
+	OnPRClosed func(ctx context.Context, repo string, pr int)
 }
 
 // Deliverer turns pending inbox items into steers and applies the D5
@@ -124,25 +127,60 @@ func (d *Deliverer) Process(ctx context.Context, items []inbox.Item) []DeliverRe
 		d.Log.Warn("prwatch.deliver_sessions_unavailable")
 		return nil
 	}
+	// Each (item, session) pair is one unit, so every session subscribed to a
+	// PR is steered and an item is acked only when every unit is.
+	type unit struct {
+		ref   SessionRef
+		found bool
+	}
 	results := make([]DeliverResult, len(items))
 	twinOf := map[int]int{}
 	firstByEvent := map[string]int{}
 	heldPerKey := map[CoalesceKey]int{}
 	var batches []*steerBatch
 	batchByUUID := map[string]*steerBatch{}
+	var units []*unit
+	var uItems []inbox.Item
+	var uResults []DeliverResult
+	unitsOf := make([][]int, len(items))
 
 	for i, it := range items {
 		results[i] = DeliverResult{
 			ItemID: it.ID, EventID: it.Event.ID, Repo: it.Event.Repository,
 			PR: it.Event.PullRequest, CreatedAt: it.CreatedAt,
 		}
+		// A merged or closed PR is done: retire its subscription (D7). The
+		// event itself is still dropped by classify below.
+		if d.OnPRClosed != nil && isPullRequestClosed(it.Event) && validRepo(it.Event.Repository) {
+			d.OnPRClosed(ctx, it.Event.Repository, it.Event.PullRequest)
+		}
 		if j, ok := firstByEvent[it.Event.ID]; ok && it.Event.ID != "" {
 			twinOf[i] = j
 			continue
 		}
 		firstByEvent[it.Event.ID] = i
-		ref, found := findSession(refs, it.Event)
-		c, ok := d.screen(&results[i], it, ref, found)
+		if !validRepo(it.Event.Repository) {
+			// Never let an unvalidated repository reach logs, the ring buffer or status.
+			results[i].Repo = ""
+			d.drop(&results[i], DropRepoMismatch, "")
+			continue
+		}
+		matches := findSessions(refs, it.Event)
+		found := len(matches) > 0
+		if !found {
+			matches = []SessionRef{{}}
+		}
+		for _, m := range matches {
+			unitsOf[i] = append(unitsOf[i], len(units))
+			units = append(units, &unit{ref: m, found: found})
+			uItems = append(uItems, it)
+			uResults = append(uResults, results[i])
+		}
+	}
+
+	for k, u := range units {
+		i, ref := k, u.ref
+		c, ok := d.screen(&uResults[i], uItems[i], ref, u.found)
 		if !ok {
 			continue
 		}
@@ -158,17 +196,23 @@ func (d *Deliverer) Process(ctx context.Context, items []inbox.Item) []DeliverRe
 			c.idx = i
 			b.cands = append(b.cands, c)
 		case CoalesceCoveredSameSHA:
-			d.drop(&results[i], DropCoveredSameHeadSHA, c.class)
+			d.drop(&uResults[i], DropCoveredSameHeadSHA, c.class)
 		case CoalesceFoldOverCap:
-			d.drop(&results[i], DropFoldedOverCap, c.class)
+			d.drop(&uResults[i], DropFoldedOverCap, c.class)
 		default: // CoalesceHold and anything unknown
 			heldPerKey[c.key]++
-			d.hold(&results[i], HoldWindowBatching, c.class)
+			d.hold(&uResults[i], HoldWindowBatching, c.class)
 		}
 	}
 
 	for _, b := range batches {
-		d.steerBatch(ctx, items, results, b, refs)
+		d.steerBatch(ctx, uItems, uResults, b, refs)
+	}
+
+	for i, idxs := range unitsOf {
+		if len(idxs) > 0 {
+			results[i] = mergeUnits(results[i], uResults, idxs)
+		}
 	}
 
 	for i, j := range twinOf {
@@ -178,6 +222,7 @@ func (d *Deliverer) Process(ctx context.Context, items []inbox.Item) []DeliverRe
 		results[i].Action = r.Action
 		results[i].Drop = r.Drop
 		results[i].Hold = r.Hold
+		results[i].Steered = r.Steered
 		results[i].Redelivered = r.Action == ActionAck
 	}
 
@@ -188,6 +233,43 @@ func (d *Deliverer) Process(ctx context.Context, items []inbox.Item) []DeliverRe
 		results[i].AckErr = d.ack(ctx, results[i].ItemID)
 	}
 	return results
+}
+
+// mergeUnits folds one item's per-session results into the item result: hold
+// if any session is held (the first held session's reason), else ack.
+func mergeUnits(base DeliverResult, units []DeliverResult, idxs []int) DeliverResult {
+	out := base
+	out.Action = ActionAck
+	out.SessionUUID, out.Kinds = units[idxs[0]].SessionUUID, units[idxs[0]].Kinds
+	redelivered := true
+	var drop DropReason
+	for _, k := range idxs {
+		u := units[k]
+		if u.Action == ActionHold {
+			if out.Action != ActionHold {
+				out.Action, out.Hold = ActionHold, u.Hold
+				out.SessionUUID, out.Kinds = u.SessionUUID, u.Kinds
+			}
+			redelivered = false
+			continue
+		}
+		out.Steered = out.Steered || u.Steered
+		if !u.Redelivered {
+			redelivered = false
+		}
+		if drop == "" {
+			drop = u.Drop
+		}
+	}
+	if out.Action == ActionHold {
+		out.Redelivered = false
+		return out
+	}
+	if !out.Steered {
+		out.Drop = drop
+	}
+	out.Redelivered = redelivered
+	return out
 }
 
 // screen runs the checks before the coalescer. ok is true when the item is a
@@ -201,7 +283,7 @@ func (d *Deliverer) screen(res *DeliverResult, it inbox.Item, ref SessionRef, fo
 			return candidate{}, false
 		}
 	}
-	if d.handled.has(ev.ID) {
+	if d.handled.has(deliveryKey(ev.ID, ref.UUID)) {
 		res.Action = ActionAck
 		res.Redelivered = true
 		return candidate{}, false
@@ -332,8 +414,8 @@ func (d *Deliverer) delivered(items []inbox.Item, results []DeliverResult, b *st
 		}
 		r := &results[c.idx]
 		r.Action, r.Steered = ActionAck, true
-		d.handled.put(it.Event.ID, struct{}{})
-		d.lastHold.put(it.ID, "")
+		d.handled.put(deliveryKey(it.Event.ID, b.ref.UUID), struct{}{})
+		d.lastHold.put(deliveryKey(it.ID, b.ref.UUID), "")
 		d.Recorder.Record(Disposition{
 			At: now, Kind: c.kind, Repo: b.ref.Repo, PR: b.ref.PR, SessionUUID: b.ref.UUID,
 			ActorClass: c.class, Disposition: DispositionSteered,
@@ -415,8 +497,8 @@ func (d *Deliverer) duplicate(results []DeliverResult, b *steerBatch) {
 }
 
 func (d *Deliverer) markHandled(r *DeliverResult) {
-	d.handled.put(r.EventID, struct{}{})
-	d.lastHold.put(r.ItemID, "")
+	d.handled.put(deliveryKey(r.EventID, r.SessionUUID), struct{}{})
+	d.lastHold.put(deliveryKey(r.ItemID, r.SessionUUID), "")
 }
 
 func (d *Deliverer) drop(r *DeliverResult, reason DropReason, class ActorClass) {
@@ -439,10 +521,10 @@ func (d *Deliverer) drop(r *DeliverResult, reason DropReason, class ActorClass) 
 // the item's hold reason is new, not on every tick it stays held.
 func (d *Deliverer) hold(r *DeliverResult, reason HoldReason, class ActorClass) {
 	r.Action, r.Hold, r.Drop = ActionHold, reason, ""
-	if prev, ok := d.lastHold.get(r.ItemID); ok && prev == reason {
+	if prev, ok := d.lastHold.get(deliveryKey(r.ItemID, r.SessionUUID)); ok && prev == reason {
 		return
 	}
-	d.lastHold.put(r.ItemID, reason)
+	d.lastHold.put(deliveryKey(r.ItemID, r.SessionUUID), reason)
 	var kind Kind
 	if len(r.Kinds) > 0 {
 		kind = r.Kinds[0]
@@ -466,20 +548,19 @@ func (d *Deliverer) ack(ctx context.Context, itemID string) error {
 	return err
 }
 
-// findSession matches the event's repo and PR, preferring a live session.
-func findSession(refs []SessionRef, ev inbox.Event) (SessionRef, bool) {
-	var best SessionRef
-	found := false
+// findSessions returns every session on the event's repo and PR, so each is steered.
+func findSessions(refs []SessionRef, ev inbox.Event) []SessionRef {
+	var out []SessionRef
 	for _, r := range refs {
-		if r.PR != ev.PullRequest || !strings.EqualFold(r.Repo, ev.Repository) {
-			continue
-		}
-		if !found || (best.State != StateLive && r.State == StateLive) {
-			best, found = r, true
+		if r.PR == ev.PullRequest && strings.EqualFold(r.Repo, ev.Repository) {
+			out = append(out, r)
 		}
 	}
-	return best, found
+	return out
 }
+
+// deliveryKey scopes dedup and hold memory to one (id, session) delivery.
+func deliveryKey(id, sessionUUID string) string { return id + "|" + sessionUUID }
 
 func stateOf(refs []SessionRef, uuid string) SessionState {
 	for _, r := range refs {

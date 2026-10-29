@@ -153,6 +153,7 @@ Start with the status page, then match what you see.
 | `ignore_repos` | The repository is in your `ignore_repos` list. | Remove it and restart. |
 | `hidden` | The session is hidden. | Unhide it. |
 | `not_live` | The session is stopped or gone. | Start the session. |
+| `pr_terminal` | The PR is merged or closed, so Squad unsubscribed from it. | None needed; reopened PRs are picked up once the session records them as open again. |
 
 ### Why an event did not steer
 
@@ -170,7 +171,7 @@ These events are dropped on purpose. Each is counted and shown in the recent eve
 | `human_feedback_off` | Comment and review steering is off. |
 | `actor_not_allowlisted` | The author is not on your allowlist. |
 | `unknown_kind` | An event type Squad does not recognize. |
-| `repo_mismatch` | The event named a different repository than the subscription. |
+| `repo_mismatch` | The event named a different repository than the subscription, or a repository that is not a plain owner/name. |
 | `hidden_session` | The target session is hidden. |
 | `session_not_live` | The session ended, or Squad's catch-up covers this case after resume. |
 | `held_age_ceiling` | The event waited longer than `held_age_ceiling_hours`. |

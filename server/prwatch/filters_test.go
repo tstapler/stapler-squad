@@ -144,3 +144,17 @@ func TestFilters_should_MakeNoNetworkCall_When_FilteringActors(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestFilters_should_DropWithoutLogin_When_ModeOffOrAllowlistEmpty(t *testing.T) {
+	unresolved := staticLogin{}
+	for _, s := range []Settings{settings(ModeOff, nil, nil, true), settings(ModeAllowlist, nil, nil, true)} {
+		f := NewActorFilter(s, unresolved)
+		if r := f.Evaluate(KindComment, "alice"); r.Verdict != VerdictDrop || r.Drop != DropHumanFeedbackOff {
+			t.Fatalf("%s: %+v", s.HumanFeedbackMode, r)
+		}
+	}
+	f := NewActorFilter(settings(ModeAll, nil, nil, true), unresolved)
+	if r := f.Evaluate(KindComment, "alice"); r.Verdict != VerdictHold || r.Hold != HoldLoginUnresolved {
+		t.Fatalf("all: %+v", r)
+	}
+}
