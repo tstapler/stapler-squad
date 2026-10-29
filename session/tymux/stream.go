@@ -75,7 +75,10 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 	// wrapping, not a replacement, context — proven by
 	// TestStartGeneration_DerivedContext_PropagatesParentCancellation in
 	// session/lifecycle/observability_test.go).
+	s.markStreamEvent()
+	liveStreams.Store(s, struct{}{})
 	go func() {
+		defer liveStreams.Delete(s)
 		genCtx, span := lifecycle.StartGeneration(ctx, "tymux_stream")
 		reason := s.readAttachLoop(genCtx, paneID, stream, done)
 		lifecycle.EndGeneration(span, "tymux_stream", reason)
@@ -149,6 +152,7 @@ func (s *tymuxGRPCSession) readAttachLoop(ctx context.Context, paneID string, st
 			}
 			continue
 		}
+		s.markStreamEvent()
 		s.handleAttachEvent(event)
 	}
 }
@@ -536,6 +540,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		s.reconnectAttempt = 0
 		s.reconnectCause = ""
 		s.mu.Unlock()
+		s.markStreamEvent() // the reattach's priming Snapshot just arrived
 
 		log.Info("tymux: standing Attach stream reconnect succeeded", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt)
 		return stream, first, true, lifecycle.ReasonUnknown

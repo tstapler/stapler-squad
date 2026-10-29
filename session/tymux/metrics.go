@@ -2,6 +2,8 @@ package tymux
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -27,6 +29,42 @@ const (
 	attachEventGapExceeded    = "gap_exceeded"
 	attachEventSnapshotRedraw = "snapshot_redraw"
 )
+
+// liveStreams is the set of sessions with a running standing-stream reader
+// goroutine, read by the heartbeat-age gauge callback. A set rather than a
+// per-session label keeps the gauge's cardinality at one series.
+var liveStreams sync.Map // *tymuxGRPCSession -> struct{}
+
+func (s *tymuxGRPCSession) markStreamEvent() {
+	s.lastEventUnixNano.Store(time.Now().UnixNano())
+}
+
+// maxHeartbeatAge is the age of the stalest live stream's last event
+// (0 when no stream is live).
+func maxHeartbeatAge() time.Duration {
+	now := time.Now().UnixNano()
+	var oldest int64
+	liveStreams.Range(func(k, _ any) bool {
+		if age := now - k.(*tymuxGRPCSession).lastEventUnixNano.Load(); age > oldest {
+			oldest = age
+		}
+		return true
+	})
+	return time.Duration(oldest)
+}
+
+func init() {
+	_, err := telemetry.GetMeter().Float64ObservableGauge("tymux_attach_heartbeat_age_seconds",
+		metric.WithDescription("Age of the stalest live Attach stream's last event (heartbeat or otherwise), max across streams; 0 when none are live"),
+		metric.WithUnit("s"),
+		metric.WithFloat64Callback(func(_ context.Context, o metric.Float64Observer) error {
+			o.Observe(maxHeartbeatAge().Seconds())
+			return nil
+		}))
+	if err != nil {
+		panic(err)
+	}
+}
 
 func mustInt64Counter(name string, opts ...metric.Int64CounterOption) metric.Int64Counter {
 	c, err := telemetry.GetMeter().Int64Counter(name, opts...)
