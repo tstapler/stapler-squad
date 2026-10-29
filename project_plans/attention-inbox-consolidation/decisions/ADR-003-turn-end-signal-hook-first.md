@@ -1,6 +1,6 @@
 # ADR-003: Hook-first turn-end signal with per-program screen fallback
 
-**Status**: Proposed. Payload shape settled by Spike 0.1.1 (see Spike findings); Phase 0 exit gate evaluated, pending owner confirmation (see Phase 0 exit gate)
+**Status**: Proposed. Payload shape settled by Spike 0.1.1 (see Spike findings); Phase 0 exit gate evaluated, pending owner confirmation (see Phase 0 exit gate). Owner approved adding `stop_notification` to the default HTTP Stop-hook injection (2026-10-27, owner: "I'm cool with Stop hook injection").
 **Date**: 2026-10-23
 **Project**: attention-inbox-consolidation
 

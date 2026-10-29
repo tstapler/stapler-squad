@@ -1,6 +1,6 @@
 # ADR-001: Attention surface consolidation (staged hybrid D)
 
-**Status**: Proposed (owner ratification is a wall-clock blocker before Epic 6 starts)
+**Status**: Accepted 2026-10-28 (owner)
 **Date**: 2026-10-23
 **Project**: attention-inbox-consolidation
 

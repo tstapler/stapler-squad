@@ -1,6 +1,6 @@
 # ADR-002: Add visible reasons instead of superseding notification-revamp ADR-002
 
-**Status**: Proposed (confirmed or reversed by Spike 0.1.3; owner decision). Amended in the Phase 4 patch: `AwaitingDirection` is delivered, not silent (OWNER TO CONFIRM, see plan.md Owner-to-confirm).
+**Status**: Accepted 2026-10-28 (owner), including the Phase 4 amendment: `AwaitingDirection` is delivered (tray record + web push), not silent.
 **Date**: 2026-10-23
 **Project**: attention-inbox-consolidation
 
