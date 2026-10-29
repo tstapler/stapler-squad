@@ -359,7 +359,7 @@ func TestDeliver_should_NotAck_When_SteerReturnsErrorOrUnspecifiedOutcomeWithNil
 
 func TestDeliver_should_TreatAck404AsDone_When_ItemWasAlreadyAckedOrRemoved(t *testing.T) {
 	h := newDeliverHarness(t, 0)
-	h.inbox.errs = map[string]error{"ack": fmt.Errorf("%w: POST /v1/events/i1/ack: status 404: no such item", inbox.ErrRejected)}
+	h.inbox.errs = map[string]error{"ack": fmt.Errorf("%w: POST /v1/events/i1/ack: status 404: no such item", inbox.ErrNotFound)}
 	item := comment("i1")
 	res := h.run(item)
 	assert.NoError(t, res[0].AckErr)

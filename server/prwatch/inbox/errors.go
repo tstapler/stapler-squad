@@ -1,6 +1,9 @@
 package inbox
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Callers branch on these with errors.Is. None of them ever carries the
 // bearer token.
@@ -15,6 +18,9 @@ var (
 	ErrDecode = errors.New("inbox response could not be decoded")
 	// ErrRejected is any other non-2xx answer (400, 403, 404 outside Watch).
 	ErrRejected = errors.New("inbox rejected the request")
+	// ErrNotFound is a 404 outside POST /v1/watch (for example an ack of an
+	// item that is already gone). It also matches ErrRejected.
+	ErrNotFound = fmt.Errorf("%w: not found", ErrRejected)
 	// ErrWatchUnsupported is a 404 on POST /v1/watch: an older inbox, so the
 	// caller falls back to Subscribe and records coverage as unknown.
 	ErrWatchUnsupported = errors.New("inbox does not support /v1/watch")

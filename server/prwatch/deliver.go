@@ -65,7 +65,10 @@ type DeliverDeps struct {
 	Clock     Clock
 	Log       Logger
 	// Filter applies the actor rules; nil lets every actor through.
-	Filter   *ActorFilter
+	Filter *ActorFilter
+	// Mode is the human_feedback_mode; it decides whether a changes-requested
+	// review on a suspended session is covered by the on-resume catch-up.
+	Mode     HumanFeedbackMode
 	Notes    DeliveryNotes
 	Stranger StrangerWatch
 	Followup FollowupObserver
@@ -230,8 +233,14 @@ func (d *Deliverer) screen(res *DeliverResult, it inbox.Item, ref SessionRef, fo
 	case ref.SkipReason != "":
 		d.drop(res, DropRepoMismatch, class)
 		return candidate{}, false
-	case ref.State != StateLive:
-		d.hold(res, HoldSessionSuspended, class)
+	}
+	changesRequested := kind == KindReview && detailString(ev.Details, "state") == "changes_requested"
+	switch verdict, reason := SessionGate(ref.State, kind, changesRequested, d.Mode); verdict {
+	case SessionDrop:
+		d.drop(res, DropSessionNotLive, class)
+		return candidate{}, false
+	case SessionHold:
+		d.hold(res, reason, class)
 		return candidate{}, false
 	}
 
@@ -296,13 +305,10 @@ func (d *Deliverer) steerBatch(ctx context.Context, items []inbox.Item, results 
 	case OutcomeNoStatusSource:
 		holdAll(HoldNoStatusSource)
 	case OutcomeNotTracked:
-		switch stateOf(refs, b.ref.UUID) {
-		case StateGone:
+		if verdict, reason := NotTrackedGate(stateOf(refs, b.ref.UUID)); verdict == SessionDrop {
 			dropAll(DropSessionNotLive)
-		case StateSuspended:
-			holdAll(HoldSessionSuspended)
-		default:
-			holdAll(HoldNotTracked)
+		} else {
+			holdAll(reason)
 		}
 	default: // OutcomeUnspecified and unknown values
 		holdAll(HoldUnspecified)
@@ -407,17 +413,11 @@ func (d *Deliverer) hold(r *DeliverResult, reason HoldReason, class ActorClass) 
 // ack treats a 404 as done: the item was already acked or removed.
 func (d *Deliverer) ack(ctx context.Context, itemID string) error {
 	err := d.Inbox.Ack(ctx, itemID)
-	if err == nil || isAckNotFound(err) {
+	if err == nil || errors.Is(err, inbox.ErrNotFound) {
 		return nil
 	}
 	d.Log.Warn("prwatch.ack_failed", "item", itemID)
 	return err
-}
-
-// isAckNotFound matches the client's 404 on ack. The client has no typed
-// not-found error (it folds 404 into ErrRejected), so the status text is used.
-func isAckNotFound(err error) bool {
-	return errors.Is(err, inbox.ErrRejected) && strings.Contains(err.Error(), "status 404")
 }
 
 // findSession matches the event's repo and PR, preferring a live session.

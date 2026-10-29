@@ -238,6 +238,18 @@ func TestClient_should_ReturnWatchUnsupported_When_WatchEndpointIs404(t *testing
 	assert.ErrorIs(t, c.Ack(context.Background(), "x"), ErrRejected)
 }
 
+func TestClient_should_ReturnErrNotFound_When_AckIs404(t *testing.T) {
+	f := newFakeInbox(t, reply(404, `{"error":{"code":"not_found","message":"no such item"}}`))
+	c := clientFor(t, f, tokenFile(t))
+	err := c.Ack(context.Background(), "x")
+	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, ErrRejected, "ErrNotFound is a kind of rejection")
+	assert.NotErrorIs(t, err, ErrWatchUnsupported)
+	_, err = c.Watch(context.Background(), "o/r", 1)
+	assert.ErrorIs(t, err, ErrWatchUnsupported)
+	assert.NotErrorIs(t, err, ErrNotFound)
+}
+
 func TestClient_should_ExposeNoIngestOrHookOperations_When_PortIsInspected(t *testing.T) {
 	var methods []string
 	typ := reflect.TypeOf(&Client{})

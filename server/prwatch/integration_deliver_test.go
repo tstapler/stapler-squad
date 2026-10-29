@@ -32,7 +32,9 @@ func (a deliverClientInbox) Events(ctx context.Context, _ string) ([]inbox.Item,
 	return a.c.Events(ctx, 200)
 }
 
-func (a deliverClientInbox) Ack(ctx context.Context, itemID string) error { return a.c.Ack(ctx, itemID) }
+func (a deliverClientInbox) Ack(ctx context.Context, itemID string) error {
+	return a.c.Ack(ctx, itemID)
+}
 
 func (a deliverClientInbox) Unsubscribe(ctx context.Context, id string) error {
 	_, err := a.c.Unsubscribe(ctx, id)

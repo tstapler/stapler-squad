@@ -223,6 +223,8 @@ func statusError(method, path string, status int, data []byte) error {
 		kind = ErrTransport
 	case status == http.StatusNotFound && path == "/v1/watch":
 		kind = ErrWatchUnsupported
+	case status == http.StatusNotFound:
+		kind = ErrNotFound
 	default:
 		kind = ErrRejected
 	}
