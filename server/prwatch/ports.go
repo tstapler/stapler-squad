@@ -110,8 +110,9 @@ type Inbox interface {
 // (live and suspended) plus sessions skipped with a SkipReason, and returns
 // an error without a partial list on failure so callers fail closed (change
 // nothing). Program, IsHidden and IsBusy answer for one session UUID; unknown
-// sessions are not hidden and not busy. IsBusy is true while the session is
-// not ready for a steer (D17).
+// sessions are not hidden. IsBusy is true while the session is not ready for a
+// steer (D17), which includes a session with no live instance: the event is
+// held and the engine's gone/suspended handling decides when to ack it.
 type Sessions interface {
 	List(ctx context.Context) ([]SessionRef, error)
 	Program(sessionUUID string) string
