@@ -61,7 +61,7 @@ func (s *tymuxGRPCSession) openStandingStream(paneID string) error {
 
 	done := make(chan struct{})
 	s.mu.Lock()
-	s.stream = stream
+	s.setStreamLocked(stream)
 	s.cancelAttach = cancel
 	s.streamDone = done
 	s.mu.Unlock()
@@ -255,23 +255,6 @@ func (s *tymuxGRPCSession) deliverExit(reason string) {
 	} else {
 		log.Debug("tymux: exit observed, no callback fired yet", "session_id", s.GetSessionIdentifier(), "reason", reason, "callback_registered", cb != nil)
 	}
-}
-
-// sendOnStream writes req to the standing stream's input side. Every
-// input method (SendKeys/TapEnter/SendPromptWithEnter/
-// SendInputViaControlMode, Story 2.3.3) and SetWindowSize/SetDetachedSize
-// (Epic 2.4) funnel through here rather than opening a new RPC.
-func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
-	s.mu.RLock()
-	stream := s.stream
-	s.mu.RUnlock()
-	if stream == nil {
-		return errSessionNotStarted
-	}
-	if err := stream.Send(req); err != nil {
-		return classifyRPCError("Attach.Send", err)
-	}
-	return nil
 }
 
 // sendResize sends a Resize AttachRequest on the standing stream — the one
@@ -535,7 +518,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		}
 
 		s.mu.Lock()
-		s.stream = stream
+		s.setStreamLocked(stream)
 		s.cancelAttach = cancel
 		s.reconnecting = false
 		s.reconnectAttempt = 0

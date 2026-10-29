@@ -86,6 +86,13 @@ type tymuxGRPCSession struct {
 	cancelAttach context.CancelFunc
 	streamDone   chan struct{}
 
+	// sendGate serializes writes to `stream` (input_send.go); replaced together with it by
+	// setStreamLocked so a Send stuck on a dead generation can't block the next one.
+	// sendLockWait/inputPayloadTimeout bound waiting for it (fields so tests can shrink them).
+	sendGate            *streamSendGate
+	sendLockWait        time.Duration
+	inputPayloadTimeout time.Duration
+
 	// teardownWait bounds teardownStandingStream's wait for the old reader
 	// goroutine to exit (Task 2.3.1a) — see maxTeardownWait's doc comment
 	// (stream.go) for the default and its rationale. A struct field (not a
@@ -215,6 +222,8 @@ func NewTymuxGRPCSession(transport rpcTransport) TymuxManager {
 		reconnectBaseDelay:   defaultReconnectBaseDelay,
 		reconnectMaxDelay:    defaultReconnectMaxDelay,
 		teardownWait:         maxTeardownWait,
+		sendLockWait:         defaultSendLockWait,
+		inputPayloadTimeout:  defaultInputPayloadTimeout,
 	}
 }
 
