@@ -1497,6 +1497,16 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 // an active session skips the backoff gate entirely for that tick (it always
 // steers, never spawns). Only the no-active-session (spawn) path is gated by
 // RemediationDue.
+// reworkCapOpen reports whether itemID has an open rework_cap stuck row.
+func (l *BacklogLifecycleListener) reworkCapOpen(ctx context.Context, er *EntRepository, itemID string) bool {
+	rows, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		return false
+	}
+	_, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonReworkCap)
+	return ok
+}
+
 func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string, conflictOnly bool) (attempted bool, err error) {
 	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
 	if markErr != nil {
@@ -1542,19 +1552,24 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 		log.WarningLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
 		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
 	}
-	if justParked {
+	// A conflict-only PR is a cheap, mechanical fix that must never park behind
+	// the 5-attempt/7-day budget meant for failing CI: it gets an hourly retry
+	// instead, bounded by the rework cap. Once that cap row is open the override
+	// stands down so the cap notification is not re-sent every hour.
+	overridden := false
+	if conflictOnly && !l.reworkCapOpen(ctx, er, itemID) && l.conflictRetries.take(itemID, time.Now(), conflictRetryInterval) {
+		overridden = !due
+		due = true
+	} else if !conflictOnly {
+		l.conflictRetries.clear(itemID)
+	}
+	if justParked && !overridden {
 		l.notify(itemID,
 			"Auto-rework paused",
 			fmt.Sprintf("%s — automated PR-fix retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
 			8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			true, true, // urgent, important — automated retry gave up; a genuine dead end
 		)
-	}
-	// A conflict-only PR is a cheap, mechanical fix that must never park behind
-	// the 5-attempt/7-day budget meant for failing CI: it gets an hourly retry
-	// instead, still bounded by the rework cap in autoReopenForPRFix.
-	if conflictOnly && l.conflictRetries.take(itemID, time.Now(), conflictRetryInterval) {
-		due = true
 	}
 	if !due {
 		log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: pr_needs_fix remediation backoff not yet due, skipping fix spawn", itemID)

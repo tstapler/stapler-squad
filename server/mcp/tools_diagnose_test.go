@@ -255,7 +255,7 @@ func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
 	assert.Empty(t, pm.writes())
 }
 
-func TestResetRemediation_should_ReArmParkedRow_ThenRefuseOnceCapSpent(t *testing.T) {
+func TestResetRemediation_should_ReArmParkedRow_ThenRefuseDuringCooldown(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
@@ -280,15 +280,19 @@ func TestResetRemediation_should_ReArmParkedRow_ThenRefuseOnceCapSpent(t *testin
 
 	rows, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
+	found := false
 	for _, r := range rows {
 		if r.ItemID == itemID && r.Reason == reason {
+			found = true
 			assert.Zero(t, r.RemediationAttempts, "reset must clear the attempt counter so the gate is due again")
 		}
 	}
+	require.True(t, found, "the stuck row must still be open after a reset")
 
 	// The re-arm is charged against the shared nudge cap, so it cannot loop.
 	m := parseResult(t, mustCall(t, dh.resetRemediation, reqCtx, req))
-	require.False(t, m["success"].(bool), "an immediate second re-arm must hit the cap/cooldown")
+	require.False(t, m["success"].(bool), "an immediate second re-arm must hit the cooldown")
+	assert.Equal(t, ErrPermissionDenied, m["error"].(map[string]interface{})["code"])
 }
 
 func TestResetRemediation_should_RejectWrongRole(t *testing.T) {

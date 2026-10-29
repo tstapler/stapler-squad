@@ -1525,6 +1525,7 @@ func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot
 	}{
 		{"conflict only", &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"}, 2},
 		{"ci failing", &git.PRStatus{CIFailing: true, FeedbackText: "## Failing CI checks\n"}, 1},
+		{"conflict plus blocking review", &git.PRStatus{HasConflicts: true, HasBlockingReviews: true, FeedbackText: "## Changes requested\n"}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

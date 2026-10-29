@@ -92,7 +92,7 @@ func registerDiagnoseNudgeSessionTool(s *mcpserver.MCPServer, dh *diagnoseHandle
 func registerDiagnoseResetRemediationTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("diagnose_reset_remediation",
-			mcpgo.WithDescription("Re-arm automated remediation for a parked stuck row so the next reconcile tick spawns a fresh fix session. Use when the item has NO live session to nudge (e.g. a pr_pending item whose PR just needs a rebase) and the stuck row's automated retries are exhausted. Role: diagnose only. Shares the per-item nudge cap/cooldown, so it cannot loop. Declines (does not error loudly) if no open row matches or the cap is spent."),
+			mcpgo.WithDescription("Re-arm automated remediation for a parked stuck row so the next reconcile tick spawns a fresh fix session. Use when the item has NO live session to nudge (e.g. a pr_pending item whose PR just needs a rebase) and the stuck row's automated retries are exhausted. Role: diagnose only. Shares the per-item nudge cap/cooldown (claimed atomically), which bounds it within one stuck episode. Declines (does not error loudly) if no open row matches or the cap is spent."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -125,22 +125,19 @@ func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.Call
 		return errRes, nil
 	}
 
-	allowed, disallowReason, gateErr := dh.storage.DiagnoseNudgeAllowed(ctx, itemID, reason)
-	if gateErr != nil {
-		return errResult(ErrInternalError, fmt.Sprintf("check re-arm eligibility: %v", gateErr), ""), nil
+	// Claim the cap/cooldown slot atomically before the effect (no refund), so
+	// concurrent calls cannot overshoot the cap.
+	claim, claimErr := dh.storage.ClaimDiagnoseNudgeSlot(ctx, itemID, reason, 0)
+	if claimErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("claim re-arm slot: %v", claimErr), ""), nil
 	}
-	if !allowed {
-		return errResult(ErrPermissionDenied, disallowReason, declineToDiagnoseRemediation), nil
+	if !claim.Claimed {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("no open %s row for item %s, or its nudge cap/cooldown is spent", reason, itemID), declineToDiagnoseRemediation), nil
 	}
-	applied, resetErr := dh.storage.ResetStuckRemediation(ctx, itemID, reason)
-	if resetErr != nil {
+	if applied, resetErr := dh.storage.ResetStuckRemediation(ctx, itemID, reason); resetErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("reset remediation: %v", resetErr), ""), nil
-	}
-	if !applied {
+	} else if !applied {
 		return errResult(ErrItemNotFound, fmt.Sprintf("no open %s row for item %s", reason, itemID), declineToDiagnoseRemediation), nil
-	}
-	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, itemID, reason); recErr != nil {
-		log.Warn("[diagnose_reset_remediation] failed to charge nudge cap", "item", itemID, "err", recErr)
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Re-armed %s remediation for item %s; the next reconcile tick will retry", reason, itemID)), nil
 }
