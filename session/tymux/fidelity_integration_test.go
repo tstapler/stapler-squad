@@ -5,7 +5,6 @@ package tymux
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
 	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // Round-trip fidelity: replay each testdata/fidelity/corpus/*.ansi file into a live tymuxd,
@@ -25,15 +25,25 @@ import (
 // (what the live Attach stream shows). Any difference is a cell the redraw gets wrong.
 // Needs bun plus `bun install` in testdata/fidelity/oracle; skips otherwise.
 
+// corpus/known_gap/ holds behavior that is out of scope for a headless cell snapshot (images,
+// bell, terminal replies...). Those files are replayed to prove the daemon swallows them
+// cleanly, and their diffs are logged, not failed.
+const knownGapArea = "known_gap"
+
+func nonBlankCells(g [][]oracleCell) (n int) {
+	for _, row := range g {
+		for _, c := range row {
+			if c[0] != " " && c[0] != "" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func TestLiveTymuxd_SnapshotRedraw_RoundTripsTerminalFidelity(t *testing.T) {
 	bin := findTymuxdBinary(t)
-	oracleDir := filepath.Join(fidelityDir, "oracle")
-	if _, err := exec.LookPath("bun"); err != nil {
-		t.Skip("bun not installed; the xterm.js oracle needs it")
-	}
-	if _, err := os.Stat(filepath.Join(oracleDir, "node_modules")); err != nil {
-		t.Skipf("run `bun install` in %s first", oracleDir)
-	}
+	oracleDir := requireOracle(t)
 	cases := corpusCases(t)
 	require.NotEmpty(t, cases)
 
@@ -108,27 +118,31 @@ func writeDiffReport(t *testing.T, c corpusCase, diffs []string) {
 	require.NoError(t, os.WriteFile(out, []byte(strings.Join(diffs, "\n")+"\n"), 0o644))
 }
 
-// settledRender polls until the pane's rendered text stops changing, then returns it with the grid size.
+// settledRender waits until the pane's snapshot stops changing, then returns it with the grid size.
 func settledRender(t *testing.T, s *tymuxGRPCSession) (snap *v1.PaneSnapshot, rows, cols int) {
 	t.Helper()
 	var last *v1.PaneSnapshot
 	stable := 0
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.RequireEventually(t, func() bool {
 		cur, err := s.capturePane(context.Background(), 0)
-		require.NoError(t, err)
+		if err != nil {
+			return false
+		}
 		text, err := CellsToSGR(cur.GetGrid(), cur.GetHyperlinks())
-		require.NoError(t, err)
+		if err != nil {
+			return false
+		}
 		if strings.TrimSpace(strings.ReplaceAll(text, "\n", "")) != "" && last != nil && proto.Equal(cur, last) {
-			if stable++; stable >= 3 {
-				return cur, len(cur.GetGrid()), len(cur.GetGrid()[0].GetCells())
-			}
+			stable++
 		} else {
 			stable = 0
 		}
 		last = cur
-		time.Sleep(40 * time.Millisecond)
-	}
-	t.Fatalf("pane never settled; last snapshot %v", last)
-	return
+		if stable >= 3 {
+			snap = cur
+			return true
+		}
+		return false
+	}, 15*time.Second, 40*time.Millisecond, "pane never settled; last snapshot %v", last)
+	return snap, len(snap.GetGrid()), len(snap.GetGrid()[0].GetCells())
 }

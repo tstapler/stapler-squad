@@ -4,7 +4,7 @@
 // stdin:  {"cols":80,"rows":24,"streams":{"<name>":"<base64 bytes>"}}
 // stdout: {"<name>":{"grid":[[ [text, fg, bg, flags, underlineStyle, underlineColor, link], ... ], ...],
 //                    "state":{title, modes, cursorHidden, cursorStyle, altScreen, scrollTop, scrollBottom,
-//                             tabStops, charsets, cursor}}}
+//                             tabStops, charsets, cursor{row,col,pendingWrap}}}
 //   state uses the numeric conventions of tymux's PaneSnapshot proto. xterm.js has no DECSCNM (?5) or
 //   UTF-8/urxvt mouse encodings (?1005/?1015), so the oracle observes those mode sequences itself.
 //   link is "<uri>\u0000<id>" (xterm.js's internal numeric link ids aren't comparable across runs).
@@ -82,7 +82,9 @@ function collectState(term, observed, title) {
     scrollBottom: wholeScreen ? 0 : buf.scrollBottom + 1,
     tabStops: Object.keys(buf.tabs).map(Number).filter((c) => c !== 0).sort((a, b) => a - b),
     charsets: charsetState(cs),
-    cursor: { row: buf.y, col: buf.x },
+    // xterm.js parks the cursor at x == cols after printing in the last column (deferred wrap);
+    // report it the way the proto does: col clamped to the grid, the parked state as a flag.
+    cursor: { row: buf.y, col: Math.min(buf.x, input.cols - 1), pendingWrap: buf.x >= input.cols },
   };
 }
 

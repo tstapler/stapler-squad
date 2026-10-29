@@ -3,6 +3,7 @@ package tymux
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,8 +22,11 @@ import (
 //
 // - RendererRoundTrip: golden grid -> v1 cells -> CellsToSGR -> xterm.js must equal the golden
 //   grid. One bun call for the whole corpus, no daemon or pty.
-// - The emulator side (raw bytes -> daemon cells == golden) is checked against the same files
-//   from the tymux repo's Rust tests, so an emulator fix is a millisecond `cargo test` loop.
+// - RedrawFromDirtyTerminal: the same redraw replayed into a terminal with every resettable mode
+//   turned on, so a dropped reset in RenderSnapshotRedraw fails.
+// - The emulator side (raw bytes -> daemon cells == golden) lives in the tymux repo: it vendors a
+//   subset of this corpus and these goldens (crates/vt100/tests/fixtures/fidelity) and runs the
+//   full set when TYMUX_FIDELITY_DIR points at this testdata/fidelity directory.
 
 const (
 	goldenRows = 24
@@ -43,11 +47,25 @@ func goldenPath(area, name string) string {
 	return filepath.Join(fidelityDir, "golden", area, name+".json")
 }
 
+// requireOracle returns the oracle directory. When bun or the oracle's node_modules is missing
+// it skips (local runs without bun), unless FIDELITY_REQUIRE_ORACLE is set, which CI sets in the
+// jobs that install the oracle (.github/actions/setup-fidelity-oracle): there a missing oracle
+// must fail, or the whole corpus would silently go untested. It's an opt-in rather than keyed on
+// CI because other CI jobs also run this package without bun.
 func requireOracle(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(fidelityDir, "oracle")
-	if _, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil {
-		t.Skipf("run `bun install` in %s first", dir)
+	missing := ""
+	if _, err := exec.LookPath("bun"); err != nil {
+		missing = "bun is not installed"
+	} else if _, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil {
+		missing = "run `bun install --frozen-lockfile` in " + dir
+	}
+	if missing != "" {
+		if os.Getenv("FIDELITY_REQUIRE_ORACLE") != "" {
+			t.Fatalf("FIDELITY_REQUIRE_ORACLE is set but the xterm.js oracle is unavailable: %s", missing)
+		}
+		t.Skip(missing)
 	}
 	return dir
 }
@@ -95,6 +113,51 @@ func TestFidelityGolden_RendererRoundTrip(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			diffs := diffScreens(goldens[key], redrawn[key])
 			require.Emptyf(t, diffs, "%d cells differ after CellsToSGR:\n%s", len(diffs), strings.Join(firstN(diffs, 25), "\n"))
+		})
+	}
+}
+
+// dirtyTerminalPrefix turns ON every piece of state a redraw must reset, the way a client that
+// was showing a different app would be: input/mouse modes, a scroll region, IRM/LNM/DECOM/DECSCNM,
+// no autowrap, custom tab stops, DEC graphics, a cursor style and a hidden cursor, a title, and
+// an alt screen with content. Primary-buffer state (region, tab stops, charsets) is set BEFORE
+// ?1049h: xterm.js scopes it to the buffer / restores it on ?1049l, so setting it after would
+// be discarded by the redraw's own screen switch and prove nothing.
+const dirtyTerminalPrefix = esc + "[?2004h" + esc + "[?1004h" + esc + "[?1h" + esc + "=" + // paste, focus, DECCKM, DECKPAM
+	esc + "[?1003h" + esc + "[?1006h" + // any-motion mouse, SGR encoding
+	esc + "[5;10r" + // DECSTBM
+	esc + "[4h" + esc + "[20h" + esc + "[?6h" + esc + "[?7l" + esc + "[?5h" + // IRM, LNM, DECOM, no autowrap, DECSCNM
+	esc + "[3g" + esc + "[1;5H" + esc + "H" + // custom tab stop at column 5
+	esc + "(0" + esc + ")0" + "\x0e" + // DEC graphics in G0/G1, shifted out
+	esc + "[3 q" + esc + "[?25l" + // blinking underline cursor, hidden
+	esc + "]2;stale title" + st +
+	esc + "[?1049h" + "ALT SCREEN CONTENT" // alt screen with content
+
+// TestFidelityGolden_RedrawFromDirtyTerminal replays the redraw into a terminal that is in the
+// state above and expects exactly the golden state, so dropping any reset in RenderSnapshotRedraw
+// fails here (a redraw into a pristine terminal can't tell a missing reset from a no-op).
+func TestFidelityGolden_RedrawFromDirtyTerminal(t *testing.T) {
+	dir := requireOracle(t)
+	goldens := loadGoldens(t)
+	require.NotEmpty(t, goldens, "no golden grids; run the Update test")
+
+	streams := map[string][]byte{}
+	for key, g := range goldens {
+		redraw, err := RenderSnapshotRedraw(goldenToSnapshot(g))
+		require.NoError(t, err)
+		streams[key] = []byte(dirtyTerminalPrefix + redraw)
+	}
+	redrawn := runOracle(t, dir, goldenRows, goldenCols, streams)
+
+	keys := make([]string, 0, len(goldens))
+	for k := range goldens {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			diffs := diffScreens(goldens[key], redrawn[key])
+			require.Emptyf(t, diffs, "%d differences after redrawing into a dirty terminal:\n%s", len(diffs), strings.Join(firstN(diffs, 25), "\n"))
 		})
 	}
 }
@@ -214,6 +277,6 @@ func snapshotStateFromOracle(st oracleState) *v1.PaneSnapshot {
 		CursorHidden: st.CursorHidden, CursorStyle: st.CursorStyle, AltScreen: st.AltScreen,
 		ScrollTop: st.ScrollTop, ScrollBottom: st.ScrollBottom, TabStops: st.TabStops,
 		Charsets:  &v1.Charsets{G0: st.Charsets.G0, G1: st.Charsets.G1, G2: st.Charsets.G2, G3: st.Charsets.G3, Gl: st.Charsets.Gl},
-		CursorRow: st.Cursor.Row, CursorCol: st.Cursor.Col,
+		CursorRow: st.Cursor.Row, CursorCol: st.Cursor.Col, CursorPendingWrap: st.Cursor.PendingWrap,
 	}
 }

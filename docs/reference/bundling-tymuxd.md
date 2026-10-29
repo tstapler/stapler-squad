@@ -27,9 +27,14 @@ make build-embedded-tymux  # Build stapler-squad with BOTH tmux and tymuxd embed
 ```
 
 - The release version is pinned by `TYMUX_VERSION` in the `Makefile`
-  (currently `v1.0.0`) — bump it and the
-  `github.com/tstapler/tymux/clients/go/gen/tymux/v1` require in `go.mod`
-  together; nothing enforces that automatically (ADR-001's Consequences).
+  (see the file for the current value), with its release-asset SHA-256s in
+  `scripts/tymuxd-checksums.txt`. Bump it, the
+  `github.com/tstapler/tymux/clients/go` require in `go.mod`, and the cache
+  key in `.github/actions/fetch-tymuxd/action.yml` together.
+  `tools/ci/check-tymux-pin.sh` (the lint workflow's pin check) fails when the
+  Makefile tag and the `go.mod` client pin are not the same tymux commit; the
+  checksums file and the action's cache key are not checked, so update them
+  by hand.
 - `make fetch-tymuxd` shells out to `scripts/fetch-tymuxd.sh`, which resolves
   the release asset for the current `uname -s`/`uname -m`, downloads it, and
   verifies its SHA-256 against a pinned value before extracting

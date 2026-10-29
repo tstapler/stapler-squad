@@ -2,27 +2,24 @@ package tymux
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // Shared by the daemon-backed integration test and the daemon-free golden tests.
 
 const fidelityDir = "testdata/fidelity"
-
-// corpus/known_gap/ holds behavior that is out of scope for a headless cell snapshot (images,
-// bell, terminal replies...). Those files are replayed to prove the daemon swallows them
-// cleanly, and their diffs are logged, not failed.
-const knownGapArea = "known_gap"
 
 // text, fg, bg, flags, underline style, underline color, link (uri NUL id)
 type oracleCell [7]string
@@ -45,8 +42,9 @@ type oracleState struct {
 	TabStops     []uint32      `json:"tabStops"`
 	Charsets     oracleCharset `json:"charsets"`
 	Cursor       struct {
-		Row uint32 `json:"row"`
-		Col uint32 `json:"col"`
+		Row         uint32 `json:"row"`
+		Col         uint32 `json:"col"`
+		PendingWrap bool   `json:"pendingWrap"`
 	} `json:"cursor"`
 }
 
@@ -111,7 +109,7 @@ func runOracle(t *testing.T, dir string, rows, cols int, streams map[string][]by
 	}
 	in, err := json.Marshal(map[string]any{"rows": rows, "cols": cols, "streams": enc})
 	require.NoError(t, err)
-	cmd := exec.Command("bun", "oracle.mjs")
+	cmd := safeexec.CommandContext(context.Background(), "bun", "oracle.mjs")
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(in)
 	var stderr bytes.Buffer
@@ -158,17 +156,6 @@ func diffStruct(path string, want, got reflect.Value) []string {
 		diffs = append(diffs, diffStruct(path+"."+want.Type().Field(i).Name, want.Field(i), got.Field(i))...)
 	}
 	return diffs
-}
-
-func nonBlankCells(g [][]oracleCell) (n int) {
-	for _, row := range g {
-		for _, c := range row {
-			if c[0] != " " && c[0] != "" {
-				n++
-			}
-		}
-	}
-	return n
 }
 
 func firstN(s []string, n int) []string {

@@ -1,0 +1,2 @@
+cursor/pending_wrap_parked -- xterm ctlseqs DECAWM: a char in the last column parks the cursor (deferred wrap)
+[3;1Hxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[1;31mZ
