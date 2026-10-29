@@ -492,7 +492,7 @@ func TestPoller_should_StopPromptly_When_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { h.poller.Run(ctx); close(done) }()
-	time.Sleep(120 * time.Millisecond)
+	require.Eventually(t, func() bool { return len(h.inbox.Calls()) > 0 }, time.Second, 5*time.Millisecond, "Run ticked")
 	cancel()
 	select {
 	case <-done:
