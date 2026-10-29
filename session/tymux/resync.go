@@ -38,6 +38,7 @@ func (s *tymuxGRPCSession) applySnapshotResync(snap *v1.PaneSnapshot) error {
 	// overlapping the redrawn text on screen.
 	sgr = strings.ReplaceAll(sgr, "\n", "\r\n")
 	s.fanout.Broadcast([]byte(resyncClearAndHomeSeq + sgr))
+	recordAttachEvent(attachEventSnapshotRedraw)
 	return nil
 }
 
