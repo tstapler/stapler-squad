@@ -1687,6 +1687,13 @@ func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) err
 	return i.pm().SendInputViaControlMode(ctx, data)
 }
 
+// CanFallBackToTmuxSendKeys reports whether the pane is a real tmux session, so `tmux send-keys`
+// against a title-derived session name can reach it. False for tymux and native backends.
+func (i *Instance) CanFallBackToTmuxSendKeys() bool {
+	_, ok := capabilityOf[TmuxSessionAccessor](i.pm())
+	return ok
+}
+
 // GetPanePID returns the PID of the foreground process in the tmux pane.
 // The DoesSessionExist guard is omitted here: TmuxSession.GetPanePID already uses
 // the CM fast path (no subprocess) and falls back to display-message which returns
