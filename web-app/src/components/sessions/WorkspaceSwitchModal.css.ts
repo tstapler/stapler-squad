@@ -18,6 +18,7 @@ export const modalOverlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   animation: `${fadeIn} 0.15s ease-out`,
 });
@@ -63,7 +64,7 @@ export const closeButton = style({
   padding: "0.25rem",
   color: vars.color.textSecondary,
   borderRadius: "4px",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -132,7 +133,7 @@ export const targetItem = style({
   padding: "0.625rem 0.75rem",
   borderRadius: "6px",
   cursor: "pointer",
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   border: "1px solid transparent",
   selectors: {
     "&:hover": {
@@ -199,7 +200,7 @@ export const strategyOption = style({
   borderRadius: "6px",
   cursor: "pointer",
   border: `1px solid ${vars.color.borderColor}`,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.cardBackground,
@@ -252,7 +253,7 @@ export const cancelButton = style({
   cursor: "pointer",
   fontSize: "0.875rem",
   fontWeight: 500,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover": {
       background: vars.color.hoverBackground,
@@ -269,7 +270,7 @@ export const switchButton = style({
   cursor: "pointer",
   fontSize: "0.875rem",
   fontWeight: 500,
-  transition: "all 0.15s ease",
+  transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease",
   selectors: {
     "&:hover:not(:disabled)": {
       background: vars.color.accentHover,

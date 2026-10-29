@@ -19,6 +19,8 @@ import * as styles from "./VcsWidgetFileList.css";
 interface VcsWidgetFileListProps {
   fileChanges: FileChangeSummary[];
   onNavigateToFile?: (path: string) => void;
+  /** When set, clicking a file row opens its diff instead of navigating to the file. */
+  onViewFileDiff?: (path: string) => void;
 }
 
 const STATUS_META: Record<FileChangeStatus, { icon: LucideIcon; label: string }> = {
@@ -47,9 +49,11 @@ const CAP = 20;
 function FileRow({
   file,
   onNavigateToFile,
+  onViewFileDiff,
 }: {
   file: FileChangeSummary;
   onNavigateToFile?: (path: string) => void;
+  onViewFileDiff?: (path: string) => void;
 }) {
   const meta = STATUS_META[file.status] ?? STATUS_META.unknown;
   const Icon = meta.icon;
@@ -69,12 +73,13 @@ function FileRow({
     </>
   );
 
-  if (onNavigateToFile) {
+  const onOpen = onViewFileDiff ?? onNavigateToFile;
+  if (onOpen) {
     return (
       <button
         type="button"
         className={styles.fileRow}
-        onClick={() => onNavigateToFile(file.path)}
+        onClick={() => onOpen(file.path)}
         title={meta.label}
       >
         {content}
@@ -93,10 +98,12 @@ function FileSection({
   section,
   files,
   onNavigateToFile,
+  onViewFileDiff,
 }: {
   section: FileChangeSection;
   files: FileChangeSummary[];
   onNavigateToFile?: (path: string) => void;
+  onViewFileDiff?: (path: string) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
   if (files.length === 0) return null;
@@ -112,7 +119,7 @@ function FileSection({
       <ul className={styles.fileListContainer}>
         {visible.map((f, i) => (
           <li key={`${f.path}-${i}`}>
-            <FileRow file={f} onNavigateToFile={onNavigateToFile} />
+            <FileRow file={f} onNavigateToFile={onNavigateToFile} onViewFileDiff={onViewFileDiff} />
           </li>
         ))}
       </ul>
@@ -125,7 +132,7 @@ function FileSection({
   );
 }
 
-export function VcsWidgetFileList({ fileChanges, onNavigateToFile }: VcsWidgetFileListProps) {
+export function VcsWidgetFileList({ fileChanges, onNavigateToFile, onViewFileDiff }: VcsWidgetFileListProps) {
   const bySection = new Map<FileChangeSection, FileChangeSummary[]>();
   for (const section of SECTION_ORDER) bySection.set(section, []);
   for (const f of fileChanges) {
@@ -141,6 +148,7 @@ export function VcsWidgetFileList({ fileChanges, onNavigateToFile }: VcsWidgetFi
           section={section}
           files={bySection.get(section) ?? []}
           onNavigateToFile={onNavigateToFile}
+          onViewFileDiff={onViewFileDiff}
         />
       ))}
     </div>

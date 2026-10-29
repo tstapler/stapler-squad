@@ -31,7 +31,7 @@ export const trigger = style({
   fontSize: "0.8125rem",
   fontWeight: "500",
   cursor: "pointer",
-  transition: "all 0.2s ease",
+  transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease",
   whiteSpace: "nowrap",
   maxWidth: "160px",
   overflow: "hidden",
@@ -80,6 +80,7 @@ export const dropdown = style({
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: "0.5rem",
   boxShadow: "0 8px 24px rgba(0, 0, 0, 0.4)",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 1000,
   overflow: "hidden",
 });
@@ -247,6 +248,7 @@ export const mergeToast = style({
   position: "fixed",
   top: "calc(var(--header-height, 56px) + 0.75rem)",
   right: "1rem",
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing slot, not yet in theme-contract zIndex
   zIndex: 2000,
   padding: "0.5rem 0.875rem",
   background: vars.color.cardBackground,

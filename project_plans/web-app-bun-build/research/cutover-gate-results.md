@@ -47,3 +47,19 @@ flip rehearsal on a ManualInstance) both ran successfully with real command
 output — see `docs/how-to/rollback-web-build.md` for the full transcripts
 and timings rather than duplicating them here. Neither touched `:8543` or
 any live tmux session.
+
+## Story 8.2: Default flip (PR 8), gate status at PR time
+
+**Date**: 2026-10-27. Recorded by the agent that prepared the PR; the owner decides whether to merge.
+
+| Gate | Status | Evidence |
+|---|---|---|
+| 5x build-time ratio (Story 8.3) | MET | `docs/explanation/bun-migration-results.md` M2: 33.90 s / 1.88 s = 18.03x |
+| `--tmux-keep-server` precondition (Story 8.5a) | MET | Entry above (2026-10-22) |
+| Rollback runbook + rehearsal (8.5b-e) | MET | `docs/how-to/rollback-web-build.md` exists with transcripts |
+| `e2e-bun` comparator green on `main` (Story 7.10 / 8.1 baseline compare) | **NOT MET** | Latest `main` Build runs (40539331462, 40392784895, 40366134530) fail `e2e (Bun build)`: comparator reports new Bun-only failures (e.g. backlog-copy-link.spec.ts, backlog-detail-live-updates.spec.ts) plus flaky-to-fail on enter-detection and history-behaviour. `e2e (Next build)` was green in the two newest runs |
+| Story 8.1 ManualInstance 3-run gate, passkey, keyboard, screen-reader, iPhone checklists | **NOT RECORDED** | No section in this file; owner-run |
+| `WEB_BUILD_GATE_MEMBERS` at the flip | Variable unset (`gh variable get` returns "not found"), so the script default `detect-changes,web-build-smoke-next,e2e-next` applies; Bun jobs are not gate members | `gh variable get WEB_BUILD_GATE_MEMBERS --repo tstapler/stapler-squad` |
+| Green `workflow_dispatch` of the edited workflow (Story 8.2 precondition c) | see PR body | |
+
+No required-check name changed (`web-build-gate` is unchanged; the only workflow edit pins `web-build-smoke-next` to `WEB_BUILD: next` so it stays the Next canary).

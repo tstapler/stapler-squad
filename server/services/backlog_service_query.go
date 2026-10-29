@@ -163,7 +163,7 @@ func (s *BacklogService) ListBacklogItems(
 	costFor := s.buildCostLookup()
 	for i := range summaries {
 		protoItems[i] = backlogItemSummaryToProto(&summaries[i], s.engine, costFor)
-		s.annotateDuplicatePending(ctx, protoItems[i])
+		annotateDuplicatePending(protoItems[i], summaries[i].ItemSessions)
 	}
 	s.attachUnresolvedBlockers(ctx, protoItems)
 
@@ -565,14 +565,10 @@ func (s *BacklogService) GetSessionBacklogIndex(
 }
 
 // annotateDuplicatePending sets duplicate_pending/duplicate_ref on a list-view
-// item (summaries carry no ItemSessions). Only review items can be pending, so
-// the per-item session lookup is limited to that status.
-func (s *BacklogService) annotateDuplicatePending(ctx context.Context, p *sessionv1.BacklogItem) {
+// item from the item sessions ListBacklogItemSummaries already batch-loaded, so
+// no per-item query is needed. Only review items can be pending.
+func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []session.ItemSessionSummary) {
 	if p.Status != string(session.BacklogStatusReview) {
-		return
-	}
-	sessions, err := s.storage.ListItemSessions(ctx, p.Id)
-	if err != nil {
 		return
 	}
 	if ref := session.PendingDuplicateRef(sessions); ref != "" {

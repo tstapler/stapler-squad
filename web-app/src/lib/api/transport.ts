@@ -3,6 +3,7 @@ import { createContextValues } from "@connectrpc/connect";
 import type { Interceptor, Transport } from "@connectrpc/connect";
 import { createMethodUrl, runStreamingCall, runUnaryCall } from "@connectrpc/connect/protocol";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { BATCH_FLAG, createBatchTransport } from "./batchTransport";
 import { createCoalescingInterceptor } from "./coalescingInterceptor";
 import { createPriorityInterceptor } from "./requestPriority";
 import { peekFlags, preloadFlagValue } from "@/lib/features/flagStore";
@@ -12,8 +13,12 @@ import { createSessionWatchTransport } from "@/lib/transport/watch-ws-transport"
 import { createUnaryWsTransport, type UnaryWsTransport } from "@/lib/transport/unary-ws-transport";
 import {
   AuthAwareBreaker,
+  MASTER_FLAG,
+  REMOTE_FLAG,
   createAuthRequiredInterceptor,
   createWsUnaryPolicyTransport,
+  currentOriginClass,
+  readWsFlag,
 } from "@/lib/transport/wsUnaryPolicy";
 
 const _transports = new Map<string, Transport>();
@@ -34,6 +39,11 @@ const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 function isRequestCoalescingEnabled(): boolean {
   const loaded = peekFlags()?.find((f) => f.name === "request_coalescing");
   return loaded ? loaded.enabled : (preloadFlagValue("request_coalescing") ?? true);
+}
+
+/** Calls the WebSocket policy would carry need no batching: the socket already multiplexes them. */
+function isUnaryWsRouted(): boolean {
+  return readWsFlag(MASTER_FLAG) && (currentOriginClass() === "local" || readWsFlag(REMOTE_FLAG));
 }
 
 /**
@@ -122,8 +132,16 @@ export function getConnectTransport(opts: ConnectTransportOptions = {}): Transpo
       getWs: () => (ws ??= createUnaryWsTransport({ baseUrl, fallback: http, defaultTimeoutMs: timeoutMs, breaker })),
     });
     // Priority first (once per transport, ADR-002 item 7); coalescing next: one flight is one auth/timing/network pass, however many callers join it.
+    // Batching sits between coalescing (outer) and the WS/HTTP policy (inner): a coalesced flight is one batch member.
+    const batched = createBatchTransport({
+      inner: policy,
+      baseUrl,
+      fetch: withInFlightGauge(),
+      isEnabled: () => readWsFlag(BATCH_FLAG),
+      isWsRouted: isUnaryWsRouted,
+    });
     transport = withOuterInterceptors(
-      policy,
+      batched,
       baseUrl,
       [
         createPriorityInterceptor(),
