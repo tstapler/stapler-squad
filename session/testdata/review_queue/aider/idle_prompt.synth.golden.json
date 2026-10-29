@@ -1,0 +1,22 @@
+{
+  "label": "idle",
+  "source": "synthesized",
+  "detected_status": "Idle",
+  "label_matched": true,
+  "no_controller": {
+    "action": "skip",
+    "reason": "",
+    "priority": "Priority(0)",
+    "context": "",
+    "claude_status": "Idle",
+    "clean_worktree": false
+  },
+  "controller_active": {
+    "action": "skip",
+    "reason": "",
+    "priority": "Priority(0)",
+    "context": "",
+    "claude_status": "Idle",
+    "clean_worktree": false
+  }
+}

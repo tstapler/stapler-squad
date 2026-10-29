@@ -131,3 +131,22 @@ func TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag(t *testi
 		})
 	}
 }
+
+func TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run(t *testing.T) {
+	set := bkfFlagWriter(t)
+	for name, reader := range map[string]func(AttentionFlags) bool{
+		attentionProseQuestionDetectionFlagName:   func(f AttentionFlags) bool { return f.ProseQuestionDetection },
+		sessionEventLogFlagName:                   func(f AttentionFlags) bool { return f.SessionEventLog },
+		attentionAckBypassFixFlagName:             func(f AttentionFlags) bool { return f.AckBypassFix },
+		attentionIdleClockOutputFlagName:          func(f AttentionFlags) bool { return f.IdleClockOutput },
+		attentionProseQuestionLLMTiebreakFlagName: func(f AttentionFlags) bool { return f.ProseQuestionLLMTiebreak },
+		attentionInboxConsolidationFlagName:       func(f AttentionFlags) bool { return f.InboxConsolidation },
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertConfigChangesBehavior(t, func(setting any) any {
+				set(name, setting.(bool))
+				return reader(LoadAttentionFlags())
+			}, false, true)
+		})
+	}
+}
