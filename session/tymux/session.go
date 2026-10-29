@@ -685,7 +685,7 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
 // CapturePaneContentRaw returns the live screen with SGR preserved, as the
@@ -697,7 +697,7 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument

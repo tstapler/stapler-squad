@@ -1,0 +1,3 @@
+scroll/full_screen_redraw_idiom -- typical TUI: CUP home + EL + redraw (ncurse
+[1;1H[2J[1;1H[7m status bar [0m[K[24;1H[7m footer                                                                         [0m
+[3;1H[2Kline3 redrawn[3;1H[2Kline3 redrawn again[4;1Hold-long-text-here[4;1Hnew[K

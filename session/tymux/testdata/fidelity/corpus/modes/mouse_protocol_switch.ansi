@@ -1,0 +1,2 @@
+modes/mouse_protocol_switch -- xterm ctlseqs mouse protocols are one mode: the last one set wins
+[?1000hset normal[?1003h then any-event

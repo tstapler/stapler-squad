@@ -1,0 +1,5 @@
+modes/alt_screen_1049_returns_to_primary -- xterm ctlseqs ?1049h then ?1049l
+primary one
+primary two
+[?1049h[2J[Halt content
+[?1049l back on primary, restored cursor

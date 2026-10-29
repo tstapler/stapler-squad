@@ -1,0 +1,4 @@
+wrap/decawm_off_overwrites_last_column -- libvterm 20state_wrapping; esctest2 
+[?7laaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa[2;1Hbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc[3;75H0123456789-overwrite-last[?7h
+[5;1Hddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd-wrap-back-on[?7l[8;78H世界x[?7h[10;1H[?7leeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee世[?7h
+[12;1H[?7l[31mffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff[0m[?7h[14;1Hback-to-normal

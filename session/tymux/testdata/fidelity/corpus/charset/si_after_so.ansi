@@ -1,0 +1,2 @@
+charset/si_after_so -- xterm ctlseqs SI 0x0F
+)0qq ascii again after SI: qq

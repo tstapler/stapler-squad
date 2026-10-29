@@ -1,0 +1,2 @@
+realworld/tui_alt_screen_mouse_paste_title -- htop/vim/less start-up: alt screen + app keys + keypad + paste + focus + mouse + title + region + hidden cursor
+[?1049h[2J[H[?1h=[?2004h[?1004h[?1002h[?1006h]2;htop - host[?25l[5;20r[1;1H[7m F1Help  F2Setup  F10Quit [0m[5;1Hrow in scroll region

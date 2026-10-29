@@ -1,0 +1,2 @@
+modes/tab_stops_custom_hts_tbc -- xterm ctlseqs HTS ESC H / TBC CSI 3 g
+[3g[1;6HH[1;16HH[1;31HH[3;1H	a	b	c	stops 5 15 30 only

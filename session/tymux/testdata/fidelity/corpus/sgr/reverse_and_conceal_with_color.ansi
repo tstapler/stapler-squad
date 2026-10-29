@@ -1,0 +1,6 @@
+sgr/reverse_and_conceal_with_color -- ECMA-48 SGR 7/8; xterm ctlseqs; esctest2
+[7mrev-default[0m [7;31mrev-fg[0m [7;42mrev-bg[0m [7;31;42mrev-both[0m [7;38;5;208;48;5;17mrev-256[0m
+[7mab[27mcd[7mef[0m [7;7mrev-twice[27moff[0m
+[8mhidden-text[0m|[8;31;42mhidden-colored[0m|[8;7mhidden-reverse[0m|[8;4mhidden-ul[0m|
+[8mab[28mcd[8mef[0m
+[7;1mrev-bold[0m [7;2mrev-faint[0m [7;4mrev-ul[0m [7;9mrev-strike[0m [7;53mrev-over[0m

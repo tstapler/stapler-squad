@@ -45,6 +45,7 @@ jest.mock('@xterm/xterm', () => {
   };
 
   class MockTerminal {
+    unicode = { activeVersion: "6" };
     cols = 80;
     rows = 24;
     options: Record<string, unknown> = {};
@@ -254,7 +255,8 @@ describe('Bug 3: ResizeObserver calls fitAddon.fit() on zero-size container', ()
   });
 
   function fireResizeObserver(width: number, height: number) {
-    if (!observerCallback) return;
+    const callback = observerCallback;
+    if (!callback) return;
     const entry = {
       contentRect: { width, height, top: 0, left: 0, bottom: height, right: width },
       borderBoxSize: [],
@@ -263,7 +265,7 @@ describe('Bug 3: ResizeObserver calls fitAddon.fit() on zero-size container', ()
       target: document.createElement('div'),
     } as unknown as ResizeObserverEntry;
     act(() => {
-      observerCallback!([entry], {} as ResizeObserver);
+      callback([entry], {} as ResizeObserver);
     });
   }
 

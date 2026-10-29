@@ -21,6 +21,7 @@ import type { WebglAddon } from "@xterm/addon-webgl";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { TerminalContextMenu } from "./TerminalContextMenu";
@@ -766,6 +767,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminal.loadAddon(webLinksAddon);
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
+    // xterm.js defaults to Unicode 6 widths, which disagree with tymuxd's emulator (and modern
+    // terminals) on emoji and other wide glyphs, so a snapshot redraw lands cells in the wrong columns.
+    terminal.loadAddon(new Unicode11Addon());
+    terminal.unicode.activeVersion = "11";
 
     // xterm.js issue #2033 — guard WebGL before loading on Android/mobile.
     // Loaded dynamically (rather than the always-on static import this

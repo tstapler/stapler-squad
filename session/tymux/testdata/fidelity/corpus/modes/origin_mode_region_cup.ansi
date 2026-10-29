@@ -1,0 +1,2 @@
+modes/origin_mode_region_cup -- xterm ctlseqs DECOM ?6h with DECSTBM: CUP is region-relative
+[5;10r[?6h[1;1Hat region top[3;5Hrow 3 of region[?6l[1;1Habsolute home: origin off

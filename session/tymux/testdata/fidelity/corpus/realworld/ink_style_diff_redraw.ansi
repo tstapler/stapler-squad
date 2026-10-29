@@ -1,0 +1,8 @@
+realworld/ink_style_diff_redraw -- Ink/React TUI incremental redraw: CUU + EL 
+[1mTask list[0m
+[32m✔[0m done-one
+[33m◐[0m running-two
+[2m○ pending-three[0m
+
+[4A[2K[32m✔[0m done-two-now[1B[1G[2K[33m◐[0m running-three[3B[1G[2K[1mFinished[0m
+[10;1HProgress: [[42m          [0m          ] 50%[10CProgress: [[42m               [0m     ] 75%
