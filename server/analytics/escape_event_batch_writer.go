@@ -102,7 +102,7 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 			SetSequenceType(ev.SequenceType).
 			SetByteLength(ev.ByteLen).
 			SetMangled(ev.Mangled).
-			SetWallTime(ev.WallTime).
+			SetWallTime(ev.WallTime.Round(0)).
 			SetSessionSeq(ev.SessionSeq)
 
 		if ev.ProjectPath != "" {
