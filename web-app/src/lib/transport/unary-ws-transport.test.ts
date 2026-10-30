@@ -9,7 +9,7 @@ import {
   ListFilesResponseSchema,
   SessionService,
 } from "@/gen/session/v1/session_pb";
-import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { createRpcTimingInterceptor, setRpcTimingSink } from "@/lib/telemetry/rpcTiming";
 import { encodeFrame, MAX_FRAME_BYTES, type MuxFrame } from "./unary-mux-frame";
 import { FakeWebSocket } from "./__fixtures__/fakeUnaryWebSocket";
 import {
@@ -323,6 +323,32 @@ describe("send queue and window", () => {
     // a call arriving after the window goes straight to HTTP without waiting
     void callListFiles(h.t, "/late");
     expect(h.fallback.unary).toHaveBeenCalledTimes(2);
+    h.t.close();
+  });
+});
+
+describe("client metrics events", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("metrics_should_EmitOpenSendCloseAndReconnectWithTheCloseCode", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    const h = setup();
+    const read = callVcs(h.t);
+    h.sock().open();
+    h.sock().serverClose(1006);
+    await read;
+
+    const events = track.mock.calls.map(([e]) => e);
+    const ws = events.filter((e) => e.name === "cm.ws").map((e) => e.labels);
+    expect(ws).toEqual([
+      { kind: "unary", event: "open" },
+      { kind: "unary", event: "close", code: "1006" },
+      { kind: "unary", event: "reconnect" },
+    ]);
+    const send = events.find((e) => e.name === "cm.ws_send");
+    expect(send.labels).toEqual({ pending: "0" });
+    expect(typeof send.durationMs).toBe("number");
     h.t.close();
   });
 });

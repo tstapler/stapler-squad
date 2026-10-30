@@ -1,6 +1,49 @@
 import { trace } from "@opentelemetry/api";
-import type { Interceptor } from "@connectrpc/connect";
+import { Code, ConnectError, createContextKey } from "@connectrpc/connect";
+import type { ContextKey, ContextValues, Interceptor, UnaryRequest } from "@connectrpc/connect";
 import type { AnalyticsProvider } from "@/lib/analytics/types";
+import { buildDedupeKey } from "@/lib/api/idempotentMethods";
+
+/** "stream" marks server-streaming calls, whose duration is time-to-headers, so dashboards can exclude them from unary latency. */
+export type RpcTransportLabel = "ws" | "http" | "batch" | "stream";
+
+/** Mutable per-call record the inner transports fill in; the timing interceptor reads it after the call. */
+export interface RpcCallInfo {
+  transport: RpcTransportLabel;
+}
+
+// Guard: many Jest suites mock "@connectrpc/connect" without createContextKey, and this module is imported transitively.
+export const rpcCallInfoKey: ContextKey<RpcCallInfo | undefined> =
+  typeof createContextKey === "function"
+    ? createContextKey<RpcCallInfo | undefined>(undefined, { description: "ssq rpc call info (client metrics)" })
+    : ({ id: Symbol("ssq rpc call info"), defaultValue: undefined } as ContextKey<RpcCallInfo | undefined>);
+
+/** Tells the timing interceptor which path actually served the call; a no-op outside an instrumented call. */
+export function markRpcTransport(contextValues: ContextValues | undefined, transport: RpcTransportLabel): void {
+  const info = contextValues?.get(rpcCallInfoKey);
+  if (info) info.transport = transport;
+}
+
+/** Connect code as the snake_case name the server's client-metrics allow-list expects. */
+export function codeLabel(err: unknown): string {
+  const code = typeof ConnectError?.from === "function" ? ConnectError.from(err).code : undefined;
+  const name = code === undefined ? undefined : Code?.[code];
+  return typeof name === "string" ? name.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase() : "unknown";
+}
+
+// Tab-wide, shared by every interceptor instance, so concurrency and duplicates are seen across hooks.
+let inFlightCalls = 0;
+const inFlightByKey = new Map<string, number>();
+
+function dedupeKeyOf(req: { stream: boolean }): string | undefined {
+  if (req.stream) return undefined;
+  try {
+    const u = req as unknown as UnaryRequest;
+    return buildDedupeKey(u.method, u.message);
+  } catch {
+    return undefined;
+  }
+}
 
 // jsdom (Jest) defines `performance` without mark/measure.
 const canMeasure = () =>
@@ -86,13 +129,29 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
     }
     const wallStart = Date.now();
 
+    const info: RpcCallInfo = { transport: req.stream ? "stream" : "http" };
+    req.contextValues?.set(rpcCallInfoKey, info);
+    const dedupeKey = dedupeKeyOf(req);
+    const inflightAtStart = inFlightCalls;
+    const duplicate = dedupeKey !== undefined && (inFlightByKey.get(dedupeKey) ?? 0) > 0;
+    inFlightCalls++;
+    if (dedupeKey !== undefined) inFlightByKey.set(dedupeKey, (inFlightByKey.get(dedupeKey) ?? 0) + 1);
+
     let ok = true;
+    let code = "ok";
     try {
       return await next(req);
     } catch (err) {
       ok = false;
+      code = codeLabel(err);
       throw err;
     } finally {
+      inFlightCalls--;
+      if (dedupeKey !== undefined) {
+        const left = (inFlightByKey.get(dedupeKey) ?? 1) - 1;
+        if (left <= 0) inFlightByKey.delete(dedupeKey);
+        else inFlightByKey.set(dedupeKey, left);
+      }
       const durationMs = Date.now() - wallStart;
       const queueDelayMs = getNetworkQueueDelayMs(req.url);
 
@@ -124,6 +183,10 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
         labels: {
           method,
           ok: String(ok),
+          code,
+          transport: info.transport,
+          inflight: String(inflightAtStart),
+          ...(duplicate ? { dup: "1" } : {}),
           ...(queueDelayMs !== undefined ? { networkQueueDelayMs: String(queueDelayMs) } : {}),
         },
       });
@@ -147,4 +210,13 @@ export function createSharedRpcTimingInterceptor(): Interceptor {
 /** Emits a non-RPC event (e.g. `ws_unary_fallback_total`) to the same sink; dropped until one is registered. */
 export function trackSharedEvent(event: Parameters<RpcTimingSink["track"]>[0]): void {
   rpcTimingSink?.track(event);
+}
+
+/** Socket lifecycle for the client-metrics beacon; `code` is the WebSocket close code when the browser gave one. */
+export function recordWsLifecycle(kind: "unary" | "watch", event: "open" | "close" | "error" | "reconnect", code?: number): void {
+  trackSharedEvent({
+    name: "cm.ws",
+    category: "performance",
+    labels: { kind, event, ...(code !== undefined ? { code: String(code) } : {}) },
+  });
 }

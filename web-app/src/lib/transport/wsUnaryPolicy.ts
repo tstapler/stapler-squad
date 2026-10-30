@@ -5,7 +5,7 @@ import type { ConnectError, ContextValues, Interceptor, Transport, UnaryResponse
 import { Code, createContextValues } from "@connectrpc/connect";
 import { IDEMPOTENT_METHODS } from "@/lib/api/idempotentMethods";
 import { peekFlags, preloadFlagValue } from "@/lib/features/flagStore";
-import { trackSharedEvent } from "@/lib/telemetry/rpcTiming";
+import { markRpcTransport, trackSharedEvent } from "@/lib/telemetry/rpcTiming";
 import {
   frameWrittenKey,
   UnaryWsBreaker,
@@ -133,8 +133,10 @@ class WsUnaryPolicy implements Transport {
     input: MessageInitShape<I>,
     contextValues?: ContextValues
   ): Promise<UnaryResponse<I, O>> {
-    const viaHttp = (timeout = timeoutMs) =>
-      this.opt.http.unary(method, signal, timeout, header, input, contextValues);
+    const viaHttp = (timeout = timeoutMs) => {
+      markRpcTransport(contextValues, "http");
+      return this.opt.http.unary(method, signal, timeout, header, input, contextValues);
+    };
     if (!this.wsAllowed(method.name)) return viaHttp();
     if (this.denylist.has(method.name)) {
       this.onFallback("ws-method-not-allowed");
@@ -167,6 +169,7 @@ class WsUnaryPolicy implements Transport {
     viaHttp: (timeout?: number) => Promise<UnaryResponse<I, O>>
   ): Promise<UnaryResponse<I, O>> {
     const decidedAt = this.now();
+    markRpcTransport(contextValues, "ws");
     const ctx = (contextValues ?? createContextValues()).set(frameWrittenKey, () =>
       recordQueueMs(this.now() - decidedAt)
     );

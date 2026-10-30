@@ -12,6 +12,7 @@ import { Code, ConnectError, createContextKey, createContextValues } from "@conn
 import { createMethodUrl, runUnaryCall } from "@connectrpc/connect/protocol";
 import { codeFromString } from "@connectrpc/connect/protocol-connect";
 import { IDEMPOTENT_METHODS } from "@/lib/api/idempotentMethods";
+import { recordWsLifecycle, trackSharedEvent } from "@/lib/telemetry/rpcTiming";
 import allowlist from "./__fixtures__/ws-unary-allowlist.json";
 import {
   MAX_FRAME_BYTES,
@@ -144,6 +145,8 @@ interface Call {
   viaHttp: () => Promise<UnaryResponse<DescMessage, DescMessage>>;
   detach: () => void;
   onWritten?: () => void;
+  submittedAt: number;
+  pendingAtSubmit: number;
 }
 
 function concatParts(parts: Uint8Array[], total: number): Uint8Array {
@@ -280,6 +283,8 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
         viaHttp: viaHttp as Call["viaHttp"],
         detach: () => signal.removeEventListener("abort", onAbort),
         onWritten: contextValues.get(frameWrittenKey),
+        submittedAt: Date.now(),
+        pendingAtSubmit: this.outstanding + this.queue.length,
       };
       const onAbort = () => {
         const wasSent = call.sent;
@@ -349,14 +354,21 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     this.ws = ws;
     ws.onopen = () => {
       if (this.ws !== ws) return;
+      recordWsLifecycle("unary", "open");
       this.clearWindow();
       this.state = "open";
       this.pump();
       this.updateLiveness();
     };
     ws.onmessage = (e) => this.onMessage(ws, e.data);
-    ws.onerror = () => this.dropSocket(ws, true);
-    ws.onclose = () => this.dropSocket(ws, true);
+    ws.onerror = () => {
+      if (this.ws === ws) recordWsLifecycle("unary", "error");
+      this.dropSocket(ws, true);
+    };
+    ws.onclose = (ev?: CloseEvent) => {
+      if (this.ws === ws) recordWsLifecycle("unary", "close", ev?.code);
+      this.dropSocket(ws, true);
+    };
     this.windowTimer = setTimeout(() => {
       this.windowTimer = null;
       if (this.state === "connecting") this.failQueueOverHttp();
@@ -409,6 +421,12 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     this.outstanding++;
     this.sendRaw(call.frame);
     call.onWritten?.();
+    trackSharedEvent({
+      name: "cm.ws_send",
+      category: "performance",
+      durationMs: Date.now() - call.submittedAt,
+      labels: { pending: String(call.pendingAtSubmit) },
+    });
     this.updateLiveness();
   }
 
@@ -541,6 +559,7 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
   private scheduleReconnect(): void {
     if (!this.wanted || this.reconnectTimer || this.socketUrl === null) return;
     this.state = "backoff";
+    recordWsLifecycle("unary", "reconnect");
     const delay = Math.max(this.backoffDelayMs(), this.breaker.msUntilProbe());
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

@@ -192,7 +192,13 @@ type unarySession struct {
 
 	mu       sync.Mutex
 	inflight map[uint32]*inflightCall
+
+	lastPingNanos atomic.Int64 // unix nanos of the outstanding ping, 0 when none
+	endReason     atomic.Value // string; first reason wins
 }
+
+// endWith records why the connection ended; the first caller wins.
+func (s *unarySession) endWith(reason string) { s.endReason.CompareAndSwap(nil, reason) }
 
 func newUnarySession(b *UnaryWsBridge, conn *websocket.Conn, upgrade *http.Request, listener string) *unarySession {
 	return &unarySession{
@@ -206,14 +212,23 @@ func newUnarySession(b *UnaryWsBridge, conn *websocket.Conn, upgrade *http.Reque
 // Per-call contexts derive from the upgrade context so shutdown cancels them.
 func (s *unarySession) serve(parent context.Context) {
 	s.ctx, s.cancel = context.WithCancel(parent)
+	s.b.metrics.connOpened(s.listener)
 	defer func() {
 		s.cancel()
 		s.wg.Wait()
 		_ = s.conn.Close()
+		reason, _ := s.endReason.Load().(string)
+		if reason == "" {
+			reason = "shutdown"
+		}
+		s.b.metrics.connClosed(s.listener, reason)
 	}()
 
 	_ = s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
 	s.conn.SetPongHandler(func(string) error {
+		if sent := s.lastPingNanos.Swap(0); sent != 0 {
+			s.b.metrics.pingRTT(s.listener, time.Since(time.Unix(0, sent)))
+		}
 		return s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
 	})
 	s.wg.Add(3)
@@ -226,6 +241,8 @@ func (s *unarySession) serve(parent context.Context) {
 	go func() {
 		defer s.wg.Done()
 		if err := s.writer.run(s.ctx); err != nil && s.ctx.Err() == nil {
+			s.endWith("write_error")
+			s.b.metrics.writeError(s.listener)
 			log.Warn("[UnaryWS] write failed", "listener", s.listener, "err", err)
 		}
 		s.cancel()
@@ -248,7 +265,9 @@ func (s *unarySession) keepalive() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
+			s.lastPingNanos.Store(time.Now().UnixNano())
 			if err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(unaryWriteWait)); err != nil {
+				s.endWith("ping_failed")
 				s.cancel()
 				return
 			}
@@ -287,6 +306,13 @@ func (s *unarySession) readLoop() {
 
 func (s *unarySession) logReadEnd(err error) {
 	switch {
+	case s.ctx.Err() != nil: // we cancelled first (shutdown, write or ping failure); that reason already won
+	case websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived):
+		s.endWith("peer_close")
+	default:
+		s.endWith("read_error")
+	}
+	switch {
 	case errors.Is(err, websocket.ErrReadLimit):
 		log.Warn("[UnaryWS] frame over hard read limit, closed 1009", "listener", s.listener)
 	case websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived):
@@ -297,6 +323,7 @@ func (s *unarySession) logReadEnd(err error) {
 }
 
 func (s *unarySession) closeProtocol(code int, reason, detail string) {
+	s.endWith("protocol")
 	log.Warn("[UnaryWS] closing socket", "listener", s.listener, "code", code, "reason", reason, "detail", detail)
 	closeWebSocket(s.conn, code, reason)
 }
@@ -458,6 +485,8 @@ func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, 
 // upgrade request's identity (Host, RemoteAddr, Origin, Cookie, proxy headers),
 // so every guard reaches the same verdict as for HTTP.
 func (s *unarySession) runCall(ctx context.Context, handler http.Handler, f unaryFrame) {
+	started := time.Now()
+	defer func() { s.b.metrics.callDuration(f.Method, time.Since(started)) }()
 	rec := &unaryRecorder{header: http.Header{}}
 	panicked := s.serveRecorded(ctx, handler, f, rec)
 	streamed := false

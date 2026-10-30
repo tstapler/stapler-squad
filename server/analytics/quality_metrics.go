@@ -44,6 +44,9 @@ func WithQualityMetrics(p AnalyticsProvider) AnalyticsProvider {
 }
 
 func (q qualityMetricsProvider) Record(ctx context.Context, ev Event) error {
+	if defaultClientMetrics().observe(ctx, ev) {
+		return nil // metrics-only browser event; not stored
+	}
 	if ev.EventName == EventInlineActionUndo {
 		if c := undoCounter(); c != nil {
 			kind := strings.ToLower(ev.Labels["kind"])

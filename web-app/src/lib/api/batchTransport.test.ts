@@ -14,6 +14,7 @@ import {
   BATCH_WINDOW_MS,
   createBatchTransport,
 } from "./batchTransport";
+import { setRpcTimingSink } from "@/lib/telemetry/rpcTiming";
 
 const listShells = SessionService.method.listShells;
 const statFile = SessionService.method.statFile;
@@ -90,6 +91,47 @@ async function flushWindow(): Promise<void> {
 
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
+
+describe("batchTransport client metrics events", () => {
+  const track = jest.fn();
+  beforeEach(() => {
+    track.mockClear();
+    setRpcTimingSink({ track });
+  });
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("batchTransport_should_EmitBatchSize_When_CallsShareTheWindow", async () => {
+    const { transport } = setup();
+    const calls = [shells(transport, "a"), shells(transport, "b"), shells(transport, "c")];
+    await flushWindow();
+    await Promise.all(calls);
+    expect(track).toHaveBeenCalledWith({ name: "cm.batch", category: "performance", labels: { size: "3" } });
+    expect(track.mock.calls.filter(([e]) => e.name === "cm.batch_fallback")).toHaveLength(0);
+  });
+
+  it("batchTransport_should_CountServerDeclinedFallbacks", async () => {
+    const reply: Reply = (calls) => [okReply(calls)[0], { id: calls[1].id, fallback: true }];
+    const { transport } = setup({ reply });
+    const calls = [shells(transport, "a"), shells(transport, "b")];
+    await flushWindow();
+    await Promise.all(calls);
+    expect(track).toHaveBeenCalledWith({ name: "cm.batch_fallback", category: "performance", labels: { reason: "server-declined" } });
+  });
+
+  it("batchTransport_should_CountRequestFailedFallbackPerMember_When_TheBatchRequestRejects", async () => {
+    const inner = { unary: jest.fn(async (m: DescMethodUnary) => ({ stream: false, service: m.parent, method: m, header: new Headers(), trailer: new Headers(), message: create(m.output, {}) })), stream: jest.fn() };
+    const transport = createBatchTransport({
+      inner: inner as unknown as Transport,
+      baseUrl: "http://h/api",
+      fetch: (async () => { throw new TypeError("network"); }) as unknown as typeof fetch,
+      isEnabled: () => true,
+    });
+    const calls = [shells(transport, "a"), shells(transport, "b")];
+    await flushWindow();
+    await Promise.all(calls);
+    expect(track.mock.calls.filter(([e]) => e.name === "cm.batch_fallback" && e.labels.reason === "request-failed")).toHaveLength(2);
+  });
+});
 
 describe("batchTransport", () => {
   it("batchTransport_should_NotTouchCalls_When_FlagIsOff", async () => {

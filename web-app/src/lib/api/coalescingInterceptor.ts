@@ -4,6 +4,7 @@ import type { Interceptor, UnaryRequest, UnaryResponse } from "@connectrpc/conne
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { buildDedupeKey, isCoalescible } from "./idempotentMethods";
 import { priorityKey } from "./requestPriority";
+import { trackSharedEvent } from "@/lib/telemetry/rpcTiming";
 
 /** The shared request runs on its own deadline: no single caller's signal may cancel the others. */
 const SHARED_TIMEOUT_MS = 30_000;
@@ -147,7 +148,13 @@ export function createCoalescingInterceptor(opts: { isEnabled: () => boolean }):
     const stale =
       flight &&
       (flight.globalGen !== globalGen || (sessionId !== "" && flight.sessionGen !== (sessionGens.get(sessionId) ?? 0)));
-    if (!flight || stale) flight = startFlight(key, unary, sessionId, unaryNext);
-    return join(flight, key, unary);
+    const startsFlight = !flight || stale;
+    if (startsFlight) flight = startFlight(key, unary, sessionId, unaryNext);
+    trackSharedEvent({
+      name: "cm.coalesce",
+      category: "performance",
+      labels: { method: unary.method.name, outcome: startsFlight ? "started" : "joined" },
+    });
+    return join(flight as Flight, key, unary);
   };
 }
