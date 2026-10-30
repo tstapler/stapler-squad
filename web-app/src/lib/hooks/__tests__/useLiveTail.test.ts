@@ -84,5 +84,13 @@ describe("useLiveTail polling", () => {
     await advance(2000);
     expect(fetchLogs.mock.calls.length).toBeLessThanOrEqual(2);
   });
+
+  it("backs off after errors instead of retrying at the base interval", async () => {
+    const fetchLogs = jest.fn().mockRejectedValue(new Error("down"));
+    renderHook(() => useLiveTail(fetchLogs, { enabled: true, interval: 2000 }));
+    await advance(0);
+    for (let i = 0; i < 15; i++) await advance(2000);
+    expect(fetchLogs.mock.calls.length).toBeLessThanOrEqual(5);
+  });
 });
 

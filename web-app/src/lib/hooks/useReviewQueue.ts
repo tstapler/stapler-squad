@@ -124,6 +124,8 @@ interface UseReviewQueueReturn extends AsyncResult {
  * });
  * ```
  */
+const LIVE_RECONCILE_MS = 120_000;
+
 export function useReviewQueue(
   options: UseReviewQueueOptions = {}
 ): UseReviewQueueReturn {
@@ -412,6 +414,12 @@ export function useReviewQueue(
     refreshRef.current = refresh;
   }, [refresh]);
 
+  // A reconnect snapshot only re-adds items, so items removed during a gap would linger: reconcile over REST
+  // on every transition to live.
+  useEffect(() => {
+    if (streamLive) void refreshRef.current();
+  }, [streamLive]);
+
   // Always do an initial REST fetch on mount for immediate fresh data.
   // Even in WebSocket push mode the stream may take a moment to connect and
   // deliver its initialSnapshot, leaving the page empty in the meantime.
@@ -433,11 +441,11 @@ export function useReviewQueue(
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
-      if (!streamLive) {
-        interval = setInterval(() => {
-          void refreshRef.current();
-        }, fallbackPollInterval);
-      }
+      // A live stream can still drop an event (the server's client channel is bounded and heartbeats keep the
+      // connection looking healthy), so a slow reconcile poll runs while live; the full-rate poll runs when it is not.
+      interval = setInterval(() => {
+        void refreshRef.current();
+      }, streamLive ? Math.max(fallbackPollInterval, LIVE_RECONCILE_MS) : fallbackPollInterval);
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
       interval = setInterval(() => {

@@ -14,6 +14,12 @@ import {
 } from "@/lib/utils/pageVisibility";
 
 export const GUIDANCE_POLL_MS = 3_000;
+/** Rows that settled but are held fresh by an open card are re-read at this slower pace. */
+const SETTLED_POLL_MS = 15_000;
+/** Per-call deadline, shorter than the transport's, so a half-open connection cannot freeze rows. */
+const POLL_TIMEOUT_MS = 10_000;
+/** At most this many live rows are read individually; more use the one shared list call. */
+const LIST_THRESHOLD = 2;
 
 /** Delivery states that still change on their own: pending, sent (acknowledgement or the 60 s decision). */
 const MOVING = new Set(["pending", "sent"]);
@@ -30,6 +36,8 @@ interface Entry {
   listeners: Set<() => void>;
   /** Subscribers that asked for polling even once the row has settled. */
   keepFresh: number;
+  /** When the row was last published, to pace reads of rows that are only held fresh. */
+  lastRead: number;
 }
 
 const entries = new Map<string, Entry>();
@@ -46,14 +54,18 @@ function publish(id: string, row: PlainGuidanceRequest): void {
   const e = entries.get(id);
   if (!e) return;
   e.row = row;
+  e.lastRead = Date.now();
   e.listeners.forEach((l) => l());
   syncTimer();
 }
 
 /**
- * One tick serves every subscribed row: a single ListAllPendingGuidanceRequests answers all open
- * cards, and only rows missing from it (answered, awaiting acknowledgement) get an individual read.
- * A tick is skipped while the previous one is in flight or the tab is hidden.
+ * One tick serves every subscribed row. With more than LIST_THRESHOLD live rows a single
+ * ListAllPendingGuidanceRequests answers all open cards and only rows missing from it (answered, awaiting
+ * acknowledgement) get an individual read; with fewer, individual reads are cheaper than the global list.
+ * If the list call fails the tick ends (no 1+N fallback against a struggling server). Settled rows held
+ * fresh by a subscriber are re-read only every SETTLED_POLL_MS. A tick is skipped while the previous one is
+ * in flight or the tab is hidden.
  */
 async function tick(urgent = false): Promise<void> {
   if (inFlight) {
@@ -62,24 +74,30 @@ async function tick(urgent = false): Promise<void> {
     return;
   }
   if (isPageHidden()) return;
-  const wanted = [...entries].filter(([, e]) => isLive(e)).map(([id]) => id);
+  const now = Date.now();
+  const wanted = [...entries]
+    .filter(([, e]) => isMoving(e.row) || (e.keepFresh > 0 && now - e.lastRead >= SETTLED_POLL_MS))
+    .map(([id]) => id);
   if (wanted.length === 0) return;
   inFlight = true;
   try {
     const client = createClient(GuidanceRequestService, getConnectTransport());
     const seen = new Set<string>();
-    try {
-      // One poll is shared by every row, so no single caller owns it.
-      // abort-signal-exempt
-      const res = await client.listAllPendingGuidanceRequests(
-        create(ListAllPendingGuidanceRequestsRequestSchema, {}),
-      );
-      for (const r of res.requests) {
-        seen.add(r.id);
-        publish(r.id, toPlain(r));
+    if (wanted.length > LIST_THRESHOLD) {
+      try {
+        // One poll is shared by every row, so no single caller owns it.
+        // abort-signal-exempt
+        const res = await client.listAllPendingGuidanceRequests(
+          create(ListAllPendingGuidanceRequestsRequestSchema, {}),
+          { timeoutMs: POLL_TIMEOUT_MS },
+        );
+        for (const r of res.requests) {
+          seen.add(r.id);
+          if (entries.has(r.id)) publish(r.id, toPlain(r));
+        }
+      } catch {
+        return; // keep the last rows and retry next tick
       }
-    } catch {
-      // keep the last rows; the per-id reads below still run
     }
     await Promise.all(
       wanted
@@ -90,6 +108,7 @@ async function tick(urgent = false): Promise<void> {
             .then(() =>
               client.getGuidanceRequest(
                 create(GetGuidanceRequestRequestSchema, { id }),
+                { timeoutMs: POLL_TIMEOUT_MS },
               ),
             )
             .then((res) => res.request && publish(id, toPlain(res.request)))
@@ -129,7 +148,7 @@ function stopPolling(): void {
 function entryFor(id: string): Entry {
   let e = entries.get(id);
   if (!e) {
-    e = { row: undefined, listeners: new Set(), keepFresh: 0 };
+    e = { row: undefined, listeners: new Set(), keepFresh: 0, lastRead: 0 };
     entries.set(id, e);
     // New ids are read on the next microtask so rows mounting together share one request.
     void Promise.resolve().then(() => tick(true));

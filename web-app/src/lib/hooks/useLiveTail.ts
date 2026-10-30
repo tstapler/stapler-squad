@@ -86,7 +86,7 @@ export function useLiveTail(
       return gotNew !== false;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch logs');
-      return true;
+      return false; // a failing endpoint backs off like an idle one
     } finally {
       inFlightRef.current = false;
     }

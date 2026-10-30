@@ -472,6 +472,8 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
       await new Promise(() => {}); // keep the stream open
     }
     mockWatchReviewQueue.mockReturnValue(fakeStream());
+    // The mount fetch and the reconcile on connect both see s1, which the rule has not removed server-side yet.
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([makeItem("s1")]) });
 
     const store = makeTestStore();
     const { result } = renderHook(
@@ -574,6 +576,7 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
     // the backend has already removed it (simulating the real reconciliation race).
     mockGetReviewQueue
       .mockResolvedValueOnce({ reviewQueue: makeQueue([makeItem("s1")]) })
+      .mockResolvedValueOnce({ reviewQueue: makeQueue([makeItem("s1")]) }) // reconcile on connect
       .mockResolvedValue({ reviewQueue: makeQueue([]) });
 
     const store = makeTestStore();
@@ -619,7 +622,7 @@ describe("useReviewQueue fallback poll", () => {
       for (let i = 0; i < 10; i++) await Promise.resolve();
     });
 
-  it("does not poll while the watch stream is delivering (90s idle: 1 mount fetch, was 4)", async () => {
+  it("reconciles over REST once when the stream goes live, then does not run the 30s poll", async () => {
     async function* liveStream() {
       yield { event: { case: "heartbeat", value: {} }, heartbeat: true };
       await new Promise(() => {});
@@ -627,11 +630,12 @@ describe("useReviewQueue fallback poll", () => {
     mockWatchReviewQueue.mockReturnValue(liveStream());
     renderHook(() => useReviewQueue({ useWebSocketPush: true }), { wrapper: makeWrapper(makeTestStore()) });
     await settle();
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(2); // mount fetch + reconcile on connect
     await act(async () => {
-      jest.advanceTimersByTime(90_000);
+      jest.advanceTimersByTime(60_000);
     });
     await settle();
-    expect(mockGetReviewQueue).toHaveBeenCalledTimes(1);
+    expect(mockGetReviewQueue.mock.calls.length).toBeLessThanOrEqual(3); // was 4 with the 30s poll (a stale-watchdog reconnect adds one)
   });
 
   it("polls every fallback interval while the stream never connects", async () => {
