@@ -2,6 +2,7 @@ package streamhub
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,6 +19,11 @@ type subscriber struct {
 	outbound  chan []byte
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// awaitingFirstPaint is true from attach until FirstPaint runs, for a ManualFirstPaint
+	// subscriber; its writer is not started meanwhile, so frames queue in outbound.
+	awaitingFirstPaint atomic.Bool
+	writerOnce         sync.Once
 
 	// mu guards closed and slowSince. closed is checked and set under the
 	// same lock as every send attempt (trySend) so a send can never race
@@ -42,13 +48,15 @@ type subscriber struct {
 // subscriber is registered with the hub, so onSendError always has a live
 // registry entry to evict.
 func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCapability, bufferSize int) *subscriber {
-	return &subscriber{
+	s := &subscriber{
 		id:         id,
 		transport:  transport,
 		capability: capability,
 		outbound:   make(chan []byte, bufferSize),
 		done:       make(chan struct{}),
 	}
+	s.awaitingFirstPaint.Store(capability.ManualFirstPaint)
+	return s
 }
 
 // startWriter launches the subscriber's writer goroutine. It drains outbound
@@ -60,15 +68,29 @@ func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCa
 // are unsafe), so the writer needs no coordination with trySend/close beyond
 // the channel itself.
 func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
-	go func() {
-		defer close(s.done)
-		for data := range s.outbound {
-			if err := s.transport.Send(data); err != nil {
-				onSendError(s.id, err)
-				return
+	s.writerOnce.Do(func() {
+		go func() {
+			defer close(s.done)
+			for data := range s.outbound {
+				if err := s.transport.Send(data); err != nil {
+					onSendError(s.id, err)
+					return
+				}
 			}
+		}()
+	})
+}
+
+// discardQueued drops every frame queued but not yet written. Only valid while the writer is
+// not running (awaitingFirstPaint), when nothing else drains outbound.
+func (s *subscriber) discardQueued() {
+	for {
+		select {
+		case <-s.outbound:
+		default:
+			return
 		}
-	}()
+	}
 }
 
 // trySend attempts a non-blocking enqueue of data onto the subscriber's

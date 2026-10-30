@@ -1135,9 +1135,10 @@ func TestTymuxGRPCSession_CapturePaneRedraw_CarriesTerminalStateAndAltScreen(t *
 	}
 	sess := startedSession(t, snap)
 
-	data, altScreen, err := sess.CapturePaneRedraw(context.Background())
+	data, altScreen, ok, err := sess.CapturePaneRedraw(context.Background())
 
 	require.NoError(t, err)
+	assert.True(t, ok)
 	assert.True(t, altScreen)
 	assert.Contains(t, data, "\x1b[?1049h", "alt-screen entry must be restored, not just the text")
 	assert.Contains(t, data, "\x1b]2;vim", "title must be restored")
@@ -1156,7 +1157,23 @@ func TestTymuxGRPCSession_CapturePaneRedraw_PropagatesCaptureError(t *testing.T)
 	})
 	require.NoError(t, sess.Start(dir))
 
-	_, _, err := sess.CapturePaneRedraw(context.Background())
+	_, _, _, err := sess.CapturePaneRedraw(context.Background())
 
 	require.Error(t, err)
+}
+
+// A daemon older than v1.9.0 sends no Modes; the redraw must decline so callers keep the text path.
+func TestTymuxGRPCSession_CapturePaneRedraw_DeclinesWhenDaemonSentNoTerminalState(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid:      []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}, {Text: "i"}}}},
+		AltScreen: true, // would be reported if the snapshot were used
+	}
+	sess := startedSession(t, snap)
+
+	data, altScreen, ok, err := sess.CapturePaneRedraw(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, data)
+	assert.False(t, altScreen)
 }

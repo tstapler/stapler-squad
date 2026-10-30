@@ -362,9 +362,13 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	// This runs before startWriter so it is guaranteed to be the very first
 	// Send call this transport ever receives, with no writer goroutine yet
 	// running to race it.
-	h.sendCatchUpSnapshot(sub)
-
-	sub.startWriter(h.handleSubscriberSendError)
+	//
+	// A ManualFirstPaint subscriber does neither: FirstPaint sends its paint and starts its
+	// writer, so frames broadcast meanwhile queue behind it instead of racing it.
+	if !capability.ManualFirstPaint {
+		h.sendCatchUpSnapshot(sub)
+		sub.startWriter(h.handleSubscriberSendError)
+	}
 
 	log.Info("streamhub subscriber attached",
 		"session", h.sessionName, "subscriber_id", string(id), "subscriber_count", count,
@@ -421,6 +425,55 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 	}
 }
 
+// ErrUnknownSubscriber is returned by FirstPaint for a subscriber that already detached.
+var ErrUnknownSubscriber = errors.New("streamhub: unknown subscriber")
+
+// FirstPaint runs paint for a ManualFirstPaint subscriber, then starts its writer. paint captures
+// and writes the subscriber's first snapshot directly (outside the hub's queue).
+//
+// Ordering: resizeApplyMu is held throughout, so no resize can capture-and-broadcast between
+// paint's capture and its write; a snapshot broadcast already queued for this subscriber predates
+// paint's capture and is discarded; live frames that arrive during paint queue behind it. The
+// subscriber therefore never sees an older snapshot after a newer one. paint blocks resizes for
+// its duration (one capture RPC plus one socket write), and is not given the hub's other locks.
+//
+// Live output frames queued before paint began are also discarded: the capture includes them
+// (to within the pump's latency), and replaying them over it would apply them twice.
+func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
+	h.mu.Lock()
+	sub, ok := h.subscribers[id]
+	h.mu.Unlock()
+	if !ok {
+		return ErrUnknownSubscriber
+	}
+
+	h.resizeApplyMu.Lock()
+	defer h.resizeApplyMu.Unlock()
+
+	if sub.awaitingFirstPaint.CompareAndSwap(true, false) {
+		sub.discardQueued()
+	}
+	err := paint()
+	sub.startWriter(h.handleSubscriberSendError)
+	return err
+}
+
+// allAwaitingFirstPaint reports whether the hub has subscribers and every one is still waiting
+// for its FirstPaint, so a resize broadcast would only be discarded.
+func (h *StreamHub) allAwaitingFirstPaint() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.subscribers) == 0 {
+		return false
+	}
+	for _, sub := range h.subscribers {
+		if !sub.awaitingFirstPaint.Load() {
+			return false
+		}
+	}
+	return true
+}
+
 // currentSnapshot returns the hub's best-known current pane content: the
 // cached result of the most recent post-quiescence CapturePaneContent call
 // if one exists, or a fresh on-demand capture otherwise (itself cached
@@ -430,12 +483,10 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 // ok is false when no snapshot is available: h.controller is nil, the
 // capture errors, or it succeeds with empty content.
 func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
-	// A full-state redraw is never served from the cache: its capture is one cheap RPC, and a
-	// cached one would hand a later attacher the modes/title/cursor of whenever it was taken.
+	// A full-state redraw is neither served from nor stored in the text cache: a cached one would
+	// hand a later attacher the modes/title/cursor of whenever it was taken, and a later failed
+	// capture would then fall back to a stale redraw dressed as the text snapshot.
 	if redraw, ok := h.captureRedraw(); ok {
-		h.snapshotMu.Lock()
-		h.lastSnapshot = redraw
-		h.snapshotMu.Unlock()
 		return redraw, true
 	}
 
@@ -809,8 +860,13 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
+	if h.allAwaitingFirstPaint() {
+		// Everyone attached is waiting for a FirstPaint that supersedes this snapshot.
+		return
+	}
+
 	if redraw, ok := h.captureRedrawContext(ctx); ok {
-		h.broadcastSnapshot(redraw)
+		h.publishSnapshot(redraw)
 		return
 	}
 
@@ -835,15 +891,16 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
-	h.broadcastSnapshot([]byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller)))
-}
-
-// broadcastSnapshot caches prepared as the hub's snapshot and sends it to every subscriber.
-func (h *StreamHub) broadcastSnapshot(prepared []byte) {
+	prepared := []byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()
+	h.publishSnapshot(prepared)
+}
 
+// publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not
+// touch the text-snapshot cache.
+func (h *StreamHub) publishSnapshot(prepared []byte) {
 	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
 	// whatever raw output happens to be mid-accumulation, since it is itself
