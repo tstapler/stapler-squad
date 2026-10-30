@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -284,7 +285,7 @@ func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrac
 	for i := 0; i < 300; i++ { // more than the 100-deep queue
 		hub.Broadcast([]byte("burst"))
 	}
-	time.Sleep(200 * time.Millisecond) // well past the grace
+	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest the hub's slow-subscriber grace is an internal wall-clock timer; the test proves it does not fire
 
 	ran := false
 	err := hub.FirstPaint(id, func() error { ran = true; log.add("paint"); return nil })
@@ -297,8 +298,9 @@ func TestFirstPaint_should_EvictSubscriber_When_NeverPaintedWithinMaxAwait(t *te
 	defer goleak.VerifyNone(t)
 	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(30*time.Millisecond))
-	id := hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{ManualFirstPaint: true})
-	time.Sleep(300 * time.Millisecond) // many multiples of the 30ms max-await
+	tr := streamhub.NewMemoryTransport()
+	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	require.Eventually(t, tr.IsClosed, 5*time.Second, time.Millisecond, "max-await eviction must close the transport")
 	require.ErrorIs(t, hub.FirstPaint(id, func() error { return nil }), streamhub.ErrUnknownSubscriber)
 }
 
@@ -353,7 +355,7 @@ func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace
 		for i := 0; i < n; i++ {
 			hub.Broadcast([]byte(fmt.Sprintf("f%03d", i)))
 		}
-		time.Sleep(150 * time.Millisecond) // many multiples of the grace
+		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the paint must outlast the hub's internal wall-clock slow-subscriber grace
 		_ = tr.Send([]byte("paint"))
 		return nil
 	}))
@@ -374,7 +376,10 @@ func TestFirstPaint_should_NotEvict_When_MaxAwaitExpiresMidPaint(t *testing.T) {
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
 	defer hub.DetachSubscriber(id)
 
-	require.NoError(t, hub.FirstPaint(id, func() error { time.Sleep(150 * time.Millisecond); return nil }))
+	require.NoError(t, hub.FirstPaint(id, func() error {
+		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the paint must outlast the hub's internal wall-clock max-await timer
+		return nil
+	}))
 	hub.Broadcast([]byte("live"))
 	require.Eventually(t, func() bool { return len(tr.snapshot()) == 1 }, 2*time.Second, 5*time.Millisecond)
 }
@@ -426,19 +431,25 @@ func runFirstPaintRace(t *testing.T, it int) {
 			}
 			n := seq.Add(1)
 			hub.Broadcast([]byte(strconv.FormatInt(n, 10)))
-			time.Sleep(50 * time.Microsecond)
+			runtime.Gosched()
 		}
 	}()
-	time.Sleep(time.Duration(it%5) * time.Millisecond)
+	for seq.Load() < int64(it%5)*20 { // head start for the producer
+		runtime.Gosched()
+	}
 
 	var snapSeq int64
 	require.NoError(t, hub.FirstPaint(id, func() error {
 		snapSeq = seq.Load()
-		time.Sleep(time.Duration(it%7) * 700 * time.Microsecond) // capture/write latency
+		for i := 0; i < it%7*50; i++ { // capture/write latency
+			runtime.Gosched()
+		}
 		_ = tr.Send([]byte("paint"))
 		return nil
 	}))
-	time.Sleep(5 * time.Millisecond)
+	for seq.Load() < snapSeq+20 { // let the producer run past the capture
+		runtime.Gosched()
+	}
 	close(stop)
 	<-prodDone
 	last := seq.Load()

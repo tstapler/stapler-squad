@@ -311,7 +311,7 @@ func TestWriteMessageTimeout_should_ClearDeadline_When_WriteSucceeds(t *testing.
 	require.NoError(t, stream.WriteMessageTimeout(websocket.BinaryMessage, []byte("a"), 100*time.Millisecond))
 	_, _, err := conn.ReadMessage()
 	require.NoError(t, err)
-	time.Sleep(250 * time.Millisecond) // past the deadline the first write set
+	time.Sleep(250 * time.Millisecond) //nolint:notimesleeptest must elapse past a real net.Conn write deadline
 	require.NoError(t, stream.WriteMessage(websocket.BinaryMessage, []byte("b")), "a stale write deadline would fail this")
 }
 
