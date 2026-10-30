@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+import { ROUTE_META } from "@/app/route-meta";
 import { MAX_LONG_TASKS_PER_MINUTE, observeLongTasks, routeLabel } from "../longTasks";
 
 describe("routeLabel", () => {
@@ -52,5 +55,17 @@ describe("observeLongTasks", () => {
     (global.PerformanceObserver as unknown as { supportedEntryTypes: string[] }).supportedEntryTypes = [];
     const stop = observeLongTasks(jest.fn());
     expect(() => stop()).not.toThrow();
+  });
+});
+
+describe("server page allow-list", () => {
+  it("lists the page label of every route in route-meta.ts (server/analytics/client_pages.json)", () => {
+    const file = path.join(process.cwd(), "..", "server", "analytics", "client_pages.json");
+    const allowed = new Set<string>(JSON.parse(fs.readFileSync(file, "utf8")));
+    const missing = Object.keys(ROUTE_META)
+      .map(routeLabel)
+      .filter((label) => !allowed.has(label));
+    // Add the label to client_pages.json (and keep it sorted) when this fails.
+    expect([...new Set(missing)]).toEqual([]);
   });
 });

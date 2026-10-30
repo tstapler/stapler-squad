@@ -93,3 +93,65 @@ func TestUnaryWsBridge_should_RecordPingRTT(t *testing.T) {
 	}()
 	assert.Eventually(t, func() bool { return histogramCount(t, "ws_unary_ping_rtt") > before }, readWait, 5*time.Millisecond)
 }
+
+func TestUnaryWsBridge_should_IgnoreForgedPongPayload(t *testing.T) {
+	before := histogramCount(t, "ws_unary_ping_rtt")
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryKeepalive(time.Hour, time.Hour)) // the server never pings
+	c := h.connect(nil)
+	for _, payload := range []string{"1", "-5", "99999999999999999999", "not-a-number"} {
+		require.NoError(t, c.WriteControl(websocket.PongMessage, []byte(payload), time.Now().Add(time.Second)))
+	}
+	sendListFiles(t, c, 1, "after-forgery") // a round trip proves the forged pongs were already processed
+	require.Equal(t, "ok:after-forgery", decodeListFiles(t, readFrame(t, c)).BasePath)
+	assert.Equal(t, before, histogramCount(t, "ws_unary_ping_rtt"), "a pong that matches no outstanding ping records nothing")
+}
+
+func TestUnaryWsBridge_should_LabelProtocolClose(t *testing.T) {
+	before := sumWithReason(t, "ws_unary_connections_closed_total", "protocol")
+	h := newBridgeHarness(t, ListenerLocal)
+	c := h.connect(nil)
+	require.NoError(t, c.WriteMessage(websocket.TextMessage, []byte("hi")))
+	require.NoError(t, c.SetReadDeadline(time.Now().Add(readWait)))
+	_, _, err := c.ReadMessage()
+	require.True(t, websocket.IsCloseError(err, websocket.CloseUnsupportedData), "got %v", err)
+	assert.Eventually(t, func() bool {
+		return sumWithReason(t, "ws_unary_connections_closed_total", "protocol") == before+1
+	}, readWait, 5*time.Millisecond)
+}
+
+func TestUnaryWsBridge_should_LabelReadErrorClose(t *testing.T) {
+	before := sumWithReason(t, "ws_unary_connections_closed_total", "read_error")
+	h := newBridgeHarness(t, ListenerLocal)
+	c := h.connect(nil)
+	_ = c.UnderlyingConn().Close() // abrupt TCP close: no close frame
+	assert.Eventually(t, func() bool {
+		return sumWithReason(t, "ws_unary_connections_closed_total", "read_error") == before+1
+	}, readWait, 5*time.Millisecond)
+}
+
+func TestUnaryWsBridge_should_LabelPongTimeoutAsReadError(t *testing.T) {
+	before := sumWithReason(t, "ws_unary_connections_closed_total", "read_error")
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, 40*time.Millisecond))
+	c := h.connect(nil)
+	c.SetPingHandler(func(string) error { return nil }) // never answer pings
+	go func() {
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	assert.Eventually(t, func() bool {
+		return sumWithReason(t, "ws_unary_connections_closed_total", "read_error") == before+1
+	}, readWait, 5*time.Millisecond)
+}
+
+func TestUnaryWsBridge_should_LabelServerContextEndAsShutdown(t *testing.T) {
+	before := sumWithReason(t, "ws_unary_connections_closed_total", "shutdown")
+	h := newBridgeHarness(t, ListenerLocal)
+	_ = h.connect(nil)
+	h.cancel()
+	assert.Eventually(t, func() bool {
+		return sumWithReason(t, "ws_unary_connections_closed_total", "shutdown") == before+1
+	}, readWait, 5*time.Millisecond)
+}

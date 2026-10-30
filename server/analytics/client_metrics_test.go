@@ -2,11 +2,14 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -54,10 +57,14 @@ func TestObserveRPCRecordsDurationByMethodTransportCode(t *testing.T) {
 	require.Len(t, pts, 1)
 	m, _ := pts[0].Attributes.Value("method")
 	tr, _ := pts[0].Attributes.Value("transport")
-	code, _ := pts[0].Attributes.Value("code")
+	code, _ := pts[0].Attributes.Value("outcome")
 	assert.Equal(t, "ListSessions", m.AsString())
 	assert.Equal(t, "ws", tr.AsString())
 	assert.Equal(t, "deadline_exceeded", code.AsString())
+	_, hasCode := pts[0].Attributes.Value("code")
+	assert.False(t, hasCode, "the per-method histogram carries the outcome class, not the full code")
+	fullCode, _ := sumPoints(got["client.rpc.codes"])[0].Attributes.Value("code")
+	assert.Equal(t, "deadline_exceeded", fullCode.AsString())
 	assert.Equal(t, int64(1), sumPoints(got["client.rpc.duplicate_inflight"])[0].Value)
 	assert.Equal(t, uint64(1), histPoints[int64](got["client.rpc.inflight_at_start"])[0].Count)
 	assert.Equal(t, uint64(1), histPoints[float64](got["client.rpc.network_queue_delay"])[0].Count)
@@ -136,9 +143,88 @@ func TestWebVitalsCLSIsDescaled(t *testing.T) {
 	}
 }
 
-func TestCloseCodeLabel(t *testing.T) {
+func TestCloseCodeLabelIsAllowListed(t *testing.T) {
 	assert.Equal(t, "1006", closeCodeLabel("1006"))
 	assert.Equal(t, "none", closeCodeLabel(""))
-	assert.Equal(t, "none", closeCodeLabel("99999"))
-	assert.Equal(t, "none", closeCodeLabel("abc"))
+	for _, hostile := range []string{"1234", "4001", "99999", "abc", "-1", "1006 "} {
+		assert.Equal(t, "other", closeCodeLabel(hostile), hostile)
+	}
+}
+
+func TestOutcomeClassFoldsCodes(t *testing.T) {
+	want := map[string]string{"ok": "ok", "canceled": "canceled", "deadline_exceeded": "deadline_exceeded",
+		"unavailable": "saturated", "resource_exhausted": "saturated", "invalid_argument": "error", "internal": "error", "unknown": "error"}
+	for code, class := range want {
+		assert.Equal(t, class, outcomeClass(code), code)
+	}
+}
+
+func TestRPCSeriesStayBoundedUnderHostileCodes(t *testing.T) {
+	cm, r := newTestClientMetrics(t)
+	for _, code := range []string{"invalid_argument", "internal", "data_loss", "aborted", "weird", "<x>"} {
+		cm.observe(context.Background(), Event{EventName: "rpc.x", DurationMs: ms(1), Labels: map[string]string{"method": "ListSessions", "code": code}})
+	}
+	pts := histPoints[float64](collect(t, r)["client.rpc.duration"])
+	assert.Len(t, pts, 1, "six distinct error codes collapse to one outcome series per method/transport")
+}
+
+func TestPageLabelIsAllowListed(t *testing.T) {
+	cm, r := newTestClientMetrics(t)
+	for i := 0; i < 100; i++ { // squatting attempt: junk pages must not consume labels
+		cm.observe(context.Background(), Event{EventName: eventLongTask, DurationMs: ms(80), Page: fmt.Sprintf("junk-%d", i)})
+	}
+	for page := range knownPages() {
+		cm.observe(context.Background(), Event{EventName: eventLongTask, DurationMs: ms(80), Page: page})
+	}
+	seen := map[string]bool{}
+	for _, p := range histPoints[float64](collect(t, r)["client.long_task.duration"]) {
+		v, _ := p.Attributes.Value("page")
+		seen[v.AsString()] = true
+	}
+	assert.True(t, seen["other"])
+	assert.True(t, seen["sessions"], "a real page keeps its own label after 100 junk pages")
+	assert.Len(t, seen, len(knownPages())+1)
+}
+
+func TestMissingDurationIsCountedNotSilentlyDropped(t *testing.T) {
+	cm, r := newTestClientMetrics(t)
+	ctx := context.Background()
+	cm.observe(ctx, Event{EventName: "rpc.ListSessions", Labels: map[string]string{"method": "ListSessions"}})
+	cm.observe(ctx, Event{EventName: eventLongTask, Page: "sessions"})
+	cm.observe(ctx, Event{EventName: "web_vital.lcp"})
+	var n int64
+	for _, dp := range sumPoints(collect(t, r)["client.metrics.rejected"]) {
+		v, _ := dp.Attributes.Value("reason")
+		assert.Equal(t, "missing_duration", v.AsString())
+		n += dp.Value
+	}
+	assert.Equal(t, int64(3), n)
+}
+
+// failingMeter makes every instrument registration fail, as a misconfigured SDK could.
+type failingMeter struct{ metric.Meter }
+
+func (failingMeter) Int64Counter(string, ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	return nil, errors.New("boom")
+}
+func (failingMeter) Int64Histogram(string, ...metric.Int64HistogramOption) (metric.Int64Histogram, error) {
+	return nil, errors.New("boom")
+}
+func (failingMeter) Float64Histogram(string, ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
+	return nil, errors.New("boom")
+}
+
+func TestFailedRegistrationFallsBackToNoopInstruments(t *testing.T) {
+	cm := newClientMetrics(failingMeter{noop.NewMeterProvider().Meter("")})
+	assert.NotPanics(t, func() {
+		for _, ev := range []Event{
+			{EventName: "rpc.ListSessions", DurationMs: ms(5), Labels: map[string]string{"method": "ListSessions", "dup": "1", "inflight": "1", "networkQueueDelayMs": "3"}},
+			{EventName: "web_vital.lcp", DurationMs: ms(5)},
+			{EventName: eventCoalesce}, {EventName: eventBatch}, {EventName: eventBatchFallback},
+			{EventName: eventWsLifecycle}, {EventName: eventWsSend, DurationMs: ms(1)}, {EventName: eventLongTask, DurationMs: ms(60)},
+			{EventName: eventWsUnaryFallback}, {EventName: "cm.bogus"},
+		} {
+			cm.observe(context.Background(), ev)
+		}
+	})
 }

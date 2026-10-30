@@ -72,7 +72,7 @@ describe("client RPC metrics labels", () => {
   it("flags an identical request started while another is in flight, and counts concurrency", async () => {
     const track = jest.fn();
     const { pending, next } = deferredNext();
-    const handler = createRpcTimingInterceptor({ track })(next as never) as Handler;
+    const handler = createRpcTimingInterceptor({ track }, { detectDuplicates: true })(next as never) as Handler;
     const first = handler(req());
     const second = handler(req());
     pending[0].resolve();
@@ -82,13 +82,45 @@ describe("client RPC metrics labels", () => {
     const [firstEvent, secondEvent] = track.mock.calls.map((c) => c[0]);
     expect(firstEvent.labels).toMatchObject({ inflight: "0" });
     expect(firstEvent.labels).not.toHaveProperty("dup");
-    expect(secondEvent.labels).toMatchObject({ inflight: "1", dup: "1" });
+    expect(secondEvent.labels).toMatchObject({ inflight: "1", dup: "1", coalescible: "1" });
+  });
+
+  it("marks a duplicated read that coalescing never covers as coalescible=0 (a candidate to add)", async () => {
+    const track = jest.fn();
+    const { pending, next } = deferredNext();
+    const handler = createRpcTimingInterceptor({ track }, { detectDuplicates: true })(next as never) as Handler;
+    const read = () => ({ ...req(), method: SessionService.method.getSessionDefaults }) as unknown as UnaryRequest;
+    const both = Promise.all([handler(read()), handler(read())]);
+    pending[0].resolve();
+    pending[1].resolve();
+    await both;
+    expect(track.mock.calls[1][0].labels).toMatchObject({ dup: "1", coalescible: "0" });
+  });
+
+  it("does not detect duplicates unless asked (the non-shared interceptor sits outside coalescing)", async () => {
+    const track = jest.fn();
+    const { pending, next } = deferredNext();
+    const handler = createRpcTimingInterceptor({ track })(next as never) as Handler;
+    const both = Promise.all([handler(req()), handler(req())]);
+    pending[0].resolve();
+    pending[1].resolve();
+    await both;
+    expect(track.mock.calls[1][0].labels).not.toHaveProperty("dup");
+  });
+
+  it("a throwing analytics sink never changes the RPC result", async () => {
+    const track = jest.fn(() => {
+      throw new Error("sink exploded");
+    });
+    const handler = createRpcTimingInterceptor({ track })((() => Promise.resolve({ ok: 1 })) as never) as Handler;
+    await expect(handler(req())).resolves.toEqual({ ok: 1 });
+    expect(track).toHaveBeenCalled();
   });
 
   it("never flags overlapping identical writes as duplicates", async () => {
     const track = jest.fn();
     const { pending, next } = deferredNext();
-    const handler = createRpcTimingInterceptor({ track })(next as never) as Handler;
+    const handler = createRpcTimingInterceptor({ track }, { detectDuplicates: true })(next as never) as Handler;
     const write = () => ({ ...req(), method: SessionService.method.createSession }) as unknown as UnaryRequest;
     const first = handler(write());
     const second = handler(write());

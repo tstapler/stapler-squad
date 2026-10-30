@@ -1,8 +1,8 @@
 import { trace } from "@opentelemetry/api";
 import { Code, ConnectError, createContextKey } from "@connectrpc/connect";
 import type { ContextKey, ContextValues, Interceptor, UnaryRequest } from "@connectrpc/connect";
-import type { AnalyticsProvider } from "@/lib/analytics/types";
-import { buildDedupeKey } from "@/lib/api/idempotentMethods";
+import type { AnalyticsEvent, AnalyticsProvider } from "@/lib/analytics/types";
+import { buildDedupeKey, isCoalescible } from "@/lib/api/idempotentMethods";
 
 /** "stream" marks server-streaming calls, whose duration is time-to-headers, so dashboards can exclude them from unary latency. */
 export type RpcTransportLabel = "ws" | "http" | "batch" | "stream";
@@ -123,7 +123,19 @@ function getNetworkQueueDelayMs(url: string): number | undefined {
  * When an optional analytics provider is supplied, each RPC call also enqueues
  * an analytics event with category "rpc" for latency tracking.
  */
-export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "track">): Interceptor {
+export interface RpcTimingOptions {
+  /**
+   * Flag identical in-flight reads (`dup=1`). Only meaningful on the shared transport, where
+   * the coalescing interceptor sits outside this one; elsewhere every overlap would look like a miss.
+   */
+  detectDuplicates?: boolean;
+}
+
+export function createRpcTimingInterceptor(
+  analytics?: Pick<AnalyticsProvider, "track">,
+  options: RpcTimingOptions = {},
+): Interceptor {
+  const safeSink = analytics ? { track: (e: AnalyticsEvent) => safeTrack(analytics, e) } : undefined;
   return (next) => async (req) => {
     const method = req.method.name;
     const startMark = `rpc:${method}:start`;
@@ -135,7 +147,7 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
 
     const info: RpcCallInfo = { transport: req.stream ? "stream" : "http" };
     req.contextValues?.set(rpcCallInfoKey, info);
-    const dedupeKey = dedupeKeyOf(req);
+    const dedupeKey = options.detectDuplicates ? dedupeKeyOf(req) : undefined;
     const inflightAtStart = inFlightCalls;
     const duplicate = dedupeKey !== undefined && (inFlightByKey.get(dedupeKey) ?? 0) > 0;
     inFlightCalls++;
@@ -180,7 +192,7 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
         );
       }
 
-      analytics?.track({
+      safeSink?.track({
         name: `rpc.${method}`,
         category: "rpc",
         durationMs,
@@ -190,12 +202,21 @@ export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "
           code,
           transport: info.transport,
           inflight: String(inflightAtStart),
-          ...(duplicate ? { dup: "1" } : {}),
+          ...(duplicate ? { dup: "1", coalescible: isCoalescible(method) ? "1" : "0" } : {}),
           ...(queueDelayMs !== undefined ? { networkQueueDelayMs: String(queueDelayMs) } : {}),
         },
       });
     }
   };
+}
+
+/** Telemetry must never change an RPC's outcome: a throwing sink is swallowed. */
+function safeTrack(sink: Pick<AnalyticsProvider, "track">, event: AnalyticsEvent): void {
+  try {
+    sink.track(event);
+  } catch {
+    // dropped on purpose
+  }
 }
 
 type RpcTimingSink = Pick<AnalyticsProvider, "track">;
@@ -208,12 +229,12 @@ export function setRpcTimingSink(sink: RpcTimingSink | undefined): void {
 
 /** rpc-timing interceptor for the shared transport; reads the sink at call time since the transport outlives React context. */
 export function createSharedRpcTimingInterceptor(): Interceptor {
-  return createRpcTimingInterceptor({ track: (event) => rpcTimingSink?.track(event) });
+  return createRpcTimingInterceptor({ track: (event) => rpcTimingSink?.track(event) }, { detectDuplicates: true });
 }
 
 /** Emits a non-RPC event (e.g. `ws_unary_fallback_total`) to the same sink; dropped until one is registered. */
 export function trackSharedEvent(event: Parameters<RpcTimingSink["track"]>[0]): void {
-  rpcTimingSink?.track(event);
+  if (rpcTimingSink) safeTrack(rpcTimingSink, event);
 }
 
 /** Socket lifecycle for the client-metrics beacon; `code` is the WebSocket close code when the browser gave one. */

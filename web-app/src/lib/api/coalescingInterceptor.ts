@@ -150,11 +150,10 @@ export function createCoalescingInterceptor(opts: { isEnabled: () => boolean }):
       (flight.globalGen !== globalGen || (sessionId !== "" && flight.sessionGen !== (sessionGens.get(sessionId) ?? 0)));
     const startsFlight = !flight || stale;
     if (startsFlight) flight = startFlight(key, unary, sessionId, unaryNext);
-    trackSharedEvent({
-      name: "cm.coalesce",
-      category: "performance",
-      labels: { method: unary.method.name, outcome: startsFlight ? "started" : "joined" },
-    });
+    // Only joins are beaconed; flights started are the rpc.* events for the same method.
+    if (!startsFlight) {
+      trackSharedEvent({ name: "cm.coalesce", category: "performance", labels: { method: unary.method.name, outcome: "joined" } });
+    }
     return join(flight as Flight, key, unary);
   };
 }

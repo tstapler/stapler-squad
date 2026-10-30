@@ -193,7 +193,8 @@ type unarySession struct {
 	mu       sync.Mutex
 	inflight map[uint32]*inflightCall
 
-	endReason atomic.Value // string; first reason wins
+	lastPingNanos atomic.Int64 // send time of the latest ping; its pong must echo it
+	endReason     atomic.Value // string; first reason wins
 }
 
 // endWith records why the connection ended; the first caller wins.
@@ -217,17 +218,24 @@ func (s *unarySession) serve(parent context.Context) {
 		s.wg.Wait()
 		_ = s.conn.Close()
 		reason, _ := s.endReason.Load().(string)
-		if reason == "" {
+		switch {
+		case reason != "":
+		case parent.Err() != nil: // the upgrade context ended: server shutdown
 			reason = "shutdown"
+		default:
+			reason = "unknown"
 		}
 		s.b.metrics.connClosed(s.listener, reason)
 	}()
 
 	_ = s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
 	s.conn.SetPongHandler(func(payload string) error {
-		// The pong echoes the ping payload (send time), so overlapping pings cannot cross-match.
-		if sent, err := strconv.ParseInt(payload, 10, 64); err == nil && sent > 0 {
-			s.b.metrics.pingRTT(s.listener, time.Since(time.Unix(0, sent)))
+		// A pong counts only if it echoes the latest ping's send time and is plausible; a client can
+		// send any pong payload, so anything else must not reach the histogram.
+		if sent, err := strconv.ParseInt(payload, 10, 64); err == nil && sent > 0 && sent == s.lastPingNanos.Load() {
+			if rtt := time.Since(time.Unix(0, sent)); rtt >= 0 && rtt <= s.b.pongWait {
+				s.b.metrics.pingRTT(s.listener, rtt)
+			}
 		}
 		return s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
 	})
@@ -265,7 +273,9 @@ func (s *unarySession) keepalive() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			payload := strconv.FormatInt(time.Now().UnixNano(), 10)
+			sent := time.Now().UnixNano()
+			s.lastPingNanos.Store(sent)
+			payload := strconv.FormatInt(sent, 10)
 			if err := s.conn.WriteControl(websocket.PingMessage, []byte(payload), time.Now().Add(unaryWriteWait)); err != nil {
 				s.endWith("ping_failed")
 				s.cancel()

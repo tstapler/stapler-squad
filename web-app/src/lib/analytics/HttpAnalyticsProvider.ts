@@ -16,6 +16,31 @@ function serializeEvent(e: AnalyticsEvent): Record<string, unknown> {
   return out;
 }
 
+/** Server rejects a batch over 100 events (analytics_handler.go) and sendBeacon is limited to about 64 KB. */
+export const MAX_EVENTS_PER_REQUEST = 100;
+export const MAX_BODY_BYTES = 60_000;
+
+/** Splits serialized events into request bodies that each fit both limits; an oversized single event is dropped. */
+export function chunkBodies(events: Record<string, unknown>[]): string[] {
+  const bodies: string[] = [];
+  let current: string[] = [];
+  let size = 0;
+  const flush = () => {
+    if (current.length > 0) bodies.push(`{"events":[${current.join(",")}]}`);
+    current = [];
+    size = 0;
+  };
+  for (const e of events) {
+    const json = JSON.stringify(e);
+    if (json.length > MAX_BODY_BYTES) continue;
+    if (current.length >= MAX_EVENTS_PER_REQUEST || size + json.length + 1 > MAX_BODY_BYTES) flush();
+    current.push(json);
+    size += json.length + 1;
+  }
+  flush();
+  return bodies;
+}
+
 const BATCH_SIZE = 25;
 const FLUSH_INTERVAL_MS = 2000;
 const MAX_QUEUE_SIZE = 200;
@@ -57,13 +82,14 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
       return;
     }
 
-    const body = JSON.stringify({ events: batch.map(serializeEvent) });
-    await fetch("/api/analytics", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      keepalive: true,
-    }).catch(() => {});
+    for (const body of chunkBodies(batch.map(serializeEvent))) {
+      await fetch("/api/analytics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    }
   }
 
   async initialize(): Promise<void> {
@@ -71,8 +97,7 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
       window.addEventListener("pagehide", () => {
         const batch = this.queue.splice(0, this.queue.length);
         if (batch.length === 0) return;
-        const body = JSON.stringify({ events: batch.map(serializeEvent) });
-        navigator.sendBeacon("/api/analytics", body);
+        for (const body of chunkBodies(batch.map(serializeEvent))) navigator.sendBeacon("/api/analytics", body);
       });
     }
   }

@@ -9,12 +9,20 @@ WebSocket bridge metrics. Dashboard: `ssq-client-network`
 ```
 SPA (rpcTiming interceptor, transports, WebVitalsReporter)
   -> HttpAnalyticsProvider (25 events / 2s batches, 200-event queue, pagehide beacon)
-  -> POST /api/analytics            (existing: 1000 req/min, 512 KB body, <=100 events)
+  -> POST /api/analytics            (existing: 1000 req/min, 512 KB body, <=100 events;
+                                      plus per-client 300 req/min and 6000 events/min, and a shared
+                                      30000 cm.* events/min budget; excess gets 429)
   -> analytics.WithQualityMetrics   (server/analytics/client_metrics.go)
   -> OTel instruments -> collector -> VictoriaMetrics
 ```
 
-No new endpoint or auth surface. Events named `cm.*` exist only to feed metrics
+No new endpoint or auth surface. The per-client bucket is keyed on the TCP peer address (never `X-Forwarded-For`), is bounded
+at 2048 tracked clients (extras share one overflow bucket), and expires after a minute. Behind a
+reverse proxy all browsers share the proxy's bucket. The browser chunks each send to 100 events
+and about 60 KB (`HttpAnalyticsProvider.chunkBodies`), so a long flush interval cannot trip the
+server's 100-event limit.
+
+Events named `cm.*` exist only to feed metrics
 and are not stored in the analytics table; `rpc.*`, `web_vital.*` and
 `ws_unary_fallback_total` events are still stored and also feed metrics. Metrics
 need `OTEL_ENABLED=true` on the server.
@@ -24,10 +32,11 @@ need `OTEL_ENABLED=true` on the server.
 | Label | Bound |
 |---|---|
 | `method` | must be an RPC method compiled into the binary (read from the proto registry), else `other`; junk names cannot use up the label budget |
-| `page` | first URL path segment only (`/sessions/<id>` -> `sessions`); `^[a-z0-9-]{1,24}$`; at most 32 distinct, then `other` |
-| `transport` | `ws`, `http`, `batch`, `stream` (server-streaming; duration is time-to-headers), else `unknown` |
-| `code` | the 17 Connect code names in snake_case, else `unknown` |
-| `close_code` | integer 1000-4999, else `none` |
+| `page` | first URL path segment, only if listed in `server/analytics/client_pages.json`, else `other`. A jest test fails when a route in `route-meta.ts` is missing from that file |
+| `transport` | `ws`, `http`, `batch`, `stream` (server-streaming; duration is time-to-headers), else `unknown`. The dashboard's `All` for `$transport` is `ws\|http\|batch`, so `stream` and `unknown` are hidden unless selected |
+| `outcome` | class of the Connect code: `ok`, `canceled`, `deadline_exceeded`, `saturated` (`unavailable`, `resource_exhausted`), `error` |
+| `code` | the 17 Connect code names in snake_case, else `unknown`; only on `client_rpc_codes_total`, never combined with `method` |
+| `close_code` | allow-list of the codes browsers and the bridge produce (1000-1003, 1005, 1006, 1008, 1009, 1011-1013), `none` when absent, else `other` |
 | everything else | fixed enums; unknown values become `unknown` |
 
 Durations clamp to 0-10 min; count-like values (in-flight, pending, batch size) clamp to 0-64.
@@ -39,11 +48,12 @@ OTel names as registered; VictoriaMetrics appends the unit and `_bucket`/`_count
 
 | VictoriaMetrics name | Type | Labels | Emitted by |
 |---|---|---|---|
-| `client_rpc_duration_milliseconds_*` | histogram | `method`, `transport`, `code` | `rpc.<Method>` event from `lib/telemetry/rpcTiming.ts`; one per coalesced flight, including browser queueing |
+| `client_rpc_duration_milliseconds_*` | histogram | `method`, `transport`, `outcome` | `rpc.<Method>` event from `lib/telemetry/rpcTiming.ts`; one per coalesced flight, including browser queueing |
+| `client_rpc_codes_total` | counter | `code` | same event; full Connect code without the method label |
 | `client_rpc_network_queue_delay_milliseconds_*` | histogram | `transport` | same event, Resource Timing `requestStart - fetchStart` |
-| `client_rpc_inflight_at_start_*` | histogram | `transport` | same event; unary calls already in flight in the tab |
-| `client_rpc_duplicate_inflight_total` | counter | `method` | same event (`dup=1`): identical request already in flight, i.e. coalescing missed it |
-| `client_rpc_coalesce_total` | counter | `method`, `outcome` (`started`, `joined`) | `cm.coalesce` from `lib/api/coalescingInterceptor.ts` |
+| `client_rpc_inflight_at_start_*` | histogram | `transport` | same event; calls already in flight in the tab, from a module-wide counter (includes stream calls until their headers arrive, and calls on the non-shared transport in `useSessionService`) |
+| `client_rpc_duplicate_inflight_total` | counter | `method`, `coalescible` | same event (`dup=1`), shared transport and read-shaped methods only: an identical read was already in flight. `coalescible=true`: coalescing should have merged it (a miss); `false`: the method is not coalescible, so it is a candidate to add |
+| `client_rpc_coalesce_total` | counter | `method`, `outcome` (`joined`) | `cm.coalesce` from `lib/api/coalescingInterceptor.ts`. Only joins are beaconed; flights started are the `rpc.*` counts |
 | `client_ws_events_total` | counter | `kind` (`unary`, `watch`), `event` (`open`, `close`, `error`, `reconnect`), `close_code` | `cm.ws` from the unary and watch WebSocket transports |
 | `client_ws_pending_at_send_*` | histogram | none | `cm.ws_send`: sent-unanswered plus queued calls when a call was submitted |
 | `client_ws_send_queue_delay_milliseconds_*` | histogram | none | `cm.ws_send`: submit until frame written to the socket |
@@ -52,7 +62,7 @@ OTel names as registered; VictoriaMetrics appends the unit and `_bucket`/`_count
 | `client_batch_fallback_total` | counter | `reason` (`request-failed`, `server-declined`) | `cm.batch_fallback` |
 | `client_web_vital_*` | histogram | `vital` (`lcp`, `inp`, `cls`, `fcp`, `ttfb`), `rating`, `page` | `web_vital.*` from `WebVitalsReporter` (ms; CLS unitless) |
 | `client_long_task_duration_milliseconds_*` | histogram | `page` | `cm.longtask` from `lib/telemetry/longTasks.ts`; capped at 30 per minute per tab |
-| `client_metrics_rejected_total` | counter | `reason` | server: unknown `cm.*` event or malformed web vital |
+| `client_metrics_rejected_total` | counter | `reason` (`unknown_event`, `bad_web_vital`, `missing_duration`) | server: events the allow-list refused. Old cached clients whose `rpc.*` events lack `method`/`transport` land as `other`/`unknown` rather than being rejected |
 
 Round-trip time for a unary WebSocket call is `client_rpc_duration` with
 `transport="ws"` (send to reply, includes `client_ws_send_queue_delay`).
@@ -73,9 +83,20 @@ Round-trip time for a unary WebSocket call is `client_rpc_duration` with
 
 ## Known gaps
 
-- `rpc.*` events pass through the 200-event client queue, which drops the oldest under a long
-  outage, so client counts can under-report during one. Compare with `rpc_server_duration_milliseconds`.
+- Events are lost when `POST /api/analytics` fails: `HttpAnalyticsProvider.flush()` takes the
+  queue before sending and swallows fetch errors, so a failed POST (or a 429) drops that chunk.
+  The 200-event queue cap additionally drops the oldest events if the page produces more between
+  flushes. Compare against `rpc_server_duration_milliseconds` when a count looks low.
 - The terminal stream WebSocket (`connectrpc_websocket.go`) has no per-message metrics yet; only
   the unary bridge does.
 - Streaming RPC `client_rpc_duration` (`transport="stream"`) measures time-to-headers, not stream life.
 - Batch metrics are only emitted when `batch_unary` is on and two batch-eligible reads land in one 4 ms window.
+- `client_rpc_duplicate_inflight_total` only sees the shared transport; calls through
+  `useSessionService`'s own transport (`getSession`, `listSessions`, `listShells`, ...) bypass the
+  coalescing and batching interceptors and are not checked for duplicates.
+- `cm.*` events are still beaconed when the server runs without `OTEL_ENABLED`; they are accepted
+  and discarded. A flag telling the client to stop is not implemented.
+- The long-task observer uses `buffered: true`, so a remount of `WebVitalsReporter` replays the
+  buffered tasks (visible in dev under React StrictMode; production mounts once).
+- Metric truthfulness is unauthenticated: a client that can reach `/api/analytics` can inflate
+  counts within the per-client and shared budgets. Labels and series counts stay bounded regardless.

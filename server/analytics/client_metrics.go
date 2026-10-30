@@ -2,13 +2,15 @@ package analytics
 
 import (
 	"context"
-	"regexp"
+	_ "embed"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
@@ -37,16 +39,14 @@ const (
 	eventWsSend            = "cm.ws_send"
 	eventLongTask          = "cm.longtask"
 	maxClientDurationMs    = 10 * 60 * 1000
-	maxLabeledPages        = 32
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
 	otherLabel             = "other"
+	reasonKey              = "reason"
 	unknownLabel           = "unknown"
 )
 
 var (
-	pageShape = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,23}$`)
-
 	transports  = map[string]bool{"ws": true, "http": true, "batch": true, "stream": true}
 	coalesceOut = map[string]bool{"started": true, "joined": true}
 	wsKinds     = map[string]bool{"unary": true, "watch": true}
@@ -64,6 +64,31 @@ var (
 		"internal": true, "unavailable": true, "data_loss": true, "unauthenticated": true,
 	}
 )
+
+// clientPagesJSON lists the first-path-segment page labels the SPA can report. A jest test
+// (longTasks.test.ts) fails when a route in route-meta.ts is missing, so the file cannot drift.
+//
+//go:embed client_pages.json
+var clientPagesJSON []byte
+
+var knownPages = sync.OnceValue(func() map[string]bool {
+	var pages []string
+	if err := json.Unmarshal(clientPagesJSON, &pages); err != nil {
+		log.Error("analytics: bad client_pages.json", "error", err)
+	}
+	known := make(map[string]bool, len(pages))
+	for _, p := range pages {
+		known[p] = true
+	}
+	return known
+})
+
+func boundPage(v string) string {
+	if knownPages()[v] {
+		return v
+	}
+	return otherLabel
+}
 
 // knownRPCMethods is every RPC method name compiled into the binary. The method label is drawn
 // only from this set, so a sender cannot spend the label budget on junk names ("first come" caps
@@ -89,34 +114,6 @@ func boundMethod(v string) string {
 	return otherLabel
 }
 
-// cappedSet admits at most max distinct values; later new values collapse to "other".
-type cappedSet struct {
-	mu    sync.Mutex
-	seen  map[string]struct{}
-	max   int
-	shape *regexp.Regexp
-}
-
-func newCappedSet(max int, shape *regexp.Regexp) *cappedSet {
-	return &cappedSet{seen: map[string]struct{}{}, max: max, shape: shape}
-}
-
-func (c *cappedSet) bound(v string) string {
-	if !c.shape.MatchString(v) {
-		return otherLabel
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.seen[v]; ok {
-		return v
-	}
-	if len(c.seen) >= c.max {
-		return otherLabel
-	}
-	c.seen[v] = struct{}{}
-	return v
-}
-
 func enum(v string, allowed map[string]bool) string {
 	if allowed[v] {
 		return v
@@ -126,9 +123,8 @@ func enum(v string, allowed map[string]bool) string {
 
 // clientMetrics holds the instruments fed by browser events.
 type clientMetrics struct {
-	pages *cappedSet
-
 	rpcDuration    metric.Float64Histogram
+	rpcCodes       metric.Int64Counter
 	rpcQueueDelay  metric.Float64Histogram
 	rpcInflight    metric.Int64Histogram
 	rpcDuplicates  metric.Int64Counter
@@ -145,7 +141,7 @@ type clientMetrics struct {
 }
 
 func newClientMetrics(m metric.Meter) *clientMetrics {
-	cm := &clientMetrics{pages: newCappedSet(maxLabeledPages, pageShape)}
+	cm := &clientMetrics{}
 	var err error
 	hist := func(name, desc, unit string, bounds []float64) metric.Float64Histogram {
 		opts := []metric.Float64HistogramOption{metric.WithDescription(desc), metric.WithUnit(unit)}
@@ -153,26 +149,36 @@ func newClientMetrics(m metric.Meter) *clientMetrics {
 			opts = append(opts, metric.WithExplicitBucketBoundaries(bounds...))
 		}
 		h, e := m.Float64Histogram(name, opts...)
-		err = firstErr(err, e)
+		if e != nil {
+			err = firstErr(err, e)
+			h, _ = noop.NewMeterProvider().Meter("").Float64Histogram(name)
+		}
 		return h
 	}
 	ihist := func(name, desc string, bounds []float64) metric.Int64Histogram {
 		h, e := m.Int64Histogram(name, metric.WithDescription(desc), metric.WithExplicitBucketBoundaries(bounds...))
-		err = firstErr(err, e)
+		if e != nil {
+			err = firstErr(err, e)
+			h, _ = noop.NewMeterProvider().Meter("").Int64Histogram(name)
+		}
 		return h
 	}
 	counter := func(name, desc string) metric.Int64Counter {
 		c, e := m.Int64Counter(name, metric.WithDescription(desc))
-		err = firstErr(err, e)
+		if e != nil {
+			err = firstErr(err, e)
+			c, _ = noop.NewMeterProvider().Meter("").Int64Counter(name)
+		}
 		return c
 	}
 	countBounds := []float64{1, 2, 3, 4, 5, 6, 8, 12, 16, 24, 32, 64}
 	// Reaches past the 30s default RPC deadline so timeouts are not lumped into +Inf.
 	latencyBounds := []float64{5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 8000, 15000, 30000, 60000}
-	cm.rpcDuration = hist("client.rpc.duration", "Browser-observed unary RPC duration (coalesced flight, includes queueing), by method, transport and Connect code", "ms", latencyBounds)
+	cm.rpcDuration = hist("client.rpc.duration", "Browser-observed unary RPC duration (coalesced flight, includes queueing), by method, transport and outcome class", "ms", latencyBounds)
+	cm.rpcCodes = counter("client.rpc.codes", "Browser-observed unary RPC results by full Connect code (no method label, so the code set stays small)")
 	cm.rpcQueueDelay = hist("client.rpc.network_queue_delay", "Browser fetch queueing before bytes hit the wire (HTTP/1.1 connection cap), by transport", "ms", latencyBounds)
-	cm.rpcInflight = ihist("client.rpc.inflight_at_start", "Unary RPCs already in flight in the tab when a new one started", countBounds)
-	cm.rpcDuplicates = counter("client.rpc.duplicate_inflight", "Unary RPCs started while an identical one was already in flight (coalescing missed it), by method")
+	cm.rpcInflight = ihist("client.rpc.inflight_at_start", "RPCs already in flight in the tab when a new one started (module-wide counter: includes stream calls until headers and calls on the non-shared transport)", append([]float64{0}, countBounds...))
+	cm.rpcDuplicates = counter("client.rpc.duplicate_inflight", "Read RPCs started while an identical one was in flight on the shared transport, by method; coalescible=true means coalescing should have merged it (a miss), false means the method is not coalescible (a candidate)")
 	cm.rpcCoalesce = counter("client.rpc.coalesce", "Coalescible unary calls by outcome: started a flight or joined one")
 	cm.wsEvents = counter("client.ws.events", "Browser WebSocket lifecycle events by kind, event and close code")
 	cm.wsPending = ihist("client.ws.pending_at_send", "Unary WebSocket calls pending (sent, unanswered) when a call was submitted", countBounds)
@@ -231,8 +237,10 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 			c.wsQueueDelay.Record(ctx, clampMs(*ev.DurationMs))
 		}
 	case name == eventLongTask:
-		if ev.DurationMs != nil {
-			c.longTask.Record(ctx, clampMs(*ev.DurationMs), attrs(attribute.String("page", c.pages.bound(ev.Page))))
+		if ev.DurationMs == nil {
+			c.reject(ctx, "missing_duration")
+		} else {
+			c.longTask.Record(ctx, clampMs(*ev.DurationMs), attrs(attribute.String("page", boundPage(ev.Page))))
 		}
 	case consumed:
 		c.rejectedEvents.Add(ctx, 1, attrs(attribute.String("reason", "unknown_event")))
@@ -240,8 +248,26 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 	return consumed
 }
 
+// outcomeClass folds the 17 Connect codes into 5 classes so the per-method duration histogram
+// does not multiply by every code; the full code lives on client.rpc.codes.
+func outcomeClass(code string) string {
+	switch code {
+	case "ok", "canceled", "deadline_exceeded":
+		return code
+	case "unavailable", "resource_exhausted":
+		return "saturated"
+	default:
+		return "error"
+	}
+}
+
+func (c *clientMetrics) reject(ctx context.Context, reason string) {
+	c.rejectedEvents.Add(ctx, 1, attrs(attribute.String(reasonKey, reason)))
+}
+
 func (c *clientMetrics) observeRPC(ctx context.Context, ev Event) {
 	if ev.DurationMs == nil {
+		c.reject(ctx, "missing_duration")
 		return
 	}
 	method := boundMethod(ev.Labels["method"])
@@ -256,7 +282,8 @@ func (c *clientMetrics) observeRPC(ctx context.Context, ev Event) {
 	c.rpcDuration.Record(ctx, clampMs(*ev.DurationMs), attrs(
 		attribute.String("method", method),
 		attribute.String("transport", transport),
-		attribute.String("code", code)))
+		attribute.String("outcome", outcomeClass(code))))
+	c.rpcCodes.Add(ctx, 1, attrs(attribute.String("code", code)))
 	if q, err := strconv.ParseInt(ev.Labels["networkQueueDelayMs"], 10, 64); err == nil && q >= 0 {
 		c.rpcQueueDelay.Record(ctx, clampMs(q), attrs(attribute.String("transport", transport)))
 	}
@@ -264,14 +291,20 @@ func (c *clientMetrics) observeRPC(ctx context.Context, ev Event) {
 		c.rpcInflight.Record(ctx, boundedInt(ev.Labels["inflight"], maxInflightObservation), attrs(attribute.String("transport", transport)))
 	}
 	if ev.Labels["dup"] == "1" {
-		c.rpcDuplicates.Add(ctx, 1, attrs(attribute.String("method", method)))
+		c.rpcDuplicates.Add(ctx, 1, attrs(
+			attribute.String("method", method),
+			attribute.Bool("coalescible", ev.Labels["coalescible"] == "1")))
 	}
 }
 
 func (c *clientMetrics) observeWebVital(ctx context.Context, ev Event) {
 	vital := strings.TrimPrefix(ev.EventName, eventWebVitalPrefix)
-	if !vitalNames[vital] || ev.DurationMs == nil {
-		c.rejectedEvents.Add(ctx, 1, attrs(attribute.String("reason", "bad_web_vital")))
+	if !vitalNames[vital] {
+		c.reject(ctx, "bad_web_vital")
+		return
+	}
+	if ev.DurationMs == nil {
+		c.reject(ctx, "missing_duration")
 		return
 	}
 	v := float64(clampMs(*ev.DurationMs))
@@ -281,7 +314,7 @@ func (c *clientMetrics) observeWebVital(ctx context.Context, ev Event) {
 	c.webVital.Record(ctx, v, attrs(
 		attribute.String("vital", vital),
 		attribute.String("rating", enum(ev.Labels["rating"], vitalRating)),
-		attribute.String("page", c.pages.bound(ev.Page))))
+		attribute.String("page", boundPage(ev.Page))))
 }
 
 func clampMs(v int64) float64 {
@@ -305,11 +338,19 @@ func boundedInt(s string, max int64) int64 {
 	return n
 }
 
-// closeCodeLabel keeps RFC 6455 / registered application close codes only; "" is a client-side drop with no code.
+// wsCloseCodes are the close codes browsers and the bridge actually produce; anything else is "other".
+var wsCloseCodes = map[string]bool{
+	"1000": true, "1001": true, "1002": true, "1003": true, "1005": true, "1006": true,
+	"1008": true, "1009": true, "1011": true, "1012": true, "1013": true,
+}
+
+// closeCodeLabel maps a close code to a bounded label: "none" when absent, "other" when not in wsCloseCodes.
 func closeCodeLabel(s string) string {
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1000 || n > 4999 {
+	if s == "" {
 		return "none"
 	}
-	return strconv.Itoa(n)
+	if wsCloseCodes[s] {
+		return s
+	}
+	return otherLabel
 }

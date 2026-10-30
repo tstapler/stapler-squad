@@ -41,7 +41,7 @@
       },
       {
         "name": "transport",
-        "label": "Transport (unary)",
+        "label": "Transport (unary; excludes stream/unknown)",
         "type": "query",
         "datasource": {
           "type": "prometheus",
@@ -207,7 +207,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",code!~\"ok|canceled\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval]))",
+          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",outcome!~\"ok|canceled\"}[$__rate_interval])) / clamp_min(sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])), 1e-9)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -264,7 +264,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",code=\"deadline_exceeded\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval]))",
+          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",outcome=\"deadline_exceeded\"}[$__rate_interval])) / clamp_min(sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])), 1e-9)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -332,9 +332,9 @@
     },
     {
       "id": 6,
-      "title": "Duplicate-call ratio",
+      "title": "Coalescing misses (share of calls)",
       "type": "stat",
-      "description": "Calls started while an identical request was already in flight. Coalescing already merged what it could, so this is what it MISSED (non-coalescible method, flag off, differing priority).",
+      "description": "Coalescible reads started while an identical one was in flight on the shared transport: coalescing should have merged them (flag off, differing priority, or a stale generation). Non-coalescible duplicates are on the Concurrency row.",
       "gridPos": {
         "h": 5,
         "w": 4,
@@ -378,7 +378,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duplicate_inflight_total{method=~\"$method\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport!=\"stream\"}[$__rate_interval]))",
+          "expr": "sum(rate(client_rpc_duplicate_inflight_total{method=~\"$method\",coalescible=\"true\"}[$__rate_interval])) / clamp_min(sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport!=\"stream\"}[$__rate_interval])), 1e-9)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -620,7 +620,7 @@
       },
       "targets": [
         {
-          "expr": "topk(8, histogram_quantile(0.95, sum(rate(client_rpc_duration_milliseconds_bucket{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])) by (le, method)))",
+          "expr": "(histogram_quantile(0.95, sum(rate(client_rpc_duration_milliseconds_bucket{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])) by (le, method))) and on(method) topk(8, sum by (method) (rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__range])))",
           "legendFormat": "{{method}}",
           "refId": "A",
           "datasource": {
@@ -730,7 +730,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])) by (method))",
+          "expr": "(sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])) by (method)) and on(method) topk(10, sum by (method) (rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__range])))",
           "legendFormat": "{{method}}",
           "refId": "A",
           "datasource": {
@@ -785,7 +785,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(client_rpc_network_queue_delay_milliseconds_bucket[$__rate_interval])) by (le, transport))",
+          "expr": "histogram_quantile(0.95, sum(rate(client_rpc_network_queue_delay_milliseconds_bucket{transport=~\"$transport\"}[$__rate_interval])) by (le, transport))",
           "legendFormat": "{{transport}}",
           "refId": "A",
           "datasource": {
@@ -810,7 +810,7 @@
       "id": 16,
       "title": "Non-ok calls by Connect code",
       "type": "timeseries",
-      "description": "",
+      "description": "Full Connect code, all methods and transports (the code is not on the per-method histogram, to keep series bounded; see the Timeouts and Error ratio panels for per-method slices).",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -851,7 +851,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",code!=\"ok\"}[$__rate_interval])) by (code)",
+          "expr": "sum(rate(client_rpc_codes_total{code!=\"ok\"}[$__rate_interval])) by (code)",
           "legendFormat": "{{code}}",
           "refId": "A",
           "datasource": {
@@ -906,7 +906,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",code=\"deadline_exceeded\"}[$__rate_interval])) by (method)",
+          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",outcome=\"deadline_exceeded\"}[$__rate_interval])) by (method)",
           "legendFormat": "{{method}}",
           "refId": "A",
           "datasource": {
@@ -962,7 +962,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",code!~\"ok|canceled\"}[$__rate_interval])) by (transport) / sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])) by (transport)",
+          "expr": "sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\",outcome!~\"ok|canceled\"}[$__rate_interval])) by (transport) / clamp_min(sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport=~\"$transport\"}[$__rate_interval])) by (transport), 1e-9)",
           "legendFormat": "{{transport}}",
           "refId": "A",
           "datasource": {
@@ -985,9 +985,9 @@
     },
     {
       "id": 20,
-      "title": "In-flight RPCs at call start (p50 / p95 / max bucket)",
+      "title": "In-flight RPCs at call start (p50 / p95)",
       "type": "timeseries",
-      "description": "Concurrency a new call joined, per tab. Sustained p95 near 6 on http = HTTP/1.1 per-origin connection cap.",
+      "description": "Calls already in flight in the tab when a new one started (module-wide counter: includes stream calls until their headers arrive and calls on the non-shared transport). Sustained p95 near 6 on http = HTTP/1.1 per-origin connection cap.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -1048,7 +1048,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(client_rpc_inflight_at_start_bucket[$__rate_interval])) by (le, transport))",
+          "expr": "histogram_quantile(0.5, sum(rate(client_rpc_inflight_at_start_bucket{transport=~\"$transport\"}[$__rate_interval])) by (le, transport))",
           "legendFormat": "p50 {{transport}}",
           "refId": "A",
           "datasource": {
@@ -1057,7 +1057,7 @@
           }
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(client_rpc_inflight_at_start_bucket[$__rate_interval])) by (le, transport))",
+          "expr": "histogram_quantile(0.95, sum(rate(client_rpc_inflight_at_start_bucket{transport=~\"$transport\"}[$__rate_interval])) by (le, transport))",
           "legendFormat": "p95 {{transport}}",
           "refId": "B",
           "datasource": {
@@ -1071,7 +1071,7 @@
       "id": 21,
       "title": "Duplicate in-flight calls by method",
       "type": "timeseries",
-      "description": "Identical request already in flight when this one started and coalescing did not merge it: candidates to add to the coalescible set or to de-dup at the call site.",
+      "description": "Identical read already in flight when this one started. coalescible=false: the method is not coalescible, so these are candidates to add to the set or to de-dup at the call site. coalescible=true: coalescing missed it.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -1112,8 +1112,8 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum(rate(client_rpc_duplicate_inflight_total{method=~\"$method\"}[$__rate_interval])) by (method))",
-          "legendFormat": "{{method}}",
+          "expr": "(sum(rate(client_rpc_duplicate_inflight_total{method=~\"$method\"}[$__rate_interval])) by (method, coalescible)) and on(method) topk(10, sum by (method) (rate(client_rpc_duplicate_inflight_total[$__range])))",
+          "legendFormat": "{{method}} (coalescible={{coalescible}})",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -1124,9 +1124,9 @@
     },
     {
       "id": 22,
-      "title": "Coalescing: joined vs started",
+      "title": "Coalescing: share of coalescible calls saved",
       "type": "timeseries",
-      "description": "Only coalescible read methods appear. joined/(joined+started) is the fraction of identical reads saved.",
+      "description": "joined / (joined + flights started) for the methods that coalesced at least once. Flights started are the rpc.* counts; only joins are beaconed.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -1139,7 +1139,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
+          "unit": "percentunit",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1148,7 +1148,9 @@
             "stacking": {
               "mode": "none"
             }
-          }
+          },
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       },
@@ -1167,18 +1169,9 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_coalesce_total{outcome=\"joined\"}[$__rate_interval]))",
-          "legendFormat": "joined (saved a request)",
+          "expr": "sum(rate(client_rpc_coalesce_total[$__rate_interval])) / clamp_min(sum(rate(client_rpc_coalesce_total[$__rate_interval])) + sum(sum by (method) (rate(client_rpc_duration_milliseconds_count{transport!=\"stream\"}[$__rate_interval])) and on(method) sum by (method) (rate(client_rpc_coalesce_total[$__rate_interval]))), 1e-9)",
+          "legendFormat": "saved share",
           "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "victoriametrics"
-          }
-        },
-        {
-          "expr": "sum(rate(client_rpc_coalesce_total{outcome=\"started\"}[$__rate_interval]))",
-          "legendFormat": "started (went to network)",
-          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "victoriametrics"
@@ -1231,7 +1224,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum(rate(client_rpc_coalesce_total{outcome=\"joined\"}[$__rate_interval])) by (method))",
+          "expr": "(sum(rate(client_rpc_coalesce_total[$__rate_interval])) by (method)) and on(method) topk(10, sum by (method) (rate(client_rpc_coalesce_total[$__range])))",
           "legendFormat": "{{method}}",
           "refId": "A",
           "datasource": {
@@ -1407,7 +1400,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{transport=\"batch\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{transport!=\"stream\"}[$__rate_interval]))",
+          "expr": "sum(rate(client_rpc_duration_milliseconds_count{transport=\"batch\"}[$__rate_interval])) / clamp_min(sum(rate(client_rpc_duration_milliseconds_count{transport!=\"stream\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "batch share",
           "refId": "A",
           "datasource": {
@@ -2086,7 +2079,7 @@
       },
       "targets": [
         {
-          "expr": "topk(8, histogram_quantile(0.95, sum(rate(ws_unary_call_duration_milliseconds_bucket[$__rate_interval])) by (le, method)))",
+          "expr": "(histogram_quantile(0.95, sum(rate(ws_unary_call_duration_milliseconds_bucket[$__rate_interval])) by (le, method))) and on(method) topk(8, sum by (method) (rate(ws_unary_call_duration_milliseconds_count[$__range])))",
           "legendFormat": "{{method}}",
           "refId": "A",
           "datasource": {
@@ -2442,7 +2435,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_web_vital_count{rating=\"poor\"}[$__rate_interval])) by (vital) / sum(rate(client_web_vital_count[$__rate_interval])) by (vital)",
+          "expr": "sum(rate(client_web_vital_count{rating=\"poor\"}[$__rate_interval])) by (vital) / clamp_min(sum(rate(client_web_vital_count[$__rate_interval])) by (vital), 1e-9)",
           "legendFormat": "{{vital}}",
           "refId": "A",
           "datasource": {

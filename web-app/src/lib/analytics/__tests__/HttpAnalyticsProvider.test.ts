@@ -131,3 +131,37 @@ describe("HttpAnalyticsProvider", () => {
     expect(event.page).toBe("/sessions");
   });
 });
+
+describe("chunkBodies", () => {
+  const { chunkBodies, MAX_EVENTS_PER_REQUEST, MAX_BODY_BYTES } = jest.requireActual("../HttpAnalyticsProvider");
+
+  it("splits more than 100 events across requests so the server never rejects the whole batch", () => {
+    const events = Array.from({ length: 250 }, (_, i) => ({ name: `e${i}`, category: "rpc" }));
+    const bodies: string[] = chunkBodies(events);
+    expect(bodies.map((b) => JSON.parse(b).events.length)).toEqual([MAX_EVENTS_PER_REQUEST, MAX_EVENTS_PER_REQUEST, 50]);
+  });
+
+  it("keeps every body under the beacon byte budget and drops a single oversized event", () => {
+    const big = { name: "x", category: "rpc", labels: { v: "a".repeat(20_000) } };
+    const bodies: string[] = chunkBodies([big, big, big, big, { name: "huge", labels: { v: "a".repeat(MAX_BODY_BYTES) } }]);
+    expect(bodies.length).toBeGreaterThan(1);
+    bodies.forEach((b) => expect(b.length).toBeLessThanOrEqual(MAX_BODY_BYTES + 20));
+    expect(bodies.join("")).not.toContain("huge");
+  });
+
+  it("returns no bodies for no events", () => {
+    expect(chunkBodies([])).toEqual([]);
+  });
+});
+
+describe("HttpAnalyticsProvider flush chunking", () => {
+  it("sends a 150-event queue as two requests", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock;
+    const provider = new HttpAnalyticsProvider();
+    (provider as unknown as { queue: AnalyticsEvent[] }).queue = Array.from({ length: 150 }, (_, i) => makeEvent(`e${i}`));
+    await provider.flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).events).toHaveLength(100);
+  });
+});
