@@ -124,7 +124,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         // ghostty-web mirrors the xterm.js Terminal surface TerminalOutput touches.
         const t = terminalRef.current;
         if (!t) return null;
-        compatRef.current ??= asXtermCompatible(t);
+        compatRef.current ??= asXtermCompatible(t, (reply) => onDataRef.current?.(reply));
         return compatRef.current as unknown as XtermWebTerminal;
       },
       get serializeAddon() {

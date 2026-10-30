@@ -6,6 +6,7 @@
 
 import type { GhosttyCell, Terminal as GhosttyWebTerminal } from "ghostty-web";
 import type { ITerminal } from "./TerminalStreamManager";
+import { createQueryResponder } from "./ghosttyQueryResponder";
 
 /** `GhosttyCell.flags` bits, probed against ghostty-web@0.4.0's WASM (bold=1 … faint=128). */
 const FLAG_BOLD = 1;
@@ -141,10 +142,15 @@ export function toITerminal(term: GhosttyWebTerminal): ITerminal {
  * `getSelection`, `focus`, `options` and the buffer's `getLine` keep working. The `buffer` override
  * keeps the full ghostty buffer API and only replaces `active.viewportY` with the xterm-style value.
  */
-export function asXtermCompatible(term: GhosttyWebTerminal): GhosttyWebTerminal {
+export function asXtermCompatible(term: GhosttyWebTerminal, onReply?: (data: string) => void): GhosttyWebTerminal {
   const facade = toITerminal(term);
+  const responder = createQueryResponder();
   const overrides: Record<string, unknown> = {
-    write: facade.write,
+    write: (data: string | Uint8Array, callback?: () => void) => {
+      const reply = typeof data === "string" ? responder.feed(data) : "";
+      if (reply) onReply?.(reply);
+      facade.write(data, callback);
+    },
     clear: facade.clear,
     refresh: facade.refresh,
     get buffer() {
