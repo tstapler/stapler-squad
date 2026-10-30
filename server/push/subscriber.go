@@ -26,7 +26,15 @@ type SessionDeliveryGate interface {
 type DeliveryOption func(*deliveryConfig)
 
 type deliveryConfig struct {
-	gate SessionDeliveryGate
+	gate     SessionDeliveryGate
+	now      func() time.Time
+	counters PushCounters
+}
+
+// WithAwaitingDirectionLimits injects the clock and counters of the awaiting_direction
+// push limiter (defaults: time.Now, no counters).
+func WithAwaitingDirectionLimits(now func() time.Time, c PushCounters) DeliveryOption {
+	return func(cfg *deliveryConfig) { cfg.now, cfg.counters = now, c }
 }
 
 // WithSessionDeliveryGate drops status-change pushes the gate refuses.
@@ -56,25 +64,30 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 	ch, _ := bus.Subscribe(ctx)
 	dedup := newDedupTracker(dedupWindow)
 
-	go runDeliveryLoop(ctx, ch, dedup, notifiers, cfg.gate, done)
+	limiter := newAwaitingLimiter(cfg.now, cfg.counters)
+	go runDeliveryLoop(ctx, ch, dedup, notifiers, cfg.gate, limiter, done)
 	return done
 }
 
 // runDeliveryLoop drains ch until it closes or ctx is cancelled, delivering
 // each event via deliverEvent, then closes done. Run as its own goroutine by
 // StartDeliverySubscriber.
-func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupTracker, notifiers []Notifier, gate SessionDeliveryGate, done chan<- struct{}) {
+func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupTracker, notifiers []Notifier, gate SessionDeliveryGate, limiter *awaitingLimiter, done chan<- struct{}) {
 	defer close(done)
 	log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
 	defer log.Info("DeliverySubscriber stopped")
 
+	digestTick := time.NewTicker(awaitingDigestPoll)
+	defer digestTick.Stop()
 	for {
 		select {
+		case <-digestTick.C:
+			flushAwaitingDigest(ctx, limiter, notifiers)
 		case event, ok := <-ch:
 			if !ok {
 				return
 			}
-			deliverEvent(ctx, event, dedup, notifiers, gate)
+			deliverEvent(ctx, event, dedup, notifiers, gate, limiter)
 		case <-ctx.Done():
 			return
 		}
@@ -84,7 +97,7 @@ func runDeliveryLoop(ctx context.Context, ch <-chan *events.Event, dedup *dedupT
 // deliverEvent converts event into a DeliveryNotification and fans it out to
 // notifiers, dropping the event entirely if it doesn't warrant a notification
 // or if dedup has already seen its tag within its window.
-func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker, notifiers []Notifier, gate SessionDeliveryGate) {
+func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker, notifiers []Notifier, gate SessionDeliveryGate, limiter *awaitingLimiter) {
 	if event == nil {
 		return
 	}
@@ -98,7 +111,43 @@ func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker,
 	if !dedup.allow(dn.Tag) {
 		return
 	}
+	if isAwaitingDirection(event) && limiter != nil && limiter.admit(event.SessionID) != admitPush {
+		return
+	}
 	fanout(ctx, notifiers, dn)
+}
+
+// awaitingDigestPoll is how often pending overflow is checked for a due digest.
+const awaitingDigestPoll = 5 * time.Second
+
+// flushAwaitingDigest sends the collapsed digest push when overflow has waited long enough.
+func flushAwaitingDigest(ctx context.Context, limiter *awaitingLimiter, notifiers []Notifier) {
+	if limiter == nil {
+		return
+	}
+	if body, ok := limiter.digestDue(); ok {
+		fanout(ctx, notifiers, awaitingDigestNotification(body))
+	}
+}
+
+func awaitingDigestNotification(body string) DeliveryNotification {
+	return DeliveryNotification{
+		Title:    "Sessions finished",
+		Body:     body,
+		Icon:     "/icons/icon-192.png",
+		Tag:      awaitingDigestTag,
+		Renotify: true,
+		Urgency:  UrgencyLow,
+		Data:     map[string]interface{}{"url": "/review-queue"},
+	}
+}
+
+func attentionReason(event *events.Event) string {
+	return event.NotificationMetadata[events.MetadataKeyAttentionReason]
+}
+
+func isAwaitingDirection(event *events.Event) bool {
+	return event.Type == events.EventNotification && attentionReason(event) == events.AttentionReasonAwaitingDirection
 }
 
 // gateSessionID is the identity the delivery gate resolves: the UUID, or the
@@ -232,6 +281,9 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 }
 
 func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
+	if dn, ok := buildAttentionNotification(event); ok {
+		return dn, true
+	}
 	if !shouldNotify(event.Type, event.NotificationPriority, event.NotificationType, time.Since(event.Timestamp)) {
 		return DeliveryNotification{}, false
 	}
@@ -262,6 +314,38 @@ func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
 		RequireInteraction: requireInteraction,
 		Renotify:           renotify,
 	}, true
+}
+
+// buildAttentionNotification is the delivery profile of the finished-turn reasons, which push
+// whatever their priority: prose_question at normal urgency (it needs a reply), awaiting_direction
+// at low urgency (it is informational and rate-limited by awaitingLimiter).
+func buildAttentionNotification(event *events.Event) (DeliveryNotification, bool) {
+	reason := attentionReason(event)
+	if reason != events.AttentionReasonProseQuestion && reason != events.AttentionReasonAwaitingDirection {
+		return DeliveryNotification{}, false
+	}
+	if event.NotificationTitle == "" || event.NotificationMessage == "" {
+		return DeliveryNotification{}, false
+	}
+	dn := DeliveryNotification{
+		Title: event.NotificationTitle,
+		Body:  event.NotificationMessage,
+		Icon:  "/icons/icon-192.png",
+		Tag:   "notification-" + event.NotificationID,
+	}
+	if event.SessionID != "" {
+		dn.Data = map[string]interface{}{
+			"sessionId":        event.SessionID,
+			"notificationType": notificationTypeName(event.NotificationType),
+			"attentionReason":  reason,
+			"timestamp":        time.Now().Unix(),
+			"url":              buildNotificationURL(event.SessionID, event.NotificationID),
+		}
+	}
+	if reason == events.AttentionReasonAwaitingDirection {
+		dn.Urgency = UrgencyLow
+	}
+	return dn, true
 }
 
 // buildNotificationForSession constructs a DeliveryNotification for a specific

@@ -72,6 +72,15 @@ const (
 	itemSessionLookupTimeout = 2 * time.Second
 )
 
+// EpisodeHistory is the persisted record of notified turn-end episodes
+// (*notifications.NotificationHistoryStore).
+type EpisodeHistory interface {
+	HasEpisode(sessionID, episodeID string) bool
+}
+
+// maxDeliveredEpisodes bounds the in-process episode dedup set.
+const maxDeliveredEpisodes = 4096
+
 // ReactiveQueueManager manages the review queue with immediate reactivity to user interactions.
 // It listens to interaction events and immediately re-evaluates the queue instead of waiting
 // for the next poll cycle, providing <100ms feedback to users.
@@ -111,6 +120,19 @@ type ReactiveQueueManager struct {
 	// queueItemGate decides the Slack and webhook-callback sends, which the bus
 	// publish filter does not reach. Nil allows everything.
 	queueItemGate func(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool
+
+	// episodeHistory answers "was this turn-end episode already notified?" across restarts
+	// (the persisted notification history). Nil limits dedup to this process.
+	episodeHistory EpisodeHistory
+
+	// deliveredEpisodes is the in-process episode dedup, bounded by maxDeliveredEpisodes.
+	deliveredMu       sync.Mutex
+	deliveredEpisodes map[string]struct{}
+	deliveredOrder    []string
+
+	// eventRecorder receives NotificationSuppressed for gate-suppressed attention
+	// notifications. Nil is a no-op.
+	eventRecorder session.SessionEventRecorder
 
 	// autoCreatePRInFlight tracks sessions with an in-progress AutoCreatePR
 	// one-shot run, keyed by stable session UUID. Prevents a second concurrent
@@ -218,6 +240,64 @@ func (rqm *ReactiveQueueManager) SetDashboardBaseURLFn(fn func() string) {
 // (deliverygate.Gate.AllowQueueItem). Optional; nil allows everything.
 func (rqm *ReactiveQueueManager) SetQueueItemGate(fn func(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool) {
 	rqm.queueItemGate = fn
+}
+
+// SetEpisodeHistory wires the persisted episode check behind attention-notification dedup.
+func (rqm *ReactiveQueueManager) SetEpisodeHistory(h EpisodeHistory) { rqm.episodeHistory = h }
+
+// SetEventRecorder wires the session event recorder that logs gate suppressions.
+func (rqm *ReactiveQueueManager) SetEventRecorder(r session.SessionEventRecorder) {
+	rqm.eventRecorder = r
+}
+
+// OnDeliverySuppressed is the delivery gate's suppression observer. It logs a
+// NotificationSuppressed event, with the gate reason, for attention notifications only.
+func (rqm *ReactiveQueueManager) OnDeliverySuppressed(_ string, metadata map[string]string, reason deliverygate.Reason) {
+	if rqm.eventRecorder == nil || metadata[events.MetadataKeyAttentionReason] == "" {
+		return
+	}
+	rqm.eventRecorder.RecordNotificationSuppressed(metadata[events.MetadataKeySessionTitle], string(reason))
+}
+
+// claimEpisode reports whether this (session, episode, reason) is new and records it.
+// Items without an episode are never deduplicated.
+func (rqm *ReactiveQueueManager) claimEpisode(sessionID, episodeID, reason string) bool {
+	if episodeID == "" {
+		return true
+	}
+	key := sessionID + "|" + reason + "|" + episodeID
+	rqm.deliveredMu.Lock()
+	_, seen := rqm.deliveredEpisodes[key]
+	rqm.deliveredMu.Unlock()
+	if seen || (rqm.episodeHistory != nil && rqm.episodeHistory.HasEpisode(sessionID, episodeID)) {
+		return false
+	}
+	rqm.deliveredMu.Lock()
+	defer rqm.deliveredMu.Unlock()
+	if rqm.deliveredEpisodes == nil {
+		rqm.deliveredEpisodes = make(map[string]struct{})
+	}
+	if _, dup := rqm.deliveredEpisodes[key]; dup {
+		return false
+	}
+	if len(rqm.deliveredOrder) >= maxDeliveredEpisodes {
+		delete(rqm.deliveredEpisodes, rqm.deliveredOrder[0])
+		rqm.deliveredOrder = rqm.deliveredOrder[1:]
+	}
+	rqm.deliveredEpisodes[key] = struct{}{}
+	rqm.deliveredOrder = append(rqm.deliveredOrder, key)
+	return true
+}
+
+// attentionReasonLabel is the notification metadata value for the finished-turn reasons.
+func attentionReasonLabel(r session.AttentionReason) string {
+	switch r {
+	case session.ReasonProseQuestion:
+		return events.AttentionReasonProseQuestion
+	case session.ReasonAwaitingDirection:
+		return events.AttentionReasonAwaitingDirection
+	}
+	return ""
 }
 
 func (rqm *ReactiveQueueManager) allowQueueItem(ch deliverygate.Channel, sessionID string, metadata map[string]string, notificationType int32) bool {
@@ -458,13 +538,20 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 
 	notifType, notifPriority := rqm.mapReviewItemToNotification(item)
 	metadata := events.SessionScopedMetadata(item.Metadata, linkedItemID)
+	attention := attentionReasonLabel(item.Reason)
+	if attention != "" {
+		metadata[events.MetadataKeyAttentionReason] = attention
+		metadata[events.MetadataKeySessionTitle] = item.SessionID
+	}
+	// One notification per turn-end episode, whatever re-adds the item (poller, restart).
+	notify := attention == "" || rqm.claimEpisode(resolvedID, metadata[events.MetadataKeyEpisodeID], attention)
 
 	// Publish an EventNotification to the EventBus so the notification history store
 	// captures this event — but skip APPROVAL_PENDING items. The ApprovalHandler already
 	// broadcasts a richer notification (with the actual command preview and approval UUID)
 	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
 	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
-	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending {
+	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending && notify {
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)
 		message := item.Context
@@ -488,7 +575,8 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 		// guard as the eventBus.Publish above — a threshold-crossing digest
 		// suppresses the per-item send on the same call (Unresolved Questions
 		// default, plan.md's Epic 1.2.4).
-		if rqm.slackNotifier != nil && rqm.allowQueueItem(deliverygate.ChannelSlack, resolvedID, metadata, notifType) {
+		// awaiting_direction never goes to Slack by default (ADR-007).
+		if rqm.slackNotifier != nil && item.Reason != session.ReasonAwaitingDirection && rqm.allowQueueItem(deliverygate.ChannelSlack, resolvedID, metadata, notifType) {
 			cfg := config.LoadConfig()
 			dashboardURL := cfg.Slack.DashboardBaseURL
 			if dashboardURL == "" && rqm.dashboardBaseURLFn != nil {
@@ -969,13 +1057,13 @@ func (rqm *ReactiveQueueManager) mapReviewItemToNotification(item *session.Revie
 	switch item.Reason {
 	case session.ReasonApprovalPending:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED)
-	case session.ReasonInputRequired, session.ReasonWaitingForUser:
+	case session.ReasonInputRequired, session.ReasonWaitingForUser, session.ReasonProseQuestion:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED)
 	case session.ReasonErrorState:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
 	case session.ReasonTestsFailing:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE)
-	case session.ReasonTaskComplete:
+	case session.ReasonTaskComplete, session.ReasonAwaitingDirection:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE)
 	case session.ReasonUncommittedChanges:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE)

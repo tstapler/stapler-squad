@@ -146,7 +146,7 @@ func TestDeliverEvent_should_NotPush_When_HiddenSessionCompletesAndGateOn(t *tes
 	g.SeedFromInstances([]*session.Instance{inst})
 	n := &mockNotifier{name: "rec"}
 
-	deliverEvent(context.Background(), event, newDedupTracker(0), []Notifier{n}, g)
+	deliverEvent(context.Background(), event, newDedupTracker(0), []Notifier{n}, g, nil)
 
 	assert.Equal(t, 0, n.CallCount(), "a Hidden session completing must not produce a push notification")
 }

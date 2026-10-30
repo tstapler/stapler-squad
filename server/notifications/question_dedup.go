@@ -7,17 +7,39 @@ const (
 	metaQuestionID      = "question_id"
 	metaApprovalID      = "approval_id"
 	metaGuidanceID      = "guidance_request_id"
+
+	metaEpisodeID       = "episode_id"
+	metaAttentionReason = "attention_reason"
 )
 
 // questionKey is what tells two question notifications of one session apart: the
-// question text plus its option labels, so a re-asked identical question
+// turn-end episode for finished-turn notifications, else the question text plus its option labels, so a re-asked identical question
 // collapses while a different question stays its own card. It is empty for every
 // other notification, which keeps the (session, type) collapse.
 func questionKey(r *NotificationRecord) string {
+	if ep := r.Metadata[metaEpisodeID]; ep != "" && r.Metadata[metaAttentionReason] != "" {
+		return "episode\x00" + ep
+	}
 	if r.Metadata[metaQuestionShape] == "" {
 		return ""
 	}
 	return r.Message + "\x00" + r.Metadata[metaQuestionOptions]
+}
+
+// HasEpisode reports whether a record for this session's turn-end episode exists, read or
+// not. It is the dedup check that survives a queue rebuild or restart: the store is persisted.
+func (s *NotificationHistoryStore) HasEpisode(sessionID, episodeID string) bool {
+	if episodeID == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.records {
+		if r.SessionID == sessionID && r.Metadata[metaEpisodeID] == episodeID && r.Metadata[metaAttentionReason] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveQuestion retires the unread records of one answered question and

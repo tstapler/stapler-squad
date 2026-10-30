@@ -1134,6 +1134,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// (constructed in BuildCoreDepsWithOptions, aliased above), so no setter-injection
 	// race window like SetHeadlessPool's had.
 	reactiveQueueMgr.SetOneShotRunner(sessionService)
+	reactiveQueueMgr.SetEventRecorder(reviewQueuePoller.EventRecorder())
 	log.Info("ReactiveQueueManager initialized")
 
 	// SlackNotifier (Epic 1.3, Story 1.3.1): a single shared instance, always

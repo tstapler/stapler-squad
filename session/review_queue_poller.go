@@ -881,6 +881,9 @@ func (rqp *ReviewQueuePoller) SetEventRecorder(r SessionEventRecorder) {
 	rqp.recorder = r
 }
 
+// EventRecorder returns the poller's recorder (never nil) for the other single-owner event callers.
+func (rqp *ReviewQueuePoller) EventRecorder() SessionEventRecorder { return rqp.eventRecorder() }
+
 func (rqp *ReviewQueuePoller) eventRecorder() SessionEventRecorder {
 	rqp.mu.RLock()
 	defer rqp.mu.RUnlock()

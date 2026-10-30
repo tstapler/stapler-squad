@@ -38,13 +38,18 @@ const TIER2_REASONS = new Set([
   AttentionReason.ERROR_STATE,
   AttentionReason.TESTS_FAILING,
   AttentionReason.STALE,
+  // A prose question is published as INPUT_REQUIRED but only asks, so it takes a brief toast.
+  AttentionReason.PROSE_QUESTION,
 ]);
 
 /**
  * Tier 3 — History only: informational, no interrupt.
  * TASK_COMPLETE, IDLE, UNCOMMITTED_CHANGES, IDLE_TIMEOUT → history panel only.
  */
-function getTier(reason: AttentionReason): 1 | 2 | 3 {
+function getTier(reason: AttentionReason): 1 | 2 | 3 | null {
+  // AWAITING_DIRECTION: the server's tray record and low-urgency push carry it; no toast, no sound,
+  // and no second client-side history row.
+  if (reason === AttentionReason.AWAITING_DIRECTION) return null;
   if (TIER1_REASONS.has(reason)) return 1;
   if (TIER2_REASONS.has(reason)) return 2;
   return 3;
@@ -109,7 +114,7 @@ interface UseReviewQueueNotificationsOptions {
  * Tier 1 (APPROVAL_PENDING, INPUT_REQUIRED, WAITING_FOR_USER):
  *   - Persistent toast (no auto-close) + browser notification with OS sound + history
  *
- * Tier 2 (ERROR_STATE, TESTS_FAILING, STALE):
+ * Tier 2 (ERROR_STATE, TESTS_FAILING, STALE, PROSE_QUESTION):
  *   - Brief toast (auto-minimizes) + history only (no browser notification unless tab hidden)
  *
  * Tier 3 (TASK_COMPLETE, IDLE, UNCOMMITTED_CHANGES, etc.):

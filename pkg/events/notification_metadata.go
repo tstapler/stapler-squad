@@ -27,6 +27,23 @@ const (
 	// MetadataKeyUntrustedType is written only by SendNotification (client values
 	// are stripped) on a request without MetadataKeySSQNotifySchema.
 	MetadataKeyUntrustedType = "ssq_untrusted_type"
+	// MetadataKeyAttentionReason names the attention reason behind a review-queue
+	// notification (AttentionReason* values). Sinks read it to pick a delivery
+	// profile; the notification type alone cannot tell a finished turn from any
+	// other TASK_COMPLETE.
+	MetadataKeyAttentionReason = "attention_reason"
+	// MetadataKeyEpisodeID carries the turn-end episode behind an attention
+	// notification; it is the dedup key across queue rebuilds and restarts.
+	MetadataKeyEpisodeID = "episode_id"
+	// MetadataKeySessionTitle carries the session title for attention notifications,
+	// whose SessionID is the stable UUID.
+	MetadataKeySessionTitle = "session_title"
+)
+
+// Values of MetadataKeyAttentionReason.
+const (
+	AttentionReasonProseQuestion     = "prose_question"
+	AttentionReasonAwaitingDirection = "awaiting_direction"
 )
 
 // Values of MetadataKeyDeliveryClass.

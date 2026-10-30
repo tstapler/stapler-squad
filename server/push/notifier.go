@@ -16,7 +16,12 @@ type DeliveryNotification struct {
 	Data               map[string]interface{}
 	RequireInteraction bool
 	Renotify           bool
+	// Urgency is the Web Push Urgency header; empty means the push service default.
+	Urgency string
 }
+
+// UrgencyLow marks a push the device may defer (battery saver, doze).
+const UrgencyLow = "low"
 
 // Notifier is the delivery backend interface (web push, future: email, Slack, etc.).
 // All implementations must be safe for concurrent use.
@@ -48,6 +53,7 @@ func (n *WebPushNotifier) Send(_ context.Context, dn DeliveryNotification) error
 		Data:               dn.Data,
 		RequireInteraction: dn.RequireInteraction,
 		Renotify:           dn.Renotify,
+		Urgency:            dn.Urgency,
 	}
 	sent := n.svc.SendNotification(pn)
 	if sent == 0 {

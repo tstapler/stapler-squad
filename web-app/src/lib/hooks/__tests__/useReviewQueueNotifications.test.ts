@@ -26,6 +26,8 @@ jest.mock("@/gen/session/v1/types_pb", () => ({
     STALE: 8,
     WAITING_FOR_USER: 9,
     TESTS_FAILING: 10,
+    PROSE_QUESTION: 11,
+    AWAITING_DIRECTION: 12,
   },
 }));
 
@@ -100,6 +102,7 @@ describe("useReviewQueueNotifications — dwell-time filter", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     mockPlayNotificationSound.mockClear();
+    mockShowBrowserNotification.mockClear();
     mockShowSessionNotification.mockClear();
     mockAddToHistoryOnly.mockClear();
     mockMarkAsReadBySessionId.mockClear();
@@ -317,6 +320,38 @@ describe("useReviewQueueNotifications — dwell-time filter", () => {
       expect(mockShowSessionNotification).toHaveBeenCalledTimes(1);
       // Tier 2 does NOT play sound
       expect(mockPlayNotificationSound).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("finished-turn reasons", () => {
+    function raise(reason: number, id: string) {
+      const { rerender } = renderHook(
+        ({ items }) => useReviewQueueNotifications(items, { enabled: true }),
+        { initialProps: { items: [] as ReturnType<typeof makeItem>[] } }
+      );
+      act(() => {
+        rerender({ items: [makeItem(id, reason)] });
+      });
+      act(() => {
+        jest.advanceTimersByTime(DWELL_TIME_MS);
+      });
+    }
+
+    it("shows a brief toast without sound for PROSE_QUESTION (tier 2)", () => {
+      raise(11, "session-prose");
+
+      expect(mockShowSessionNotification).toHaveBeenCalledTimes(1);
+      expect(mockPlayNotificationSound).not.toHaveBeenCalled();
+      expect(mockAddToHistoryOnly).not.toHaveBeenCalled();
+    });
+
+    it("raises no toast, sound or history row for AWAITING_DIRECTION", () => {
+      raise(12, "session-await");
+
+      expect(mockShowSessionNotification).not.toHaveBeenCalled();
+      expect(mockPlayNotificationSound).not.toHaveBeenCalled();
+      expect(mockShowBrowserNotification).not.toHaveBeenCalled();
+      expect(mockAddToHistoryOnly).not.toHaveBeenCalled();
     });
   });
 

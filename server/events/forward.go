@@ -31,6 +31,13 @@ const (
 	MetadataKeySessionScoped = pkgevents.MetadataKeySessionScoped
 	MetadataKeyItemID        = pkgevents.MetadataKeyItemID
 
+	// Metadata keys and values of attention (finished-turn) notifications.
+	MetadataKeyAttentionReason       = pkgevents.MetadataKeyAttentionReason
+	MetadataKeyEpisodeID             = pkgevents.MetadataKeyEpisodeID
+	MetadataKeySessionTitle          = pkgevents.MetadataKeySessionTitle
+	AttentionReasonProseQuestion     = pkgevents.AttentionReasonProseQuestion
+	AttentionReasonAwaitingDirection = pkgevents.AttentionReasonAwaitingDirection
+
 	// FieldStatus is the UpdatedFields entry marking a session status change.
 	FieldStatus = pkgevents.FieldStatus
 

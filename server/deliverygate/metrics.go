@@ -26,26 +26,28 @@ const (
 // Counter names. Each is mirrored in-process (the OTel meter is a no-op when
 // telemetry is not initialized, so the soak cannot depend on it).
 const (
-	CounterSuppressed            = "notification_delivery_suppressed_total"            // channel,type,reason,kind
-	CounterWouldSuppress         = "notification_delivery_would_suppress_total"        // channel,type,reason,kind
-	CounterHiddenDelivered       = "notification_hidden_delivered_total"               // channel,class,kind
-	CounterUnresolved            = "notification_delivery_unresolved_total"            // class
-	CounterIndexMiss             = "notification_gate_index_miss_total"                // (none)
-	CounterIndexRefresh          = "notification_gate_index_refresh_total"             // result
-	CounterResolvedLater         = "notification_unresolved_resolved_later_total"      // (none)
-	CounterFilterPanic           = "notification_gate_filter_panic_total"              // (none)
-	CounterRPCUnversioned        = "notification_rpc_unversioned_total"                // (none)
-	CounterAuditDegraded         = "hidden_session_audit_degraded_total"               // mode
-	CounterCrashCoalesced        = "notification_crash_coalesced_total"                // (none)
-	CounterLeaseWedgeNotified    = "hidden_session_write_lease_wedge_notified_total"   // (none)
-	CounterBacklogSteer          = "hidden_session_backlog_steer_total"                // outcome
-	CounterReply                 = "hidden_session_reply_total"                        // outcome
-	CounterReplyUnreplyable      = "hidden_session_reply_registered_unreplyable_total" // cause
-	CounterGuidanceMirrorFailed  = "guidance_mirror_failed_total"                      // reason
-	CounterGuidanceMirrorCleared = "guidance_mirror_cleared_total"                     // reason
-	CounterQuestionDialogMatch   = "question_dialog_match_total"                       // result,claude_version
-	histogramFilterDurationSec   = "notification_gate_filter_duration_seconds"         // OTel only
-	counterLabelSeparator        = "|"
+	CounterSuppressed              = "notification_delivery_suppressed_total"            // channel,type,reason,kind
+	CounterWouldSuppress           = "notification_delivery_would_suppress_total"        // channel,type,reason,kind
+	CounterHiddenDelivered         = "notification_hidden_delivered_total"               // channel,class,kind
+	CounterUnresolved              = "notification_delivery_unresolved_total"            // class
+	CounterIndexMiss               = "notification_gate_index_miss_total"                // (none)
+	CounterIndexRefresh            = "notification_gate_index_refresh_total"             // result
+	CounterResolvedLater           = "notification_unresolved_resolved_later_total"      // (none)
+	CounterFilterPanic             = "notification_gate_filter_panic_total"              // (none)
+	CounterRPCUnversioned          = "notification_rpc_unversioned_total"                // (none)
+	CounterAuditDegraded           = "hidden_session_audit_degraded_total"               // mode
+	CounterCrashCoalesced          = "notification_crash_coalesced_total"                // (none)
+	CounterLeaseWedgeNotified      = "hidden_session_write_lease_wedge_notified_total"   // (none)
+	CounterBacklogSteer            = "hidden_session_backlog_steer_total"                // outcome
+	CounterReply                   = "hidden_session_reply_total"                        // outcome
+	CounterReplyUnreplyable        = "hidden_session_reply_registered_unreplyable_total" // cause
+	CounterGuidanceMirrorFailed    = "guidance_mirror_failed_total"                      // reason
+	CounterGuidanceMirrorCleared   = "guidance_mirror_cleared_total"                     // reason
+	CounterQuestionDialogMatch     = "question_dialog_match_total"                       // result,claude_version
+	CounterNotificationsSuppressed = "notifications_suppressed_total"                    // gate_reason
+	CounterAwaitingDigest          = "awaiting_direction_digest_total"                   // (none)
+	histogramFilterDurationSec     = "notification_gate_filter_duration_seconds"         // OTel only
+	counterLabelSeparator          = "|"
 )
 
 // Index refresh result label values.
@@ -71,6 +73,8 @@ var counterLabelKeys = map[string][]string{
 	CounterGuidanceMirrorFailed:  {"reason"},
 	CounterGuidanceMirrorCleared: {"reason"},
 	CounterQuestionDialogMatch:   {"result", "claude_version"},
+
+	CounterNotificationsSuppressed: {"gate_reason"},
 }
 
 // maxLabels is the widest counter label set (suppressed: channel, type, reason, kind).
@@ -116,7 +120,7 @@ func otelInstrument(name string) metric.Int64Counter {
 				otelCounters.Store(n, c)
 			}
 		}
-		for _, n := range []string{CounterIndexMiss, CounterResolvedLater, CounterFilterPanic, CounterRPCUnversioned, CounterCrashCoalesced, CounterLeaseWedgeNotified} {
+		for _, n := range []string{CounterIndexMiss, CounterResolvedLater, CounterFilterPanic, CounterRPCUnversioned, CounterCrashCoalesced, CounterLeaseWedgeNotified, CounterAwaitingDigest} {
 			if c, err := meter.Int64Counter(n); err == nil {
 				otelCounters.Store(n, c)
 			}
