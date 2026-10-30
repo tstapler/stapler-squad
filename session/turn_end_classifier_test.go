@@ -18,7 +18,7 @@ const (
 	syntheticLabeller  = "implementer-synthetic"
 )
 
-type corpusCase struct {
+type turnEndCorpusCase struct {
 	ID       string `json:"id"`
 	Category string `json:"category"`
 	Text     string `json:"text"`
@@ -32,7 +32,7 @@ type corpusCase struct {
 
 type corpusFile struct {
 	LabelledBy string       `json:"labelled_by"`
-	Cases      []corpusCase `json:"cases"`
+	Cases      []turnEndCorpusCase `json:"cases"`
 }
 
 func loadCorpus(t *testing.T, name string) corpusFile {

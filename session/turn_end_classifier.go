@@ -16,15 +16,6 @@ const (
 	TurnEndClassQuestion TurnEndClass = "question"
 )
 
-// TurnEndConfidence gates escalation: only High yields TurnEndClassQuestion without a tiebreak.
-type TurnEndConfidence int
-
-const (
-	TurnEndConfidenceLow TurnEndConfidence = iota
-	TurnEndConfidenceMedium
-	TurnEndConfidenceHigh
-)
-
 // TurnEndClassification is the result of ClassifyTurnEnd.
 type TurnEndClassification struct {
 	Class      TurnEndClass
@@ -206,10 +197,10 @@ func ExtractQuestionSentence(text string) string {
 			break
 		}
 	}
-	return capTail(scrubExcerpt(pick), questionExcerptMax)
+	return capTail(redactQuestionText(pick), questionExcerptMax)
 }
 
-func scrubExcerpt(s string) string {
+func redactQuestionText(s string) string {
 	s = secretRe.ReplaceAllString(s, "[redacted]")
 	return strings.TrimSpace(spaceRe.ReplaceAllString(s, " "))
 }
