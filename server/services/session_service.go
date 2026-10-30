@@ -183,6 +183,11 @@ type SessionService struct {
 	approvalSvc     *ApprovalService
 	utilitySvc      *UtilityService
 	rulesSvc        *RulesService
+
+	// stopTurns records Stop-hook turn ends; built lazily by ObserveStop.
+	stopTurnEndsOnce sync.Once
+	stopTurns        *stopTurnEnds
+
 	// taggingRulesSvc is exposed over ListTaggingRules/UpsertTaggingRule/DeleteTaggingRule
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
 	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the

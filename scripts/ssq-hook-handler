@@ -426,6 +426,19 @@ send_notification() {
     "$CS_NOTIFY" "${args[@]}" 2>/dev/null || true
 }
 
+# stop_endpoint_owns_notification: true when the session's project settings inject the
+# stapler-squad HTTP Stop hook (/api/hooks/stop).
+stop_endpoint_owns_notification() {
+    case "${SSQ_STOP_ENDPOINT:-}" in
+        on) return 0 ;;
+        off) return 1 ;;
+    esac
+    local cwd
+    cwd=$(json_get '.cwd')
+    [[ -n "$cwd" && -f "$cwd/.claude/settings.local.json" ]] || return 1
+    grep -q '/api/hooks/stop' "$cwd/.claude/settings.local.json" 2>/dev/null
+}
+
 case "$HOOK_TYPE" in
     notification)
         # Notification hook - Claude is sending a notification
@@ -446,7 +459,12 @@ case "$HOOK_TYPE" in
         ;;
 
     stop)
-        # Stop hook - Claude finished a task
+        # Stop hook - Claude finished a task. When the session's settings carry the stapler
+        # HTTP Stop hook, the endpoint records the turn end and owns the notification, so this
+        # branch stays silent to avoid a duplicate. SSQ_STOP_ENDPOINT=on|off overrides detection.
+        if stop_endpoint_owns_notification; then
+            exit 0
+        fi
         REASON=$(json_get '.stop_reason // .reason // "Task completed"')
 
         # Classify stop reason explicitly

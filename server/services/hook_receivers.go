@@ -35,6 +35,9 @@ type HookReceiver struct {
 
 	// postToolUse, when set, hears every PostToolUse receipt with the tool name.
 	postToolUse PostToolUseObserver
+
+	// stop, when set, hears every Stop hook with its parsed body.
+	stop StopObserver
 }
 
 // PostToolUseObserver is told which tool a session's PostToolUse hook ran for.
@@ -43,6 +46,9 @@ type PostToolUseObserver func(ctx context.Context, sessionID, toolName string)
 
 // SetPostToolUseObserver installs the receipt observer; call it before serving.
 func (h *HookReceiver) SetPostToolUseObserver(o PostToolUseObserver) { h.postToolUse = o }
+
+// SetStopObserver installs the Stop observer; call it before serving.
+func (h *HookReceiver) SetStopObserver(o StopObserver) { h.stop = o }
 
 // NewHookReceiver creates a HookReceiver.
 func NewHookReceiver() *HookReceiver {
@@ -64,8 +70,13 @@ func (h *HookReceiver) RegisterRoutes(mux *http.ServeMux) {
 // HandleStop receives the Claude Code Stop hook.
 func (h *HookReceiver) HandleStop(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(sessionIDHeader)
-	size := h.drainBody(r)
+	body, size := h.readBody(r)
 	log.Info("[hook/stop]", "session", sessionID, "bytes", size)
+	if h.stop != nil {
+		payload := parseStopPayload(body)
+		payload.ReceivedAt = time.Now()
+		h.stop(r.Context(), sessionID, payload)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -109,6 +120,13 @@ const maxHookBody = 64 * 1024
 func (h *HookReceiver) readBody(r *http.Request) ([]byte, int64) {
 	b, _ := io.ReadAll(io.LimitReader(r.Body, maxHookBody))
 	return b, int64(len(b))
+}
+
+// parseStopPayload decodes a Stop body; a malformed one yields the zero payload.
+func parseStopPayload(body []byte) StopPayload {
+	var p StopPayload
+	_ = json.Unmarshal(body, &p)
+	return p
 }
 
 // toolNameOf extracts tool_name from a hook payload, or "".
