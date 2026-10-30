@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,6 +103,36 @@ func BenchmarkSaveInstances_AllUnchanged(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		require.NoError(b, storage.SaveInstances(instances))
 	}
+}
+
+// Racing saves must never leave a fingerprint that makes a later save of the
+// newest data look unchanged while the row holds an older value.
+func TestSaveInstances_Should_ConvergeToLatestData_When_SavesRace(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("dedup-race")
+	require.NoError(t, storage.AddInstance(inst))
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 25; i++ {
+				inst.SetNote(fmt.Sprintf("note-%d-%d", g, i))
+				_ = storage.SaveInstances([]*Instance{inst})
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, inst.Snapshot().Note, loaded[0].Snapshot().Note, "stored note must match the in-memory note after the final save")
 }
 
 func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *testing.T) {

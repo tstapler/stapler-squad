@@ -379,21 +379,17 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		log.Debug("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-		sum, hashed := fingerprintInstanceData(data)
-		if hashed && s.saved.unchanged(data.Title, sum) {
-			continue
-		}
-		if err := s.repo.Update(ctx, data); err != nil {
-			// Not found → create it
-			if createErr := s.repo.Create(ctx, data); createErr != nil {
-				log.Error("SaveInstances: failed to upsert instance",
-					"session", data.Title, "update_err", err, "create_err", createErr)
-				continue
+		s.saved.persist(data, func() bool {
+			if err := s.repo.Update(ctx, data); err != nil {
+				// Not found → create it
+				if createErr := s.repo.Create(ctx, data); createErr != nil {
+					log.Error("SaveInstances: failed to upsert instance",
+						"session", data.Title, "update_err", err, "create_err", createErr)
+					return false
+				}
 			}
-		}
-		if hashed {
-			s.saved.record(data.Title, sum)
-		}
+			return true
+		})
 	}
 	return nil
 }
@@ -621,6 +617,7 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 func (s *Storage) DeleteInstance(title string) error {
 	s.saved.forget(title)
 	err := s.repo.Delete(context.Background(), title)
+	s.saved.forget(title) // an in-flight save may have re-recorded the title before the row went away
 	clearLoggedMissingWorktree(title)
 	return err
 }
