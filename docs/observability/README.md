@@ -68,7 +68,7 @@ the app's own OTel flag.
 
 ## Traces on the dashboards
 
-Five dashboards carry a "Traces in Tempo (Explore)" dashboard link (top bar) that opens Explore on the
+All six dashboards carry a "Traces in Tempo (Explore)" dashboard link (top bar) that opens Explore on the
 Tempo datasource with the dashboard's time range. `cgroup-memory` and `pprof-profiles` have only that
 link, because no spans correspond to memory or profile data. The other four also have:
 
