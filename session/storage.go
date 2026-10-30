@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -308,6 +309,12 @@ func (s *Storage) Close() error {
 // GetEntClient returns the *ent.Client from the underlying EntRepository.
 func (s *Storage) GetEntClient() *ent.Client {
 	return s.repo.GetEntClient()
+}
+
+// MaintenanceDriver returns the instrumented driver behind the sessions database
+// for session/dbmaint, or nil when the repository has none.
+func (s *Storage) MaintenanceDriver() dialect.ExecQuerier {
+	return s.repo.MaintenanceDriver()
 }
 
 // SetItemChangePublisher wires p into the underlying repository.

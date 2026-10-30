@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"entgo.io/ent/dialect"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +50,7 @@ var EntSchemaCreateMu sync.Mutex
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
 	client        *ent.Client
+	driver        dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
 
@@ -163,7 +165,10 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// driver's applyTimezone(t) -> t.In(time.UTC), which sets the Location to
 	// the exact singleton (time.LoadLocation("UTC") — what _timezone resolves
 	// through — special-cases "UTC" to return that singleton directly).
+	// auto_vacuum=INCREMENTAL only takes effect on a database with no tables yet;
+	// session/dbmaint reclaims the freelist of such databases in the background.
 	dbPath := sqlitedsn.New(expandedPath).
+		WithPragma("auto_vacuum", "incremental").
 		WithWAL().
 		WithBusyTimeout(5000 * time.Millisecond).
 		WithForeignKeysShort().
@@ -206,7 +211,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
 
 	// Create Ent client with the existing database connection
-	client := newInstrumentedEntClient(db, readDB)
+	client, drv := newInstrumentedEntClient(db, readDB)
 
 	// Run automatic schema migration. entSchemaCreateMu serializes this call
 	// process-wide: even though each caller opens its own isolated SQLite
@@ -224,6 +229,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	repo.client = client
+	repo.driver = drv
 
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
@@ -261,6 +267,15 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 // can operate on entities not managed by the Repository interface.
 func (r *EntRepository) GetEntClient() *ent.Client {
 	return r.client
+}
+
+// MaintenanceDriver returns the instrumented driver behind the ent client, for
+// session/dbmaint. It is nil when the repository was built from a bare client.
+func (r *EntRepository) MaintenanceDriver() dialect.ExecQuerier {
+	if r.driver == nil {
+		return nil
+	}
+	return r.driver
 }
 
 // Create inserts a new session into the database

@@ -12,6 +12,7 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/ent"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -23,8 +24,15 @@ import (
 // SQLite's single-writer semantics and avoid "database is locked" errors.
 // The caller is responsible for calling client.Close() on shutdown.
 func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
+	client, _, err := OpenAnalyticsDBWithDriver(ctx, dataDir)
+	return client, err
+}
+
+// OpenAnalyticsDBWithDriver is OpenAnalyticsDB that also returns the
+// dbobs-instrumented driver behind the client, for session/dbmaint.
+func OpenAnalyticsDBWithDriver(ctx context.Context, dataDir string) (*ent.Client, dialect.ExecQuerier, error) {
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
-		return nil, fmt.Errorf("analytics db: create data dir: %w", err)
+		return nil, nil, fmt.Errorf("analytics db: create data dir: %w", err)
 	}
 
 	dbPath := filepath.Join(dataDir, "analytics.db")
@@ -44,7 +52,7 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("analytics db: open sqlite: %w", err)
+		return nil, nil, fmt.Errorf("analytics db: open sqlite: %w", err)
 	}
 
 	// SQLite supports only one writer at a time; serialise all access through a
@@ -53,7 +61,7 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
-	drv := entsql.OpenDB(dialect.SQLite, db)
+	drv := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, db), db, dbobs.ConfigFromEnv("analytics"))
 	client := ent.NewClient(ent.Driver(drv))
 
 	// Auto-migrate the AnalyticsEvent table (and any future schema additions).
@@ -66,14 +74,14 @@ func OpenAnalyticsDB(ctx context.Context, dataDir string) (*ent.Client, error) {
 	session.EntSchemaCreateMu.Unlock()
 	if err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("analytics db: schema migration: %w", err)
+		return nil, nil, fmt.Errorf("analytics db: schema migration: %w", err)
 	}
 	// Bounded compaction for databases created with incremental auto-vacuum.
 	// This is a no-op for legacy databases until their next maintenance VACUUM.
 	if _, err := db.ExecContext(ctx, "PRAGMA incremental_vacuum(4096)"); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("analytics db: incremental vacuum: %w", err)
+		return nil, nil, fmt.Errorf("analytics db: incremental vacuum: %w", err)
 	}
 
-	return client, nil
+	return client, drv, nil
 }

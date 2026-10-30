@@ -58,12 +58,13 @@ func openReadPool(path string, n int) (*sql.DB, error) {
 // newInstrumentedEntClient builds the ent client over db with query timing,
 // slow-query logging, spans and pool stats (session/dbobs). On by default.
 // A non-nil readDB routes plain SELECTs to it (session/dbsplit); stats for
-// that pool are reported as "ent-read".
-func newInstrumentedEntClient(db, readDB *sql.DB) *ent.Client {
+// that pool are reported as "ent-read". The driver is also returned so
+// background maintenance (session/dbmaint) runs through the same instrumentation.
+func newInstrumentedEntClient(db, readDB *sql.DB) (*ent.Client, dialect.Driver) {
 	drv := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, db), db, dbobs.ConfigFromEnv("ent"))
 	if readDB != nil {
 		reader := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, readDB), readDB, dbobs.ConfigFromEnv("ent-read"))
 		drv = dbsplit.New(drv, reader)
 	}
-	return ent.NewClient(ent.Driver(drv))
+	return ent.NewClient(ent.Driver(drv)), drv
 }
