@@ -2,9 +2,6 @@ package session
 
 import (
 	"reflect"
-	"time"
-
-	"github.com/tstapler/stapler-squad/log"
 )
 
 // TurnEndSink persists a turn-end fact; it never writes the acked episode.
@@ -48,31 +45,8 @@ func (i *Instance) collaborators() (TurnEndSink, SessionEventRecorder) {
 	return i.turnEndSink, orNoopRecorder(i.eventRecorder)
 }
 
-// RecordTurnEnd stores the turn-end fact and touches activity under i.mu, then, after
-// releasing it, persists via the sink and records the event once each.
+// RecordTurnEnd records a turn end for text, classified by the provisional heuristic.
 func (i *Instance) RecordTurnEnd(text string, source TurnEndSource) {
-	turn := TurnEnded{Excerpt: text, Source: source, At: time.Now()}
-	var title string
-	err := i.sendSyncErr(func(s *instanceState) error {
-		s.inst.mu.Lock()
-		s.inst.TurnEnded = turn
-		s.inst.touchLocked(SessionEventTurnEnded, turn.At)
-		snap := buildSnapshot(s.inst)
-		s.inst.mu.Unlock()
-		s.inst.snapshot.Store(snap)
-		title = snap.Title
-		return nil
-	})
-	if err != nil {
-		// Actor stopped: the in-memory fact was not stored, so don't persist or record under an empty title.
-		log.Warn("turn end dropped; actor unavailable", "error", err)
-		return
-	}
-	sink, rec := i.collaborators()
-	if sink != nil {
-		if err := sink.PersistTurnEnded(title, turn); err != nil {
-			log.ForSession(title).Warn("persist turn end failed; keeping in-memory fact", "error", err)
-		}
-	}
-	rec.RecordTurnEnded(title, turn)
+	kind, conf := provisionalClassify(text)
+	i.RecordClassifiedTurnEnd(text, source, kind, conf)
 }
