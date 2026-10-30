@@ -16,6 +16,8 @@ var (
 	registered  = map[*collector]struct{}{}
 	metricsOnce sync.Once
 	histogram   metric.Float64Histogram
+	waitHist    metric.Float64Histogram
+	busyCounter metric.Int64Counter
 )
 
 func register(c *collector) {
@@ -43,6 +45,7 @@ type Stats struct {
 	Queries         int64   `json:"queries_total"`
 	SlowQueries     int64   `json:"slow_queries_total"`
 	Errors          int64   `json:"errors_total"`
+	BusyErrors      int64   `json:"busy_errors_total"`
 	TotalDurationMs float64 `json:"total_duration_ms"`
 	MaxDurationMs   float64 `json:"max_duration_ms"`
 	SlowThresholdMs int64   `json:"slow_threshold_ms"`
@@ -56,7 +59,7 @@ func (c *collector) snapshot() Stats {
 		Name: c.cfg.Name, OpenConnections: p.OpenConnections, InUse: p.InUse, Idle: p.Idle,
 		MaxOpen: p.MaxOpenConnections, WaitCount: p.WaitCount,
 		WaitDurationMs: ms(int64(p.WaitDuration)),
-		Queries:        c.stat.queries.Load(), SlowQueries: c.stat.slow.Load(), Errors: c.stat.errors.Load(),
+		Queries:        c.stat.queries.Load(), SlowQueries: c.stat.slow.Load(), Errors: c.stat.errors.Load(), BusyErrors: c.stat.busy.Load(),
 		TotalDurationMs: ms(c.stat.totalNanos.Load()), MaxDurationMs: ms(c.stat.maxNanos.Load()),
 		SlowThresholdMs: c.cfg.SlowThreshold.Milliseconds(),
 	}
@@ -81,12 +84,32 @@ func recordHistogram(name string, d time.Duration) {
 	}
 }
 
+// recordPoolWait records time a query spent queued for a pooled connection
+// (approximate: database/sql's WaitDuration is pool-wide). On the single-writer
+// pool this is the write-lock wait.
+func recordPoolWait(name string, d time.Duration) {
+	if waitHist != nil {
+		waitHist.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(nameAttr(name)))
+	}
+}
+
+func recordBusy(name string) {
+	if busyCounter != nil {
+		busyCounter.Add(context.Background(), 1, metric.WithAttributes(nameAttr(name)))
+	}
+}
+
 // initMetrics registers OTel instruments against the global (delegating) meter,
 // so they export once telemetry.Initialize installs a real provider.
 func initMetrics() {
 	meter := telemetry.GetMeter()
 	histogram, _ = meter.Float64Histogram("db.query.duration",
 		metric.WithDescription("Duration of ent/SQLite queries"), metric.WithUnit("ms"))
+	waitHist, _ = meter.Float64Histogram("db.query.pool_wait",
+		metric.WithDescription("Time a query waited for a pooled connection (write-lock wait on the single writer pool)"),
+		metric.WithUnit("ms"))
+	busyCounter, _ = meter.Int64Counter("db.busy_errors_total",
+		metric.WithDescription("Queries that failed with SQLITE_BUSY or SQLITE_LOCKED"))
 	gauges := newPoolGauges(meter)
 	if gauges == nil {
 		return

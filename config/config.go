@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -1529,6 +1530,7 @@ func GetAvailablePrograms() []string {
 }
 
 func LoadConfig() *Config {
+	loadConfigCalls.Add(1)
 	configDir, err := GetConfigDir()
 	if err != nil {
 		log.Error("failed to get config directory", "err", err)
@@ -1620,11 +1622,33 @@ func saveConfig(config *Config, paths ...string) error {
 	return saveConfigLocked(config, configPath)
 }
 
+// syncConfigFile is the fsync of each config save. A package var so tests can
+// count saves and emulate a stalled disk: on macOS os.File.Sync is F_FULLFSYNC,
+// which waits on every other writer's flush too.
+var syncConfigFile = func(f *os.File) error { return f.Sync() } //nolint:gochecknoglobals // test seam
+
+// SetSyncConfigFileForTest swaps the per-save fsync and returns a restore func.
+func SetSyncConfigFileForTest(fn func(*os.File) error) (restore func()) {
+	prev := syncConfigFile
+	syncConfigFile = fn
+	return func() { syncConfigFile = prev }
+}
+
+// loadConfigCalls counts LoadConfig calls (each reads and parses config.json).
+var loadConfigCalls atomic.Int64 //nolint:gochecknoglobals // diagnostic counter
+
+// LoadConfigCalls returns how many times LoadConfig has run; tests use the
+// delta to assert a request path reads config.json a bounded number of times.
+func LoadConfigCalls() int64 { return loadConfigCalls.Load() }
+
 // saveConfigLocked performs the marshal + write-tmp-then-rename sequence.
 // Callers must hold saveConfigLockFor(configPath) — factored out so
 // loadConfigWithDefaultFallback can share the same critical section as
 // saveConfig without re-entering (and deadlocking on) the same mutex.
 func saveConfigLocked(config *Config, configPath string) error {
+	start := time.Now()
+	var fsyncTook time.Duration
+	defer func() { recordSave(time.Since(start), fsyncTook) }()
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -1648,7 +1672,9 @@ func saveConfigLocked(config *Config, configPath string) error {
 	chmodErr := tmpFile.Chmod(0644)
 	_, writeErr := tmpFile.Write(data)
 	// Sync before rename so a power loss cannot leave a zero-length config.json.
-	syncErr := tmpFile.Sync()
+	syncStart := time.Now()
+	syncErr := syncConfigFile(tmpFile)
+	fsyncTook = time.Since(syncStart)
 	closeErr := tmpFile.Close()
 	if chmodErr != nil {
 		_ = os.Remove(tmpPath)
@@ -2049,19 +2075,30 @@ func (c *Config) GetFeatureFlagWithDefault(name string, defaultValue bool) bool 
 
 // SetFeatureFlag sets the named feature flag and persists the config to disk.
 func (c *Config) SetFeatureFlag(name string, value bool) error {
+	c.ApplyFeatureFlag(name, value)
+	return SaveConfig(c)
+}
+
+// ApplyFeatureFlag sets the named flag in memory only. Use it inside
+// UpdateConfig, which saves once itself; SetFeatureFlag there would fsync twice.
+func (c *Config) ApplyFeatureFlag(name string, value bool) {
 	if c.FeatureFlags == nil {
 		c.FeatureFlags = make(map[string]bool)
 	}
 	c.FeatureFlags[name] = value
-	return SaveConfig(c)
 }
 
 // DeleteFeatureFlag removes the named flag entirely — a reader using
 // GetFeatureFlagWithDefault falls back to its default again — and persists
 // the config to disk.
 func (c *Config) DeleteFeatureFlag(name string) error {
-	delete(c.FeatureFlags, name)
+	c.RemoveFeatureFlag(name)
 	return SaveConfig(c)
+}
+
+// RemoveFeatureFlag deletes the named flag in memory only (see ApplyFeatureFlag).
+func (c *Config) RemoveFeatureFlag(name string) {
+	delete(c.FeatureFlags, name)
 }
 
 // GetFeatureFlagOverride reports the explicitly-persisted value of the named
@@ -2110,6 +2147,12 @@ func (c *Config) FeatureFlagScopeOverrides(name string) map[string]bool {
 
 // SetFeatureFlagScope persists an explicit value of name at scope.
 func (c *Config) SetFeatureFlagScope(name, scope string, value bool) error {
+	c.ApplyFeatureFlagScope(name, scope, value)
+	return SaveConfig(c)
+}
+
+// ApplyFeatureFlagScope sets name at scope in memory only (see ApplyFeatureFlag).
+func (c *Config) ApplyFeatureFlagScope(name, scope string, value bool) {
 	if c.FeatureFlagScopes == nil {
 		c.FeatureFlagScopes = make(map[string]map[string]bool)
 	}
@@ -2117,13 +2160,18 @@ func (c *Config) SetFeatureFlagScope(name, scope string, value bool) error {
 		c.FeatureFlagScopes[name] = make(map[string]bool)
 	}
 	c.FeatureFlagScopes[name][scope] = value
-	return SaveConfig(c)
 }
 
 // DeleteFeatureFlagScope removes the explicit value of name at scope (inherit)
 // and persists. An emptied flag entry, and then an emptied map, is dropped so
 // the file returns to its previous-version shape.
 func (c *Config) DeleteFeatureFlagScope(name, scope string) error {
+	c.RemoveFeatureFlagScope(name, scope)
+	return SaveConfig(c)
+}
+
+// RemoveFeatureFlagScope deletes name at scope in memory only (see ApplyFeatureFlag).
+func (c *Config) RemoveFeatureFlagScope(name, scope string) {
 	delete(c.FeatureFlagScopes[name], scope)
 	if len(c.FeatureFlagScopes[name]) == 0 {
 		delete(c.FeatureFlagScopes, name)
@@ -2131,7 +2179,6 @@ func (c *Config) DeleteFeatureFlagScope(name, scope string) error {
 	if len(c.FeatureFlagScopes) == 0 {
 		c.FeatureFlagScopes = nil
 	}
-	return SaveConfig(c)
 }
 
 // ImportSessionEnabled reports whether the import-external-session feature

@@ -154,6 +154,7 @@ func flagScopeReadback(cfg *config.Config, name string, scopes []string) []*sess
 func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit *flagAudit) error {
 	var previous, hadKey bool
 	var cfg *config.Config
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
 	err := config.UpdateConfig(func(c *config.Config) error {
 		cfg = c
 		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
@@ -161,10 +162,13 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 			previous = c.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
 		}
 		if op.isSet() {
-			return c.SetFeatureFlagScope(op.name, op.scope, op.enabled)
+			c.ApplyFeatureFlagScope(op.name, op.scope, op.enabled)
+		} else {
+			c.RemoveFeatureFlagScope(op.name, op.scope)
 		}
-		return c.DeleteFeatureFlagScope(op.name, op.scope)
+		return nil
 	})
+	endPersistSpan()
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
@@ -193,9 +197,11 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 		"feature", op.name, "scope", op.scope, "err", ctrlErr)
 	rollbackErr := config.UpdateConfig(func(c *config.Config) error {
 		if hadKey {
-			return c.SetFeatureFlagScope(op.name, op.scope, previous)
+			c.ApplyFeatureFlagScope(op.name, op.scope, previous)
+		} else {
+			c.RemoveFeatureFlagScope(op.name, op.scope)
 		}
-		return c.DeleteFeatureFlagScope(op.name, op.scope)
+		return nil
 	})
 	if rollbackErr != nil {
 		if audit.active() {

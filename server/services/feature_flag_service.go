@@ -627,8 +627,8 @@ func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string
 	f.setStatusDetailSlot(name, "", fn)
 }
 
-func (f *FeatureFlagService) statusDetailFor(name string) string {
-	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
+func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
+	parts := autonomyFlagStatusDetail(name, cfg)
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(); d != "" {
 			parts = append(parts, d)
@@ -709,7 +709,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 			Name:         kf.name,
 			Enabled:      enabled,
 			Description:  kf.description,
-			StatusDetail: f.statusDetailFor(kf.name),
+			StatusDetail: f.statusDetailFor(kf.name, cfg),
 			Scopes:       flagScopeReadback(cfg, kf.name, kf.scopes),
 		})
 	}
@@ -769,7 +769,9 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	// update mutex so a stalled fsync cannot queue a kill switch behind it. The
 	// deferred `result` line is registered before the lock, so it runs after
 	// the unlock.
+	endAuditSpan := flagSpan(ctx, op, flagPhaseAudit)
 	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
+	endAuditSpan()
 	if err != nil {
 		log.Error("feature flag change not audited, nothing persisted", "feature", name, "err", err)
 		return nil, connect.NewError(connect.CodeInternal, errors.New("flag change not audited, nothing persisted"))
@@ -803,7 +805,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 			Name:         name,
 			Enabled:      enabled,
 			Description:  description,
-			StatusDetail: f.statusDetailFor(name),
+			StatusDetail: f.statusDetailFor(name, cfg),
 			Scopes:       flagScopeReadback(cfg, name, scopes),
 		},
 	}), nil
@@ -818,16 +820,22 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
 	var previous, hadKey bool
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
 			previous = featureFlagDefault(name)
 		}
+		// In-memory mutators: UpdateConfig saves once, so the saving setters
+		// here would fsync config.json twice per flip.
 		if op.isSet() {
-			return cfg.SetFeatureFlag(name, enabled)
+			cfg.ApplyFeatureFlag(name, enabled)
+		} else {
+			cfg.RemoveFeatureFlag(name)
 		}
-		return cfg.DeleteFeatureFlag(name)
+		return nil
 	})
+	endPersistSpan()
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
@@ -840,6 +848,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 		f.finishApplied(op, audit)
 		return nil
 	}
+	defer flagSpan(ctx, op, flagPhaseApply)()
 	// A failed toggle must not leave disk config and in-memory state disagreeing
 	// about whether the feature is on: GetFeatureFlags and RPC-gating
 	// interceptors read from different sources.
@@ -874,9 +883,11 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 func rollbackFlag(name string, previous, hadKey bool) error {
 	return config.UpdateConfig(func(cfg *config.Config) error {
 		if hadKey {
-			return cfg.SetFeatureFlag(name, previous)
+			cfg.ApplyFeatureFlag(name, previous)
+		} else {
+			cfg.RemoveFeatureFlag(name)
 		}
-		return cfg.DeleteFeatureFlag(name)
+		return nil
 	})
 }
 
