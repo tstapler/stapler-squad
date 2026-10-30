@@ -25,6 +25,23 @@ const PER_CALL_OVERHEAD_BYTES = 128; // JSON keys, method path and punctuation a
 const FETCH_GRACE_MS = 2_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Counters that make the batching effect visible: how many eligible calls travelled in a batch and how many
+ * were eligible but left the window alone (a batch of one is sent as an ordinary request). Also readable in
+ * the console as `window.__ssqBatchStats`.
+ */
+export const batchStats = { batches: 0, batchedCalls: 0, eligibleAlone: 0 };
+
+export function resetBatchStats(): void {
+  batchStats.batches = 0;
+  batchStats.batchedCalls = 0;
+  batchStats.eligibleAlone = 0;
+}
+
+if (typeof window !== "undefined") {
+  (window as unknown as { __ssqBatchStats?: typeof batchStats }).__ssqBatchStats = batchStats;
+}
+
 export interface BatchTransportOptions {
   inner: Transport;
   baseUrl: string;
@@ -191,9 +208,13 @@ class BatchTransport implements Transport {
     this.pendingBytes = 0;
     if (batch.length === 0) return;
     if (batch.length === 1) {
+      batchStats.eligibleAlone++;
       this.runIndividually(batch[0]);
       return;
     }
+    batchStats.batches++;
+    batchStats.batchedCalls += batch.length;
+    if (process.env.NODE_ENV !== "production") console.debug(`[batch] ${batch.length} calls in one request`);
     void this.send(batch);
   }
 

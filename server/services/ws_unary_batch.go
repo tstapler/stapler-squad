@@ -7,6 +7,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,10 +38,11 @@ const (
 	batchMaxTimeoutMs      = 60_000
 )
 
-// batchAllowed is the deny-by-default set of procedures a batch may dispatch: a
-// subset of wsUnaryAllowed (reads), minus the slow or bulk ones. One response is
-// returned only after every item finishes, so a slow git call or a multi-MB body
-// would hold the cheap calls batched with it; those travel alone.
+// batchAllowed is the deny-by-default set of procedures a batch may dispatch: cheap,
+// unguarded reads only. One response is returned only after every item finishes, so a
+// slow call or a multi-MB body would hold the cheap calls batched with it; those travel
+// alone. The polled reads (approvals, review queue, session lookup) average about 1-3 ms
+// server-side; GetFeatureFlags and ListSessions (about 230-240 ms) stay out.
 var batchAllowed = map[string]struct{}{
 	sessionv1connect.SessionServiceListFilesProcedure:                    {},
 	sessionv1connect.SessionServiceStatFileProcedure:                     {},
@@ -48,6 +50,19 @@ var batchAllowed = map[string]struct{}{
 	sessionv1connect.SessionServiceListShellsProcedure:                   {},
 	sessionv1connect.SessionServiceListWorkflowsProcedure:                {},
 	sessionv1connect.SessionServiceListProgramsConfigProcedure:           {},
+	sessionv1connect.SessionServiceListPendingApprovalsProcedure:         {},
+	sessionv1connect.SessionServiceGetReviewQueueProcedure:               {},
+	sessionv1connect.SessionServiceGetSessionProcedure:                   {},
+}
+
+// BatchAllowedMethods returns the batchable procedures as full paths, sorted.
+func BatchAllowedMethods() []string {
+	out := make([]string, 0, len(batchAllowed))
+	for m := range batchAllowed {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func batchMethodAllowed(method string) bool {

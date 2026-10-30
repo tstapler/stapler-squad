@@ -53,8 +53,7 @@ export const IDEMPOTENT_METHODS = {
     "ListProgramsConfig",
   ],
   /**
-   * May join an HTTP request batch: cheap reads only, a subset of wsEligible and of the server's
-   * batchAllowed. GetVCSStatus, GetSessionDiff and GetFileContent are slow or bulk, and a batch
+   * May join an HTTP request batch: cheap reads only, equal to the server's batchAllowed. GetVCSStatus, GetSessionDiff and GetFileContent are slow or bulk, and a batch
    * answers only when every item is done, so they always travel alone.
    */
   batchEligible: [
@@ -64,6 +63,11 @@ export const IDEMPOTENT_METHODS = {
     "ListShells",
     "ListWorkflows",
     "ListProgramsConfig",
+    // Polled reads that answer in about 1-3 ms server-side; GetFeatureFlags and ListSessions (~240 ms) would
+    // hold the rest of a batch, so they stay out.
+    "ListPendingApprovals",
+    "GetReviewQueue",
+    "GetSession",
   ],
   /** Kept in a client cache between calls; separate so enabling one purpose never enables another. */
   cacheable: ["GetFeatureFlags", "ListProgramsConfig", "GetFileTransportCapabilities"],

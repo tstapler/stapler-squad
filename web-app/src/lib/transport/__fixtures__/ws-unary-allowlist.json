@@ -16,7 +16,10 @@
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
-    "ListProgramsConfig"
+    "ListProgramsConfig",
+    "ListPendingApprovals",
+    "GetReviewQueue",
+    "GetSession"
   ],
   "clientHeaders": ["Connect-Protocol-Version"],
   "maxInFlight": 6
