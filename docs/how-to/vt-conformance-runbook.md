@@ -59,24 +59,27 @@ Run each with the flag off, then on (Settings > Feature flags > `ghostty_rendere
 
 ## Before/after comparison
 
-Automated results, measured 2026-10-29 with `xterm.js 6.0.0` and `ghostty-web 0.4.0`:
+Automated results, measured 2026-10-30 with `xterm.js 6.0.0` and `ghostty-web 0.4.0` (19 vectors):
 
 | Vector | xterm.js | ghostty-web |
 |---|---|---|
-| 17 vectors (all except the two below) | pass | pass |
-| kitty-keyboard-query | FAIL | FAIL |
-| sync-output-decrqm | pass | FAIL |
+| 18 vectors (all except `kitty-keyboard-query`) | pass | pass |
+| sync-output-decrqm | pass | pass (reply synthesized by `ghosttyQueryResponder.ts`) |
+| kitty-keyboard-query | FAIL | pass (reply `CSI ? 0 u` synthesized by `ghosttyQueryResponder.ts`) |
 
-Reading: on these vectors ghostty-web does **not** improve on xterm.js 6. xterm.js 6 already passes REP, DECALN and mode 2026, so those are not gaps today. ghostty-web does not answer DECRQM for mode 2026 or the Kitty keyboard query (its WASM build emitted no reply), which makes it worse for TUIs that probe for 2026 support. Any benefit has to come from the manual steps (rendering fidelity, grapheme handling) and is **not yet measured**.
+Reading: ghostty-web's WASM parses mode 2026 and the Kitty query but emits no reply, so the adapter answers both itself (`ghosttyQueryResponder.ts`; Kitty flags are reported as 0 because the renderer never enables them). With that shim ghostty-web passes every vector; xterm.js 6 still fails the Kitty query. On the other vectors (REP, DECALN, mode 2026 rendering) xterm.js 6 already passed, so the automated suite shows no further improvement; any remaining benefit has to come from rendering fidelity and grapheme handling, which the manual steps below are meant to measure.
 
-Manual results (not run: this was an unattended agent session with no interactive terminal or browser, so no row below was measured; run the steps above and replace "not run"):
+Manual / browser results, measured 2026-10-30 against a separate instance (`PORT=62871`, `--tmux-keep-server`) built with `WEB_MINIFY=1`, Playwright Chromium, cache disabled:
 
 | Check | xterm.js | ghostty-web |
 |---|---|---|
+| Cold-load LCP on `/`, 5 runs (ms) | 340, 320, 252, 276, 268 (median 276) | 260, 240, 248, 236, 244 (median 244) |
+| Keep-alive pane switch A→B→A | not run | PASS: same canvas element survives, 0 console errors, 0 `ghostty`/`.wasm` requests during the switch, canvas non-blank (3247 lit px before, 2584 after; the drop is the cursor/typed line, not a blank pane) |
 | vim | not run | not run |
 | htop | not run | not run |
 | Claude Code TUI | not run | not run |
-| Keep-alive pane switch | not run | not run |
+
+LCP is measured on `/`, where the pool preloads the chosen renderer; the ghostty-web chunk is only requested when the flag is on. The LCP delta (ghostty on minus off) is -32 ms at the median, inside the 200 ms budget. vim, htop and the Claude Code TUI still need a person at a terminal.
 
 ## Known ghostty-web limitations in this integration
 
