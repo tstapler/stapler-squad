@@ -83,6 +83,11 @@ var batchScratchPool = sync.Pool{New: func() any { b := make([]byte, 0, 4096); r
 // BatchWindowOption configures a BatchWindow at construction time.
 type BatchWindowOption func(*BatchWindow)
 
+// withBatchClock routes the ceiling timer through c.
+func withBatchClock(c Clock) BatchWindowOption {
+	return func(b *BatchWindow) { b.clock = c }
+}
+
 // WithMaxBatchWindow overrides MaxBatchWindow — tests use this to shrink the
 // ceiling so ceiling-flush assertions run in milliseconds.
 func WithMaxBatchWindow(d time.Duration) BatchWindowOption {
@@ -97,16 +102,17 @@ func WithMaxBatchWindow(d time.Duration) BatchWindowOption {
 // subscribers are attached, either at the caller's next TryFlush
 // (opportunistic) or after maxWindow elapses since the first buffered byte
 // (ceiling), whichever comes first. Exactly one BatchWindow exists per hub,
-// so exactly one accumulation buffer and one *time.Timer exist per hub too,
+// so exactly one accumulation buffer and one Timer exist per hub too,
 // never one per subscriber.
 type BatchWindow struct {
 	onFlush   func(BroadcastUnit)
 	maxWindow time.Duration
+	clock     Clock
 	seq       sequenceCounter
 
 	mu         sync.Mutex
 	buf        *[]byte
-	timer      *time.Timer
+	timer      Timer
 	frameCount int // number of Add calls folded into the pending window so far
 
 	// flushCount and timersArmed are test-only instrumentation for Task
@@ -126,6 +132,7 @@ func NewBatchWindow(onFlush func(BroadcastUnit), opts ...BatchWindowOption) *Bat
 	b := &BatchWindow{
 		onFlush:   onFlush,
 		maxWindow: MaxBatchWindow,
+		clock:     realClock{},
 		buf:       buf,
 	}
 	for _, opt := range opts {
@@ -156,7 +163,7 @@ func (b *BatchWindow) Add(data []byte) {
 // outstanding timer exists per BatchWindow at any time.
 func (b *BatchWindow) armCeilingLocked() {
 	b.timersArmed.Add(1)
-	b.timer = time.AfterFunc(b.maxWindow, b.onCeilingExpired)
+	b.timer = b.clock.AfterFunc(b.maxWindow, b.onCeilingExpired)
 }
 
 // onCeilingExpired runs on the timer goroutine once maxWindow has elapsed

@@ -276,7 +276,8 @@ func TestApplyNegotiatedSize_should_SkipCapture_When_EverySubscriberAwaitsFirstP
 // on resizeApplyMu or a slow capture) must not trip the slow-subscriber eviction.
 func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrace(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
 	log := newOrderLog()
 	id := hub.AttachSubscriber(&orderedTransport{log}, streamhub.SubscriberCapability{ManualFirstPaint: true})
@@ -285,7 +286,7 @@ func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrac
 	for i := 0; i < 300; i++ { // more than the 100-deep queue
 		hub.Broadcast([]byte("burst"))
 	}
-	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest the hub's slow-subscriber grace is an internal wall-clock timer; the test proves it does not fire
+	clock.Advance(200 * time.Millisecond) // fires the slow-grace timer, which must spare an awaiting subscriber
 
 	ran := false
 	err := hub.FirstPaint(id, func() error { ran = true; log.add("paint"); return nil })
@@ -296,10 +297,12 @@ func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrac
 
 func TestFirstPaint_should_EvictSubscriber_When_NeverPaintedWithinMaxAwait(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(30*time.Millisecond))
 	tr := streamhub.NewMemoryTransport()
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	clock.Advance(30 * time.Millisecond)
 	require.Eventually(t, tr.IsClosed, 5*time.Second, time.Millisecond, "max-await eviction must close the transport")
 	require.ErrorIs(t, hub.FirstPaint(id, func() error { return nil }), streamhub.ErrUnknownSubscriber)
 }
@@ -349,7 +352,8 @@ func (s *seqTransport) snapshot() []string {
 // nothing may be evicted or lost, and every frame follows the paint in order.
 func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
 	tr := &seqTransport{}
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
@@ -360,7 +364,7 @@ func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace
 		for i := 0; i < n; i++ {
 			hub.Broadcast([]byte(fmt.Sprintf("f%03d", i)))
 		}
-		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the paint must outlast the hub's internal wall-clock slow-subscriber grace
+		clock.Advance(150 * time.Millisecond) // the paint outlasts the slow-subscriber grace
 		_ = tr.Send([]byte("paint"))
 		return nil
 	}))
@@ -375,14 +379,15 @@ func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace
 
 func TestFirstPaint_should_NotEvict_When_MaxAwaitExpiresMidPaint(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(20*time.Millisecond))
 	tr := &seqTransport{}
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
 	defer hub.DetachSubscriber(id)
 
 	require.NoError(t, hub.FirstPaint(id, func() error {
-		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the paint must outlast the hub's internal wall-clock max-await timer
+		clock.Advance(150 * time.Millisecond) // the paint outlasts the max-await window
 		return nil
 	}))
 	hub.Broadcast([]byte("live"))
