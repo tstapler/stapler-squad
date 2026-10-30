@@ -14,6 +14,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
 	m := &vcsStatusMetrics{}
 	var err error
 	if m.requests, err = meter.Int64Counter("vcs.status.requests",
-		metric.WithDescription("GetVCSStatus calls by outcome: cache_hit, computed (leader), coalesced (joined an in-flight computation), error, canceled")); err != nil {
+		metric.WithDescription("GetVCSStatus calls by outcome: cache_hit, stale_hit (stale entry served, refresh in background), computed (leader), coalesced (joined an in-flight computation), error, canceled")); err != nil {
 		log.Error("services: register vcs.status.requests", "error", err)
 	}
 	if m.compute, err = meter.Float64Histogram("vcs.status.compute.duration",
@@ -136,6 +137,15 @@ func (f *vcsFlights) do(ctx context.Context, key string, compute func(context.Co
 	}
 }
 
+// forget detaches the running flight for key so the next caller starts a fresh one. The
+// detached run finishes for its existing waiters.
+func (f *vcsFlights) forget(key string) {
+	f.init()
+	f.mu.Lock()
+	delete(f.flights, key)
+	f.mu.Unlock()
+}
+
 func (f *vcsFlights) leave(key string, fl *vcsFlight) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -159,14 +169,22 @@ func (f *vcsFlights) run(ctx context.Context, key string, fl *vcsFlight, compute
 
 	outcome := "ok"
 	defer func() {
+		// This goroutine is not covered by net/http's per-request recover.
+		if r := recover(); r != nil {
+			outcome = vcsOutcomeError
+			fl.status, fl.err = nil, fmt.Errorf("failed to get VCS status: panic: %v", r)
+			log.Error("vcs status computation panicked", "key", key, "panic", r)
+			span.SetStatus(codes.Error, "panic")
+		}
 		m.compute.Record(context.WithoutCancel(ctx), float64(time.Since(start).Microseconds())/1000,
 			metric.WithAttributes(attribute.String("result", outcome)))
-		close(fl.done)
+		// Unlink before signalling so a caller arriving now starts fresh instead of joining a finished flight.
 		f.mu.Lock()
 		if f.flights[key] == fl {
 			delete(f.flights, key)
 		}
 		f.mu.Unlock()
+		close(fl.done)
 		fl.cancel()
 	}()
 

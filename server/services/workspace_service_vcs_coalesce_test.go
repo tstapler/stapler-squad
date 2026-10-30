@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
+	"github.com/tstapler/stapler-squad/session/vc"
 )
 
 // statusSpyBackend counts Status calls and optionally holds each one open,
@@ -199,4 +200,33 @@ func TestGetVCSStatus_StaleEntryServedInstantlyThenRefreshed(t *testing.T) {
 		return c.(vcsStatusCacheEntry).cachedAt.After(old)
 	}, 5*time.Second, 10*time.Millisecond, "background refresh must update the cache")
 	assert.EqualValues(t, primed+1, spy.calls.Load())
+}
+
+// A save invalidates the entry; a poller arriving afterwards must not join a
+// computation that started before the save (it would return pre-save status).
+func TestGetVCSStatus_InvalidateMidFlightStartsFreshComputation(t *testing.T) {
+	spy := installStatusSpy(t, 300*time.Millisecond)
+	svc, dir := vcsStatusFixture(t)
+
+	first := make(chan error, 1)
+	go func() { _, err := getVCS(context.Background(), svc); first <- err }()
+	require.Eventually(t, func() bool { return spy.calls.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+
+	svc.InvalidateVCSStatus(dir)
+	_, err := getVCS(context.Background(), svc)
+	require.NoError(t, err)
+	require.NoError(t, <-first)
+	assert.EqualValues(t, 2, spy.calls.Load(), "post-invalidation caller must run its own computation")
+}
+
+// A panic inside the shared computation runs on its own goroutine, outside
+// net/http's per-request recover: it must surface as an error, not crash.
+func TestVCSFlights_PanicInComputeBecomesError(t *testing.T) {
+	var f vcsFlights
+	st, _, err := f.do(context.Background(), "k", func(context.Context) (*vc.VCSStatus, error) {
+		panic("boom")
+	})
+	require.Error(t, err)
+	assert.Nil(t, st)
+	assert.Contains(t, err.Error(), "boom")
 }

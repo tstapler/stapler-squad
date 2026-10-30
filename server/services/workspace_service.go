@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -91,6 +92,9 @@ type WorkspaceService struct {
 	vcsStatusCache sync.Map // map[string]vcsStatusCacheEntry
 	// vcsFlights coalesces concurrent cache misses per workdir and bounds parallel computations.
 	vcsFlights vcsFlights
+	// vcsInvalidations counts InvalidateVCSStatus calls so a computation that straddles one
+	// does not re-cache a pre-change result.
+	vcsInvalidations atomic.Int64
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -165,7 +169,10 @@ func (ws *WorkspaceService) CheckWriteAccess(sessionID string) error {
 // InvalidateVCSStatus drops the cached status of workDir (keyed as GetVCSStatus keys it),
 // so a file save shows in the next status poll instead of after the TTL.
 func (ws *WorkspaceService) InvalidateVCSStatus(workDir string) {
+	ws.vcsInvalidations.Add(1)
 	ws.vcsStatusCache.Delete(workDir)
+	// A computation already running began before the change: new callers must not join it.
+	ws.vcsFlights.forget(workDir)
 }
 
 // GetVCSStatus retrieves the current version control status for a session.
@@ -221,6 +228,12 @@ func (ws *WorkspaceService) GetVCSStatus(
 		recordVCSOutcome(ctx, vcsOutcomeComputed)
 	}
 	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(status)}), nil
+}
+
+// cachedAfter reports whether workDir has a cache entry computed after t.
+func (ws *WorkspaceService) cachedAfter(workDir string, t time.Time) bool {
+	cached, ok := ws.vcsStatusCache.Load(workDir)
+	return ok && cached.(vcsStatusCacheEntry).cachedAt.After(t)
 }
 
 // refreshVCSStatusInBackground joins (or starts) the workdir's computation without
@@ -288,6 +301,8 @@ func (ws *WorkspaceService) vcsStatusFailure(
 // computeVCSStatus does the expensive work for one workDir and fills the cache.
 // Errors carry the user-facing message GetVCSStatus has always put in Error.
 func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *session.Instance, workDir string) (*vc.VCSStatus, error) {
+	invalidationsAtStart := ws.vcsInvalidations.Load()
+	startedAt := time.Now()
 	// A flight that finished between the caller's cache check and this start has filled it.
 	if st, ok := ws.freshVCSStatus(workDir); ok {
 		return st, nil
@@ -330,7 +345,12 @@ func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *sess
 
 	now := time.Now()
 	status.StatusAsOf = now
-	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
+	// Skip the store if an invalidation landed mid-computation: this result may predate it.
+	// Also skip it if a newer computation for this workdir already cached a fresher entry
+	// (an overlapping run after the last waiter of this one left).
+	if ws.vcsInvalidations.Load() == invalidationsAtStart && !ws.cachedAfter(workDir, startedAt) {
+		ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
+	}
 	return status, nil
 }
 
