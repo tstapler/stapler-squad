@@ -937,6 +937,10 @@ func (rqm *ReactiveQueueManager) reasonToProto(r session.AttentionReason) sessio
 		return sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER
 	case session.ReasonTestsFailing:
 		return sessionv1.AttentionReason_ATTENTION_REASON_TESTS_FAILING
+	case session.ReasonProseQuestion:
+		return sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION
+	case session.ReasonAwaitingDirection:
+		return sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION
 	default:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED
 	}

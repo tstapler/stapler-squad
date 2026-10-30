@@ -5,6 +5,7 @@ import { AttentionReason, type ReviewItem } from "@/gen/session/v1/types_pb";
 // centrally, in useReviewQueue.ts so every consumer (ReviewQueuePanel, ReviewQueueNavBadge,
 // BottomNav, DrawerNav) sees the same filtered view by construction — avoiding the
 // count-vs-list mismatch class of bug StuckItemsSection's own comment warns about.
+// It is a denylist, so PROSE_QUESTION and AWAITING_DIRECTION are visible without a case.
 export function isReviewQueueVisible(item: Pick<ReviewItem, "reason">): boolean {
   return item.reason !== AttentionReason.IDLE;
 }

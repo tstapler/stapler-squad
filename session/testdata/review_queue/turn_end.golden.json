@@ -1,0 +1,230 @@
+[
+  {
+    "case": "waiting/question",
+    "option_off": {
+      "action": "skip",
+      "reason": "",
+      "priority": "Priority(0)",
+      "context": "",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "prose_question",
+      "priority": "Medium",
+      "context": "Which approach do you prefer?",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "waiting/finished",
+    "option_off": {
+      "action": "skip",
+      "reason": "",
+      "priority": "Priority(0)",
+      "context": "",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "awaiting_direction",
+      "priority": "Low",
+      "context": "Which approach do you prefer?",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "waiting/error",
+    "option_off": {
+      "action": "skip",
+      "reason": "",
+      "priority": "Priority(0)",
+      "context": "",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "error_state",
+      "priority": "Urgent",
+      "context": "Which approach do you prefer?",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "waiting/unknown",
+    "option_off": {
+      "action": "skip",
+      "reason": "",
+      "priority": "Priority(0)",
+      "context": "",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "skip",
+      "reason": "",
+      "priority": "Priority(0)",
+      "context": "",
+      "claude_status": "Unknown",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "task_complete/question",
+    "option_off": {
+      "action": "add",
+      "reason": "task_complete",
+      "priority": "Low",
+      "context": "Task completed successfully",
+      "claude_status": "Success",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "prose_question",
+      "priority": "Medium",
+      "context": "Which approach do you prefer?",
+      "claude_status": "Success",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "task_complete/finished",
+    "option_off": {
+      "action": "add",
+      "reason": "task_complete",
+      "priority": "Low",
+      "context": "Task completed successfully",
+      "claude_status": "Success",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "awaiting_direction",
+      "priority": "Low",
+      "context": "Which approach do you prefer?",
+      "claude_status": "Success",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "task_complete/error",
+    "option_off": {
+      "action": "add",
+      "reason": "task_complete",
+      "priority": "Low",
+      "context": "Task completed successfully",
+      "claude_status": "Success",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "error_state",
+      "priority": "Urgent",
+      "context": "Which approach do you prefer?",
+      "claude_status": "Success",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "task_complete/unknown",
+    "option_off": {
+      "action": "add",
+      "reason": "task_complete",
+      "priority": "Low",
+      "context": "Task completed successfully",
+      "claude_status": "Success",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "task_complete",
+      "priority": "Low",
+      "context": "Task completed successfully",
+      "claude_status": "Success",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "approval/question",
+    "option_off": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "approval/finished",
+    "option_off": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "approval/error",
+    "option_off": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    }
+  },
+  {
+    "case": "approval/unknown",
+    "option_off": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    },
+    "option_on": {
+      "action": "add",
+      "reason": "approval_pending",
+      "priority": "High",
+      "context": "Waiting for approval to proceed",
+      "claude_status": "Needs Approval",
+      "clean_worktree": false
+    }
+  }
+]

@@ -48,6 +48,8 @@ type DetectionResult struct {
 	// CleanWorktree is true when the worktree was inspected and found clean.
 	// checkSession uses this to remove a queued UncommittedChanges entry immediately.
 	CleanWorktree bool
+	// Episode is the turn-end episode behind Reason; empty unless a TurnEnded produced it.
+	Episode EpisodeID
 }
 
 // IsHighPriority returns true when the result warrants bypassing grace-period suppression.
@@ -128,6 +130,7 @@ type verdict struct {
 	shouldAdd     bool
 	ctx           string
 	cleanWorktree bool
+	episode       EpisodeID
 }
 
 func (v *verdict) apply(dec statusDecision) {
@@ -179,6 +182,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	}
 
 	d.applyStaleness(inst, &v)
+	d.applyTurnEnded(inst.Snapshot(), opts, &v)
 
 	action := DetectionActionSkip
 	if v.shouldAdd {
@@ -194,7 +198,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	// applies uniformly regardless of which caller (ReviewQueuePoller.checkSession,
 	// StartupScanner.Scan) invokes Determine.
 	if inst.Hidden && action == DetectionActionAdd &&
-		(v.reason == ReasonTaskComplete || v.reason == ReasonIdle || v.reason == ReasonStale) {
+		(v.reason == ReasonTaskComplete || v.reason == ReasonIdle || v.reason == ReasonStale || v.reason == ReasonAwaitingDirection) {
 		action = DetectionActionSkip
 	}
 
@@ -205,6 +209,7 @@ func (d *DefaultStatusDeterminer) Determine(
 		Context:       v.ctx,
 		ClaudeStatus:  claudeStatus,
 		CleanWorktree: v.cleanWorktree,
+		Episode:       v.episode,
 	}
 }
 

@@ -1024,6 +1024,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 	}
 
 	rqp.enrichApprovalMetadata(item, snap)
+	setEpisodeMetadata(item, result.Episode)
 
 	log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 	rqp.addToQueue(item, prior)

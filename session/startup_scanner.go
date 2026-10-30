@@ -59,6 +59,9 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 
 		result := ss.determiner.Determine(inst, content, statusInfo, ss.detector, opts)
 		if result.Action == DetectionActionAdd {
+			if episodeAcked(result.Reason, result.Episode, inst.Snapshot().AckedEpisodeID) {
+				continue
+			}
 			item := buildStartupItem(inst, result)
 			queue.Add(item)
 			added++
@@ -76,7 +79,7 @@ func buildStartupItem(inst *Instance, result DetectionResult) *ReviewItem {
 	if lastActivity.IsZero() {
 		lastActivity = inst.CreatedAt
 	}
-	return &ReviewItem{
+	item := &ReviewItem{
 		SessionID:       inst.Title,
 		SessionName:     inst.Title,
 		Reason:          result.Reason,
@@ -95,4 +98,6 @@ func buildStartupItem(inst *Instance, result DetectionResult) *ReviewItem {
 		HasCommitsAhead: inst.GetHasCommitsAhead(),
 		ClaudeStatus:    result.ClaudeStatus,
 	}
+	setEpisodeMetadata(item, result.Episode)
+	return item
 }

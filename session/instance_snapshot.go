@@ -160,6 +160,7 @@ type InstanceSnapshot struct {
 	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
 	LastMeaningfulChangeAt time.Time
 	TurnEnded              TurnEnded
+	AckedEpisodeID         EpisodeID // episode the operator acknowledged; populated from the Instance field
 
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
