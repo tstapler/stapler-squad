@@ -763,6 +763,10 @@ const (
 	capturePollEvery  = 150 * time.Millisecond
 )
 
+// hubCaptureRetryWindow bounds the text-capture retries inside a hub first paint, which holds
+// the hub's resize lock; much shorter than firstPaintMaxWait for that reason.
+var hubCaptureRetryWindow = time.Second
+
 // waitForPaneContent polls CapturePaneContentRaw until deadline while the instance is still in a
 // transient state (i.e. a concurrent Instance.Resume() may be mid-restore), giving up
 // immediately once the status settles into one that means capture will never succeed.
@@ -2192,9 +2196,9 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 // clears its loading spinner on a received message with non-empty output
 // bytes, and ansiSnapshotPrefix alone is non-empty, so an idle/empty session
 // still reaches "connected, nothing to show" instead of spinning forever with
-// no future event to ever clear it. A capture failure returns an error (the
-// connection fails visibly): output dropped while awaiting this paint would
-// otherwise be lost behind a blank snapshot.
+// no future event to ever clear it. A capture that still fails after a short
+// retry paints blank rather than failing the connection, since live frames
+// would otherwise reconnect-loop on a session whose output works.
 func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSocketStream, hub *streamhub.StreamHub, subscriberID streamhub.SubscriberID, instance *session.Instance, sessionID string) error {
 	return hub.FirstPaint(subscriberID, func() error {
 		return h.writeHubInitialSnapshot(stream, instance, sessionID)
@@ -2209,11 +2213,15 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 	if frame, ok := fullStateFrame(ctx, instance); ok {
 		return sendFullStateFrame(stream, sessionID, frame)
 	}
-	content, captureErr := instance.CapturePaneContentRaw()
+	// A capture that keeps failing (e.g. ErrSessionNotStarted mid-resume) must not end the
+	// connection while live output still works: retry briefly, then paint blank. Frames held
+	// during the paint are still replayed after it; only frames dropped before it are lost.
+	content, captureErr := pollWhileResuming(instanceStatus(instance), time.Now().Add(hubCaptureRetryWindow),
+		capturePollEvery, instance.CapturePaneContentRaw)
 	if captureErr != nil {
-		// Output broadcast while the subscriber awaited this paint was dropped as superseded by
-		// the capture, so a blank paint would silently lose it; fail the connection instead.
-		return fmt.Errorf("failed to capture initial content: %w", captureErr)
+		log.Warn("[streamViaHub] initial capture failed, painting blank and streaming live output",
+			"session", sessionID, "err", captureErr)
+		content = ""
 	}
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
 	altScreenActive := altScreenActiveForSnapshot(instance)

@@ -34,6 +34,12 @@ type subscriber struct {
 	expired         bool
 	pending         [][]byte
 	overflow        bool
+	// paintDone is set when the paint returned. From then on, pending growing past drainLimit (one
+	// queue's worth beyond what the writer has yet to take) counts as the queue being full: frames
+	// are still held, none is lost, but the slow-subscriber grace starts, so a transport that
+	// stalls during replay is evicted instead of absorbing frames forever.
+	paintDone  bool
+	drainLimit int
 
 	// mu guards closed and slowSince. closed is checked and set under the
 	// same lock as every send attempt (trySend) so a send can never race
@@ -98,32 +104,36 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 // outbound queue. It reports delivered=false both when the queue is full and
 // when the subscriber has already been closed — the caller (StreamHub.deliver)
 // treats both identically: this frame is dropped for this subscriber.
-func (s *subscriber) trySend(data []byte) (delivered bool) {
+//
+// stalled is true when the frame was accepted into the replay backlog but the backlog is past
+// drainLimit, i.e. the writer is not keeping up; the caller then arms the slow-subscriber timer.
+func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return false
+		return false, false
 	}
 	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
 	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
 	if s.awaitingFirstPaint.Load() {
-		return true
+		return true, false
 	}
 	if s.painting {
+		stalled = s.paintDone && len(s.pending) >= s.drainLimit
 		if len(s.pending) >= maxPaintBacklog {
 			s.overflow = true
 		} else {
 			s.pending = append(s.pending, data)
 		}
-		return true
+		return true, stalled
 	}
 	select {
 	case s.outbound <- data:
 		s.slowSince = time.Time{}
-		return true
+		return true, false
 	default:
-		return false
+		return false, false
 	}
 }
 
@@ -161,6 +171,9 @@ func (s *subscriber) isStillFull() bool {
 	defer s.mu.Unlock()
 	if s.closed {
 		return false
+	}
+	if s.painting && s.paintDone {
+		return len(s.pending) >= s.drainLimit
 	}
 	return len(s.outbound) == cap(s.outbound)
 }
@@ -247,11 +260,13 @@ func (s *subscriber) beginFirstPaint() bool {
 	return true
 }
 
-// endFirstPaint reports whether any frame was lost to maxPaintBacklog during the paint. Frames
-// keep going to pending until the writer's drainPending has caught up.
+// endFirstPaint reports whether any frame was lost to maxPaintBacklog during the paint, and
+// starts the replay stall bound. Frames keep going to pending until the writer's drainPending has caught up.
 func (s *subscriber) endFirstPaint() (overflowed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.paintDone = true
+	s.drainLimit = len(s.pending) + cap(s.outbound)
 	return s.overflow
 }
 
@@ -268,6 +283,7 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 		}
 		batch := s.pending
 		s.pending = nil
+		s.drainLimit = cap(s.outbound)
 		if len(batch) == 0 {
 			s.painting = false
 			s.mu.Unlock()
