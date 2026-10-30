@@ -235,4 +235,88 @@ describe("HttpAnalyticsProvider", () => {
 
     expect(sendBeacon).toHaveBeenCalledTimes(1);
   });
+
+  const queueOf = (provider: HttpAnalyticsProvider) => (provider as unknown as { queue: AnalyticsEvent[] }).queue;
+  const bigEvents = (n: number): AnalyticsEvent[] =>
+    Array.from({ length: n }, (_, i) => ({ ...makeEvent(`event_${i}`), labels: { padding: "x".repeat(900) } }));
+
+  it("should_send_chunks_one_at_a_time_without_keepalive_on_a_normal_flush", async () => {
+    let releaseFirst: (v: unknown) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise((r) => (releaseFirst = r)));
+    const provider = new HttpAnalyticsProvider();
+    queueOf(provider).push(...bigEvents(150));
+
+    const flushed = provider.flush();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the second chunk waits for the first
+    releaseFirst({ ok: true });
+    await flushed;
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of fetchMock.mock.calls) expect(call[1].keepalive).toBeUndefined();
+    expect(queueOf(provider)).toHaveLength(0);
+  });
+
+  it("should_requeue_a_failed_chunk_and_the_ones_after_it_instead_of_dropping_them", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(new Error("offline"));
+    const provider = new HttpAnalyticsProvider();
+    queueOf(provider).push(...bigEvents(150));
+
+    await provider.flush();
+
+    const delivered = (JSON.parse(fetchMock.mock.calls[0][1].body as string) as { events: unknown[] }).events.length;
+    expect(queueOf(provider)).toHaveLength(150 - delivered);
+    queueOf(provider).length = 0;
+  });
+
+  it("should_cap_the_requeue_and_rearm_the_flush_timer_after_a_failed_flush", async () => {
+    const provider = new HttpAnalyticsProvider();
+    queueOf(provider).push(makeEvent("old"));
+    fetchMock.mockImplementationOnce(() => {
+      // 200 newer events arrive while the request is in flight
+      for (let i = 0; i < 200; i++) queueOf(provider).push(makeEvent(`new_${i}`));
+      return Promise.reject(new Error("offline"));
+    });
+
+    await provider.flush();
+
+    expect(queueOf(provider)).toHaveLength(200);
+    expect(queueOf(provider)[0].name).not.toBe("old"); // the oldest was dropped to honour the cap
+    fetchMock.mockClear();
+    jest.advanceTimersByTime(20_001);
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(2); // the timer was re-armed: 200 events go out as 2 chunks of 100
+  });
+
+  it("should_beacon_every_chunk_that_fits_the_quota_on_unload", async () => {
+    const sendBeacon = jest.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: sendBeacon });
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    for (let i = 0; i < 250; i++) queueOf(provider).push(makeEvent(`event_${i}`));
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(sendBeacon).toHaveBeenCalledTimes(3); // 100 + 100 + 50 small events, all within 60 KB in total
+    const total = sendBeacon.mock.calls.reduce((n, c) => n + (c[1] as string).length, 0);
+    expect(total).toBeLessThanOrEqual(60_000);
+    expect(queueOf(provider)).toHaveLength(0);
+  });
+
+  it("should_stop_listening_and_survive_a_missing_sendBeacon_after_onClose", async () => {
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: undefined });
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    provider.track(makeEvent());
+    window.dispatchEvent(new Event("pagehide")); // no sendBeacon: falls back to a keepalive fetch
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].keepalive).toBe(true);
+
+    await provider.onClose();
+    provider.track(makeEvent());
+    window.dispatchEvent(new Event("pagehide"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    queueOf(provider).length = 0;
+  });
 });
+

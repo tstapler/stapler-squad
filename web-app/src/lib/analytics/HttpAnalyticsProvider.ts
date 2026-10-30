@@ -54,12 +54,13 @@ function toChunks(batch: AnalyticsEvent[]): Chunk[] {
   return chunks;
 }
 
-function postKeepalive(body: string): Promise<unknown> {
+/** keepalive only for the unload drain: browsers share one ~64 KiB in-flight quota across keepalive requests. */
+function post(body: string, keepalive: boolean): Promise<Response> {
   return fetch("/api/analytics", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
-    keepalive: true,
+    ...(keepalive ? { keepalive: true } : {}),
   });
 }
 
@@ -89,6 +90,16 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
     }
   }
 
+  /** Puts events back at the front (they are older), keeps the queue within its cap and re-arms the timer. */
+  private requeue(events: AnalyticsEvent[]): void {
+    this.queue.unshift(...events);
+    if (this.queue.length > MAX_QUEUE_SIZE) this.queue.splice(0, this.queue.length - MAX_QUEUE_SIZE);
+    if (this.queue.length > 0 && this.flushTimer === undefined) {
+      this.flushTimer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
+    }
+  }
+
+  /** Sends chunks one at a time; a network failure re-queues that chunk and everything after it. */
   async flush(): Promise<void> {
     if (this.flushTimer !== undefined) {
       clearTimeout(this.flushTimer);
@@ -96,45 +107,65 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
     }
 
     const batch = this.queue.splice(0, this.queue.length);
-    if (batch.length === 0) {
-      return;
+    const chunks = toChunks(batch);
+    for (let i = 0; i < chunks.length; i++) {
+      try {
+        await post(chunks[i].body, false);
+      } catch {
+        // A 429 or 5xx resolves the fetch and is dropped, as before; only a network failure is retried.
+        this.requeue(chunks.slice(i).flatMap((c) => c.events));
+        return;
+      }
     }
-
-    await Promise.all(toChunks(batch).map((c) => postKeepalive(c.body).catch(() => {})));
   }
 
   private listening = false;
+  private readonly onPageHide = () => this.drainOnUnload();
+  private readonly onVisibilityChange = () => {
+    if (document.hidden) this.drainOnUnload();
+  };
 
   async initialize(): Promise<void> {
     if (typeof window === "undefined" || this.listening) return;
     this.listening = true;
     // pagehide alone misses a mobile tab the OS discards while hidden, so a hidden tab drains too.
-    window.addEventListener("pagehide", () => this.sendBeacon());
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) this.sendBeacon();
-    });
+    window.addEventListener("pagehide", this.onPageHide);
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
   /**
-   * Hands one chunk (at most 100 events, under 60 KB: beacons share a ~64 KiB quota) to sendBeacon. A refused
-   * beacon falls back to a keepalive fetch of that chunk, which re-queues it on failure. Anything past the first
-   * chunk stays queued for the timer.
+   * Unload drain: sends as many chunks by sendBeacon as fit the ~64 KiB aggregate quota (MAX_BODY_BYTES in
+   * total). A refused beacon falls back to a keepalive fetch of that chunk (re-queued if it fails); chunks past
+   * the quota stay queued for the timer.
    */
-  private sendBeacon(): void {
+  private drainOnUnload(): void {
     if (this.flushTimer !== undefined) {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
-    const batch = this.queue.splice(0, this.queue.length);
-    if (batch.length === 0) return;
-    const [first, ...later] = toChunks(batch);
-    this.queue.unshift(...later.flatMap((c) => c.events));
-    if (this.queue.length > 0) this.flushTimer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
-    if (navigator.sendBeacon("/api/analytics", first.body)) return;
-    postKeepalive(first.body).catch(() => this.queue.unshift(...first.events));
+    const chunks = toChunks(this.queue.splice(0, this.queue.length));
+    let budget = MAX_BODY_BYTES;
+    let i = 0;
+    for (; i < chunks.length; i++) {
+      const { body, events } = chunks[i];
+      if (i > 0 && body.length > budget) break;
+      budget -= body.length;
+      const beaconed = typeof navigator.sendBeacon === "function" && navigator.sendBeacon("/api/analytics", body);
+      if (!beaconed) {
+        post(body, true).catch(() => this.requeue(events));
+        i++;
+        break;
+      }
+    }
+    this.requeue(chunks.slice(i).flatMap((c) => c.events));
   }
 
   async onClose(): Promise<void> {
+    if (this.listening) {
+      window.removeEventListener("pagehide", this.onPageHide);
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
+      this.listening = false;
+    }
     await this.flush();
   }
 }
