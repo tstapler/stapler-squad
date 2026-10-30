@@ -1,0 +1,72 @@
+{
+ "labelled_by": "implementer-synthetic",
+ "cases": [
+  {
+   "id": "ext-001",
+   "category": "long-preamble",
+   "text": "I read through the handler, the retry wrapper and the two call sites in the poller. The retry wrapper swallows the context error, which explains the stuck state you saw. I also checked the migration and it is idempotent. I read through the handler, the retry wrapper and the two call sites in the poller. The retry wrapper swallows the context error, which explains the stuck state you saw. I also checked the migration and it is idempotent. I read through the handler, the retry wrapper and the two call sites in the poller. The retry wrapper swallows the context error, which explains the stuck state you saw. I also checked the migration and it is idempotent. I read through the handler, the retry wrapper and the two call sites in the poller. The retry wrapper swallows the context error, which explains the stuck state you saw. I also checked the migration and it is idempotent. Want A or B for the router?",
+   "want": "Want A or B for the router?"
+  },
+  {
+   "id": "ext-002",
+   "category": "multi-question",
+   "text": "Should the cache be per-user? Do you want metrics for the hit rate? Also, which linter config should I follow?",
+   "want": "Also, which linter config should I follow?"
+  },
+  {
+   "id": "ext-003",
+   "category": "no-question-mark",
+   "text": "I fixed the bug. Tests pass. The change is in retry.go.",
+   "want": "The change is in retry.go."
+  },
+  {
+   "id": "ext-004",
+   "category": "code-block",
+   "text": "Here:\n\n```go\nx := 1 // why?\n```\n\nDoes this look right?",
+   "want": "Does this look right?"
+  },
+  {
+   "id": "ext-005",
+   "category": "quoted",
+   "text": "The message was \"Did you mean foo?\". Updated the suggestions.",
+   "want": "Updated the suggestions."
+  },
+  {
+   "id": "ext-006",
+   "category": "over-160",
+   "text": "Given everything above about the caching layer, the invalidation strategy, the sweeper cadence, and the interaction with the replication lag we measured last week, which of the two designs would you like me to implement first?",
+   "want_max_len": 160,
+   "want_suffix": "which of the two designs would you like me to implement first?"
+  },
+  {
+   "id": "ext-007",
+   "category": "empty",
+   "text": "",
+   "want": ""
+  },
+  {
+   "id": "ext-008",
+   "category": "scrub",
+   "text": "I used the token ghp_abcdefghijklmnopqrstuvwxyz0123456789 to push. Should I rotate it?",
+   "want": "Should I rotate it?"
+  },
+  {
+   "id": "ext-009",
+   "category": "scrub",
+   "text": "Pushed with sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD set in env.",
+   "want_not_contains": "sk-abcdefghijklmnopqrstuvwxyz"
+  },
+  {
+   "id": "ext-010",
+   "category": "markdown",
+   "text": "**Want me to continue with the formatter?**",
+   "want": "Want me to continue with the formatter?"
+  },
+  {
+   "id": "ext-011",
+   "category": "tail-bias",
+   "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx. The last bit is short and clear, with no question mark at all",
+   "want_max_len": 160
+  }
+ ]
+}
