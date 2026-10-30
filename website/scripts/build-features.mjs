@@ -157,7 +157,27 @@ export function extractSectionDescription(body) {
 		}
 		paragraph.push(line);
 	}
-	return paragraph.join(' ');
+	return truncateAtSentence(stripInlineMarkdown(paragraph.join(' ')));
+}
+
+const MAX_DESCRIPTION_CHARS = 200;
+
+// The card renders plain text, so `**bold**` and `code` markers would show literally.
+function stripInlineMarkdown(text) {
+	return text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1');
+}
+
+// Keeps whole sentences up to the cap (always at least the first), so one
+// verbose section can't stretch its card far beyond the rest of the grid.
+function truncateAtSentence(text) {
+	if (text.length <= MAX_DESCRIPTION_CHARS) return text;
+	const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [text];
+	let result = '';
+	for (const sentence of sentences) {
+		if (result && (result + sentence).length > MAX_DESCRIPTION_CHARS) break;
+		result += sentence;
+	}
+	return result.trim();
 }
 
 /**

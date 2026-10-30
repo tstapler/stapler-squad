@@ -26,15 +26,18 @@ export function applyAutoplayUnlessReducedMotion(
 	});
 }
 
+// Caps how long a busy page can postpone the hero autoplay.
+const IDLE_TIMEOUT_MS = 2000;
+
 /**
  * Runs `start` once the page has loaded and the main thread is idle, so
  * decoding the hero clip doesn't count as blocking time during load (mobile
  * Lighthouse performance dropped to ~0.75 with autoplay at load).
  */
-function whenLoadedAndIdle(start: () => void, win: Window = window): void {
+export function whenLoadedAndIdle(start: () => void, win: Window = window): void {
 	const afterLoad = () => {
 		if (win.requestIdleCallback) {
-			win.requestIdleCallback(start);
+			win.requestIdleCallback(start, { timeout: IDLE_TIMEOUT_MS });
 		} else {
 			win.setTimeout(start, 0);
 		}

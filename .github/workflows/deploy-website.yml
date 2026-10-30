@@ -148,7 +148,7 @@ jobs:
   # again (it failed 25 consecutive times unnoticed before this existed).
   notify:
     needs: [build, deploy]
-    if: always() && github.event_name != 'workflow_dispatch'
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-22.04
     permissions:
       issues: write

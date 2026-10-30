@@ -187,17 +187,19 @@ const WEBSITE_CI_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-
 
 // The PR gate must run every check the deploy runs, byte-for-byte, or a PR can
 // go green and still break the Pages deploy after merge (which is how the site
-// went 25 deploys without publishing). Compared over the span from checkout to
-// "Stop preview server"; only the Pages publishing steps are deploy-only.
+// went 25 deploys without publishing). Only the Pages publishing steps are deploy-only.
 test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => {
   const deploy = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as CiWorkflow;
   const ci = yaml.load(readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8)) as CiWorkflow;
 
   assert.deepEqual(Object.keys(ci.on), ['pull_request'], 'website-ci.yml must trigger only on pull_request');
 
-  const checkSteps = (steps: CiWorkflow['jobs'][string]['steps']) =>
-    steps.slice(0, steps.findIndex((step) => step.name === 'Stop preview server') + 1);
-  assert.deepEqual(checkSteps(ci.jobs.checks.steps), checkSteps(deploy.jobs.build.steps));
+  // Every deploy step before the Pages publishing steps must also run in the PR gate.
+  const publishAt = deploy.jobs.build.steps.findIndex((step) => step.name === 'Configure Pages');
+  assert.notEqual(publishAt, -1, 'deploy-website.yml must have a "Configure Pages" step');
+  const deployChecks = deploy.jobs.build.steps.slice(0, publishAt);
+  assert.ok(deployChecks.some((step) => step.name === 'Stop preview server'));
+  assert.deepEqual(ci.jobs.checks.steps, deployChecks);
 });
 
 // Story 1.1.2: the deploy job needs id-token: write to mint the OIDC token
