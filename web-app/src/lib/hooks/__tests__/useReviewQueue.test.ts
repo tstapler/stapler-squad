@@ -605,3 +605,46 @@ describe("useReviewQueue — auto-resolved-by-rule item_removed (Epic 2.3.2, ux.
     expect(result.current.autoResolvedRules).toEqual({});
   });
 });
+
+describe("useReviewQueue fallback poll", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockGetReviewQueue.mockReset();
+    mockGetReviewQueue.mockResolvedValue({ reviewQueue: makeQueue([]) });
+  });
+  afterEach(() => jest.useRealTimers());
+
+  const settle = () =>
+    act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+  it("does not poll while the watch stream is delivering (90s idle: 1 mount fetch, was 4)", async () => {
+    async function* liveStream() {
+      yield { event: { case: "heartbeat", value: {} }, heartbeat: true };
+      await new Promise(() => {});
+    }
+    mockWatchReviewQueue.mockReturnValue(liveStream());
+    renderHook(() => useReviewQueue({ useWebSocketPush: true }), { wrapper: makeWrapper(makeTestStore()) });
+    await settle();
+    await act(async () => {
+      jest.advanceTimersByTime(90_000);
+    });
+    await settle();
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls every fallback interval while the stream never connects", async () => {
+    mockWatchReviewQueue.mockImplementation(async function* () {
+      await new Promise(() => {});
+    });
+    renderHook(() => useReviewQueue({ useWebSocketPush: true }), { wrapper: makeWrapper(makeTestStore()) });
+    await settle();
+    await act(async () => {
+      jest.advanceTimersByTime(90_000);
+    });
+    await settle();
+    expect(mockGetReviewQueue).toHaveBeenCalledTimes(4);
+  });
+});
+

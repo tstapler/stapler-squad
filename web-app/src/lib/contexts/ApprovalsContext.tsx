@@ -1,10 +1,11 @@
 "use client";
 // +feature: approval-enter-detection
 
-import { createContext, useContext, ReactNode, useCallback, useMemo, useState, useRef } from "react";
+import { createContext, useContext, ReactNode, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useGetApprovalsQuery, useResolveApprovalMutation } from "@/lib/api/approvalsApi";
 import type { PlainApproval } from "@/lib/api/approvalsApi";
 import { toErrorOrNull } from "@/lib/utils/rtkQueryError";
+import { usePageVisible } from "@/lib/utils/pageVisibility";
 
 export interface ApprovalsContextValue {
   approvals: PlainApproval[];
@@ -36,10 +37,17 @@ const FALLBACK_CONTEXT: ApprovalsContextValue = {
 };
 
 export function ApprovalsProvider({ children }: { children: ReactNode }) {
-  // RTK Query with 5s polling — single authoritative source for the entire app
+  // RTK Query with 5s polling — single authoritative source for the entire app.
+  // Polling is off in a background tab; one refetch on return catches up.
+  const visible = usePageVisible();
   const { data, isLoading, error: queryError, refetch } = useGetApprovalsQuery(undefined, {
-    pollingInterval: 5000,
+    pollingInterval: visible ? 5000 : 0,
   });
+  const wasVisible = useRef(visible);
+  useEffect(() => {
+    if (visible && !wasVisible.current) void refetch();
+    wasVisible.current = visible;
+  }, [visible, refetch]);
 
   const [resolveApproval] = useResolveApprovalMutation();
   const [clearedSessions, setClearedSessions] = useState<Set<string>>(new Set());

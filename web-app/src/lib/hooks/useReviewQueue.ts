@@ -37,7 +37,7 @@ import {
   selectReviewQueueItemsWithLiveStatus,
 } from "@/lib/store/reviewQueueSlice";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
-import { useWatchStream } from "@/lib/hooks/useWatchStream";
+import { useWatchStream, type WatchConnectionState } from "@/lib/hooks/useWatchStream";
 
 // How long a reconciled row stays visible-but-disabled (ux.md Surface 9) before the
 // deferred removeItem dispatch actually removes it from the store.
@@ -392,8 +392,13 @@ export function useReviewQueue(
     handleReviewQueueEventRef.current?.(event);
   }, []);
 
+  // The REST poll below only runs while the stream is not delivering.
+  const [streamLive, setStreamLive] = useState(false);
+  const onStreamState = useCallback((state: WatchConnectionState) => setStreamLive(state === "live"), []);
+
   useWatchStream<ReviewQueueEvent>({
     subscribe: subscribeReviewQueue,
+    onConnectionStateChange: onStreamState,
     onEvent: onReviewQueueEvent,
     isHeartbeat: (event) => event.heartbeat,
     enabled: useWebSocketPush,
@@ -428,9 +433,11 @@ export function useReviewQueue(
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
-      interval = setInterval(() => {
-        void refreshRef.current();
-      }, fallbackPollInterval);
+      if (!streamLive) {
+        interval = setInterval(() => {
+          void refreshRef.current();
+        }, fallbackPollInterval);
+      }
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
       interval = setInterval(() => {
@@ -443,7 +450,7 @@ export function useReviewQueue(
         clearInterval(interval);
       }
     };
-  }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval]);
+  }, [useWebSocketPush, streamLive, autoRefresh, refreshInterval, fallbackPollInterval]);
 
   // Acknowledge session with optimistic update
   const acknowledgeSession = useCallback(
