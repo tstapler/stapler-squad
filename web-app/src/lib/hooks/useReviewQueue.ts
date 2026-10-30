@@ -5,11 +5,12 @@ import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
 import { getWatchTransport } from "@/lib/api/transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import {
+import type {
   ReviewQueue,
   ReviewItem,
   Priority,
-  AttentionReason,
+  AttentionReason} from "@/gen/session/v1/types_pb";
+import {
   SessionStatus,
 } from "@/gen/session/v1/types_pb";
 import {
@@ -21,7 +22,8 @@ import {
   AcknowledgeSessionRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { SessionEvent, ReviewQueueEvent } from "@/gen/session/v1/events_pb";
+import type { ReviewQueueEvent } from "@/gen/session/v1/events_pb";
+import { SessionEvent } from "@/gen/session/v1/events_pb";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 import {
   setReviewQueue as setReviewQueueAction,
@@ -385,7 +387,9 @@ export function useReviewQueue(
         initialSnapshot: true,
         includeStatistics: true,
       });
-      return clientRef.current!.watchReviewQueue(request, { signal });
+      const client = clientRef.current;
+      if (!client) throw new Error("review queue client not initialised");
+      return client.watchReviewQueue(request, { signal });
     },
     [priorityFilter, reasonFilter]
   );
@@ -495,14 +499,15 @@ export function useReviewQueue(
   // instead.
   const acknowledgeSessions = useCallback(
     async (sessionIds: string[]): Promise<{ failed: string[] }> => {
-      if (!clientRef.current) return { failed: sessionIds };
+      const client = clientRef.current;
+      if (!client) return { failed: sessionIds };
 
       sessionIds.forEach((id) => dispatch(removeItem(id)));
 
       const results = await Promise.allSettled(
         sessionIds.map((id) => {
           const request = create(AcknowledgeSessionRequestSchema, { id });
-          return clientRef.current!.acknowledgeSession(request);
+          return client.acknowledgeSession(request);
         })
       );
 

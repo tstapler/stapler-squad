@@ -360,7 +360,8 @@ describe("Move all to tray (Story 3.4)", () => {
     act(() => notifications.addNotification(toast(1, { notificationType: "info" })));
     act(() => notifications.addNotification(toast(2, { notificationType: "info" })));
 
-    const infoToast = notifications.notifications.find((n) => n.sessionId === "s1")!;
+    const infoToast = notifications.notifications.find((n) => n.sessionId === "s1");
+    if (!infoToast) throw new Error("expected the s1 toast");
     act(() => notifications.dismissToast(infoToast.id));
     expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0", "s2"]);
     expect(notifications.notificationHistory).toHaveLength(3);

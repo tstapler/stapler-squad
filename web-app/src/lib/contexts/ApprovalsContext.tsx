@@ -1,7 +1,8 @@
 "use client";
 // +feature: approval-enter-detection
 
-import { createContext, useContext, ReactNode, useCallback, useEffect, useMemo, useState, useRef } from "react";
+import type { ReactNode} from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useGetApprovalsQuery, useResolveApprovalMutation } from "@/lib/api/approvalsApi";
 import type { PlainApproval } from "@/lib/api/approvalsApi";
 import { toErrorOrNull } from "@/lib/utils/rtkQueryError";
