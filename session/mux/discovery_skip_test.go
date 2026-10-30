@@ -81,11 +81,20 @@ func (f *discFixture) realChange(t *testing.T, mutate func()) {
 	f.d.scan.mu.Unlock()
 	mutate()
 	scratch := filepath.Join(f.dir, "scratch.tmp")
-	for i := 0; f.mtime(t).Equal(recorded); i++ {
-		require.Less(t, i, 5000, "directory mtime never advanced")
-		require.NoError(t, os.WriteFile(scratch, nil, 0o600))
-		require.NoError(t, os.Remove(scratch))
+	// Eventually runs the closure on another goroutine: no require.* inside.
+	advanced := func() bool {
+		info, err := os.Stat(f.dir)
+		return err == nil && !info.ModTime().Equal(recorded)
 	}
+	require.Eventually(t, func() bool {
+		if advanced() {
+			return true
+		}
+		if os.WriteFile(scratch, nil, 0o600) != nil || os.Remove(scratch) != nil {
+			return false
+		}
+		return advanced()
+	}, 10*time.Second, 5*time.Millisecond, "directory mtime never advanced")
 }
 
 // The premise of the whole optimisation: creating or removing a socket file is
@@ -253,6 +262,25 @@ func TestDiscoveryScan_should_RunFullScan_When_ScanFromUserOptionsMergedSessions
 
 	assert.EqualValues(t, 2, f.globs.Load(), "scan after ScanFromUserOptions must list the directory")
 	assert.Len(t, f.d.GetSessions(), 1, "the session with no live socket is reconciled away")
+}
+
+// A full scan stamps LastSeen from the injected clock for sessions it already
+// knew and for ones it just discovered.
+func TestDiscoveryScan_should_StampLastSeenWithInjectedClock_When_ScanIsFull(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "ssq-mux-a.sock")
+	f.scan(t)
+
+	f.advance(7 * time.Second)
+	f.realChange(t, func() { f.create(t, "ssq-mux-b.sock") })
+	got := f.scan(t)
+
+	require.Len(t, got, 2, "full scan: existing and newly discovered session")
+	require.EqualValues(t, 2, f.globs.Load())
+	want := time.Unix(0, f.clock.Load())
+	for _, s := range got {
+		assert.Equal(t, want, s.LastSeen, filepath.Base(s.SocketPath))
+	}
 }
 
 // Run under -race: polling scans, ad-hoc Scan() calls and a mutating
