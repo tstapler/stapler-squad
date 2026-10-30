@@ -37,17 +37,10 @@ describe('checkAssetHealth against real build output', () => {
 	});
 
 	it('checkAssetHealth_should_ScanBuiltDistAndValidateRealReleaseUrls_When_RunAgainstDistOutput', async () => {
-		// Story 3.3.1's second AC: the real site build now embeds exactly one
-		// release-asset URL -- the "Live Terminal Streaming" FeatureCard's
-		// terminal-streaming.webm DemoClip. It isn't published yet (Phase 5's
-		// demo-recording workflow is a separate, already-deferred task), so this
-		// genuine HEAD request is expected to 404 until that clip ships.
+		// Every release asset the real site references must be published and
+		// match its manifest hash -- the same gate the Pages deploy enforces.
 		const realBuildResults = await checkAssetHealth({ distDir: REAL_DIST_DIR });
-		expect(realBuildResults).toHaveLength(1);
-		const [realResult] = realBuildResults;
-		expect(realResult.ok).toBe(false);
-		expect(realResult.url).toContain('terminal-streaming.webm');
-		expect(realResult.reason).toContain('404');
+		expect(realBuildResults.filter((result) => !result.ok)).toEqual([]);
 
 		const fixtureResults = await checkAssetHealth({ distDir: fixtureDir });
 

@@ -80,7 +80,7 @@ function runLhciAndReadScores(configFile: string, outputDir: string): Array<Reco
 describe('lighthouseCi against real built dist/', () => {
 	beforeAll(() => {
 		runRealBuild(WEBSITE_ROOT);
-	});
+	}, 120_000);
 
 	afterAll(() => {
 		// `astro preview` daemonizes itself (see playwright.config.ts's comment

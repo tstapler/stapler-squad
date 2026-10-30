@@ -9,12 +9,12 @@
 	{
 		"heading": "Live Terminal Streaming",
 		"description": "Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.",
-		"category": "Visibility",
-		"demoClip": {
-			"tag": "website-demo-gifs-latest",
-			"name": "terminal-streaming",
-			"ext": "webm"
-		}
+		"category": "Visibility"
+	},
+	{
+		"heading": "Browser Element Inspector",
+		"description": "While watching an agent's browser in the **Browser** tab, click **Inspect**, then click any element in the live view. Stapler Squad queries Chrome over CDP and shows the element's cropped screenshot, `outerHTML` (truncated to 8 KB) and key computed CSS (display, position, width, height, color, background-color, font-size, font-family, border, margin, padding). **Send to Agent** types a `[Browser Inspector] Element at (x, y): HTML: … CSS: …` block into the session's terminal input without pressing Enter, so you can add a note before submitting. The screenshot stays in the panel; only text is sent.",
+		"category": "Visibility"
 	},
 	{
 		"heading": "Diff Viewer",
@@ -97,6 +97,11 @@
 		"heading": "Config Viewer",
 		"description": "Inspect your current Stapler Squad configuration directly from the UI — no hunting for JSON files.",
 		"category": "History & Debugging"
+	},
+	{
+		"heading": "Parallel Fan-Out",
+		"description": "Run one prompt across 2–5 isolated worktree sessions, compare their diffs side by side, and merge the best one.",
+		"category": "Review & Approval"
 	},
 	{
 		"heading": "Isolated Git Workspaces",

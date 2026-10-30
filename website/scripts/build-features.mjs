@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Reconciles README.md's 5-category "Highlights" grouping with
-// docs/features.md's flat 17-section detail into website/src/content/features.json
+// docs/features.md's flat section detail into website/src/content/features.json
 // -- see project_plans/stapler-squad-website/research/features.md §4.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -33,7 +33,7 @@ const CATEGORY = {
 export const CATEGORY_ORDER = Object.values(CATEGORY);
 
 /**
- * Maps docs/features.md's 17 section headings to README's 5 Highlights
+ * Maps docs/features.md's section headings to README's 5 Highlights
  * categories. "Status Filtering" and "Custom Rules" have no direct README
  * bullet, so their mapping is a judgment call -- see
  * project_plans/stapler-squad-website/research/features.md §4.
@@ -43,6 +43,7 @@ export const CATEGORY_ORDER = Object.values(CATEGORY);
 const CATEGORY_BY_HEADING = {
 	Dashboard: CATEGORY.VISIBILITY,
 	'Live Terminal Streaming': CATEGORY.VISIBILITY,
+	'Browser Element Inspector': CATEGORY.VISIBILITY,
 	'Diff Viewer': CATEGORY.VISIBILITY,
 	Notifications: CATEGORY.VISIBILITY,
 	'Instant Search': CATEGORY.ORGANISATION,
@@ -52,6 +53,7 @@ const CATEGORY_BY_HEADING = {
 	'Bulk Actions': CATEGORY.ORGANISATION,
 	'Custom Rules': CATEGORY.ORGANISATION,
 	'Review Queue': CATEGORY.REVIEW_APPROVAL,
+	'Parallel Fan-Out': CATEGORY.REVIEW_APPROVAL,
 	'Auto-Approval Rules': CATEGORY.REVIEW_APPROVAL,
 	'Approval Analytics': CATEGORY.REVIEW_APPROVAL,
 	'History Search': CATEGORY.HISTORY_DEBUGGING,
@@ -87,19 +89,15 @@ const ALT_TEXT_BY_HEADING = {
 };
 
 /**
- * Story 3.3.1's second AC: exactly one of the 9 screenshot-less sections gets
- * a `DemoClip` video embed (via `ReleaseAssetRef`), proving the embed wiring
- * exists and is exercised -- the other 8 stay text-only per
- * research/features.md §4. "Live Terminal Streaming" is the plan's own
- * example. The clip itself (`terminal-streaming.webm`) isn't published yet
- * (Phase 5 is deferred), so `check-asset-health.mjs` is expected to fail on
- * it until then.
+ * Headings that get a `DemoClip` video embed (via `ReleaseAssetRef`); the
+ * rest stay text-only. Empty on purpose: only add an entry once its clip is
+ * published to the release, because `check-asset-health.mjs` blocks the Pages
+ * deploy on any referenced asset that 404s. The embed wiring itself is covered
+ * by tests/unit/feature-card.test.ts.
  *
  * @type {Record<string, {tag: string, name: string, ext: string}>}
  */
-const DEMO_CLIP_BY_HEADING = {
-	'Live Terminal Streaming': { tag: 'website-demo-gifs-latest', name: 'terminal-streaming', ext: 'webm' },
-};
+const DEMO_CLIP_BY_HEADING = {};
 
 /**
  * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {tag: string, name: string, ext: string}}} FeatureCard
@@ -140,20 +138,26 @@ export function parseFeaturesMdSections(markdown) {
 }
 
 /**
- * Extracts a section's prose description: its body with the Markdown image
- * reference and the `---` separator stripped, collapsed to a single
- * trimmed line.
+ * Extracts a section's card description: its first paragraph only, with the
+ * Markdown image reference and `---` separator stripped. Later paragraphs and
+ * bullet lists are reference detail that stays in docs/features.md; the card
+ * renders plain text, so they would show up as raw Markdown.
  *
  * @param {string} body
  * @returns {string}
  */
 export function extractSectionDescription(body) {
-	return body
-		.split('\n')
-		.map((line) => line.trim())
-		.filter((line) => line !== '' && line !== '---' && !line.startsWith('!['))
-		.join(' ')
-		.trim();
+	const paragraph = [];
+	for (const raw of body.split('\n')) {
+		const line = raw.trim();
+		if (line === '---' || line.startsWith('![')) continue;
+		if (line === '') {
+			if (paragraph.length > 0) break;
+			continue;
+		}
+		paragraph.push(line);
+	}
+	return paragraph.join(' ');
 }
 
 /**
@@ -208,7 +212,7 @@ export function extractReadmeCategoryNames(readmeMarkdown) {
 
 /**
  * Builds the full FeatureCard[] data set, reconciling README.md's category
- * names with docs/features.md's 17 sections.
+ * names with docs/features.md's sections.
  *
  * @param {{readmePath?: string, featuresMdPath?: string}} [options]
  * @returns {FeatureCard[]}
