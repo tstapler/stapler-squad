@@ -103,3 +103,30 @@ func TestPaneWriter_ShouldFallBackToTheSenderSeam_WhenControlModeFails(t *testin
 	inputs, _ = sender.counts()
 	assert.Equal(t, 1, inputs)
 }
+
+// gatedControlMode is a control-mode attach that also says whether a tmux subprocess can reach it.
+type gatedControlMode struct {
+	recordingControlMode
+	tmuxReachable bool
+}
+
+func (g *gatedControlMode) CanFallBackToTmuxSendKeys() bool { return g.tmuxReachable }
+
+func TestPaneWriter_ShouldNotShellOutToTmux_WhenTheBackendIsNotTmux(t *testing.T) {
+	sender := &fakeTmuxSender{}
+	w, err := TerminalReadWrite.Writer(sender)
+	require.NoError(t, err)
+	cmErr := errors.New("tymux stream busy")
+	cm := &gatedControlMode{recordingControlMode: recordingControlMode{err: cmErr}, tmuxReachable: false}
+
+	got := w.SendInput(context.Background(), PaneInput{ControlMode: cm, TmuxSession: "title-derived", Data: []byte("a")})
+
+	assert.ErrorIs(t, got, cmErr, "the caller must see the real backend error")
+	inputs, _ := sender.counts()
+	assert.Equal(t, 0, inputs, "tmux send-keys against a title-derived name must never run for a non-tmux pane")
+
+	cm.tmuxReachable = true
+	require.NoError(t, w.SendInput(context.Background(), PaneInput{ControlMode: cm, Data: []byte("b")}))
+	inputs, _ = sender.counts()
+	assert.Equal(t, 1, inputs, "a tmux pane keeps the subprocess fallback")
+}

@@ -131,7 +131,8 @@ const dirtyTerminalPrefix = esc + "[?2004h" + esc + "[?1004h" + esc + "[?1h" + e
 	esc + "(0" + esc + ")0" + "\x0e" + // DEC graphics in G0/G1, shifted out
 	esc + "[3 q" + esc + "[?25l" + // blinking underline cursor, hidden
 	esc + "]2;stale title" + st +
-	esc + "[?1049h" + "ALT SCREEN CONTENT" // alt screen with content
+	esc + "[?1049h" + "ALT SCREEN CONTENT" + // alt screen with content
+	esc + "]8;;https://stale.example/open-link" + st // hyperlink left open: SGR 0 does not close it
 
 // TestFidelityGolden_RedrawFromDirtyTerminal replays the redraw into a terminal that is in the
 // state above and expects exactly the golden state, so dropping a reset in RenderSnapshotRedraw

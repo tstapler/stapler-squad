@@ -89,6 +89,12 @@ type controlModeInput interface {
 	SendInputViaControlMode(ctx context.Context, data []byte) error
 }
 
+// tmuxFallbackGate is implemented by control-mode inputs whose backend may not be tmux
+// (*session.Instance). One that doesn't implement it (a shell's tmux session) is always tmux.
+type tmuxFallbackGate interface {
+	CanFallBackToTmuxSendKeys() bool
+}
+
 // PaneInput describes one keystroke delivery: control mode first, then the
 // tmux subprocess seam when control mode fails.
 type PaneInput struct {
@@ -143,6 +149,10 @@ func (w *paneWriter) SendInput(ctx context.Context, in PaneInput) error {
 	err := in.ControlMode.SendInputViaControlMode(ctx, in.Data)
 	if err == nil {
 		return nil
+	}
+	if gate, ok := in.ControlMode.(tmuxFallbackGate); ok && !gate.CanFallBackToTmuxSendKeys() {
+		log.Error(in.LogPrefix+" input failed and the backend has no tmux pane to fall back to", "session", in.TmuxSession, "err", err)
+		return err
 	}
 	log.Warn(in.LogPrefix+" CM input failed, retrying via subprocess", "session", in.TmuxSession, "err", err)
 	if fbErr := w.sender.SendInput(in.TmuxSocket, in.TmuxSession, in.Data); fbErr != nil {
