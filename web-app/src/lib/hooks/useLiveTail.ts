@@ -76,7 +76,9 @@ export function useLiveTail(
   }, [onNewLogs]);
 
   // One fetch; resolves true when it produced new entries (fetchLogs resolving void counts as new).
+  const inFlightRef = useRef(false);
   const doFetch = useCallback(async (): Promise<boolean> => {
+    inFlightRef.current = true;
     try {
       setError(null);
       const gotNew = await fetchLogsRef.current();
@@ -85,6 +87,8 @@ export function useLiveTail(
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch logs');
       return true;
+    } finally {
+      inFlightRef.current = false;
     }
   }, []);
 
@@ -97,6 +101,11 @@ export function useLiveTail(
     let timer: ReturnType<typeof setTimeout> | undefined;
     let idlePolls = 0;
     const run = async () => {
+      // An effect restart (resume, tab shown, interval change) can land while a fetch is still pending.
+      if (inFlightRef.current) {
+        timer = setTimeout(run, interval);
+        return;
+      }
       const gotNew = await doFetch();
       if (cancelled) return;
       idlePolls = gotNew ? 0 : idlePolls + 1;

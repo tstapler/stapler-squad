@@ -36,6 +36,7 @@ const entries = new Map<string, Entry>();
 let timer: ReturnType<typeof setInterval> | undefined;
 let stopVisibility: (() => void) | undefined;
 let inFlight = false;
+let rerunAfterFlight = false;
 
 const isLive = (e: Entry) => e.keepFresh > 0 || isMoving(e.row);
 const toPlain = (r: Message) =>
@@ -54,8 +55,13 @@ function publish(id: string, row: PlainGuidanceRequest): void {
  * cards, and only rows missing from it (answered, awaiting acknowledgement) get an individual read.
  * A tick is skipped while the previous one is in flight or the tab is hidden.
  */
-async function tick(): Promise<void> {
-  if (inFlight || isPageHidden()) return;
+async function tick(urgent = false): Promise<void> {
+  if (inFlight) {
+    // A row that mounted mid-flight must not wait a whole interval for its first read.
+    if (urgent) rerunAfterFlight = true;
+    return;
+  }
+  if (isPageHidden()) return;
   const wanted = [...entries].filter(([, e]) => isLive(e)).map(([id]) => id);
   if (wanted.length === 0) return;
   inFlight = true;
@@ -94,6 +100,10 @@ async function tick(): Promise<void> {
     // transport unavailable: keep the last rows and try again next tick
   } finally {
     inFlight = false;
+    if (rerunAfterFlight) {
+      rerunAfterFlight = false;
+      void tick(true);
+    }
   }
 }
 
@@ -116,26 +126,41 @@ function stopPolling(): void {
   stopVisibility = undefined;
 }
 
-/** Subscribes to a row. A new id is read on the next microtask so rows mounting together share one request. */
-export function subscribeGuidanceRow(
-  id: string,
-  keepFresh: boolean,
-  listener: () => void,
-): () => void {
+function entryFor(id: string): Entry {
   let e = entries.get(id);
   if (!e) {
     e = { row: undefined, listeners: new Set(), keepFresh: 0 };
     entries.set(id, e);
-    void Promise.resolve().then(tick);
+    // New ids are read on the next microtask so rows mounting together share one request.
+    void Promise.resolve().then(() => tick(true));
   }
+  return e;
+}
+
+function dropIfUnused(id: string, e: Entry): void {
+  if (e.listeners.size === 0 && e.keepFresh === 0) entries.delete(id);
+  syncTimer();
+}
+
+/** Subscribes to a row's updates; the cached row survives until its last subscriber and holder is gone. */
+export function subscribeGuidanceRow(id: string, listener: () => void): () => void {
+  const e = entryFor(id);
   e.listeners.add(listener);
-  if (keepFresh) e.keepFresh++;
   syncTimer();
   return () => {
     e.listeners.delete(listener);
-    if (keepFresh) e.keepFresh--;
-    if (e.listeners.size === 0) entries.delete(id);
-    syncTimer();
+    dropIfUnused(id, e);
+  };
+}
+
+/** Keeps polling the row even once it has settled, until the returned release is called. */
+export function holdGuidanceRowFresh(id: string): () => void {
+  const e = entryFor(id);
+  e.keepFresh++;
+  syncTimer();
+  return () => {
+    e.keepFresh--;
+    dropIfUnused(id, e);
   };
 }
 

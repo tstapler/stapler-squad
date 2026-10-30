@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
-import { readGuidanceRow, subscribeGuidanceRow } from "./guidanceRowStore";
+import { holdGuidanceRowFresh, readGuidanceRow, subscribeGuidanceRow } from "./guidanceRowStore";
 
 export { GUIDANCE_POLL_MS, isMoving } from "./guidanceRowStore";
 
@@ -14,9 +14,10 @@ export { GUIDANCE_POLL_MS, isMoving } from "./guidanceRowStore";
  */
 export function useGuidanceRow(id: string | undefined, keepFresh: boolean): PlainGuidanceRequest | undefined {
   const subscribe = useCallback(
-    (onChange: () => void) => (id ? subscribeGuidanceRow(id, keepFresh, onChange) : () => {}),
-    [id, keepFresh],
+    (onChange: () => void) => (id ? subscribeGuidanceRow(id, onChange) : () => {}),
+    [id],
   );
   const getSnapshot = useCallback(() => (id ? readGuidanceRow(id) : undefined), [id]);
+  useEffect(() => (id && keepFresh ? holdGuidanceRowFresh(id) : undefined), [id, keepFresh]);
   return useSyncExternalStore(subscribe, getSnapshot, () => undefined);
 }

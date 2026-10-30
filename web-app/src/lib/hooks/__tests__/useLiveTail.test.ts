@@ -69,4 +69,20 @@ describe("useLiveTail polling", () => {
     await act(async () => setHidden(false));
     expect(fetchLogs).toHaveBeenCalledTimes(before + 1);
   });
+
+  it("does not overlap a fetch when pause then resume lands while one is still pending", async () => {
+    let release: () => void = () => {};
+    const fetchLogs = jest.fn().mockImplementation(() => new Promise<void>((r) => (release = r)));
+    const { result } = renderHook(() => useLiveTail(fetchLogs, { enabled: true, interval: 2000 }));
+    await advance(0);
+    expect(fetchLogs).toHaveBeenCalledTimes(1);
+    await act(async () => result.current[1].pause());
+    await act(async () => result.current[1].resume());
+    await advance(1000);
+    expect(fetchLogs).toHaveBeenCalledTimes(1);
+    await act(async () => release());
+    await advance(2000);
+    expect(fetchLogs.mock.calls.length).toBeLessThanOrEqual(2);
+  });
 });
+

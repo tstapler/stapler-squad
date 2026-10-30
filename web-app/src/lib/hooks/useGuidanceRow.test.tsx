@@ -92,9 +92,10 @@ describe("useGuidanceRow", () => {
         jest.advanceTimersByTime(GUIDANCE_POLL_MS);
       });
     }
-    // 1 initial shared read + 10 ticks, never one-per-row (before: 5 rows x 11 reads = 55 Get calls)
+    // 10 ticks plus the initial reads (one more for rows mounted mid-flight), never one per row
+    // (before: 5 rows x 11 reads = 55 Get calls)
     expect(getGuidanceRequest).not.toHaveBeenCalled();
-    expect(listAllPendingGuidanceRequests).toHaveBeenCalledTimes(11);
+    expect(listAllPendingGuidanceRequests.mock.calls.length).toBeLessThanOrEqual(12);
     hooks.forEach((h, i) => expect(h.result.current?.id).toBe(ids[i]));
   });
 
@@ -122,4 +123,30 @@ describe("useGuidanceRow", () => {
     expect(listAllPendingGuidanceRequests).toHaveBeenCalledTimes(1);
     await act(async () => release({ requests: [] }));
   });
+
+  it("keeps the cached row when keepFresh flips on a mounted row", async () => {
+    listAllPendingGuidanceRequests.mockResolvedValue({ requests: [makeGuidanceRow()] });
+    const { result, rerender } = renderHook(({ keep }) => useGuidanceRow("q1", keep), { initialProps: { keep: true } });
+    await act(async () => {});
+    expect(result.current?.id).toBe("q1");
+    rerender({ keep: false });
+    expect(result.current?.id).toBe("q1");
+    rerender({ keep: true });
+    expect(result.current?.id).toBe("q1");
+  });
+
+  it("reads a row that mounts while another read is in flight as soon as that read returns", async () => {
+    let release: (v: { requests: unknown[] }) => void = () => {};
+    listAllPendingGuidanceRequests.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    renderHook(() => useGuidanceRow("q1", true));
+    await act(async () => {});
+    listAllPendingGuidanceRequests.mockResolvedValue({ requests: [makeGuidanceRow({ id: "q2" })] });
+    const second = renderHook(() => useGuidanceRow("q2", true));
+    await act(async () => {});
+    expect(second.result.current).toBeUndefined();
+    await act(async () => release({ requests: [] }));
+    await act(async () => {});
+    expect(second.result.current?.id).toBe("q2");
+  });
 });
+
