@@ -8,35 +8,8 @@
  */
 import type { Ghostty, GhosttyTerminal as WasmTerminal, Terminal as GhosttyWebTerminal } from "ghostty-web";
 import { ANSI_SNAPSHOT_PREFIX, TerminalStreamManager } from "../TerminalStreamManager";
+import { COLS, HeadlessGhosttyTerminal, ROWS } from "./ghosttyHeadless";
 import { asXtermCompatible, serializeGhosttyBuffer, toITerminal } from "../ghosttyAdapter";
-
-const ROWS = 5;
-const COLS = 20;
-
-class HeadlessGhosttyTerminal {
-  readonly wasmTerm: WasmTerminal;
-  viewportY = 0;
-  constructor(ghostty: Ghostty) {
-    this.wasmTerm = ghostty.createTerminal(COLS, ROWS, { scrollbackLimit: 1000 });
-  }
-  get rows() { return ROWS; }
-  get cols() { return COLS; }
-  write(data: string | Uint8Array) { this.wasmTerm.write(data); this.wasmTerm.update(); }
-  writeln(data: string) { this.write(`${data}\r\n`); }
-  getViewportY() { return this.viewportY; }
-  scrollToBottom() { this.viewportY = 0; }
-  get buffer() {
-    const w = this.wasmTerm;
-    const length = () => w.getScrollbackLength() + ROWS;
-    const lineAt = (y: number) => {
-      const sb = w.getScrollbackLength();
-      const cells = y < sb ? w.getScrollbackLine(y) : w.getLine(y - sb);
-      return cells && { translateToString: () => cells.map((c) => (c.width === 0 ? "" : c.codepoint ? String.fromCodePoint(c.codepoint) : " ")).join("").trimEnd() };
-    };
-    const active = { get length() { return length(); }, cursorY: w.getCursor().y, viewportY: 0, getLine: lineAt };
-    return { active, normal: active };
-  }
-}
 
 const transcript = (term: HeadlessGhosttyTerminal): string[] => {
   const { active } = term.buffer;
