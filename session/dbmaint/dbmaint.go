@@ -195,7 +195,7 @@ func (m *Maintainer) Tick(ctx context.Context) error {
 	if err != nil && ctx.Err() == nil { // a shutdown cancel is not a maintenance failure
 		m.state.LastError = err.Error()
 		m.state.Errors++
-	} else {
+	} else if err == nil {
 		m.state.LastError = ""
 	}
 	m.mu.Unlock()
@@ -259,6 +259,9 @@ func (m *Maintainer) tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
+	m.state.LastReclaimedPages = 0
+	m.mu.Unlock()
 	if s.mode != AutoVacuumIncremental || !m.overThreshold(s) {
 		return nil
 	}
@@ -275,7 +278,11 @@ func (m *Maintainer) tick(ctx context.Context) error {
 	}
 	// Freed pages sit in the WAL until a checkpoint copies them back and truncates
 	// the main file. PASSIVE never blocks readers or the writer.
-	return m.checkpointPassive(ctx)
+	if err := m.checkpointPassive(ctx); err != nil {
+		return err
+	}
+	_, err = m.sample(ctx) // refresh page_count after the shrink
+	return err
 }
 
 func (m *Maintainer) overThreshold(s sampleResult) bool {

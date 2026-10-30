@@ -38,7 +38,7 @@ Invalid values fall back to the default.
 
 ## Observe it
 
-`GET /actuator/db` returns a `maintenance` array (and `/actuator` a `db_maintenance` array), one
+`GET /actuator/db` returns a `maintenance` array (and `/actuator/metrics` a `db_maintenance` array), one
 entry per database (`sessions`, `analytics`):
 
 ```json
