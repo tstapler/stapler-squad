@@ -45,4 +45,11 @@ describe("CockpitShell", () => {
     expect(screen.getByTestId("drawer-nav")).toBeInTheDocument();
     expect(screen.getByTestId("bottom-nav")).toBeInTheDocument();
   });
+
+  it("mounts the single attention announcer outside the page content", () => {
+    render(<CockpitShell>children</CockpitShell>);
+    const announcer = screen.getByTestId("attention-announcer");
+    expect(announcer.closest("[inert], [aria-hidden='true']")).toBeNull();
+    expect(announcer.contains(screen.getByText("children"))).toBe(false);
+  });
 });

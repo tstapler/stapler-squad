@@ -9,6 +9,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useNotificationShortcuts } from "@/lib/shortcuts/useNotificationShortcuts";
 import { CommandBar } from "@/components/command-bar/CommandBar";
+import { AttentionAnnouncer } from "@/components/sessions/AttentionAnnouncer";
 import { useNavigation } from "@/lib/contexts/NavigationContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { cockpitRoot, drawerColumn, mainContent } from "@/styles/layout.css";
@@ -72,6 +73,8 @@ export function CockpitShell({ children }: CockpitShellProps) {
 
   return (
     <>
+      {/* Outside every inert/aria-hidden subtree so it keeps speaking while a dialog is open. */}
+      <AttentionAnnouncer />
       <div className={cockpitRoot}>
         <div className={drawerColumn}>
           <DrawerNav />
