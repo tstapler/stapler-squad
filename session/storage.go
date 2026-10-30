@@ -3,12 +3,13 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"time"
+
+	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"

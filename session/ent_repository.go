@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"database/sql"
-	"entgo.io/ent/dialect"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"encoding/json"
+
+	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/artifacts"

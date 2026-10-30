@@ -192,7 +192,7 @@ func (m *Maintainer) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	m.state.Runs++
 	m.state.LastRun = time.Now()
-	if err != nil {
+	if err != nil && ctx.Err() == nil { // a shutdown cancel is not a maintenance failure
 		m.state.LastError = err.Error()
 		m.state.Errors++
 	} else {

@@ -3,8 +3,11 @@ package dbmaint
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,6 +38,45 @@ func (c *fakeClock) Pause(ctx context.Context, _ time.Duration) error {
 		return c.onPause(ctx)
 	}
 	return ctx.Err()
+}
+
+// recordingQ records every statement and can fail incremental_vacuum.
+type recordingQ struct {
+	dialect.ExecQuerier
+	mu      sync.Mutex
+	stmts   []string
+	failVac error
+}
+
+func (r *recordingQ) record(q string) {
+	r.mu.Lock()
+	r.stmts = append(r.stmts, q)
+	r.mu.Unlock()
+}
+
+func (r *recordingQ) count(substr string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, q := range r.stmts {
+		if strings.Contains(q, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+func (r *recordingQ) Exec(ctx context.Context, q string, args, v any) error {
+	r.record(q)
+	if r.failVac != nil && strings.Contains(q, "incremental_vacuum") {
+		return r.failVac
+	}
+	return r.ExecQuerier.Exec(ctx, q, args, v)
+}
+
+func (r *recordingQ) Query(ctx context.Context, q string, args, v any) error {
+	r.record(q)
+	return r.ExecQuerier.Query(ctx, q, args, v)
 }
 
 type warnLog struct{ n atomic.Int64 }
@@ -104,15 +146,16 @@ func TestTick_ShouldReclaimFreePagesInChunks_When_IncrementalAndOverThreshold(t 
 		return ctx.Err()
 	}
 	w := &warnLog{}
-	m := New("t", drv, testConfig(), WithClock(clock), WithWarn(w.warn))
+	rec := &recordingQ{ExecQuerier: drv}
+	m := New("t", rec, testConfig(), WithClock(clock), WithWarn(w.warn))
 
 	require.NoError(t, m.Tick(context.Background()))
 
+	assert.Equal(t, 1, rec.count("wal_checkpoint(PASSIVE)"), "one PASSIVE checkpoint after reclaiming")
 	assert.Less(t, scalar(t, drv, "PRAGMA freelist_count"), int64(100), "freelist drained")
 	assert.Greater(t, clock.pauses.Load(), int64(1), "reclaimed in multiple chunks")
 	assert.Equal(t, int(clock.pauses.Load()), writes, "writer wrote between every chunk")
-	exec(t, drv, "PRAGMA wal_checkpoint(TRUNCATE)")
-	assert.Less(t, fileSize(t, path), sizeBefore, "file shrank")
+	assert.Less(t, fileSize(t, path), sizeBefore, "file shrank after the maintainer's own PASSIVE checkpoint")
 	st := m.snapshot()
 	assert.Equal(t, "incremental", st.AutoVacuumMode)
 	assert.GreaterOrEqual(t, st.ReclaimedPagesTotal, freeBefore-100)
@@ -127,10 +170,15 @@ func TestTick_ShouldWarnOnceAndNeverVacuum_When_AutoVacuumNone(t *testing.T) {
 	freeBefore := scalar(t, drv, "PRAGMA freelist_count")
 	clock := newFakeClock()
 	w := &warnLog{}
-	m := New("t", drv, testConfig(), WithClock(clock), WithWarn(w.warn))
+	rec := &recordingQ{ExecQuerier: drv}
+	m := New("t", rec, testConfig(), WithClock(clock), WithWarn(w.warn))
 
 	require.NoError(t, m.Tick(context.Background()))
 	require.NoError(t, m.Tick(context.Background()))
+
+	assert.Zero(t, rec.count("incremental_vacuum"))
+	assert.Zero(t, rec.count("VACUUM"), "no full VACUUM was issued")
+	assert.Zero(t, rec.count("wal_checkpoint"))
 
 	assert.Equal(t, freeBefore, scalar(t, drv, "PRAGMA freelist_count"), "no vacuum ran")
 	assert.Equal(t, int64(0), scalar(t, drv, "PRAGMA auto_vacuum"), "mode not converted")
@@ -155,6 +203,81 @@ func TestTick_ShouldSkip_When_BelowThreshold(t *testing.T) {
 
 	assert.Equal(t, free, scalar(t, drv, "PRAGMA freelist_count"))
 	assert.Zero(t, clock.pauses.Load())
+}
+
+func TestTick_ShouldSkip_When_FreeRatioNotExceeded(t *testing.T) {
+	drv, _ := openDB(t, "incremental")
+	fillAndDelete(t, drv)
+	exec(t, drv, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 2500)
+		INSERT INTO blob_t (b) SELECT zeroblob(2048) FROM n`)
+	exec(t, drv, "DELETE FROM blob_t WHERE id % 10 = 0")
+	free, pages := scalar(t, drv, "PRAGMA freelist_count"), scalar(t, drv, "PRAGMA page_count")
+	cfg := testConfig()
+	cfg.MinFreePages = 1
+	cfg.FreeRatio = 0.9
+	require.Greater(t, free, cfg.MinFreePages, "setup: min-free exceeded")
+	require.Less(t, float64(free), cfg.FreeRatio*float64(pages), "setup: ratio not exceeded")
+	rec := &recordingQ{ExecQuerier: drv}
+	m := New("t", rec, cfg, WithClock(newFakeClock()))
+
+	require.NoError(t, m.Tick(context.Background()))
+
+	assert.Zero(t, rec.count("incremental_vacuum"))
+}
+
+func TestTick_ShouldNotWarnOrVacuum_When_AutoVacuumFull(t *testing.T) {
+	drv, _ := openDB(t, "full")
+	fillAndDelete(t, drv)
+	rec := &recordingQ{ExecQuerier: drv}
+	w := &warnLog{}
+	m := New("t", rec, testConfig(), WithClock(newFakeClock()), WithWarn(w.warn))
+
+	require.NoError(t, m.Tick(context.Background()))
+
+	assert.Zero(t, rec.count("incremental_vacuum"))
+	assert.Zero(t, w.n.Load())
+	assert.False(t, m.snapshot().NeedsOfflineVacuum)
+}
+
+func TestTick_ShouldRecordErrorAndWarn_When_VacuumFails(t *testing.T) {
+	drv, _ := openDB(t, "incremental")
+	fillAndDelete(t, drv)
+	boom := errors.New("boom")
+	rec := &recordingQ{ExecQuerier: drv, failVac: boom}
+	w := &warnLog{}
+	m := New("t", rec, testConfig(), WithClock(newFakeClock()), WithWarn(w.warn))
+
+	require.ErrorIs(t, m.Tick(context.Background()), boom)
+
+	st := m.snapshot()
+	assert.Contains(t, st.LastError, "boom")
+	assert.Equal(t, int64(1), st.Errors)
+	assert.Equal(t, int64(1), w.n.Load())
+	assert.Zero(t, rec.count("wal_checkpoint"), "no checkpoint after a failed reclaim")
+}
+
+func TestTick_ShouldStopWithoutSpinning_When_FreelistMakesNoProgress(t *testing.T) {
+	drv, _ := openDB(t, "incremental")
+	fillAndDelete(t, drv)
+	rec := &recordingQ{ExecQuerier: &noopVacuumQ{rec: drv}}
+	m := New("t", rec, testConfig(), WithClock(newFakeClock()))
+
+	require.NoError(t, m.Tick(context.Background()))
+
+	assert.Equal(t, 1, rec.count("incremental_vacuum"), "gave up after one chunk freed nothing")
+}
+
+func TestTick_ShouldNotCountShutdownCancelAsError(t *testing.T) {
+	drv, _ := openDB(t, "incremental")
+	fillAndDelete(t, drv)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := New("t", drv, testConfig(), WithClock(newFakeClock()))
+
+	require.Error(t, m.Tick(ctx))
+
+	assert.Zero(t, m.snapshot().Errors)
+	assert.Empty(t, m.snapshot().LastError)
 }
 
 func TestTick_ShouldStopMidReclaim_When_ContextCancelled(t *testing.T) {
@@ -189,13 +312,22 @@ func TestTick_ShouldReturnErrTickInProgress_When_Overlapping(t *testing.T) {
 	m := New("t", drv, testConfig(), WithClock(clock))
 	done := make(chan error, 1)
 	go func() { done <- m.Tick(context.Background()) }()
-	<-inPause
+	select {
+	case <-inPause:
+	case <-time.After(30 * time.Second):
+		t.Fatal("first tick never reached its pause")
+	}
 
 	require.ErrorIs(t, m.Tick(context.Background()), ErrTickInProgress)
 
 	clock.onPause = nil
 	close(release)
-	require.NoError(t, <-done)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("first tick did not finish")
+	}
 	require.NoError(t, m.Tick(context.Background()), "usable again after the first tick ends")
 }
 
@@ -240,6 +372,20 @@ func TestConfigFromLookup(t *testing.T) {
 	def := configFromLookup(func(string) string { return "junk" })
 	assert.Equal(t, Config{Interval: DefaultInterval, FreeRatio: DefaultFreeRatio, MinFreePages: DefaultMinFreePages,
 		ChunkPages: DefaultChunkPages, ChunkPause: DefaultChunkPause}, def)
+}
+
+// noopVacuumQ swallows incremental_vacuum so the freelist never shrinks.
+type noopVacuumQ struct{ rec dialect.ExecQuerier }
+
+func (n *noopVacuumQ) Exec(ctx context.Context, q string, args, v any) error {
+	if strings.Contains(q, "incremental_vacuum") {
+		return nil
+	}
+	return n.rec.Exec(ctx, q, args, v)
+}
+
+func (n *noopVacuumQ) Query(ctx context.Context, q string, args, v any) error {
+	return n.rec.Query(ctx, q, args, v)
 }
 
 func fileSize(t *testing.T, path string) int64 {

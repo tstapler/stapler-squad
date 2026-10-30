@@ -2,7 +2,7 @@
 
 SQLite never shrinks a file when rows are deleted; freed pages go on a freelist.
 `analytics.db` once reached 2.9 GB with 71% free pages (505702 of 709053 pages at
-4096 bytes) because `auto_vacuum` was `NONE`, and shrank to 675 MB after an offline
+4096 bytes) because `auto_vacuum` was `NONE`, and shrank to 675 MB (measured by the author, not reproducible from the repo) after an offline
 `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`.
 
 ## What the app does
@@ -27,7 +27,7 @@ logging and `/actuator/db` pool stats cover them.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STAPLER_SQUAD_DB_MAINT_DISABLE` | unset | `true` turns the loop off |
+| `STAPLER_SQUAD_DB_MAINT_DISABLE` | unset | Any `strconv.ParseBool` true value (`1`, `true`) turns the loop off |
 | `STAPLER_SQUAD_DB_MAINT_INTERVAL` | `15m` | Go duration between ticks |
 | `STAPLER_SQUAD_DB_MAINT_FREE_RATIO` | `0.20` | Reclaim above this free/total ratio (0 to 1) |
 | `STAPLER_SQUAD_DB_MAINT_MIN_FREE_PAGES` | `5000` | ...and above this many free pages |
@@ -42,9 +42,9 @@ Invalid values fall back to the default.
 entry per database (`sessions`, `analytics`):
 
 ```json
-{"name":"analytics","auto_vacuum_mode":"incremental","needs_offline_vacuum":false,
+{"name":"analytics","auto_vacuum_mode":"incremental","auto_vacuum_mode_value":2,"needs_offline_vacuum":false,
  "page_count":170000,"free_pages":120,"page_size":4096,"reclaimed_pages_total":505000,
- "last_reclaimed_pages":0,"runs_total":3,"errors_total":0,"last_run":"...","last_error":""}
+ "last_reclaimed_pages":0,"runs_total":3,"errors_total":0,"last_run":"..."}
 ```
 
 OpenTelemetry gauges (label `db.name`): `db.maint.free_pages`, `db.maint.page_count`,
@@ -69,7 +69,7 @@ sqlite3 <db> 'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'
 ```
 
 Restart the service. The in-app loop takes over from there. The directory follows `config.GetConfigDir`
-(`workspaces/<hash>/` or `instances/<name>/` under `~/.stapler-squad/`); see
+(`workspaces/<hash-or-name>/` or `instances/<name>/` under `~/.stapler-squad/`); see
 `docs/reference/state-isolation.md`.
 
 ## Fallback external job

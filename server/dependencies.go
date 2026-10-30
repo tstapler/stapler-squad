@@ -2,13 +2,14 @@ package server
 
 import (
 	"context"
-	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
