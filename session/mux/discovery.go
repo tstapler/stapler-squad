@@ -24,10 +24,13 @@ type Discovery struct {
 	mu        sync.RWMutex
 	callbacks []func(*DiscoveredSession, bool) // (session, isNew)
 
-	// Test seams; zero values mean os.TempDir(), probeSocketContext, time.Now.
-	dir   string
-	probe func(ctx context.Context, socketPath string) (*SessionMetadata, error)
-	now   func() time.Time
+	// Test seams; zero values mean os.TempDir(), probeSocketContext, time.Now,
+	// filepath.Glob, ScanByUserOptions.
+	dir         string
+	probe       func(ctx context.Context, socketPath string) (*SessionMetadata, error)
+	now         func() time.Time
+	glob        func(pattern string) ([]string, error)
+	userOptions func() ([]*DiscoveredSession, error)
 
 	scan scanState
 }
@@ -85,7 +88,7 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 
 	// Find all potential socket files
 	pattern := filepath.Join(dir, "ssq-mux-*.sock")
-	matches, err := filepath.Glob(pattern)
+	matches, err := d.globSockets(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob socket files: %w", err)
 	}
@@ -102,13 +105,14 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 		currentPaths[socketPath] = true
 
 		// Check if we already know about this session
-		d.mu.RLock()
+		d.mu.Lock()
 		existing, exists := d.sessions[socketPath]
-		d.mu.RUnlock()
+		if exists {
+			existing.LastSeen = d.clock() // under d.mu: scans may run concurrently
+		}
+		d.mu.Unlock()
 
 		if exists {
-			// Update last seen time
-			existing.LastSeen = time.Now()
 			discovered = append(discovered, existing)
 			continue
 		}
@@ -127,7 +131,7 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 		session := &DiscoveredSession{
 			SocketPath: socketPath,
 			Metadata:   meta,
-			LastSeen:   time.Now(),
+			LastSeen:   d.clock(),
 		}
 
 		// Register the new session
@@ -166,6 +170,13 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 	}
 
 	return discovered, nil
+}
+
+func (d *Discovery) globSockets(pattern string) ([]string, error) {
+	if d.glob != nil {
+		return d.glob(pattern)
+	}
+	return filepath.Glob(pattern)
 }
 
 func (d *Discovery) socketDir() string {
@@ -224,6 +235,13 @@ func (d *Discovery) previousFailures(socketPath string) int {
 	return d.scan.failed[socketPath]
 }
 
+// invalidate makes the next scan a full one.
+func (st *scanState) invalidate() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.scannedAt = time.Time{}
+}
+
 // recordScan stores the outcome of a full scan. Without a readable mtime the
 // state is cleared so the next scan runs in full.
 func (d *Discovery) recordScan(mtime time.Time, haveMtime bool, failed map[string]int) {
@@ -241,7 +259,7 @@ func (d *Discovery) recordScan(mtime time.Time, haveMtime bool, failed map[strin
 // touchKnownSessions is the skipped-scan result: every known session is still
 // present, so refresh LastSeen as a full scan would and return them.
 func (d *Discovery) touchKnownSessions() []*DiscoveredSession {
-	now := time.Now()
+	now := d.clock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	sessions := make([]*DiscoveredSession, 0, len(d.sessions))
@@ -285,12 +303,18 @@ func (d *Discovery) GetClaudeSessions() []*DiscoveredSession {
 //
 // Results are merged into d.sessions and callbacks are fired for new sessions,
 // matching the behaviour of Scan(). Existing sessions are not removed — call
-// Scan() afterward to reconcile against the live socket set if needed.
+// Scan() afterward to reconcile against the live socket set if needed; the
+// merge invalidates the unchanged-directory skip so that Scan() is a full one.
 func (d *Discovery) ScanFromUserOptions() ([]*DiscoveredSession, error) {
-	discovered, err := ScanByUserOptions()
+	scanUserOptions := ScanByUserOptions
+	if d.userOptions != nil {
+		scanUserOptions = d.userOptions
+	}
+	discovered, err := scanUserOptions()
 	if err != nil {
 		return nil, err
 	}
+	d.scan.invalidate()
 
 	var newSessions []*DiscoveredSession
 
