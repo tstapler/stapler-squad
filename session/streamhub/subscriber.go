@@ -29,7 +29,7 @@ type subscriber struct {
 	// frames then land in pending (they may post-date the capture, so none may be lost) instead
 	// of outbound, so the queue cannot fill while the paint and the replay are in flight.
 	// overflow records that pending hit maxPaintBacklog.
-	firstPaintTimer *time.Timer
+	firstPaintTimer Timer
 	painting        bool
 	expired         bool
 	pending         [][]byte
@@ -141,12 +141,12 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 // observed full. It reports true exactly once per stall — the caller arms a
 // single grace-period eviction timer on that signal, rather than one timer
 // per dropped frame while the stall continues.
-func (s *subscriber) markSlow() (firstObservation bool) {
+func (s *subscriber) markSlow(now time.Time) (firstObservation bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.slowSince.IsZero() {
-		s.slowSince = time.Now()
+		s.slowSince = now
 		return true
 	}
 	return false
@@ -227,10 +227,10 @@ const maxPaintBacklog = 4096
 
 // armFirstPaintTimeout evicts (via onExpire) a subscriber still awaiting its FirstPaint after d.
 // The check and beginFirstPaint share mu, so it can never evict a subscriber mid-paint.
-func (s *subscriber) armFirstPaintTimeout(d time.Duration, onExpire func()) {
+func (s *subscriber) armFirstPaintTimeout(clock Clock, d time.Duration, onExpire func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.firstPaintTimer = time.AfterFunc(d, func() {
+	s.firstPaintTimer = clock.AfterFunc(d, func() {
 		s.mu.Lock()
 		expire := s.awaitingFirstPaint.Load() && !s.closed
 		if expire {

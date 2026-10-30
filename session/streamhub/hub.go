@@ -126,6 +126,7 @@ type StreamHub struct {
 	slowSubscriberGrace   time.Duration
 	firstPaintMaxAwait    time.Duration
 	teardownGrace         time.Duration
+	clock                 Clock
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
 	batchMaxWindow        time.Duration
@@ -150,7 +151,7 @@ type StreamHub struct {
 	// removeSubscriber re-armed in response to the second detach.
 	reactivatedDuringTeardown bool
 	subscribers               map[SubscriberID]*subscriber
-	teardownTimer             *time.Timer
+	teardownTimer             Timer
 
 	// batchWindow is the hub's single opportunistic-with-ceiling
 	// accumulation buffer and timer (Epic 2.1) — OnRawOutput feeds it
@@ -260,6 +261,7 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 		slowSubscriberGrace:   defaultSlowSubscriberGrace,
 		firstPaintMaxAwait:    defaultFirstPaintMaxAwait,
 		teardownGrace:         DefaultHubTeardownGrace,
+		clock:                 realClock{},
 		quiescenceTimeout:     defaultQuiescenceTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
 		batchMaxWindow:        MaxBatchWindow,
@@ -269,7 +271,7 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 	for _, opt := range opts {
 		opt(h)
 	}
-	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow))
+	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow), withBatchClock(h.clock))
 
 	incActiveHubs()
 	log.Info("streamhub hub created", "session", sessionName, "resolved_path", "hub_owned")
@@ -385,7 +387,7 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 		h.sendCatchUpSnapshot(sub)
 		sub.startWriter(h.handleSubscriberSendError)
 	} else {
-		sub.armFirstPaintTimeout(h.firstPaintMaxAwait, func() { h.removeSubscriber(id, errFirstPaintTimeout) })
+		sub.armFirstPaintTimeout(h.clock, h.firstPaintMaxAwait, func() { h.removeSubscriber(id, errFirstPaintTimeout) })
 	}
 
 	log.Info("streamhub subscriber attached",
@@ -535,7 +537,7 @@ func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 	}
 
 	prepared := ansiSnapshotPrefix + prepareSnapshotContent(captured)
-	capturedBytes := []byte(withCursorSync(prepared, h.controller))
+	capturedBytes := []byte(withCursorSync(h.clock, prepared, h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = capturedBytes
 	h.snapshotMu.Unlock()
@@ -645,13 +647,13 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 		h.tap.Record(TapDrop, DropCauseSubscriberUndelivered, data)
 	}
 
-	if !sub.markSlow() {
+	if !sub.markSlow(h.clock.Now()) {
 		// Already stalled and a timer is pending for it; this frame is
 		// simply dropped, same as any frame that finds the queue full.
 		return
 	}
 
-	time.AfterFunc(grace, func() {
+	h.clock.AfterFunc(grace, func() {
 		if sub.isStillFull() {
 			h.slowSubscriberDropsTotal.Add(1)
 			recordSlowSubscriberDrop()
@@ -686,7 +688,7 @@ func (h *StreamHub) cancelPendingTeardownLocked() {
 func (h *StreamHub) scheduleTeardownLocked() {
 	h.state = HubDraining
 	h.cancelPendingTeardownLocked()
-	h.teardownTimer = time.AfterFunc(h.teardownGrace, h.onTeardownGraceExpired)
+	h.teardownTimer = h.clock.AfterFunc(h.teardownGrace, h.onTeardownGraceExpired)
 }
 
 // onTeardownGraceExpired fires on the timer goroutine once teardownGrace has
@@ -882,7 +884,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	}
 
 	subID, updates := h.controller.SubscribeControlModeUpdates()
-	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
+	waitForQuiescence(h.clock, updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
 	if h.allAwaitingFirstPaint() {
@@ -916,7 +918,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
-	prepared := []byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
+	prepared := []byte(withCursorSync(h.clock, ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()

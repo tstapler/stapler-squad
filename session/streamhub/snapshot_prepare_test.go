@@ -108,7 +108,7 @@ func (f fakeCursorPositioner) GetPaneCursorPosition() (x, y int, err error) {
 // cursor lands one row/column off, which is exactly the kind of off-by-one
 // a compile-time type can't catch.
 func TestWithCursorSync_should_AppendCUPEscape_When_PositionLookupSucceeds(t *testing.T) {
-	got := withCursorSync("content", fakeCursorPositioner{x: 4, y: 9})
+	got := withCursorSync(realClock{}, "content", fakeCursorPositioner{x: 4, y: 9})
 	want := "content\x1b[10;5H"
 	if got != want {
 		t.Errorf("withCursorSync() = %q, want %q", got, want)
@@ -120,7 +120,7 @@ func TestWithCursorSync_should_AppendCUPEscape_When_PositionLookupSucceeds(t *te
 // corrupt or drop the snapshot, just skip the cosmetic cursor-sync suffix.
 func TestWithCursorSync_should_LeaveContentUnchanged_When_PositionLookupFails(t *testing.T) {
 	wantErr := errors.New("cursor lookup failed")
-	got := withCursorSync("content", fakeCursorPositioner{err: wantErr})
+	got := withCursorSync(realClock{}, "content", fakeCursorPositioner{err: wantErr})
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged on lookup error", got)
 	}
@@ -167,7 +167,7 @@ func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *
 	maxElapsed := withCursorSyncTimeout + 50*time.Millisecond
 
 	start := time.Now()
-	got := withCursorSync("content", slow)
+	got := withCursorSync(realClock{}, "content", slow)
 	elapsed := time.Since(start)
 
 	if got != "content" {

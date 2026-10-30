@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -305,14 +308,79 @@ func TestWriteMessageTimeout_should_FailWithinDeadline_When_PeerNeverReads(t *te
 	require.Error(t, err)
 }
 
-func TestWriteMessageTimeout_should_ClearDeadline_When_WriteSucceeds(t *testing.T) {
-	stream, conn, cleanup := createTestWebSocketPair(t)
-	defer cleanup()
-	require.NoError(t, stream.WriteMessageTimeout(websocket.BinaryMessage, []byte("a"), 100*time.Millisecond))
-	_, _, err := conn.ReadMessage()
+// deadlineRecordingConn records every SetWriteDeadline on the server side of a test socket.
+type deadlineRecordingConn struct {
+	net.Conn
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (c *deadlineRecordingConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadlines = append(c.deadlines, t)
+	c.mu.Unlock()
+	return c.Conn.SetWriteDeadline(t)
+}
+
+func (c *deadlineRecordingConn) recorded() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Time(nil), c.deadlines...)
+}
+
+type recordingListener struct {
+	net.Listener
+	conns chan *deadlineRecordingConn
+}
+
+func (l recordingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	rc := &deadlineRecordingConn{Conn: c}
+	l.conns <- rc
+	return rc, nil
+}
+
+// The write deadline must be set d ahead of now for the write and then cleared, so a later plain
+// write is not subject to a stale deadline. Recording the SetWriteDeadline calls proves that
+// without waiting for a real deadline to pass.
+func TestWriteMessageTimeout_should_SetThenClearDeadline_When_WriteSucceeds(t *testing.T) {
+	rec := make(chan *deadlineRecordingConn, 8)
+	streamCh := make(chan *connectWebSocketStream, 1)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		streamCh <- &connectWebSocketStream{conn: conn}
+	}))
+	srv.Listener = recordingListener{Listener: srv.Listener, conns: rec}
+	srv.Start()
+	defer srv.Close()
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.NoError(t, err)
-	time.Sleep(250 * time.Millisecond) //nolint:notimesleeptest must elapse past a real net.Conn write deadline
-	require.NoError(t, stream.WriteMessage(websocket.BinaryMessage, []byte("b")), "a stale write deadline would fail this")
+	defer client.Close()
+	stream := <-streamCh
+	defer stream.conn.Close()
+	conn := <-rec
+
+	const d = 100 * time.Millisecond
+	before := time.Now()
+	require.NoError(t, stream.WriteMessageTimeout(websocket.BinaryMessage, []byte("a"), d))
+	after := time.Now()
+	_, _, err = client.ReadMessage()
+	require.NoError(t, err)
+
+	// gorilla forwards a deadline to the net.Conn only when it writes, so the clear shows up on the
+	// next write: [deadline for "a", zero for "b"].
+	require.NoError(t, stream.WriteMessage(websocket.BinaryMessage, []byte("b")))
+	got := conn.recorded()
+	require.Len(t, got, 2)
+	assert.False(t, got[0].Before(before.Add(d)) || got[0].After(after.Add(d)), "deadline %v not within [%v, %v]", got[0], before.Add(d), after.Add(d))
+	assert.True(t, got[1].IsZero(), "the deadline must be cleared; a stale one would fail the later write")
 }
 
 func TestSendFullStateFrame_should_UseWriteDeadline(t *testing.T) {
