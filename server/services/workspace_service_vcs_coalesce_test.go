@@ -276,7 +276,7 @@ func TestVCSFlights_CancelledWhileQueuedReleasesSlots(t *testing.T) {
 	go func() {
 		_, _, err := f.do(ctx, "queued", func(context.Context) (*vc.VCSStatus, error) {
 			t.Error("a flight cancelled while queued must never run compute")
-			return nil, nil
+			return nil, assert.AnError
 		})
 		queued <- err
 	}()

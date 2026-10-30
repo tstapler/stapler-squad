@@ -15,7 +15,7 @@ jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 jest.mock("@/lib/store", () => ({ useAppSelector: () => undefined }));
 jest.mock("@/lib/store/sessionsSlice", () => ({ selectAllSessions: () => [] }));
 
-import { prefetchVcsStatus, resetVcsCacheForTests } from "@/lib/hooks/useVcsStatus";
+import { fetchVcsEntry, prefetchVcsStatus, resetVcsCacheForTests } from "@/lib/hooks/useVcsStatus";
 import { useSessionVcs } from "@/lib/hooks/useSessionVcs";
 import { priorityKey } from "@/lib/api/requestPriority";
 
@@ -50,6 +50,14 @@ describe("useSessionVcs prefetch dedupe", () => {
     const { result } = renderHook(() => useSessionVcs("s3", "", "slow"));
     await waitFor(() => expect(result.current.statusLoading).toBe(false));
     expect(mockGetVCSStatus.mock.calls[0][1].contextValues.get(priorityKey)).toBe("deferred");
+  });
+
+  it("fetchVcsEntry_should_SetForceFresh_OnlyWhenForced", async () => {
+    mockGetVCSStatus.mockResolvedValue({ vcsStatus: { branch: "x" }, error: "" });
+    await fetchVcsEntry("s5");
+    expect(mockGetVCSStatus.mock.calls[0][0]).toEqual({ id: "s5", forceFresh: false });
+    await fetchVcsEntry("s5", true);
+    expect(mockGetVCSStatus.mock.calls[1][0]).toEqual({ id: "s5", forceFresh: true });
   });
 
   it("useSessionVcs_should_LeaveGetVCSStatusCritical_When_PaneActive", async () => {
