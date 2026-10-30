@@ -1258,6 +1258,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
 	}
 
+	srv.startDBMaintenance(serverCtx, deps)
+
 	// Start escape analytics batch writer and register it as the global writer.
 	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
 	if deps.AnalyticsEntClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {

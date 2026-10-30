@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/jules"
@@ -110,6 +112,9 @@ type ServerDependencies struct {
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
+	// AnalyticsDriver is the instrumented driver behind AnalyticsEntClient, used
+	// by background SQLite maintenance. Nil whenever AnalyticsEntClient is nil.
+	AnalyticsDriver dialect.ExecQuerier
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	// Available=false means the Browser tab will be hidden on all sessions.
@@ -214,6 +219,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		WorkflowEngine:                 rt.WorkflowEngine,
 		BacklogEnabledCheck:            rt.BacklogEnabledCheck,
 		AnalyticsEntClient:             rt.AnalyticsEntClient,
+		AnalyticsDriver:                rt.AnalyticsDriver,
 		VNCDeps:                        rt.VNCDeps,
 		CDPDeps:                        rt.CDPDeps,
 		HeadlessPool:                   rt.HeadlessPool,
@@ -538,6 +544,7 @@ type RuntimeDeps struct {
 
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
+	AnalyticsDriver    dialect.ExecQuerier
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	VNCDeps vnc.DepsResult
@@ -1342,12 +1349,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
 	var analyticsClient *ent.Client
+	var analyticsDriver dialect.ExecQuerier
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
 		ctx := context.Background()
-		if ac, acErr := analytics.OpenAnalyticsDB(ctx, configDir); acErr != nil {
+		if ac, drv, acErr := analytics.OpenAnalyticsDBWithDriver(ctx, configDir); acErr != nil {
 			log.Warn("could not open analytics DB (will use log-only fallback)", "err", acErr)
 		} else {
 			analyticsClient = ac
+			analyticsDriver = drv
 			log.Info("analytics DB opened", "path", configDir+"/analytics.db")
 		}
 	} else {
@@ -2009,6 +2018,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		BacklogEnabledCheck:            backlogCtrl.IsEnabled,
 		Config:                         cfg,
 		AnalyticsEntClient:             analyticsClient,
+		AnalyticsDriver:                analyticsDriver,
 		VNCDeps:                        vncDeps,
 		CDPDeps:                        cdpDeps,
 		WorkflowRepo:                   workflowRepo,

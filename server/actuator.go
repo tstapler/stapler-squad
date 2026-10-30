@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbmaint"
 	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -74,7 +75,7 @@ func handleActuatorInboxPRWatch(w http.ResponseWriter, r *http.Request) {
 // With the single-connection pool, wait_count/wait_duration_ms rising is DB queueing.
 func handleActuatorDB(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"pools": dbobs.Snapshot()})
+	_ = json.NewEncoder(w).Encode(map[string]any{"pools": dbobs.Snapshot(), "maintenance": dbmaint.Snapshot()})
 }
 
 // handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters
@@ -214,6 +215,7 @@ func handleActuatorMetrics(w http.ResponseWriter, _ *http.Request) {
 		},
 		"workflow_engine_bypass_total": session.EngineBypassSnapshot(),
 		"db":                           dbobs.Snapshot(),
+		"db_maintenance":               dbmaint.Snapshot(),
 		"runtime": map[string]any{
 			"goroutines":    runtime.NumGoroutine(),
 			"heap_inuse_mb": float64(m.HeapInuse) / 1024 / 1024,

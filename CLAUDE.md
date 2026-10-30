@@ -365,6 +365,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
+| SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
