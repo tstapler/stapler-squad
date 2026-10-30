@@ -1653,7 +1653,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	var setupErr error
 	defer func() {
 		if setupErr != nil {
-			if cleanupErr := i.Kill(); cleanupErr != nil {
+			if cleanupErr := i.cleanupAfterFailedStart(firstTimeSetup); cleanupErr != nil {
 				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
 			}
 		}
@@ -1919,7 +1919,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	var setupErr error
 	defer func() {
 		if setupErr != nil {
-			if cleanupErr := i.Kill(); cleanupErr != nil {
+			if cleanupErr := i.cleanupAfterFailedStart(firstTimeSetup); cleanupErr != nil {
 				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
 			}
 			if setupCleanup && cleanup != nil {
@@ -2109,10 +2109,42 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	return nil
 }
 
-// Kill terminates the instance and cleans up all resources
-// Kill destroys both tmux session and worktree (legacy method)
+// cleanupAfterFailedStart releases what a failed start acquired. A first-time setup created
+// its worktree, so Kill (which still keeps a dirty one) is right. A restore did not: the
+// worktree predates the attempt, and a transient failure (tmux killed, restart-storm guard)
+// must never delete it. This once removed 14 worktrees after a restart.
+func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
+	if firstTimeSetup {
+		return i.Kill()
+	}
+	i.stopVNC()
+	i.stopCDP()
+	return i.KillSession()
+}
+
+// Kill terminates the instance and cleans up its resources. Like Destroy, it keeps a
+// worktree that holds uncommitted changes (legacy name).
 func (i *Instance) Kill() error {
 	return i.Destroy()
+}
+
+// CheckWorktreeRemovable returns nil when removing this session's worktree cannot lose
+// uncommitted work: there is no worktree, it is gone from disk, or it is clean. It returns
+// ErrWorktreeDirty (or ErrDirtyStateUnknown when the check itself fails) otherwise.
+func (i *Instance) CheckWorktreeRemovable() error {
+	if !i.gitManager.HasWorktree() {
+		return nil // CleanupWorktree is a no-op without one
+	}
+	// Not worktreeNeedsCommit: its IsWorktree gate would let an attached worktree through
+	// unchecked, and this is the guard in front of a delete.
+	dirty, err := i.worktreeDirtyOnDisk()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("%w: %s", ErrWorktreeDirty, i.gitManager.GetWorktreePath())
+	}
+	return nil
 }
 
 // destroyChainTimeout bounds Destroy()'s stopVNC/stopCDP/KillSession/
@@ -2127,11 +2159,24 @@ func (i *Instance) Kill() error {
 // fires — this bounds the wait, not the work.
 const destroyChainTimeout = 5 * time.Second
 
-// Destroy completely destroys the instance - both tmux session and worktree.
+// Destroy tears down the tmux session and removes the worktree, unless the worktree holds
+// uncommitted changes (or its state can't be determined): then the worktree is kept and
+// ErrWorktreeDirty / ErrDirtyStateUnknown is returned. Use ForceDestroy to discard
+// uncommitted work.
 // Fires EventStopped unconditionally (even if the instance was never started)
 // so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
 // ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	return i.destroy(false)
+}
+
+// ForceDestroy is Destroy that removes the worktree even if it holds uncommitted changes.
+// Only an explicit user request to discard the session's work should reach it.
+func (i *Instance) ForceDestroy() error {
+	return i.destroy(true)
+}
+
+func (i *Instance) destroy(force bool) error {
 	// Set first, before anything else: a leftover SessionDriver goroutine
 	// (session_driver.go) polls this every driverPollInterval and exits on
 	// seeing it, rather than continuing until its own 25-minute deadline.
@@ -2175,7 +2220,7 @@ func (i *Instance) Destroy() error {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- i.destroyChain()
+		done <- i.destroyChain(force)
 	}()
 	select {
 	case err := <-done:
@@ -2188,7 +2233,7 @@ func (i *Instance) Destroy() error {
 // destroyChain runs the actual stopVNC/stopCDP/KillSession/CleanupWorktree
 // teardown sequence. Split out of Destroy() so it can be bounded by
 // destroyChainTimeout without losing track of the goroutine it runs in.
-func (i *Instance) destroyChain() error {
+func (i *Instance) destroyChain(force bool) error {
 	// Stop the remote approval relay (if any) -- see SetRemoteApprovalRelay's
 	// doc comment. No-op for local sessions (always nil there).
 	i.stopRemoteApprovalRelay()
@@ -2216,7 +2261,14 @@ func (i *Instance) destroyChain() error {
 		_ = i.UpdateDiffStats()
 	}
 
-	// Then clean up git worktree
+	// Then clean up git worktree, unless it holds work that exists nowhere else.
+	if !force {
+		if err := i.CheckWorktreeRemovable(); err != nil {
+			log.Warn("destroy: keeping worktree", "session", i.Title, "err", err)
+			// errors.Join, not combineErrors: callers match ErrWorktreeDirty with errors.Is.
+			return errors.Join(i.combineErrors(errs), err)
+		}
+	}
 	if err := i.CleanupWorktree(); err != nil {
 		errs = append(errs, err)
 	}
@@ -2241,6 +2293,12 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 	if !i.gitManager.HasWorktree() {
 		return false, fmt.Errorf("%w: git worktree not initialized", ErrDirtyStateUnknown)
 	}
+	return i.worktreeDirtyOnDisk()
+}
+
+// worktreeDirtyOnDisk reports whether the attached worktree directory holds uncommitted
+// changes, bypassing IsDirty's TTL cache. Requires gitManager.HasWorktree().
+func (i *Instance) worktreeDirtyOnDisk() (bool, error) {
 	if _, err := os.Stat(i.gitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
 		return false, nil // nothing on disk to lose
 	} else if err != nil {

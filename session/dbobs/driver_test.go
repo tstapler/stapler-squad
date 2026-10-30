@@ -169,14 +169,68 @@ func TestTransactionQueriesAreObserved(t *testing.T) {
 	assert.NotContains(t, rec.all(), secretBind)
 }
 
+func TestStatementsAttributedToCaller(t *testing.T) {
+	drv, _ := newDriver(t, Config{Name: "calltest", SlowThreshold: time.Hour, Warn: func(string, ...any) {}})
+	for i := 0; i < 3; i++ {
+		insertSecret(t, drv, context.Background())
+	}
+
+	var top []StatementStat
+	for _, s := range Snapshot() {
+		if s.Name == "calltest" {
+			top = s.TopStatements
+		}
+	}
+	require.NotEmpty(t, top)
+	assert.Equal(t, int64(3), top[0].Count)
+	assert.Contains(t, top[0].Caller, "TestStatementsAttributedToCaller")
+}
+
+func TestSlowQueryLogCarriesCaller(t *testing.T) {
+	rec := &warnRecorder{}
+	drv, _ := newDriver(t, Config{Name: "slowcaller", SlowThreshold: time.Nanosecond, Warn: rec.warn})
+	insertSecret(t, drv, context.Background())
+	assert.Contains(t, rec.all(), "TestSlowQueryLogCarriesCaller")
+}
+
+func TestStatementsWithDifferentListLengthsShareOneKey(t *testing.T) {
+	drv, _ := newDriver(t, Config{Name: "listkeytest", SlowThreshold: time.Hour, Warn: func(string, ...any) {}})
+	for _, q := range []string{"SELECT v FROM t WHERE v IN (?, ?)", "SELECT v FROM t WHERE v IN (?, ?, ?, ?)"} {
+		args := make([]any, strings.Count(q, "?"))
+		for i := range args {
+			args[i] = "x"
+		}
+		var rows entsql.Rows
+		require.NoError(t, drv.Query(context.Background(), q, args, &rows))
+		_ = rows.Close()
+	}
+	for _, s := range Snapshot() {
+		if s.Name == "listkeytest" {
+			require.Len(t, s.TopStatements, 1)
+			assert.Equal(t, int64(2), s.TopStatements[0].Count)
+		}
+	}
+}
+
+func TestStatementTable_Should_CountDroppedKeys_When_Full(t *testing.T) {
+	var tbl statementTable
+	for i := 0; i < maxStatementKeys+3; i++ {
+		tbl.add(stmtKey{statement: fmt.Sprintf("SELECT %d", i), caller: "c"}, time.Millisecond, 0)
+	}
+	assert.Equal(t, int64(3), tbl.droppedKeys())
+	assert.Len(t, tbl.top(maxStatementKeys+10), maxStatementKeys)
+}
+
 func TestNormalizeStatement(t *testing.T) {
 	cases := map[string]string{
-		"SELECT  *\n FROM t WHERE a = 'bob''s' AND b = 42": "SELECT * FROM t WHERE a = ? AND b = ?",
-		"SELECT `t1`.`id` FROM t1 WHERE x IN (?, ?)":       "SELECT `t1`.`id` FROM t1 WHERE x IN (?, ?)",
-		"UPDATE t SET n = 3.14 WHERE id = 7":               "UPDATE t SET n = ? WHERE id = ?",
-		"SELECT col2 FROM tab_3 WHERE x = 'unterminated":   "SELECT col2 FROM tab_3 WHERE x = ?",
-		"SELECT 1 FROM t WHERE k = 0xDEADBEEF":             "SELECT ? FROM t WHERE k = ?",
-		"SELECT 1 FROM t WHERE k = 1e10 AND j = 2.5E-3":    "SELECT ? FROM t WHERE k = ? AND j = ?",
+		"SELECT  *\n FROM t WHERE a = 'bob''s' AND b = 42":   "SELECT * FROM t WHERE a = ? AND b = ?",
+		"SELECT `t1`.`id` FROM t1 WHERE x IN (?, ?)":         "SELECT `t1`.`id` FROM t1 WHERE x IN (?, ...?)",
+		"SELECT 1 FROM t WHERE x IN (?)":                     "SELECT ? FROM t WHERE x IN (?)",
+		"INSERT INTO t (a, b) VALUES (?, ?), (?, ?), (?, ?)": "INSERT INTO t (a, b) VALUES (?, ...?), ...",
+		"UPDATE t SET n = 3.14 WHERE id = 7":                 "UPDATE t SET n = ? WHERE id = ?",
+		"SELECT col2 FROM tab_3 WHERE x = 'unterminated":     "SELECT col2 FROM tab_3 WHERE x = ?",
+		"SELECT 1 FROM t WHERE k = 0xDEADBEEF":               "SELECT ? FROM t WHERE k = ?",
+		"SELECT 1 FROM t WHERE k = 1e10 AND j = 2.5E-3":      "SELECT ? FROM t WHERE k = ? AND j = ?",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, NormalizeStatement(in), in)

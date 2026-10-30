@@ -49,9 +49,10 @@ jest.mock("@/lib/hooks/useNotificationHistory", () => ({
     refresh: jest.fn().mockResolvedValue(undefined),
   }),
 }));
+const mockLogNotificationDismissed = jest.fn();
 jest.mock("@/lib/hooks/useAuditLog", () => ({
   useAuditLog: () => ({
-    logNotificationDismissed: jest.fn(),
+    logNotificationDismissed: mockLogNotificationDismissed,
     logNotificationMarkedRead: jest.fn(),
     logNotificationPanelOpened: jest.fn(),
     logNotificationPanelClosed: jest.fn(),
@@ -359,7 +360,8 @@ describe("Move all to tray (Story 3.4)", () => {
     act(() => notifications.addNotification(toast(1, { notificationType: "info" })));
     act(() => notifications.addNotification(toast(2, { notificationType: "info" })));
 
-    const infoToast = notifications.notifications.find((n) => n.sessionId === "s1")!;
+    const infoToast = notifications.notifications.find((n) => n.sessionId === "s1");
+    if (!infoToast) throw new Error("expected the s1 toast");
     act(() => notifications.dismissToast(infoToast.id));
     expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0", "s2"]);
     expect(notifications.notificationHistory).toHaveLength(3);
@@ -731,6 +733,19 @@ describe("deck rules from the UX criteria (TD-5, TD-9, TB-2, T-TS-32)", () => {
     advance(10 * 60 * 1000);
     expect(notifications.notifications.map((n) => n.sessionId)).toEqual(["s0"]);
     expect(screen.getAllByTestId("toast")).toHaveLength(1);
+  });
+
+  it("logs a dismissal audit event when a person closes a toast, and none when it times out", () => {
+    mockLogNotificationDismissed.mockClear();
+    mount();
+    act(() => notifications.addNotification(toast(0, { notificationType: "warning", isPendingDecision: false })));
+    advance(8_000 + 300);
+    expect(notifications.notifications).toHaveLength(0);
+    expect(mockLogNotificationDismissed).not.toHaveBeenCalled();
+
+    act(() => notifications.addNotification(toast(1, { notificationType: "warning", isPendingDecision: false })));
+    fireEvent.click(screen.getByTestId("toast-dismiss"));
+    expect(mockLogNotificationDismissed).toHaveBeenCalledTimes(1);
   });
 
   it("td9_should_leave_document_active_element_alone_when_a_toast_arrives", () => {

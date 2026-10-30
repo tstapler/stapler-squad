@@ -1514,6 +1514,186 @@ func parkPRNeedsFixRow(t *testing.T, storage *Storage, itemID string) {
 	require.NoError(t, err)
 }
 
+// conflictTestClock steps a listener's hourly conflict throttle without real time.
+type conflictTestClock struct{ now time.Time }
+
+func newConflictTestClock(l *BacklogLifecycleListener) *conflictTestClock {
+	c := &conflictTestClock{now: time.Now()}
+	l.conflictRetryClock = func() time.Time { return c.now }
+	return c
+}
+
+func (c *conflictTestClock) Add(d time.Duration) { c.now = c.now.Add(d) }
+
+// conflictOnlyListener wires a listener whose PR has only a merge conflict, a fake fix
+// spawner, a stepping clock and a recording notifier.
+func conflictOnlyListener(t *testing.T, storage *Storage, prNumber int) (*BacklogLifecycleListener, *fakePRFixSpawner, *autoRemediatingNotifier, *conflictTestClock, *fakePRPendingChecker, *BacklogItemData) {
+	t.Helper()
+	item := newPRPendingTestItem(t, storage, prNumber)
+	listener := NewBacklogLifecycleListener(storage)
+	clock := newConflictTestClock(listener)
+	checker := &fakePRPendingChecker{status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"}}
+	overridePRPendingChecker(t, listener, checker)
+	spawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(spawner)
+	n := &autoRemediatingNotifier{}
+	listener.SetNotifier(n)
+	return listener, spawner, n, clock, checker, item
+}
+
+// With ReworkCapOverride == 0 the rework cap never closes, so the hourly retry must bound
+// itself: conflictRetryMaxAttempts sessions, then stand down with one notice.
+func TestReconcilePRPending_ConflictOnly_StopsAfterMaxAttempts_WithOneNotice(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9311)
+
+	for i := 1; i <= conflictRetryMaxAttempts; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		require.Equal(t, i, spawner.callCount, "hourly grant %d must spawn", i)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.NotContains(t, n.titles(), "Auto-rework paused", "no dead-end notice while the override is still retrying")
+
+	for i := 0; i < 3; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.Equal(t, conflictRetryMaxAttempts, spawner.callCount, "no session past the max")
+	paused := 0
+	for _, title := range n.titles() {
+		if title == "Auto-rework paused" {
+			paused++
+		}
+	}
+	assert.Equal(t, 1, paused, "exactly one exhaustion notice")
+}
+
+// While the override is retrying, the attempt that parks the pr_needs_fix row must not
+// announce a dead end the next hour contradicts.
+func TestReconcilePRPending_ConflictOnly_ParkingRowDoesNotAnnounceDeadEnd(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, n, clock, _, item := conflictOnlyListener(t, storage, 9312)
+
+	for attempt := int32(1); attempt <= MaxRemediationAttempts; attempt++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		backdateNextRemediationAt(t, storage.repo, item.ID, domain.StuckReasonPRNeedsFix, time.Now().Add(-time.Second))
+		clock.Add(conflictRetryInterval)
+	}
+	assert.NotContains(t, n.titles(), "Auto-rework paused")
+}
+
+// An open rework_cap row means a human decision is pending: the override stands down.
+func TestReconcilePRPending_ConflictOnly_StandsDownWhenReworkCapOpen(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, _, clock, _, item := conflictOnlyListener(t, storage, 9313)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	require.Equal(t, 1, spawner.callCount)
+	parkPRNeedsFixRow(t, storage, item.ID)
+	applied, err := storage.repo.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusPRPending, "cap hit")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	clock.Add(conflictRetryInterval + time.Second)
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Equal(t, 1, spawner.callCount, "no hourly respawn once the rework cap row is open")
+}
+
+// A fix attempt that fails to start must not spend the attempt budget.
+func TestReconcilePRPending_ConflictOnly_FailedSpawnIsRefunded(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9315)
+	spawner.err = errors.New("spawn failed")
+
+	for i := 0; i < conflictRetryMaxAttempts+3; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.Equal(t, conflictRetryMaxAttempts+3, spawner.callCount, "every hourly tick keeps trying: failed spawns spend nothing")
+	assert.NotContains(t, n.titles(), "Auto-rework paused", "no \"survived N sessions\" notice when no session ran")
+}
+
+// Reset (attempt counter back to 0) re-arms the hourly override after exhaustion.
+func TestReconcilePRPending_ConflictOnly_ResetReArmsExhaustedOverride(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, _, clock, _, item := conflictOnlyListener(t, storage, 9316)
+
+	for i := 0; i < conflictRetryMaxAttempts+1; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	require.Equal(t, conflictRetryMaxAttempts, spawner.callCount, "setup: exhausted")
+
+	applied, err := storage.ResetStuckRemediation(ctx, item.ID, domain.StuckReasonPRNeedsFix)
+	require.NoError(t, err)
+	require.True(t, applied)
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Greater(t, spawner.callCount, conflictRetryMaxAttempts, "Reset must let the hourly override try again")
+}
+
+// A merged PR drops the item's ledger entry.
+func TestReconcilePRPending_ConflictLedgerClearedWhenPRMerges(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, _, _, checker, item := conflictOnlyListener(t, storage, 9317)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	listener.conflictRetries.mu.Lock()
+	require.NotNil(t, listener.conflictRetries.items[item.ID])
+	listener.conflictRetries.mu.Unlock()
+
+	checker.merged = true
+	listener.ReconcilePRPending(ctx, storage.repo)
+	listener.conflictRetries.mu.Lock()
+	defer listener.conflictRetries.mu.Unlock()
+	assert.Nil(t, listener.conflictRetries.items[item.ID], "merged PR must not leave a ledger entry")
+}
+
+// A transient UNKNOWN mergeable state must not reset the throttle; a known-clean PR must.
+func TestReconcilePRPending_ConflictThrottle_ResetsOnlyOnKnownCleanPR(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, _, _, checker, item := conflictOnlyListener(t, storage, 9314)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	granted := func() int {
+		listener.conflictRetries.mu.Lock()
+		defer listener.conflictRetries.mu.Unlock()
+		if s := listener.conflictRetries.items[item.ID]; s != nil {
+			return s.grants
+		}
+		return 0
+	}
+	require.Equal(t, 1, granted())
+
+	checker.status = &git.PRStatus{Mergeable: "UNKNOWN"}
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Equal(t, 1, granted(), "UNKNOWN is no signal: the throttle must survive it")
+
+	checker.status = &git.PRStatus{Mergeable: "MERGEABLE"}
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Equal(t, 0, granted(), "a known-clean PR resets the throttle")
+}
+
 // A conflict-only PR must keep getting fix sessions (hourly) after its
 // pr_needs_fix row parks; a CI-failing PR in the same state must not.
 func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot(t *testing.T) {
@@ -1536,6 +1716,7 @@ func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot
 			item := newPRPendingTestItem(t, storage, 9301)
 
 			listener := NewBacklogLifecycleListener(storage)
+			clock := newConflictTestClock(listener)
 			overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: tc.status})
 			fakeSpawner := &fakePRFixSpawner{}
 			listener.SetPRFixSpawner(fakeSpawner)
@@ -1544,8 +1725,8 @@ func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot
 			require.Equal(t, 1, fakeSpawner.callCount)
 			parkPRNeedsFixRow(t, storage, item.ID)
 
-			// Pretend the hourly conflict throttle has elapsed.
-			listener.conflictRetries.clear(item.ID)
+			// Step the clock past the hourly conflict throttle.
+			clock.Add(conflictRetryInterval + time.Second)
 			listener.ReconcilePRPending(ctx, storage.repo)
 			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount)
 

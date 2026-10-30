@@ -158,6 +158,7 @@ func TestWorktreePRPoller_InvalidateCacheReenablesPollingOnNextScan(t *testing.T
 		t.Fatalf("polls before invalidation = %d, want 2", got)
 	}
 
+	noteRepos(env.p, items, "acme", "widgets")
 	env.p.InvalidateCache("acme", "widgets", 7)
 	env.advance(2 * time.Second)
 	env.p.pollWorktrees(items, pollTriggerScan)

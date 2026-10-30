@@ -795,10 +795,13 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
       streams.push(s);
       return s.iterable;
     });
+    // Backoff delay is Math.random() * 1000ms. Pin it near the ceiling so the natural
+    // reconnect cannot fire inside the 300ms window and make the online connect() a no-op
+    // (a ~0ms draw made it fire early, leaving the count flat).
+    jest.spyOn(Math, 'random').mockReturnValue(0.999);
 
     const { result } = renderHook(() => useTerminalStream(RECONNECT_OPTIONS));
 
-    // Connect then disconnect stream
     await act(async () => { result.current.connect(); });
     await waitFor(() => expect(streams.length).toBe(1));
     await act(async () => { streams[0].push(makeOutputMsg()); });
@@ -806,18 +809,16 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     await act(async () => { streams[0].end(); });
     await waitFor(() => expect(result.current.isConnected).toBe(false));
 
-    // Cancel any pending backoff timer from the natural reconnect
-    await act(async () => { jest.advanceTimersByTime(0); });
+    // The natural backoff reconnect is still pending: nothing has reconnected yet.
+    expect(callCount).toBe(1);
 
-    const callCountBefore = callCount;
-
-    // Fire an online event
     await act(async () => {
       window.dispatchEvent(new Event('online'));
-      jest.advanceTimersByTime(300);
+      jest.advanceTimersByTime(300); // 200ms debounce, well under the ~999ms backoff
     });
 
-    await waitFor(() => expect(callCount).toBeGreaterThan(callCountBefore));
+    // Exactly one connect, and it came from the online path.
+    expect(callCount).toBe(2);
   });
 
   it('useTerminalStream_should_registerExactlyOneVisibilityListener_When_strictModeRemounts', async () => {

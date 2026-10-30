@@ -101,6 +101,8 @@ type analyticsSummaryResponse struct {
 type AnalyticsHandler struct {
 	provider analytics.AnalyticsProvider
 	limiter  *rateLimiter
+	events   *minuteBudget
+	cmEvents *minuteBudget
 	client   *ent.Client // may be nil when only LogAnalyticsProvider is available
 }
 
@@ -114,7 +116,19 @@ func NewAnalyticsHandler(provider analytics.AnalyticsProvider) *AnalyticsHandler
 		limiter: &rateLimiter{
 			resetAt: time.Now().Add(time.Minute),
 		},
+		events:   &minuteBudget{limit: analyticsEventsPerMinute},
+		cmEvents: &minuteBudget{limit: metricEventsPerMinute},
 	}
+}
+
+func countMetricEvents(events []analyticsEventRequest) int {
+	n := 0
+	for _, ev := range events {
+		if strings.HasPrefix(ev.EventName, "cm.") {
+			n++
+		}
+	}
+	return n
 }
 
 // NewAnalyticsHandlerWithClient creates a new AnalyticsHandler that can also serve
@@ -150,6 +164,7 @@ func (h *AnalyticsHandler) allow() bool {
 // HandlePost handles POST /api/analytics.
 func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 	if !h.allow() {
+		noteRateLimited(scopeGlobalRequests)
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
@@ -183,6 +198,18 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid event category: must be one of user_action, performance, navigation, rpc", http.StatusBadRequest)
 			return
 		}
+	}
+
+	// Charged only after validation, so a malformed batch consumes no event budget.
+	if !h.events.take(len(req.Events)) {
+		noteRateLimited(scopeGlobalEvents)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
+	}
+	if !h.cmEvents.take(countMetricEvents(req.Events)) {
+		noteRateLimited(scopeMetricBudget)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
 	}
 
 	ctx := r.Context()

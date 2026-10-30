@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { create, toBinary } from "@bufbuild/protobuf";
 import type { DescMethodUnary } from "@bufbuild/protobuf";
 import type { Transport, UnaryResponse } from "@connectrpc/connect";
@@ -10,6 +12,7 @@ import {
   _resetAuthRequiredForTesting,
   AuthAwareBreaker,
   createWsUnaryPolicyTransport,
+  FALLBACK_REASONS,
   markAuthRequired,
   WS_CALL_TIMEOUT_MS,
   type FallbackReason,
@@ -210,6 +213,37 @@ describe("WsUnaryPolicy", () => {
     expect(h.reasons).toEqual([]);
   });
 
+  it.each([
+    ["resource_exhausted", "ws-resource-exhausted"],
+    ["unavailable", "ws-unavailable"],
+  ])("policy_should_ReplayOverHttp_When_ReplayableCallGetsServerError_%s", async (code, reason) => {
+    const h = setup();
+    const call = vcs(h.policy);
+    h.sock().open();
+    await Promise.resolve();
+    jest.advanceTimersByTime(2_000);
+    h.sock().receive({ type: "ERROR", id: h.sock().requestIds()[0], json: { code, message: "shed" } } as MuxFrame);
+    await call;
+    expect(h.http.unary).toHaveBeenCalledTimes(1);
+    expect((h.http.unary.mock.calls[0] as unknown[])[2]).toBe(30_000 - 2_000); // only the time left
+    expect(h.reasons).toEqual([reason]);
+  });
+
+  it("policy_should_RejectServerResourceExhausted_When_CallIsNotReplayable", async () => {
+    const h = setup({ isReplayable: () => false });
+    const call = vcs(h.policy);
+    h.sock().open();
+    await Promise.resolve();
+    h.sock().receive({
+      type: "ERROR",
+      id: h.sock().requestIds()[0],
+      json: { code: "resource_exhausted", message: "shed" },
+    } as MuxFrame);
+    const err = await call.catch((e) => e);
+    expect((err as ConnectError).code).toBe(Code.ResourceExhausted);
+    expect(h.http.unary).not.toHaveBeenCalled();
+  });
+
   it("policy_should_UseHttpOnNextCall_When_ForceHttpOverrideSetMidSession", async () => {
     let force = false;
     const h = setup({ forceHttp: () => force });
@@ -240,5 +274,16 @@ describe("WsUnaryPolicy", () => {
     await vcs(h.policy);
     expect(h.http.unary).toHaveBeenCalledTimes(1);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+describe("fallback reasons vs the server allow-list", () => {
+  it("every FallbackReason is accepted by server/analytics/client_metrics.go", () => {
+    const file = path.join(process.cwd(), "..", "server", "analytics", "client_metrics.go");
+    const src = fs.readFileSync(file, "utf8");
+    const block = /fallbacks\s*=\s*map\[string\]bool\{([\s\S]*?)\}/.exec(src)?.[1] ?? "";
+    const allowed = new Set([...block.matchAll(/"([a-z-]+)":\s*true/g)].map((m) => m[1]));
+    // Add the reason to the Go `fallbacks` map when this fails, or the server labels it "unknown".
+    expect(FALLBACK_REASONS.filter((r) => !allowed.has(r))).toEqual([]);
   });
 });
