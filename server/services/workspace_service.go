@@ -66,8 +66,9 @@ const branchCacheTTL = 5 * time.Minute
 const vcsStatusCacheTTL = 15 * time.Second
 
 // vcsStatusStaleTTL is how old a cached status may be and still be served instantly
-// (while a background refresh runs). Beyond it callers wait for a fresh computation.
-const vcsStatusStaleTTL = 2 * time.Minute
+// to a plain poll (while a background refresh runs). Beyond it, or when the request sets
+// force_fresh, callers wait for a fresh computation. Matches the UI's 60s active poll.
+const vcsStatusStaleTTL = time.Minute
 
 // WorkspaceService handles all VCS/workspace RPC methods.
 //
@@ -207,7 +208,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 	}
 	// Stale-while-revalidate: a poller never waits on git for an entry that is merely
 	// past its TTL. StatusAsOf tells the UI how old the data is.
-	if stale, ok := ws.cachedVCSStatus(workDir, vcsStatusStaleTTL); ok {
+	if stale, ok := ws.cachedVCSStatus(workDir, vcsStatusStaleTTL); ok && !req.Msg.ForceFresh {
 		ws.refreshVCSStatusInBackground(ctx, instance, workDir)
 		recordVCSOutcome(ctx, vcsOutcomeStaleHit)
 		span.SetAttributes(attribute.String("cache", "stale"))
@@ -240,6 +241,10 @@ func (ws *WorkspaceService) cachedAfter(workDir string, t time.Time) bool {
 // blocking the caller. It is itself a waiter, so the work is not cancelled when the
 // triggering request ends; vcsComputeTimeout bounds it.
 func (ws *WorkspaceService) refreshVCSStatusInBackground(ctx context.Context, instance *session.Instance, workDir string) {
+	// Background refreshes yield to interactive misses: skip when every slot is busy.
+	if ws.vcsFlights.saturated() {
+		return
+	}
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vcsComputeTimeout)
 	go func() {
 		defer cancel()
@@ -604,7 +609,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 	}
 
 	// Evict the status cache for the old path; the new path will be repopulated on next poll.
-	ws.vcsStatusCache.Delete(preWorkDir)
+	ws.InvalidateVCSStatus(preWorkDir)
 
 	if ws.eventBus != nil {
 		ws.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"workspace", "branch"}))

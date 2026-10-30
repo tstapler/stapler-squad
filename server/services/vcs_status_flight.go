@@ -33,7 +33,7 @@ const (
 	// Each spawns several git processes; more than a handful in parallel just
 	// queues on the runtime's fork lock.
 	maxConcurrentVCSComputations = 4
-	// vcsComputeTimeout bounds one shared computation regardless of waiters.
+	// vcsComputeTimeout bounds the git work of one shared computation (queue wait excluded).
 	vcsComputeTimeout = 30 * time.Second
 )
 
@@ -121,7 +121,7 @@ func (f *vcsFlights) do(ctx context.Context, key string, compute func(context.Co
 	} else {
 		// Detached from the leader's cancellation (it may leave while others wait) but
 		// keeping its values, so the computation's spans stay in the leader's trace.
-		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vcsComputeTimeout)
+		workCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		fl = &vcsFlight{cancel: cancel, done: make(chan struct{}), waiters: 1}
 		f.flights[key] = fl
 		go f.run(workCtx, key, fl, compute)
@@ -135,6 +135,24 @@ func (f *vcsFlights) do(ctx context.Context, key string, compute func(context.Co
 		f.leave(key, fl)
 		return nil, shared, ctx.Err()
 	}
+}
+
+// waiters is the number of callers currently waiting on key's flight (0 if none). Tests poll it
+// instead of sleeping to know a caller has joined.
+func (f *vcsFlights) waiters(key string) int {
+	f.init()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if fl, ok := f.flights[key]; ok {
+		return fl.waiters
+	}
+	return 0
+}
+
+// saturated reports whether every computation slot is taken.
+func (f *vcsFlights) saturated() bool {
+	f.init()
+	return len(f.slots) == cap(f.slots)
 }
 
 // forget detaches the running flight for key so the next caller starts a fresh one. The
@@ -197,6 +215,9 @@ func (f *vcsFlights) run(ctx context.Context, key string, fl *vcsFlight, compute
 	}
 	defer func() { <-f.slots }()
 
+	// The bound starts after the slot is won: queueing must not eat the git budget.
+	ctx, cancelTimeout := context.WithTimeout(ctx, vcsComputeTimeout)
+	defer cancelTimeout()
 	fl.status, fl.err = compute(ctx)
 	outcome = classifyVCSResult(ctx, fl.err, span)
 	span.SetAttributes(attribute.Int64("queue_wait_ms", waited.Milliseconds()))

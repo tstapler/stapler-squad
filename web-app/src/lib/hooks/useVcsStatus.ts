@@ -50,7 +50,7 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true):
   // caller drops the result itself when its own signal has aborted.
   // abort-signal-exempt
   const promise: Promise<VcsCacheEntry> = client
-    .getVCSStatus({ id: sessionId }, deferUnless(focused))
+    .getVCSStatus({ id: sessionId, forceFresh: force }, deferUnless(focused))
     .then((response) => {
       const entry: VcsCacheEntry = {
         data: response.vcsStatus ?? null,
