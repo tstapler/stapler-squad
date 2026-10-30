@@ -107,6 +107,9 @@ export function serializeGhosttyBuffer(term: GhosttyWebTerminal): string {
  * converted. `clear` also drops scrollback, like xterm's. `refresh` is a no-op: ghostty-web repaints from its own render loop.
  */
 export function toITerminal(term: GhosttyWebTerminal): ITerminal {
+  // Captured now: TerminalOutput's debug instrumentation later monkey-patches `write`, and calling the patched
+  // one from here would recurse back into this facade.
+  const rawWrite = term.write.bind(term);
   const xtermStyleViewportY = (): number =>
     Math.max(0, term.buffer.active.length - term.rows - term.getViewportY());
   return {
@@ -119,11 +122,11 @@ export function toITerminal(term: GhosttyWebTerminal): ITerminal {
     // ghostty-web fires the write callback from requestAnimationFrame, which a hidden tab never runs;
     // parsing is synchronous in the WASM, so completion is already true when write() returns.
     write: (data, callback) => {
-      term.write(data);
+      rawWrite(data);
       if (callback) queueMicrotask(callback);
     },
     // Terminal.clear() leaves scrollback behind; xterm's drops it, and prependScrollbackBatch relies on that.
-    clear: () => term.write("\x1b[3J\x1b[2J\x1b[H"),
+    clear: () => rawWrite("\x1b[3J\x1b[2J\x1b[H"),
     refresh: () => {},
     scrollToBottom: () => term.scrollToBottom(),
     get buffer() {
@@ -163,6 +166,14 @@ export function asXtermCompatible(term: GhosttyWebTerminal, onReply?: (data: str
   };
   return new Proxy(term, {
     get: (target, prop) => (typeof prop === "string" && Object.hasOwn(overrides, prop) ? overrides[prop] : bound(target, prop)),
+    // Method patches (e.g. write instrumentation) must wrap the facade's method, not replace the raw terminal's.
+    set: (target, prop, value) => {
+      if (typeof prop === "string" && Object.hasOwn(overrides, prop) && typeof overrides[prop] === "function") {
+        overrides[prop] = value;
+        return true;
+      }
+      return Reflect.set(target, prop, value, target);
+    },
   });
 }
 

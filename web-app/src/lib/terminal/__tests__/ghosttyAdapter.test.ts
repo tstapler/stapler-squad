@@ -45,6 +45,19 @@ describe("ghostty adapter: ITerminal contract", () => {
     await new Promise<void>((resolve) => term.write("hi", resolve));
   });
 
+  it("write_should_NotRecurse_When_InstrumentationWrapsTheFacadeWrite", () => {
+    const { term } = setup();
+    const original = term.write;
+    let calls = 0;
+    // Mirrors TerminalOutput's debug monitor: replace write with a wrapper that calls the original.
+    (term as unknown as { write: unknown }).write = (...args: unknown[]) => {
+      calls++;
+      return (original as (...a: unknown[]) => void)(...args);
+    };
+    expect(() => term.write("hello")).not.toThrow();
+    expect(calls).toBe(1);
+  });
+
   it("clear_should_DropScrollbackAndScreen", () => {
     const { raw, term } = setup();
     term.write("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7");
