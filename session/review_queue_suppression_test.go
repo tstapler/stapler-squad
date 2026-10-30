@@ -17,6 +17,12 @@ func existingItem(p Priority) func() (*ReviewItem, bool) {
 	return func() (*ReviewItem, bool) { return &ReviewItem{Priority: p}, true }
 }
 
+func existingEpisodeItem(p Priority, ep EpisodeID) func() (*ReviewItem, bool) {
+	return func() (*ReviewItem, bool) {
+		return &ReviewItem{Priority: p, Metadata: map[string]string{episodeMetadataKey: string(ep)}}, true
+	}
+}
+
 func addCtx() ruleCtx {
 	return ruleCtx{action: DetectionActionAdd, priority: PriorityMedium, reason: ReasonInputRequired,
 		controllerActive: true, now: suppressionNow, existing: noExisting}
@@ -29,8 +35,7 @@ func TestSuppressionPolicy_Should_EnforceRuleOrder_When_TwoRulesWouldFire(t *tes
 	for _, r := range suppressionRules {
 		names = append(names, r.name)
 	}
-	// PR B inserts episodeAck after readdLimit and extends this list.
-	if want := []string{"ackSnooze", "grace", "readdLimit"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"ackSnooze", "grace", "readdLimit", "episodeAck"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("rule order = %v, want %v", names, want)
 	}
 
@@ -162,7 +167,11 @@ func TestReaddLimit_Should_NotSuppress_When_NewEpisodeWithin2Minutes(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := addCtx()
-			c.priority, c.existing, c.episodeChanged = tc.priority, tc.existing, tc.episodeNew
+			c.priority, c.existing = tc.priority, tc.existing
+			if tc.episodeNew {
+				c.episode = "E2"
+				c.existing = existingEpisodeItem(tc.priority, "E1")
+			}
 			if tc.addedAgo != 0 {
 				c.lastAddedToQueue = suppressionNow.Add(-tc.addedAgo)
 			}
@@ -287,10 +296,9 @@ func TestAckSnooze_Should_KeepApprovalPending_When_BypassFixOnOrOff(t *testing.T
 	}
 }
 
-// PR B appends ReasonProseQuestion to this expectation when the constant exists.
 func TestNeedsHumanReasons_Should_ListBlockingReasons_When_Queried(t *testing.T) {
 	t.Parallel()
-	want := []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
+	want := []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState, ReasonProseQuestion}
 	if got := NeedsHumanReasons(); !reflect.DeepEqual(got, want) {
 		t.Errorf("NeedsHumanReasons = %v, want %v", got, want)
 	}

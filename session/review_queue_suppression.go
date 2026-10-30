@@ -19,6 +19,10 @@ const (
 	graceAfterAck = 5 * time.Minute
 	// minReAddInterval limits how soon an already-queued session may be re-added.
 	minReAddInterval = 2 * time.Minute
+	// snoozeTTL is how long an output-based ack may hide an item (with AckBypassFix on).
+	snoozeTTL = 4 * time.Hour
+	// episodeMetadataKey carries a queued item's EpisodeID so the limiter can tell a new episode.
+	episodeMetadataKey = "episode_id"
 )
 
 // RuleOptions are the flags consumed by the poller's suppression rules.
@@ -60,9 +64,11 @@ type ruleCtx struct {
 	lastAcknowledged time.Time
 	lastAddedToQueue time.Time
 	now              time.Time
-	// episodeChanged marks an item whose episode differs from the queued one; always
-	// false until episode ids exist.
+	// episodeChanged marks a result whose episode is not the acked one: an unacked
+	// episode is an escalation, never a re-add shortly after an ack (grace).
 	episodeChanged bool
+	episode        EpisodeID // the result's turn-end episode; empty for non-episode reasons
+	ackedEpisode   EpisodeID
 	existing       func() (*ReviewItem, bool)
 	opts           RuleOptions
 }
@@ -80,6 +86,7 @@ var suppressionRules = []suppressionRule{
 	{"ackSnooze", ackSnooze},
 	{"grace", grace},
 	{"readdLimit", readdLimit},
+	{"episodeAck", episodeAck},
 }
 
 // suppressionPolicy runs the rule chain for one session's detection result.
@@ -93,6 +100,9 @@ func suppressionPolicy(snap *InstanceSnapshot, result DetectionResult, statusInf
 		lastAcknowledged: snap.LastAcknowledged,
 		lastAddedToQueue: snap.LastAddedToQueue,
 		now:              time.Now(),
+		episode:          result.Episode,
+		ackedEpisode:     snap.AckedEpisodeID,
+		episodeChanged:   result.Episode != "" && result.Episode != snap.AckedEpisodeID,
 		existing:         func() (*ReviewItem, bool) { return queue.Get(snap.Title) },
 		opts:             opts,
 	}
@@ -109,22 +119,48 @@ func evaluateRules(rules []suppressionRule, rc ruleCtx) SuppressionDecision {
 }
 
 // needsHumanReasons are the reasons that block the agent on a person; with
-// RuleOptions.AckBypassFix they escape the output-based ack snooze. The plan's fourth
-// reason, prose_question, arrives in PR B with the prose-question detector.
-var needsHumanReasons = []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
+// RuleOptions.AckBypassFix they escape the output-based ack snooze.
+var needsHumanReasons = []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState, ReasonProseQuestion}
 
 // NeedsHumanReasons returns a copy of the needs-human reason set.
 func NeedsHumanReasons() []AttentionReason { return slices.Clone(needsHumanReasons) }
 
 func isNeedsHumanReason(r AttentionReason) bool { return slices.Contains(needsHumanReasons, r) }
 
+// isEpisodeKeyedReason marks the reasons whose ack is per turn-end episode, not per output.
+func isEpisodeKeyedReason(r AttentionReason) bool {
+	return r == ReasonProseQuestion || r == ReasonAwaitingDirection
+}
+
+// setEpisodeMetadata records the item's episode so the limiter can recognise a new one.
+func setEpisodeMetadata(item *ReviewItem, ep EpisodeID) {
+	if ep == "" {
+		return
+	}
+	if item.Metadata == nil {
+		item.Metadata = make(map[string]string)
+	}
+	item.Metadata[episodeMetadataKey] = string(ep)
+}
+
+// episodeAcked reports whether a result for reason/episode was already acknowledged.
+func episodeAcked(reason AttentionReason, episode, acked EpisodeID) bool {
+	return isEpisodeKeyedReason(reason) && episode != "" && episode == acked
+}
+
 // ackSnooze drops items the user acknowledged after the last output. Active high-priority
 // adds bypass it: content-signature dedup leaves LastMeaningfulOutput unchanged when an
 // identical prompt reappears, so the ack would otherwise hide a live blocking prompt.
-// With AckBypassFix the same holds for every needs-human reason, whatever its priority.
+// With AckBypassFix the same holds for every needs-human reason, whatever its priority,
+// and a snooze expires after snoozeTTL. Episode-keyed reasons never use this snooze: their
+// ack is the episodeAck rule, regardless of AckBypassFix.
 func ackSnooze(c ruleCtx) (SuppressionDecision, bool) {
 	bypass := c.shouldAdd() && (c.priority <= PriorityHigh || (c.opts.AckBypassFix && isNeedsHumanReason(c.reason)))
-	if !bypass && c.ackedAfterOutput {
+	if c.shouldAdd() && isEpisodeKeyedReason(c.reason) {
+		bypass = true
+	}
+	expired := c.opts.AckBypassFix && !c.lastAcknowledged.IsZero() && c.now.Sub(c.lastAcknowledged) >= snoozeTTL
+	if !bypass && !expired && c.ackedAfterOutput {
 		return removeDecision("ackSnooze"), true
 	}
 	return SuppressionDecision{}, false
@@ -145,7 +181,7 @@ func grace(c ruleCtx) (SuppressionDecision, bool) {
 }
 
 // readdLimit stops notification spam for an item that is already queued; an escalation
-// or a new episode passes. A restart empties the queue, so a missing item is never limited.
+// or a new episode (different from the queued item's) passes. A restart empties the queue, so a missing item is never limited.
 func readdLimit(c ruleCtx) (SuppressionDecision, bool) {
 	if !c.shouldAdd() || c.lastAddedToQueue.IsZero() || c.now.Sub(c.lastAddedToQueue) >= minReAddInterval {
 		return SuppressionDecision{}, false
@@ -155,11 +191,21 @@ func readdLimit(c ruleCtx) (SuppressionDecision, bool) {
 		return SuppressionDecision{}, false
 	}
 	// Lower priority number = higher priority (Urgent=1 > High=2 > Medium=3 > Low=4)
-	if c.priority < existing.Priority || c.episodeChanged {
+	newEpisode := c.episode != "" && c.episode != EpisodeID(existing.Metadata[episodeMetadataKey])
+	if c.priority < existing.Priority || newEpisode {
 		log.Debug("escalation, bypassing rate limit", "from", existing.Priority.String(), "to", c.priority.String())
 		return SuppressionDecision{}, false
 	}
 	return suppressDecision("readdLimit"), true
+}
+
+// episodeAck drops a re-add of an episode-keyed item whose episode the operator already
+// acknowledged; a new episode is a new item. It applies whatever AckBypassFix says.
+func episodeAck(c ruleCtx) (SuppressionDecision, bool) {
+	if c.shouldAdd() && episodeAcked(c.reason, c.episode, c.ackedEpisode) {
+		return removeDecision("episodeAck"), true
+	}
+	return SuppressionDecision{}, false
 }
 
 // SkipReason says why shouldSkipSession excluded a session from attention detection.
