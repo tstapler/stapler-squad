@@ -31,7 +31,7 @@ type turnEndCorpusCase struct {
 }
 
 type corpusFile struct {
-	LabelledBy string       `json:"labelled_by"`
+	LabelledBy string              `json:"labelled_by"`
 	Cases      []turnEndCorpusCase `json:"cases"`
 }
 
