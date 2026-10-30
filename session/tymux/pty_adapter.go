@@ -92,6 +92,7 @@ func (a *tymuxPTYAdapter) pumpInput(send func(*v1.AttachRequest) error) {
 // forwardInput sends one chunk, retrying while a long paste holds the input lock so keystrokes
 // queue behind it (this goroutine only reads the PTY) instead of being silently dropped. Gives up
 // on a non-busy error or once the adapter is closed.
+// The retry assumes a single-frame (<= 32 KiB) payload: resending a partially sent multi-chunk payload would duplicate its prefix.
 func (a *tymuxPTYAdapter) forwardInput(send func(*v1.AttachRequest) error, input []byte) {
 	for {
 		err := send(&v1.AttachRequest{Payload: &v1.AttachRequest_Input{Input: input}})
