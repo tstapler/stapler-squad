@@ -48,7 +48,7 @@ type ContextCapturer interface {
 // stream makes a fresh client show the pane with its input/mouse modes, title, alt screen, scroll
 // region and cursor intact. Backends without it (tmux) leave Instance on its text-capture paint.
 type RedrawCapturer interface {
-	CapturePaneRedraw(ctx context.Context) (data string, altScreen bool, err error)
+	CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error)
 }
 
 // AltScreenQuerier asks the backend whether the pane shows its alternate screen.

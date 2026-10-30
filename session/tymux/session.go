@@ -705,16 +705,21 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 // CapturePaneRedraw is the full-state first paint: unlike CapturePaneContentRaw's text capture it
 // restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
 // mouse work in a freshly attached client before the app re-sets any of them.
-func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (string, bool, error) {
+func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
 	snap, err := s.capturePane(ctx, 0)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
-	data, err := RenderSnapshotRedraw(snap)
+	// A daemon older than v1.9.0 sends no Modes; its redraw would be a bare grid paint with no
+	// state reset, which the legacy text path (prefix + cursor sync) does better.
+	if snap.GetModes() == nil {
+		return "", false, false, nil
+	}
+	data, err = RenderSnapshotRedraw(snap)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
-	return data, snap.GetAltScreen(), nil
+	return data, snap.GetAltScreen(), true, nil
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument

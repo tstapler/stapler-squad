@@ -2,6 +2,7 @@ package streamhub
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,6 +19,21 @@ type subscriber struct {
 	outbound  chan []byte
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// awaitingFirstPaint is true from attach until FirstPaint runs, for a ManualFirstPaint
+	// subscriber; its writer is not started meanwhile, so frames queue in outbound.
+	awaitingFirstPaint atomic.Bool
+	writerOnce         sync.Once
+
+	// Guarded by mu. painting is true from beginFirstPaint until the writer has drained pending:
+	// frames then land in pending (they may post-date the capture, so none may be lost) instead
+	// of outbound, so the queue cannot fill while the paint and the replay are in flight.
+	// overflow records that pending hit maxPaintBacklog.
+	firstPaintTimer *time.Timer
+	painting        bool
+	expired         bool
+	pending         [][]byte
+	overflow        bool
 
 	// mu guards closed and slowSince. closed is checked and set under the
 	// same lock as every send attempt (trySend) so a send can never race
@@ -42,13 +58,15 @@ type subscriber struct {
 // subscriber is registered with the hub, so onSendError always has a live
 // registry entry to evict.
 func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCapability, bufferSize int) *subscriber {
-	return &subscriber{
+	s := &subscriber{
 		id:         id,
 		transport:  transport,
 		capability: capability,
 		outbound:   make(chan []byte, bufferSize),
 		done:       make(chan struct{}),
 	}
+	s.awaitingFirstPaint.Store(capability.ManualFirstPaint)
+	return s
 }
 
 // startWriter launches the subscriber's writer goroutine. It drains outbound
@@ -60,15 +78,20 @@ func newSubscriber(id SubscriberID, transport Transport, capability SubscriberCa
 // are unsafe), so the writer needs no coordination with trySend/close beyond
 // the channel itself.
 func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
-	go func() {
-		defer close(s.done)
-		for data := range s.outbound {
-			if err := s.transport.Send(data); err != nil {
-				onSendError(s.id, err)
+	s.writerOnce.Do(func() {
+		go func() {
+			defer close(s.done)
+			if !s.drainPending(onSendError) {
 				return
 			}
-		}
-	}()
+			for data := range s.outbound {
+				if err := s.transport.Send(data); err != nil {
+					onSendError(s.id, err)
+					return
+				}
+			}
+		}()
+	})
 }
 
 // trySend attempts a non-blocking enqueue of data onto the subscriber's
@@ -81,6 +104,19 @@ func (s *subscriber) trySend(data []byte) (delivered bool) {
 
 	if s.closed {
 		return false
+	}
+	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
+	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
+	if s.awaitingFirstPaint.Load() {
+		return true
+	}
+	if s.painting {
+		if len(s.pending) >= maxPaintBacklog {
+			s.overflow = true
+		} else {
+			s.pending = append(s.pending, data)
+		}
+		return true
 	}
 	select {
 	case s.outbound <- data:
@@ -141,6 +177,9 @@ func (s *subscriber) close() {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closed = true
+		if s.firstPaintTimer != nil {
+			s.firstPaintTimer.Stop()
+		}
 		s.mu.Unlock()
 
 		_ = s.transport.Close()
@@ -167,4 +206,79 @@ func (s *subscriber) currentResizeVote() (size TerminalSize, voted bool) {
 	s.resizeMu.Lock()
 	defer s.resizeMu.Unlock()
 	return s.lastVote, s.hasVoted
+}
+
+// maxPaintBacklog bounds the frames held while a first paint is in flight; past it the paint
+// fails visibly (errPaintBacklog) rather than silently leaving a gap.
+const maxPaintBacklog = 4096
+
+// armFirstPaintTimeout evicts (via onExpire) a subscriber still awaiting its FirstPaint after d.
+// The check and beginFirstPaint share mu, so it can never evict a subscriber mid-paint.
+func (s *subscriber) armFirstPaintTimeout(d time.Duration, onExpire func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.firstPaintTimer = time.AfterFunc(d, func() {
+		s.mu.Lock()
+		expire := s.awaitingFirstPaint.Load() && !s.closed
+		if expire {
+			s.expired = true
+		}
+		s.mu.Unlock()
+		if expire {
+			onExpire()
+		}
+	})
+}
+
+// beginFirstPaint leaves the awaiting state and starts holding frames. It reports false if the
+// subscriber already expired or closed.
+func (s *subscriber) beginFirstPaint() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.expired || s.closed {
+		return false
+	}
+	if s.firstPaintTimer != nil {
+		s.firstPaintTimer.Stop()
+	}
+	if s.awaitingFirstPaint.CompareAndSwap(true, false) {
+		s.painting = true
+	}
+	return true
+}
+
+// endFirstPaint reports whether any frame was lost to maxPaintBacklog during the paint. Frames
+// keep going to pending until the writer's drainPending has caught up.
+func (s *subscriber) endFirstPaint() (overflowed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.overflow
+}
+
+// drainPending sends the frames held during a first paint, in order, and switches the
+// subscriber to the live outbound queue once none are left, so no frame can fall between the two.
+// It reports false if the writer should stop (send error, or the backlog overflowed).
+func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) bool {
+	for {
+		s.mu.Lock()
+		if s.overflow {
+			s.mu.Unlock()
+			onSendError(s.id, errPaintBacklog)
+			return false
+		}
+		batch := s.pending
+		s.pending = nil
+		if len(batch) == 0 {
+			s.painting = false
+			s.mu.Unlock()
+			return true
+		}
+		s.mu.Unlock()
+		for _, data := range batch {
+			if err := s.transport.Send(data); err != nil {
+				onSendError(s.id, err)
+				return false
+			}
+		}
+	}
 }

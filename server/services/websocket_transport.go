@@ -31,16 +31,6 @@ type WebSocketTransport struct {
 	// well-behaved transport can unblock a stalled Send). sync.Once.Do would
 	// deadlock on that reentrant call; CompareAndSwap just no-ops it.
 	closed atomic.Bool
-
-	// suppressNextSend dedupes StreamHub.AttachSubscriber's attach-time
-	// CatchUpSnapshot (session/streamhub/hub.go) against this handler's own,
-	// separate initial-snapshot send in streamViaHub
-	// (server/services/connectrpc_websocket.go): the browser path needs its
-	// snapshot ANSI-sanitized (prepareSnapshotContent) and cursor-synced
-	// (withCursorSync) — transformations StreamHub has no notion of and
-	// cannot replicate. See SuppressNextSend's doc comment for why
-	// suppressing exactly one Send call is safe.
-	suppressNextSend atomic.Bool
 }
 
 // NewWebSocketTransport wraps stream as a streamhub.Transport for sessionID.
@@ -62,24 +52,8 @@ func (t *WebSocketTransport) BindSubscriber(hub *streamhub.StreamHub, id streamh
 	t.bound = true
 }
 
-// SuppressNextSend marks the next Send call as a no-op, without writing to
-// the WebSocket connection or returning an error. streamViaHub
-// (server/services/connectrpc_websocket.go) calls this before
-// AttachSubscriber, so the exact one Send call StreamHub.AttachSubscriber's
-// synchronous CatchUpSnapshot makes (session/streamhub/hub.go) — guaranteed
-// to be this transport's very first Send, since it happens before the
-// subscriber's writer goroutine ever starts — is suppressed. The handler
-// then sends its own ANSI-prepared, proto-enveloped initial snapshot right
-// after, which the browser client actually depends on. Every subsequent
-// Send (real broadcast traffic) behaves normally.
-func (t *WebSocketTransport) SuppressNextSend() {
-	t.suppressNextSend.Store(true)
-}
-
-// Send implements streamhub.Transport. The first call after
-// SuppressNextSend is a no-op; see its doc comment. Every other call wraps
-// data (raw tmux bytes) in the same envelope-and-TerminalData_Output framing
-// streamViaControlMode's sendData applies (server/services/connectrpc_websocket.go),
+// Send implements streamhub.Transport. It wraps data (raw tmux bytes) in the
+// same envelope-and-TerminalData_Output framing streamViaControlMode's sendData applies (server/services/connectrpc_websocket.go),
 // via marshalProtoEnvelope over the stream's existing write-mutex-guarded
 // WriteMessage.
 //
@@ -88,15 +62,11 @@ func (t *WebSocketTransport) SuppressNextSend() {
 // ssq-mux clients), but the browser client's message loop
 // (useTerminalStream.ts) always protobuf-decodes an envelope expecting a
 // TerminalData message. Every hub-broadcast frame past the one
-// SuppressNextSend-guarded CatchUpSnapshot was silently undecodable:
-// StreamHub could never render a single byte of live output to a browser
+// first-paint snapshot was silently undecodable: StreamHub could never render a single byte of live output to a browser
 // tab once attached, including the user's own input echoing back — the
 // terminal simply never updated after its one-shot initial snapshot
 // (2026-09-01, first real end-to-end exercise of this path).
 func (t *WebSocketTransport) Send(data []byte) error {
-	if t.suppressNextSend.CompareAndSwap(true, false) {
-		return nil
-	}
 	msg := &sessionv1.TerminalData{
 		SessionId: t.sessionID,
 		Data: &sessionv1.TerminalData_Output{

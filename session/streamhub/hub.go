@@ -15,6 +15,10 @@ import (
 // errSlowSubscriberEvicted is the eviction reason logged when a subscriber's
 // outbound queue stays full past slowSubscriberGrace (Task 1.2.1e), as
 // opposed to a Transport.Send error (Task 1.2.1g).
+var errPaintBacklog = errors.New("streamhub: more than maxPaintBacklog frames arrived during the first paint")
+
+var errFirstPaintTimeout = errors.New("streamhub: subscriber never ran FirstPaint")
+
 var errSlowSubscriberEvicted = errors.New("streamhub: subscriber outbound queue full past grace period")
 
 const (
@@ -30,6 +34,10 @@ const (
 	// up, rather than being evicted on the very first full send (which
 	// would disconnect healthy-but-bursty consumers, not just stuck ones).
 	defaultSlowSubscriberGrace = 250 * time.Millisecond
+
+	// defaultFirstPaintMaxAwait bounds how long a ManualFirstPaint subscriber, which has no writer
+	// and whose frames are dropped as superseded, may wait for its FirstPaint.
+	defaultFirstPaintMaxAwait = 30 * time.Second
 
 	// DefaultHubTeardownGrace is how long a StreamHub with zero subscribers
 	// waits before tearing down control mode, so a brief reconnect doesn't
@@ -116,6 +124,7 @@ type StreamHub struct {
 
 	subscriberBufferSize  int
 	slowSubscriberGrace   time.Duration
+	firstPaintMaxAwait    time.Duration
 	teardownGrace         time.Duration
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
@@ -237,12 +246,19 @@ func (h *StreamHub) BeginScrollForward() (release func()) {
 // HubStarting state with zero subscribers. controller is used by
 // ForceTeardown and the resize/quiescence/capture pipeline; it may be nil in
 // tests that never exercise either.
+// WithFirstPaintMaxAwait overrides how long a ManualFirstPaint subscriber may wait for its
+// FirstPaint before being evicted.
+func WithFirstPaintMaxAwait(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.firstPaintMaxAwait = d }
+}
+
 func NewStreamHub(sessionName string, controller SessionController, opts ...HubOption) *StreamHub {
 	h := &StreamHub{
 		sessionName:           sessionName,
 		controller:            controller,
 		subscriberBufferSize:  defaultSubscriberBufferSize,
 		slowSubscriberGrace:   defaultSlowSubscriberGrace,
+		firstPaintMaxAwait:    defaultFirstPaintMaxAwait,
 		teardownGrace:         DefaultHubTeardownGrace,
 		quiescenceTimeout:     defaultQuiescenceTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
@@ -362,9 +378,15 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	// This runs before startWriter so it is guaranteed to be the very first
 	// Send call this transport ever receives, with no writer goroutine yet
 	// running to race it.
-	h.sendCatchUpSnapshot(sub)
-
-	sub.startWriter(h.handleSubscriberSendError)
+	//
+	// A ManualFirstPaint subscriber does neither: FirstPaint sends its paint and starts its
+	// writer, so frames broadcast meanwhile queue behind it instead of racing it.
+	if !capability.ManualFirstPaint {
+		h.sendCatchUpSnapshot(sub)
+		sub.startWriter(h.handleSubscriberSendError)
+	} else {
+		sub.armFirstPaintTimeout(h.firstPaintMaxAwait, func() { h.removeSubscriber(id, errFirstPaintTimeout) })
+	}
 
 	log.Info("streamhub subscriber attached",
 		"session", h.sessionName, "subscriber_id", string(id), "subscriber_count", count,
@@ -421,6 +443,59 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 	}
 }
 
+// ErrUnknownSubscriber is returned by FirstPaint for a subscriber that already detached.
+var ErrUnknownSubscriber = errors.New("streamhub: unknown subscriber")
+
+// FirstPaint runs paint for a ManualFirstPaint subscriber, then starts its writer. paint captures
+// and writes the subscriber's first snapshot directly (outside the hub's queue).
+//
+// Ordering: resizeApplyMu is held throughout, so no resize can capture-and-broadcast between
+// paint's capture and its write. Frames broadcast before paint begins are dropped (the capture
+// includes them, and replaying them would apply them twice, and nothing drains a queue then).
+// Frames that arrive during paint are held, up to maxPaintBacklog, and the writer sends them
+// right after the paint, so none is lost (those the capture already contains are duplicated).
+// paint must return an error rather than paint blank when it captured nothing: the frames
+// dropped before it would otherwise be lost silently. paint blocks resizes for its duration
+// (one capture RPC plus one socket write), and is not given the hub's other locks.
+func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
+	h.mu.Lock()
+	sub, ok := h.subscribers[id]
+	h.mu.Unlock()
+	if !ok {
+		return ErrUnknownSubscriber
+	}
+
+	h.resizeApplyMu.Lock()
+	defer h.resizeApplyMu.Unlock()
+
+	if !sub.beginFirstPaint() {
+		return ErrUnknownSubscriber
+	}
+	err := paint()
+	overflowed := sub.endFirstPaint()
+	sub.startWriter(h.handleSubscriberSendError)
+	if err == nil && overflowed {
+		return errPaintBacklog
+	}
+	return err
+}
+
+// allAwaitingFirstPaint reports whether the hub has subscribers and every one is still waiting
+// for its FirstPaint, so a resize broadcast would only be discarded.
+func (h *StreamHub) allAwaitingFirstPaint() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.subscribers) == 0 {
+		return false
+	}
+	for _, sub := range h.subscribers {
+		if !sub.awaitingFirstPaint.Load() {
+			return false
+		}
+	}
+	return true
+}
+
 // currentSnapshot returns the hub's best-known current pane content: the
 // cached result of the most recent post-quiescence CapturePaneContent call
 // if one exists, or a fresh on-demand capture otherwise (itself cached
@@ -430,12 +505,10 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 // ok is false when no snapshot is available: h.controller is nil, the
 // capture errors, or it succeeds with empty content.
 func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
-	// A full-state redraw is never served from the cache: its capture is one cheap RPC, and a
-	// cached one would hand a later attacher the modes/title/cursor of whenever it was taken.
+	// A full-state redraw is neither served from nor stored in the text cache: a cached one would
+	// hand a later attacher the modes/title/cursor of whenever it was taken, and a later failed
+	// capture would then fall back to a stale redraw dressed as the text snapshot.
 	if redraw, ok := h.captureRedraw(); ok {
-		h.snapshotMu.Lock()
-		h.lastSnapshot = redraw
-		h.snapshotMu.Unlock()
 		return redraw, true
 	}
 
@@ -809,8 +882,13 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
+	if h.allAwaitingFirstPaint() {
+		// Everyone attached is waiting for a FirstPaint that supersedes this snapshot.
+		return
+	}
+
 	if redraw, ok := h.captureRedrawContext(ctx); ok {
-		h.broadcastSnapshot(redraw)
+		h.publishSnapshot(redraw)
 		return
 	}
 
@@ -835,15 +913,16 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
-	h.broadcastSnapshot([]byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller)))
-}
-
-// broadcastSnapshot caches prepared as the hub's snapshot and sends it to every subscriber.
-func (h *StreamHub) broadcastSnapshot(prepared []byte) {
+	prepared := []byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
 	h.snapshotMu.Lock()
 	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()
+	h.publishSnapshot(prepared)
+}
 
+// publishSnapshot sends prepared to every subscriber ahead of any queued raw output. It does not
+// touch the text-snapshot cache.
+func (h *StreamHub) publishSnapshot(prepared []byte) {
 	// The post-resize CatchUpSnapshot bypasses the BatchWindow entirely
 	// (Story 2.1.2, research/pitfalls.md §2c/§2d): it must never wait behind
 	// whatever raw output happens to be mid-accumulation, since it is itself
