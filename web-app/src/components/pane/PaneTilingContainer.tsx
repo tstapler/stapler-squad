@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback, type Dispatch } from "react";
 import { createPortal } from "react-dom";
-import { Columns2, Rows2, LayoutList, X, Maximize2 } from "lucide-react";
+import { Columns2, Rows2, LayoutList, X, Maximize2, ArrowRight } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { usePaneShortcuts } from "@/lib/pane/usePaneShortcuts";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
@@ -109,6 +109,9 @@ export function PaneTilingContainer({
       if (eligiblePanes.length === 0) {
         // Auto-split: reducer creates a new detail pane beside the session-list pane.
         dispatch({ type: "ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: session.id });
+      } else if (eligiblePanes.length === 1 && eligiblePanes[0].sessionId === session.id) {
+        // Already showing this session: just focus, so ASSIGN_SESSION doesn't reset the active tab.
+        dispatch({ type: "FOCUS_PANE", paneId: eligiblePanes[0].id });
       } else if (eligiblePanes.length === 1) {
         // Single detail pane: assign directly. If focused pane is the detail pane,
         // eligiblePanes[0] === focusedLeaf, so the intent shortcut still fires — just
@@ -147,7 +150,16 @@ export function PaneTilingContainer({
   usePaneShortcuts(state, dispatch, containerRef, windowActive);
 
   const openPeek = useCallback((session: Session) => setPeekSession(session), []);
-  usePanePickerKeys(windowActive, { pickerPendingSession, state, dispatch, cancelPicker, openPeek });
+  const findOpenPane = (sessionId: string | undefined) =>
+    sessionId
+      ? getAllLeaves(state.root).find((l) => l.viewKind !== "session-list" && l.sessionId === sessionId) ?? null
+      : null;
+  const alreadyOpenLeaf = findOpenPane(pickerPendingSession?.id);
+  const alreadyOpenLeafMobile = findOpenPane(mobilePickerSession?.id);
+  usePanePickerKeys(windowActive, {
+    pickerPendingSession, state, dispatch, cancelPicker, openPeek,
+    alreadyOpenPaneId: alreadyOpenLeaf?.id ?? null,
+  });
 
   // Focus the mobile sheet when it opens so keyboard and screen reader users can interact.
   useEffect(() => {
@@ -205,7 +217,7 @@ export function PaneTilingContainer({
           style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}
         >
           {pickerPendingSession
-            ? `Choose where to open "${pickerPendingSession.title}": Side by side (V), Top/Bottom (H), Replace list (M), or Cancel (Esc)`
+            ? `Choose where to open "${pickerPendingSession.title}": ${alreadyOpenLeaf ? "Open existing pane (O), " : ""}Side by side (V), Top/Bottom (H), Replace list (M), or Cancel (Esc)`
             : ""}
         </div>
         {pickerPendingSession && (
@@ -215,6 +227,22 @@ export function PaneTilingContainer({
             role="toolbar"
             aria-label={`Open ${pickerPendingSession.title}`}
           >
+            {alreadyOpenLeaf && (
+              <button
+                className={pickerActionButton}
+                data-testid="picker-open-existing"
+                onClick={() => {
+                  dispatch({ type: "FOCUS_PANE", paneId: alreadyOpenLeaf.id });
+                  cancelPicker();
+                }}
+                title="Switch to the pane already showing this session"
+              >
+                {/* analytics-exempt */}
+                <ArrowRight size={14} />
+                Open existing pane
+                <span className={pickerActionKbd}>O</span>
+              </button>
+            )}
             <button
               className={pickerActionButton}
               onClick={() => {
@@ -308,6 +336,20 @@ export function PaneTilingContainer({
             onKeyDown={(e) => { if (e.key === "Escape") cancelPicker(); }}
           >
             <div id="mobile-pane-picker-title" className={mobilePickerSheetTitle}>Open session in…</div>
+            {alreadyOpenLeafMobile && (
+              <button
+                className={mobilePickerPaneItem}
+                data-testid="mobile-picker-open-existing"
+                onClick={() => {
+                  dispatch({ type: "FOCUS_PANE", paneId: alreadyOpenLeafMobile.id });
+                  cancelPicker();
+                }}
+              >
+                {/* analytics-exempt */}
+                <span className={mobilePickerPaneLabel}>→</span>
+                Open existing pane
+              </button>
+            )}
             {/* A split is just another full-screen page on narrow screens, so offer a
                 fresh pane instead of forcing the session into an existing one. */}
             <button

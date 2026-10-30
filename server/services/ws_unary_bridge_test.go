@@ -68,6 +68,10 @@ func (s *bridgeStub) release(key string) { close(s.gate(key)) }
 func (s *bridgeStub) ListFiles(ctx context.Context, req *connect.Request[sessionv1.ListFilesRequest]) (*connect.Response[sessionv1.ListFilesResponse], error) {
 	s.hits.Add(1)
 	id := req.Msg.SessionId
+	if strings.HasPrefix(id, "stuck:") { // ignores ctx, like a git subprocess under a mutex
+		s.started <- id
+		<-s.gate(id)
+	}
 	if strings.HasPrefix(id, "gate:") {
 		s.started <- id
 		select {
@@ -262,11 +266,11 @@ func TestUnaryWsBridge_should_RejectForbiddenMetaHeaders_Without_InvokingHandler
 }
 
 func TestUnaryWsBridge_should_ReturnResourceExhausted_When_InFlightCapExceeded(t *testing.T) {
-	h := newBridgeHarness(t, ListenerLocal)
+	const limit = 6
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(limit))
 	c := h.connect(nil)
-	require.Equal(t, 6, wsUnaryMaxInFlight)
 
-	for i := 1; i <= wsUnaryMaxInFlight; i++ {
+	for i := 1; i <= limit; i++ {
 		sendListFiles(t, c, uint32(2*i-1), "gate:"+strconv.Itoa(i))
 		<-h.stub.started
 	}
@@ -275,7 +279,7 @@ func TestUnaryWsBridge_should_ReturnResourceExhausted_When_InFlightCapExceeded(t
 	assert.EqualValues(t, 99, f.ID)
 	assert.Equal(t, unaryFrameError, f.Type)
 	assert.Equal(t, codeResourceExhausted, f.Error.Code)
-	assert.EqualValues(t, wsUnaryMaxInFlight, h.bridge.Metrics().Inflight())
+	assert.EqualValues(t, limit, h.bridge.Metrics().Inflight())
 
 	h.stub.release("gate:1")
 	assert.EqualValues(t, 1, readFrame(t, c).ID, "a freed slot completes normally")
@@ -548,7 +552,7 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 func TestUnarySession_should_KeepIDReserved_UntilLastChunkWritten(t *testing.T) {
 	s := &unarySession{inflight: map[uint32]*inflightCall{7: {cancel: func() {}}}, writer: newUnaryWriter(nil), b: &UnaryWsBridge{metrics: newUnaryMetrics()}}
 	require.False(t, s.finishCall(7))
-	streamed, canceled, err := s.enqueueUnlessCanceled(7, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes))
+	streamed, canceled, err := s.enqueueUnlessCanceled(7, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes), nil)
 	require.NoError(t, err)
 	require.True(t, streamed)
 	require.False(t, canceled)
@@ -569,7 +573,7 @@ func TestUnarySession_should_SkipEnqueue_When_CancelArrivesAfterFinish(t *testin
 	s := &unarySession{inflight: map[uint32]*inflightCall{9: {cancel: func() {}}}, writer: newUnaryWriter(nil), b: &UnaryWsBridge{metrics: newUnaryMetrics()}}
 	s.finishCall(9)
 	s.cancelCall(9) // lands between finishCall and enqueue
-	streamed, canceled, err := s.enqueueUnlessCanceled(9, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes))
+	streamed, canceled, err := s.enqueueUnlessCanceled(9, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes), nil)
 	require.NoError(t, err)
 	assert.True(t, canceled)
 	assert.False(t, streamed)
