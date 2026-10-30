@@ -162,7 +162,7 @@ export function asXtermCompatible(term: GhosttyWebTerminal, onReply?: (data: str
     },
   };
   return new Proxy(term, {
-    get: (target, prop) => (typeof prop === "string" && prop in overrides ? overrides[prop] : bound(target, prop)),
+    get: (target, prop) => (typeof prop === "string" && Object.hasOwn(overrides, prop) ? overrides[prop] : bound(target, prop)),
   });
 }
 

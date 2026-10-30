@@ -25,10 +25,15 @@ const DEFAULT_FONT_SIZE = 14;
  */
 let ghosttyReady: Promise<typeof GhosttyModule> | null = null;
 function loadGhostty(): Promise<typeof GhosttyModule> {
-  ghosttyReady ??= import("ghostty-web").then(async (mod) => {
-    await mod.init();
-    return mod;
-  });
+  ghosttyReady ??= import("ghostty-web")
+    .then(async (mod) => {
+      await mod.init();
+      return mod;
+    })
+    .catch((err) => {
+      ghosttyReady = null; // a transient chunk/WASM fetch failure must not poison every later mount
+      throw err;
+    });
   return ghosttyReady;
 }
 
@@ -63,6 +68,14 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
   const cursorStyle = config?.cursorStyle ?? "block";
   const cursorBlink = config?.cursorBlink ?? true;
 
+  // Every PTY write goes through the facade so the query responder sees it (handle.write and handle.terminal.write alike).
+  const compatTerminal = (): GhosttyWebTerminal | null => {
+    const t = terminalRef.current;
+    if (!t) return null;
+    compatRef.current ??= asXtermCompatible(t, (reply) => onDataRef.current?.(reply));
+    return compatRef.current;
+  };
+
   // Created once per mount; later prop changes would need a remount, as the pool already keys on session.
   useEffect(() => {
     const container = containerRef.current;
@@ -87,16 +100,21 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       term.onResize(({ cols, rows }) => onResizeRef.current?.(cols, rows));
       terminalRef.current = term;
       fitRef.current = fit;
-      for (const chunk of pendingWritesRef.current.splice(0)) term.write(chunk);
+      const surface = compatTerminal();
+      for (const chunk of pendingWritesRef.current.splice(0)) surface?.write(chunk);
       fit.fit();
       fit.observeResize();
       onResizeRef.current?.(term.cols, term.rows);
+    }).catch((err) => {
+      pendingWritesRef.current.length = 0;
+      console.error("[GhosttyTerminal] failed to load ghostty-web; disable the ghostty_renderer flag to fall back to xterm.js", err);
     });
 
     return () => {
       disposed = true;
       terminalRef.current = null;
       compatRef.current = null;
+      fitRef.current?.dispose?.();
       fitRef.current = null;
       term?.dispose();
     };
@@ -122,21 +140,20 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     return {
       get terminal() {
         // ghostty-web mirrors the xterm.js Terminal surface TerminalOutput touches.
-        const t = terminalRef.current;
-        if (!t) return null;
-        compatRef.current ??= asXtermCompatible(t, (reply) => onDataRef.current?.(reply));
-        return compatRef.current as unknown as XtermWebTerminal;
+        return compatTerminal() as unknown as XtermWebTerminal | null;
       },
       get serializeAddon() {
         const t = terminalRef.current;
         return t ? ({ serialize: () => serializeGhosttyBuffer(t) } as unknown as XtermTerminalHandle["serializeAddon"]) : null;
       },
       write: (data: string) => {
-        if (terminalRef.current) terminalRef.current.write(data);
+        const surface = compatTerminal();
+        if (surface) surface.write(data);
         else pendingWritesRef.current.push(data);
       },
       writeln: (data: string) => {
-        if (terminalRef.current) terminalRef.current.writeln(data);
+        const surface = compatTerminal();
+        if (surface) surface.write(`${data}\r\n`);
         else pendingWritesRef.current.push(`${data}\r\n`);
       },
       clear: () => {
