@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,8 +20,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/session/vcs"
+	"github.com/tstapler/stapler-squad/telemetry"
 
 	"connectrpc.com/connect"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -59,6 +64,10 @@ const branchCacheTTL = 5 * time.Minute
 // polls. 15 s matches the GitProvider.branchCacheTTL and keeps the UI feeling fresh.
 const vcsStatusCacheTTL = 15 * time.Second
 
+// vcsStatusStaleTTL is how old a cached status may be and still be served instantly
+// (while a background refresh runs). Beyond it callers wait for a fresh computation.
+const vcsStatusStaleTTL = 2 * time.Minute
+
 // WorkspaceService handles all VCS/workspace RPC methods.
 //
 // These methods operate on session workspace state (git/jj status, branch
@@ -80,6 +89,8 @@ type WorkspaceService struct {
 	// vcsStatusCache caches full VCSStatus results per workdir to avoid spawning 6+
 	// git subprocesses on every poll. Keyed by workdir path.
 	vcsStatusCache sync.Map // map[string]vcsStatusCacheEntry
+	// vcsFlights coalesces concurrent cache misses per workdir and bounds parallel computations.
+	vcsFlights vcsFlights
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -178,20 +189,108 @@ func (ws *WorkspaceService) GetVCSStatus(
 		}), nil
 	}
 
-	// Fast path: return cached status if still fresh.
-	if cached, ok := ws.vcsStatusCache.Load(workDir); ok {
-		entry := cached.(vcsStatusCacheEntry)
-		if time.Since(entry.cachedAt) < vcsStatusCacheTTL {
-			// Shallow-copy before touching StatusAsOf — entry.status is a
-			// pointer shared with every other concurrent cache hit (and with
-			// the map itself); writing through it directly races with those
-			// readers instead of only reading from them.
-			respStatus := *entry.status
-			respStatus.StatusAsOf = entry.cachedAt
-			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
-				VcsStatus: vcsStatusToProto(&respStatus),
-			}), nil
+	ctx, span := telemetry.GetTracer().Start(ctx, "vcs.status.request",
+		trace.WithAttributes(attribute.String("session.id", req.Msg.Id), attribute.String("workdir", workDir)))
+	defer span.End()
+
+	if cachedStatus, ok := ws.freshVCSStatus(workDir); ok {
+		recordVCSOutcome(ctx, vcsOutcomeCacheHit)
+		span.SetAttributes(attribute.String("cache", "hit"))
+		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(cachedStatus)}), nil
+	}
+	// Stale-while-revalidate: a poller never waits on git for an entry that is merely
+	// past its TTL. StatusAsOf tells the UI how old the data is.
+	if stale, ok := ws.cachedVCSStatus(workDir, vcsStatusStaleTTL); ok {
+		ws.refreshVCSStatusInBackground(ctx, instance, workDir)
+		recordVCSOutcome(ctx, vcsOutcomeStaleHit)
+		span.SetAttributes(attribute.String("cache", "stale"))
+		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(stale)}), nil
+	}
+	span.SetAttributes(attribute.String("cache", "miss"))
+
+	status, shared, err := ws.vcsFlights.do(ctx, workDir, func(workCtx context.Context) (*vc.VCSStatus, error) {
+		return ws.computeVCSStatus(workCtx, instance, workDir)
+	})
+	span.SetAttributes(attribute.Bool("coalesced", shared))
+	if err != nil {
+		return ws.vcsStatusFailure(ctx, span, err)
+	}
+	if shared {
+		recordVCSOutcome(ctx, vcsOutcomeCoalesced)
+	} else {
+		recordVCSOutcome(ctx, vcsOutcomeComputed)
+	}
+	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(status)}), nil
+}
+
+// refreshVCSStatusInBackground joins (or starts) the workdir's computation without
+// blocking the caller. It is itself a waiter, so the work is not cancelled when the
+// triggering request ends; vcsComputeTimeout bounds it.
+func (ws *WorkspaceService) refreshVCSStatusInBackground(ctx context.Context, instance *session.Instance, workDir string) {
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vcsComputeTimeout)
+	go func() {
+		defer cancel()
+		_, _, _ = ws.vcsFlights.do(bgCtx, workDir, func(workCtx context.Context) (*vc.VCSStatus, error) {
+			return ws.computeVCSStatus(workCtx, instance, workDir)
+		})
+	}()
+}
+
+// freshVCSStatus returns a copy of the cached status for workDir if still within the TTL.
+func (ws *WorkspaceService) freshVCSStatus(workDir string) (*vc.VCSStatus, bool) {
+	return ws.cachedVCSStatus(workDir, vcsStatusCacheTTL)
+}
+
+// cachedVCSStatus returns a copy of the cached status for workDir if younger than maxAge.
+func (ws *WorkspaceService) cachedVCSStatus(workDir string, maxAge time.Duration) (*vc.VCSStatus, bool) {
+	cached, ok := ws.vcsStatusCache.Load(workDir)
+	if !ok {
+		return nil, false
+	}
+	entry := cached.(vcsStatusCacheEntry)
+	if time.Since(entry.cachedAt) >= maxAge {
+		return nil, false
+	}
+	// Shallow-copy before touching StatusAsOf — entry.status is a pointer shared
+	// with every other concurrent cache hit (and with the map itself); writing
+	// through it directly races with those readers.
+	respStatus := *entry.status
+	respStatus.StatusAsOf = entry.cachedAt
+	return &respStatus, true
+}
+
+// vcsStatusFailure maps a failed flight to the RPC result: a caller that left
+// gets a Connect cancel/deadline error (so it shows in the error-code series);
+// a git failure keeps the long-standing in-band Error string.
+func (ws *WorkspaceService) vcsStatusFailure(
+	ctx context.Context, span trace.Span, err error,
+) (*connect.Response[sessionv1.GetVCSStatusResponse], error) {
+	switch {
+	case ctx.Err() != nil:
+		outcome, code := vcsOutcomeCanceled, connect.CodeCanceled
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = connect.CodeDeadlineExceeded
 		}
+		recordVCSOutcome(context.WithoutCancel(ctx), outcome)
+		span.AddEvent("caller_canceled", trace.WithAttributes(attribute.String("connect.code", code.String())))
+		return nil, connect.NewError(code, ctx.Err())
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		// The shared computation was cut short (all other waiters left, or the 30s bound hit).
+		recordVCSOutcome(ctx, vcsOutcomeError)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
+	recordVCSOutcome(ctx, vcsOutcomeError)
+	span.SetStatus(codes.Error, err.Error())
+	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{Error: err.Error()}), nil
+}
+
+// computeVCSStatus does the expensive work for one workDir and fills the cache.
+// Errors carry the user-facing message GetVCSStatus has always put in Error.
+func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *session.Instance, workDir string) (*vc.VCSStatus, error) {
+	// A flight that finished between the caller's cache check and this start has filled it.
+	if st, ok := ws.freshVCSStatus(workDir); ok {
+		return st, nil
 	}
 
 	var provider vc.VCSProvider
@@ -199,56 +298,75 @@ func (ws *WorkspaceService) GetVCSStatus(
 	if err != nil {
 		jjProvider, jjErr := vc.NewJujutsuProvider(workDir)
 		if jjErr != nil {
-			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
-				Error: fmt.Sprintf("not a version-controlled directory: %s", workDir),
-			}), nil
+			return nil, fmt.Errorf("not a version-controlled directory: %s", workDir)
 		}
 		provider = jjProvider
 	} else {
 		provider = gitProvider
 	}
 
-	status, err := provider.GetStatus()
-	if err != nil {
-		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
-			Error: fmt.Sprintf("failed to get VCS status: %v", err),
-		}), nil
+	_, statusSpan := telemetry.GetTracer().Start(ctx, "vcs.status.git_status",
+		trace.WithAttributes(attribute.String("vcs.type", provider.Name())))
+	var status *vc.VCSStatus
+	if gp, ok := provider.(*vc.GitProvider); ok {
+		status, err = gp.GetStatusContext(ctx)
+	} else {
+		status, err = provider.GetStatus()
 	}
-
-	// Commits/AggregateDiffStat are computed here (not inside GitProvider.GetStatus)
-	// because they need the session's recorded base SHA, an Instance-level concept the
-	// vc.VCSProvider abstraction doesn't have access to. Jujutsu has no equivalent base
-	// SHA concept, so this only runs for git sessions.
-	if _, isGit := provider.(*vc.GitProvider); isGit {
-		if baseSHA := instance.GetBaseCommitSHA(); baseSHA != "" {
-			if headSHA, headErr := git.GetHeadCommitSHA(workDir); headErr != nil {
-				log.Debug("GetVCSStatus: failed to resolve HEAD commit SHA", "workDir", workDir, "err", headErr)
-				status.CommitsUnavailable = true
-			} else if headSHA != baseSHA {
-				commits, truncated, listErr := git.ListShippedCommits(ctx, workDir, baseSHA, headSHA)
-				if listErr == nil {
-					status.Commits = commits
-					status.CommitsTruncated = truncated
-				} else {
-					log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
-					status.CommitsUnavailable = true
-				}
-				if diffStat, diffErr := git.DiffStatBetween(ctx, workDir, baseSHA, headSHA); diffErr == nil {
-					status.AggregateDiffStat = &diffStat
-				} else {
-					log.Debug("GetVCSStatus: failed to compute aggregate diff stat", "workDir", workDir, "err", diffErr)
-				}
-			}
+	if err != nil {
+		statusSpan.RecordError(err)
+		statusSpan.End()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
+		return nil, fmt.Errorf("failed to get VCS status: %v", err)
+	}
+	statusSpan.SetAttributes(attribute.Int("files.changed", len(status.StagedFiles)+len(status.UnstagedFiles)+len(status.UntrackedFiles)+len(status.ConflictFiles)))
+	statusSpan.End()
+
+	if _, isGit := provider.(*vc.GitProvider); isGit {
+		ws.addShippedCommits(ctx, instance, workDir, status)
 	}
 
 	now := time.Now()
 	status.StatusAsOf = now
 	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
+	return status, nil
+}
 
-	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
-		VcsStatus: vcsStatusToProto(status),
-	}), nil
+// addShippedCommits fills Commits/AggregateDiffStat. They are computed here (not inside
+// GitProvider.GetStatus) because they need the session's recorded base SHA, an
+// Instance-level concept the vc.VCSProvider abstraction doesn't have. Jujutsu has no
+// equivalent base SHA concept, so this only runs for git sessions.
+func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *session.Instance, workDir string, status *vc.VCSStatus) {
+	baseSHA := instance.GetBaseCommitSHA()
+	if baseSHA == "" {
+		return
+	}
+	ctx, span := telemetry.GetTracer().Start(ctx, "vcs.status.shipped_commits")
+	defer span.End()
+	headSHA, headErr := git.GetHeadCommitSHA(workDir)
+	if headErr != nil {
+		log.Debug("GetVCSStatus: failed to resolve HEAD commit SHA", "workDir", workDir, "err", headErr)
+		status.CommitsUnavailable = true
+		return
+	}
+	if headSHA == baseSHA {
+		return
+	}
+	commits, truncated, listErr := git.ListShippedCommits(ctx, workDir, baseSHA, headSHA)
+	if listErr == nil {
+		status.Commits = commits
+		status.CommitsTruncated = truncated
+	} else {
+		log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
+		status.CommitsUnavailable = true
+	}
+	if diffStat, diffErr := git.DiffStatBetween(ctx, workDir, baseSHA, headSHA); diffErr == nil {
+		status.AggregateDiffStat = &diffStat
+	} else {
+		log.Debug("GetVCSStatus: failed to compute aggregate diff stat", "workDir", workDir, "err", diffErr)
+	}
 }
 
 // GetWorkspaceInfo retrieves VCS and workspace information for a session.
