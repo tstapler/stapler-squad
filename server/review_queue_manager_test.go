@@ -1767,3 +1767,9 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 		})
 	}
 }
+
+func TestReasonToProto_NewReasons(t *testing.T) {
+	rqm := &ReactiveQueueManager{}
+	require.Equal(t, sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION, rqm.reasonToProto(session.ReasonProseQuestion))
+	require.Equal(t, sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION, rqm.reasonToProto(session.ReasonAwaitingDirection))
+}

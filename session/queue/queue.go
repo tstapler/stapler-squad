@@ -24,6 +24,8 @@ const (
 	ReasonIdle               AttentionReason = "idle"                // Session idle, ready for next task (short idle, expected)
 	ReasonStale              AttentionReason = "stale"               // No output for extended period (may be stuck)
 	ReasonWaitingForUser     AttentionReason = "waiting_for_user"    // Explicitly waiting for user input (detected prompt)
+	ReasonProseQuestion      AttentionReason = "prose_question"      // Agent's last turn ended with a question
+	ReasonAwaitingDirection  AttentionReason = "awaiting_direction"  // Agent finished its turn and awaits direction
 )
 
 // String returns a human-readable description of the attention reason.
@@ -611,9 +613,9 @@ func ReasonToPriority(reason AttentionReason) Priority {
 		return PriorityUrgent
 	case ReasonApprovalPending, ReasonTestsFailing:
 		return PriorityHigh
-	case ReasonInputRequired:
+	case ReasonInputRequired, ReasonProseQuestion:
 		return PriorityMedium
-	case ReasonTaskComplete, ReasonIdleTimeout, ReasonUncommittedChanges:
+	case ReasonTaskComplete, ReasonIdleTimeout, ReasonUncommittedChanges, ReasonAwaitingDirection:
 		return PriorityLow
 	default:
 		return PriorityMedium

@@ -181,6 +181,10 @@ func attentionReasonToProto(reason session.AttentionReason) sessionv1.AttentionR
 		return sessionv1.AttentionReason_ATTENTION_REASON_STALE
 	case session.ReasonWaitingForUser:
 		return sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER
+	case session.ReasonProseQuestion:
+		return sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION
+	case session.ReasonAwaitingDirection:
+		return sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION
 	default:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED
 	}
@@ -223,6 +227,10 @@ func ProtoToAttentionReason(reason sessionv1.AttentionReason) session.AttentionR
 		return session.ReasonStale
 	case sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER:
 		return session.ReasonWaitingForUser
+	case sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION:
+		return session.ReasonProseQuestion
+	case sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION:
+		return session.ReasonAwaitingDirection
 	default:
 		return session.ReasonInputRequired // Default to input required
 	}

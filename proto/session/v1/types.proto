@@ -885,6 +885,10 @@ enum AttentionReason {
   ATTENTION_REASON_WAITING_FOR_USER = 9;
   // Session has failing tests that need attention.
   ATTENTION_REASON_TESTS_FAILING = 10;
+  // The agent's last turn ended with a question to the operator.
+  ATTENTION_REASON_PROSE_QUESTION = 11;
+  // The agent finished its turn and is waiting for direction.
+  ATTENTION_REASON_AWAITING_DIRECTION = 12;
 }
 
 // PRInfo contains metadata about a GitHub pull request.

@@ -370,6 +370,10 @@ func convertProtoReasons(protoReasons []sessionv1.AttentionReason) []session.Att
 			result = append(result, session.ReasonIdleTimeout)
 		case sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE:
 			result = append(result, session.ReasonTaskComplete)
+		case sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION:
+			result = append(result, session.ReasonProseQuestion)
+		case sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION:
+			result = append(result, session.ReasonAwaitingDirection)
 		}
 	}
 	return result

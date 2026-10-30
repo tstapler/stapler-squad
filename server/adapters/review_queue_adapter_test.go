@@ -53,11 +53,23 @@ func TestAttentionReasonToProto(t *testing.T) {
 		{"idle", session.ReasonIdle, sessionv1.AttentionReason_ATTENTION_REASON_IDLE},
 		{"stale", session.ReasonStale, sessionv1.AttentionReason_ATTENTION_REASON_STALE},
 		{"waiting_for_user", session.ReasonWaitingForUser, sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER},
+		{"prose_question", session.ReasonProseQuestion, sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION},
+		{"awaiting_direction", session.ReasonAwaitingDirection, sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION},
 		{"unknown defaults to unspecified", session.AttentionReason("not_a_reason"), sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, attentionReasonToProto(tc.input))
+		})
+	}
+}
+
+func TestAttentionReasonRoundTrip_NewReasons(t *testing.T) {
+	for _, r := range []session.AttentionReason{session.ReasonProseQuestion, session.ReasonAwaitingDirection} {
+		t.Run(string(r), func(t *testing.T) {
+			p := attentionReasonToProto(r)
+			assert.NotEqual(t, sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED, p)
+			assert.Equal(t, r, ProtoToAttentionReason(p))
 		})
 	}
 }
@@ -105,6 +117,8 @@ func TestProtoToAttentionReason(t *testing.T) {
 		{"idle", sessionv1.AttentionReason_ATTENTION_REASON_IDLE, session.ReasonIdle},
 		{"stale", sessionv1.AttentionReason_ATTENTION_REASON_STALE, session.ReasonStale},
 		{"waiting_for_user", sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER, session.ReasonWaitingForUser},
+		{"prose_question", sessionv1.AttentionReason_ATTENTION_REASON_PROSE_QUESTION, session.ReasonProseQuestion},
+		{"awaiting_direction", sessionv1.AttentionReason_ATTENTION_REASON_AWAITING_DIRECTION, session.ReasonAwaitingDirection},
 		// ATTENTION_REASON_UNSPECIFIED defaults to input_required
 		{"unspecified defaults to input_required", sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED, session.ReasonInputRequired},
 	}

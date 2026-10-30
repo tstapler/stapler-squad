@@ -22,6 +22,8 @@ const (
 	ReasonIdle               = queue.ReasonIdle
 	ReasonStale              = queue.ReasonStale
 	ReasonWaitingForUser     = queue.ReasonWaitingForUser
+	ReasonProseQuestion      = queue.ReasonProseQuestion
+	ReasonAwaitingDirection  = queue.ReasonAwaitingDirection
 )
 
 // Priority re-export
