@@ -217,6 +217,7 @@ type inflightCall struct {
 	handlerDone bool // the handler returned; result holds its output
 	zombie      bool // slot released while the handler still runs; its output is dropped
 	result      chan callResult
+	detached    chan struct{} // closed when the slot is released (zombie); wakes abandon's cap-wait
 }
 
 type callResult struct {
@@ -419,7 +420,7 @@ func (s *unarySession) handleRequest(f unaryFrame) {
 	}
 
 	callCtx, cancel := s.callContext(f.RequestMeta.TimeoutMs)
-	call := &inflightCall{cancel: cancel, result: make(chan callResult, 1)}
+	call := &inflightCall{cancel: cancel, result: make(chan callResult, 1), detached: make(chan struct{})}
 	s.mu.Lock()
 	_, dup := s.inflight[f.ID]
 	full := len(s.inflight) >= s.b.maxInFlight
@@ -502,6 +503,9 @@ func (s *unarySession) detachLocked(id uint32, call *inflightCall, reason string
 		return false
 	}
 	call.zombie = true
+	if call.detached != nil {
+		close(call.detached)
+	}
 	s.zombies++
 	delete(s.inflight, id)
 	s.b.metrics.zombieDelta(1)
@@ -611,6 +615,7 @@ func (s *unarySession) abandon(ctx context.Context, call *inflightCall, f unaryF
 	case <-call.result:
 		s.finishCall(f.ID)
 		s.releaseCall(f.ID)
+	case <-call.detached: // a later CANCEL found zombie room and freed the slot
 	case <-s.ctx.Done():
 		s.mu.Lock()
 		s.detachLocked(f.ID, call, abandonShutdown, true)
