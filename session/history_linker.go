@@ -120,7 +120,7 @@ func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
 // rescanNeeded reports whether a write to filePath (<conversation-uuid>.jsonl)
 // can change any link. It cannot only when a live (active, unarchived) session
 // owns the conversation (just the owner appending) and no live session is still
-// waiting for a link. A non-live owner proves nothing, and a waiting session
+// waiting for a link (a live Claude session with no conversation yet). A non-live owner proves nothing, and a waiting session
 // may be the one that resumed an already-claimed conversation, which only the
 // pane-PID fast path in ScanAll can link. Assumes a resumed conversation is
 // appended in place rather than copied to a new file; if Claude Code copies, the
@@ -135,7 +135,10 @@ func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
 		snap := inst.Snapshot()
 		live := snap.Status == Active && snap.ArchivedAt == nil
 		if !inst.HasClaudeSession() {
-			awaitingLink = awaitingLink || live
+			// isClaude reads config from disk, so only evaluate it for the
+			// few live unlinked sessions. A parked session still counts: the
+			// rescan is its only wake-up besides the poll's backoff expiry.
+			awaitingLink = awaitingLink || (live && isClaude(snap.Program))
 			continue
 		}
 		if live && inst.GetClaudeConversationUUID() == uuid {
