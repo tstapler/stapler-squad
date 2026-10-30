@@ -1036,6 +1036,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	hookReceiver := services.NewHookReceiver()
 	if deps.SessionService != nil {
 		hookReceiver.SetPostToolUseObserver(deps.SessionService.ObservePostToolUse)
+		hookReceiver.SetStopObserver(deps.SessionService.ObserveStop)
 	}
 	hookReceiver.RegisterRoutes(srv.mux)
 	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")

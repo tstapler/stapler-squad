@@ -125,7 +125,20 @@ func (ns *NotificationService) SendNotification(
 	if err := validateLocalhostOrigin(ctx, req); err != nil {
 		return nil, err
 	}
+	return ns.sendNotification(ctx, req)
+}
 
+// SendInProcess delivers a notification raised by the server itself, which has no peer
+// address for the localhost-origin check.
+func (ns *NotificationService) SendInProcess(ctx context.Context, msg *sessionv1.SendNotificationRequest) error {
+	_, err := ns.sendNotification(ctx, connect.NewRequest(msg))
+	return err
+}
+
+func (ns *NotificationService) sendNotification(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SendNotificationRequest],
+) (*connect.Response[sessionv1.SendNotificationResponse], error) {
 	// Validate required fields
 	if req.Msg.SessionId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
