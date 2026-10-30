@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -75,6 +76,10 @@ func OpenAnalyticsDBWithDriver(ctx context.Context, dataDir string) (*ent.Client
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("analytics db: schema migration: %w", err)
+	}
+	// Legacy cleanup, not needed for correctness: a transient lock must not disable analytics.
+	if err := dropObsoleteEscapeIndexes(ctx, db); err != nil {
+		log.Warn("analytics db: drop obsolete escape indexes failed; retrying next start", "err", err)
 	}
 	// Bounded compaction for databases created with incremental auto-vacuum.
 	// This is a no-op for legacy databases until their next maintenance VACUUM.
