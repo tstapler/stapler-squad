@@ -1,6 +1,8 @@
 package tymux
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -26,6 +28,12 @@ import (
 // therefore cannot block writes to the stream that replaced it after a reconnect.
 // A single Send cannot be interrupted short of cancelling the stream; waiting for either lock and
 // the total time of a multi-chunk payload are bounded so callers get an error instead of hanging.
+// Every wait also honors the caller's context, so a 2s browser-keystroke context is not held for
+// the full lock wait behind a long paste.
+//
+// Small keystrokes deliberately do not bypass the input lock to interleave between a paste's
+// chunks: that would splice typed bytes into the middle of the paste's byte stream. A busy input
+// lock is instead reported (errInputBusy / the caller's context error) and the PTY adapter retries.
 
 const (
 	// maxInputChunk is the largest single Input frame. 32 KiB keeps each Send short enough that
@@ -41,6 +49,10 @@ var (
 	errSendBusy      = errors.New("tymux: input stream busy: timed out waiting to send")
 	errInputBusy     = errors.New("tymux: input stream busy: timed out waiting for an earlier input to finish")
 	errInputTimedOut = errors.New("tymux: input payload timed out")
+	errLockTimeout   = errors.New("tymux: lock wait timed out")
+
+	bracketedPasteStart = []byte("\x1b[200~")
+	bracketedPasteEnd   = []byte("\x1b[201~")
 )
 
 // timedLock is a mutex whose acquisition can time out.
@@ -48,19 +60,26 @@ type timedLock chan struct{}
 
 func newTimedLock() timedLock { return make(timedLock, 1) }
 
-func (l timedLock) acquire(timeout time.Duration) bool {
+// acquire waits for the lock for at most timeout or until ctx is done, whichever comes first.
+// An already-cancelled ctx fails even when the lock is free.
+func (l timedLock) acquire(ctx context.Context, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case l <- struct{}{}:
-		return true
+		return nil
 	default:
 	}
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
 	case l <- struct{}{}:
-		return true
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-t.C:
-		return false
+		return errLockTimeout
 	}
 }
 
@@ -86,12 +105,19 @@ func (s *tymuxGRPCSession) setStreamLocked(stream attachStream) {
 // (SendKeys/TapEnter/SendPromptWithEnter/SendInputViaControlMode), the PTY adapter and
 // SetWindowSize/SetDetachedSize funnel through here rather than opening a new RPC.
 func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
+	_, err := s.sendOnStreamCtx(context.Background(), req)
+	return err
+}
+
+// sendOnStreamCtx is sendOnStream bounded by ctx. For an Input frame it also returns how many
+// payload bytes were written, so a caller can tell a partial multi-chunk failure from a clean one.
+func (s *tymuxGRPCSession) sendOnStreamCtx(ctx context.Context, req *v1.AttachRequest) (int, error) {
 	s.mu.RLock()
 	stream, gate := s.stream, s.sendGate
 	frameWait, payloadTimeout := s.sendLockWait, s.inputPayloadTimeout
 	s.mu.RUnlock()
 	if stream == nil {
-		return errSessionNotStarted
+		return 0, errSessionNotStarted
 	}
 	if frameWait <= 0 {
 		frameWait = defaultSendLockWait
@@ -100,14 +126,22 @@ func (s *tymuxGRPCSession) sendOnStream(req *v1.AttachRequest) error {
 		payloadTimeout = defaultInputPayloadTimeout
 	}
 	if _, isInput := req.GetPayload().(*v1.AttachRequest_Input); isInput {
-		return sendInputPayload(stream, gate, req.GetInput(), frameWait, payloadTimeout)
+		return sendInputPayload(ctx, stream, gate, req.GetInput(), frameWait, payloadTimeout)
 	}
-	return sendFrame(stream, gate, req, frameWait)
+	return 0, sendFrame(ctx, stream, gate, req, frameWait)
 }
 
-func sendFrame(stream attachStream, gate *streamSendGate, req *v1.AttachRequest, wait time.Duration) error {
-	if !gate.frame.acquire(wait) {
-		return errSendBusy
+// lockErr maps a failed acquire to the package's busy error, leaving ctx errors untouched.
+func lockErr(err, busy error) error {
+	if errors.Is(err, errLockTimeout) {
+		return busy
+	}
+	return err
+}
+
+func sendFrame(ctx context.Context, stream attachStream, gate *streamSendGate, req *v1.AttachRequest, wait time.Duration) error {
+	if err := gate.frame.acquire(ctx, wait); err != nil {
+		return lockErr(err, errSendBusy)
 	}
 	defer gate.frame.release()
 	if err := stream.Send(req); err != nil {
@@ -116,10 +150,11 @@ func sendFrame(stream attachStream, gate *streamSendGate, req *v1.AttachRequest,
 	return nil
 }
 
-// sendInputPayload sends data as one contiguous logical input (see the guarantees above).
-func sendInputPayload(stream attachStream, gate *streamSendGate, data []byte, wait, payloadTimeout time.Duration) error {
-	if !gate.input.acquire(wait) {
-		return errInputBusy
+// sendInputPayload sends data as one contiguous logical input (see the guarantees above) and
+// returns the number of bytes written, which is less than len(data) only alongside an error.
+func sendInputPayload(ctx context.Context, stream attachStream, gate *streamSendGate, data []byte, wait, payloadTimeout time.Duration) (int, error) {
+	if err := gate.input.acquire(ctx, wait); err != nil {
+		return 0, lockErr(err, errInputBusy)
 	}
 	defer gate.input.release()
 
@@ -127,20 +162,67 @@ func sendInputPayload(stream attachStream, gate *streamSendGate, data []byte, wa
 	sent := 0
 	for {
 		end := min(sent+maxInputChunk, len(data))
-		if err := sendFrame(stream, gate, &v1.AttachRequest{
+		if err := sendFrame(ctx, stream, gate, &v1.AttachRequest{
 			Payload: &v1.AttachRequest_Input{Input: data[sent:end]},
 		}, wait); err != nil {
-			if sent > 0 {
-				return fmt.Errorf("%w (after %d of %d bytes)", err, sent, len(data))
-			}
-			return err
+			return sent, abortPayload(stream, gate, data, sent, wait, err)
 		}
 		sent = end
 		if sent >= len(data) {
-			return nil
+			return sent, nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%w: sent %d of %d bytes in %s", errInputTimedOut, sent, len(data), payloadTimeout)
+			err := fmt.Errorf("%w: sent %d of %d bytes in %s", errInputTimedOut, sent, len(data), payloadTimeout)
+			return sent, abortPayload(stream, gate, data, sent, wait, err)
 		}
 	}
+}
+
+// abortPayload annotates a mid-payload failure with how far it got and, if the bytes already
+// delivered left the app inside a bracketed paste, best-effort closes it so the app does not keep
+// swallowing keystrokes as paste text. Runs on a fresh context: the caller's is often why we failed.
+func abortPayload(stream attachStream, gate *streamSendGate, data []byte, sent int, wait time.Duration, err error) error {
+	if sent == 0 {
+		return err
+	}
+	if closer := pasteCloser(data, sent); len(closer) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), min(wait, time.Second))
+		defer cancel()
+		_ = sendFrame(ctx, stream, gate, &v1.AttachRequest{
+			Payload: &v1.AttachRequest_Input{Input: closer},
+		}, wait)
+	}
+	return fmt.Errorf("%w (after %d of %d bytes)", err, sent, len(data))
+}
+
+// pasteCloser returns the bytes that close a bracketed paste left open after data[:sent] was
+// delivered, or nil if none is open, sent is out of range, or closing is unsafe.
+//
+// When the delivered bytes end in a partial ESC[201~ prefix (chunk boundary inside the terminator),
+// only the missing suffix is sent, and only if the undelivered remainder confirms that is what was
+// coming. Otherwise (the partial prefix is not continued by the remainder as ESC[201~, or the
+// payload was cut inside a trailing partial prefix with no remainder to confirm) recovery is
+// skipped and the paste may stay open: a full ESC[201~ after a half-sent sequence would garble it
+// into something the app could misread, which is worse than a paste the user can end themselves.
+func pasteCloser(data []byte, sent int) []byte {
+	if sent < 0 || sent > len(data) {
+		return nil
+	}
+	delivered := data[:sent]
+	if !inBracketedPaste(delivered) {
+		return nil
+	}
+	for k := len(bracketedPasteEnd) - 1; k > 0; k-- {
+		if bytes.HasSuffix(delivered, bracketedPasteEnd[:k]) {
+			if bytes.HasPrefix(data[sent:], bracketedPasteEnd[k:]) {
+				return bracketedPasteEnd[k:]
+			}
+			return nil
+		}
+	}
+	return bracketedPasteEnd
+}
+
+func inBracketedPaste(delivered []byte) bool {
+	return bytes.LastIndex(delivered, bracketedPasteStart) > bytes.LastIndex(delivered, bracketedPasteEnd)
 }
