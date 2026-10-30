@@ -41,6 +41,11 @@ type polledState struct {
 // rate for permanently failing worktrees (404/403, deleted repo, SSO block).
 const failureBackoffBase = 5 * time.Second
 
+// noPRLiftMinInterval limits how often webhooks lift a repo's no-PR backoff.
+// The webhook handler does not pass the event type, so check_run-style events
+// would otherwise re-poll every no-PR branch of a busy repo on every scan.
+const noPRLiftMinInterval = 30 * time.Second
+
 var (
 	pollOutcomeCounterOnce sync.Once
 	pollOutcomeCounter     metric.Int64Counter
@@ -142,7 +147,8 @@ type WorktreePRPoller struct {
 	mu            sync.Mutex
 	noPRPollAfter map[string]time.Time // key: worktreeCacheKey
 	lastPolled    map[string]polledState
-	keyRepo       map[string]string // worktree key -> lowercase owner/repo, for targeted InvalidateCache
+	keyRepo       map[string]string    // worktree key -> lowercase owner/repo, for targeted InvalidateCache
+	noPRLiftedAt  map[string]time.Time // repoID -> last InvalidateCache no-PR backoff lift
 
 	// now and fetch are test seams (fake clock, fake GitHub fetch).
 	now   func() time.Time
@@ -168,6 +174,7 @@ func NewWorktreePRPollerWithConfig(etagCache *github.ETagCache, prPoller *PRStat
 		noPRPollAfter: make(map[string]time.Time),
 		lastPolled:    make(map[string]polledState),
 		keyRepo:       make(map[string]string),
+		noPRLiftedAt:  make(map[string]time.Time),
 		now:           time.Now,
 	}
 	p.fetch = p.fetchAndStore
@@ -240,11 +247,18 @@ func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
 	// none) so the next scan re-polls them; other repos stay gated.
 	want := repoID(owner, repo)
 	p.mu.Lock()
+	now := p.now()
+	liftNoPR := now.Sub(p.noPRLiftedAt[want]) >= noPRLiftMinInterval
+	if liftNoPR {
+		p.noPRLiftedAt[want] = now
+	}
 	for key, id := range p.keyRepo {
 		if id != want {
 			continue
 		}
-		delete(p.noPRPollAfter, key) // a webhook may mean a PR was just opened
+		if liftNoPR {
+			delete(p.noPRPollAfter, key) // a webhook may mean a PR was just opened
+		}
 		// A failing key keeps its retry schedule so a webhook stream cannot
 		// defeat the failure backoff.
 		if st, ok := p.lastPolled[key]; ok && st.failures == 0 {
@@ -363,7 +377,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 			defer cancel()
 			ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
-			p.recordResult(key, p.fetch(ctx, captured))
+			p.recordResult(key, fingerprints[key], p.fetch(ctx, captured))
 		}()
 	}
 	p.pruneLastPolled(seen)
@@ -389,12 +403,16 @@ func combinedFingerprints(items []WorktreeScanItem) map[string]string {
 // recordResult resets key's failure streak on success, or schedules an
 // exponentially growing retry (capped at PollInterval) on error by backdating
 // the poll record so the interval gate reopens after the delay.
-func (p *WorktreePRPoller) recordResult(key string, err error) {
+func (p *WorktreePRPoller) recordResult(key, fingerprint string, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st, ok := p.lastPolled[key]
 	if !ok {
-		return // invalidated or pruned meanwhile; next scan polls anyway
+		if err == nil {
+			return // invalidated meanwhile; next scan polls anyway
+		}
+		// Invalidated mid-fetch: still count the failure, or it is lost.
+		st = polledState{fingerprint: fingerprint}
 	}
 	if err == nil {
 		st.failures = 0
@@ -435,6 +453,17 @@ func (p *WorktreePRPoller) pruneLastPolled(live map[string]struct{}) {
 	for k := range p.keyRepo {
 		if _, ok := live[k]; !ok {
 			delete(p.keyRepo, k)
+		}
+	}
+	now := p.now()
+	for k, until := range p.noPRPollAfter {
+		if _, ok := live[k]; !ok || !now.Before(until) {
+			delete(p.noPRPollAfter, k)
+		}
+	}
+	for repo, at := range p.noPRLiftedAt {
+		if now.Sub(at) >= noPRLiftMinInterval {
+			delete(p.noPRLiftedAt, repo)
 		}
 	}
 }
