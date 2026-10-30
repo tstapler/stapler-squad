@@ -29,7 +29,7 @@ jest.mock("./mockTerminal", () => {
       super.clear();
     }
     refresh(start: number, end: number): void {
-      this.facade.refresh(start, end);
+      (this.facade as unknown as { refresh(s: number, e: number): void }).refresh(start, end);
       super.refresh(start, end);
     }
     scrollToBottom(): void {
