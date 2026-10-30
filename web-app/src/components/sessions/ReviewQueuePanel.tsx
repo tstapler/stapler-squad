@@ -72,9 +72,9 @@ import {
   completionState,
   completionIcon,
   retryButton,
-  visuallyHidden,
   oldestCallout,
   newItemsBanner,
+  promotedNewLine,
   filterToggleRow,
   filterToggle,
   filterToggleActive,
@@ -97,6 +97,9 @@ import {
 } from "./ReviewQueuePanel.css";
 import { Button } from "@/components/ui";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
+import { announceAttention, announceNeedsYou } from "@/lib/attention/announceAttention";
+import { isNeedsHuman } from "@/lib/attention/needsHuman";
+import { promotedKind, promotedLabel } from "@/lib/attention/promotedArrivals";
 
 interface ReviewQueuePanelProps {
   onSessionClick?: (sessionId: string) => void;
@@ -107,6 +110,8 @@ interface ReviewQueuePanelProps {
   onAcknowledged?: (sessionId: string) => void; // Notifies parent when a session is acknowledged (for auto-advance)
   autoAdvance?: boolean;
   onAutoAdvanceChange?: (value: boolean) => void;
+  /** Shows "Not a question" on prose_question rows; absent until the server's dismiss contract exists. */
+  onNotAQuestion?: (sessionId: string) => Promise<void>;
 }
 
 /**
@@ -347,6 +352,7 @@ export function ReviewQueuePanel({
   onAcknowledged,
   autoAdvance,
   onAutoAdvanceChange,
+  onNotAQuestion,
 }: ReviewQueuePanelProps) {
   // Epic 2.4: Create PR modal state — holds the sessionId whose modal is open (null = closed),
   // mirroring SessionActionsOverflow.tsx's isCreatePrOpen/createPrTriggerRef pattern (Epic 2.3)
@@ -363,6 +369,13 @@ export function ReviewQueuePanel({
   const [activeRuleItemId, setActiveRuleItemId] = useState<string | null>(null);
   const [ruleSaved, setRuleSaved] = useState(false);
   const { suggestions, loading: ruleLoading, error: ruleError, generate: generateRule, clear: clearRule } = useGenerateRule();
+  // The rule modal's inline status/error go through the shared announcer, once each.
+  useEffect(() => {
+    if (ruleSaved) announceAttention("action-result", "Rule saved");
+  }, [ruleSaved]);
+  useEffect(() => {
+    if (ruleError) announceAttention("action-result", `Could not generate a rule: ${ruleError.message}`);
+  }, [ruleError]);
   // Filter/sort/group state is persisted to URL query params (shareable/bookmarkable),
   // seeded once from the URL on mount; local state is the source of truth thereafter.
   const { filterState: urlFilters, setFilter: setUrlFilter, clearFilters: clearUrlFilters } = useFilterState(FILTER_URL_KEYS);
@@ -401,10 +414,9 @@ export function ReviewQueuePanel({
   // Track whether queue ever had items so we can show "all done" vs generic empty state
   const [hadItems, setHadItems] = useState(false);
 
-  // Live region announcement text for screen readers
-  const [liveAnnouncement, setLiveAnnouncement] = useState('');
-  // Prevent announcement on initial mount
-  const hasMountedRef = useRef(false);
+  // Previously seen needs-human session ids; null until the first load completes so the
+  // initial snapshot is never announced as "arrivals".
+  const announcedIdsRef = useRef<Set<string> | null>(null);
   // "Saved" flash for auto-advance toggle
   const [autoAdvanceSaved, setAutoAdvanceSaved] = useState(false);
 
@@ -632,11 +644,35 @@ export function ReviewQueuePanel({
     return allFilteredItems.filter((item) => reviewingIdsSnapshot.has(item.sessionId));
   }, [allFilteredItems, reviewingIdsSnapshot]);
 
-  // New items not yet in snapshot — shown in the refresh banner
-  const newItemsCount = useMemo(() => {
-    if (reviewingIdsSnapshot === null) return 0;
-    return allFilteredItems.filter((item) => !reviewingIdsSnapshot.has(item.sessionId)).length;
+  // New items not yet in snapshot are held behind "N new - show"; approvals and errors are
+  // promoted to their own sticky line instead of being buried behind the hold.
+  const heldArrivals = useMemo(() => {
+    if (reviewingIdsSnapshot === null) return [];
+    return allFilteredItems.filter((item) => !reviewingIdsSnapshot.has(item.sessionId));
   }, [allFilteredItems, reviewingIdsSnapshot]);
+  const promotedArrivals = useMemo(() => heldArrivals.filter((i) => promotedKind(i.reason) !== null), [heldArrivals]);
+  const newItemsCount = heldArrivals.length - promotedArrivals.length;
+
+  // Oldest waiting item, by detection time, for the plain-text sticky callout.
+  const oldestItem = useMemo(() => {
+    let oldest: ReviewItem | undefined;
+    for (const item of items) {
+      if (!item.detectedAt) continue;
+      if (!oldest || item.detectedAt.seconds < (oldest.detectedAt?.seconds ?? BigInt(0))) oldest = item;
+    }
+    return oldest;
+  }, [items]);
+  const oldestSessionId = oldestItem?.sessionId;
+  const oldestName = oldestItem?.sessionName;
+  const previousOldestRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const previous = previousOldestRef.current;
+    previousOldestRef.current = oldestSessionId;
+    // Name only, never the age: ages are static text in the callout, not spoken.
+    if (previous && oldestSessionId && previous !== oldestSessionId && oldestName) {
+      announceAttention("action-result", `${oldestName} is now the oldest waiting`);
+    }
+  }, [oldestSessionId, oldestName]);
 
   // Position of each item within the flat `items` array — used so grouped rendering can still
   // highlight the keyboard-nav "current item" at its real index.
@@ -779,19 +815,20 @@ export function ReviewQueuePanel({
     }
   }, [items.length]);
 
-  // Update live announcement for screen readers when queue changes
+  // Speaks through the shell's single AttentionAnnouncer, which coalesces bursts.
   useEffect(() => {
     if (loading) return;
-    if (!hasMountedRef.current) {
-      hasMountedRef.current = true;
-      return; // Skip announcement on initial mount
+    const current = new Set(allItems.filter((i) => isNeedsHuman(i.reason)).map((i) => i.sessionId));
+    const previous = announcedIdsRef.current;
+    announcedIdsRef.current = current;
+    if (previous === null) return;
+    let arrivals = 0;
+    for (const id of current) if (!previous.has(id)) arrivals += 1;
+    announceNeedsYou(arrivals);
+    if (allItems.length === 0 && hadItems && previous.size > 0) {
+      announceAttention("action-result", "Queue cleared. All items reviewed.");
     }
-    if (items.length === 0 && hadItems) {
-      setLiveAnnouncement('Queue cleared. All items reviewed.');
-    } else if (items.length > 0) {
-      setLiveAnnouncement(`${items.length} ${items.length === 1 ? 'item' : 'items'} need attention.`);
-    }
-  }, [items.length, hadItems, loading]);
+  }, [allItems, hadItems, loading]);
 
   // Format duration in seconds (e.g., averageAgeSeconds, oldestAgeSeconds)
   const formatDuration = (durationSeconds: bigint): string => {
@@ -852,6 +889,10 @@ export function ReviewQueuePanel({
         return "Waiting";
       case AttentionReason.TESTS_FAILING:
         return "Tests Failing";
+      case AttentionReason.PROSE_QUESTION:
+        return "Asked a question";
+      case AttentionReason.AWAITING_DIRECTION:
+        return "Finished, waiting for direction";
       default:
         return "All";
     }
@@ -992,6 +1033,8 @@ export function ReviewQueuePanel({
       [AttentionReason.TASK_COMPLETE, (n) => `${n} complete`],
       [AttentionReason.WAITING_FOR_USER, (n) => `${n} waiting`],
       [AttentionReason.TESTS_FAILING, (n) => `${n} test${n !== 1 ? "s" : ""} failing`],
+      [AttentionReason.PROSE_QUESTION, (n) => `${n} question${n !== 1 ? "s" : ""}`],
+      [AttentionReason.AWAITING_DIRECTION, (n) => `${n} awaiting direction`],
     ];
     for (const [reason, format] of reasonFormatters) {
       const n = byReason.get(reason) ?? 0;
@@ -1093,6 +1136,19 @@ export function ReviewQueuePanel({
           )}
           {queueItem.context && !queueItem.metadata?.["pending_approval_id"] && (
             <p className={itemContext}>{queueItem.context}</p>
+          )}
+          {queueItem.reason === AttentionReason.PROSE_QUESTION && onNotAQuestion && (
+            <Button
+              intent="ghost"
+              size="md"
+              onClick={(e) => {
+                e.stopPropagation();
+                void onNotAQuestion(queueItem.sessionId).then(() => refresh());
+              }}
+              data-testid={`not-a-question-${queueItem.sessionId}`}
+            >
+              Not a question
+            </Button>
           )}
           {queueItem.patternName && (
             <span className={itemPattern}>
@@ -1357,10 +1413,6 @@ export function ReviewQueuePanel({
           queue ended up empty — tests and other consumers use this to know
           when it's safe to make assertions about queue contents. */}
       {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
-      {/* Screen reader live region for queue count changes */}
-      <div aria-live="polite" aria-atomic="true" className={visuallyHidden}>
-        {liveAnnouncement}
-      </div>
       <div className={header}>
         <div className={titleRow}>
           <h2 className={title} ref={panelHeadingRef} tabIndex={-1}>
@@ -1415,7 +1467,7 @@ export function ReviewQueuePanel({
             regardless of which content branch (hidden-by-filter, calm empty, or the
             normal two-tier list) renders below. */}
         {showStalenessIndicator && (
-          <div className={stalenessIndicator} role="status" data-testid="review-queue-staleness">
+          <div className={stalenessIndicator} data-testid="review-queue-staleness">
             Last updated {stalenessLabel} ago ·{" "}
             <button type="button" className={stalenessRetry} onClick={refresh}>
               Retry
@@ -1425,19 +1477,25 @@ export function ReviewQueuePanel({
 
         {/* Heads-up callout when oldest item is over 5 minutes old */}
         {oldestAgeSeconds > BigInt(300) && (
-          <div className={oldestCallout} role="status">
-            Oldest item: {formatDuration(oldestAgeSeconds)}
+          <div className={oldestCallout} data-testid="oldest-waiting-callout">
+            Oldest waiting: {oldestName ? `${oldestName}, ` : ""}{formatDuration(oldestAgeSeconds)}
           </div>
         )}
 
-        {/* New-items banner: shows when items arrive after snapshot was taken */}
-        {newItemsCount > 0 && (
+        {/* Priority-1 arrivals (approval/error) are never held back behind the count below. */}
+        {promotedArrivals.length > 0 && (
           <button
-            className={newItemsBanner}
+            className={`${newItemsBanner} ${promotedNewLine}`}
             onClick={refreshSnapshot}
-            aria-label={`${newItemsCount} new item${newItemsCount !== 1 ? "s" : ""} added. Click to refresh the list.`}
-          >
-            {newItemsCount} new item{newItemsCount !== 1 ? "s" : ""} added — click to refresh
+            data-testid="new-promoted-line"
+          >{/* analytics-exempt */}
+            {promotedLabel(promotedArrivals.map((i) => i.reason))} - show
+          </button>
+        )}
+        {/* Other arrivals wait here so rows never reorder under focus or pointer. */}
+        {newItemsCount > 0 && (
+          <button className={newItemsBanner} onClick={refreshSnapshot} data-testid="new-items-banner">{/* analytics-exempt */}
+            {newItemsCount} new - show
           </button>
         )}
       </div>
@@ -1530,10 +1588,14 @@ export function ReviewQueuePanel({
                 AttentionReason.IDLE,
                 AttentionReason.STALE,
                 AttentionReason.TASK_COMPLETE,
+                AttentionReason.PROSE_QUESTION,
+                AttentionReason.AWAITING_DIRECTION,
               ].map((reason) => {
                 const reasonCount = byReason.get(reason) ?? 0;
                 // Hide TESTS_FAILING when count is 0 (detection may be disabled)
                 if (reason === AttentionReason.TESTS_FAILING && reasonCount === 0) return null;
+                // The new reasons only exist with detection on; keep the flag-off chip row identical.
+                if ((reason === AttentionReason.PROSE_QUESTION || reason === AttentionReason.AWAITING_DIRECTION) && reasonCount === 0) return null;
                 const isExcluded = reasonExcludeFilter.has(reason);
                 return (
                   <button
@@ -1869,7 +1931,6 @@ export function ReviewQueuePanel({
 
             {ruleSaved && (
               <p
-                role="status"
                 style={{ margin: 0, fontSize: "0.875rem", color: "var(--success)" }}
                 data-testid="rule-saved-indicator"
               >
@@ -1887,7 +1948,7 @@ export function ReviewQueuePanel({
             )}
 
             {ruleError && !ruleLoading && (
-              <p role="alert" style={{ margin: 0, fontSize: "0.875rem", color: "var(--error)" }}>
+              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--error)" }}>
                 ✗ {ruleError.message}
               </p>
             )}

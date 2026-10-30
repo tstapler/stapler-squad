@@ -14,11 +14,13 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 import { isReviewQueueVisible } from "@/lib/utils/reviewQueueVisibility";
+import { AttentionAnnouncer } from "../AttentionAnnouncer";
+import { findLiveNodes, isTimeLike, makeReviewItem as makeAttentionItem } from "@/test-utils/attentionFixtures";
 
 afterEach(() => {
   mockSearchParams = new URLSearchParams();
@@ -180,6 +182,7 @@ function makeContextValue(
     error: Error | null;
     lastUpdatedAt: number | null;
     autoResolvedRules: Record<string, string>;
+    oldestAgeSeconds: bigint;
   }> = {}
 ) {
   return {
@@ -2039,5 +2042,153 @@ describe("ReviewQueuePanel — auto-resolved-by-rule disable-in-place", () => {
     rerender(<ReviewQueuePanel />);
 
     expect(screen.queryByTestId("review-item-session-approval")).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attention list: single announcer, held arrivals, reason rendering (PR B)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — attention announcer and held arrivals", () => {
+  const startedAt = (secondsAgo: number) => ({ seconds: BigInt(Math.floor(Date.now() / 1000) - secondsAgo), nanos: 0 });
+  const approval = (id: string, extra: Partial<ReviewItem> = {}) =>
+    makeAttentionItem({ sessionId: id, sessionName: id, reason: AttentionReason.APPROVAL_PENDING, ...extra });
+
+  function renderWithAnnouncer(items: ReviewItem[], overrides: Parameters<typeof makeContextValue>[1] = {}) {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue(items, overrides));
+    const view = render(
+      <>
+        <AttentionAnnouncer />
+        <ReviewQueuePanel />
+      </>,
+    );
+    const update = (next: ReviewItem[], more: Parameters<typeof makeContextValue>[1] = {}) => {
+      mockUseReviewQueueContext.mockReturnValue(makeContextValue(next, more));
+      view.rerender(
+        <>
+          <AttentionAnnouncer />
+          <ReviewQueuePanel />
+        </>,
+      );
+    };
+    return { ...view, update };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it("UX-17: exactly one live node, and nothing live carries a time or <time> element", () => {
+    const items = [
+      approval("a", { detectedAt: startedAt(600) } as Partial<ReviewItem>),
+      makeAttentionItem({ sessionId: "p", sessionName: "p", reason: AttentionReason.PROSE_QUESTION, context: "Should I continue?" }),
+      makeAttentionItem({ sessionId: "d", sessionName: "d", reason: AttentionReason.AWAITING_DIRECTION }),
+    ];
+    const { container } = renderWithAnnouncer(items, {
+      error: new Error("blip"),
+      lastUpdatedAt: Date.now() - 65_000,
+      oldestAgeSeconds: BigInt(600),
+    });
+    const live = findLiveNodes(container);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toHaveAttribute("data-testid", "attention-announcer");
+    expect(container.querySelector("time")).toBeNull();
+    expect(live.every((n) => !n.querySelector("time") && !isTimeLike(n.textContent ?? ""))).toBe(true);
+  });
+
+  it("announces a burst of arrivals once, politely, without moving focus", () => {
+    const { update, container } = renderWithAnnouncer([approval("a")]);
+    const row = screen.getByTestId("review-item-a");
+    row.focus();
+    update([approval("a"), approval("b"), approval("c"), approval("d")]);
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(screen.getByTestId("attention-announcer")).toHaveTextContent("3 sessions need you");
+    expect(row).toHaveFocus();
+    expect(findLiveNodes(container)).toHaveLength(1);
+  });
+
+  it("holds ordinary arrivals behind 'N new - show' and never reorders rows", () => {
+    const quiet = (id: string) => makeAttentionItem({ sessionId: id, sessionName: id, reason: AttentionReason.TESTS_FAILING });
+    const { update } = renderWithAnnouncer([quiet("a")]);
+    update([quiet("a"), quiet("b")]);
+    expect(screen.queryByTestId("review-item-b")).not.toBeInTheDocument();
+    const show = screen.getByTestId("new-items-banner");
+    expect(show).toHaveTextContent("1 new - show");
+    fireEvent.click(show);
+    expect(screen.getByTestId("review-item-b")).toBeInTheDocument();
+  });
+
+  it("promotes a new approval to a sticky line instead of burying it in the count", () => {
+    const quiet = makeAttentionItem({ sessionId: "a", sessionName: "a", reason: AttentionReason.TESTS_FAILING });
+    const { update } = renderWithAnnouncer([quiet]);
+    update([quiet, approval("b")]);
+    expect(screen.getByTestId("new-promoted-line")).toHaveTextContent("1 new approval - show");
+    expect(screen.queryByTestId("new-items-banner")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-b")).not.toBeInTheDocument();
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(screen.getByTestId("attention-announcer")).toHaveTextContent("1 session needs you");
+  });
+
+  it("renders the oldest-waiting callout as plain text with the session name", () => {
+    renderWithAnnouncer([approval("api-refactor", { detectedAt: startedAt(600) } as Partial<ReviewItem>)], {
+      oldestAgeSeconds: BigInt(600),
+    });
+    const callout = screen.getByTestId("oldest-waiting-callout");
+    expect(callout).toHaveTextContent("Oldest waiting: api-refactor");
+    expect(callout.closest("[aria-live], [role='status'], [role='alert']")).toBeNull();
+  });
+
+  it("speaks only the session name when the oldest item changes", () => {
+    const a = approval("alpha", { detectedAt: startedAt(900) } as Partial<ReviewItem>);
+    const b = approval("beta", { detectedAt: startedAt(600) } as Partial<ReviewItem>);
+    const { update } = renderWithAnnouncer([a, b]);
+    update([b]);
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    const spoken = screen.getByTestId("attention-announcer").textContent ?? "";
+    expect(spoken).toBe("beta is now the oldest waiting");
+    expect(isTimeLike(spoken)).toBe(false);
+  });
+});
+
+describe("ReviewQueuePanel — reason rendering and Not a question", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const prose = makeAttentionItem({
+    sessionId: "p1",
+    sessionName: "p1",
+    reason: AttentionReason.PROSE_QUESTION,
+    context: "Should I delete the old migration?",
+  });
+  const finished = makeAttentionItem({ sessionId: "f1", sessionName: "f1", reason: AttentionReason.AWAITING_DIRECTION });
+
+  it("labels prose_question and awaiting_direction with text, and shows the excerpt", () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([prose, finished]));
+    renderPanel();
+    const proseRow = screen.getByTestId("review-item-p1");
+    expect(within(proseRow).getByText("Asked a question")).toBeInTheDocument();
+    expect(within(proseRow).getByText("Should I delete the old migration?")).toBeInTheDocument();
+    expect(within(screen.getByTestId("review-item-f1")).getByText("Finished, waiting for direction")).toBeInTheDocument();
+  });
+
+  it("shows 'Not a question' only on prose rows and only when the callback is supplied", async () => {
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([prose, finished]));
+    const { unmount } = renderPanel();
+    expect(screen.queryByTestId("not-a-question-p1")).not.toBeInTheDocument();
+    unmount();
+
+    const onNotAQuestion = jest.fn().mockResolvedValue(undefined);
+    renderPanel({ onNotAQuestion });
+    expect(screen.queryByTestId("not-a-question-f1")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("not-a-question-p1"));
+    expect(onNotAQuestion).toHaveBeenCalledWith("p1");
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
   });
 });

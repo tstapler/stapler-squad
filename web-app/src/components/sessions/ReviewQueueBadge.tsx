@@ -104,7 +104,7 @@ export function ReviewQueueBadge({
       >
         {getPriorityEmoji(priority)} {getPriorityText(priority)}
       </span>
-      <StatusBadge reason={reason} />
+      <StatusBadge reason={reason} live={false} />
     </div>
   );
 }

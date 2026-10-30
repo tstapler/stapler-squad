@@ -16,6 +16,7 @@ import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
+import { useDismissNotAQuestion } from "@/lib/hooks/useDismissNotAQuestion";
 import * as styles from "./page.css";
 
 // Stable reference — useWatchBacklogItems only reruns its connection effects when the
@@ -82,6 +83,7 @@ function ReviewQueueContent() {
   // "deleted externally" effect below so that a status transition to ACTIVE/PROCESSING
   // (which filters the session from the visible queue) does not spuriously trigger auto-advance.
   const { acknowledgeSession, items: allQueueItems } = useReviewQueueContext();
+  const notAQuestion = useDismissNotAQuestion();
 
   // Review queue items for navigation (next/previous)
   const [reviewQueueItems, setReviewQueueItems] = useState<Session[]>([]);
@@ -346,6 +348,7 @@ function ReviewQueueContent() {
           onItemsChange={handleItemsChange}
           onAcknowledged={handleAcknowledged}
           autoAdvance={autoAdvance}
+          onNotAQuestion={notAQuestion}
           onAutoAdvanceChange={(val) => {
             setAutoAdvance(val);
             localStorage.setItem("review-queue-auto-advance", String(val));

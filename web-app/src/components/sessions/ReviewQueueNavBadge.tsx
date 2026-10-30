@@ -5,6 +5,7 @@ import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
 import { NotificationSound } from "@/lib/utils/notifications";
 import { NavBadge } from "@/components/ui/NavBadge";
+import { useAttentionCount } from "@/lib/attention/useAttentionCount";
 
 interface ReviewQueueNavBadgeProps {
   inline?: boolean;
@@ -31,7 +32,8 @@ export function ReviewQueueNavBadge({ inline = false }: ReviewQueueNavBadgeProps
     },
   });
 
-  const count = items.length;
+  // Flag on: needs-human reasons only; flag off: the legacy item count.
+  const { count, needsHumanOnly } = useAttentionCount();
 
   // Always show badge (even when count is 0) for test visibility
   return (
@@ -41,7 +43,11 @@ export function ReviewQueueNavBadge({ inline = false }: ReviewQueueNavBadgeProps
       inline={inline}
       showWhenEmpty
       data-testid="review-queue-badge"
-      aria-label={`${count} item${count !== 1 ? "s" : ""} in review queue`}
+      aria-label={
+        needsHumanOnly
+          ? `Attention, ${count} need you`
+          : `${count} item${count !== 1 ? "s" : ""} in review queue`
+      }
       title={`${count} session${count !== 1 ? "s" : ""} ${count > 0 ? "need attention" : "- queue empty"}`}
     />
   );

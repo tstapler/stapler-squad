@@ -216,3 +216,17 @@ describe("getDetectedStatusInfo", () => {
     expect(getDetectedStatusInfo(DetectedStatus.UNSPECIFIED)).toBeNull();
   });
 });
+
+describe("StatusBadge prose_question and awaiting_direction", () => {
+  it("renders icon plus text labels", () => {
+    const { rerender } = render(<StatusBadge reason={AttentionReason.PROSE_QUESTION} />);
+    expect(screen.getByText("Asked a question")).toBeInTheDocument();
+    rerender(<StatusBadge reason={AttentionReason.AWAITING_DIRECTION} />);
+    expect(screen.getByText("Finished, waiting for direction")).toBeInTheDocument();
+  });
+
+  it("drops the live role when live is false", () => {
+    render(<StatusBadge reason={AttentionReason.PROSE_QUESTION} live={false} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});

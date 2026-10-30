@@ -463,6 +463,9 @@ export const retryButton = style({
 export { visuallyHidden } from "@/styles/a11y.css";
 
 export const oldestCallout = style({
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
   marginTop: vars.space["2"],
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
   background: vars.color.surfaceSubtle,
@@ -493,6 +496,13 @@ export const newItemsBanner = style({
       color: "white",
     },
   },
+});
+
+export const promotedNewLine = style({
+  position: "sticky",
+  top: 0,
+  zIndex: 2,
+  fontWeight: 700,
 });
 
 export const autoAdvanceToggle = style({

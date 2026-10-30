@@ -31,6 +31,10 @@ export function getAttentionReasonInfo(reason: AttentionReason): StatusInfo {
       return { label: "Stale", icon: "⌛", variant: "stale" };
     case AttentionReason.WAITING_FOR_USER:
       return { label: "Your Input Needed", icon: "✏️", variant: "input" };
+    case AttentionReason.PROSE_QUESTION:
+      return { label: "Asked a question", icon: "❓", variant: "input" };
+    case AttentionReason.AWAITING_DIRECTION:
+      return { label: "Finished, waiting for direction", icon: "🏁", variant: "complete" };
     default:
       return { label: "Unknown", icon: "●", variant: "unknown" };
   }
@@ -74,9 +78,11 @@ interface StatusBadgeProps {
   detectedStatus?: DetectedStatus;
   title?: string;
   context?: string;
+  /** Default true keeps role="status"; the attention list passes false so only the announcer is live. */
+  live?: boolean;
 }
 
-export function StatusBadge({ reason, detectedStatus, title, context }: StatusBadgeProps) {
+export function StatusBadge({ reason, detectedStatus, title, context, live = true }: StatusBadgeProps) {
   let info: StatusInfo | null;
 
   if (reason !== undefined) {
@@ -96,8 +102,8 @@ export function StatusBadge({ reason, detectedStatus, title, context }: StatusBa
   return (
     <span
       className={`${styles.badge} ${styles.reasonVariants[info.variant]}`}
-      role="status"
-      aria-label={info.label}
+      role={live ? "status" : undefined}
+      aria-label={live ? info.label : undefined}
       title={tooltipText}
     >
       <span className={styles.icon} aria-hidden="true">{info.icon}</span>
