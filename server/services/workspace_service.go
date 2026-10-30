@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -93,9 +92,11 @@ type WorkspaceService struct {
 	vcsStatusCache sync.Map // map[string]vcsStatusCacheEntry
 	// vcsFlights coalesces concurrent cache misses per workdir and bounds parallel computations.
 	vcsFlights vcsFlights
-	// vcsInvalidations counts InvalidateVCSStatus calls so a computation that straddles one
-	// does not re-cache a pre-change result.
-	vcsInvalidations atomic.Int64
+	// vcsEpochs holds a per-workdir counter bumped by InvalidateVCSStatus so a computation that
+	// straddles an invalidation does not re-cache a pre-change result. vcsMu makes the epoch
+	// check and the cache store (and the bump and the delete) atomic with each other.
+	vcsMu     sync.Mutex
+	vcsEpochs map[string]uint64
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -170,8 +171,13 @@ func (ws *WorkspaceService) CheckWriteAccess(sessionID string) error {
 // InvalidateVCSStatus drops the cached status of workDir (keyed as GetVCSStatus keys it),
 // so a file save shows in the next status poll instead of after the TTL.
 func (ws *WorkspaceService) InvalidateVCSStatus(workDir string) {
-	ws.vcsInvalidations.Add(1)
+	ws.vcsMu.Lock()
+	if ws.vcsEpochs == nil {
+		ws.vcsEpochs = make(map[string]uint64)
+	}
+	ws.vcsEpochs[workDir]++
 	ws.vcsStatusCache.Delete(workDir)
+	ws.vcsMu.Unlock()
 	// A computation already running began before the change: new callers must not join it.
 	ws.vcsFlights.forget(workDir)
 }
@@ -181,6 +187,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetVCSStatusRequest],
 ) (*connect.Response[sessionv1.GetVCSStatusResponse], error) {
+	requestedAt := time.Now()
 	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
@@ -208,7 +215,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 	}
 	// Stale-while-revalidate: a poller never waits on git for an entry that is merely
 	// past its TTL. StatusAsOf tells the UI how old the data is.
-	if stale, ok := ws.cachedVCSStatus(workDir, vcsStatusStaleTTL); ok && !req.Msg.ForceFresh {
+	if stale, ok := ws.cachedVCSStatus(workDir, vcsStatusStaleTTL); ok && !req.Msg.WaitForFresh {
 		ws.refreshVCSStatusInBackground(ctx, instance, workDir)
 		recordVCSOutcome(ctx, vcsOutcomeStaleHit)
 		span.SetAttributes(attribute.String("cache", "stale"))
@@ -216,7 +223,12 @@ func (ws *WorkspaceService) GetVCSStatus(
 	}
 	span.SetAttributes(attribute.String("cache", "miss"))
 
-	status, shared, err := ws.vcsFlights.do(ctx, workDir, func(workCtx context.Context) (*vc.VCSStatus, error) {
+	// A caller waiting for fresh data must not join a computation that began before its request.
+	var notBefore time.Time
+	if req.Msg.WaitForFresh {
+		notBefore = requestedAt
+	}
+	status, shared, err := ws.vcsFlights.do(ctx, workDir, notBefore, func(workCtx context.Context) (*vc.VCSStatus, error) {
 		return ws.computeVCSStatus(workCtx, instance, workDir)
 	})
 	span.SetAttributes(attribute.Bool("coalesced", shared))
@@ -248,7 +260,7 @@ func (ws *WorkspaceService) refreshVCSStatusInBackground(ctx context.Context, in
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vcsComputeTimeout)
 	go func() {
 		defer cancel()
-		_, _, _ = ws.vcsFlights.do(bgCtx, workDir, func(workCtx context.Context) (*vc.VCSStatus, error) {
+		_, _, _ = ws.vcsFlights.do(bgCtx, workDir, time.Time{}, func(workCtx context.Context) (*vc.VCSStatus, error) {
 			return ws.computeVCSStatus(workCtx, instance, workDir)
 		})
 	}()
@@ -306,7 +318,9 @@ func (ws *WorkspaceService) vcsStatusFailure(
 // computeVCSStatus does the expensive work for one workDir and fills the cache.
 // Errors carry the user-facing message GetVCSStatus has always put in Error.
 func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *session.Instance, workDir string) (*vc.VCSStatus, error) {
-	invalidationsAtStart := ws.vcsInvalidations.Load()
+	ws.vcsMu.Lock()
+	epochAtStart := ws.vcsEpochs[workDir]
+	ws.vcsMu.Unlock()
 	startedAt := time.Now()
 	// A flight that finished between the caller's cache check and this start has filled it.
 	if st, ok := ws.freshVCSStatus(workDir); ok {
@@ -347,16 +361,28 @@ func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *sess
 	if _, isGit := provider.(*vc.GitProvider); isGit {
 		ws.addShippedCommits(ctx, instance, workDir, status)
 	}
+	// A cancelled or timed-out context makes the shipped-commit calls fail, which would mark
+	// the status CommitsUnavailable: never cache or return such a partial result.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 
 	now := time.Now()
 	status.StatusAsOf = now
-	// Skip the store if an invalidation landed mid-computation: this result may predate it.
-	// Also skip it if a newer computation for this workdir already cached a fresher entry
-	// (an overlapping run after the last waiter of this one left).
-	if ws.vcsInvalidations.Load() == invalidationsAtStart && !ws.cachedAfter(workDir, startedAt) {
-		ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
-	}
+	ws.storeVCSStatusIfCurrent(workDir, epochAtStart, startedAt, status, now)
 	return status, nil
+}
+
+// storeVCSStatusIfCurrent caches status unless an invalidation landed since epochAtStart (the
+// result may predate it) or a computation that started later already cached a fresher entry.
+// Check and store happen under vcsMu, which InvalidateVCSStatus also holds.
+func (ws *WorkspaceService) storeVCSStatusIfCurrent(workDir string, epochAtStart uint64, startedAt time.Time, status *vc.VCSStatus, now time.Time) {
+	ws.vcsMu.Lock()
+	defer ws.vcsMu.Unlock()
+	if ws.vcsEpochs[workDir] != epochAtStart || ws.cachedAfter(workDir, startedAt) {
+		return
+	}
+	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: now})
 }
 
 // addShippedCommits fills Commits/AggregateDiffStat. They are computed here (not inside

@@ -33,10 +33,12 @@ const vcsInflight = new Map<string, { promise: Promise<VcsCacheEntry>; focused: 
  * Resolve a session's VCS status through the shared cache and a shared in-flight
  * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
  * `force` skips a fresh cache hit and never joins an in-flight request, which may predate the write that prompted it.
+ * `waitForFresh` (server side) opts out of stale-while-revalidate; set it only for event-driven or
+ * user-requested refreshes, never for the interval poll, or the server's stale path never serves it.
  * `focused` false marks the call deferred (Story 2.1.9); a focused caller never joins a deferred flight.
  * Rejects on RPC failure; callers own error handling.
  */
-export function fetchVcsEntry(sessionId: string, force = false, focused = true): Promise<VcsCacheEntry> {
+export function fetchVcsEntry(sessionId: string, force = false, focused = true, waitForFresh = false): Promise<VcsCacheEntry> {
   if (!force) {
     const cached = getCached(sessionId);
     if (cached) return Promise.resolve(cached);
@@ -50,7 +52,7 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true):
   // caller drops the result itself when its own signal has aborted.
   // abort-signal-exempt
   const promise: Promise<VcsCacheEntry> = client
-    .getVCSStatus({ id: sessionId, forceFresh: force }, deferUnless(focused))
+    .getVCSStatus({ id: sessionId, waitForFresh }, deferUnless(focused))
     .then((response) => {
       const entry: VcsCacheEntry = {
         data: response.vcsStatus ?? null,
@@ -143,7 +145,7 @@ export function useVcsStatus(
 
       const signal = startFetch();
       try {
-        const entry = await fetchVcsEntry(sessionId, skipCache);
+        const entry = await fetchVcsEntry(sessionId, skipCache, true, skipCache);
         if (signal.aborted) return;
         setData(entry.data);
         setError(entry.error);

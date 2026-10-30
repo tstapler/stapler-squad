@@ -83,11 +83,12 @@ var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
 
 // vcsFlight is one in-progress computation shared by all callers of a workdir.
 type vcsFlight struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	waiters int // guarded by vcsFlights.mu
-	status  *vc.VCSStatus
-	err     error
+	startedAt time.Time
+	cancel    context.CancelFunc
+	done      chan struct{}
+	waiters   int // guarded by vcsFlights.mu
+	status    *vc.VCSStatus
+	err       error
 }
 
 // vcsFlights is a singleflight whose work is cancelled when the last waiter
@@ -98,6 +99,7 @@ type vcsFlights struct {
 	mu       sync.Mutex
 	flights  map[string]*vcsFlight
 	slots    chan struct{}
+	running  sync.WaitGroup // run goroutines; tests wait on it so none outlives its fixture
 }
 
 func (f *vcsFlights) init() {
@@ -111,10 +113,15 @@ func (f *vcsFlights) init() {
 // concurrent callers. shared is true for callers that joined an existing run.
 // If ctx ends first, do returns ctx's error; the computation is cancelled only
 // if no other caller is still waiting.
-func (f *vcsFlights) do(ctx context.Context, key string, compute func(context.Context) (*vc.VCSStatus, error)) (st *vc.VCSStatus, shared bool, err error) {
+func (f *vcsFlights) do(ctx context.Context, key string, notBefore time.Time, compute func(context.Context) (*vc.VCSStatus, error)) (st *vc.VCSStatus, shared bool, err error) {
 	f.init()
 	f.mu.Lock()
 	fl, ok := f.flights[key]
+	if ok && fl.startedAt.Before(notBefore) {
+		// Began before the caller's request: detach it (it finishes for its own waiters).
+		delete(f.flights, key)
+		ok = false
+	}
 	if ok {
 		fl.waiters++
 		shared = true
@@ -122,9 +129,13 @@ func (f *vcsFlights) do(ctx context.Context, key string, compute func(context.Co
 		// Detached from the leader's cancellation (it may leave while others wait) but
 		// keeping its values, so the computation's spans stay in the leader's trace.
 		workCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-		fl = &vcsFlight{cancel: cancel, done: make(chan struct{}), waiters: 1}
+		fl = &vcsFlight{startedAt: time.Now(), cancel: cancel, done: make(chan struct{}), waiters: 1}
 		f.flights[key] = fl
-		go f.run(workCtx, key, fl, compute)
+		f.running.Add(1)
+		go func() {
+			defer f.running.Done()
+			f.run(workCtx, key, fl, compute)
+		}()
 	}
 	f.mu.Unlock()
 
@@ -136,6 +147,9 @@ func (f *vcsFlights) do(ctx context.Context, key string, compute func(context.Co
 		return nil, shared, ctx.Err()
 	}
 }
+
+// wait blocks until every run goroutine has exited.
+func (f *vcsFlights) wait() { f.running.Wait() }
 
 // waiters is the number of callers currently waiting on key's flight (0 if none). Tests poll it
 // instead of sleeping to know a caller has joined.
@@ -179,13 +193,11 @@ func (f *vcsFlights) leave(key string, fl *vcsFlight) {
 func (f *vcsFlights) run(ctx context.Context, key string, fl *vcsFlight, compute func(context.Context) (*vc.VCSStatus, error)) {
 	m := vcsMetrics()
 	start := time.Now()
-	m.inFlight.Add(ctx, 1)
-	defer m.inFlight.Add(context.WithoutCancel(ctx), -1)
-
 	ctx, span := telemetry.GetTracer().Start(ctx, "vcs.status.compute")
 	defer span.End()
 
 	outcome := "ok"
+	// Registered before anything that could panic (including the metric calls below).
 	defer func() {
 		// This goroutine is not covered by net/http's per-request recover.
 		if r := recover(); r != nil {
@@ -205,6 +217,9 @@ func (f *vcsFlights) run(ctx context.Context, key string, fl *vcsFlight, compute
 		close(fl.done)
 		fl.cancel()
 	}()
+
+	m.inFlight.Add(ctx, 1)
+	defer m.inFlight.Add(context.WithoutCancel(ctx), -1)
 
 	waited, err := f.acquireSlot(ctx, m)
 	if err != nil {

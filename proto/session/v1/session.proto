@@ -1090,10 +1090,12 @@ message GetVCSStatusRequest {
   // Session identifier.
   string id = 1;
 
-  // When true the server will not answer from a cache entry that is past its TTL
-  // while refreshing in the background. Set by callers reacting to a known change
-  // (session-updated event, explicit refresh); plain polls leave it false.
-  bool force_fresh = 2;
+  // When true the server never answers from a cache entry past its TTL while
+  // refreshing in the background (stale-while-revalidate), and will not join a
+  // computation that began before this request. The short fresh-TTL cache still
+  // applies. Set by callers reacting to a known change (session-updated event,
+  // user-clicked refresh); interval polls leave it false.
+  bool wait_for_fresh = 2;
 }
 
 message GetVCSStatusResponse {

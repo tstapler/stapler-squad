@@ -27,18 +27,42 @@ type statusSpyBackend struct {
 	backend.Backend
 	calls     atomic.Int64
 	cancelled atomic.Int64
-	gate      chan struct{}
+	ignoreCtx bool // Status keeps waiting for the gate even if its context ends (a slow git)
+
+	mu       sync.Mutex
+	gate     chan struct{}
+	released bool
+}
+
+func (b *statusSpyBackend) currentGate() chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.gate
+}
+
+// block makes every later Status call wait for release.
+func (b *statusSpyBackend) block() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.gate, b.released = make(chan struct{}), false
 }
 
 func (b *statusSpyBackend) Status(ctx context.Context, loc backend.RepoLocation, intent backend.Intent) (backend.StatusResult, error) {
 	b.calls.Add(1)
-	if b.gate != nil {
+	if gate := b.currentGate(); gate != nil {
+		var ctxDone <-chan struct{}
+		if !b.ignoreCtx {
+			ctxDone = ctx.Done()
+		}
 		select {
-		case <-b.gate:
-		case <-ctx.Done():
+		case <-gate:
+		case <-ctxDone:
 			b.cancelled.Add(1)
 			return backend.StatusResult{}, ctx.Err()
 		}
+	}
+	if b.ignoreCtx {
+		ctx = context.WithoutCancel(ctx)
 	}
 	return b.Backend.Status(ctx, loc, intent)
 }
@@ -48,18 +72,32 @@ func installStatusSpy(t *testing.T, gated bool) *statusSpyBackend {
 	t.Helper()
 	spy := &statusSpyBackend{Backend: gitwiring.Shared()}
 	if gated {
-		spy.gate = make(chan struct{})
+		spy.block()
 	}
 	t.Cleanup(gitprovider.Register(func() backend.Backend { return spy }))
 	return spy
 }
 
-func (b *statusSpyBackend) release() { close(b.gate) }
+// release unblocks every waiting and future Status call; safe to call more than once.
+func (b *statusSpyBackend) release() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.gate != nil && !b.released {
+		close(b.gate)
+		b.released = true
+	}
+}
 
-func vcsStatusFixture(t *testing.T) (*WorkspaceService, string) {
+// vcsStatusFixture builds a service over a real temp repo. Cleanup unblocks the spy and waits for
+// every flight goroutine, so none outlives the test (and the gitprovider swap it restores).
+func vcsStatusFixture(t *testing.T, spy *statusSpyBackend) (*WorkspaceService, string) {
 	t.Helper()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
+	t.Cleanup(func() {
+		spy.release()
+		fix.svc.vcsFlights.wait()
+	})
 	dir, baseSHA, _ := newVCSStatusTestRepo(t)
 	inst := &session.Instance{Title: "coalesce", Path: dir, Status: session.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
@@ -71,10 +109,10 @@ func getVCS(ctx context.Context, svc *WorkspaceService) (*connect.Response[sessi
 	return svc.GetVCSStatus(ctx, connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "coalesce"}))
 }
 
-func getVCSAsync(ctx context.Context, svc *WorkspaceService, forceFresh bool) <-chan error {
+func getVCSAsync(ctx context.Context, svc *WorkspaceService, waitForFresh bool) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		resp, err := svc.GetVCSStatus(ctx, connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "coalesce", ForceFresh: forceFresh}))
+		resp, err := svc.GetVCSStatus(ctx, connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "coalesce", WaitForFresh: waitForFresh}))
 		if err == nil && resp.Msg.Error != "" {
 			err = assert.AnError
 		}
@@ -91,7 +129,7 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 // A cache miss under N concurrent pollers must run one git status, not N.
 func TestGetVCSStatus_ConcurrentColdMissesCoalesce(t *testing.T) {
 	spy := installStatusSpy(t, true)
-	svc, dir := vcsStatusFixture(t)
+	svc, dir := vcsStatusFixture(t, spy)
 
 	const callers = 16
 	results := make([]<-chan error, callers)
@@ -109,7 +147,7 @@ func TestGetVCSStatus_ConcurrentColdMissesCoalesce(t *testing.T) {
 // Once nobody is waiting the git work is cancelled, and the caller returns Connect canceled at once.
 func TestGetVCSStatus_CancelledCallerAbortsGitWork(t *testing.T) {
 	spy := installStatusSpy(t, true)
-	svc, _ := vcsStatusFixture(t)
+	svc, _ := vcsStatusFixture(t, spy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := getVCSAsync(ctx, svc, false)
@@ -129,7 +167,7 @@ func TestGetVCSStatus_CancelledCallerAbortsGitWork(t *testing.T) {
 // One waiter leaving must not cancel work another caller still needs.
 func TestGetVCSStatus_OneCancelledWaiterDoesNotPoisonOthers(t *testing.T) {
 	spy := installStatusSpy(t, true)
-	svc, dir := vcsStatusFixture(t)
+	svc, dir := vcsStatusFixture(t, spy)
 
 	ctxA, cancelA := context.WithCancel(context.Background())
 	a := getVCSAsync(ctxA, svc, false)
@@ -150,7 +188,7 @@ func TestGetVCSStatus_OneCancelledWaiterDoesNotPoisonOthers(t *testing.T) {
 // computation that succeeds, not join the dying one.
 func TestGetVCSStatus_CancelThenRejoinSameKeyStartsFresh(t *testing.T) {
 	spy := installStatusSpy(t, true)
-	svc, _ := vcsStatusFixture(t)
+	svc, _ := vcsStatusFixture(t, spy)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a := getVCSAsync(ctx, svc, false)
@@ -170,7 +208,7 @@ func TestGetVCSStatus_CancelThenRejoinSameKeyStartsFresh(t *testing.T) {
 // re-cache its result.
 func TestGetVCSStatus_InvalidateMidFlightStartsFreshComputation(t *testing.T) {
 	spy := installStatusSpy(t, true)
-	svc, dir := vcsStatusFixture(t)
+	svc, dir := vcsStatusFixture(t, spy)
 
 	first := getVCSAsync(context.Background(), svc, false)
 	waitFor(t, func() bool { return spy.calls.Load() == 1 }, "first git started")
@@ -192,7 +230,7 @@ func TestGetVCSStatus_InvalidateMidFlightStartsFreshComputation(t *testing.T) {
 // A computation that straddles an invalidation must not store its (possibly pre-change) result.
 func TestGetVCSStatus_ResultOfInvalidatedRunIsNotCached(t *testing.T) {
 	spy := installStatusSpy(t, true)
-	svc, dir := vcsStatusFixture(t)
+	svc, dir := vcsStatusFixture(t, spy)
 
 	done := getVCSAsync(context.Background(), svc, false)
 	waitFor(t, func() bool { return spy.calls.Load() == 1 }, "git started")
@@ -204,10 +242,10 @@ func TestGetVCSStatus_ResultOfInvalidatedRunIsNotCached(t *testing.T) {
 }
 
 // A plain poll on a stale entry is answered at once from the stale snapshot (the blocked git
-// call proves it did not wait); a force_fresh request waits for new data.
-func TestGetVCSStatus_StaleServedToPollButNotToForceFresh(t *testing.T) {
+// call proves it did not wait); a wait_for_fresh request waits for new data.
+func TestGetVCSStatus_StaleServedToPollButNotToWaitForFresh(t *testing.T) {
 	spy := installStatusSpy(t, false)
-	svc, dir := vcsStatusFixture(t)
+	svc, dir := vcsStatusFixture(t, spy)
 	_, err := getVCS(context.Background(), svc) // prime
 	require.NoError(t, err)
 	primed := spy.calls.Load()
@@ -218,18 +256,19 @@ func TestGetVCSStatus_StaleServedToPollButNotToForceFresh(t *testing.T) {
 		svc.vcsStatusCache.Store(dir, vcsStatusCacheEntry{status: cached.(vcsStatusCacheEntry).status, cachedAt: old})
 	}
 	age()
-	spy.gate = make(chan struct{}) // from here git blocks until released
+	spy.block() // from here git blocks until released
 
 	resp, err := getVCS(context.Background(), svc) // returns although git is blocked
 	require.NoError(t, err)
 	assert.True(t, resp.Msg.VcsStatus.StatusAsOf.AsTime().Before(time.Now().Add(-20*time.Second)), "served the stale snapshot")
 	waitFor(t, func() bool { return spy.calls.Load() == primed+1 }, "background refresh started")
 
+	// wait_for_fresh refuses the refresh that began before it and starts its own computation.
 	forced := getVCSAsync(context.Background(), svc, true)
-	waitFor(t, func() bool { return svc.vcsFlights.waiters(dir) >= 2 }, "force_fresh caller waits on the flight")
+	waitFor(t, func() bool { return spy.calls.Load() == primed+2 }, "wait_for_fresh caller starts a new computation")
 	select {
 	case <-forced:
-		t.Fatal("force_fresh returned before git finished")
+		t.Fatal("wait_for_fresh returned before git finished")
 	default:
 	}
 	spy.release()
@@ -244,7 +283,7 @@ func TestGetVCSStatus_StaleServedToPollButNotToForceFresh(t *testing.T) {
 // surface as an error, not crash the process.
 func TestVCSFlights_PanicInComputeBecomesError(t *testing.T) {
 	var f vcsFlights
-	st, _, err := f.do(context.Background(), "k", func(context.Context) (*vc.VCSStatus, error) {
+	st, _, err := f.do(context.Background(), "k", time.Time{}, func(context.Context) (*vc.VCSStatus, error) {
 		panic("boom")
 	})
 	require.Error(t, err)
@@ -262,7 +301,7 @@ func TestVCSFlights_CancelledWhileQueuedReleasesSlots(t *testing.T) {
 		running.Add(1)
 		key := string(rune('a' + i))
 		go func() {
-			_, _, _ = f.do(context.Background(), key, func(context.Context) (*vc.VCSStatus, error) {
+			_, _, _ = f.do(context.Background(), key, time.Time{}, func(context.Context) (*vc.VCSStatus, error) {
 				running.Done()
 				<-block
 				return &vc.VCSStatus{}, nil
@@ -274,7 +313,7 @@ func TestVCSFlights_CancelledWhileQueuedReleasesSlots(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := make(chan error, 1)
 	go func() {
-		_, _, err := f.do(ctx, "queued", func(context.Context) (*vc.VCSStatus, error) {
+		_, _, err := f.do(ctx, "queued", time.Time{}, func(context.Context) (*vc.VCSStatus, error) {
 			t.Error("a flight cancelled while queued must never run compute")
 			return nil, assert.AnError
 		})
@@ -286,7 +325,7 @@ func TestVCSFlights_CancelledWhileQueuedReleasesSlots(t *testing.T) {
 
 	close(block)
 	waitFor(t, func() bool { return len(f.slots) == 0 }, "all slots released")
-	st, _, err := f.do(context.Background(), "after", func(context.Context) (*vc.VCSStatus, error) { return &vc.VCSStatus{}, nil })
+	st, _, err := f.do(context.Background(), "after", time.Time{}, func(context.Context) (*vc.VCSStatus, error) { return &vc.VCSStatus{}, nil })
 	require.NoError(t, err)
 	assert.NotNil(t, st)
 }
@@ -295,7 +334,7 @@ func TestVCSFlights_CancelledWhileQueuedReleasesSlots(t *testing.T) {
 func TestVCSFlights_ComputeDeadlineStartsAfterSlotAcquired(t *testing.T) {
 	var f vcsFlights
 	var deadline time.Time
-	_, _, err := f.do(context.Background(), "k", func(ctx context.Context) (*vc.VCSStatus, error) {
+	_, _, err := f.do(context.Background(), "k", time.Time{}, func(ctx context.Context) (*vc.VCSStatus, error) {
 		deadline, _ = ctx.Deadline()
 		return &vc.VCSStatus{}, nil
 	})
@@ -308,7 +347,7 @@ func TestVCSFlights_ComputeDeadlineStartsAfterSlotAcquired(t *testing.T) {
 // Background refreshes yield to interactive misses: with every slot busy none is started.
 func TestRefreshVCSStatusInBackground_SkippedWhenSaturated(t *testing.T) {
 	spy := installStatusSpy(t, false)
-	svc, dir := vcsStatusFixture(t)
+	svc, dir := vcsStatusFixture(t, spy)
 	svc.vcsFlights.init()
 	for i := 0; i < maxConcurrentVCSComputations; i++ {
 		svc.vcsFlights.slots <- struct{}{}
@@ -316,4 +355,82 @@ func TestRefreshVCSStatusInBackground_SkippedWhenSaturated(t *testing.T) {
 	svc.refreshVCSStatusInBackground(context.Background(), &session.Instance{Path: dir}, dir)
 	assert.Zero(t, svc.vcsFlights.waiters(dir))
 	assert.Zero(t, spy.calls.Load())
+}
+
+// The last waiter leaving mid-compute cancels the context; git calls after that fail on it. The
+// partial result (CommitsUnavailable) must never be cached or served to later pollers.
+func TestGetVCSStatus_CancelledMidComputeDoesNotCachePartialResult(t *testing.T) {
+	spy := installStatusSpy(t, true)
+	spy.ignoreCtx = true // status itself finishes after the cancel; the shipped-commit calls then fail
+	svc, dir := vcsStatusFixture(t, spy)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := getVCSAsync(ctx, svc, false)
+	waitFor(t, func() bool { return spy.calls.Load() == 1 }, "git started")
+	cancel()
+	require.Error(t, <-done)
+	waitFor(t, func() bool { return svc.vcsFlights.waiters(dir) == 0 }, "flight abandoned")
+
+	spy.release()
+	svc.vcsFlights.wait()
+	_, cached := svc.vcsStatusCache.Load(dir)
+	assert.False(t, cached, "a result computed on a cancelled context must not be cached")
+}
+
+// wait_for_fresh must not join a computation that began before the request (it may predate the
+// event the caller is reacting to); a plain poll still joins it.
+func TestGetVCSStatus_WaitForFreshRefusesOlderFlight(t *testing.T) {
+	spy := installStatusSpy(t, true)
+	svc, dir := vcsStatusFixture(t, spy)
+
+	first := getVCSAsync(context.Background(), svc, false)
+	waitFor(t, func() bool { return spy.calls.Load() == 1 }, "first flight started")
+	poll := getVCSAsync(context.Background(), svc, false)
+	waitFor(t, func() bool { return svc.vcsFlights.waiters(dir) == 2 }, "plain poll joins the running flight")
+	assert.EqualValues(t, 1, spy.calls.Load())
+
+	fresh := getVCSAsync(context.Background(), svc, true)
+	waitFor(t, func() bool { return spy.calls.Load() == 2 }, "wait_for_fresh starts its own flight")
+	spy.release()
+	for _, c := range []<-chan error{first, poll, fresh} {
+		require.NoError(t, <-c)
+	}
+}
+
+// wait_for_fresh opts out of stale-while-revalidate only: an entry inside the fresh TTL is still
+// served from cache (stated in the proto comment).
+func TestGetVCSStatus_WaitForFreshStillUsesFreshTTLCache(t *testing.T) {
+	spy := installStatusSpy(t, false)
+	svc, _ := vcsStatusFixture(t, spy)
+	_, err := getVCS(context.Background(), svc)
+	require.NoError(t, err)
+	primed := spy.calls.Load()
+	require.NoError(t, <-getVCSAsync(context.Background(), svc, true))
+	assert.Equal(t, primed, spy.calls.Load())
+}
+
+// The invalidation epoch is per workdir: a save elsewhere must not stop this run caching.
+func TestGetVCSStatus_InvalidatingOtherWorkdirDoesNotBlockStore(t *testing.T) {
+	spy := installStatusSpy(t, true)
+	svc, dir := vcsStatusFixture(t, spy)
+
+	done := getVCSAsync(context.Background(), svc, false)
+	waitFor(t, func() bool { return spy.calls.Load() == 1 }, "git started")
+	svc.InvalidateVCSStatus("/some/other/workdir")
+	spy.release()
+	require.NoError(t, <-done)
+	_, cached := svc.vcsStatusCache.Load(dir)
+	assert.True(t, cached)
+}
+
+// An older run finishing after a newer one already cached must not overwrite the fresher entry.
+func TestStoreVCSStatusIfCurrent_OlderRunDoesNotOverwriteFresher(t *testing.T) {
+	var ws WorkspaceService
+	t0 := time.Now()
+	older := &vc.VCSStatus{Branch: "older"}
+	newer := &vc.VCSStatus{Branch: "newer"}
+	ws.storeVCSStatusIfCurrent("d", 0, t0.Add(time.Second), newer, t0.Add(2*time.Second))
+	ws.storeVCSStatusIfCurrent("d", 0, t0, older, t0.Add(3*time.Second)) // started earlier, finished later
+	got, _ := ws.vcsStatusCache.Load("d")
+	assert.Equal(t, "newer", got.(vcsStatusCacheEntry).status.Branch)
 }

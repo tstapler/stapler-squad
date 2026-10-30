@@ -52,12 +52,12 @@ describe("useSessionVcs prefetch dedupe", () => {
     expect(mockGetVCSStatus.mock.calls[0][1].contextValues.get(priorityKey)).toBe("deferred");
   });
 
-  it("fetchVcsEntry_should_SetForceFresh_OnlyWhenForced", async () => {
+  it("fetchVcsEntry_should_SetWaitForFresh_OnlyWhenAsked", async () => {
     mockGetVCSStatus.mockResolvedValue({ vcsStatus: { branch: "x" }, error: "" });
     await fetchVcsEntry("s5");
-    expect(mockGetVCSStatus.mock.calls[0][0]).toEqual({ id: "s5", forceFresh: false });
-    await fetchVcsEntry("s5", true);
-    expect(mockGetVCSStatus.mock.calls[1][0]).toEqual({ id: "s5", forceFresh: true });
+    expect(mockGetVCSStatus.mock.calls[0][0]).toEqual({ id: "s5", waitForFresh: false });
+    await fetchVcsEntry("s5", true, true, true);
+    expect(mockGetVCSStatus.mock.calls[1][0]).toEqual({ id: "s5", waitForFresh: true });
   });
 
   it("useSessionVcs_should_LeaveGetVCSStatusCritical_When_PaneActive", async () => {
