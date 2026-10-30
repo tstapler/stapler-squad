@@ -1,0 +1,8 @@
+sgr/underline_colors -- kitty underlines.rst (SGR 58/59); xterm ctlseqs SGR 58
+[4;58;5;196mul 256-red[0m [4;58;2;255;128;0mul rgb-orange[0m [4;58:2::10:200:30mul colon-rgb[0m
+[4;58;5;21mset[0m-reset-by-0[0m [4;58;5;21mset[24m-24-keeps-color[4m-on-again[0m
+[4:3;58;2;255;0;0mcurly red[0m [4:2;58;5;46mdouble green[0m [4:4;58;5;226mdotted yellow[0m
+[58;5;196mcolor without underline[4m now underlined[0m
+[4;58;5;196mred [58;5;21mthen-blue[24m off[4m on-again[0m
+[4;31;58;5;21mfg-red ul-blue[0m [4;7;58;5;21mreverse ul-blue[0m
+[58:5:99;4mul colon-256[0m

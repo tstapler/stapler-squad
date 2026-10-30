@@ -56,7 +56,7 @@ A flag whose only instrument is a reliability counter (e.g. a reconnect
 count) or a generic cross-backend histogram with no backend/implementation
 label (functionally correct, but unable to isolate the new path's latency)
 cannot answer "does this feel slower" — file that as its own gap (this
-review's `docs/bugs/open/BUG-108` is the worked example) rather than treating
+review's `docs/bugs/fixed/BUG-108-no-latency-metrics-or-traces-to-compare-tymux-vs-tmux.md` is the worked example) rather than treating
 Step 3/4's functional pass as sufficient proof of readiness.
 
 ## Step 2 — Static readiness checks

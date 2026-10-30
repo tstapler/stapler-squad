@@ -1,0 +1,5 @@
+osc/hyperlinks_with_styles -- OSC 8 + SGR interplay; xterm.js linkifier forces
+]8;;https://e.com/styled\[1;31mbold-red[4m+ul[0mplain-in-link]8;;\|[44m]8;;https://e.com/bg\blue-bg-link]8;;\[0m
+[1m]8;;https://e.com/b\bold-link]8;;\[0m [7m]8;;https://e.com/r\reverse-link]8;;\[0m [2m]8;;https://e.com/f\faint-link]8;;\[0m [9m]8;;https://e.com/s\strike-link]8;;\[0m
+]8;;https://e.com/open\[38;5;208morange[0m[48;2;0;40;0m green-bg [0m]8;;\
+]8;;https://e.com/w\世界link]8;;\ ]8;;https://e.com/e\😀emoji]8;;\ ]8;;https://e.com/c\écombining]8;;\

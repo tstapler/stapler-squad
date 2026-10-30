@@ -105,7 +105,11 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		// read these same fields via buildSnapshot under i.mu.Lock() from outside
 		// the actor. See runActor's doc comment in actor.go.
 		s.inst.mu.Lock()
+		prevMeaningful := s.inst.LastMeaningfulOutput
 		changed := s.inst.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, s.inst.Title)
+		if changed && !s.inst.LastMeaningfulOutput.Equal(prevMeaningful) {
+			s.inst.touchLocked(SessionEventOutput, s.inst.LastMeaningfulOutput)
+		}
 		var snap *InstanceSnapshot
 		if changed {
 			snap = buildSnapshot(s.inst)

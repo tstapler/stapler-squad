@@ -1,0 +1,6 @@
+sgr/unknown_and_extended_params -- xterm ctlseqs; libvterm 30state_pen; ECMA-4
+[10m10 [11m11 [19m19 [20m20-fraktur [26m26 [50m50 [51m51-framed [52m52-encircled[0m
+[54m54 [60m60 [61m61 [62m62 [63m63 [64m64 [65m65-ideogram[0m
+[73m73-super [74m74-sub [75m75 [66m66 [89m89 [98m98 [99m99 [108m108[0m
+[1mbold[19m-after-unknown-keeps-bold[0m [31mred[20m-after-20[0m
+[1;20;4m1;20;4-skip-unknown[0m [9999m9999 [1;9999;3m1;9999;3[0m

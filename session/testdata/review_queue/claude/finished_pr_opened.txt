@@ -1,0 +1,12 @@
+
+  The change is committed and PR #12 is open as a draft:
+  https://github.com/example/project/pull/12. I haven't checked
+  its CI yet. I can pull the results once the workflows finish if
+  you want.
+
+✻ Cogitated for 41s · done 6:54 PM
+  new task? /clear to save… · ✔ Update installed · /restart to a…
+──────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────
+  ⏵⏵ auto mode on · PR #12 · ← 2 agents

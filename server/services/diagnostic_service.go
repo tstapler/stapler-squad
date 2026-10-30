@@ -191,6 +191,7 @@ func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuck
 	} else {
 		fmt.Fprintf(&sb, "3. Nudging is NOT available for this dispatch (%s) — do not attempt resume_session/steer_session/write_to_session/diagnose_nudge_session on it. File a bug or post a note instead.\n", nudgeDisallowedReason)
 	}
+	fmt.Fprintf(&sb, "4. If there is NO live session to nudge and the open %q row has exhausted its automated retries on a mechanical problem (e.g. a PR merge conflict that only needs a rebase), call diagnose_reset_remediation with stuck_reason=%q so the next reconcile tick spawns a fresh fix session. Do not use it for a genuine defect.\n", stuckReason, stuckReason)
 	sb.WriteString("\nWhen you conclude your investigation, call submit_diagnosis_result exactly once with your outcome and evidence.\n\n")
 	sb.WriteString(bundle.Prompt())
 	return sb.String()

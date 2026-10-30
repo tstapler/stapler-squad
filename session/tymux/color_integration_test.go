@@ -21,6 +21,7 @@ func TestLiveTymuxd_RawCapture_PreservesColor(t *testing.T) {
 	defer daemon.stop(t)
 
 	sess := NewTymuxGRPCSession(NewRealTransport("http://" + daemon.addr))
+	plainShell(sess)
 	require.NoError(t, sess.Start(t.TempDir()))
 	defer sess.Close()
 	_, err := sess.SendKeys(`printf '\033[31m%s\033[0m\n' COLOR''OUT` + "\r")

@@ -2466,6 +2466,27 @@ func TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions(t *testing.T)
 	}
 }
 
+// TestIsSafeSteerStatus_TurnCompleteOnly pins the one Success context the gate accepts
+// (auto-mode panes end on the turn-complete marker) against claude.go and checks that
+// no other Success description, and no other status, rides along.
+func TestIsSafeSteerStatus_TurnCompleteOnly(t *testing.T) {
+	t.Parallel()
+
+	var turnComplete string
+	for _, p := range binaries.NewClaudeDetector().Patterns().Success {
+		if p.Name == "verb_duration_completion" {
+			turnComplete = p.Description
+		}
+	}
+	require.Equal(t, session.TurnCompleteStatusContext, turnComplete, "claude.go's verb_duration_completion description changed")
+
+	require.True(t, isSafeSteerStatus(detection.StatusSuccess, turnComplete))
+	require.False(t, isSafeSteerStatus(detection.StatusSuccess, "All tests passed"))
+	require.False(t, isSafeSteerStatus(detection.StatusExecuting, turnComplete))
+	require.False(t, isSafeSteerStatus(detection.StatusProcessing, turnComplete))
+	require.False(t, isSafeSteerStatus(detection.StatusWaitingForAgent, turnComplete))
+}
+
 // TestSessionService_IsReadyForSteer_ReturnsTrue_When_RealDetectionSeesClaudeReadlinePrompt
 // runs realistic Claude Code idle-prompt terminal text through the real
 // detection.PatternSet.MatchLines pipeline (built from the actual

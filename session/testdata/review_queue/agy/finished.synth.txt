@@ -1,0 +1,4 @@
+✓ Done. Updated 2 files and ran the test suite (14 passed).
+Shift+Tab to accept edits                                          1 GEMINI.md file · 63 skills
+> ▌
+[INSERT]         ~/project          main          untrusted          Auto (Antigravity)          312.0 MB

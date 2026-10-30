@@ -1,0 +1,2 @@
+modes/insert_mode_left_on -- xterm ctlseqs IRM 4h left set
+[1;1HABCDEFGH[4hinsert mode left on at snapshot time

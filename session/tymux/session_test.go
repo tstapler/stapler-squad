@@ -1125,3 +1125,38 @@ func TestParseScrollbackOffset(t *testing.T) {
 		})
 	}
 }
+
+func TestTymuxGRPCSession_CapturePaneRedraw_CarriesTerminalStateAndAltScreen(t *testing.T) {
+	snap := &v1.PaneSnapshot{
+		Grid:      []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}, {Text: "i"}}}},
+		Modes:     &v1.TerminalModes{},
+		AltScreen: true,
+		Title:     "vim",
+	}
+	sess := startedSession(t, snap)
+
+	data, altScreen, err := sess.CapturePaneRedraw(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, altScreen)
+	assert.Contains(t, data, "\x1b[?1049h", "alt-screen entry must be restored, not just the text")
+	assert.Contains(t, data, "\x1b]2;vim", "title must be restored")
+	assert.Contains(t, data, "hi")
+}
+
+func TestTymuxGRPCSession_CapturePaneRedraw_PropagatesCaptureError(t *testing.T) {
+	dir := t.TempDir()
+	sess := NewTymuxGRPCSession(&fakeTransport{
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)), nil
+		},
+		capturePaneFn: func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, errors.New("daemon gone")
+		},
+	})
+	require.NoError(t, sess.Start(dir))
+
+	_, _, err := sess.CapturePaneRedraw(context.Background())
+
+	require.Error(t, err)
+}

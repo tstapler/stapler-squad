@@ -120,25 +120,45 @@ func (b *TymuxBackend) GetCurrentWorkingDirectory() (string, error) {
 
 // --- Terminal I/O ---
 
-func (b *TymuxBackend) GetPTY() (*os.File, error)          { return b.mgr.GetPTY() }
-func (b *TymuxBackend) SendKeys(keys string) (int, error)  { return b.mgr.SendKeys(keys) }
+func (b *TymuxBackend) GetPTY() (*os.File, error) { return b.mgr.GetPTY() }
+func (b *TymuxBackend) SendKeys(keys string) (int, error) {
+	return timeBackendOp(tymuxIOOps.sendKeys, func() (int, error) { return b.mgr.SendKeys(keys) })
+}
 func (b *TymuxBackend) TapEnter() error                    { return b.mgr.TapEnter() }
 func (b *TymuxBackend) SendPromptWithEnter(p string) error { return b.mgr.SendPromptWithEnter(p) }
 func (b *TymuxBackend) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	return b.mgr.SendInputViaControlMode(ctx, data)
+	return timeBackendOpErr(tymuxIOOps.writeStdin, func() error { return b.mgr.SendInputViaControlMode(ctx, data) })
 }
 
 // --- Terminal state ---
 
-func (b *TymuxBackend) CapturePaneContent() (string, error) { return b.mgr.CapturePaneContent() }
+func (b *TymuxBackend) CapturePaneContent() (string, error) {
+	return timeBackendOp(tymuxIOOps.capturePane, b.mgr.CapturePaneContent)
+}
 func (b *TymuxBackend) CapturePaneContentRaw() (string, error) {
-	return b.mgr.CapturePaneContentRaw()
+	return timeBackendOp(tymuxIOOps.capturePane, b.mgr.CapturePaneContentRaw)
 }
 func (b *TymuxBackend) CapturePaneContentWithOptions(start, end string) (string, error) {
-	return b.mgr.CapturePaneContentWithOptions(start, end)
+	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) {
+		return b.mgr.CapturePaneContentWithOptions(start, end)
+	})
+}
+
+// CapturePaneRedraw makes TymuxBackend a RedrawCapturer: the daemon's emulator holds the pane's
+// real terminal state, which a text capture would drop. Timed with the other capture_pane calls.
+func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (string, bool, error) {
+	type redraw struct {
+		data      string
+		altScreen bool
+	}
+	r, err := timeBackendOp(tymuxIOOps.capturePane, func() (redraw, error) {
+		data, altScreen, err := b.mgr.CapturePaneRedraw(ctx)
+		return redraw{data, altScreen}, err
+	})
+	return r.data, r.altScreen, err
 }
 func (b *TymuxBackend) CaptureViewport(lines int) (string, error) {
-	return b.mgr.CaptureViewport(lines)
+	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) { return b.mgr.CaptureViewport(lines) })
 }
 func (b *TymuxBackend) GetCursorPosition() (x, y int, err error) {
 	return b.mgr.GetCursorPosition()
@@ -147,10 +167,10 @@ func (b *TymuxBackend) GetPaneDimensions() (width, height int, err error) {
 	return b.mgr.GetPaneDimensions()
 }
 func (b *TymuxBackend) SetWindowSize(cols, rows int) error {
-	return b.mgr.SetWindowSize(cols, rows)
+	return timeBackendOpErr(tymuxIOOps.resize, func() error { return b.mgr.SetWindowSize(cols, rows) })
 }
 func (b *TymuxBackend) SetDetachedSize(w, h int, title string) error {
-	return b.mgr.SetDetachedSize(w, h, title)
+	return timeBackendOpErr(tymuxIOOps.resize, func() error { return b.mgr.SetDetachedSize(w, h, title) })
 }
 func (b *TymuxBackend) RefreshClient() error { return b.mgr.RefreshClient() }
 

@@ -14,6 +14,7 @@ type StartupScanner struct {
 	contentProvider ContentProvider
 	detector        detection.TerminalDetector
 	determiner      StatusDeterminer
+	optionsSource   FlagOptionsSource // same source as the poller's first cycle; nil = all off
 }
 
 // NewStartupScanner creates a StartupScanner using the provided status and content providers.
@@ -27,15 +28,19 @@ func NewStartupScanner(statusManager StatusProvider, contentProvider ContentProv
 	}
 }
 
+// SetOptionsSource wires the attention-flag source read once per Scan.
+func (ss *StartupScanner) SetOptionsSource(src FlagOptionsSource) { ss.optionsSource = src }
+
 // Scan iterates over instances and adds any that need attention to the queue.
 // Returns the number of sessions added to the queue.
 func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) int {
 	scanned, added := 0, 0
+	opts, _ := ss.optionsSource.resolve()
 	for _, inst := range instances {
-		// Mirrors ReviewQueuePoller.shouldSkipSession's ArchivedAt guard (Hidden
-		// is deliberately NOT checked here — Determine()'s reason-scoped Hidden
-		// gate handles that, see its comment and TestScan_SkipsHiddenInstance_
-		// ForSuppressedReasonsOnly). Without the ArchivedAt check, a soft-archived
+		// Mirrors ReviewQueuePoller.shouldSkipSession's ArchivedAt guard but cannot reuse
+		// skipReasonOf: Hidden is deliberately NOT skipped here (Determine()'s reason-scoped
+		// Hidden gate handles that, see TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly)
+		// and only Paused, not every suspended status, is. Without the ArchivedAt check, a soft-archived
 		// session with a long-dead tmux pane looks like a brand-new stale/idle
 		// session on every server restart (the startup scan runs once, before
 		// the poller's steady-state counterpart of this guard ever sees it) and
@@ -52,7 +57,7 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 		// one-shot scan that runs before the regular poll cycle establishes a baseline.
 		content := ss.contentProvider.GetContent(inst, statusInfo, nil)
 
-		result := ss.determiner.Determine(inst, content, statusInfo, ss.detector)
+		result := ss.determiner.Determine(inst, content, statusInfo, ss.detector, opts)
 		if result.Action == DetectionActionAdd {
 			item := buildStartupItem(inst, result)
 			queue.Add(item)

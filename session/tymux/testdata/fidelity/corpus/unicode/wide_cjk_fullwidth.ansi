@@ -1,0 +1,9 @@
+unicode/wide_cjk_fullwidth -- libvterm 61screen_unicode; UAX #11 East Asian Wi
+CJK: 世界你好 mixed a世b界c d
+Fullwidth: ＡＢＣ１２３！ kana: ひらがなカタカナ ｱｲｳ(halfwidth)
+Hangul: 한글 안녕하세요 Bopomofo: ㄅㄆㄇ
+Wide with attrs: [1;31m世界[0m[44m你好[0m[4m世[0m[7m界[0m[38;5;208m你[0m
+Wide then ECH: 世界你好[5;15H[2X
+Wide at col 79-80: [7;79H世界-wraps? [8;80H世[9;79H世x[10;78Hab世
+[12;1H世界你好[12;2Hx[12;6Hy[14;1H世界[14;1Hab
+[16;1H世界你好[16;3H[P[18;1H世界你好[18;3H[@

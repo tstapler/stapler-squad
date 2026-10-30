@@ -430,6 +430,15 @@ func (h *StreamHub) sendCatchUpSnapshot(sub *subscriber) {
 // ok is false when no snapshot is available: h.controller is nil, the
 // capture errors, or it succeeds with empty content.
 func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
+	// A full-state redraw is never served from the cache: its capture is one cheap RPC, and a
+	// cached one would hand a later attacher the modes/title/cursor of whenever it was taken.
+	if redraw, ok := h.captureRedraw(); ok {
+		h.snapshotMu.Lock()
+		h.lastSnapshot = redraw
+		h.snapshotMu.Unlock()
+		return redraw, true
+	}
+
 	h.snapshotMu.Lock()
 	cached := h.lastSnapshot
 	h.snapshotMu.Unlock()
@@ -458,6 +467,33 @@ func (h *StreamHub) currentSnapshot() (content []byte, ok bool) {
 	h.lastSnapshot = capturedBytes
 	h.snapshotMu.Unlock()
 	return capturedBytes, true
+}
+
+// captureRedraw returns the controller's full-state redraw (modes, title, alt screen, cursor
+// restored) as the complete snapshot bytes. ok is false when the controller has none — nil
+// controller, no FullStateSnapshotter, a text-only backend, or a failed capture, which is logged
+// and left to the caller's text-capture path.
+func (h *StreamHub) captureRedraw() ([]byte, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	return h.captureRedrawContext(ctx)
+}
+
+func (h *StreamHub) captureRedrawContext(ctx context.Context) ([]byte, bool) {
+	f, isCapable := h.controller.(FullStateSnapshotter)
+	if !isCapable {
+		return nil, false
+	}
+	snap, ok, err := f.CapturePaneRedraw(ctx)
+	if err != nil {
+		log.Info("streamhub: full-state redraw unavailable, falling back to text capture",
+			"session", h.sessionName, "error", err)
+		return nil, false
+	}
+	if !ok {
+		return nil, false
+	}
+	return []byte(snap.Data), true
 }
 
 // DetachSubscriber removes the subscriber and stops its writer goroutine
@@ -773,6 +809,11 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	waitForQuiescence(updates, h.quiescenceTimeout, h.quiescenceQuietPeriod, h.sessionName)
 	h.controller.UnsubscribeControlModeUpdates(subID)
 
+	if redraw, ok := h.captureRedrawContext(ctx); ok {
+		h.broadcastSnapshot(redraw)
+		return
+	}
+
 	content, err := h.controller.CapturePaneContentRawContext(ctx)
 	if err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
@@ -794,8 +835,11 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// see it — sending it unprepared, as this used to, staircased every
 	// resize's new content diagonally across whatever the client was
 	// already displaying (2026-08-25 reflow bug).
-	prepared := []byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller))
+	h.broadcastSnapshot([]byte(withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), h.controller)))
+}
 
+// broadcastSnapshot caches prepared as the hub's snapshot and sends it to every subscriber.
+func (h *StreamHub) broadcastSnapshot(prepared []byte) {
 	h.snapshotMu.Lock()
 	h.lastSnapshot = prepared
 	h.snapshotMu.Unlock()

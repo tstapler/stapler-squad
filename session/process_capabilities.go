@@ -44,6 +44,13 @@ type ContextCapturer interface {
 	CapturePaneContentContext(ctx context.Context) (string, error)
 }
 
+// RedrawCapturer captures a first paint that restores terminal state, not just cells: the byte
+// stream makes a fresh client show the pane with its input/mouse modes, title, alt screen, scroll
+// region and cursor intact. Backends without it (tmux) leave Instance on its text-capture paint.
+type RedrawCapturer interface {
+	CapturePaneRedraw(ctx context.Context) (data string, altScreen bool, err error)
+}
+
 // AltScreenQuerier asks the backend whether the pane shows its alternate screen.
 type AltScreenQuerier interface {
 	IsAlternateScreenActive() (bool, error)

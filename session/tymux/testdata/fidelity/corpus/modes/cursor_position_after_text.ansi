@@ -1,0 +1,3 @@
+modes/cursor_position_after_text -- cursor ends where the program left it, not at end of grid
+[3;1Hrow three[10;20Hhere
+[12;35H

@@ -1,0 +1,4 @@
+edit/insert_delete_in_region -- esctest2 il.py/dl.py (DECSTBM); libvterm 13sta
+[1;1Hline01-zzzzzzzzzzzzzzzzzzzz[2;1Hline02-zzzzzzzzzzzzzzzzzzzz[3;1Hline03-zzzzzzzzzzzzzzzzzzzz[4;1Hline04-zzzzzzzzzzzzzzzzzzzz[5;1Hline05-zzzzzzzzzzzzzzzzzzzz[6;1Hline06-zzzzzzzzzzzzzzzzzzzz[7;1Hline07-zzzzzzzzzzzzzzzzzzzz[8;1Hline08-zzzzzzzzzzzzzzzzzzzz[9;1Hline09-zzzzzzzzzzzzzzzzzzzz[10;1Hline10-zzzzzzzzzzzzzzzzzzzz[11;1Hline11-zzzzzzzzzzzzzzzzzzzz[12;1Hline12-zzzzzzzzzzzzzzzzzzzz[13;1Hline13-zzzzzzzzzzzzzzzzzzzz[14;1Hline14-zzzzzzzzzzzzzzzzzzzz[15;1Hline15-zzzzzzzzzzzzzzzzzzzz[4;10r[5;1H[2L[9;1H[2M[r
+[2;1H[L-outside-region-above-region-not-set-here
+[6;8r[2;1H[2L-outside-region-ignored[12;1H[2M-ignored[r[20;1Hdone

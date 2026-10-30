@@ -59,6 +59,10 @@ type TymuxManager interface {
 	// Terminal state
 	CapturePaneContent() (string, error)
 	CapturePaneContentRaw() (string, error)
+	// CapturePaneRedraw returns the byte stream that makes a fresh terminal show this pane
+	// exactly as it is now — cells plus modes, title, alt screen, scroll region and cursor
+	// (RenderSnapshotRedraw) — and whether the pane is on its alternate screen.
+	CapturePaneRedraw(ctx context.Context) (data string, altScreen bool, err error)
 	CapturePaneContentWithOptions(startLine, endLine string) (string, error)
 	CaptureViewport(lines int) (string, error)
 	GetCursorPosition() (x, y int, err error)

@@ -1,0 +1,9 @@
+unicode/emoji_and_presentation -- UTS #51 emoji; libvterm 61screen_unicode; VS
+Emoji: 😀 🚀 ✅ ❌ ⭐ 🔥 💯 👍 🎉 📦 🙂
+VS16: ⚠️ ❤️ ✔️ ☀️ ✈️   VS15: ⚠︎ ❤︎ ☀︎
+Text-default w/o VS: ⚠ ❤ ✔ ☀ ✈ ⌚ ⌛
+Skin tones: 👍🏽 👋🏻 🤝🏿  Keycaps: 1️⃣ #️⃣ *️⃣
+Flags: 🇺🇸 🇯🇵 🇩🇪 🇫🇷 (regional indicators)  Single RI: 🇺 x
+ZWJ: 👨‍👩‍👧 👩‍💻 🏳️‍🌈 🧑‍🚀
+Emoji with attrs: [1;31m😀[0m[44m🚀[0m[4m✅[0m[7m❌[0m
+Emoji at edge: [10;79H😀x[11;80H😀[12;78Hab😀

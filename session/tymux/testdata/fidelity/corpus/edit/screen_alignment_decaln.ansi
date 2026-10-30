@@ -1,0 +1,2 @@
+edit/screen_alignment_decaln -- esctest2 decaln.py; xterm DECALN ESC # 8
+[1;31mprecolored[0m[5;5H#8[1;1H[4mafter-decaln-text[0m[3;20r[24;1H#8[r[24;1Hend

@@ -112,6 +112,10 @@ type tymuxGRPCSession struct {
 	// tymux_attach_stream_reconnects_total{output_gap} metric.
 	outputGapCount atomic.Int64
 
+	// lastEventUnixNano is when the standing stream last delivered any
+	// AttachEvent (heartbeats included); feeds tymux_attach_heartbeat_age_seconds.
+	lastEventUnixNano atomic.Int64
+
 	// exitCallback is invoked at most once, by whichever of
 	// readAttachLoop's Exited handling (stream.go's deliverExit) or
 	// SetOnExitCallback observes the exit second — the check-before-and-
@@ -681,7 +685,7 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
 // CapturePaneContentRaw returns the live screen with SGR preserved, as the
@@ -693,7 +697,22 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return CellsToSGR(snap.GetGrid())
+	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
+}
+
+// CapturePaneRedraw is the full-state first paint: unlike CapturePaneContentRaw's text capture it
+// restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
+// mouse work in a freshly attached client before the app re-sets any of them.
+func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (string, bool, error) {
+	snap, err := s.capturePane(ctx, 0)
+	if err != nil {
+		return "", false, err
+	}
+	data, err := RenderSnapshotRedraw(snap)
+	if err != nil {
+		return "", false, err
+	}
+	return data, snap.GetAltScreen(), nil
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument
