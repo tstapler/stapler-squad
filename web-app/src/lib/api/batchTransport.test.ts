@@ -12,9 +12,7 @@ import {
   BATCH_MAX_CALLS,
   BATCH_PATH,
   BATCH_WINDOW_MS,
-  batchStats,
   createBatchTransport,
-  resetBatchStats,
 } from "./batchTransport";
 
 const listShells = SessionService.method.listShells;
@@ -266,29 +264,6 @@ describe("batchTransport", () => {
     for (const batch of sent) expect(JSON.stringify({ calls: batch }).length).toBeLessThanOrEqual(256 * 1024);
   });
 
-  it("batchTransport_should_CountBatchedAndEligibleAloneCalls", async () => {
-    resetBatchStats();
-    const { transport } = setup();
-    void shells(transport, "a");
-    await flushWindow();
-    expect(batchStats).toEqual({ batches: 0, batchedCalls: 0, eligibleAlone: 1 });
-    void shells(transport, "b");
-    void shells(transport, "c");
-    await flushWindow();
-    expect(batchStats).toEqual({ batches: 1, batchedCalls: 2, eligibleAlone: 1 });
-  });
-
-  it("batchTransport_should_BatchThePolledReads_ListPendingApprovals_GetReviewQueue_GetSession", async () => {
-    const { transport, sent } = setup({ reply: (calls) => calls.map((c) => ({ id: c.id, body: "" })) });
-    const { listPendingApprovals, getReviewQueue, getSession } = SessionService.method;
-    void transport.unary(listPendingApprovals, undefined, undefined, undefined, {});
-    void transport.unary(getReviewQueue, undefined, undefined, undefined, {});
-    void transport.unary(getSession, undefined, undefined, undefined, { id: "s1" });
-    await flushWindow();
-    expect(sent).toHaveLength(1);
-    expect(sent[0].map((c) => c.method.split("/").pop()).sort()).toEqual(["GetReviewQueue", "GetSession", "ListPendingApprovals"]);
-  });
-
   it("batchTransport_should_RoundTripTheProtoBody_When_ServerEchoesTheRequest", async () => {
     const reply: Reply = (calls) => calls.map((c) => {
       const req = fromBinary(ListShellsRequestSchema, Uint8Array.from(atob(c.body), (ch) => ch.charCodeAt(0)));
@@ -300,4 +275,17 @@ describe("batchTransport", () => {
     const ids = (await Promise.all([a, b])).map((r) => (r.message as { shells: { id: string }[] }).shells[0].id);
     expect(ids).toEqual(["alpha", "beta"]);
   });
+
+  it("batchTransport_should_BatchGetReviewQueueAndGetSession_But_SendListPendingApprovalsAlone", async () => {
+    const { transport, sent, inner } = setup({ reply: (calls) => calls.map((c) => ({ id: c.id, body: "" })) });
+    const { listPendingApprovals, getReviewQueue, getSession } = SessionService.method;
+    void transport.unary(listPendingApprovals, undefined, undefined, undefined, {});
+    void transport.unary(getReviewQueue, undefined, undefined, undefined, {});
+    void transport.unary(getSession, undefined, undefined, undefined, { id: "s1" });
+    await flushWindow();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].map((c) => c.method.split("/").pop()).sort()).toEqual(["GetReviewQueue", "GetSession"]);
+    expect(inner.unary).toHaveBeenCalledTimes(1);
+  });
 });
+

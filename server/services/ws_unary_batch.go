@@ -41,8 +41,9 @@ const (
 // batchAllowed is the deny-by-default set of procedures a batch may dispatch: cheap,
 // unguarded reads only. One response is returned only after every item finishes, so a
 // slow call or a multi-MB body would hold the cheap calls batched with it; those travel
-// alone. The polled reads (approvals, review queue, session lookup) average about 1-3 ms
-// server-side; GetFeatureFlags and ListSessions (about 230-240 ms) stay out.
+// alone. The polled reads (review queue, session lookup) average about 1-3 ms server-side.
+// GetFeatureFlags and ListSessions (about 230-240 ms) stay out, as does ListPendingApprovals,
+// which drives the approval countdown and would wait on the large GetReviewQueue body.
 var batchAllowed = map[string]struct{}{
 	sessionv1connect.SessionServiceListFilesProcedure:                    {},
 	sessionv1connect.SessionServiceStatFileProcedure:                     {},
@@ -50,7 +51,6 @@ var batchAllowed = map[string]struct{}{
 	sessionv1connect.SessionServiceListShellsProcedure:                   {},
 	sessionv1connect.SessionServiceListWorkflowsProcedure:                {},
 	sessionv1connect.SessionServiceListProgramsConfigProcedure:           {},
-	sessionv1connect.SessionServiceListPendingApprovalsProcedure:         {},
 	sessionv1connect.SessionServiceGetReviewQueueProcedure:               {},
 	sessionv1connect.SessionServiceGetSessionProcedure:                   {},
 }

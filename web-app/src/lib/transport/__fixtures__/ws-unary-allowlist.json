@@ -17,7 +17,6 @@
     "ListShells",
     "ListWorkflows",
     "ListProgramsConfig",
-    "ListPendingApprovals",
     "GetReviewQueue",
     "GetSession"
   ],

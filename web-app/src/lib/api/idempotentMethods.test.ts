@@ -21,7 +21,7 @@ describe("idempotentMethodTable", () => {
     for (const name of batchEligible) {
       expect(known.has(name)).toBe(true);
     }
-    for (const slow of ["GetVCSStatus", "GetSessionDiff", "GetFileContent", "GetFeatureFlags", "ListSessions"]) {
+    for (const slow of ["GetVCSStatus", "GetSessionDiff", "GetFileContent", "GetFeatureFlags", "ListSessions", "ListPendingApprovals"]) {
       expect(batchEligible).not.toContain(slow);
     }
     expect([...batchEligible].sort()).toEqual([...allowlist.batchAllowed].sort());

@@ -20,17 +20,13 @@ Response (always 200 for a well-formed envelope; malformed is 400, oversize is 4
 ## Safety properties
 
 - Every call re-enters the listener's full dispatcher (HostGuard, auth or LocalWriteGuard, interceptors), the same path the unary WebSocket bridge uses, so a batch never widens what a direct call may do.
-- `batchAllowed` holds cheap, unguarded reads only (the file calls plus the polled `ListPendingApprovals`, `GetReviewQueue` and `GetSession`; `server/ws_unary_batch_allowlist_guard_test.go` fails if one is in `guardedProcedures`). It excludes `GetVCSStatus`, `GetSessionDiff` and `GetFileContent`, and `GetFeatureFlags` and `ListSessions` (about 240 ms average vs 1-3 ms for the polled reads): a batch answers only when every item is done, so slow or bulk calls travel alone.
+- `batchAllowed` holds cheap, unguarded reads only (the file calls plus the polled `GetReviewQueue` and `GetSession`; `server/ws_unary_batch_allowlist_guard_test.go` fails if one is in `guardedProcedures`). It excludes `GetVCSStatus`, `GetSessionDiff` and `GetFileContent`, and `GetFeatureFlags` and `ListSessions` (about 240 ms average vs 1-3 ms for the polled reads) and `ListPendingApprovals` (drives the approval countdown, so it must not wait on the ~170 KB `GetReviewQueue` body): a batch answers only when every item is done, so slow or bulk calls travel alone.
 - Server work is bounded: at most 4 batch requests in flight server-wide (extra ones get `503` with `Retry-After`, and the client falls back to individual calls), 6 concurrent calls per batch, 2 MiB per item, 8 MiB (base64) per response. Items past a cap, and items whose handler panicked, come back as `fallback`; buffering stops at the response cap instead of growing first.
 - The endpoint requires `Content-Type: application/json`, so a cross-site POST needs a CORS preflight.
 - The WebSocket bridge's strict remote Origin policy is **not** applied to this endpoint. It relies on the listener chain (HostGuard, auth, CORS preflight) exactly as direct Connect calls do.
 - The flag is client-side only: the server always mounts the endpoint and does not read `batch_unary`. Safety comes from the per-call allow-list and re-entry, not from the flag.
 - The client falls back to individual calls on any batch-level failure (network error, non-200, malformed body) and for any item the server declines, so behaviour never regresses.
 - Aborting one caller rejects only that caller. The in-flight request is cancelled only when every caller in it has aborted.
-
-## Seeing the effect
-
-`window.__ssqBatchStats` (also `batchStats` in `batchTransport.ts`) counts `batches`, `batchedCalls` and `eligibleAlone`, the eligible calls that found nothing to share a window with and went out as ordinary requests. Non-production builds also log `[batch] N calls in one request`.
 
 ## Extending
 
