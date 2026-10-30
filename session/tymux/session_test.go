@@ -351,8 +351,8 @@ func TestTymuxGRPCSession_Start_SetsColorEnv(t *testing.T) {
 		wantColorterm string
 	}{
 		{"both unset: injects defaults", "", "", "xterm-256color", wantColorterm},
-		{"TERM already set: left alone", "screen-256color", "", "", wantColorterm},
-		{"COLORTERM already set: left alone", "", wantColorterm, "xterm-256color", ""},
+		{"TERM already set: overridden", "screen-256color", "", "xterm-256color", wantColorterm},
+		{"COLORTERM already set: overridden", "", "24bit", "xterm-256color", wantColorterm},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

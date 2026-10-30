@@ -2090,18 +2090,212 @@
       ]
     },
     {
+      "id": 39,
+      "title": "Server: zombie handlers (abandoned, still running)",
+      "type": "timeseries",
+      "description": "A zombie is a handler still running after its call was cancelled/timed out and its slot released. A rising line means handlers that ignore their context.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 90
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 4
+              },
+              {
+                "color": "red",
+                "value": 16
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(ws_unary_zombies)",
+          "legendFormat": "zombies",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          }
+        },
+        {
+          "expr": "sum(ws_unary_inflight)",
+          "legendFormat": "in-flight calls",
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          }
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "title": "Server: calls abandoned by reason",
+      "type": "timeseries",
+      "description": "cancel = client CANCEL, deadline = call deadline hit, shutdown = socket ended, zombie_cap = too many zombies closed the socket.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 90
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(ws_unary_abandoned_total[$__rate_interval])) by (reason)",
+          "legendFormat": "{{reason}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          }
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "title": "Server: upgrades refused by listener and reason",
+      "type": "timeseries",
+      "description": "origin / auth_required / query / no_listener refusals at the WebSocket upgrade; a browser then falls back to HTTP.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 90
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(ws_unary_upgrade_denied_total[$__rate_interval])) by (listener, reason)",
+          "legendFormat": "{{listener}} {{reason}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          }
+        }
+      ]
+    },
+    {
       "type": "row",
       "title": "Slow page loads and main-thread jank",
-      "id": 139,
+      "id": 142,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 98
       }
     },
     {
-      "id": 40,
+      "id": 43,
       "title": "LCP p75 by page (ms)",
       "type": "timeseries",
       "description": "Core Web Vitals threshold: 2500 good, 4000 poor.",
@@ -2109,7 +2303,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 91
+        "y": 99
       },
       "datasource": {
         "type": "prometheus",
@@ -2176,7 +2370,7 @@
       ]
     },
     {
-      "id": 41,
+      "id": 44,
       "title": "INP p75 by page (ms)",
       "type": "timeseries",
       "description": "Thresholds: 200 good, 500 poor.",
@@ -2184,7 +2378,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 91
+        "y": 99
       },
       "datasource": {
         "type": "prometheus",
@@ -2251,7 +2445,7 @@
       ]
     },
     {
-      "id": 42,
+      "id": 45,
       "title": "CLS p75 by page",
       "type": "timeseries",
       "description": "Thresholds: 0.1 good, 0.25 poor.",
@@ -2259,7 +2453,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 91
+        "y": 99
       },
       "datasource": {
         "type": "prometheus",
@@ -2326,7 +2520,7 @@
       ]
     },
     {
-      "id": 43,
+      "id": 46,
       "title": "FCP / TTFB p75 (ms)",
       "type": "timeseries",
       "description": "",
@@ -2334,7 +2528,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 99
+        "y": 107
       },
       "datasource": {
         "type": "prometheus",
@@ -2390,7 +2584,7 @@
       ]
     },
     {
-      "id": 44,
+      "id": 47,
       "title": "Vital ratings (poor share) by vital",
       "type": "timeseries",
       "description": "",
@@ -2398,7 +2592,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 99
+        "y": 107
       },
       "datasource": {
         "type": "prometheus",
@@ -2446,7 +2640,7 @@
       ]
     },
     {
-      "id": 45,
+      "id": 48,
       "title": "Long tasks (>50ms) per minute by page",
       "type": "timeseries",
       "description": "Capped at 30 events/min per tab at the source, so a saturated line means 'at least this janky'.",
@@ -2454,7 +2648,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 99
+        "y": 107
       },
       "datasource": {
         "type": "prometheus",
@@ -2501,7 +2695,7 @@
       ]
     },
     {
-      "id": 46,
+      "id": 49,
       "title": "Long task duration p50 / p95 (ms)",
       "type": "timeseries",
       "description": "",
@@ -2509,7 +2703,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 115
       },
       "datasource": {
         "type": "prometheus",
@@ -2565,7 +2759,7 @@
       ]
     },
     {
-      "id": 47,
+      "id": 50,
       "title": "Beacon health: events the server rejected",
       "type": "timeseries",
       "description": "Non-zero means a client sent an event the allow-list refused (version skew or a bug).",
@@ -2573,7 +2767,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 115
       },
       "datasource": {
         "type": "prometheus",
@@ -2622,16 +2816,16 @@
     {
       "type": "row",
       "title": "Server comparison and traces",
-      "id": 148,
+      "id": 151,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 123
       }
     },
     {
-      "id": 49,
+      "id": 52,
       "title": "Server-side RPC p95 (otelconnect) vs browser p95",
       "type": "timeseries",
       "description": "Browser minus server = queueing + network + socket + encode; a wide gap points at the transport, not the handler.",
@@ -2639,7 +2833,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 116
+        "y": 124
       },
       "datasource": {
         "type": "prometheus",
@@ -2695,7 +2889,7 @@
       ]
     },
     {
-      "id": 50,
+      "id": 53,
       "title": "HTTP/1.1 connections open (cap 6)",
       "type": "timeseries",
       "description": "",
@@ -2703,7 +2897,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 116
+        "y": 124
       },
       "datasource": {
         "type": "prometheus",
@@ -2770,7 +2964,7 @@
       ]
     },
     {
-      "id": 51,
+      "id": 54,
       "title": "Slow browser spans (stapler-squad-web, > 1s)",
       "type": "table",
       "description": "Browser fetch/document-load spans from the OTLP relay (needs NEXT_PUBLIC_OTEL_ENABLED=true web build). Click a trace id to open it in Tempo; the browser traceparent links to the server span.",
@@ -2778,7 +2972,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 132
       },
       "datasource": {
         "type": "tempo",

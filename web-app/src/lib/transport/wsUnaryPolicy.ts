@@ -29,7 +29,15 @@ const WS_ELIGIBLE = new Set<string>(IDEMPOTENT_METHODS.wsEligible);
 const REPLAYABLE = new Set<string>(IDEMPOTENT_METHODS.replayable);
 
 /** The server's client-metrics allow-list (server/analytics/client_metrics.go `fallbacks`) must contain each of these; wsUnaryPolicy.test.ts checks. */
-export const FALLBACK_REASONS = ["breaker-open", "force-http", "ws-method-not-allowed", "ws-call-timeout"] as const;
+export const FALLBACK_REASONS = [
+  "breaker-open",
+  "force-http",
+  "ws-method-not-allowed",
+  "ws-call-timeout",
+  "ws-resource-exhausted",
+  "ws-unavailable",
+  "ws-send-queue-full",
+] as const;
 export type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 // A browser WebSocket hides a rejected handshake's 401, so a 401 seen over HTTP is the only signal.
@@ -183,14 +191,16 @@ class WsUnaryPolicy implements Transport {
     const call = ws.unary(method, ac.signal, timeoutMs, header, input, ctx);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = Symbol("ws-call-timeout");
-    const guard: Promise<UnaryResponse<I, O> | typeof timedOut> = (this.opt.isReplayable ?? ((n) => REPLAYABLE.has(n)))(method.name)
+    const guard: Promise<UnaryResponse<I, O> | typeof timedOut> = this.replayable(method.name)
       ? Promise.race([call, new Promise<typeof timedOut>((r) => (timer = setTimeout(() => r(timedOut), WS_CALL_TIMEOUT_MS)))])
       : call;
     try {
       const res = await guard;
       if (res !== timedOut) return res;
     } catch (err) {
-      return this.onWsError(err, method.name, ws, viaHttp);
+      // The fallback gets only the deadline that is left, like the ws-call-timeout path.
+      const remaining = () => Math.max(1, (timeoutMs ?? DEFAULT_TIMEOUT_MS) - (this.now() - decidedAt));
+      return this.onWsError(err, method.name, ws, () => viaHttp(remaining()));
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", relay);
@@ -199,6 +209,10 @@ class WsUnaryPolicy implements Transport {
     call.catch(() => undefined);
     this.onFallback("ws-call-timeout");
     return viaHttp(Math.max(1, (timeoutMs ?? DEFAULT_TIMEOUT_MS) - WS_CALL_TIMEOUT_MS));
+  }
+
+  private replayable(methodName: string): boolean {
+    return (this.opt.isReplayable ?? ((n) => REPLAYABLE.has(n)))(methodName);
   }
 
   private onWsError<T>(
@@ -211,6 +225,12 @@ class WsUnaryPolicy implements Transport {
       if (err.marker === WS_METHOD_NOT_ALLOWED) {
         this.denylist.add(methodName);
         this.onFallback("ws-method-not-allowed");
+        return viaHttp();
+      }
+      // The server shed the call (in-flight/zombie backstop, oversize response) before
+      // or without running it to completion; a replayable read is safe to re-issue.
+      if ((err.code === Code.ResourceExhausted || err.code === Code.Unavailable) && this.replayable(methodName)) {
+        this.onFallback(err.code === Code.ResourceExhausted ? "ws-resource-exhausted" : "ws-unavailable");
         return viaHttp();
       }
       if (err.code === Code.Unauthenticated) {

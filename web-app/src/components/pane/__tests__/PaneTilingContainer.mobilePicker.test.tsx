@@ -52,4 +52,28 @@ describe("mobile picker sheet", () => {
     });
     expect(screen.queryByTestId("mobile-picker-new-pane")).toBeNull();
   });
+
+  it("lists Open existing pane first when the session is already in a pane, and focuses it", async () => {
+    const held: LeafPane = { ...leaf("p2"), sessionId: "session-X" };
+    const state: PaneState = {
+      root: { type: "split", id: "s", direction: "vertical", ratio: 0.5, first: leaf("p1"), second: held },
+      focusedPaneId: "p1",
+      zoomedPaneId: null,
+    };
+    const dispatch = jest.fn();
+    const session = { id: "session-X" } as Session;
+    const props = { sessions: [session], paneState: state, dispatch };
+
+    const { rerender } = render(<PaneTilingContainer {...props} externalSessionAssign={null} />);
+    await act(async () => {
+      rerender(<PaneTilingContainer {...props} externalSessionAssign={{ sessionId: "session-X", version: 1 }} />);
+    });
+
+    const existing = screen.getByTestId("mobile-picker-open-existing");
+    expect(existing.nextElementSibling).toBe(screen.getByTestId("mobile-picker-new-pane"));
+    fireEvent.click(existing);
+
+    expect(dispatch).toHaveBeenCalledWith({ type: "FOCUS_PANE", paneId: "p2" });
+    expect(screen.queryByTestId("mobile-picker-open-existing")).toBeNull();
+  });
 });
