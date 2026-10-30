@@ -3729,10 +3729,21 @@ message FeatureFlagScopeOverride {
   bool enabled = 2;
 }
 
-message GetFeatureFlagsRequest {}
+message GetFeatureFlagsRequest {
+  // Validator (ETag) of the body the caller already holds. When it matches the
+  // current flags the server answers not_modified instead of re-sending them.
+  // Empty means "send everything" (and is what clients predating this field send).
+  string if_none_match = 1;
+}
 
 message GetFeatureFlagsResponse {
+  // Empty when not_modified is true; keep the previously held flags.
   repeated FeatureFlag flags = 1;
+  // Validator for this body. Echo it as if_none_match on the next poll.
+  // Absent from servers predating this field: treat the body as authoritative.
+  string etag = 2;
+  // True when if_none_match matched and flags was elided.
+  bool not_modified = 3;
 }
 
 message GetHookStatusRequest {}

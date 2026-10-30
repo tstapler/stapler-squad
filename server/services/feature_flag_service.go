@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/conditional"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -714,7 +715,13 @@ func (f *FeatureFlagService) GetFeatureFlags(
 		})
 	}
 
-	return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Flags: flags}), nil
+	full := &sessionv1.GetFeatureFlagsResponse{Flags: flags}
+	etag, notModified := conditional.Check("GetFeatureFlags", conditional.Validator(req.Msg.GetIfNoneMatch()), full)
+	if notModified {
+		return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Etag: string(etag), NotModified: true}), nil
+	}
+	full.Etag = string(etag)
+	return connect.NewResponse(full), nil
 }
 
 // +api: feature-flags:update

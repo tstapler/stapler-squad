@@ -4,6 +4,7 @@ import {
   preloadFlagValue,
   recordFlagWrite,
   resetFlagStoreForTest,
+  subscribeFlags,
   WINDOW_KEEP_ALIVE_DEFAULT,
 } from "./flagStore";
 
@@ -97,5 +98,52 @@ describe("flagStore", () => {
     expect(preloadFlagValue("request_coalescing")).toBe(true);
     expect(localStorage.getItem("ssq:flag:request_coalescing")).toBeNull();
     expect(preloadFlagValue("notification_inline_actions")).toBeUndefined();
+  });
+  describe("conditional reads", () => {
+    it("flagStore_should_SendLastEtagAsIfNoneMatch_When_Refreshing", async () => {
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e1"' });
+      await loadFlags();
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [], etag: '"e1"', notModified: true });
+      await loadFlags(Date.now, { force: true });
+      expect(mockGetFeatureFlags.mock.calls[0][0]).toEqual({ ifNoneMatch: "" });
+      expect(mockGetFeatureFlags.mock.calls[1][0]).toEqual({ ifNoneMatch: '"e1"' });
+    });
+
+    it("flagStore_should_KeepPreviousBodyAndNotNotify_When_NotModified", async () => {
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e1"' });
+      const first = await loadFlags();
+      const listener = jest.fn();
+      const unsubscribe = subscribeFlags(listener);
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [], etag: '"e1"', notModified: true });
+      const second = await loadFlags(Date.now, { force: true });
+      unsubscribe();
+      expect(second).toBe(first);
+      expect(peekFlags()).toBe(first);
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("flagStore_should_SendNoValidator_When_ServerNeverReturnedAnEtag", async () => {
+      mockGetFeatureFlags.mockResolvedValue({ flags: [flag("x", true)] });
+      await loadFlags();
+      await loadFlags(Date.now, { force: true });
+      expect(mockGetFeatureFlags.mock.calls[1][0]).toEqual({ ifNoneMatch: "" });
+    });
+
+    it("flagStore_should_DropValidator_When_AFlagWriteIsRecorded", async () => {
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", false)], etag: '"e1"' });
+      await loadFlags();
+      recordFlagWrite("x", true);
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
+      await loadFlags();
+      expect(mockGetFeatureFlags.mock.calls[1][0]).toEqual({ ifNoneMatch: "" });
+    });
+
+    it("flagStore_should_RefetchInFull_When_NotModifiedArrivesWithNothingToKeep", async () => {
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [], etag: '"e1"', notModified: true });
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
+      const flags = await loadFlags();
+      expect(flags[0]).toMatchObject({ name: "x", enabled: true });
+      expect(mockGetFeatureFlags.mock.calls[1][0]).toEqual({ ifNoneMatch: "" });
+    });
   });
 });
