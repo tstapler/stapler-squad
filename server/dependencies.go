@@ -449,6 +449,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
 	// The persisting recorder lands with the event log (PR C); until then the gated recorder wraps a no-op.
 	wireAttentionCollaborators(reviewQueuePoller, core.Storage, session.NewNoopSessionEventRecorder(), sessionEventLogEnabled)
+	// Inert unless attention_prose_question_llm_tiebreak is on (default off).
+	reviewQueuePoller.SetTurnEndTiebreaker(session.NewLLMTurnEndTiebreaker(session.NewHeadlessTurnEndModelCall(), 0))
 	prStatusPoller := session.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
