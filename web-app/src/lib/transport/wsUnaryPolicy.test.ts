@@ -218,9 +218,11 @@ describe("WsUnaryPolicy", () => {
     const call = vcs(h.policy);
     h.sock().open();
     await Promise.resolve();
+    jest.advanceTimersByTime(2_000);
     h.sock().receive({ type: "ERROR", id: h.sock().requestIds()[0], json: { code, message: "shed" } } as MuxFrame);
     await call;
     expect(h.http.unary).toHaveBeenCalledTimes(1);
+    expect((h.http.unary.mock.calls[0] as unknown[])[2]).toBe(30_000 - 2_000); // only the time left
     expect(h.reasons).toEqual([reason]);
   });
 

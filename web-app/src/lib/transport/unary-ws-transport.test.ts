@@ -296,13 +296,24 @@ describe("frame size routing", () => {
 });
 
 describe("send queue and window", () => {
-  it("unary_should_RejectResourceExhausted_When_65thFrameQueuedWhileConnecting", async () => {
+  it("unary_should_ReplayReadOverHttp_When_SendQueueFullWhileConnecting", async () => {
     const h = setup();
     const ps = Array.from({ length: 65 }, (_, i) => settled(callListFiles(h.t, `/${i}`)));
     const last = await ps[64];
-    expect(!last.ok && ConnectError.from(last.error).code).toBe(Code.ResourceExhausted);
+    expect(last.ok).toBe(true);
+    expect(h.fallback.unary).toHaveBeenCalledTimes(1);
     h.sock().open();
     expect(h.sock().requestIds().length).toBe(MAX_IN_FLIGHT); // 64 queued, all fit the window
+    h.t.close();
+  });
+
+  it("unary_should_RejectResourceExhausted_When_SendQueueFull_And_CallNotReplayable", async () => {
+    const h = setup();
+    for (let i = 0; i < 64; i++) void callListFiles(h.t, `/${i}`);
+    const p = settled(h.t.unary(createSession, undefined, undefined, undefined, {}));
+    const r = await p;
+    expect(!r.ok && ConnectError.from(r.error).code).toBe(Code.ResourceExhausted);
+    expect(h.fallback.unary).not.toHaveBeenCalled();
     h.t.close();
   });
 
@@ -477,6 +488,23 @@ describe("liveness", () => {
       h.t.close();
     } finally {
       hidden.mockRestore();
+    }
+  });
+
+  it("liveness_should_GiveHiddenGrace_When_TabHidesWhileWaitingForPong", () => {
+    const h = setup();
+    callVcs(h.t).catch(() => undefined);
+    h.sock().open();
+    jest.advanceTimersByTime(10_000); // PING sent while visible
+    const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      jest.advanceTimersByTime(PONG_DEADLINE_MS + 1);
+      expect(h.sock().closed).toBe(false);
+      jest.advanceTimersByTime(PONG_DEADLINE_HIDDEN_MS - PONG_DEADLINE_MS);
+      expect(h.sock().closed).toBe(true);
+    } finally {
+      hidden.mockRestore();
+      h.t.close();
     }
   });
 

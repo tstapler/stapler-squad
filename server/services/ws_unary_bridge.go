@@ -33,6 +33,20 @@ const (
 	// typical allow-listed reads are KiB-sized. Override with wsUnaryMaxInFlightEnv.
 	wsUnaryMaxInFlight    = 64
 	wsUnaryMaxInFlightEnv = "STAPLER_SQUAD_WS_UNARY_MAX_INFLIGHT"
+	// wsUnaryMaxInFlightLimit is the ceiling for the env override.
+	wsUnaryMaxInFlightLimit = 256
+
+	// wsUnaryBufferBudget bounds, across every socket of the process, the response
+	// bytes handlers have buffered but not yet handed to a writer (zombies included).
+	// Over budget a call gets resource_exhausted and the client replays over HTTP.
+	wsUnaryBufferBudget = 256 << 20
+
+	// wsUnaryMaxSockets bounds concurrent unary sockets per process (one per tab).
+	wsUnaryMaxSockets = 64
+
+	// wsUnaryMaxZombiesTotal refuses new sockets while this many abandoned handlers
+	// still run process-wide: a reconnect resets the per-socket count, this does not.
+	wsUnaryMaxZombiesTotal = 128
 
 	// wsUnaryMaxZombies bounds handlers abandoned by CANCEL/deadline that have not
 	// returned yet (a goroutine cannot be killed). Past it, an abandoned call keeps
@@ -85,9 +99,14 @@ type UnaryWsBridge struct {
 	maxInFlight int
 	maxZombies  int
 	maxTimeout  time.Duration
-	pingPeriod  time.Duration
-	pongWait    time.Duration
-	metrics     *unaryMetrics
+
+	bufferMax  int64
+	buffered   atomic.Int64
+	maxSocket  int
+	sockets    atomic.Int32
+	pingPeriod time.Duration
+	pongWait   time.Duration
+	metrics    *unaryMetrics
 }
 
 // UnaryWsOption customizes a UnaryWsBridge.
@@ -106,6 +125,16 @@ func WithUnaryMaxInFlight(n int) UnaryWsOption {
 // WithUnaryMaxZombies overrides the per-socket cap on abandoned-but-running handlers.
 func WithUnaryMaxZombies(n int) UnaryWsOption {
 	return func(b *UnaryWsBridge) { b.maxZombies = n }
+}
+
+// WithUnaryBufferBudget overrides the process-wide handler response buffer budget.
+func WithUnaryBufferBudget(n int64) UnaryWsOption {
+	return func(b *UnaryWsBridge) { b.bufferMax = n }
+}
+
+// WithUnaryMaxSockets overrides the per-process unary socket cap.
+func WithUnaryMaxSockets(n int) UnaryWsOption {
+	return func(b *UnaryWsBridge) { b.maxSocket = n }
 }
 
 // WithUnaryMaxCallTimeout overrides the server-side clamp on call deadlines.
@@ -127,6 +156,8 @@ func NewUnaryWsBridge(dispatchers UnaryDispatchers, opts ...UnaryWsOption) *Unar
 		maxInFlight: maxInFlightFromEnv(),
 		maxZombies:  wsUnaryMaxZombies,
 		maxTimeout:  wsUnaryMaxCallTimeout,
+		bufferMax:   wsUnaryBufferBudget,
+		maxSocket:   wsUnaryMaxSockets,
 		pingPeriod:  wsUnaryPingPeriod,
 		pongWait:    wsUnaryPongWait,
 		metrics:     newUnaryMetrics(),
@@ -137,9 +168,13 @@ func NewUnaryWsBridge(dispatchers UnaryDispatchers, opts ...UnaryWsOption) *Unar
 	return b
 }
 
-func maxInFlightFromEnv() int {
-	if n, err := strconv.Atoi(os.Getenv(wsUnaryMaxInFlightEnv)); err == nil && n > 0 {
-		return n
+func maxInFlightFromEnv() int { return parseMaxInFlight(os.Getenv(wsUnaryMaxInFlightEnv)) }
+
+// parseMaxInFlight reads the env override: invalid or non-positive keeps the
+// default, anything above wsUnaryMaxInFlightLimit is clamped.
+func parseMaxInFlight(raw string) int {
+	if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+		return min(n, wsUnaryMaxInFlightLimit)
 	}
 	return wsUnaryMaxInFlight
 }
@@ -199,6 +234,16 @@ func (b *UnaryWsBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.denyUpgrade(w, r, listener, "origin", http.StatusForbidden, "origin not allowed")
 		return
 	}
+	if b.metrics.Zombies() >= wsUnaryMaxZombiesTotal {
+		b.denyUpgrade(w, r, listener, "zombie_limit", http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	if int(b.sockets.Add(1)) > b.maxSocket {
+		b.sockets.Add(-1)
+		b.denyUpgrade(w, r, listener, "socket_limit", http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	defer b.sockets.Add(-1)
 	// Origin was decided above; no subprotocol is negotiated.
 	conn, err := upgradeWebSocket(w, r, func(*http.Request) bool { return true }, unaryReadLimitBytes)
 	if err != nil {
@@ -217,7 +262,6 @@ type inflightCall struct {
 	handlerDone bool // the handler returned; result holds its output
 	zombie      bool // slot released while the handler still runs; its output is dropped
 	result      chan callResult
-	detached    chan struct{} // closed when the slot is released (zombie); wakes abandon's cap-wait
 }
 
 type callResult struct {
@@ -244,9 +288,10 @@ type unarySession struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu       sync.Mutex
-	inflight map[uint32]*inflightCall
-	zombies  int
+	mu        sync.Mutex
+	inflight  map[uint32]*inflightCall
+	zombies   int
+	capClosed bool // the zombie cap already closed this socket
 }
 
 func newUnarySession(b *UnaryWsBridge, conn *websocket.Conn, upgrade *http.Request, listener string) *unarySession {
@@ -420,7 +465,7 @@ func (s *unarySession) handleRequest(f unaryFrame) {
 	}
 
 	callCtx, cancel := s.callContext(f.RequestMeta.TimeoutMs)
-	call := &inflightCall{cancel: cancel, result: make(chan callResult, 1), detached: make(chan struct{})}
+	call := &inflightCall{cancel: cancel, result: make(chan callResult, 1)}
 	s.mu.Lock()
 	_, dup := s.inflight[f.ID]
 	full := len(s.inflight) >= s.b.maxInFlight
@@ -492,26 +537,39 @@ func (s *unarySession) callContext(timeoutMs int64) (context.Context, context.Ca
 }
 
 // detachLocked releases id's slot while its handler is still running and counts
-// the handler as a zombie. Past the zombie cap it refuses (false) unless force is
-// set, leaving the slot held until the handler returns. Caller holds s.mu.
+// the handler as a zombie. At the zombie cap it refuses (false) unless force is
+// set, and closes the socket instead: stuck handlers that never return would
+// otherwise pin the socket's slots for good, and a fresh socket recovers.
+// Caller holds s.mu.
 func (s *unarySession) detachLocked(id uint32, call *inflightCall, reason string, force bool) bool {
-	if call.zombie {
+	if call.zombie || call.handlerDone {
 		return true
 	}
 	if !force && s.zombies >= s.b.maxZombies {
-		s.b.metrics.abandoned(abandonCapped)
+		s.closeForZombieCapLocked()
 		return false
 	}
 	call.zombie = true
-	if call.detached != nil {
-		close(call.detached)
-	}
 	s.zombies++
 	delete(s.inflight, id)
 	s.b.metrics.zombieDelta(1)
 	s.b.metrics.inflightDelta(-1)
 	s.b.metrics.abandoned(reason)
 	return true
+}
+
+// closeForZombieCapLocked counts the event once per socket and ends the session;
+// every pending call then force-detaches through the shutdown path.
+func (s *unarySession) closeForZombieCapLocked() {
+	if s.capClosed {
+		return
+	}
+	s.capClosed = true
+	s.b.metrics.abandoned(abandonCapped)
+	log.Warn("[UnaryWS] zombie cap reached, closing socket", "listener", s.listener, "zombies", s.zombies)
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // finishCall marks the handler done but keeps id reserved (duplicate-id guard)
@@ -549,7 +607,9 @@ func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, 
 // runCall runs the handler in its own goroutine and waits for either its result or
 // the call context ending (CANCEL, deadline, shutdown). A handler that ignores its
 // context therefore cannot hold the slot: the call is abandoned and the handler
-// finishes in the background as a zombie. The handler re-enters the listener
+// finishes in the background as a zombie. runCall returns when the reply is
+// queued or the call is abandoned (the deadline reply is queued first), not when
+// the handler returns; time a call by its reply, not by this function. The handler re-enters the listener
 // dispatcher with a request that carries the upgrade request's identity (Host,
 // RemoteAddr, Origin, Cookie, proxy headers), so every guard reaches the same
 // verdict as for HTTP.
@@ -566,17 +626,26 @@ func (s *unarySession) runCall(ctx context.Context, call *inflightCall, handler 
 // runHandler is deliberately outside s.wg: a ctx-ignoring handler must not keep
 // the socket's teardown waiting.
 func (s *unarySession) runHandler(ctx context.Context, call *inflightCall, handler http.Handler, f unaryFrame) {
-	rec := &unaryRecorder{header: http.Header{}}
+	rec := s.newRecorder()
 	panicked := s.serveRecorded(ctx, handler, f, rec)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if call.zombie {
+		rec.release()
 		s.zombies--
 		s.b.metrics.zombieDelta(-1)
 		return
 	}
 	call.handlerDone = true
 	call.result <- callResult{rec: rec, panicked: panicked} // buffered: never blocks
+}
+
+func (s *unarySession) newRecorder() *unaryRecorder {
+	rec := &unaryRecorder{header: http.Header{}}
+	if s.b.bufferMax > 0 {
+		rec.budget, rec.budgetMax = &s.b.buffered, s.b.bufferMax
+	}
+	return rec
 }
 
 // abandon handles a call context that ended before the handler returned.
@@ -600,32 +669,21 @@ func (s *unarySession) abandon(ctx context.Context, call *inflightCall, f unaryF
 	case deadline:
 		reason = abandonDeadline
 	}
-	detached := s.detachLocked(f.ID, call, reason, shutdown)
-	s.mu.Unlock()
-
 	if deadline {
+		// Queued before the id is released and under s.mu, so a racing CANCEL either
+		// precedes the reply (suppressed above) or finds the call already answered.
 		s.replyError(f.ID, f.Method, unaryErrorBody{Code: "deadline_exceeded", Message: "call deadline exceeded"})
 	}
-	if detached {
-		return
+	if !s.detachLocked(f.ID, call, reason, shutdown) {
+		s.detachLocked(f.ID, call, abandonShutdown, true) // the socket is closing; still account the call
 	}
-	// Zombie cap reached: keep the slot until the handler returns, then free it
-	// without a second reply.
-	select {
-	case <-call.result:
-		s.finishCall(f.ID)
-		s.releaseCall(f.ID)
-	case <-call.detached: // a later CANCEL found zombie room and freed the slot
-	case <-s.ctx.Done():
-		s.mu.Lock()
-		s.detachLocked(f.ID, call, abandonShutdown, true)
-		s.mu.Unlock()
-	}
+	s.mu.Unlock()
 }
 
 // respond turns a finished handler's output into frames.
 func (s *unarySession) respond(f unaryFrame, res callResult) {
 	rec, panicked := res.rec, res.panicked
+	defer rec.release() // queued chunks are bounded by the writer's own cap
 	streamed := false
 	defer func() {
 		if !streamed {
@@ -639,7 +697,7 @@ func (s *unarySession) respond(f unaryFrame, res callResult) {
 	case panicked:
 		s.replyError(f.ID, f.Method, unaryErrorBody{Code: codeInternal, Message: "handler panicked"})
 	case rec.overflow:
-		s.replyError(f.ID, f.Method, unaryErrorBody{Code: codeResourceExhausted, Message: "response exceeds bridge limit; use HTTP"})
+		s.replyError(f.ID, f.Method, unaryErrorBody{Code: codeResourceExhausted, Message: "response exceeds bridge or server buffer limit; use HTTP"})
 	case rec.statusOrOK() != http.StatusOK:
 		s.replyError(f.ID, f.Method, rec.errorBody())
 	default:
@@ -734,6 +792,15 @@ type unaryRecorder struct {
 	// budgetMax overflow instead of buffering.
 	budget    *atomic.Int64
 	budgetMax int64
+	charged   int64
+}
+
+// release returns this recorder's bytes to the shared budget; idempotent.
+func (r *unaryRecorder) release() {
+	if r.budget != nil && r.charged > 0 {
+		r.budget.Add(-r.charged)
+		r.charged = 0
+	}
 }
 
 func (r *unaryRecorder) Header() http.Header { return r.header }
@@ -750,12 +817,21 @@ func (r *unaryRecorder) Write(p []byte) (int, error) {
 	if limit == 0 {
 		limit = wsUnaryMaxResponseBytes
 	}
-	if r.budget != nil && r.budget.Add(int64(len(p))) > r.budgetMax {
-		r.overflow = true
-		return 0, io.ErrShortWrite
+	n := int64(len(p))
+	if r.budget != nil {
+		if r.budget.Add(n) > r.budgetMax {
+			r.budget.Add(-n)
+			r.overflow = true
+			return 0, io.ErrShortWrite
+		}
+		r.charged += n
 	}
 	if r.body.Len()+len(p) > limit {
 		r.overflow = true
+		if r.budget != nil {
+			r.budget.Add(-n)
+			r.charged -= n
+		}
 		return 0, io.ErrShortWrite
 	}
 	return r.body.Write(p)

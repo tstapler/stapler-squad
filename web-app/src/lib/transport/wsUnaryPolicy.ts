@@ -92,7 +92,7 @@ function recordFallback(reason: FallbackReason): void {
 }
 
 function recordQueueMs(ms: number): void {
-  trackSharedEvent({ name: "ws_unary_slot_wait_ms", category: "performance", durationMs: ms });
+  trackSharedEvent({ name: "ws_unary_send_queue_ms", category: "performance", durationMs: ms });
   const perf = typeof window === "undefined" ? undefined : window.__ssqPerf;
   if (!perf) return;
   perf.wsQueueMs.push(ms);
@@ -192,7 +192,9 @@ class WsUnaryPolicy implements Transport {
       const res = await guard;
       if (res !== timedOut) return res;
     } catch (err) {
-      return this.onWsError(err, method.name, ws, viaHttp);
+      // The fallback gets only the deadline that is left, like the ws-call-timeout path.
+      const remaining = () => Math.max(1, (timeoutMs ?? DEFAULT_TIMEOUT_MS) - (this.now() - decidedAt));
+      return this.onWsError(err, method.name, ws, () => viaHttp(remaining()));
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", relay);

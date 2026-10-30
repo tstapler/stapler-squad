@@ -148,6 +148,10 @@ interface Call {
   onWritten?: () => void;
 }
 
+function isHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
 function concatParts(parts: Uint8Array[], total: number): Uint8Array {
   if (parts.length === 1) return parts[0];
   const out = new Uint8Array(total);
@@ -301,6 +305,10 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
         this.queue.length + 1 > SEND_QUEUE_MAX_FRAMES ||
         this.queuedBytes + frame.length > SEND_QUEUE_MAX_BYTES
       ) {
+        if (call.replayable) {
+          this.runOverHttp(call); // a read never surfaces "queue full" to the caller
+          return;
+        }
         this.settle(call);
         reject(new ConnectError("unary websocket send queue is full", Code.ResourceExhausted));
         return;
@@ -568,10 +576,20 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     const ws = this.ws;
     if (!ws || this.state !== "open" || this.pongTimer) return;
     this.sendRaw(encodeFrame({ type: "PING", id: 0 }));
+    const hiddenAtSend = isHidden();
     this.pongTimer = setTimeout(() => {
       this.pongTimer = null;
+      if (!hiddenAtSend && isHidden()) {
+        // Hidden while waiting: timers and message delivery were throttled, so give
+        // the PONG one more hidden-tab window before calling the socket dead.
+        this.pongTimer = setTimeout(() => {
+          this.pongTimer = null;
+          this.dropSocket(ws, true);
+        }, PONG_DEADLINE_HIDDEN_MS - PONG_DEADLINE_MS);
+        return;
+      }
       this.dropSocket(ws, true);
-    }, typeof document !== "undefined" && document.hidden ? PONG_DEADLINE_HIDDEN_MS : PONG_DEADLINE_MS);
+    }, hiddenAtSend ? PONG_DEADLINE_HIDDEN_MS : PONG_DEADLINE_MS);
   }
 
   private clearPong(): void {
