@@ -6,6 +6,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,17 +95,40 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 		instances: make([]*Instance, 0),
 		backoffs:  make(map[string]*sessionBackoff),
 	}
-	hl.watcher = NewHistoryFileWatcher(watchDir, func(filePath string) {
-		hl.ScanAll()
-		// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
-		hl.mu.RLock()
-		cbs := hl.extraCallbacks
-		hl.mu.RUnlock()
-		for _, cb := range cbs {
-			cb(filePath)
-		}
-	})
+	hl.watcher = NewHistoryFileWatcher(watchDir, hl.handleHistoryFileEvent)
 	return hl
+}
+
+// handleHistoryFileEvent is the watcher callback. It force-rescans all sessions
+// only for a JSONL no monitored session has claimed yet (a new conversation,
+// e.g. after /clear); every append to a linked session's own file would
+// otherwise re-check every session's pane PID and open files.
+func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
+	if !hl.isClaimedConversationFile(filePath) {
+		hl.ScanAll()
+	}
+	// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
+	hl.mu.RLock()
+	cbs := hl.extraCallbacks
+	hl.mu.RUnlock()
+	for _, cb := range cbs {
+		cb(filePath)
+	}
+}
+
+// isClaimedConversationFile reports whether filePath (<conversation-uuid>.jsonl)
+// is the conversation of a monitored session.
+func (hl *HistoryLinker) isClaimedConversationFile(filePath string) bool {
+	uuid := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
+	if uuid == "" {
+		return false
+	}
+	for _, inst := range hl.Instances() {
+		if inst.GetClaudeConversationUUID() == uuid {
+			return true
+		}
+	}
+	return false
 }
 
 // RegisterFileCallback registers a callback that receives the file path whenever
