@@ -70,25 +70,26 @@ the app's own OTel flag.
 
 All six dashboards carry a "Traces in Tempo (Explore)" dashboard link (top bar) that opens Explore on the
 Tempo datasource with the dashboard's time range. `cgroup-memory` and `pprof-profiles` have only that
-link, because no spans correspond to memory or profile data. The other four also have:
+link, because no spans correspond to memory or profile data. The other four also have the following. The overview link on `cgroup-memory` and `pprof-profiles` is pre-filtered to server spans slower than 500ms:
 
 | Dashboard | Trace panels (TraceQL, `resource.service.name = "stapler-squad"`) | Metric-panel data links (click a series) |
 |---|---|---|
-| `http-rpc-connections` | slow (> 500ms, `Watch*` streams excluded) and errored Connect RPC server spans | streams-by-method panel opens that method's spans |
+| `http-rpc-connections` | slow (> 500ms) and errored Connect RPC server spans; `Watch*` streams and client-canceled calls are excluded | streams-by-method panel opens that method's spans |
 | `tmux-control-mode` | slow and errored/timed-out `tmux.control_mode.command` spans | rate, timeout, latency panels open spans for that `command` |
 | `tymux-backend` | slow and errored `session.backend.*` / `tymux.v1.*` spans (`Attach` excluded) | latency and rate panels open spans for that `backend` |
-| `client-network` | slow and errored server RPC spans for the selected `$method` | error/timeout/p95 stats and per-method panels open server spans for the method(s) |
+| `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams and canceled calls excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links show all errored spans because no span carries a `deadline_exceeded` code |
 
 Notes:
 
 - Grafana 11.5's Tempo plugin runs TraceQL searches in the browser, so the tables cannot be checked with
-  `POST /api/ds/query` (it returns "backend TraceQL search queries are not supported"). Check a query with
+  `POST /api/ds/query` (it returns a 500; Grafana logs "backend TraceQL search queries are not supported"). Check a query with
   `GET /api/datasources/proxy/uid/tempo/api/search?q=<traceql>&start=<s>&end=<s>` instead.
 - Span attributes used: `rpc.system`, `rpc.method`, `rpc.connect_rpc.error_code`, `command`, `timed_out`,
   `backend`. Hot-path backend operations (`send_keys`, `write_stdin`, `capture_pane`, `resize`) are
-  metric-only, so a link from those series can legitimately open an empty result.
-- Not available: metric-to-trace exemplars. VictoriaMetrics returns no exemplars from
-  `/api/v1/query_exemplars`, and the provisioned Tempo datasource has no `tracesToMetrics`/`tracesToLogs`
+  have no `session.backend.*` span, so a per-backend link from those series can open an empty result. The tymux
+  backend's gRPC client spans (`tymux.v1.*`) do appear in the tables but carry no `backend` attribute.
+- Not available: metric-to-trace exemplars. VictoriaMetrics returned no exemplars from
+  `/api/v1/query_exemplars` when checked (whether it can store them was not confirmed), and the provisioned Tempo datasource has no `tracesToMetrics`/`tracesToLogs`
   settings (they live in the dotfiles stack, not this repo), so trace-to-metrics and trace-to-logs links
   are not part of these dashboards.
 - The existing "Slow browser spans" table on `client-network` needs a web build with
