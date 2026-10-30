@@ -67,9 +67,14 @@ jobs:
         working-directory: website
         run: node scripts/check-asset-health.mjs
 
+      # Backgrounded with its output redirected: left attached, the server
+      # holds the step's output pipe open and the step never completes.
       - name: Start preview server
         working-directory: website
-        run: bun run preview -- --port 4321
+        run: |
+          nohup bun run preview -- --port 4321 > /tmp/preview.log 2>&1 &
+          timeout 60 bash -c 'until curl -sf http://localhost:4321/stapler-squad/ > /dev/null; do sleep 1; done' \
+            || { cat /tmp/preview.log; exit 1; }
 
       - name: Lighthouse CI (desktop)
         working-directory: website
