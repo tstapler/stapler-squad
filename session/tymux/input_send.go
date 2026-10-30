@@ -185,14 +185,35 @@ func abortPayload(stream attachStream, gate *streamSendGate, data []byte, sent i
 	if sent == 0 {
 		return err
 	}
-	if inBracketedPaste(data[:sent]) {
+	if closer := pasteCloser(data, sent); len(closer) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), min(wait, time.Second))
 		defer cancel()
 		_ = sendFrame(ctx, stream, gate, &v1.AttachRequest{
-			Payload: &v1.AttachRequest_Input{Input: bracketedPasteEnd},
+			Payload: &v1.AttachRequest_Input{Input: closer},
 		}, wait)
 	}
 	return fmt.Errorf("%w (after %d of %d bytes)", err, sent, len(data))
+}
+
+// pasteCloser returns the bytes that close a bracketed paste left open after data[:sent] was
+// delivered, or nil if none is open or closing is unsafe. When the delivered bytes end in a partial
+// ESC[201~ prefix (chunk boundary inside the terminator), only the missing suffix is sent, and only
+// if the undelivered remainder confirms that is what was coming; otherwise a full terminator would
+// garble the half-sent sequence, so recovery is skipped.
+func pasteCloser(data []byte, sent int) []byte {
+	delivered := data[:sent]
+	if !inBracketedPaste(delivered) {
+		return nil
+	}
+	for k := len(bracketedPasteEnd) - 1; k > 0; k-- {
+		if bytes.HasSuffix(delivered, bracketedPasteEnd[:k]) {
+			if bytes.HasPrefix(data[sent:], bracketedPasteEnd[k:]) {
+				return bracketedPasteEnd[k:]
+			}
+			return nil
+		}
+	}
+	return bracketedPasteEnd
 }
 
 func inBracketedPaste(delivered []byte) bool {
