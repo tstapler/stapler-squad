@@ -74,10 +74,10 @@ link, because no spans correspond to memory or profile data. The other four also
 
 | Dashboard | Trace panels (TraceQL, `resource.service.name = "stapler-squad"`) | Metric-panel data links (click a series) |
 |---|---|---|
-| `http-rpc-connections` | slow (> 500ms) and errored Connect RPC server spans; `Watch*` streams and client-canceled calls are excluded | streams-by-method panel opens that method's spans |
+| `http-rpc-connections` | slow (> 500ms) and errored Connect RPC server spans; `Watch*` streams are excluded | streams-by-method panel opens that method's spans |
 | `tmux-control-mode` | slow and errored/timed-out `tmux.control_mode.command` spans | rate, timeout, latency panels open spans for that `command` |
 | `tymux-backend` | slow and errored `session.backend.*` / `tymux.v1.*` spans (`Attach` excluded) | latency and rate panels open spans for that `backend` |
-| `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams and canceled calls excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links show all errored spans (canceled excluded) because no span carries a `deadline_exceeded` code. Latency links filter to spans slower than 500ms, so they can open an empty result when the panel value is lower. Browser-side series are linked to the matching server spans, and the few `method` label values that carry the full `/session.v1.…/` prefix never match a server span |
+| `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links filter on `error_code = "deadline_exceeded"` (server spans only, which are rare). Latency links filter to spans slower than 500ms, so they can open an empty result when the panel value is lower. Browser-side series are linked to the matching server spans |
 
 Notes:
 
@@ -85,7 +85,7 @@ Notes:
   `POST /api/ds/query` (it returns a 500; Grafana logs "backend TraceQL search queries are not supported"). Check a query with
   `GET /api/datasources/proxy/uid/tempo/api/search?q=<traceql>&start=<s>&end=<s>` instead.
 - Span attributes used: `rpc.system`, `rpc.method`, `rpc.connect_rpc.error_code`, `command`, `timed_out`,
-  `backend`. Hot-path backend operations (`send_keys`, `write_stdin`, `capture_pane`, `resize`) are
+  `backend`. Hot-path backend operations (`send_keys`, `write_stdin`, `capture_pane`, `resize`)
   have no `session.backend.*` span, so a per-backend link from those series can open an empty result. The tymux
   backend's gRPC client spans (`tymux.v1.*`) do appear in the tables but carry no `backend` attribute.
 - Not available: metric-to-trace exemplars. VictoriaMetrics returned no exemplars from

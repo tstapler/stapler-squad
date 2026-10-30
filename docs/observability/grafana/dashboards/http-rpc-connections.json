@@ -153,9 +153,9 @@
     },
     {
       "id": 203,
-      "title": "Errored RPC server spans (excluding canceled)",
+      "title": "Errored RPC server spans",
       "type": "table",
-      "description": "Connect RPC handler spans with status=error, excluding client-canceled calls. See span attribute rpc.connect_rpc.error_code for the Connect code.",
+      "description": "Connect RPC handler spans with status=error. See span attribute rpc.connect_rpc.error_code for the Connect code.",
       "gridPos": {
         "h": 9,
         "w": 12,
@@ -176,7 +176,7 @@
           "queryType": "traceql",
           "limit": 30,
           "tableType": "traces",
-          "query": "{ resource.service.name = \"stapler-squad\" && span.rpc.system = \"connect_rpc\" && kind = server && name !~ \".*Watch.*\" && status = error && span.rpc.connect_rpc.error_code != \"canceled\" }"
+          "query": "{ resource.service.name = \"stapler-squad\" && span.rpc.system = \"connect_rpc\" && kind = server && name !~ \".*Watch.*\" && status = error }"
         }
       ],
       "fieldConfig": {
