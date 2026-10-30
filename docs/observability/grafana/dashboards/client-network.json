@@ -98,6 +98,7 @@
       }
     ]
   },
+  "links": [{"title": "Traces in Tempo (Explore)", "type": "link", "icon": "external link", "targetBlank": true, "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "tooltip": "Open Grafana Explore on Tempo with this dashboard's time range"}],
   "panels": [
     {
       "type": "row",
@@ -175,7 +176,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Errored server spans for the selected methods in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D~%20%5C%22${method:regex}%5C%22%20%26%26%20status%20%3D%20error%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "percentunit",
           "thresholds": {
             "mode": "absolute",
@@ -232,7 +233,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Errored server spans (timeouts included) for the selected methods in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D~%20%5C%22${method:regex}%5C%22%20%26%26%20status%20%3D%20error%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "percentunit",
           "thresholds": {
             "mode": "absolute",
@@ -289,7 +290,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Slow server spans (> 500ms) for the selected methods in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D~%20%5C%22${method:regex}%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ms",
           "thresholds": {
             "mode": "absolute",
@@ -591,7 +592,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Slow server spans (> 500ms) for this method in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D%20%5C%22${__field.labels.method}%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ms",
           "custom": {
             "drawStyle": "line",
@@ -877,7 +878,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Errored server spans for this method in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D%20%5C%22${__field.labels.method}%5C%22%20%26%26%20status%20%3D%20error%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "reqps",
           "custom": {
             "drawStyle": "line",
@@ -2050,7 +2051,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Slow server spans (> 500ms) for this method in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D%20%5C%22${__field.labels.method}%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ms",
           "custom": {
             "drawStyle": "line",
@@ -2840,7 +2841,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Slow server RPC spans (> 500ms) in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20name%20%21~%20%5C%22.%2AWatch.%2A%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ms",
           "custom": {
             "drawStyle": "line",
@@ -2989,6 +2990,74 @@
           "limit": 30,
           "tableType": "traces",
           "query": "{resource.service.name=\"stapler-squad-web\" && duration > 1s}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 204,
+      "title": "Slow server RPC spans for $method (> 500ms, streams excluded)",
+      "type": "table",
+      "description": "Server-side Connect handler spans for the selected RPC method(s). Compare with the browser view above: a slow browser call with no slow server span points at queuing or the transport, not the handler. Click a trace id to open it in Tempo.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 141
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && span.rpc.system = \"connect_rpc\" && kind = server && span.rpc.method =~ \"${method:regex}\" && name !~ \".*Watch.*\" && duration > 500ms }"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 205,
+      "title": "Errored server RPC spans for $method (excluding canceled)",
+      "type": "table",
+      "description": "Server-side Connect handler spans with status=error for the selected RPC method(s).",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 141
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && span.rpc.system = \"connect_rpc\" && kind = server && span.rpc.method =~ \"${method:regex}\" && status = error && span.rpc.connect_rpc.error_code != \"canceled\" }"
         }
       ],
       "fieldConfig": {
