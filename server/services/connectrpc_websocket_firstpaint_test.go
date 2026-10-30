@@ -206,7 +206,7 @@ func TestHandleCurrentPaneRequest_should_SendRedraw_ThroughRealInstance(t *testi
 func TestPollFullStateFrame_should_TryOnce_When_DeadlineAlreadyPassed(t *testing.T) {
 	t.Parallel()
 	var calls int
-	frame, ok := pollFullStateFrame(func() session.Status { return session.Running }, time.Now().Add(-time.Second), time.Millisecond,
+	frame, ok := pollFullStateFrame(func() session.Status { return session.Active }, time.Now().Add(-time.Second), time.Millisecond,
 		func(context.Context) (streamhub.FullStateSnapshot, bool, error) {
 			calls++
 			return streamhub.FullStateSnapshot{}, false, errors.New("resuming")
@@ -220,7 +220,7 @@ func TestPollFullStateFrame_should_TryOnce_When_DeadlineAlreadyPassed(t *testing
 func TestPollFullStateFrame_should_RetryWhileResumingThenSucceed(t *testing.T) {
 	t.Parallel()
 	var calls int
-	frame, ok := pollFullStateFrame(func() session.Status { return session.Running }, time.Now().Add(5*time.Second), time.Millisecond,
+	frame, ok := pollFullStateFrame(func() session.Status { return session.Active }, time.Now().Add(5*time.Second), time.Millisecond,
 		func(context.Context) (streamhub.FullStateSnapshot, bool, error) {
 			calls++
 			if calls < 3 {
