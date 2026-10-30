@@ -33,6 +33,8 @@ type PushNotification struct {
 	Data               map[string]interface{} `json:"data,omitempty"`
 	RequireInteraction bool                   `json:"requireInteraction,omitempty"`
 	Renotify           bool                   `json:"renotify,omitempty"`
+	// Urgency is the Web Push Urgency header ("low"); not part of the payload.
+	Urgency string `json:"-"`
 }
 
 type PushService struct {
@@ -256,6 +258,7 @@ func (ps *PushService) sendToSubscription(sub PushSubscription, notif PushNotifi
 		VAPIDPrivateKey: privateKeyPEM,
 		VAPIDPublicKey:  ps.vapidPublicKey,
 		TTL:             60 * 60 * 24, // 24 hours
+		Urgency:         webpush.Urgency(notif.Urgency),
 	})
 	if resp != nil {
 		defer resp.Body.Close()

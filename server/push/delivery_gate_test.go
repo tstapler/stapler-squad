@@ -48,9 +48,9 @@ func TestStatusChangePush_ShouldDeliverZeroHiddenOneVisible_WhenGateOnAndOneWhen
 		n := &mockNotifier{name: "rec"}
 		ctx := context.Background()
 		dedup := newDedupTracker(0)
-		deliverEvent(ctx, stoppedEvent("hidden-sess", true), dedup, []Notifier{n}, g)
+		deliverEvent(ctx, stoppedEvent("hidden-sess", true), dedup, []Notifier{n}, g, nil)
 		hidden = n.CallCount()
-		deliverEvent(ctx, stoppedEvent("visible-sess", false), dedup, []Notifier{n}, g)
+		deliverEvent(ctx, stoppedEvent("visible-sess", false), dedup, []Notifier{n}, g, nil)
 		visible = n.CallCount() - hidden
 		return hidden, visible, g
 	}
@@ -76,7 +76,7 @@ func TestStatusChangePush_ShouldFailOpenAndCount_WhenHiddenInstanceMissingFromIn
 	}))
 	g.Flags().Reload()
 	n := &mockNotifier{name: "rec"}
-	deliverEvent(context.Background(), stoppedEvent("hidden-unindexed", true), newDedupTracker(0), []Notifier{n}, g)
+	deliverEvent(context.Background(), stoppedEvent("hidden-unindexed", true), newDedupTracker(0), []Notifier{n}, g, nil)
 	assert.Equal(t, 1, n.CallCount())
 	assert.EqualValues(t, 1, g.Metrics().Value(deliverygate.CounterUnresolved, "routine"))
 }
@@ -89,7 +89,7 @@ func TestStatusChangePush_ShouldDeliverAndCount_WhenGateReportsUnresolved(t *tes
 	}))
 	g.Flags().Reload()
 	n := &mockNotifier{name: "rec"}
-	deliverEvent(context.Background(), stoppedEvent("never-indexed", false), newDedupTracker(0), []Notifier{n}, g)
+	deliverEvent(context.Background(), stoppedEvent("never-indexed", false), newDedupTracker(0), []Notifier{n}, g, nil)
 	require.Equal(t, 1, n.CallCount())
 	assert.EqualValues(t, 1, g.Metrics().Value(deliverygate.CounterUnresolved, "routine"))
 }
@@ -103,7 +103,7 @@ func TestStatusChangePush_ShouldPassSessionUUIDToGate_WhenInstanceHasUUID(t *tes
 	deliverEvent(context.Background(), ev, newDedupTracker(0), []Notifier{n}, gateFunc(func(id string) bool {
 		seen = id
 		return false
-	}))
+	}), nil)
 	assert.Equal(t, "uuid-1", seen)
 	assert.Equal(t, 0, n.CallCount())
 }
@@ -122,7 +122,7 @@ func TestStatusChangePush_ShouldNotConsultGate_WhenEventIsInlineNotification(t *
 	deliverEvent(context.Background(), ev, newDedupTracker(0), []Notifier{n}, gateFunc(func(string) bool {
 		called = true
 		return false
-	}))
+	}), nil)
 	assert.False(t, called)
 	assert.Equal(t, 1, n.CallCount())
 }
