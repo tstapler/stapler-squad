@@ -1608,6 +1608,64 @@ func TestReconcilePRPending_ConflictOnly_StandsDownWhenReworkCapOpen(t *testing.
 	assert.Equal(t, 1, spawner.callCount, "no hourly respawn once the rework cap row is open")
 }
 
+// A fix attempt that fails to start must not spend the attempt budget.
+func TestReconcilePRPending_ConflictOnly_FailedSpawnIsRefunded(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9315)
+	spawner.err = errors.New("spawn failed")
+
+	for i := 0; i < conflictRetryMaxAttempts+3; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	assert.Equal(t, conflictRetryMaxAttempts+3, spawner.callCount, "every hourly tick keeps trying: failed spawns spend nothing")
+	assert.NotContains(t, n.titles(), "Auto-rework paused", "no \"survived N sessions\" notice when no session ran")
+}
+
+// Reset (attempt counter back to 0) re-arms the hourly override after exhaustion.
+func TestReconcilePRPending_ConflictOnly_ResetReArmsExhaustedOverride(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, spawner, _, clock, _, item := conflictOnlyListener(t, storage, 9316)
+
+	for i := 0; i < conflictRetryMaxAttempts+1; i++ {
+		listener.ReconcilePRPending(ctx, storage.repo)
+		clock.Add(conflictRetryInterval)
+	}
+	require.Equal(t, conflictRetryMaxAttempts, spawner.callCount, "setup: exhausted")
+
+	applied, err := storage.ResetStuckRemediation(ctx, item.ID, domain.StuckReasonPRNeedsFix)
+	require.NoError(t, err)
+	require.True(t, applied)
+	listener.ReconcilePRPending(ctx, storage.repo)
+	assert.Greater(t, spawner.callCount, conflictRetryMaxAttempts, "Reset must let the hourly override try again")
+}
+
+// A merged PR drops the item's ledger entry.
+func TestReconcilePRPending_ConflictLedgerClearedWhenPRMerges(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	listener, _, _, _, checker, item := conflictOnlyListener(t, storage, 9317)
+
+	listener.ReconcilePRPending(ctx, storage.repo)
+	listener.conflictRetries.mu.Lock()
+	require.NotNil(t, listener.conflictRetries.items[item.ID])
+	listener.conflictRetries.mu.Unlock()
+
+	checker.merged = true
+	listener.ReconcilePRPending(ctx, storage.repo)
+	listener.conflictRetries.mu.Lock()
+	defer listener.conflictRetries.mu.Unlock()
+	assert.Nil(t, listener.conflictRetries.items[item.ID], "merged PR must not leave a ledger entry")
+}
+
 // A transient UNKNOWN mergeable state must not reset the throttle; a known-clean PR must.
 func TestReconcilePRPending_ConflictThrottle_ResetsOnlyOnKnownCleanPR(t *testing.T) {
 	t.Parallel()

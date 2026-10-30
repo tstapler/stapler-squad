@@ -93,6 +93,7 @@ func registerDiagnoseNudgeSessionTool(s *mcpserver.MCPServer, dh *diagnoseHandle
 // RemediationDue backoff gate; re-arming any other row (rework_cap, bounce_cap_exhausted, ...)
 // would override a deliberate hand-off to a human.
 var remediationResettableReasons = map[domain.StuckReason]bool{
+	domain.StuckReasonAutonomousStuck: true,
 	domain.StuckReasonPRNeedsFix:      true,
 	domain.StuckReasonPushFailed:      true,
 	domain.StuckReasonBouncing:        true,

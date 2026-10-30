@@ -1465,14 +1465,18 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 	return nil
 }
 
-// reworkCapOpen reports whether itemID has an open rework_cap stuck row.
-func (l *BacklogLifecycleListener) reworkCapOpen(ctx context.Context, er *EntRepository, itemID string) bool {
+// conflictRowState reports whether itemID has an open rework_cap row and the attempt
+// counter of its open pr_needs_fix row (0 when there is none or the read fails).
+func (l *BacklogLifecycleListener) conflictRowState(ctx context.Context, er *EntRepository, itemID string) (reworkCapOpen bool, prAttempts int32) {
 	rows, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
-		return false
+		return false, 0
 	}
-	_, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonReworkCap)
-	return ok
+	_, reworkCapOpen = findOpenStuckStateFor(rows, itemID, domain.StuckReasonReworkCap)
+	if row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonPRNeedsFix); ok {
+		prAttempts = row.RemediationAttempts
+	}
+	return reworkCapOpen, prAttempts
 }
 
 // conflictRetryClock is overridable so tests can step the hourly throttle.
@@ -1568,11 +1572,11 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	// at most conflictRetryMaxAttempts consecutive grants. The override stands down once
 	// a rework_cap row is open or the attempts are spent; the normal parked behaviour and
 	// its "needs manual attention" notice then apply.
-	overrideActive := false
-	if conflictOnly && !l.reworkCapOpen(ctx, er, itemID) {
-		switch l.conflictRetries.take(itemID, l.conflictRetryNow(), conflictRetryInterval) {
+	overrideActive, grantedHere := false, false
+	if capOpen, prAttempts := l.conflictRowState(ctx, er, itemID); conflictOnly && !capOpen {
+		switch l.conflictRetries.take(itemID, l.conflictRetryNow(), conflictRetryInterval, prAttempts) {
 		case conflictRetryGranted:
-			overrideActive, due = true, true
+			overrideActive, grantedHere, due = true, true, true
 		case conflictRetryThrottled:
 			overrideActive = true
 		case conflictRetryExhausted:
@@ -1609,7 +1613,11 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	// webhook side (the poller never writes to that table, by design — AC3).
 	log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: attempting fix (trigger_source=%s)", itemID, prFixTriggerSourceFrom(ctx))
 
-	return true, fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+	fixErr := fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+	if fixErr != nil && grantedHere {
+		l.conflictRetries.refund(itemID) // no session started: don't spend the attempt budget
+	}
+	return true, fixErr
 }
 
 // reconcilePRPendingItem runs ReconcilePRPending's per-item reconciliation logic for
@@ -1648,6 +1656,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		return
 	}
 	if merged {
+		l.conflictRetries.clear(item.ID.String())
 		// Capture the durable ship snapshot (GitHub PR/CI/review state +
 		// per-file diff stats) synchronously, before the done transition —
 		// never as a background goroutine — so the data is written before
@@ -1798,6 +1807,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		}
 
 		closedPrURL, closedPrNum := item.PrURL, item.PrNumber
+		l.conflictRetries.clear(item.ID.String())
 		// A closed-without-merging PR can never be pr_ready_unmerged again
 		// under this pr_number; resolve immediately regardless of whether
 		// the reopen below succeeds (self-heal would also catch this
