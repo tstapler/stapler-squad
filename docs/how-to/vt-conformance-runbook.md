@@ -69,14 +69,14 @@ Automated results, measured 2026-10-29 with `xterm.js 6.0.0` and `ghostty-web 0.
 
 Reading: on these vectors ghostty-web does **not** improve on xterm.js 6. xterm.js 6 already passes REP, DECALN and mode 2026, so those are not gaps today. ghostty-web does not answer DECRQM for mode 2026 or the Kitty keyboard query (its WASM build emitted no reply), which makes it worse for TUIs that probe for 2026 support. Any benefit has to come from the manual steps (rendering fidelity, grapheme handling) and is **not yet measured**.
 
-Manual results (fill in):
+Manual results (not run: this was an unattended agent session with no interactive terminal or browser, so no row below was measured; run the steps above and replace "not run"):
 
 | Check | xterm.js | ghostty-web |
 |---|---|---|
-| vim | | |
-| htop | | |
-| Claude Code TUI | | |
-| Keep-alive pane switch | | |
+| vim | not run | not run |
+| htop | not run | not run |
+| Claude Code TUI | not run | not run |
+| Keep-alive pane switch | not run | not run |
 
 ## Known ghostty-web limitations in this integration
 

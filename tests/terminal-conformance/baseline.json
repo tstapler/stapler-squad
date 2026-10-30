@@ -2,12 +2,19 @@
   "xterm": {
     "knownFailing": [
       "kitty-keyboard-query"
-    ]
+    ],
+    "reasons": {
+      "kitty-keyboard-query": "xterm.js 6.0.0 does not implement the Kitty keyboard protocol, so CSI ? u gets no reply."
+    }
   },
   "ghostty": {
     "knownFailing": [
       "sync-output-decrqm",
       "kitty-keyboard-query"
-    ]
+    ],
+    "reasons": {
+      "sync-output-decrqm": "ghostty-web 0.4.0 WASM renders mode 2026 but emits no DECRQM reply for ?2026$p. Engine limit; faking the reply in the adapter would have to re-parse the byte stream across chunk boundaries.",
+      "kitty-keyboard-query": "ghostty-web 0.4.0 WASM emits no reply to CSI ? u. Engine limit; needs an upstream ghostty-web change."
+    }
   }
 }

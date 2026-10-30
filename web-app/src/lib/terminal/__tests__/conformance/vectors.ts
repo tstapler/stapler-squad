@@ -23,6 +23,8 @@ export interface Outcome {
 export interface Baseline {
   /** Vectors that fail on this renderer today; the suite fails if one starts passing, so the table cannot rot. */
   knownFailing: string[];
+  /** Why each known-failing vector fails; documentation only. */
+  reasons?: Record<string, string>;
 }
 
 const read = (file: string): string => readFileSync(join(VECTOR_DIR, file), "utf8");
