@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,7 +138,7 @@ type WorktreePRPoller struct {
 
 	// now and fetch are test seams (fake clock, fake GitHub fetch).
 	now   func() time.Time
-	fetch func(ctx context.Context, item WorktreeScanItem)
+	fetch func(ctx context.Context, item WorktreeScanItem) error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -223,6 +224,13 @@ func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
 		return
 	}
 	p.etagCache.Invalidate(ref, prNumber)
+
+	// lastPolled is keyed by local repo path + branch, which cannot be mapped
+	// back to owner/repo here, so re-arm every worktree: the next scan pass
+	// re-polls each (a 304 for the unchanged ones).
+	p.mu.Lock()
+	clear(p.lastPolled)
+	p.mu.Unlock()
 }
 
 // pollLoop drives the poller: react to scanner completions and a fallback ticker.
@@ -285,6 +293,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 
 	now := p.now()
 	seen := make(map[string]struct{}, len(items))
+	fingerprints := combinedFingerprints(items)
 	for _, item := range items {
 		if _, owned := sessionPaths[item.WorktreePath]; owned {
 			continue // PRStatusPoller covers this one
@@ -302,7 +311,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 			continue
 		}
 		seen[key] = struct{}{}
-		if !p.claimPoll(key, item.Fingerprint, now, trigger) {
+		if !p.claimPoll(key, fingerprints[key], now, trigger) {
 			recordPollOutcome(p.ctx, "skipped_min_interval")
 			continue
 		}
@@ -317,11 +326,36 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 			defer cancel()
 			ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
-			p.fetch(ctx, captured)
+			if err := p.fetch(ctx, captured); err != nil {
+				p.forgetPolled(key) // retry on the next scan instead of waiting out PollInterval
+			}
 		}()
 	}
 	p.pruneLastPolled(seen)
 	wg.Wait()
+}
+
+// combinedFingerprints merges the fingerprints of all worktrees sharing a
+// repo+branch key (order-independent), so a change in any of them counts.
+func combinedFingerprints(items []WorktreeScanItem) map[string]string {
+	byKey := make(map[string][]string, len(items))
+	for _, it := range items {
+		k := worktreeCacheKey(it.RepoPath, it.Branch)
+		byKey[k] = append(byKey[k], it.Fingerprint)
+	}
+	out := make(map[string]string, len(byKey))
+	for k, fps := range byKey {
+		sort.Strings(fps)
+		out[k] = strings.Join(fps, "\x00")
+	}
+	return out
+}
+
+// forgetPolled clears the poll record for key so the next scan re-polls it.
+func (p *WorktreePRPoller) forgetPolled(key string) {
+	p.mu.Lock()
+	delete(p.lastPolled, key)
+	p.mu.Unlock()
 }
 
 // claimPoll reports whether key should be polled now and, if so, records it.
@@ -348,14 +382,14 @@ func (p *WorktreePRPoller) pruneLastPolled(live map[string]struct{}) {
 }
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
-func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanItem) {
+func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanItem) error {
 	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
-		return
+		return err
 	}
 	if !repoRef.IsValid() {
-		return // not a GitHub remote
+		return nil // not a GitHub remote
 	}
 
 	key := worktreeCacheKey(item.RepoPath, item.Branch)
@@ -367,13 +401,13 @@ func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanI
 			if !p.handleFetchError(fetchErr) {
 				log.Warn("worktree PR poller: failed to fetch PR status", "branch", item.Branch, "err", fetchErr)
 			}
-			return
+			return fetchErr
 		}
 		if changed && info != nil {
 			p.data.Store(key, info)
 			p.fireOnUpdated(item.RepoPath, item.Branch, info)
 		}
-		return
+		return nil
 	}
 
 	// Discovery: find PR by branch name, using ETag to avoid redundant list calls.
@@ -389,22 +423,23 @@ func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanI
 	if fetchErr != nil {
 		if errors.Is(fetchErr, github.ErrNoPR) {
 			p.setNoPRBackoff(key)
-			return
+			return nil
 		}
 		if !p.handleFetchError(fetchErr) {
 			log.Warn("worktree PR poller: PR discovery failed", "branch", item.Branch, "err", fetchErr)
 		}
-		return
+		return fetchErr
 	}
 	if !changed {
 		// 304 Not Modified: re-apply no-PR backoff if the cached result had no PR.
 		if v, ok := p.listEtags.Load(key); ok && v.(listCacheEntry).noPR {
 			p.setNoPRBackoff(key)
 		}
-		return
+		return nil
 	}
 	p.data.Store(key, info)
 	p.fireOnUpdated(item.RepoPath, item.Branch, info)
+	return nil
 }
 
 // setNoPRBackoff records that a branch has no PR and skips it for NoPRBackoff duration.
@@ -413,7 +448,7 @@ func (p *WorktreePRPoller) setNoPRBackoff(key string) {
 		return
 	}
 	p.mu.Lock()
-	p.noPRPollAfter[key] = time.Now().Add(p.config.NoPRBackoff)
+	p.noPRPollAfter[key] = p.now().Add(p.config.NoPRBackoff)
 	p.mu.Unlock()
 }
 
