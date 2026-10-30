@@ -132,6 +132,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		LastAddedToQueue:          snap.LastAddedToQueue,
 		LastViewed:                snap.LastViewed,
 		LastAcknowledged:          snap.LastAcknowledged,
+		AckedEpisodeID:            snap.AckedEpisodeID,
+		TurnEnded:                 snap.TurnEnded,
 		CreationProgressUpdatedAt: snap.CreationProgressUpdatedAt,
 		// Prompt detection and interaction tracking
 		LastPromptDetected:   snap.LastPromptDetected,
@@ -318,6 +320,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		TmuxPrefix:         data.TmuxPrefix,
 		TmuxServerSocket:   data.TmuxServerSocket,
 		Backend:            data.Backend,
+		AckedEpisodeID:     data.AckedEpisodeID,
+		TurnEnded:          data.TurnEnded,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,

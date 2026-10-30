@@ -250,18 +250,23 @@ func (i *Instance) MarkUserResponded() time.Time {
 	return i.LastUserResponse
 }
 
-// MarkAcknowledged records that the user has acknowledged (dismissed) this session from the review queue.
-func (i *Instance) MarkAcknowledged() {
+// MarkAcknowledged records that the user has acknowledged (dismissed) this session from the
+// review queue for the given turn-end episode ("" when none is open) and returns the ack time.
+// It touches memory and the snapshot only; the caller persists the returned time with
+// Storage.UpdateInstanceAckedEpisode after this returns, so no DB call runs under i.mu.
+func (i *Instance) MarkAcknowledged(episode EpisodeID) time.Time {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	now := time.Now()
 	i.LastAcknowledged = now
+	i.AckedEpisodeID = episode
 	// Keep the lock-free shadow in sync so IsAcknowledgedAfterOutput() can be called safely
 	// from goroutines outside the actor pattern (e.g. ReviewQueuePoller's own goroutine via
 	// review_queue_determiner.go's Determine()) — same discipline as UpdateTimestamps()
 	// storing lastMeaningfulOutputNs alongside LastMeaningfulOutput.
 	atomic.StoreInt64(&i.lastAcknowledgedNs, now.UnixNano())
 	i.snapshot.Store(buildSnapshot(i))
+	return now
 }
 
 // MarkNeedsApproval is a no-op: NeedsApproval is no longer a lifecycle state.

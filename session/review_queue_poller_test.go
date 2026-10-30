@@ -657,7 +657,7 @@ func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing
 	// (server/services/review_queue_service.go's AcknowledgeSession) calls exactly this
 	// method on the live instance — reuse it rather than reinventing the acknowledgment
 	// mechanism by poking timestamp fields directly.
-	inst.MarkAcknowledged()
+	inst.MarkAcknowledged("")
 
 	// Tick 2 (the very next poll after Skip): must not reappear.
 	if err := poller.checkSessionsSafe(); err != nil {

@@ -67,7 +67,7 @@ func TestSnapshotReflectsMarkAcknowledged(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	before := inst.Snapshot().LastAcknowledged
-	inst.MarkAcknowledged()
+	inst.MarkAcknowledged("")
 	after := inst.Snapshot().LastAcknowledged
 	if !after.After(before) {
 		t.Fatalf("Snapshot().LastAcknowledged not updated: before=%v after=%v", before, after)

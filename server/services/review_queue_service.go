@@ -167,9 +167,11 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list instances: %w", err))
 		}
 		sessionTitle := ""
+		var ackedEpisode session.EpisodeID
 		for _, data := range dataSlice {
 			if data.Title == req.Msg.Id || data.UUID == req.Msg.Id {
 				sessionTitle = data.Title
+				ackedEpisode = data.TurnEnded.Episode
 				break
 			}
 		}
@@ -181,7 +183,8 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 			}), nil
 		}
 		// Persist the acknowledged timestamp using Title (the storage key), not the client-supplied ID.
-		if err := rqs.storage.UpdateInstanceAcknowledged(sessionTitle); err != nil {
+		// Ack the stored open episode in the same single UPDATE that sets last_acknowledged.
+		if err := rqs.storage.UpdateInstanceAckedEpisode(sessionTitle, ackedEpisode, time.Now()); err != nil {
 			log.Warn("[ReviewQueue] AcknowledgeSession: failed to persist ack", "session", req.Msg.Id, "err", err)
 		}
 		rqs.eventBus.Publish(events.NewSessionAcknowledgedEvent(req.Msg.Id, "user_acknowledged"))
@@ -192,9 +195,15 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 	}
 
 	// Update the live instance in-place — no LoadInstances() required.
-	instance.MarkAcknowledged()
+	episode := instance.Snapshot().TurnEnded.Episode
+	ackedAt := instance.MarkAcknowledged(episode)
 
-	// Persist only this instance. UpdateInstance does a targeted UPDATE by title.
+	// Narrow write first (after i.mu is released), so the ack is durable even if the full save fails.
+	if err := rqs.storage.UpdateInstanceAckedEpisode(instance.Title, episode, ackedAt); err != nil {
+		log.Warn("[ReviewQueue] AcknowledgeSession: failed to persist acked episode", "session", instance.Title, "err", err)
+	}
+
+	// The full save also carries the ack; its merge never regresses the narrow write.
 	if err := rqs.storage.UpdateInstance(instance); err != nil {
 		log.Warn("[ReviewQueue] AcknowledgeSession: failed to persist ack", "session", instance.Title, "err", err)
 	}

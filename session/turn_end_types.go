@@ -43,6 +43,19 @@ func (k TurnEndKind) String() string {
 	return "unknown"
 }
 
+// ParseTurnEndKind inverts TurnEndKind.String; anything unrecognised is Unknown.
+func ParseTurnEndKind(s string) TurnEndKind {
+	switch s {
+	case "question":
+		return TurnEndKindQuestion
+	case "finished":
+		return TurnEndKindFinished
+	case "error":
+		return TurnEndKindError
+	}
+	return TurnEndKindUnknown
+}
+
 // TurnEndConfidence is how sure the classifier is; only High yields Question without a tiebreak.
 type TurnEndConfidence uint8
 
@@ -60,6 +73,17 @@ func (c TurnEndConfidence) String() string {
 		return "high"
 	}
 	return "low"
+}
+
+// ParseTurnEndConfidence inverts TurnEndConfidence.String; anything unrecognised is Low.
+func ParseTurnEndConfidence(s string) TurnEndConfidence {
+	switch s {
+	case "medium":
+		return TurnEndConfidenceMedium
+	case "high":
+		return TurnEndConfidenceHigh
+	}
+	return TurnEndConfidenceLow
 }
 
 // EpisodeID identifies one turn-end episode: hash(sessionID, turnEndedAt). It is the ack and
