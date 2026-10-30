@@ -160,7 +160,8 @@ type InstanceSnapshot struct {
 	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
 	LastMeaningfulChangeAt time.Time
 	TurnEnded              TurnEnded
-	AckedEpisodeID         EpisodeID // episode the operator acknowledged; populated from the Instance field
+	// AckedEpisodeID is the turn-end episode the operator acknowledged ("" = none).
+	AckedEpisodeID EpisodeID
 
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
@@ -261,6 +262,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		ReviewState:                i.ReviewState,
 		LastMeaningfulChangeAt:     i.LastMeaningfulChangeAt,
 		TurnEnded:                  i.TurnEnded,
+		AckedEpisodeID:             i.AckedEpisodeID,
 		InstanceType:               i.InstanceType,
 		IsManaged:                  i.IsManaged,
 		Artifacts:                  i.Artifacts,

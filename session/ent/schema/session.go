@@ -86,6 +86,29 @@ func (Session) Fields() []ent.Field {
 		field.Time("last_acknowledged").
 			Optional().
 			Nillable(),
+		field.String("acked_episode_id").
+			Optional().
+			Nillable().
+			Comment("Turn-end episode the operator acknowledged; narrow-writer owned (UpdateAckedEpisode)."),
+		field.String("turn_end_episode").
+			Optional().
+			Nillable().
+			Comment("Latest persisted TurnEnded; the turn_end_* columns are narrow-writer owned (UpdateTurnEnded)."),
+		field.String("turn_end_kind").
+			Optional().
+			Nillable(),
+		field.String("turn_end_confidence").
+			Optional().
+			Nillable(),
+		field.String("turn_end_excerpt").
+			Optional().
+			Nillable(),
+		field.String("turn_end_source").
+			Optional().
+			Nillable(),
+		field.Time("turn_end_at").
+			Optional().
+			Nillable(),
 		field.String("mcp_server_url").
 			Optional(),
 		field.String("initial_prompt").

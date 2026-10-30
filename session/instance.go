@@ -695,6 +695,8 @@ type Instance struct {
 	LastMeaningfulChangeAt time.Time
 	// TurnEnded is the latest agent turn-end fact (zero until one is recorded).
 	TurnEnded TurnEnded
+	// AckedEpisodeID is the turn-end episode the operator acknowledged ("" = none).
+	AckedEpisodeID EpisodeID
 
 	// collabMu guards the registration-time collaborators below; nil means no-op.
 	collabMu      sync.RWMutex

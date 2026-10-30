@@ -1236,6 +1236,9 @@ func recordTurnEndLocked(s *instanceState, text string, source TurnEndSource, ki
 		turn = FromHook(title, text, at, kind, conf)
 	}
 	inst.TurnEnded = turn
+	if inst.AckedEpisodeID != turn.Episode {
+		inst.AckedEpisodeID = "" // a new episode supersedes the old ack
+	}
 	inst.touchLocked(SessionEventTurnEnded, at)
 	snap := buildSnapshot(inst)
 	inst.mu.Unlock()

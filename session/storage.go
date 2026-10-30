@@ -118,6 +118,12 @@ type InstanceData struct {
 	// Sessions acknowledged after their last update won't appear in the queue until they update again
 	LastAcknowledged time.Time `json:"last_acknowledged,omitempty"`
 
+	// AckedEpisodeID is the turn-end episode the operator acknowledged; TurnEnded is the latest
+	// agent turn-end fact. Both are zero for legacy rows. Narrow writers own them (see
+	// EntRepository.UpdateAckedEpisode/UpdateTurnEnded); the full save merges, never overwrites.
+	AckedEpisodeID EpisodeID `json:"acked_episode_id,omitempty"`
+	TurnEnded      TurnEnded `json:"turn_ended,omitempty"`
+
 	// CreationProgressUpdatedAt records when Instance.CreationProgress was last set
 	// (Instance.creationProgressUpdatedAt, Epic 1.1.4). Persisted so the
 	// Stale-Creation Sweeper (Epic 4.1) can judge a restored Creating row's actual
@@ -733,6 +739,17 @@ func (s *Storage) UpdateInstanceLastUserResponse(title string, lastUserResponse 
 // Used by AcknowledgeSession when the instance is not available in the live poller.
 func (s *Storage) UpdateInstanceAcknowledged(title string) error {
 	return s.repo.UpdateLastAcknowledged(context.Background(), title, time.Now())
+}
+
+// UpdateInstanceAckedEpisode persists the acknowledged turn-end episode together with
+// last_acknowledged in one UPDATE. Only the ack RPC path calls it; turnEndSink never does.
+func (s *Storage) UpdateInstanceAckedEpisode(title string, episode EpisodeID, ackedAt time.Time) error {
+	return s.repo.UpdateAckedEpisode(context.Background(), title, episode, ackedAt)
+}
+
+// UpdateInstanceTurnEnded persists the turn-end columns in one monotonic UPDATE.
+func (s *Storage) UpdateInstanceTurnEnded(title string, turn TurnEnded) error {
+	return s.repo.UpdateTurnEnded(context.Background(), title, turn)
 }
 
 // UpdateInstanceProcessingGrace persists the ProcessingGraceUntil timestamp.

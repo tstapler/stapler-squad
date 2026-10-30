@@ -52,6 +52,10 @@ type EntRepository struct {
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
 
+	// afterUpdateSelect, when set (tests only), runs inside Update between its SELECT and
+	// its UPDATE so a test can force a narrow write into that window.
+	afterUpdateSelect func(ctx context.Context)
+
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
 	// database instead of running schema creation and startup migrations — see
@@ -351,6 +355,10 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if !data.LastAcknowledged.IsZero() {
 		sessionCreate.SetLastAcknowledged(data.LastAcknowledged)
 	}
+	if data.AckedEpisodeID != "" {
+		sessionCreate.SetAckedEpisodeID(string(data.AckedEpisodeID))
+	}
+	setTurnEndCreate(sessionCreate, data.TurnEnded)
 	if data.MCPServerURL != "" {
 		sessionCreate.SetMcpServerURL(data.MCPServerURL)
 	}
@@ -518,6 +526,13 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		return fmt.Errorf("failed to find session: %w", err)
 	}
 
+	if r.afterUpdateSelect != nil {
+		r.afterUpdateSelect(ctx)
+	}
+	if err := mergeNarrowColumns(ctx, tx, sess, data); err != nil {
+		return err
+	}
+
 	// Update main session fields
 	sessionUpdate := tx.Session.UpdateOne(sess).
 		SetNillableUUID(nilIfEmpty(data.UUID)).
@@ -588,7 +603,8 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if !data.LastViewed.IsZero() {
 		sessionUpdate.SetLastViewed(data.LastViewed)
 	}
-	if !data.LastAcknowledged.IsZero() {
+	// Never regress last_acknowledged below what a narrow writer stored since this snapshot.
+	if !data.LastAcknowledged.IsZero() && (sess.LastAcknowledged == nil || !sess.LastAcknowledged.After(data.LastAcknowledged)) {
 		sessionUpdate.SetLastAcknowledged(data.LastAcknowledged)
 	}
 	if !data.LastUserResponse.IsZero() {
@@ -1406,6 +1422,10 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	if sess.LastAcknowledged != nil {
 		data.LastAcknowledged = *sess.LastAcknowledged
 	}
+	if sess.AckedEpisodeID != nil {
+		data.AckedEpisodeID = EpisodeID(*sess.AckedEpisodeID)
+	}
+	data.TurnEnded = turnEndFromRow(sess)
 	if sess.LastUserResponse != nil {
 		data.LastUserResponse = *sess.LastUserResponse
 	}
