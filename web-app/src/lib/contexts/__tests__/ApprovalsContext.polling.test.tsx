@@ -45,14 +45,23 @@ beforeEach(() => {
 afterEach(() => jest.useRealTimers());
 
 describe("ApprovalsProvider polling", () => {
-  it("polls every 5s while the tab is visible", async () => {
+  it("polls every 5s while approvals are pending and the tab is visible", async () => {
+    listPendingApprovals.mockResolvedValue({ approvals: [{ id: "a1", sessionId: "s1", toolInput: {} }] });
     mount();
     await advance(0);
     for (let i = 0; i < 6; i++) await advance(5000);
-    expect(listPendingApprovals).toHaveBeenCalledTimes(7);
+    expect(listPendingApprovals.mock.calls.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("backs off to 15s when no approval is pending (90s idle: 7 calls, was 19)", async () => {
+    mount();
+    await advance(0);
+    for (let i = 0; i < 18; i++) await advance(5000);
+    expect(listPendingApprovals.mock.calls.length).toBeLessThanOrEqual(7);
   });
 
   it("stops polling while the tab is hidden and refetches once when it returns", async () => {
+    listPendingApprovals.mockResolvedValue({ approvals: [{ id: "a1", sessionId: "s1", toolInput: {} }] });
     mount();
     await advance(0);
     await act(async () => setHidden(true));

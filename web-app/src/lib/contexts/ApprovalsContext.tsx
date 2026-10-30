@@ -19,6 +19,9 @@ export interface ApprovalsContextValue {
   clearedSessions: ReadonlySet<string>;
 }
 
+const PENDING_POLL_MS = 5_000;
+const IDLE_POLL_MS = 15_000;
+
 const ApprovalsContext = createContext<ApprovalsContextValue | null>(null);
 
 /** Fallback returned by useApprovalsContext when used outside ApprovalsProvider. */
@@ -37,12 +40,15 @@ const FALLBACK_CONTEXT: ApprovalsContextValue = {
 };
 
 export function ApprovalsProvider({ children }: { children: ReactNode }) {
-  // RTK Query with 5s polling — single authoritative source for the entire app.
-  // Polling is off in a background tab; one refetch on return catches up.
+  // RTK Query, the single authoritative source for the entire app. Polls every 5 s while approvals are
+  // pending, every 15 s when none are (a new one also arrives as a notification), and not at all in a
+  // background tab; one refetch on return catches up.
   const visible = usePageVisible();
+  const [anyPending, setAnyPending] = useState(false);
   const { data, isLoading, error: queryError, refetch } = useGetApprovalsQuery(undefined, {
-    pollingInterval: visible ? 5000 : 0,
+    pollingInterval: !visible ? 0 : anyPending ? PENDING_POLL_MS : IDLE_POLL_MS,
   });
+  useEffect(() => setAnyPending((data?.approvals.length ?? 0) > 0), [data]);
   const wasVisible = useRef(visible);
   useEffect(() => {
     if (visible && !wasVisible.current) void refetch();
