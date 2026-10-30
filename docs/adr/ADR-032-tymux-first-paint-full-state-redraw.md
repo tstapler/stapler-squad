@@ -50,6 +50,13 @@ Six places send a browser a full-screen snapshot:
 
    While every subscriber is still waiting for its first paint, `applyNegotiatedSize` applies the resize but skips its own
    capture, which the paint would discard. `WebSocketTransport.SuppressNextSend` is removed.
+   **This applies to tmux-backed sessions too.** `attachHubSubscriber` sets `ManualFirstPaint` for every hub browser
+   subscriber, whatever the backend. A tmux subscriber therefore gets no attach-time catch-up, its writer starts only after
+   `FirstPaint`, frames queued before the paint are discarded, and `applyNegotiatedSize` skips its capture while every
+   subscriber awaits its first paint. tmux has no `RedrawCapturer` (only `TymuxBackend` implements it, so
+   `Instance.CapturePaneRedraw` returns `ok=false`); `FirstPaint`'s paint callback then runs the unchanged text path
+   (`CapturePaneContentRaw` + `ansiSnapshotPrefix` + `prepareSnapshotContent` + `withCursorSync`), so what the tmux
+   subscriber receives is the same bytes as before, from one capture instead of two, ahead of any live output.
 6. **Timestamps follow the legacy rule.** Only the control-mode initial snapshot calls `UpdateTerminalTimestamps`; an attach
    to the hub, a resize, or a resync of an idle session must not reset `LastMeaningfulOutput` or fire `SessionEventOutput`.
 7. **One first-paint wait budget.** `captureAndSendInitialSnapshot` computes a single deadline shared by the redraw attempt
@@ -99,12 +106,21 @@ side, as ADR-003 does for the attach stream. That closes the remaining window on
 
 ## Consequences
 
-- `FirstPaint` holds `resizeApplyMu` across one capture RPC and one socket write, so another subscriber's resize waits that long.
+- `FirstPaint` holds `resizeApplyMu` across one capture RPC and one socket write, so another subscriber's resize waits that
+  long. The write carries a 5 s deadline (`firstPaintWriteTimeout`, `WriteMessageTimeout`), so a stalled client socket cannot
+  hold the lock indefinitely; other connection writes still have no deadline.
 - On the hub path, a redraw-capable session costs one capture per browser attach, down from two plus a resize capture.
   tmux sessions also lose the wasted attach-time capture. Non-browser transports keep the catch-up, which holds
   `scrollForwardMu` for its capture.
-- If `FirstPaint` is never called, the subscriber receives nothing and is evicted by the normal slow-subscriber path; the
-  handler always calls it right after attach.
+- While a subscriber awaits its `FirstPaint` it has no writer, so `trySend` drops frames as superseded rather than queueing
+  them (a full queue would otherwise trip the 250 ms slow-subscriber eviction when `FirstPaint` is delayed behind
+  `resizeApplyMu` or a slow capture). If `FirstPaint` is never called, the subscriber is evicted after
+  `defaultFirstPaintMaxAwait` (30 s); the handler always calls it right after attach.
+- **Residual duplicate window.** A frame broadcast after `FirstPaint` starts but while the capture RPC is in flight (up to
+  `fullStateCaptureTimeout`, 3 s) queues behind the paint and may already be in the capture, so it can be applied twice. No
+  clean cutoff exists: the hub cannot observe when, relative to the pump's frames, the daemon took its snapshot, so any
+  sequence cutoff would trade this duplicate for dropping a frame that is not in the capture. At-least-once was chosen over
+  possible loss; `TestFirstPaint_should_DeliverFrameBroadcastDuringPaintAfterPaint` pins it.
 - A control-mode connection whose first paint is a redraw gets no initial scrollback.
 
 ## Verification

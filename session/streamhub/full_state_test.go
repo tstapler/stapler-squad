@@ -268,3 +268,51 @@ func TestApplyNegotiatedSize_should_SkipCapture_When_EverySubscriberAwaitsFirstP
 		t.Fatal("after the first paint a resize must broadcast a fresh redraw")
 	}
 }
+
+// A subscriber waiting for FirstPaint has no writer, so a burst plus a delayed FirstPaint (blocked
+// on resizeApplyMu or a slow capture) must not trip the slow-subscriber eviction.
+func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrace(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
+	log := newOrderLog()
+	id := hub.AttachSubscriber(&orderedTransport{log}, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	for i := 0; i < 300; i++ { // more than the 100-deep queue
+		hub.Broadcast([]byte("burst"))
+	}
+	time.Sleep(200 * time.Millisecond) // well past the grace
+
+	ran := false
+	err := hub.FirstPaint(id, func() error { ran = true; log.add("paint"); return nil })
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Zero(t, hub.SlowSubscriberDropsTotal())
+}
+
+func TestFirstPaint_should_EvictSubscriber_When_NeverPaintedWithinMaxAwait(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(30*time.Millisecond))
+	id := hub.AttachSubscriber(streamhub.NewMemoryTransport(), streamhub.SubscriberCapability{ManualFirstPaint: true})
+	time.Sleep(300 * time.Millisecond) // many multiples of the 30ms max-await
+	require.ErrorIs(t, hub.FirstPaint(id, func() error { return nil }), streamhub.ErrUnknownSubscriber)
+}
+
+// Pins the residual window: a frame broadcast during the capture is delivered after the paint
+// even though the capture may already contain it (at-least-once; see ADR-032).
+func TestFirstPaint_should_DeliverFrameBroadcastDuringPaintAfterPaint(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	log := newOrderLog()
+	id := hub.AttachSubscriber(&orderedTransport{log}, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+	require.NoError(t, hub.FirstPaint(id, func() error {
+		hub.Broadcast([]byte("F"))
+		log.add("paint")
+		return nil
+	}))
+	log.waitFor(t, 2)
+	require.Equal(t, []string{"paint", "frame:F"}, log.snapshot())
+}

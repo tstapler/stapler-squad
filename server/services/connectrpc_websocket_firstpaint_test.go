@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"google.golang.org/protobuf/proto"
@@ -261,4 +263,55 @@ func TestCaptureAndSendInitialSnapshot_should_ShareOneWaitBudget_When_NothingCap
 	assert.False(t, fullState)
 	assert.Less(t, elapsed, firstPaintMaxWait/2, "the fallback poll must reuse the spent budget, not start its own")
 	assert.Contains(t, string(readOutput(t, conn).Data), "session stopped")
+}
+
+// A client that never reads must not hold a first-paint write (and the hub's resize lock) forever.
+func TestWriteMessageTimeout_should_FailWithinDeadline_When_PeerNeverReads(t *testing.T) {
+	stream, _, cleanup := createTestWebSocketPair(t) // the peer conn is never read
+	defer cleanup()
+	chunk := make([]byte, 1<<20)
+	start := time.Now()
+	var err error
+	for i := 0; i < 4096 && err == nil; i++ { // socket buffers fill long before 4 GiB
+		err = stream.WriteMessageTimeout(websocket.BinaryMessage, chunk, 200*time.Millisecond)
+	}
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 10*time.Second)
+}
+
+func scrollbackHandler(t *testing.T) *ConnectRPCWebSocketHandler {
+	t.Helper()
+	cfg := scrollback.DefaultScrollbackConfig()
+	cfg.StoragePath = t.TempDir()
+	mgr := scrollback.NewScrollbackManager(cfg)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.AppendOutput("s", []byte("older line\r\n")))
+	return &ConnectRPCWebSocketHandler{scrollbackManager: mgr}
+}
+
+func TestSendInitialScrollbackUnlessFullState_should_ReplayScrollback_When_LegacyPaint(t *testing.T) {
+	stream, conn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	scrollbackHandler(t).sendInitialScrollbackUnlessFullState(stream, "s", false)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	env, _, err := protocol.ParseEnvelope(msg)
+	require.NoError(t, err)
+	var data sessionv1.TerminalData
+	require.NoError(t, proto.Unmarshal(env.Data, &data))
+	require.NotNil(t, data.GetScrollbackResponse())
+}
+
+func TestSendInitialScrollbackUnlessFullState_should_SendNothing_When_FullStatePaint(t *testing.T) {
+	stream, conn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	scrollbackHandler(t).sendInitialScrollbackUnlessFullState(stream, "s", true)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	_, _, err := conn.ReadMessage()
+	var ne net.Error
+	require.ErrorAs(t, err, &ne)
+	require.True(t, ne.Timeout(), "scrollback replay would clear the full-state paint: %v", err)
 }

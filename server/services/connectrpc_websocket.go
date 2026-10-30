@@ -1048,6 +1048,22 @@ func (s *connectWebSocketStream) WriteMessage(messageType int, data []byte) erro
 	return s.conn.WriteMessage(messageType, data)
 }
 
+// firstPaintWriteTimeout bounds a first-paint socket write: the hub holds its resize lock across
+// it, so a stalled client must not block every resize for the session.
+const firstPaintWriteTimeout = 5 * time.Second
+
+// WriteMessageTimeout is WriteMessage with a write deadline; it fails if the peer does not
+// accept the message within d. The deadline is cleared afterwards.
+func (s *connectWebSocketStream) WriteMessageTimeout(messageType int, data []byte, d time.Duration) error {
+	s.writeMutex.Lock()
+	defer s.writeMutex.Unlock()
+	if err := s.conn.SetWriteDeadline(time.Now().Add(d)); err != nil {
+		return err
+	}
+	defer func() { _ = s.conn.SetWriteDeadline(time.Time{}) }()
+	return s.conn.WriteMessage(messageType, data)
+}
+
 // streamTerminal handles the StreamTerminal RPC method
 func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStream) error {
 	// Parse the request message to get TerminalData
@@ -1322,7 +1338,7 @@ func sendFullStateFrame(stream *connectWebSocketStream, sessionID string, frame 
 	if err != nil {
 		return fmt.Errorf("failed to marshal full-state snapshot: %w", err)
 	}
-	if err := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes)); err != nil {
+	if err := stream.WriteMessageTimeout(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes), firstPaintWriteTimeout); err != nil {
 		return fmt.Errorf("failed to send full-state snapshot: %w", err)
 	}
 	log.Info("sent full-state snapshot", "bytes", len(frame.data), "session", sessionID)
@@ -1351,6 +1367,14 @@ func sendInitialSnapshotContent(stream *connectWebSocketStream, instance *sessio
 	log.Info("[streamViaControlMode] scrollback lines sent", "lines", strings.Count(initialContent, "\n")+1, "session", sessionID)
 	instance.UpdateTerminalTimestamps(initialContent, true)
 	return nil
+}
+
+// sendInitialScrollbackUnlessFullState skips the scrollback replay after a full-state first
+// paint, whose state the client's pre-scrollback clear would wipe.
+func (h *ConnectRPCWebSocketHandler) sendInitialScrollbackUnlessFullState(stream *connectWebSocketStream, sessionID string, fullState bool) {
+	if !fullState {
+		h.sendInitialScrollback(stream, sessionID)
+	}
 }
 
 // sendInitialScrollback sends the most recent scrollback history so the
@@ -1509,9 +1533,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 	// The client clears the terminal before writing initial scrollback, which would replace a
 	// full-state redraw with an older replay of raw output; the redraw is the better first paint.
-	if !fullState {
-		h.sendInitialScrollback(stream, sessionID)
-	}
+	h.sendInitialScrollbackUnlessFullState(stream, sessionID, fullState)
 
 	// resizeCh coalesces rapid resize events (e.g. window drags) so only the
 	// latest dimensions reach SetWindowSize. The channel holds at most one
@@ -2206,7 +2228,7 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 		log.Error("[streamViaHub] failed to marshal initial content", "err", merr)
 		return nil
 	}
-	if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b)); wsErr != nil {
+	if wsErr := stream.WriteMessageTimeout(websocket.BinaryMessage, protocol.CreateEnvelope(0, b), firstPaintWriteTimeout); wsErr != nil {
 		return fmt.Errorf("failed to send initial content: %w", wsErr)
 	}
 	return nil

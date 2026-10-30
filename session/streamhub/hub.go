@@ -15,6 +15,8 @@ import (
 // errSlowSubscriberEvicted is the eviction reason logged when a subscriber's
 // outbound queue stays full past slowSubscriberGrace (Task 1.2.1e), as
 // opposed to a Transport.Send error (Task 1.2.1g).
+var errFirstPaintTimeout = errors.New("streamhub: subscriber never ran FirstPaint")
+
 var errSlowSubscriberEvicted = errors.New("streamhub: subscriber outbound queue full past grace period")
 
 const (
@@ -30,6 +32,10 @@ const (
 	// up, rather than being evicted on the very first full send (which
 	// would disconnect healthy-but-bursty consumers, not just stuck ones).
 	defaultSlowSubscriberGrace = 250 * time.Millisecond
+
+	// defaultFirstPaintMaxAwait bounds how long a ManualFirstPaint subscriber, which has no writer
+	// and whose frames are dropped as superseded, may wait for its FirstPaint.
+	defaultFirstPaintMaxAwait = 30 * time.Second
 
 	// DefaultHubTeardownGrace is how long a StreamHub with zero subscribers
 	// waits before tearing down control mode, so a brief reconnect doesn't
@@ -116,6 +122,7 @@ type StreamHub struct {
 
 	subscriberBufferSize  int
 	slowSubscriberGrace   time.Duration
+	firstPaintMaxAwait    time.Duration
 	teardownGrace         time.Duration
 	quiescenceTimeout     time.Duration
 	quiescenceQuietPeriod time.Duration
@@ -237,12 +244,19 @@ func (h *StreamHub) BeginScrollForward() (release func()) {
 // HubStarting state with zero subscribers. controller is used by
 // ForceTeardown and the resize/quiescence/capture pipeline; it may be nil in
 // tests that never exercise either.
+// WithFirstPaintMaxAwait overrides how long a ManualFirstPaint subscriber may wait for its
+// FirstPaint before being evicted.
+func WithFirstPaintMaxAwait(d time.Duration) HubOption {
+	return func(h *StreamHub) { h.firstPaintMaxAwait = d }
+}
+
 func NewStreamHub(sessionName string, controller SessionController, opts ...HubOption) *StreamHub {
 	h := &StreamHub{
 		sessionName:           sessionName,
 		controller:            controller,
 		subscriberBufferSize:  defaultSubscriberBufferSize,
 		slowSubscriberGrace:   defaultSlowSubscriberGrace,
+		firstPaintMaxAwait:    defaultFirstPaintMaxAwait,
 		teardownGrace:         DefaultHubTeardownGrace,
 		quiescenceTimeout:     defaultQuiescenceTimeout,
 		quiescenceQuietPeriod: defaultQuiescenceQuietPeriod,
@@ -368,6 +382,8 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 	if !capability.ManualFirstPaint {
 		h.sendCatchUpSnapshot(sub)
 		sub.startWriter(h.handleSubscriberSendError)
+	} else {
+		sub.armFirstPaintTimeout(h.firstPaintMaxAwait, func() { h.removeSubscriber(id, errFirstPaintTimeout) })
 	}
 
 	log.Info("streamhub subscriber attached",
@@ -451,6 +467,7 @@ func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
 	defer h.resizeApplyMu.Unlock()
 
 	if sub.awaitingFirstPaint.CompareAndSwap(true, false) {
+		sub.stopFirstPaintTimeout()
 		sub.discardQueued()
 	}
 	err := paint()

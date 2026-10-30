@@ -24,6 +24,7 @@ type subscriber struct {
 	// subscriber; its writer is not started meanwhile, so frames queue in outbound.
 	awaitingFirstPaint atomic.Bool
 	writerOnce         sync.Once
+	firstPaintTimer    *time.Timer // guarded by mu
 
 	// mu guards closed and slowSince. closed is checked and set under the
 	// same lock as every send attempt (trySend) so a send can never race
@@ -103,6 +104,11 @@ func (s *subscriber) trySend(data []byte) (delivered bool) {
 
 	if s.closed {
 		return false
+	}
+	// FirstPaint's capture supersedes anything sent before it, and no writer drains outbound yet,
+	// so queueing would only fill it and trigger a slow-subscriber eviction.
+	if s.awaitingFirstPaint.Load() {
+		return true
 	}
 	select {
 	case s.outbound <- data:
@@ -189,4 +195,23 @@ func (s *subscriber) currentResizeVote() (size TerminalSize, voted bool) {
 	s.resizeMu.Lock()
 	defer s.resizeMu.Unlock()
 	return s.lastVote, s.hasVoted
+}
+
+// armFirstPaintTimeout evicts (via onExpire) a subscriber still awaiting its FirstPaint after d.
+func (s *subscriber) armFirstPaintTimeout(d time.Duration, onExpire func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.firstPaintTimer = time.AfterFunc(d, func() {
+		if s.awaitingFirstPaint.Load() {
+			onExpire()
+		}
+	})
+}
+
+func (s *subscriber) stopFirstPaintTimeout() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.firstPaintTimer != nil {
+		s.firstPaintTimer.Stop()
+	}
 }
