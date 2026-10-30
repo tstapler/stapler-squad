@@ -8,6 +8,7 @@ import { DeckViewportBridge } from "@/components/providers/DeckViewportBridge";
 import { PushClickHandoff } from "@/components/providers/PushClickHandoff";
 import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
 import { ReviewQueueProvider } from "@/lib/contexts/ReviewQueueContext";
+import { AttentionDocumentTitle } from "@/components/sessions/AttentionDocumentTitle";
 import { ApprovalsProvider } from "@/lib/contexts/ApprovalsContext";
 import { StuckBacklogItemsProvider } from "@/lib/hooks/useStuckBacklogItems";
 import { GlobalSessionServiceProvider } from "@/lib/contexts/SessionServiceContext";
@@ -53,6 +54,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <OmnibarProvider>
                   <OnboardingProvider>
                     <ReviewQueueProvider>
+                      <AttentionDocumentTitle />
                       <ApprovalsProvider>
                         <StuckBacklogItemsProvider>
                           {/* Story 3 (Task 3.4) — must live above PaneSplitRenderer's
