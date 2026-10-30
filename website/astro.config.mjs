@@ -11,6 +11,14 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Stapler Squad',
+			// The app's own WH40K theme (web-app/src/styles/theme.css.ts); dark only.
+			customCss: ['./src/styles/wh40k.css'],
+			components: { ThemeSelect: './src/components/NoThemeSelect.astro' },
+			favicon: '/favicon.svg',
+			// One dark code theme: with Expressive Code's default light+dark pair the
+			// light tokens (e.g. #3b61b0, 3.22:1) render on this dark-only theme and
+			// fail axe's contrast check.
+			expressiveCode: { themes: ['vitesse-dark'] },
 			// Task 4.4.2a: src/pages/404.astro (built on <StarlightPage>) replaces
 			// Starlight's own built-in 404 route, which otherwise collides with it
 			// at the same "/404" pattern (Astro build warning, promoted to a hard
@@ -58,6 +66,9 @@ export default defineConfig({
 			// to every page: the search-trigger button (every page's header) and
 			// code blocks (most docs pages, this project's InstallCommand.astro).
 			head: [
+				{ tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${SITE_BASE}/favicon-32.png` } },
+				{ tag: 'link', attrs: { rel: 'apple-touch-icon', href: `${SITE_BASE}/apple-touch-icon.png` } },
+				{ tag: 'meta', attrs: { name: 'theme-color', content: '#0c0a08' } },
 				{
 					tag: 'script',
 					content: `

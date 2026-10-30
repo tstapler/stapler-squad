@@ -1,0 +1,75 @@
+/*
+ * WH40K theme: grimdark parchment + gold on near-black. Values mirror
+ * wh40kTheme in web-app/src/styles/theme.css.ts (the app's own theme); keep
+ * the two in sync, including its WCAG notes (textMuted #a08870, successText).
+ * Dark only: light mode maps to the same palette and the theme picker is
+ * removed (src/components/NoThemeSelect.astro).
+ */
+@import '@fontsource/cinzel/400.css';
+@import '@fontsource/cinzel/700.css';
+
+:root,
+:root[data-theme='light'],
+:root[data-theme='dark'] {
+	color-scheme: dark;
+
+	/* Neutrals: white = strongest text, black = page background. */
+	--sl-color-white: #e4d6b8;
+	--sl-color-gray-1: #c8b89a; /* textPrimary */
+	--sl-color-gray-2: #b8a888;
+	--sl-color-gray-3: #a89878; /* textSecondary */
+	--sl-color-gray-4: #a08870; /* textMuted */
+	--sl-color-gray-5: #3d3020; /* borderColor */
+	--sl-color-gray-6: #1a1510; /* cardBackground */
+	--sl-color-gray-7: #120e0a; /* modalBackground */
+	--sl-color-black: #0c0a08; /* background */
+
+	/* Accent: imperial gold (primary #c0a020). Text on gold is near-black. */
+	--sl-color-accent-low: #3a2f08;
+	--sl-color-accent: #c0a020;
+	--sl-color-accent-high: #d4b424;
+	--sl-color-text-accent: #d4b424;
+
+	--sl-color-bg-nav: #120e0a;
+	--sl-color-bg-sidebar: #120e0a;
+	--sl-color-bg-inline-code: #221e18; /* hoverBackground */
+	--sl-color-hairline: #3d3020;
+	--sl-color-hairline-light: #2a2015;
+	--sl-color-hairline-shade: #0c0a08;
+
+	--sl-color-green-low: #0a1208;
+	--sl-color-green: #4a7c3f;
+	--sl-color-green-high: #8fd47a;
+	--sl-color-orange-low: #1a1400;
+	--sl-color-orange: #c0a020;
+	--sl-color-orange-high: #e4c840;
+	--sl-color-red-low: #1a0808;
+	--sl-color-red: #8b1a1a;
+	--sl-color-red-high: #d46060;
+	--sl-color-purple-low: #1a0808;
+	--sl-color-purple: #6b3d8b;
+	--sl-color-purple-high: #b088c9;
+
+	--sl-font-system-mono: 'JetBrains Mono', ui-monospace, 'Monaco', monospace;
+	--sl-font-display: 'Cinzel', 'Trajan Pro', Georgia, serif;
+}
+
+/* Display type in Cinzel; body stays a legible sans for long docs pages. */
+h1,
+h2,
+h3,
+h4,
+.site-title {
+	font-family: var(--sl-font-display);
+	letter-spacing: 0.03em;
+}
+
+.site-title {
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+::selection {
+	background: var(--sl-color-accent-low);
+	color: var(--sl-color-white);
+}
