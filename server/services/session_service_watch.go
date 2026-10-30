@@ -171,6 +171,11 @@ func (s *SessionService) GetSessionDiff(
 	}
 	customContext := contextLines != 0 // 0 = server default, served from the cached diff
 
+	// The git diff below takes no ctx, so don't start it for a call already gone.
+	if err := ctx.Err(); err != nil {
+		return nil, connect.NewError(connect.CodeCanceled, err)
+	}
+
 	instance := s.findInstance(req.Msg.Id)
 	if instance != nil {
 		if wt, err := instance.GetGitWorktree(); customContext && err == nil && wt != nil {
