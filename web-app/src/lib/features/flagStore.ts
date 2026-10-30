@@ -122,6 +122,8 @@ export async function loadFlags(
           }
           // Nothing held to keep (cleared mid-flight): ask again without a validator.
           res = await fetchFlags("");
+          // An empty validator can never match; a server claiming it did is misbehaving, so keep what we hold.
+          if (res.notModified) return cached?.flags ?? [];
         }
         if (startedAt !== generation) return res.flags;
         cached = { at: now(), flags: res.flags, etag: res.etag };

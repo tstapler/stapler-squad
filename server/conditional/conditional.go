@@ -116,7 +116,10 @@ type tallyKey struct {
 // tally mirrors the OTel counter so tests can read it without a metric reader.
 var tally sync.Map // tallyKey -> *atomic.Int64
 
-var readsCounter = sync.OnceValue(func() metric.Int64Counter {
+// readsCounter resolves the instrument on every use (the SDK returns the same one per meter, so
+// this is a map lookup): a counter cached across telemetry.Initialize could stay bound to the
+// pre-init no-op meter and silently drop every sample.
+func readsCounter() metric.Int64Counter {
 	c, err := telemetry.GetMeter().Int64Counter(metricName,
 		metric.WithDescription("Conditional read outcomes by RPC: not_modified (body elided) or miss (full body)"))
 	if err != nil {
@@ -124,7 +127,7 @@ var readsCounter = sync.OnceValue(func() metric.Int64Counter {
 		return nil
 	}
 	return c
-})
+}
 
 // record counts one outcome. rpc must be a fixed method name, never client text.
 func record(rpc string, out Outcome) {

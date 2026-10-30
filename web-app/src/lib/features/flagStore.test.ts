@@ -167,6 +167,18 @@ describe("flagStore", () => {
       expect(mockGetFeatureFlags.mock.calls[2][0]).toEqual({ ifNoneMatch: "" });
     });
 
+    it("flagStore_should_NotCacheOrWipePersistedHints_When_ServerAnswersNotModifiedToAnEmptyValidator", async () => {
+      localStorage.setItem("ssq:flag:unary_over_ws", "1");
+      localStorage.setItem("ssq:flag:window_keep_alive", "1");
+      mockGetFeatureFlags.mockResolvedValue({ flags: [], etag: '"e1"', notModified: true });
+      const flags = await loadFlags();
+      expect(flags).toEqual([]);
+      expect(peekFlags()).toBeNull();
+      expect(localStorage.getItem("ssq:flag:unary_over_ws")).toBe("1");
+      expect(localStorage.getItem("ssq:flag:window_keep_alive")).toBe("1");
+      expect(mockGetFeatureFlags).toHaveBeenCalledTimes(2);
+    });
+
     it("flagStore_should_RefetchInFull_When_NotModifiedArrivesWithNothingToKeep", async () => {
       mockGetFeatureFlags.mockResolvedValueOnce({ flags: [], etag: '"e1"', notModified: true });
       mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
