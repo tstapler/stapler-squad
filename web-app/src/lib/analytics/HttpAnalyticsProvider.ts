@@ -20,6 +20,30 @@ const BATCH_SIZE = 25;
 // Events are telemetry, not interaction: a 20 s window cuts idle POSTs from one per 2-5 s to ~3/min.
 const FLUSH_INTERVAL_MS = 20_000;
 const MAX_QUEUE_SIZE = 200;
+// The server rejects more than 100 events per request, and keepalive fetch and sendBeacon cap the body near 64 KB.
+const MAX_EVENTS_PER_REQUEST = 100;
+const MAX_BODY_BYTES = 60_000;
+
+/** Splits events into request bodies that stay under both the server's event cap and the beacon size cap. */
+function toRequestBodies(batch: AnalyticsEvent[]): string[] {
+  const bodies: string[] = [];
+  let chunk: Record<string, unknown>[] = [];
+  let bytes = 0;
+  const close = () => {
+    if (chunk.length > 0) bodies.push(JSON.stringify({ events: chunk }));
+    chunk = [];
+    bytes = 0;
+  };
+  for (const e of batch) {
+    const wire = serializeEvent(e);
+    const size = JSON.stringify(wire).length + 1;
+    if (chunk.length > 0 && (chunk.length >= MAX_EVENTS_PER_REQUEST || bytes + size > MAX_BODY_BYTES)) close();
+    chunk.push(wire);
+    bytes += size;
+  }
+  close();
+  return bodies;
+}
 
 export class HttpAnalyticsProvider implements AnalyticsProvider {
   readonly metadata: AnalyticsProviderMetadata = { name: "HttpAnalyticsProvider" };
@@ -58,13 +82,16 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
       return;
     }
 
-    const body = JSON.stringify({ events: batch.map(serializeEvent) });
-    await fetch("/api/analytics", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      keepalive: true,
-    }).catch(() => {});
+    await Promise.all(
+      toRequestBodies(batch).map((body) =>
+        fetch("/api/analytics", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {}),
+      ),
+    );
   }
 
   async initialize(): Promise<void> {
@@ -80,8 +107,7 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
   private sendBeacon(): void {
     const batch = this.queue.splice(0, this.queue.length);
     if (batch.length === 0) return;
-    const body = JSON.stringify({ events: batch.map(serializeEvent) });
-    navigator.sendBeacon("/api/analytics", body);
+    for (const body of toRequestBodies(batch)) navigator.sendBeacon("/api/analytics", body);
   }
 
   async onClose(): Promise<void> {

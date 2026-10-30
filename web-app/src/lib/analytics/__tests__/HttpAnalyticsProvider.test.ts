@@ -160,4 +160,39 @@ describe("HttpAnalyticsProvider", () => {
     expect(event).not.toHaveProperty("duration_ms");
     expect(event.page).toBe("/sessions");
   });
+
+  it("should_split_a_flush_into_requests_of_at_most_100_events", async () => {
+    const provider = new HttpAnalyticsProvider();
+    const queue = (provider as unknown as { queue: AnalyticsEvent[] }).queue;
+    for (let i = 0; i < 200; i++) queue.push(makeEvent(`event_${i}`));
+
+    await provider.flush();
+
+    const sizes = fetchMock.mock.calls.map((c) => (JSON.parse(c[1].body as string) as { events: unknown[] }).events.length);
+    expect(sizes).toEqual([100, 100]);
+  });
+
+  it("should_split_a_beacon_so_no_body_exceeds_the_size_cap_or_100_events", async () => {
+    const sendBeacon = jest.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: sendBeacon });
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    const queue = (provider as unknown as { queue: AnalyticsEvent[] }).queue;
+    const padding = "x".repeat(900);
+    for (let i = 0; i < 200; i++) queue.push({ ...makeEvent(`event_${i}`), labels: { padding } });
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(sendBeacon.mock.calls.length).toBeGreaterThan(2);
+    let total = 0;
+    for (const call of sendBeacon.mock.calls) {
+      const body = call[1] as string;
+      const events = (JSON.parse(body) as { events: unknown[] }).events;
+      expect(events.length).toBeLessThanOrEqual(100);
+      expect(body.length).toBeLessThanOrEqual(60_000);
+      total += events.length;
+    }
+    expect(total).toBe(200);
+  });
 });
+
