@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -350,6 +351,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// in-flight event handler that calls GetNotificationStore() sees a
 			// non-nil value even if the subscriber goroutine races ahead.
 			deps.SessionService.SetNotificationStore(notifStore)
+			if deps.ReactiveQueueMgr != nil {
+				deps.ReactiveQueueMgr.SetEpisodeHistory(notifStore)
+			}
 			subscriberDone := notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
 			// Joined by Shutdown: the subscriber's final flush on ctx cancel writes
 			// notifications.json, which must not outlive Shutdown() (it raced a
@@ -401,7 +405,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		pushHandler.RegisterRoutes(srv.mux)
 		var pushOpts []push.DeliveryOption
 		if gate := deps.SessionService.DeliveryGate(); gate != nil {
-			pushOpts = append(pushOpts, push.WithSessionDeliveryGate(gate))
+			pushOpts = append(pushOpts, push.WithSessionDeliveryGate(gate),
+				push.WithAwaitingDirectionLimits(nil, gatePushCounters{gate.Metrics()}))
 		}
 		pushDone := push.StartPushSubscriber(serverCtx, deps.EventBus, pushService, pushOpts...)
 		srv.backgroundTasksWG.Go(func() { <-pushDone })
@@ -902,6 +907,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		deps.ReactiveQueueMgr.SetDashboardBaseURLFn(hookBaseURLFn)
 		if gate := deps.SessionService.DeliveryGate(); gate != nil {
 			deps.ReactiveQueueMgr.SetQueueItemGate(gate.AllowQueueItem)
+			gate.SetSuppressionObserver(deps.ReactiveQueueMgr.OnDeliverySuppressed)
 		}
 	}
 
@@ -2225,3 +2231,11 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 		),
 	}
 }
+
+// gatePushCounters feeds the awaiting_direction push limiter's counters into the gate metrics.
+type gatePushCounters struct{ m *deliverygate.Metrics }
+
+func (c gatePushCounters) Suppressed(gateReason string) {
+	c.m.Add(deliverygate.CounterNotificationsSuppressed, gateReason)
+}
+func (c gatePushCounters) Digest() { c.m.Add(deliverygate.CounterAwaitingDigest) }

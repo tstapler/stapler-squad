@@ -144,3 +144,34 @@ func TestResolveGuidance_should_RetireAnUnreplyableCardThatHasNoQuestionID(t *te
 	got, _ := store.GetByID("n1")
 	assert.True(t, got.IsRead)
 }
+
+func episodeRecord(id, session, episode string) *NotificationRecord {
+	return &NotificationRecord{
+		ID: id, SessionID: session, NotificationType: 4, Message: "excerpt", CreatedAt: time.Now(),
+		Metadata: map[string]string{metaAttentionReason: "awaiting_direction", metaEpisodeID: episode},
+	}
+}
+
+func TestAppend_ShouldCollapseSameEpisodeAndKeepNewEpisode_WhenAttentionRecordsRepeat(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	require.NoError(t, store.Append(episodeRecord("n1", "s1", "E1")))
+	require.NoError(t, store.Append(episodeRecord("n2", "s1", "E1"))) // re-publish of the same episode
+	require.NoError(t, store.Append(episodeRecord("n3", "s1", "E2")))
+
+	_, total, err := store.List(ListOptions{Limit: 10})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, total, "E1 once, E2 its own record")
+}
+
+func TestHasEpisode_ShouldFindRecordedEpisodeOnly_WhenSessionAndEpisodeMatch(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	require.NoError(t, store.Append(episodeRecord("n1", "s1", "E1")))
+
+	assert.True(t, store.HasEpisode("s1", "E1"))
+	assert.False(t, store.HasEpisode("s1", "E2"))
+	assert.False(t, store.HasEpisode("s2", "E1"))
+	assert.False(t, store.HasEpisode("s1", ""))
+}

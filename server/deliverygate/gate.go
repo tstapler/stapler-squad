@@ -26,6 +26,8 @@ type Gate struct {
 	limiter  *rateLimitedLogger
 	now      Clock
 
+	suppressObserver atomic.Pointer[SuppressionObserver]
+
 	filterSeq atomic.Uint64 // counts notification decisions for duration sampling
 
 	tickerMu sync.Mutex
@@ -137,6 +139,25 @@ func (g *Gate) Flags() *FlagCache { return g.flags }
 
 // Metrics returns the in-process counter mirror.
 func (g *Gate) Metrics() *Metrics { return g.metrics }
+
+// SuppressionObserver is told about every enforced bus suppression. It runs on the
+// publisher's goroutine, so it must not block or take a lock a publisher may hold.
+type SuppressionObserver func(sessionID string, metadata map[string]string, reason Reason)
+
+// SetSuppressionObserver installs (nil removes) the bus-suppression observer.
+func (g *Gate) SetSuppressionObserver(o SuppressionObserver) {
+	if o == nil {
+		g.suppressObserver.Store(nil)
+		return
+	}
+	g.suppressObserver.Store(&o)
+}
+
+func (g *Gate) notifySuppressed(sessionID string, metadata map[string]string, reason Reason) {
+	if o := g.suppressObserver.Load(); o != nil {
+		(*o)(sessionID, metadata, reason)
+	}
+}
 
 // Index returns the visibility index (feed points, tests).
 func (g *Gate) Index() *VisibilityIndex { return g.index }
@@ -325,7 +346,12 @@ func (g *Gate) decide(ch Channel, sessionID string, metadata map[string]string, 
 		}
 		return true
 	case VisibilityHidden:
-		return g.decideHidden(ch, res, ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint}), t, sessionID, probe)
+		d := ShouldDeliver(res.Visibility, Facts{Type: t, Hint: hint})
+		deliver := g.decideHidden(ch, res, d, t, sessionID, probe)
+		if !deliver && ch == ChannelBus {
+			g.notifySuppressed(sessionID, metadata, d.Reason)
+		}
+		return deliver
 	default:
 		return true
 	}

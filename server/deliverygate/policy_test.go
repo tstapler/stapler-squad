@@ -181,3 +181,25 @@ func TestShouldDeliver_ShouldDeliverEveryNewEmission_WhenSessionHiddenOrNotASess
 		}
 	}
 }
+
+// The attention reasons ride existing NotificationTypes: no new proto value, class by type.
+func TestShouldDeliver_ShouldMapAttentionReasonTypes_WhenProseQuestionAndAwaitingDirection(t *testing.T) {
+	t.Parallel()
+	if got := ClassOf(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED); got != ClassNeedsHuman {
+		t.Errorf("prose_question (INPUT_REQUIRED) class = %v", got)
+	}
+	if got := ClassOf(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE); got != ClassRoutine {
+		t.Errorf("awaiting_direction (TASK_COMPLETE) class = %v", got)
+	}
+	meta := map[string]string{events.MetadataKeyAttentionReason: events.AttentionReasonAwaitingDirection}
+	hint, ok := ParseClassHint(meta)
+	if !ok || hint != HintNone {
+		t.Fatalf("attention_reason must not change the class hint, got %v ok=%v", hint, ok)
+	}
+	if d := ShouldDeliver(VisibilityHidden, Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE, Hint: hint}); d.Outcome != OutcomeSuppress {
+		t.Errorf("hidden awaiting_direction: %+v", d)
+	}
+	if d := ShouldDeliver(VisibilityHidden, Facts{Type: sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED}); d.Outcome != OutcomeDeliver {
+		t.Errorf("hidden prose_question: %+v", d)
+	}
+}
