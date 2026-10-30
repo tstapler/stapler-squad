@@ -17,7 +17,8 @@ function serializeEvent(e: AnalyticsEvent): Record<string, unknown> {
 }
 
 const BATCH_SIZE = 25;
-const FLUSH_INTERVAL_MS = 2000;
+// Events are telemetry, not interaction: a 20 s window cuts idle POSTs from one per 2-5 s to ~3/min.
+const FLUSH_INTERVAL_MS = 20_000;
 const MAX_QUEUE_SIZE = 200;
 
 export class HttpAnalyticsProvider implements AnalyticsProvider {
@@ -68,13 +69,19 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
 
   async initialize(): Promise<void> {
     if (typeof window !== "undefined") {
-      window.addEventListener("pagehide", () => {
-        const batch = this.queue.splice(0, this.queue.length);
-        if (batch.length === 0) return;
-        const body = JSON.stringify({ events: batch.map(serializeEvent) });
-        navigator.sendBeacon("/api/analytics", body);
+      // pagehide alone misses a mobile tab the OS discards while hidden, so a hidden tab drains too.
+      window.addEventListener("pagehide", () => this.sendBeacon());
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) this.sendBeacon();
       });
     }
+  }
+
+  private sendBeacon(): void {
+    const batch = this.queue.splice(0, this.queue.length);
+    if (batch.length === 0) return;
+    const body = JSON.stringify({ events: batch.map(serializeEvent) });
+    navigator.sendBeacon("/api/analytics", body);
   }
 
   async onClose(): Promise<void> {

@@ -36,18 +36,48 @@ describe("HttpAnalyticsProvider", () => {
     expect(body.events).toHaveLength(25);
   });
 
-  it("should_flush_after_2s_timer", async () => {
+  it("should_flush_after_20s_timer_not_before", async () => {
     const provider = new HttpAnalyticsProvider();
 
     provider.track(makeEvent());
 
+    jest.advanceTimersByTime(19_999);
+    await Promise.resolve();
     expect(fetchMock).not.toHaveBeenCalled();
 
-    jest.advanceTimersByTime(2001);
+    jest.advanceTimersByTime(2);
     await Promise.resolve();
     await Promise.resolve();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("should_send_one_post_per_20s_window_for_a_steady_trickle_of_events", async () => {
+    const provider = new HttpAnalyticsProvider();
+
+    // 90 s idle with an event every 2 s: was one POST per 2 s window (45), now one per 20 s.
+    for (let t = 0; t < 90; t += 2) {
+      provider.track(makeEvent());
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    }
+
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it("should_drain_the_queue_with_sendBeacon_when_the_tab_is_hidden", async () => {
+    const sendBeacon = jest.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: sendBeacon });
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    provider.track(makeEvent());
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("should_not_exceed_max_queue_size", () => {
