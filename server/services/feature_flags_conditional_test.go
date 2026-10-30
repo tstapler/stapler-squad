@@ -77,3 +77,12 @@ func TestGetFeatureFlags_ForeignValidatorServesFullBody(t *testing.T) {
 	assert.False(t, got.NotModified)
 	assert.NotEmpty(t, got.Flags)
 }
+
+// Etag stability across consecutive polls proves no volatile or map-ordered field churns the body.
+func TestGetFeatureFlags_EtagStableAcrossPolls(t *testing.T) {
+	svc := newFeatureFlagService(t)
+	first := getFlags(t, svc, "")
+	for i := 0; i < 5; i++ {
+		assert.Equal(t, first.Etag, getFlags(t, svc, "").Etag)
+	}
+}

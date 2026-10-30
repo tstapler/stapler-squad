@@ -138,6 +138,21 @@ describe("flagStore", () => {
       expect(mockGetFeatureFlags.mock.calls[1][0]).toEqual({ ifNoneMatch: "" });
     });
 
+    it("flagStore_should_KeepWrittenValue_When_NotModifiedAnswersAPreWriteRequest", async () => {
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", false)], etag: '"e1"' });
+      await loadFlags();
+      let resolve!: (v: unknown) => void;
+      mockGetFeatureFlags.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      const pending = loadFlags(Date.now, { force: true });
+      recordFlagWrite("x", true);
+      resolve({ flags: [], etag: '"e1"', notModified: true });
+      await pending;
+      expect(peekFlags()?.[0].enabled).toBe(true);
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
+      await loadFlags();
+      expect(mockGetFeatureFlags.mock.calls[2][0]).toEqual({ ifNoneMatch: "" });
+    });
+
     it("flagStore_should_RefetchInFull_When_NotModifiedArrivesWithNothingToKeep", async () => {
       mockGetFeatureFlags.mockResolvedValueOnce({ flags: [], etag: '"e1"', notModified: true });
       mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
