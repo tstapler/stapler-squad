@@ -26,9 +26,32 @@ export function applyAutoplayUnlessReducedMotion(
 	});
 }
 
-/** Applies applyAutoplayUnlessReducedMotion to every hero video on the page. */
+// Caps how long a busy page can postpone the hero autoplay.
+const IDLE_TIMEOUT_MS = 2000;
+
+/**
+ * Runs `start` once the page has loaded and the main thread is idle, so
+ * decoding the hero clip doesn't count as blocking time during load (mobile
+ * Lighthouse performance dropped to ~0.75 with autoplay at load).
+ */
+export function whenLoadedAndIdle(start: () => void, win: Window = window): void {
+	const afterLoad = () => {
+		if (win.requestIdleCallback) {
+			win.requestIdleCallback(start, { timeout: IDLE_TIMEOUT_MS });
+		} else {
+			win.setTimeout(start, 0);
+		}
+	};
+	if (win.document.readyState === 'complete') {
+		afterLoad();
+	} else {
+		win.addEventListener('load', afterLoad, { once: true });
+	}
+}
+
+/** Applies applyAutoplayUnlessReducedMotion to every hero video on the page, after load. */
 export function initHeroVideos(doc: Document = document): void {
 	doc.querySelectorAll<HTMLVideoElement>('[data-testid="hero-video"]').forEach((video) => {
-		applyAutoplayUnlessReducedMotion(video);
+		whenLoadedAndIdle(() => applyAutoplayUnlessReducedMotion(video), doc.defaultView ?? window);
 	});
 }

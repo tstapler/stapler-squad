@@ -1,6 +1,6 @@
 // Story 3.2.2: FeatureCard.astro renders real descriptive alt text when a
 // screenshot is provided, and renders no <img> element at all when it isn't
-// (9 of the 17 features.json entries have no screenshot).
+// (most features.json entries have no screenshot).
 import { describe, expect, it } from 'vitest';
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import FeatureCard from '../../src/components/FeatureCard.astro';

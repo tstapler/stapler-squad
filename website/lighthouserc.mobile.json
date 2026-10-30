@@ -1,13 +1,11 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "bun run preview -- --port 4321",
-      "startServerReadyPattern": "Preview server running",
       "url": [
         "http://localhost:4321/stapler-squad/",
         "http://localhost:4321/stapler-squad/help/getting-started/"
       ],
-      "numberOfRuns": 1,
+      "numberOfRuns": 3,
       "settings": {
         "formFactor": "mobile",
         "screenEmulation": {

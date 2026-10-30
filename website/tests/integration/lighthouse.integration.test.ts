@@ -55,6 +55,10 @@ function runLhciAndReadScores(configFile: string, outputDir: string): Array<Reco
 			'lhci',
 			'autorun',
 			`--config=./${configFile}`,
+			// The configs expect an already-running preview server (the CI workflow and
+			// the lhci:* scripts start one); this test has none, so lhci starts it.
+			'--collect.startServerCommand=bun run preview -- --port 4321',
+			'--collect.startServerReadyPattern=Preview server running',
 			'--collect.settings.chromeFlags=--no-sandbox --headless=new',
 		],
 		{
@@ -80,7 +84,7 @@ function runLhciAndReadScores(configFile: string, outputDir: string): Array<Reco
 describe('lighthouseCi against real built dist/', () => {
 	beforeAll(() => {
 		runRealBuild(WEBSITE_ROOT);
-	});
+	}, 120_000);
 
 	afterAll(() => {
 		// `astro preview` daemonizes itself (see playwright.config.ts's comment

@@ -162,20 +162,44 @@ test('deployWorkflow_should_FlagMissingStep_When_AssetHealthCheckStepRemoved', (
   );
 });
 
-// Story 1.1.2: deploy-website.yml must trigger only on push to main --
-// repo's existing `github-pages` environment branch policy rejects anything
-// else, so a stray pull_request trigger would just fail at deploy time
-// instead of being caught here. Uses js-yaml like the two tests above
-// (not the raw-text extractOnTriggerKeys() helper website-demo-publish.yml's
-// tests use), since js-yaml parses this file's unquoted `on:` key as the
-// string "on", not a YAML-1.1 boolean -- confirmed directly against this file.
-test('deployWorkflow_should_TriggerOnlyOnPushToMain_When_YamlParsed', () => {
+// Story 1.1.2: deploy-website.yml must never trigger on pull_request -- the
+// repo's `github-pages` environment branch policy rejects anything but main,
+// so a stray PR trigger would only fail at deploy time. push-to-main is the
+// content trigger; schedule/workflow_dispatch redeploy without a content
+// change (website-ci.yml gates PRs instead). Uses js-yaml (not the raw-text
+// extractOnTriggerKeys() helper) since it parses this file's unquoted `on:`
+// key as the string "on", not a YAML-1.1 boolean.
+test('deployWorkflow_should_NeverTriggerOnPullRequest_When_YamlParsed', () => {
   const doc = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as {
     on: Record<string, unknown>;
   };
 
-  assert.deepEqual(Object.keys(doc.on), ['push'], 'on: block must declare only a push trigger');
+  assert.deepEqual(Object.keys(doc.on).sort(), ['push', 'schedule', 'workflow_dispatch']);
   assert.deepEqual((doc.on.push as { branches: string[] }).branches, ['main']);
+});
+
+type CiWorkflow = {
+  on: Record<string, unknown>;
+  jobs: Record<string, { steps: (WorkflowStep & { with?: unknown; 'working-directory'?: string })[] }>;
+};
+
+const WEBSITE_CI_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-ci.yml');
+
+// The PR gate must run every check the deploy runs, byte-for-byte, or a PR can
+// go green and still break the Pages deploy after merge (which is how the site
+// went 25 deploys without publishing). Only the Pages publishing steps are deploy-only.
+test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => {
+  const deploy = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as CiWorkflow;
+  const ci = yaml.load(readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8)) as CiWorkflow;
+
+  assert.deepEqual(Object.keys(ci.on), ['pull_request'], 'website-ci.yml must trigger only on pull_request');
+
+  // Every deploy step before the Pages publishing steps must also run in the PR gate.
+  const publishAt = deploy.jobs.build.steps.findIndex((step) => step.name === 'Configure Pages');
+  assert.notEqual(publishAt, -1, 'deploy-website.yml must have a "Configure Pages" step');
+  const deployChecks = deploy.jobs.build.steps.slice(0, publishAt);
+  assert.ok(deployChecks.some((step) => step.name === 'Stop preview server'));
+  assert.deepEqual(ci.jobs.checks.steps, deployChecks);
 });
 
 // Story 1.1.2: the deploy job needs id-token: write to mint the OIDC token

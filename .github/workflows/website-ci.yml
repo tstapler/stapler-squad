@@ -1,0 +1,102 @@
+name: Website CI
+
+# PR gate for the Astro+Starlight site in website/. Runs the same checks as
+# deploy-website.yml's build job (everything before "Configure Pages"), so a PR
+# that would break the Pages deploy fails here instead of after merge.
+# website/tests/unit/workflow-yaml.test.ts fails if the two drift apart.
+# Never deploys: the `github-pages` environment only accepts main.
+
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'docs/how-to/**'
+      - 'docs/features.md'
+      - 'README.md'
+      - '.github/workflows/deploy-website.yml'
+      - '.github/workflows/website-ci.yml'
+      - '.github/actions/setup-bun/**'
+
+concurrency:
+  group: website-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: website
+        run: bun install --frozen-lockfile
+
+      - name: Unit tests
+        working-directory: website
+        run: bun run test:unit
+
+      - name: Verify content sync
+        working-directory: website
+        run: bun run sync-content -- --check
+
+      - name: Verify features.json is current
+        working-directory: website
+        run: node scripts/build-features.mjs && git diff --exit-code -- src/content/features.json
+
+      - name: Build site
+        working-directory: website
+        run: bun run build
+
+      - name: Check internal links
+        working-directory: website
+        run: node scripts/check-internal-links.mjs
+
+      - name: Check demo-asset health
+        working-directory: website
+        run: node scripts/check-asset-health.mjs
+
+      # Backgrounded with its output redirected: left attached, the server
+      # holds the step's output pipe open and the step never completes.
+      - name: Start preview server
+        working-directory: website
+        run: |
+          nohup bun run preview -- --port 4321 > /tmp/preview.log 2>&1 &
+          timeout 60 bash -c 'until curl -sf http://localhost:4321/stapler-squad/ > /dev/null; do sleep 1; done' \
+            || { cat /tmp/preview.log; exit 1; }
+
+      - name: Lighthouse CI (desktop)
+        working-directory: website
+        run: bun run lhci:desktop:ci
+
+      - name: Lighthouse CI (mobile)
+        working-directory: website
+        run: bun run lhci:mobile:ci
+
+      - name: Install Playwright browsers
+        working-directory: website
+        run: npx playwright install chromium --with-deps
+
+      - name: Accessibility scan (axe-core)
+        working-directory: website
+        run: bun run test:a11y:ci
+
+      - name: E2E UX acceptance tests
+        working-directory: website
+        run: bun run test:e2e:ci
+
+      - name: Stop preview server
+        working-directory: website
+        if: always()
+        run: bun run preview:stop

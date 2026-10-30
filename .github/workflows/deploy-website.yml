@@ -1,11 +1,15 @@
 name: Deploy Website
 
 # Builds and deploys the Astro+Starlight site in website/ to GitHub Pages.
-# Phase 6 (Story 6.3.1) finalized the path filters -- docs/how-to/** and
-# docs/features.md are CuratedDoc sources (Epic 2.1's sync-content.mjs /
+# Phase 6 (Story 6.3.1) finalized the path filters -- docs/how-to/**,
+# docs/features.md and README.md are CuratedDoc/features.json sources (Epic 2.1's sync-content.mjs /
 # content-manifest.json), so a change there without a `website/**` change
 # must still trigger a rebuild+resync, not silently drift.
 
+# `schedule` + `workflow_dispatch` redeploy without a content change, so a
+# release asset or external link that rots is caught within a week instead of
+# at the next unrelated website edit. PRs are gated by website-ci.yml, which
+# must keep running the same checks (website/tests/unit/workflow-yaml.test.ts).
 on:
   push:
     branches: [main]
@@ -13,7 +17,11 @@ on:
       - 'website/**'
       - 'docs/how-to/**'
       - 'docs/features.md'
+      - 'README.md'
       - '.github/workflows/deploy-website.yml'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
 
 concurrency:
   group: "pages"
@@ -42,6 +50,10 @@ jobs:
         working-directory: website
         run: bun install --frozen-lockfile
 
+      - name: Unit tests
+        working-directory: website
+        run: bun run test:unit
+
       # Story 6.3.1: catches a committed CuratedDoc that no longer matches
       # what sync-content.mjs would produce from its SourceDoc right now --
       # e.g. someone edited docs/how-to/debug-with-logs.md without re-running
@@ -52,6 +64,10 @@ jobs:
       - name: Verify content sync
         working-directory: website
         run: bun run sync-content -- --check
+
+      - name: Verify features.json is current
+        working-directory: website
+        run: node scripts/build-features.mjs && git diff --exit-code -- src/content/features.json
 
       - name: Build site
         working-directory: website
@@ -74,9 +90,14 @@ jobs:
       # `astro preview` server here (it daemonizes itself) and let
       # lhci/a11y/e2e below reuse it via their `:ci` scripts instead of each
       # rebuilding and re-previewing the identical site.
+      # Backgrounded with its output redirected: left attached, the server
+      # holds the step's output pipe open and the step never completes.
       - name: Start preview server
         working-directory: website
-        run: bun run preview -- --port 4321
+        run: |
+          nohup bun run preview -- --port 4321 > /tmp/preview.log 2>&1 &
+          timeout 60 bash -c 'until curl -sf http://localhost:4321/stapler-squad/ > /dev/null; do sleep 1; done' \
+            || { cat /tmp/preview.log; exit 1; }
 
       - name: Lighthouse CI (desktop)
         working-directory: website
@@ -126,3 +147,33 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # ratchet:actions/deploy-pages@v5
+
+  # Opens (or comments on) one tracking issue when a push/scheduled deploy
+  # fails, and closes it on the next success, so a broken site is never silent
+  # again (it failed 25 consecutive times unnoticed before this existed).
+  notify:
+    needs: [build, deploy]
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Website deploy is failing
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      DEPLOYED: ${{ needs.deploy.result }}
+    steps:
+      - name: Open, update or close the tracking issue
+        run: |
+          existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          if [ "$DEPLOYED" = "success" ]; then
+            [ -n "$existing" ] && gh issue close "$existing" --comment "Recovered: $RUN_URL"
+            exit 0
+          fi
+          body="Deploy Website failed (build or deploy job): $RUN_URL"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
