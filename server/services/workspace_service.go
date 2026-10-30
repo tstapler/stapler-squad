@@ -194,6 +194,11 @@ func (ws *WorkspaceService) GetVCSStatus(
 		}
 	}
 
+	// provider.GetStatus below takes no ctx, so don't start it for a call already gone.
+	if err := ctx.Err(); err != nil {
+		return nil, connect.NewError(connect.CodeCanceled, err)
+	}
+
 	var provider vc.VCSProvider
 	gitProvider, err := vc.NewGitProvider(workDir)
 	if err != nil {

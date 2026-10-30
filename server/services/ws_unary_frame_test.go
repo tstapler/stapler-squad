@@ -100,7 +100,7 @@ func TestUnaryAllowlistFixture_ShouldLoad(t *testing.T) {
 	loadFixture(t, "ws-unary-allowlist.json", &a)
 	assert.Len(t, a.WsUnaryAllowed, 9)
 	assert.Equal(t, []string{"Connect-Protocol-Version"}, a.ClientHeaders)
-	assert.Equal(t, 6, a.MaxInFlight)
+	assert.Equal(t, 64, a.MaxInFlight)
 }
 
 type vectorFields struct {

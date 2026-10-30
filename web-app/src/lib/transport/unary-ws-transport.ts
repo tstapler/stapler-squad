@@ -40,6 +40,8 @@ export const SEND_QUEUE_MAX_FRAMES = 64;
 export const SEND_QUEUE_MAX_BYTES = 1024 * 1024;
 export const PING_INTERVAL_MS = 10_000;
 export const PONG_DEADLINE_MS = 5_000;
+/** Hidden tabs get throttled timers and delayed event delivery, so a late PONG is not a dead socket. */
+export const PONG_DEADLINE_HIDDEN_MS = 20_000;
 export const RECONNECT_BASE_MS = 100;
 export const RECONNECT_CAP_MS = 5_000;
 export const BREAKER_THRESHOLD = 3;
@@ -432,6 +434,7 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
 
   private onMessage(ws: WebSocket, data: unknown): void {
     if (this.ws !== ws) return;
+    this.clearPong(); // any inbound frame proves the socket is alive, not only a PONG
     if (!(data instanceof ArrayBuffer)) {
       this.dropSocket(ws, true);
       return;
@@ -568,7 +571,7 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     this.pongTimer = setTimeout(() => {
       this.pongTimer = null;
       this.dropSocket(ws, true);
-    }, PONG_DEADLINE_MS);
+    }, typeof document !== "undefined" && document.hidden ? PONG_DEADLINE_HIDDEN_MS : PONG_DEADLINE_MS);
   }
 
   private clearPong(): void {

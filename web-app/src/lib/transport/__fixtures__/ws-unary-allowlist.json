@@ -19,5 +19,5 @@
     "ListProgramsConfig"
   ],
   "clientHeaders": ["Connect-Protocol-Version"],
-  "maxInFlight": 6
+  "maxInFlight": 64
 }

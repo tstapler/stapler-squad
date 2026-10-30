@@ -15,6 +15,9 @@ import { FakeWebSocket } from "./__fixtures__/fakeUnaryWebSocket";
 import {
   createUnaryWsTransport,
   deriveSocketUrl,
+  MAX_IN_FLIGHT,
+  PONG_DEADLINE_HIDDEN_MS,
+  PONG_DEADLINE_MS,
   UnaryWsBreaker,
   WsUnaryError,
   type UnaryWsTransport,
@@ -299,18 +302,19 @@ describe("send queue and window", () => {
     const last = await ps[64];
     expect(!last.ok && ConnectError.from(last.error).code).toBe(Code.ResourceExhausted);
     h.sock().open();
-    expect(h.sock().requestIds().length).toBe(6); // 64 queued, window caps at 6
+    expect(h.sock().requestIds().length).toBe(MAX_IN_FLIGHT); // 64 queued, all fit the window
     h.t.close();
   });
 
   it("unary_should_KeepAtMostMaxInFlightOutstanding_And_SendNextWhenOneSettles", async () => {
     const h = setup();
-    const ps = Array.from({ length: 8 }, (_, i) => callListFiles(h.t, `/${i}`));
+    h.t.connect();
     h.sock().open();
-    expect(h.sock().requestIds()).toHaveLength(6);
+    const ps = Array.from({ length: MAX_IN_FLIGHT + 2 }, (_, i) => callListFiles(h.t, `/${i}`));
+    expect(h.sock().requestIds()).toHaveLength(MAX_IN_FLIGHT);
     h.sock().receive(response(h.sock().requestIds()[0], "/0"));
     await ps[0];
-    expect(h.sock().requestIds()).toHaveLength(7);
+    expect(h.sock().requestIds()).toHaveLength(MAX_IN_FLIGHT + 1);
     h.t.close();
   });
 
@@ -445,6 +449,35 @@ describe("liveness", () => {
     expect(h.sock().closed).toBe(false);
     expect(h.t.breaker.failures).toBe(0);
     h.t.close();
+  });
+
+  it("liveness_should_StayOpen_When_AnyInboundFrameArrivesInsteadOfPong", () => {
+    const h = setup();
+    void callVcs(h.t);
+    h.sock().open();
+    jest.advanceTimersByTime(10_000); // PING sent, pong deadline armed
+    h.sock().receive({ type: "PING", id: 7 }); // any frame proves the socket is alive
+    jest.advanceTimersByTime(5_000);
+    expect(h.sock().closed).toBe(false);
+    expect(h.t.breaker.failures).toBe(0);
+    h.t.close();
+  });
+
+  it("liveness_should_WaitLonger_When_DocumentIsHidden", () => {
+    const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      const h = setup();
+      callVcs(h.t).catch(() => undefined); // the 30s call deadline fires during the advance
+      h.sock().open();
+      jest.advanceTimersByTime(10_000);
+      jest.advanceTimersByTime(PONG_DEADLINE_MS + 1);
+      expect(h.sock().closed).toBe(false);
+      jest.advanceTimersByTime(PONG_DEADLINE_HIDDEN_MS);
+      expect(h.sock().closed).toBe(true);
+      h.t.close();
+    } finally {
+      hidden.mockRestore();
+    }
   });
 
   it("liveness_should_NotPing_When_NoCallInFlight", () => {
