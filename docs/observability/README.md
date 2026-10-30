@@ -77,7 +77,7 @@ link, because no spans correspond to memory or profile data. The other four also
 | `http-rpc-connections` | slow (> 500ms) and errored Connect RPC server spans; `Watch*` streams and client-canceled calls are excluded | streams-by-method panel opens that method's spans |
 | `tmux-control-mode` | slow and errored/timed-out `tmux.control_mode.command` spans | rate, timeout, latency panels open spans for that `command` |
 | `tymux-backend` | slow and errored `session.backend.*` / `tymux.v1.*` spans (`Attach` excluded) | latency and rate panels open spans for that `backend` |
-| `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams and canceled calls excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links show all errored spans because no span carries a `deadline_exceeded` code |
+| `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams and canceled calls excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links show all errored spans (canceled excluded) because no span carries a `deadline_exceeded` code. Latency links filter to spans slower than 500ms, so they can open an empty result when the panel value is lower. Browser-side series are linked to the matching server spans, and the few `method` label values that carry the full `/session.v1.…/` prefix never match a server span |
 
 Notes:
 
