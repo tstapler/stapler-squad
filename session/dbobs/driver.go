@@ -51,9 +51,10 @@ func thresholdFromEnv(raw string) time.Duration {
 }
 
 type collector struct {
-	cfg  Config
-	db   *sql.DB
-	stat counters
+	cfg   Config
+	db    *sql.DB
+	stat  counters
+	stmts statementTable
 }
 
 type counters struct {
@@ -142,12 +143,14 @@ func (c *collector) observe(ctx context.Context, q string, fn func() error) erro
 	// WaitDuration is pool-wide, so under concurrency this over-attributes
 	// queue time from other callers to this query; it is a contention hint.
 	wait := c.db.Stats().WaitDuration - waitBefore
-	c.record(q, elapsed, wait, err)
+	key := stmtKey{statement: NormalizeStatement(q), caller: callerOf()}
+	c.stmts.add(key, elapsed, wait)
+	c.record(key, elapsed, wait, err)
 	end(wait, err)
 	return err
 }
 
-func (c *collector) record(q string, elapsed, wait time.Duration, err error) {
+func (c *collector) record(k stmtKey, elapsed, wait time.Duration, err error) {
 	s := &c.stat
 	s.queries.Add(1)
 	s.totalNanos.Add(int64(elapsed))
@@ -162,7 +165,8 @@ func (c *collector) record(q string, elapsed, wait time.Duration, err error) {
 			"db", c.cfg.Name,
 			"duration_ms", elapsed.Milliseconds(),
 			"pool_wait_ms", wait.Milliseconds(),
-			"statement", NormalizeStatement(q))
+			"caller", k.caller,
+			"statement", k.statement)
 	}
 }
 

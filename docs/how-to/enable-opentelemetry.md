@@ -49,6 +49,7 @@ The ent/SQLite client is instrumented by default (`session/dbobs`). The pool is 
 
 - **Slow-query log:** queries at or above `STAPLER_SQUAD_SLOW_QUERY_MS` (default `100`; `0` disables) log `slow database query` at WARN with `duration_ms`, `pool_wait_ms` and a normalized statement. Bind values and literals are never logged.
 - **Stats:** `GET /actuator/db` returns `sql.DBStats` (`wait_count`, `wait_duration_ms`, `in_use`, `open_connections`) plus query, slow and error counters; `/actuator/metrics` embeds the same under `db`. The same values export as OTel gauges `db.pool.*` / `db.slow_queries_total` and histogram `db.query.duration` (ms).
+- **Who issues a query:** the slow-query WARN carries `caller` (up to three application frames, e.g. `session.EntRepository.Update<-session.Storage.saveInstancesToRepo<-...`), and each pool in `/actuator/db` lists `top_statements` ranked by total time with per-(statement, caller) count, max and pool wait. Statements are normalized (`IN (?, ...?)`), the table holds 512 keys per pool, and `dropped_statement_keys` counts pairs it refused. Use it to find write amplification on the single writer connection.
 - **Spans:** when a `TracerProvider` is configured, each query under an RPC span is a `db.<VERB>` child span (`db.statement` normalized, `db.pool_wait_ms`). Queries with no parent span are not traced.
 - `pool_wait_ms` is the delta of the pool-wide `WaitDuration`, so under concurrency it can include queue time caused by other callers; treat it as a hint.
 

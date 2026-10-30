@@ -46,6 +46,12 @@ type Stats struct {
 	TotalDurationMs float64 `json:"total_duration_ms"`
 	MaxDurationMs   float64 `json:"max_duration_ms"`
 	SlowThresholdMs int64   `json:"slow_threshold_ms"`
+	// TopStatements ranks (statement, caller) pairs by total time, so write
+	// amplification from one caller is visible without a profiler.
+	TopStatements []StatementStat `json:"top_statements,omitempty"`
+	// DroppedStatementKeys counts distinct (statement, caller) pairs the bounded
+	// table refused; non-zero means TopStatements is missing late-arriving callers.
+	DroppedStatementKeys int64 `json:"dropped_statement_keys,omitempty"`
 }
 
 func ms(nanos int64) float64 { return float64(nanos) / float64(time.Millisecond) }
@@ -59,6 +65,9 @@ func (c *collector) snapshot() Stats {
 		Queries:        c.stat.queries.Load(), SlowQueries: c.stat.slow.Load(), Errors: c.stat.errors.Load(),
 		TotalDurationMs: ms(c.stat.totalNanos.Load()), MaxDurationMs: ms(c.stat.maxNanos.Load()),
 		SlowThresholdMs: c.cfg.SlowThreshold.Milliseconds(),
+		TopStatements:   c.stmts.top(topStatementsReported),
+
+		DroppedStatementKeys: c.stmts.droppedKeys(),
 	}
 }
 

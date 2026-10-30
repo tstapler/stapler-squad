@@ -978,6 +978,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 
 	detectedAt := time.Now()
 	isUpdate := false
+	unchanged := false
 	var prior *ReviewItem
 	if existingItem, exists := rqp.queue.Get(snap.Title); exists {
 		isUpdate = true
@@ -987,6 +988,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 			existingItem.Priority == priority &&
 			existingItem.Context == context {
 			detectedAt = existingItem.DetectedAt
+			unchanged = true
 		}
 	}
 
@@ -1028,7 +1030,11 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 	log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 	rqp.addToQueue(item, prior)
 
-	rqp.persistLastAddedToQueue(inst, snap.Title)
+	// The in-memory stamp drives the re-add rate limit, so it must advance on
+	// every add; only the DB write is skipped for an unchanged entry that is
+	// re-detected every poll cycle (it would rewrite the same sessions row
+	// through the single writer connection forever).
+	rqp.persistLastAddedToQueue(inst, snap.Title, !unchanged)
 
 	if !isUpdate {
 		log.Debug("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
@@ -1087,11 +1093,11 @@ func setIfNonEmpty(m map[string]string, key, val string) {
 // write is serialised with buildSnapshot) and persists it so restarts don't re-add sessions.
 // Uses UpdateInstanceLastAddedToQueue, not SaveInstances, to avoid the merge logic that would
 // restore deleted instances from disk.
-func (rqp *ReviewQueuePoller) persistLastAddedToQueue(inst *Instance, title string) {
+func (rqp *ReviewQueuePoller) persistLastAddedToQueue(inst *Instance, title string, writeToDB bool) {
 	now := time.Now()
 	inst.SetLastAddedToQueue(now)
 	log.Debug("updated LastAddedToQueue timestamp", "session", title, "timestamp", now)
-	if rqp.storage == nil {
+	if !writeToDB || rqp.storage == nil {
 		return
 	}
 	if err := rqp.storage.UpdateInstanceLastAddedToQueue(title, now); err != nil {

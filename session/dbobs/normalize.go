@@ -1,6 +1,7 @@
 package dbobs
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -32,7 +33,20 @@ func NormalizeStatement(q string) string {
 			i++
 		}
 	}
-	return truncate(strings.Join(strings.Fields(b.String()), " "))
+	return truncate(collapsePlaceholderLists(strings.Join(strings.Fields(b.String()), " ")))
+}
+
+var (
+	placeholderList = regexp.MustCompile(`\?(?:, \?)+`)
+	valuesRows      = regexp.MustCompile(`\(\?, \.\.\.\?\)(?:, \(\?, \.\.\.\?\))+`)
+)
+
+// collapsePlaceholderLists folds "?, ?, ?" to "?, ...?" and repeated identical
+// multi-row VALUES tuples to one, so statements that differ only in how many
+// values they bind aggregate under one key.
+func collapsePlaceholderLists(s string) string {
+	s = placeholderList.ReplaceAllString(s, "?, ...?")
+	return valuesRows.ReplaceAllString(s, "(?, ...?), ...")
 }
 
 func skipQuoted(q string, i int) int {
