@@ -169,6 +169,30 @@ func TestTransactionQueriesAreObserved(t *testing.T) {
 	assert.NotContains(t, rec.all(), secretBind)
 }
 
+func TestStatementsAttributedToCaller(t *testing.T) {
+	drv, _ := newDriver(t, Config{Name: "calltest", SlowThreshold: time.Hour, Warn: func(string, ...any) {}})
+	for i := 0; i < 3; i++ {
+		insertSecret(t, drv, context.Background())
+	}
+
+	var top []StatementStat
+	for _, s := range Snapshot() {
+		if s.Name == "calltest" {
+			top = s.TopStatements
+		}
+	}
+	require.NotEmpty(t, top)
+	assert.Equal(t, int64(3), top[0].Count)
+	assert.Contains(t, top[0].Caller, "TestStatementsAttributedToCaller")
+}
+
+func TestSlowQueryLogCarriesCaller(t *testing.T) {
+	rec := &warnRecorder{}
+	drv, _ := newDriver(t, Config{Name: "slowcaller", SlowThreshold: time.Nanosecond, Warn: rec.warn})
+	insertSecret(t, drv, context.Background())
+	assert.Contains(t, rec.all(), "TestSlowQueryLogCarriesCaller")
+}
+
 func TestNormalizeStatement(t *testing.T) {
 	cases := map[string]string{
 		"SELECT  *\n FROM t WHERE a = 'bob''s' AND b = 42": "SELECT * FROM t WHERE a = ? AND b = ?",
