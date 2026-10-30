@@ -116,14 +116,18 @@ side, as ADR-003 does for the attach stream. That closes the remaining window on
   them (a full queue would otherwise trip the 250 ms slow-subscriber eviction when `FirstPaint` is delayed behind
   `resizeApplyMu` or a slow capture). If `FirstPaint` is never called, the subscriber is evicted after
   `defaultFirstPaintMaxAwait` (30 s); the check shares a lock with `beginFirstPaint`, so it cannot evict mid-paint.
-- **A paint must carry a capture.** Frames dropped while awaiting are safe to drop only because the capture covers them, so
-  `writeHubInitialSnapshot` returns an error (the connection fails visibly) when neither the redraw nor the text capture
-  works, instead of the old empty snapshot. This changes the hub path for a session whose capture fails: it now errors
-  rather than showing a blank terminal.
+- **A failed capture paints blank, it does not end the connection.** `writeHubInitialSnapshot` retries the text capture for up
+  to `hubCaptureRetryWindow` (1 s; the paint holds the resize lock), then paints an empty snapshot and lets live frames
+  follow. Failing the connection instead made a session whose capture keeps failing (e.g. `ErrSessionNotStarted` mid-resume)
+  reconnect-loop while its live output worked. Frames dropped before the paint are lost in that case, as they were before
+  this ADR; frames held during the paint are still replayed in order.
 - **Frames during the paint are held, not queued.** From `beginFirstPaint` until the writer has replayed them, frames go to a
   bounded side list, not the 100-deep outbound queue, so a long capture or a stalled socket cannot trip the slow-subscriber
   eviction. The writer sends the list before the queue and switches over under the same lock, so no frame falls between the
   two. More than `maxPaintBacklog` (4096) frames fail the connection rather than leaving a gap.
+- **Replay honours the slow-subscriber grace.** Once the paint returns, the held list may grow by only one queue's worth
+  (`drainLimit`) beyond what it held; further frames are dropped and arm the usual 250 ms eviction, which fires if the list is
+  still at its limit. A socket that stalls during replay is therefore evicted, as one stalling on the live queue is.
 - **Residual duplicate window.** A frame broadcast after `FirstPaint` starts but while the capture RPC is in flight (up to
   `fullStateCaptureTimeout`, 3 s) is held and replayed after the paint, and may already be in the capture, so it can be
   applied twice. No clean cutoff exists: the hub cannot observe when, relative to the pump's frames, the daemon took its

@@ -338,9 +338,12 @@ func TestWriteHubInitialSnapshot_should_UseWriteDeadline_OnLegacyText(t *testing
 	require.Error(t, err)
 }
 
-// Output dropped while a subscriber awaited its paint is only safe to drop if the paint carries a
-// capture; when neither capture works the connection must fail, not paint blank.
-func TestSendHubInitialSnapshot_should_Fail_When_NoCaptureSucceeds(t *testing.T) {
+// A capture that keeps failing must not end the connection: the client gets a blank paint and
+// then live frames, instead of a reconnect loop on a session whose output works.
+func TestSendHubInitialSnapshot_should_PaintBlankAndStreamLive_When_NoCaptureSucceeds(t *testing.T) {
+	old := hubCaptureRetryWindow
+	hubCaptureRetryWindow = time.Millisecond
+	t.Cleanup(func() { hubCaptureRetryWindow = old })
 	stream, conn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
 	boom := errors.New("daemon gone")
@@ -348,14 +351,12 @@ func TestSendHubInitialSnapshot_should_Fail_When_NoCaptureSucceeds(t *testing.T)
 	hub := streamhub.NewStreamHub("s", nil, streamhub.WithTeardownGrace(time.Hour))
 	id := attachFirstPaintSubscriber(t, stream, hub)
 
-	err := newFirstPaintHandler().sendHubInitialSnapshot(stream, hub, id, inst, "s")
+	require.NoError(t, newFirstPaintHandler().sendHubInitialSnapshot(stream, hub, id, inst, "s"))
+	blank := string(readOutput(t, conn).Data)
+	assert.True(t, strings.HasPrefix(blank, ansiSnapshotPrefix), "a blank paint must still clear the client's spinner")
 
-	require.ErrorIs(t, err, boom)
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
-	_, _, rerr := conn.ReadMessage()
-	var ne net.Error
-	require.ErrorAs(t, rerr, &ne)
-	require.True(t, ne.Timeout(), "a blank paint was sent: %v", rerr)
+	hub.Broadcast([]byte("live-frame"))
+	assert.Contains(t, string(readOutput(t, conn).Data), "live-frame")
 }
 
 func scrollbackHandler(t *testing.T) *ConnectRPCWebSocketHandler {

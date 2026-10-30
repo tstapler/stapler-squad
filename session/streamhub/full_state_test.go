@@ -493,3 +493,26 @@ func runFirstPaintRace(t *testing.T, it int) {
 		"iteration %d: frames after the capture (saw %d, last %d) were lost: missing %v, events %d, first %v", it, snapSeq, last, missing(), len(tr.snapshot()), tr.snapshot()[:min(6, len(tr.snapshot()))])
 	require.Equal(t, "paint", tr.snapshot()[0], "iteration %d", it)
 }
+
+// A socket that stalls right after the paint must still be evicted: frames held during the paint
+// and replayed by the writer may not bypass the slow-subscriber grace.
+func TestFirstPaint_should_EvictSubscriber_When_TransportStallsDuringReplay(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+		streamhub.WithTeardownGrace(time.Hour),
+		streamhub.WithSubscriberBufferSize(4),
+		streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
+	blocked := streamhub.NewMemoryTransport(streamhub.WithBlockingSend())
+	id := hub.AttachSubscriber(blocked, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	require.NoError(t, hub.FirstPaint(id, func() error {
+		hub.Broadcast([]byte("held")) // lands in the paint backlog, so the writer's first Send blocks
+		return nil
+	}))
+	require.Eventually(t, func() bool {
+		hub.Broadcast([]byte("live"))
+		return hub.SubscriberCount() == 0
+	}, 5*time.Second, time.Millisecond, "a stalled replay must trip the slow-subscriber eviction")
+	require.Equal(t, int64(1), hub.SlowSubscriberDropsTotal())
+}

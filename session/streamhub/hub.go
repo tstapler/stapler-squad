@@ -454,8 +454,8 @@ var ErrUnknownSubscriber = errors.New("streamhub: unknown subscriber")
 // includes them, and replaying them would apply them twice, and nothing drains a queue then).
 // Frames that arrive during paint are held, up to maxPaintBacklog, and the writer sends them
 // right after the paint, so none is lost (those the capture already contains are duplicated).
-// paint must return an error rather than paint blank when it captured nothing: the frames
-// dropped before it would otherwise be lost silently. paint blocks resizes for its duration
+// A paint that captured nothing loses the frames dropped before it; the caller decides whether
+// that is worth failing the connection (the websocket handler paints blank). paint blocks resizes for its duration
 // (one capture RPC plus one socket write), and is not given the hub's other locks.
 func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
 	h.mu.Lock()
@@ -637,10 +637,13 @@ func (h *StreamHub) Broadcast(data []byte) {
 }
 
 func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
-	if sub.trySend(data) {
+	delivered, stalled := sub.trySend(data)
+	if delivered && !stalled {
 		return
 	}
-	h.tap.Record(TapDrop, DropCauseSubscriberUndelivered, data)
+	if !delivered {
+		h.tap.Record(TapDrop, DropCauseSubscriberUndelivered, data)
+	}
 
 	if !sub.markSlow() {
 		// Already stalled and a timer is pending for it; this frame is
