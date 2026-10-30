@@ -26,3 +26,17 @@ describe("createQueryResponder", () => {
     expect(createQueryResponder().feed("\x1b[?1049h\x1b[2J\x1b[?25l")).toBe("");
   });
 });
+
+describe("createQueryResponder on large input", () => {
+  it("handles a multi-megabyte replay chunk without overflowing the stack", () => {
+    const r = createQueryResponder();
+    const big = "\x1b[0m\x1b[31mline of text\x1b[0m\r\n".repeat(200_000);
+    expect(r.feed(`${big}\x1b[?u${big}`)).toBe("\x1b[?0u");
+  });
+
+  it("does not carry over a long digit run indefinitely", () => {
+    const r = createQueryResponder();
+    expect(r.feed(`\x1b[?${"1".repeat(40)}`)).toBe("");
+    expect(r.feed("$p\x1b[?u")).toBe("\x1b[?0u");
+  });
+});
