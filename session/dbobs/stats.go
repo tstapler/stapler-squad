@@ -49,6 +49,9 @@ type Stats struct {
 	// TopStatements ranks (statement, caller) pairs by total time, so write
 	// amplification from one caller is visible without a profiler.
 	TopStatements []StatementStat `json:"top_statements,omitempty"`
+	// DroppedStatementKeys counts distinct (statement, caller) pairs the bounded
+	// table refused; non-zero means TopStatements is missing late-arriving callers.
+	DroppedStatementKeys int64 `json:"dropped_statement_keys,omitempty"`
 }
 
 func ms(nanos int64) float64 { return float64(nanos) / float64(time.Millisecond) }
@@ -63,6 +66,8 @@ func (c *collector) snapshot() Stats {
 		TotalDurationMs: ms(c.stat.totalNanos.Load()), MaxDurationMs: ms(c.stat.maxNanos.Load()),
 		SlowThresholdMs: c.cfg.SlowThreshold.Milliseconds(),
 		TopStatements:   c.stmts.top(topStatementsReported),
+
+		DroppedStatementKeys: c.stmts.droppedKeys(),
 	}
 }
 

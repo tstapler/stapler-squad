@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,34 +104,112 @@ func BenchmarkSaveInstances_AllUnchanged(b *testing.B) {
 	}
 }
 
-// Racing saves must never leave a fingerprint that makes a later save of the
-// newest data look unchanged while the row holds an older value.
-func TestSaveInstances_Should_ConvergeToLatestData_When_SavesRace(t *testing.T) {
+// persist must hold the mutex across check, write and record: if it released
+// it around write(), a racing save could record a fingerprint for data the row
+// does not hold. TryLock from inside a blocked write observes that directly.
+func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
+	t.Parallel()
+	var f savedFingerprints
+	inWrite := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.persist(InstanceData{Title: "t"}, func() bool {
+			close(inWrite)
+			<-release
+			return true
+		})
+	}()
+	<-inWrite
+	locked := !f.mu.TryLock()
+	if !locked {
+		f.mu.Unlock()
+	}
+	close(release)
+	<-done
+	assert.True(t, locked, "persist must keep the mutex held while its write runs")
+}
+
+// A concurrent persist can re-record the old fingerprint between a direct
+// row write's forget and the write landing; writeRow must forget again after.
+func TestWriteRow_Should_ForgetAfterWrite(t *testing.T) {
+	t.Parallel()
+	s := &Storage{}
+	data := InstanceData{Title: "t"}
+	s.saved.persist(data, func() bool { return true })
+
+	err := s.writeRow("t", func() error {
+		// simulates a save racing with the write and re-recording the title
+		s.saved.persist(data, func() bool { return true })
+		return nil
+	})
+	require.NoError(t, err)
+
+	wrote := false
+	s.saved.persist(data, func() bool { wrote = true; return true })
+	assert.True(t, wrote, "fingerprint recorded during the write must not survive it")
+}
+
+// ProcessingGraceUntil is persisted by the full save; a partial writer that
+// cleared it in the DB while memory kept the deadline used to be masked by the
+// next save and would now be skipped as unchanged.
+func TestUpdateInstanceLastUserResponse_Should_KeepProcessingGrace(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := newTestInstance("dedup-race")
+	inst := newTestInstance("dedup-grace")
 	require.NoError(t, storage.AddInstance(inst))
-
-	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go func(g int) {
-			defer wg.Done()
-			for i := 0; i < 25; i++ {
-				inst.SetNote(fmt.Sprintf("note-%d-%d", g, i))
-				_ = storage.SaveInstances([]*Instance{inst})
-			}
-		}(g)
-	}
-	wg.Wait()
-
+	inst.ProcessingGraceUntil = time.Now().Add(time.Hour).Truncate(time.Millisecond)
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.UpdateInstanceLastUserResponse(inst.Title, time.Now()))
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, inst.Snapshot().Note, loaded[0].Snapshot().Note, "stored note must match the in-memory note after the final save")
+	assert.False(t, loaded[0].ProcessingGraceUntil.IsZero(), "recording a user response must not clear the stored grace deadline")
+}
+
+// UpdateInstanceIfEpoch is keyed by id; it must only invalidate the matching
+// session, not force the next pass to rewrite every session.
+func TestUpdateInstanceIfEpoch_Should_OnlyForgetMatchingSession(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	a, b := newTestInstance("dedup-epoch-a"), newTestInstance("dedup-epoch-b")
+	require.NoError(t, storage.AddInstance(a))
+	require.NoError(t, storage.AddInstance(b))
+	require.NoError(t, storage.SaveInstances([]*Instance{a, b}))
+
+	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, Stopped, "x")
+	require.NoError(t, err)
+	updates := countSessionUpdates(t, storage)
+
+	require.NoError(t, storage.SaveInstances([]*Instance{b}))
+	assert.Zero(t, updates.Load(), "an unrelated session must still be skipped")
+	require.NoError(t, storage.SaveInstances([]*Instance{a}))
+	assert.Positive(t, updates.Load(), "the session the epoch write touched must be re-saved")
+}
+
+// AssignSessionsToProject changes project_id behind the fingerprint.
+func TestAssignSessionsToProject_Should_ForceResave(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("dedup-project")
+	require.NoError(t, storage.AddInstance(inst))
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	_, err := storage.CreateProject(context.Background(), ProjectData{ID: "proj-dedup", Name: "proj-dedup"})
+	require.NoError(t, err)
+	require.NoError(t, storage.AssignSessionsToProject(context.Background(), "proj-dedup", []string{inst.Title}))
+	updates := countSessionUpdates(t, storage)
+
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	assert.Positive(t, updates.Load(), "re-save after a project assignment must not be skipped")
 }
 
 // A direct row writer changes the row behind the fingerprint; the caller's

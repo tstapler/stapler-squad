@@ -29,6 +29,8 @@ type StatementStat struct {
 	PoolWaitMs float64 `json:"pool_wait_ms"`
 }
 
+// stmtKey holds the normalized statement (see NormalizeStatement), so IN lists
+// and multi-row VALUES of varying length share one key.
 type stmtKey struct{ statement, caller string }
 
 type stmtAgg struct {
@@ -37,8 +39,9 @@ type stmtAgg struct {
 }
 
 type statementTable struct {
-	mu   sync.Mutex
-	rows map[stmtKey]*stmtAgg
+	mu      sync.Mutex
+	rows    map[stmtKey]*stmtAgg
+	dropped int64 // new keys refused because the table was full
 }
 
 func (t *statementTable) add(k stmtKey, elapsed, wait time.Duration) {
@@ -50,6 +53,7 @@ func (t *statementTable) add(k stmtKey, elapsed, wait time.Duration) {
 	a := t.rows[k]
 	if a == nil {
 		if len(t.rows) >= maxStatementKeys {
+			t.dropped++
 			return
 		}
 		a = &stmtAgg{}
@@ -63,13 +67,19 @@ func (t *statementTable) add(k stmtKey, elapsed, wait time.Duration) {
 	}
 }
 
+func (t *statementTable) droppedKeys() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.dropped
+}
+
 // top returns the n rows with the greatest total duration.
 func (t *statementTable) top(n int) []StatementStat {
 	t.mu.Lock()
 	out := make([]StatementStat, 0, len(t.rows))
 	for k, a := range t.rows {
 		out = append(out, StatementStat{
-			Statement: NormalizeStatement(k.statement), Caller: k.caller, Count: a.count,
+			Statement: k.statement, Caller: k.caller, Count: a.count,
 			TotalMs: ms(int64(a.total)), MaxMs: ms(int64(a.max)), PoolWaitMs: ms(int64(a.waits)),
 		})
 	}

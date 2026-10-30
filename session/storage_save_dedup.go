@@ -1,10 +1,14 @@
 package session
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/ent"
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
 
 // savedFingerprints remembers a hash of the InstanceData last persisted per
@@ -72,4 +76,35 @@ func (f *savedFingerprints) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.m = nil
+}
+
+// writeRow runs a direct row write and clears the title's fingerprint on both
+// sides of it. Clearing only before leaves a window where a concurrent persist
+// re-records the pre-write fingerprint, so the caller's follow-up re-save of
+// the unchanged in-memory instance would be skipped.
+func (s *Storage) writeRow(title string, write func() error) error {
+	s.saved.forget(title)
+	err := write()
+	s.saved.forget(title)
+	return err
+}
+
+func (s *Storage) forgetAll(titles []string) {
+	for _, t := range titles {
+		s.saved.forget(t)
+	}
+}
+
+// titlesMatchingID resolves an id (uuid or title) to row titles so id-keyed
+// writers clear only the affected fingerprints; on lookup failure it clears all.
+func (s *Storage) titlesMatchingID(ctx context.Context, client *ent.Client, id string) []string {
+	titles, err := client.Session.Query().
+		Where(entsession.Or(entsession.UUID(id), entsession.Title(id))).
+		Select(entsession.FieldTitle).
+		Strings(ctx)
+	if err != nil {
+		s.saved.reset()
+		return nil
+	}
+	return titles
 }

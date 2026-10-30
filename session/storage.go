@@ -554,8 +554,7 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 	data.Status = Stopped
 	// The row now differs from what the live instance last saved; the caller's
 	// re-save must not be skipped as "unchanged".
-	s.saved.forget(data.Title)
-	if err := s.repo.Update(context.Background(), *data); err != nil {
+	if err := s.writeRow(data.Title, func() error { return s.repo.Update(context.Background(), *data) }); err != nil {
 		return false, fmt.Errorf("update session %s: %w", id, err)
 	}
 	return true, nil
@@ -636,6 +635,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	data := instance.ToInstanceData()
 	ctx := context.Background()
 	s.saved.forget(data.Title)
+	defer s.saved.forget(data.Title) // an in-flight save may re-record the old fingerprint before the row lands
 	if err := s.repo.Create(ctx, data); err != nil {
 		if !ent.IsConstraintError(err) {
 			return fmt.Errorf("failed to persist session %q: %w", data.Title, err)
@@ -677,15 +677,13 @@ func (s *Storage) AddInstance(instance *Instance) error {
 // (e.g. e2e debug seed handlers). Use AddInstance for anything with a live
 // Instance.
 func (s *Storage) CreateInstanceData(ctx context.Context, data InstanceData) error {
-	s.saved.forget(data.Title)
-	return s.repo.Create(ctx, data)
+	return s.writeRow(data.Title, func() error { return s.repo.Create(ctx, data) })
 }
 
 // UpdateInstance updates an existing instance in storage.
 func (s *Storage) UpdateInstance(instance *Instance) error {
 	data := instance.ToInstanceData()
-	s.saved.forget(data.Title)
-	return s.repo.Update(context.Background(), data)
+	return s.writeRow(data.Title, func() error { return s.repo.Update(context.Background(), data) })
 }
 
 // UpdateInstanceMetadata persists a narrow set of session metadata fields (title rename,
@@ -744,15 +742,18 @@ func (s *Storage) UpdateInstanceInitialPromptSentAt(title string, t time.Time) e
 }
 
 // UpdateInstanceLastUserResponse persists the LastUserResponse timestamp for a session.
-// Uses a direct UPDATE (no read round-trip) via UpdateReviewQueueState.
+// Uses a direct UPDATE (no read round-trip) that touches only last_user_response;
+// UpdateReviewQueueState would also clear processing_grace_until.
 func (s *Storage) UpdateInstanceLastUserResponse(title string, lastUserResponse time.Time) error {
-	return s.repo.UpdateReviewQueueState(context.Background(), title, lastUserResponse, time.Time{}, time.Time{}, "")
+	return s.repo.UpdateLastUserResponse(context.Background(), title, lastUserResponse)
 }
 
 // UpdateInstanceAcknowledged sets the LastAcknowledged timestamp to now for a specific instance.
 // Used by AcknowledgeSession when the instance is not available in the live poller.
 func (s *Storage) UpdateInstanceAcknowledged(title string) error {
-	return s.repo.UpdateLastAcknowledged(context.Background(), title, time.Now())
+	return s.writeRow(title, func() error {
+		return s.repo.UpdateLastAcknowledged(context.Background(), title, time.Now())
+	})
 }
 
 // UpdateInstanceProcessingGrace persists the ProcessingGraceUntil timestamp.
@@ -772,15 +773,17 @@ func (s *Storage) UpdateInstancePRStatus(title, _, _, _ string, _, _ int, _, ter
 	if !terminal {
 		return nil
 	}
-	s.saved.forget(title)
-	return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
+	return s.writeRow(title, func() error {
+		return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
+	})
 }
 
 // UpdateInstancePRNumber persists the discovered PR number for a session so it
 // survives restarts and avoids repeated branch-name lookups in PRStatusPoller.
 func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
-	s.saved.forget(title)
-	return s.repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
+	return s.writeRow(title, func() error {
+		return s.repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
+	})
 }
 
 // UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in
@@ -793,8 +796,9 @@ func (s *Storage) UpdateInstanceForkFlag(_ string, _ bool) error {
 // UpdateInstanceArtifacts persists the JSON-encoded artifact blob for a session.
 // Only the session_artifacts column is touched; all other fields are unchanged.
 func (s *Storage) UpdateInstanceArtifacts(title string, blob string) error {
-	s.saved.forget(title)
-	return s.repo.UpdateSessionArtifacts(context.Background(), title, blob)
+	return s.writeRow(title, func() error {
+		return s.repo.UpdateSessionArtifacts(context.Background(), title, blob)
+	})
 }
 
 // GetInstanceArtifacts loads the raw JSON-encoded artifact blob for a session.
@@ -820,7 +824,9 @@ func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, captured
 	if client == nil {
 		return false, fmt.Errorf("UpdateInstanceIfEpoch not supported by this backend")
 	}
-	s.saved.reset() // keyed by id, not title: any saved fingerprint may now be stale
+	titles := s.titlesMatchingID(ctx, client, id)
+	defer s.forgetAll(titles)
+	s.forgetAll(titles)
 	n, err := client.Session.Update().
 		Where(
 			entsession.Or(entsession.UUID(id), entsession.Title(id)),
@@ -994,12 +1000,18 @@ func (s *Storage) UpdateProject(ctx context.Context, data ProjectData) (*Project
 
 // DeleteProject removes a project from storage (sessions are unassigned).
 func (s *Storage) DeleteProject(ctx context.Context, name string) error {
-	return s.repo.DeleteProject(ctx, name)
+	s.saved.reset() // unassigns an unknown set of sessions
+	err := s.repo.DeleteProject(ctx, name)
+	s.saved.reset()
+	return err
 }
 
 // AssignSessionsToProject links sessions to a project in storage.
 func (s *Storage) AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error {
-	return s.repo.AssignSessionsToProject(ctx, projectName, sessionTitles)
+	s.saved.reset() // ids may be titles or uuids; project ops are rare
+	err := s.repo.AssignSessionsToProject(ctx, projectName, sessionTitles)
+	s.saved.reset()
+	return err
 }
 
 // --- Backlog ---
