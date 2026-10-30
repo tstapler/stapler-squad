@@ -134,6 +134,7 @@ type ReviewQueuePoller struct {
 	optionsSource    FlagOptionsSource          // Attention flags, read once per poll cycle; nil = all off
 	explain          suppressionExplainer       // Why-suppressed and why-skipped visibility
 	recorder         SessionEventRecorder       // Attention raised/cleared sink; nil = no-op
+	instanceWirer    func(*Instance)            // Registers per-instance collaborators (turn-end sink, recorder); nil = none
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -213,6 +214,26 @@ func (rqp *ReviewQueuePoller) SetInstances(instances []*Instance) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 	rqp.instances = instances
+	rqp.wireInstances(instances)
+}
+
+// SetInstanceWirer sets the registration hook applied to every instance the poller tracks,
+// now and on later SetInstances/AddInstance calls, so no creation path has to remember it.
+func (rqp *ReviewQueuePoller) SetInstanceWirer(wire func(*Instance)) {
+	rqp.mu.Lock()
+	defer rqp.mu.Unlock()
+	rqp.instanceWirer = wire
+	rqp.wireInstances(rqp.instances)
+}
+
+// wireInstances requires rqp.mu held.
+func (rqp *ReviewQueuePoller) wireInstances(instances []*Instance) {
+	if rqp.instanceWirer == nil {
+		return
+	}
+	for _, inst := range instances {
+		rqp.instanceWirer(inst)
+	}
 }
 
 // AddInstance adds a single instance to monitor.
@@ -223,6 +244,7 @@ func (rqp *ReviewQueuePoller) AddInstance(instance *Instance) {
 	// (e.g. bulk startup) don't all run git-status subprocesses simultaneously.
 	instance.gitManager.PrimeDirtyCacheJitter()
 	rqp.instances = append(rqp.instances, instance)
+	rqp.wireInstances([]*Instance{instance})
 }
 
 // RemoveInstance removes an instance from monitoring.

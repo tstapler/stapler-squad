@@ -77,3 +77,58 @@ func orNoopRecorder(r SessionEventRecorder) SessionEventRecorder {
 	}
 	return r
 }
+
+// gatedRecorder forwards to inner only while enabled() is true, so session_event_log off
+// keeps every Record* call a no-op without callers checking the flag.
+type gatedRecorder struct {
+	inner   SessionEventRecorder
+	enabled func() bool
+}
+
+// NewGatedSessionEventRecorder wraps inner behind a live flag read (nil inner = no-op).
+func NewGatedSessionEventRecorder(inner SessionEventRecorder, enabled func() bool) SessionEventRecorder {
+	return gatedRecorder{inner: orNoopRecorder(inner), enabled: enabled}
+}
+
+func (g gatedRecorder) on() bool { return g.enabled != nil && g.enabled() }
+
+func (g gatedRecorder) RecordTurnEnded(t string, turn TurnEnded) {
+	if g.on() {
+		g.inner.RecordTurnEnded(t, turn)
+	}
+}
+func (g gatedRecorder) RecordAttentionRaised(t string, r AttentionReason) {
+	if g.on() {
+		g.inner.RecordAttentionRaised(t, r)
+	}
+}
+func (g gatedRecorder) RecordAttentionCleared(t string, r AttentionReason) {
+	if g.on() {
+		g.inner.RecordAttentionCleared(t, r)
+	}
+}
+func (g gatedRecorder) RecordStatusChanged(t string, from, to Status) {
+	if g.on() {
+		g.inner.RecordStatusChanged(t, from, to)
+	}
+}
+func (g gatedRecorder) RecordAcknowledged(t string, undone bool) {
+	if g.on() {
+		g.inner.RecordAcknowledged(t, undone)
+	}
+}
+func (g gatedRecorder) RecordLifecycle(t string, e LifecycleEvent) {
+	if g.on() {
+		g.inner.RecordLifecycle(t, e)
+	}
+}
+func (g gatedRecorder) RecordNotificationSuppressed(t string, reason string) {
+	if g.on() {
+		g.inner.RecordNotificationSuppressed(t, reason)
+	}
+}
+func (g gatedRecorder) RecordApprovalResolved(t string, approved bool) {
+	if g.on() {
+		g.inner.RecordApprovalResolved(t, approved)
+	}
+}
