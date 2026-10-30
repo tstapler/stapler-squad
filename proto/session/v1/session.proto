@@ -1014,7 +1014,8 @@ message DeleteSessionRequest {
   // Session identifier.
   string id = 1;
 
-  // Force deletion even if session is running.
+  // Discard uncommitted changes in the session's worktree. Without it, deleting a session
+  // whose worktree is dirty (or whose state can't be checked) fails with FAILED_PRECONDITION.
   bool force = 2;
 }
 
