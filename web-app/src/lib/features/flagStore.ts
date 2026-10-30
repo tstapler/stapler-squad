@@ -115,10 +115,9 @@ export async function loadFlags(
     inFlight = fetchFlags(cached?.etag ?? "")
       .then(async (res) => {
         if (res.notModified) {
-          if (startedAt !== generation) return cached?.flags ?? [];
           if (cached) {
-            // Unchanged: keep the held body (same reference, so no re-render) and just extend its TTL.
-            cached = { ...cached, at: now() };
+            // Unchanged: keep the held body (same reference, so no re-render); extend the TTL only if no write intervened.
+            if (startedAt === generation) cached = { ...cached, at: now() };
             return cached.flags;
           }
           // Nothing held to keep (cleared mid-flight): ask again without a validator.

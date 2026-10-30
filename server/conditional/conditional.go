@@ -26,6 +26,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -35,7 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
-// Outcome labels the counter. The set is closed so the label stays low cardinality.
+// Outcome labels the counter (hit, for a server-side cache, joins when one is added). The set is closed so the label stays low cardinality.
 type Outcome string
 
 const (
@@ -43,8 +44,6 @@ const (
 	OutcomeMiss Outcome = "miss"
 	// OutcomeNotModified means the client's validator matched and the body was elided.
 	OutcomeNotModified Outcome = "not_modified"
-	// OutcomeHit means the body came from a server-side cache without recomputation.
-	OutcomeHit Outcome = "hit"
 
 	metricName = "conditional_reads_total"
 	tagBytes   = 16
@@ -109,42 +108,43 @@ func Check(rpc string, ifNoneMatch Validator, full proto.Message) (etag Validato
 	return etag, false
 }
 
-var (
-	tallyMu sync.Mutex
-	tally   = map[tallyKey]int64{}
-)
-
 type tallyKey struct {
 	rpc string
 	out Outcome
 }
 
-// Record counts one read outcome for rpc. rpc must be a fixed method name, never client text.
-func Record(rpc string, out Outcome) { record(rpc, out) }
+// tally mirrors the OTel counter so tests can read it without a metric reader.
+var tally sync.Map // tallyKey -> *atomic.Int64
 
-func record(rpc string, out Outcome) {
-	tallyMu.Lock()
-	tally[tallyKey{rpc, out}]++
-	tallyMu.Unlock()
+var readsCounter = sync.OnceValue(func() metric.Int64Counter {
 	c, err := telemetry.GetMeter().Int64Counter(metricName,
-		metric.WithDescription("Conditional read outcomes by RPC: hit (server cache), not_modified (body elided), miss (full body)"))
+		metric.WithDescription("Conditional read outcomes by RPC: not_modified (body elided) or miss (full body)"))
 	if err != nil {
-		return
+		log.Error("conditional: failed to register "+metricName, "err", err)
+		return nil
 	}
-	c.Add(context.Background(), 1, metric.WithAttributes(
-		attribute.String("rpc", rpc), attribute.String("outcome", string(out))))
+	return c
+})
+
+// record counts one outcome. rpc must be a fixed method name, never client text.
+func record(rpc string, out Outcome) {
+	n, _ := tally.LoadOrStore(tallyKey{rpc, out}, new(atomic.Int64))
+	n.(*atomic.Int64).Add(1)
+	if c := readsCounter(); c != nil {
+		c.Add(context.Background(), 1, metric.WithAttributes(
+			attribute.String("rpc", rpc), attribute.String("outcome", string(out))))
+	}
 }
 
 // Count returns the in-process tally for rpc and outcome (tests and diagnostics).
 func Count(rpc string, out Outcome) int64 {
-	tallyMu.Lock()
-	defer tallyMu.Unlock()
-	return tally[tallyKey{rpc, out}]
+	if n, ok := tally.Load(tallyKey{rpc, out}); ok {
+		return n.(*atomic.Int64).Load()
+	}
+	return 0
 }
 
 // ResetCountsForTest clears the in-process tally.
 func ResetCountsForTest() {
-	tallyMu.Lock()
-	tally = map[tallyKey]int64{}
-	tallyMu.Unlock()
+	tally.Range(func(k, _ any) bool { tally.Delete(k); return true })
 }

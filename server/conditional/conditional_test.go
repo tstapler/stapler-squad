@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func TestCheck_FirstCallIsMissAndCarriesEtag(t *testing.T) {
+func TestConditionalCheck_FirstCallIsMissAndCarriesEtag(t *testing.T) {
 	ResetCountsForTest()
 	body := wrapperspb.String("hello")
 
@@ -19,7 +19,7 @@ func TestCheck_FirstCallIsMissAndCarriesEtag(t *testing.T) {
 	assert.Equal(t, int64(1), Count("RpcA", OutcomeMiss))
 }
 
-func TestCheck_SameContentWithEtagIsNotModified(t *testing.T) {
+func TestConditionalCheck_SameContentWithEtagIsNotModified(t *testing.T) {
 	ResetCountsForTest()
 	body := wrapperspb.String("hello")
 	etag, _ := Check("RpcA", "", body)
@@ -31,7 +31,7 @@ func TestCheck_SameContentWithEtagIsNotModified(t *testing.T) {
 	assert.Equal(t, int64(1), Count("RpcA", OutcomeNotModified))
 }
 
-func TestCheck_ChangedContentInvalidates(t *testing.T) {
+func TestConditionalCheck_ChangedContentInvalidates(t *testing.T) {
 	ResetCountsForTest()
 	etag, _ := Check("RpcA", "", wrapperspb.String("v1"))
 
@@ -41,7 +41,7 @@ func TestCheck_ChangedContentInvalidates(t *testing.T) {
 	assert.NotEqual(t, etag, etag2)
 }
 
-func TestCheck_EtagIsBoundToRpc(t *testing.T) {
+func TestConditionalCheck_EtagIsBoundToRpc(t *testing.T) {
 	etagA, _ := Check("RpcA", "", wrapperspb.String("same"))
 
 	_, notModified := Check("RpcB", etagA, wrapperspb.String("same"))
@@ -49,7 +49,7 @@ func TestCheck_EtagIsBoundToRpc(t *testing.T) {
 	assert.False(t, notModified, "a validator minted for one RPC must not validate another")
 }
 
-func TestCheck_ClientCannotMintAValidator(t *testing.T) {
+func TestConditionalCheck_ClientCannotMintAValidator(t *testing.T) {
 	// The tag is keyed by a per-process secret: a client that knows the content
 	// (or guesses a hash of it) still cannot produce a matching validator.
 	guess := Validator("\"0123456789abcdef0123456789abcdef\"")
@@ -59,13 +59,13 @@ func TestCheck_ClientCannotMintAValidator(t *testing.T) {
 	assert.False(t, notModified)
 }
 
-func TestCheck_EmptyValidatorNeverMatches(t *testing.T) {
+func TestConditionalCheck_EmptyValidatorNeverMatches(t *testing.T) {
 	_, notModified := Check("RpcA", "", wrapperspb.String(""))
 
 	assert.False(t, notModified)
 }
 
-func TestTagMessage_StableWithinProcess(t *testing.T) {
+func TestConditionalTagMessage_StableWithinProcess(t *testing.T) {
 	a, err := TagMessage("RpcA", wrapperspb.String("x"))
 	require.NoError(t, err)
 	b, err := TagMessage("RpcA", wrapperspb.String("x"))

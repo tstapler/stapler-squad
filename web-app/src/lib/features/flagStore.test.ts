@@ -153,6 +153,20 @@ describe("flagStore", () => {
       expect(mockGetFeatureFlags.mock.calls[2][0]).toEqual({ ifNoneMatch: "" });
     });
 
+    it("flagStore_should_ReturnFreshFlags_When_StaleNotModifiedFindsTheCacheCleared", async () => {
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e1"' });
+      await loadFlags();
+      let resolve!: (v: unknown) => void;
+      mockGetFeatureFlags.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      const pending = loadFlags(Date.now, { force: true });
+      resetFlagStoreForTest();
+      mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
+      resolve({ flags: [], etag: '"e1"', notModified: true });
+      const flags = await pending;
+      expect(flags).toHaveLength(1);
+      expect(mockGetFeatureFlags.mock.calls[2][0]).toEqual({ ifNoneMatch: "" });
+    });
+
     it("flagStore_should_RefetchInFull_When_NotModifiedArrivesWithNothingToKeep", async () => {
       mockGetFeatureFlags.mockResolvedValueOnce({ flags: [], etag: '"e1"', notModified: true });
       mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("x", true)], etag: '"e2"' });
