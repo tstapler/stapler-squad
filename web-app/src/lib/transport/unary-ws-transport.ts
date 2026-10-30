@@ -12,6 +12,7 @@ import { Code, ConnectError, createContextKey, createContextValues } from "@conn
 import { createMethodUrl, runUnaryCall } from "@connectrpc/connect/protocol";
 import { codeFromString } from "@connectrpc/connect/protocol-connect";
 import { IDEMPOTENT_METHODS } from "@/lib/api/idempotentMethods";
+import { trackSharedEvent } from "@/lib/telemetry/rpcTiming";
 import allowlist from "./__fixtures__/ws-unary-allowlist.json";
 import {
   MAX_FRAME_BYTES,
@@ -306,7 +307,9 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
         this.queuedBytes + frame.length > SEND_QUEUE_MAX_BYTES
       ) {
         if (call.replayable) {
-          this.runOverHttp(call); // a read never surfaces "queue full" to the caller
+          // A read never surfaces "queue full"; count it where the policy counts its fallbacks.
+          trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason: "ws-send-queue-full" } });
+          this.runOverHttp(call);
           return;
         }
         this.settle(call);

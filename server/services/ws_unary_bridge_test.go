@@ -552,7 +552,7 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 func TestUnarySession_should_KeepIDReserved_UntilLastChunkWritten(t *testing.T) {
 	s := &unarySession{inflight: map[uint32]*inflightCall{7: {cancel: func() {}}}, writer: newUnaryWriter(nil), b: &UnaryWsBridge{metrics: newUnaryMetrics()}}
 	require.False(t, s.finishCall(7))
-	streamed, canceled, err := s.enqueueUnlessCanceled(7, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes))
+	streamed, canceled, err := s.enqueueUnlessCanceled(7, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes), nil)
 	require.NoError(t, err)
 	require.True(t, streamed)
 	require.False(t, canceled)
@@ -573,7 +573,7 @@ func TestUnarySession_should_SkipEnqueue_When_CancelArrivesAfterFinish(t *testin
 	s := &unarySession{inflight: map[uint32]*inflightCall{9: {cancel: func() {}}}, writer: newUnaryWriter(nil), b: &UnaryWsBridge{metrics: newUnaryMetrics()}}
 	s.finishCall(9)
 	s.cancelCall(9) // lands between finishCall and enqueue
-	streamed, canceled, err := s.enqueueUnlessCanceled(9, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes))
+	streamed, canceled, err := s.enqueueUnlessCanceled(9, unaryResponseMeta{}, make([]byte, 2*unaryMaxFrameBytes), nil)
 	require.NoError(t, err)
 	assert.True(t, canceled)
 	assert.False(t, streamed)

@@ -34,7 +34,8 @@ export type FallbackReason =
   | "ws-method-not-allowed"
   | "ws-call-timeout"
   | "ws-resource-exhausted"
-  | "ws-unavailable";
+  | "ws-unavailable"
+  | "ws-send-queue-full";
 
 // A browser WebSocket hides a rejected handshake's 401, so a 401 seen over HTTP is the only signal.
 let authRequired = false;
@@ -92,7 +93,6 @@ function recordFallback(reason: FallbackReason): void {
 }
 
 function recordQueueMs(ms: number): void {
-  trackSharedEvent({ name: "ws_unary_send_queue_ms", category: "performance", durationMs: ms });
   const perf = typeof window === "undefined" ? undefined : window.__ssqPerf;
   if (!perf) return;
   perf.wsQueueMs.push(ms);

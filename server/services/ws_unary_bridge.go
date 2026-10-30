@@ -48,11 +48,15 @@ const (
 	// still run process-wide: a reconnect resets the per-socket count, this does not.
 	wsUnaryMaxZombiesTotal = 128
 
-	// wsUnaryMaxZombies bounds handlers abandoned by CANCEL/deadline that have not
-	// returned yet (a goroutine cannot be killed). Past it, an abandoned call keeps
-	// its slot until the handler returns, so runaway handlers apply backpressure
-	// instead of growing without bound.
+	// wsUnaryMaxZombies bounds handlers that are still running wsUnaryZombieGrace
+	// after CANCEL/deadline (a goroutine cannot be killed). One more closes the
+	// socket; the client reconnects and replays reads over HTTP.
 	wsUnaryMaxZombies = 32
+
+	// wsUnaryZombieGrace is how long an abandoned handler may keep running before it
+	// counts as a zombie: a cooperative handler exits in microseconds, and a burst of
+	// cancels (route change) must neither close the socket nor inflate the metrics.
+	wsUnaryZombieGrace = 250 * time.Millisecond
 
 	// wsUnaryMaxCallTimeout clamps a client deadline and is the deadline for a call
 	// that sent none, so no handler context lives forever.
@@ -98,6 +102,7 @@ type UnaryWsBridge struct {
 	policies    map[string]func(*http.Request) bool
 	maxInFlight int
 	maxZombies  int
+	zombieGrace time.Duration
 	maxTimeout  time.Duration
 
 	bufferMax  int64
@@ -137,6 +142,12 @@ func WithUnaryMaxSockets(n int) UnaryWsOption {
 	return func(b *UnaryWsBridge) { b.maxSocket = n }
 }
 
+// WithUnaryZombieGrace overrides how long an abandoned handler may run before it
+// is counted as a zombie.
+func WithUnaryZombieGrace(d time.Duration) UnaryWsOption {
+	return func(b *UnaryWsBridge) { b.zombieGrace = d }
+}
+
 // WithUnaryMaxCallTimeout overrides the server-side clamp on call deadlines.
 func WithUnaryMaxCallTimeout(d time.Duration) UnaryWsOption {
 	return func(b *UnaryWsBridge) { b.maxTimeout = d }
@@ -155,6 +166,7 @@ func NewUnaryWsBridge(dispatchers UnaryDispatchers, opts ...UnaryWsOption) *Unar
 		policies:    map[string]func(*http.Request) bool{ListenerLocal: loopbackOriginAllowed},
 		maxInFlight: maxInFlightFromEnv(),
 		maxZombies:  wsUnaryMaxZombies,
+		zombieGrace: wsUnaryZombieGrace,
 		maxTimeout:  wsUnaryMaxCallTimeout,
 		bufferMax:   wsUnaryBufferBudget,
 		maxSocket:   wsUnaryMaxSockets,
@@ -261,6 +273,9 @@ type inflightCall struct {
 	canceled    bool // client sent CANCEL
 	handlerDone bool // the handler returned; result holds its output
 	zombie      bool // slot released while the handler still runs; its output is dropped
+	counted     bool // still running after the grace, so counted in s.zombies
+	exited      bool // an abandoned handler has returned
+	graceTimer  *time.Timer
 	result      chan callResult
 }
 
@@ -309,6 +324,7 @@ func (s *unarySession) serve(parent context.Context) {
 	defer func() {
 		s.cancel()
 		s.wg.Wait()
+		s.writer.abort() // streams still queued will never be written
 		_ = s.conn.Close()
 	}()
 
@@ -516,7 +532,7 @@ func (s *unarySession) cancelCall(id uint32) {
 	if call != nil {
 		call.canceled = true
 		if !call.handlerDone {
-			s.detachLocked(id, call, abandonCancel, false)
+			s.detachLocked(id, call, abandonCancel)
 		}
 	}
 	s.mu.Unlock()
@@ -536,26 +552,34 @@ func (s *unarySession) callContext(timeoutMs int64) (context.Context, context.Ca
 	return context.WithTimeout(s.ctx, limit)
 }
 
-// detachLocked releases id's slot while its handler is still running and counts
-// the handler as a zombie. At the zombie cap it refuses (false) unless force is
-// set, and closes the socket instead: stuck handlers that never return would
-// otherwise pin the socket's slots for good, and a fresh socket recovers.
+// detachLocked releases id's slot while its handler is still running. The handler
+// becomes a counted zombie only if it is still running after the grace period.
 // Caller holds s.mu.
-func (s *unarySession) detachLocked(id uint32, call *inflightCall, reason string, force bool) bool {
+func (s *unarySession) detachLocked(id uint32, call *inflightCall, reason string) {
 	if call.zombie || call.handlerDone {
-		return true
-	}
-	if !force && s.zombies >= s.b.maxZombies {
-		s.closeForZombieCapLocked()
-		return false
+		return
 	}
 	call.zombie = true
-	s.zombies++
 	delete(s.inflight, id)
-	s.b.metrics.zombieDelta(1)
 	s.b.metrics.inflightDelta(-1)
+	call.graceTimer = time.AfterFunc(s.b.zombieGrace, func() { s.countZombie(call, reason) })
+}
+
+// countZombie runs when the grace expires: a handler still running is a zombie,
+// and one beyond the cap closes the socket.
+func (s *unarySession) countZombie(call *inflightCall, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if call.exited {
+		return
+	}
+	call.counted = true
+	s.zombies++
+	s.b.metrics.zombieDelta(1)
 	s.b.metrics.abandoned(reason)
-	return true
+	if s.zombies > s.b.maxZombies {
+		s.closeForZombieCapLocked()
+	}
 }
 
 // closeForZombieCapLocked counts the event once per socket and ends the session;
@@ -566,7 +590,7 @@ func (s *unarySession) closeForZombieCapLocked() {
 	}
 	s.capClosed = true
 	s.b.metrics.abandoned(abandonCapped)
-	log.Warn("[UnaryWS] zombie cap reached, closing socket", "listener", s.listener, "zombies", s.zombies)
+	log.Warn("[UnaryWS] zombie cap exceeded, closing socket", "listener", s.listener, "zombies", s.zombies)
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -594,13 +618,18 @@ func (s *unarySession) releaseCall(id uint32) {
 // enqueueUnlessCanceled closes the CANCEL window between finishCall and the
 // enqueue: cancelCall sets canceled under s.mu before its drop(), so holding
 // s.mu here means either we see the cancel or drop() sees our stream.
-func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, body []byte) (streamed, canceled bool, err error) {
+func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, body []byte, onStreamDone func()) (streamed, canceled bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if call := s.inflight[id]; call != nil && call.canceled {
 		return false, true, nil
 	}
-	streamed, err = s.writer.enqueueResponse(id, meta, body, func() { s.releaseCall(id) })
+	streamed, err = s.writer.enqueueResponse(id, meta, body, func() {
+		s.releaseCall(id)
+		if onStreamDone != nil {
+			onStreamDone()
+		}
+	})
 	return streamed, false, err
 }
 
@@ -632,8 +661,14 @@ func (s *unarySession) runHandler(ctx context.Context, call *inflightCall, handl
 	defer s.mu.Unlock()
 	if call.zombie {
 		rec.release()
-		s.zombies--
-		s.b.metrics.zombieDelta(-1)
+		call.exited = true
+		if call.graceTimer != nil {
+			call.graceTimer.Stop()
+		}
+		if call.counted {
+			s.zombies--
+			s.b.metrics.zombieDelta(-1)
+		}
 		return
 	}
 	call.handlerDone = true
@@ -674,20 +709,18 @@ func (s *unarySession) abandon(ctx context.Context, call *inflightCall, f unaryF
 		// precedes the reply (suppressed above) or finds the call already answered.
 		s.replyError(f.ID, f.Method, unaryErrorBody{Code: "deadline_exceeded", Message: "call deadline exceeded"})
 	}
-	if !s.detachLocked(f.ID, call, reason, shutdown) {
-		s.detachLocked(f.ID, call, abandonShutdown, true) // the socket is closing; still account the call
-	}
+	s.detachLocked(f.ID, call, reason)
 	s.mu.Unlock()
 }
 
 // respond turns a finished handler's output into frames.
 func (s *unarySession) respond(f unaryFrame, res callResult) {
 	rec, panicked := res.rec, res.panicked
-	defer rec.release() // queued chunks are bounded by the writer's own cap
 	streamed := false
 	defer func() {
-		if !streamed {
+		if !streamed { // a streamed tail aliases rec.body until its last CHUNK is popped or dropped
 			s.releaseCall(f.ID)
+			rec.release()
 		}
 	}()
 	if canceled := s.finishCall(f.ID); canceled || s.ctx.Err() != nil {
@@ -704,7 +737,7 @@ func (s *unarySession) respond(f unaryFrame, res callResult) {
 		meta := rec.responseMeta()
 		var canceled bool
 		var err error
-		streamed, canceled, err = s.enqueueUnlessCanceled(f.ID, meta, rec.body.Bytes())
+		streamed, canceled, err = s.enqueueUnlessCanceled(f.ID, meta, rec.body.Bytes(), rec.release)
 		if canceled {
 			return
 		}
@@ -795,6 +828,20 @@ type unaryRecorder struct {
 	charged   int64
 }
 
+// tryCharge adds n to budget unless that would pass max; a failed attempt never
+// changes the budget, so a near-limit call is not failed by a neighbor's transient charge.
+func tryCharge(budget *atomic.Int64, n, max int64) bool {
+	for {
+		cur := budget.Load()
+		if cur+n > max {
+			return false
+		}
+		if budget.CompareAndSwap(cur, cur+n) {
+			return true
+		}
+	}
+}
+
 // release returns this recorder's bytes to the shared budget; idempotent.
 func (r *unaryRecorder) release() {
 	if r.budget != nil && r.charged > 0 {
@@ -818,21 +865,16 @@ func (r *unaryRecorder) Write(p []byte) (int, error) {
 		limit = wsUnaryMaxResponseBytes
 	}
 	n := int64(len(p))
+	if r.body.Len()+len(p) > limit {
+		r.overflow = true
+		return 0, io.ErrShortWrite
+	}
 	if r.budget != nil {
-		if r.budget.Add(n) > r.budgetMax {
-			r.budget.Add(-n)
+		if !tryCharge(r.budget, n, r.budgetMax) {
 			r.overflow = true
 			return 0, io.ErrShortWrite
 		}
 		r.charged += n
-	}
-	if r.body.Len()+len(p) > limit {
-		r.overflow = true
-		if r.budget != nil {
-			r.budget.Add(-n)
-			r.charged -= n
-		}
-		return 0, io.ErrShortWrite
 	}
 	return r.body.Write(p)
 }

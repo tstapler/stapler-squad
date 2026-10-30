@@ -1,6 +1,9 @@
 package services
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -15,6 +18,9 @@ import (
 
 // stuckBurst equals the harness in-flight cap: the burst that used to exhaust it.
 const stuckBurst = 6
+
+// testGrace is the zombie grace the stuck-handler tests use; cooperative tests use a long one.
+const testGrace = 10 * time.Millisecond
 
 // startStuck sends a ctx-ignoring call and waits until its handler is running.
 func startStuck(t *testing.T, h *bridgeHarness, c *websocket.Conn, id uint32, meta unaryRequestMeta) string {
@@ -38,7 +44,7 @@ func requireHealthyCall(t *testing.T, c *websocket.Conn, id uint32) {
 }
 
 func TestUnaryWsBridge_should_FreeSlots_When_CtxIgnoringHandlersAreCanceled(t *testing.T) {
-	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(stuckBurst))
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(stuckBurst), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < stuckBurst; i++ {
@@ -48,7 +54,8 @@ func TestUnaryWsBridge_should_FreeSlots_When_CtxIgnoringHandlersAreCanceled(t *t
 		sendCancel(t, c, uint32(2*i+1))
 	}
 	requireHealthyCall(t, c, 1<<20)
-	assert.EqualValues(t, stuckBurst, h.bridge.Metrics().Zombies(), "abandoned handlers are tracked as zombies")
+	require.Eventually(t, func() bool { return h.bridge.Metrics().Zombies() == stuckBurst }, readWait, time.Millisecond,
+		"handlers still running after the grace are tracked as zombies")
 
 	for _, k := range keys {
 		h.stub.release(k)
@@ -58,7 +65,7 @@ func TestUnaryWsBridge_should_FreeSlots_When_CtxIgnoringHandlersAreCanceled(t *t
 }
 
 func TestUnaryWsBridge_should_ReplyDeadlineExceeded_And_FreeSlots_When_HandlerIgnoresCtx(t *testing.T) {
-	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(stuckBurst))
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(stuckBurst), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < stuckBurst; i++ {
@@ -70,7 +77,7 @@ func TestUnaryWsBridge_should_ReplyDeadlineExceeded_And_FreeSlots_When_HandlerIg
 		assert.Equal(t, "deadline_exceeded", f.Error.Code)
 	}
 	requireHealthyCall(t, c, 1<<20)
-	assert.EqualValues(t, stuckBurst, h.bridge.Metrics().Abandoned(abandonDeadline))
+	require.Eventually(t, func() bool { return h.bridge.Metrics().Abandoned(abandonDeadline) == stuckBurst }, readWait, time.Millisecond)
 	for _, k := range keys {
 		h.stub.release(k)
 	}
@@ -78,7 +85,7 @@ func TestUnaryWsBridge_should_ReplyDeadlineExceeded_And_FreeSlots_When_HandlerIg
 }
 
 func TestUnaryWsBridge_should_CloseSocket_And_Recover_When_ZombieCapReached(t *testing.T) {
-	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(4), WithUnaryMaxZombies(2))
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxInFlight(4), WithUnaryMaxZombies(2), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < 4; i++ {
@@ -87,9 +94,11 @@ func TestUnaryWsBridge_should_CloseSocket_And_Recover_When_ZombieCapReached(t *t
 	for i := 0; i < 4; i++ {
 		sendCancel(t, c, uint32(2*i+1)) // the third CANCEL finds the cap full
 	}
+	start := time.Now()
 	require.NoError(t, c.SetReadDeadline(time.Now().Add(readWait)))
 	_, _, err := c.ReadMessage()
-	require.Error(t, err, "the server closes the socket so stuck handlers cannot pin its slots")
+	assert.True(t, websocket.IsCloseError(err, websocket.CloseGoingAway), "the server closes the socket: %v", err)
+	assert.Less(t, time.Since(start), readWait/2, "closed promptly, not by the read deadline")
 
 	m := h.bridge.Metrics()
 	assert.EqualValues(t, 1, m.Abandoned(abandonCapped), "counted once per socket, not per repeated CANCEL")
@@ -151,13 +160,57 @@ func TestUnaryWsBridge_should_ReleaseBudget_When_ZombieHandlerReturns(t *testing
 }
 
 func TestUnarySession_should_NotAccountZombie_When_HandlerAlreadyFinished(t *testing.T) {
-	s := &unarySession{inflight: map[uint32]*inflightCall{5: {cancel: func() {}, handlerDone: true}}, b: &UnaryWsBridge{metrics: newUnaryMetrics(), maxZombies: 1}}
+	s := &unarySession{inflight: map[uint32]*inflightCall{5: {cancel: func() {}, handlerDone: true}}, b: &UnaryWsBridge{metrics: newUnaryMetrics(), maxZombies: 1, zombieGrace: time.Hour}}
 	s.mu.Lock()
-	ok := s.detachLocked(5, s.inflight[5], abandonShutdown, true)
+	s.detachLocked(5, s.inflight[5], abandonShutdown)
 	s.mu.Unlock()
-	assert.True(t, ok)
 	assert.Zero(t, s.zombies, "a handler that already returned must not leak a zombie")
 	assert.Zero(t, s.b.metrics.Zombies())
+}
+
+// Cumulative abandoned handlers over a socket's life must not add up to the cap:
+// each returning zombie decrements the per-socket count.
+func TestUnarySession_should_DecrementZombieCount_When_AbandonedHandlerReturns(t *testing.T) {
+	b := &UnaryWsBridge{metrics: newUnaryMetrics(), maxZombies: 2, zombieGrace: time.Hour}
+	s := &unarySession{inflight: map[uint32]*inflightCall{}, b: b, listener: ListenerLocal,
+		upgrade: httptest.NewRequest("GET", "/api/ws/unary", nil)}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	defer s.cancel()
+	quick := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	for i := uint32(1); i <= 100; i++ {
+		call := &inflightCall{cancel: func() {}, result: make(chan callResult, 1)}
+		s.inflight[i] = call
+		s.mu.Lock()
+		s.detachLocked(i, call, abandonCancel)
+		s.mu.Unlock()
+		s.countZombie(call, abandonCancel) // the grace expired while the handler still ran
+		require.Equal(t, 1, s.zombies)
+		s.runHandler(s.ctx, call, quick, unaryFrame{ID: i, Method: listFilesMethod})
+		require.Zero(t, s.zombies, "cycle %d", i)
+	}
+	assert.False(t, s.capClosed, "100 sequential zombies never reach a cap of 2")
+	assert.Zero(t, b.metrics.Zombies())
+}
+
+func TestUnaryWsBridge_should_NotCountOrClose_When_CooperativeCallsAreCanceledInABurst(t *testing.T) {
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxZombies(2), WithUnaryZombieGrace(5*time.Second))
+	c := h.connect(nil)
+	const n = 40
+	for i := 0; i < n; i++ {
+		sendListFiles(t, c, uint32(2*i+1), "gate:burst"+strconv.Itoa(i))
+		<-h.stub.started
+	}
+	for i := 0; i < n; i++ {
+		sendCancel(t, c, uint32(2*i+1))
+	}
+	for i := 0; i < n; i++ {
+		<-h.stub.canceled
+	}
+	requireHealthyCall(t, c, 1<<20) // the socket is still open
+	m := h.bridge.Metrics()
+	require.Eventually(t, func() bool { return m.Inflight() == 0 }, readWait, time.Millisecond)
+	assert.Zero(t, m.Zombies())
+	assert.Zero(t, m.Abandoned(abandonCancel), "handlers that honored ctx are not zombies")
 }
 
 func TestUnaryWsBridge_should_AnswerOnce_When_CancelFollowsDeadline(t *testing.T) {
@@ -177,7 +230,7 @@ func TestUnaryWsBridge_should_AnswerOnce_When_CancelFollowsDeadline(t *testing.T
 
 func TestUnaryWsBridge_should_NotLeakGoroutines_Over100StuckCancelCycles(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxZombies(1000))
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryMaxZombies(1000), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < 100; i++ {

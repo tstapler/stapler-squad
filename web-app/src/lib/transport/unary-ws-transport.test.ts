@@ -9,7 +9,7 @@ import {
   ListFilesResponseSchema,
   SessionService,
 } from "@/gen/session/v1/session_pb";
-import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { createRpcTimingInterceptor, setRpcTimingSink } from "@/lib/telemetry/rpcTiming";
 import { encodeFrame, MAX_FRAME_BYTES, type MuxFrame } from "./unary-mux-frame";
 import { FakeWebSocket } from "./__fixtures__/fakeUnaryWebSocket";
 import {
@@ -297,13 +297,19 @@ describe("frame size routing", () => {
 
 describe("send queue and window", () => {
   it("unary_should_ReplayReadOverHttp_When_SendQueueFullWhileConnecting", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
     const h = setup();
     const ps = Array.from({ length: 65 }, (_, i) => settled(callListFiles(h.t, `/${i}`)));
     const last = await ps[64];
     expect(last.ok).toBe(true);
     expect(h.fallback.unary).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "ws_unary_fallback_total", labels: { reason: "ws-send-queue-full" } })
+    );
     h.sock().open();
     expect(h.sock().requestIds().length).toBe(MAX_IN_FLIGHT); // 64 queued, all fit the window
+    setRpcTimingSink(undefined);
     h.t.close();
   });
 
