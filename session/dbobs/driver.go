@@ -137,6 +137,16 @@ type txWrapper struct {
 	c *collector
 }
 
+// Commit and Rollback are observed too: a deferred write transaction usually
+// fails with SQLITE_BUSY at COMMIT, which Exec/Query alone would never see.
+func (t *txWrapper) Commit() error {
+	return t.c.observe(context.Background(), "COMMIT", t.Tx.Commit)
+}
+
+func (t *txWrapper) Rollback() error {
+	return t.c.observe(context.Background(), "ROLLBACK", t.Tx.Rollback)
+}
+
 func (t *txWrapper) Exec(ctx context.Context, q string, args, v any) error {
 	return t.c.observe(ctx, q, func() error { return t.Tx.Exec(ctx, q, args, v) })
 }

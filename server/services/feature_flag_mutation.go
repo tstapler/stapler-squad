@@ -233,8 +233,8 @@ func explicitOffKinds(cfg *config.Config) []deliverygate.HiddenKind {
 // kindOffStatusDetail is the per-kind half of the explicit-false status line
 // (Task 2.11g): one phrase per kind whose override is false. It is a source on
 // the composite provider, so registration order cannot hide it.
-func kindOffStatusDetail() string {
-	kinds := explicitOffKinds(config.LoadConfig())
+func kindOffStatusDetail(cfg *config.Config) string {
+	kinds := explicitOffKinds(cfg)
 	parts := make([]string, 0, len(kinds))
 	for _, k := range kinds {
 		parts = append(parts, fmt.Sprintf("Gate is OFF for kind %s: hidden %s sessions deliver everything", k, k))
@@ -251,8 +251,7 @@ const (
 // effective global value is off and either never set (shadow mode) or
 // explicitly false. It reads the effective value, so it goes silent once the
 // default flips on.
-func globalOffStatusDetail() string {
-	cfg := config.LoadConfig()
+func globalOffStatusDetail(cfg *config.Config) string {
 	name := config.HiddenSessionGateFeatureFlag
 	if cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name)) {
 		return ""

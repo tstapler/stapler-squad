@@ -84,11 +84,12 @@ func recordHistogram(name string, d time.Duration) {
 	}
 }
 
-// recordPoolWait records time a query spent queued for a pooled connection
-// (approximate: database/sql's WaitDuration is pool-wide). On the single-writer
-// pool this is the write-lock wait.
+// recordPoolWait records the connection-queue wait attributed to a query that had
+// to wait (zero waits are skipped). It is a diff of the pool-wide WaitDuration,
+// so concurrent queries over-attribute each other's wait. Kept next to the
+// cumulative db.pool.wait_* gauges because only a histogram gives p99 per query.
 func recordPoolWait(name string, d time.Duration) {
-	if waitHist != nil {
+	if waitHist != nil && d > 0 {
 		waitHist.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(nameAttr(name)))
 	}
 }
@@ -106,7 +107,7 @@ func initMetrics() {
 	histogram, _ = meter.Float64Histogram("db.query.duration",
 		metric.WithDescription("Duration of ent/SQLite queries"), metric.WithUnit("ms"))
 	waitHist, _ = meter.Float64Histogram("db.query.pool_wait",
-		metric.WithDescription("Time a query waited for a pooled connection (write-lock wait on the single writer pool)"),
+		metric.WithDescription("Connection-queue wait attributed to queries that had to wait (pool-wide, over-attributed under concurrency)"),
 		metric.WithUnit("ms"))
 	busyCounter, _ = meter.Int64Counter("db.busy_errors_total",
 		metric.WithDescription("Queries that failed with SQLITE_BUSY or SQLITE_LOCKED"))

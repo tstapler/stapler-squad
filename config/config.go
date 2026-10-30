@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -1530,7 +1529,6 @@ func GetAvailablePrograms() []string {
 }
 
 func LoadConfig() *Config {
-	loadConfigCalls.Add(1)
 	configDir, err := GetConfigDir()
 	if err != nil {
 		log.Error("failed to get config directory", "err", err)
@@ -1622,25 +1620,6 @@ func saveConfig(config *Config, paths ...string) error {
 	return saveConfigLocked(config, configPath)
 }
 
-// syncConfigFile is the fsync of each config save. A package var so tests can
-// count saves and emulate a stalled disk: on macOS os.File.Sync is F_FULLFSYNC,
-// which waits on every other writer's flush too.
-var syncConfigFile = func(f *os.File) error { return f.Sync() } //nolint:gochecknoglobals // test seam
-
-// SetSyncConfigFileForTest swaps the per-save fsync and returns a restore func.
-func SetSyncConfigFileForTest(fn func(*os.File) error) (restore func()) {
-	prev := syncConfigFile
-	syncConfigFile = fn
-	return func() { syncConfigFile = prev }
-}
-
-// loadConfigCalls counts LoadConfig calls (each reads and parses config.json).
-var loadConfigCalls atomic.Int64 //nolint:gochecknoglobals // diagnostic counter
-
-// LoadConfigCalls returns how many times LoadConfig has run; tests use the
-// delta to assert a request path reads config.json a bounded number of times.
-func LoadConfigCalls() int64 { return loadConfigCalls.Load() }
-
 // saveConfigLocked performs the marshal + write-tmp-then-rename sequence.
 // Callers must hold saveConfigLockFor(configPath) — factored out so
 // loadConfigWithDefaultFallback can share the same critical section as
@@ -1678,7 +1657,7 @@ func saveConfigLocked(config *Config, configPath string) (saveErr error) {
 	_, writeErr := tmpFile.Write(data)
 	// Sync before rename so a power loss cannot leave a zero-length config.json.
 	syncStart := time.Now()
-	syncErr := syncConfigFile(tmpFile)
+	syncErr := syncFile(tmpFile)
 	fsyncTook = time.Since(syncStart)
 	closeErr := tmpFile.Close()
 	if chmodErr != nil {
@@ -1783,6 +1762,7 @@ func (g *GitBackendCohortsConfig) UnmarshalJSON(data []byte) error {
 // LoadConfigFromPath loads and parses a config file from an explicit path.
 // Returns the config and any error encountered.
 func LoadConfigFromPath(path string) (*Config, error) {
+	countConfigRead(path)
 	// #nosec G304 -- all callers pass paths built from config.GetConfigDir() plus a
 	// fixed "config.json" filename, not caller/user-controlled input.
 	data, err := os.ReadFile(path)

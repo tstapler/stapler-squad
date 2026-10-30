@@ -1150,8 +1150,8 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		}
 		return ""
 	})
-	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
-	ff.AddStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)

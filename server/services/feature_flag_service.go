@@ -594,7 +594,7 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 // named feature flag. GetFeatureFlags calls fn on every request and populates
 // FeatureFlag.StatusDetail with its result (empty string when fn returns "").
 func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
-	f.setStatusDetailSlot(name, providerSlotKey, fn)
+	f.setStatusDetailSlot(name, providerSlotKey, ignoreConfig(fn))
 }
 
 // providerSlotKey names the slot SetStatusDetailProvider owns; a second call
@@ -603,10 +603,15 @@ const providerSlotKey = "provider"
 
 type statusDetailSlot struct {
 	key string
-	fn  func() string
+	fn  func(*config.Config) string
 }
 
-func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() string) {
+// ignoreConfig adapts a config-free source to the cfg-taking slot signature.
+func ignoreConfig(fn func() string) func(*config.Config) string {
+	return func(*config.Config) string { return fn() }
+}
+
+func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func(*config.Config) string) {
 	if f.statusDetailSlots == nil {
 		f.statusDetailSlots = make(map[string][]statusDetailSlot)
 	}
@@ -624,13 +629,20 @@ func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() str
 // line. Several sources (stats writer, explicit global false, per-kind false)
 // each speak for the same flag without replacing one another.
 func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string) {
+	f.setStatusDetailSlot(name, "", ignoreConfig(fn))
+}
+
+// AddConfigStatusDetailSource is AddStatusDetailSource for a source that reads
+// config.json: it is handed the one snapshot GetFeatureFlags loaded, so listing
+// flags parses the file once however many sources are wired.
+func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*config.Config) string) {
 	f.setStatusDetailSlot(name, "", fn)
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
 	parts := autonomyFlagStatusDetail(name, cfg)
 	for _, s := range f.statusDetailSlots[name] {
-		if d := s.fn(); d != "" {
+		if d := s.fn(cfg); d != "" {
 			parts = append(parts, d)
 		}
 	}
