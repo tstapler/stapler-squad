@@ -85,6 +85,19 @@ describe("client RPC metrics labels", () => {
     expect(secondEvent.labels).toMatchObject({ inflight: "1", dup: "1" });
   });
 
+  it("never flags overlapping identical writes as duplicates", async () => {
+    const track = jest.fn();
+    const { pending, next } = deferredNext();
+    const handler = createRpcTimingInterceptor({ track })(next as never) as Handler;
+    const write = () => ({ ...req(), method: SessionService.method.createSession }) as unknown as UnaryRequest;
+    const first = handler(write());
+    const second = handler(write());
+    pending[0].resolve();
+    pending[1].resolve();
+    await Promise.all([first, second]);
+    expect(track.mock.calls[1][0].labels).not.toHaveProperty("dup");
+  });
+
   it("does not flag sequential identical requests as duplicates", async () => {
     const track = jest.fn();
     const handler = createRpcTimingInterceptor({ track })((() => Promise.resolve({})) as never) as Handler;

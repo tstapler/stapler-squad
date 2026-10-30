@@ -9,7 +9,10 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 
+	_ "github.com/tstapler/stapler-squad/gen/proto/go/session/v1" // registers the RPC descriptors knownRPCMethods reads
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -34,7 +37,6 @@ const (
 	eventWsSend            = "cm.ws_send"
 	eventLongTask          = "cm.longtask"
 	maxClientDurationMs    = 10 * 60 * 1000
-	maxLabeledMethods      = 192
 	maxLabeledPages        = 32
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
@@ -43,8 +45,7 @@ const (
 )
 
 var (
-	methodShape = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,63}$`)
-	pageShape   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,23}$`)
+	pageShape = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,23}$`)
 
 	transports  = map[string]bool{"ws": true, "http": true, "batch": true, "stream": true}
 	coalesceOut = map[string]bool{"started": true, "joined": true}
@@ -63,6 +64,30 @@ var (
 		"internal": true, "unavailable": true, "data_loss": true, "unauthenticated": true,
 	}
 )
+
+// knownRPCMethods is every RPC method name compiled into the binary. The method label is drawn
+// only from this set, so a sender cannot spend the label budget on junk names ("first come" caps
+// let one bad client push every real method to "other").
+var knownRPCMethods = sync.OnceValue(func() map[string]bool {
+	known := map[string]bool{}
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		for i := 0; i < fd.Services().Len(); i++ {
+			ms := fd.Services().Get(i).Methods()
+			for j := 0; j < ms.Len(); j++ {
+				known[string(ms.Get(j).Name())] = true
+			}
+		}
+		return true
+	})
+	return known
+})
+
+func boundMethod(v string) string {
+	if knownRPCMethods()[v] {
+		return v
+	}
+	return otherLabel
+}
 
 // cappedSet admits at most max distinct values; later new values collapse to "other".
 type cappedSet struct {
@@ -101,7 +126,7 @@ func enum(v string, allowed map[string]bool) string {
 
 // clientMetrics holds the instruments fed by browser events.
 type clientMetrics struct {
-	methods, pages *cappedSet
+	pages *cappedSet
 
 	rpcDuration    metric.Float64Histogram
 	rpcQueueDelay  metric.Float64Histogram
@@ -120,7 +145,7 @@ type clientMetrics struct {
 }
 
 func newClientMetrics(m metric.Meter) *clientMetrics {
-	cm := &clientMetrics{methods: newCappedSet(maxLabeledMethods, methodShape), pages: newCappedSet(maxLabeledPages, pageShape)}
+	cm := &clientMetrics{pages: newCappedSet(maxLabeledPages, pageShape)}
 	var err error
 	hist := func(name, desc, unit string, bounds []float64) metric.Float64Histogram {
 		opts := []metric.Float64HistogramOption{metric.WithDescription(desc), metric.WithUnit(unit)}
@@ -142,14 +167,16 @@ func newClientMetrics(m metric.Meter) *clientMetrics {
 		return c
 	}
 	countBounds := []float64{1, 2, 3, 4, 5, 6, 8, 12, 16, 24, 32, 64}
-	cm.rpcDuration = hist("client.rpc.duration", "Browser-observed unary RPC duration (coalesced flight, includes queueing), by method, transport and Connect code", "ms", nil)
-	cm.rpcQueueDelay = hist("client.rpc.network_queue_delay", "Browser fetch queueing before bytes hit the wire (HTTP/1.1 connection cap), by transport", "ms", nil)
+	// Reaches past the 30s default RPC deadline so timeouts are not lumped into +Inf.
+	latencyBounds := []float64{5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 8000, 15000, 30000, 60000}
+	cm.rpcDuration = hist("client.rpc.duration", "Browser-observed unary RPC duration (coalesced flight, includes queueing), by method, transport and Connect code", "ms", latencyBounds)
+	cm.rpcQueueDelay = hist("client.rpc.network_queue_delay", "Browser fetch queueing before bytes hit the wire (HTTP/1.1 connection cap), by transport", "ms", latencyBounds)
 	cm.rpcInflight = ihist("client.rpc.inflight_at_start", "Unary RPCs already in flight in the tab when a new one started", countBounds)
 	cm.rpcDuplicates = counter("client.rpc.duplicate_inflight", "Unary RPCs started while an identical one was already in flight (coalescing missed it), by method")
 	cm.rpcCoalesce = counter("client.rpc.coalesce", "Coalescible unary calls by outcome: started a flight or joined one")
 	cm.wsEvents = counter("client.ws.events", "Browser WebSocket lifecycle events by kind, event and close code")
 	cm.wsPending = ihist("client.ws.pending_at_send", "Unary WebSocket calls pending (sent, unanswered) when a call was submitted", countBounds)
-	cm.wsQueueDelay = hist("client.ws.send_queue_delay", "Time a unary call waited before its frame was written to the socket", "ms", nil)
+	cm.wsQueueDelay = hist("client.ws.send_queue_delay", "Time a unary call waited before its frame was written to the socket", "ms", latencyBounds)
 	cm.wsFallback = counter("client.ws.unary_fallback", "Unary calls that fell back from WebSocket to HTTP, by reason")
 	cm.batchSize = ihist("client.batch.size", "Calls per /batch/unary request", countBounds)
 	cm.batchFallback = counter("client.batch.fallback", "Batch members re-run individually, by reason")
@@ -187,7 +214,7 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 		c.wsFallback.Add(ctx, 1, attrs(attribute.String("reason", enum(ev.Labels["reason"], fallbacks))))
 	case name == eventCoalesce:
 		c.rpcCoalesce.Add(ctx, 1, attrs(
-			attribute.String("method", c.methods.bound(ev.Labels["method"])),
+			attribute.String("method", boundMethod(ev.Labels["method"])),
 			attribute.String("outcome", enum(ev.Labels["outcome"], coalesceOut))))
 	case name == eventBatch:
 		c.batchSize.Record(ctx, boundedInt(ev.Labels["size"], maxBatchObservation))
@@ -217,7 +244,7 @@ func (c *clientMetrics) observeRPC(ctx context.Context, ev Event) {
 	if ev.DurationMs == nil {
 		return
 	}
-	method := c.methods.bound(ev.Labels["method"])
+	method := boundMethod(ev.Labels["method"])
 	transport := enum(ev.Labels["transport"], transports)
 	code := ev.Labels["code"]
 	switch {

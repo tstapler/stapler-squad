@@ -35,10 +35,14 @@ export function codeLabel(err: unknown): string {
 let inFlightCalls = 0;
 const inFlightByKey = new Map<string, number>();
 
+const READ_METHOD = /^(Get|List|Stat|Search|Find|Read)/;
+
+/** Identical-call key for read-shaped unary methods only: two overlapping identical writes are legitimate, not duplicates. */
 function dedupeKeyOf(req: { stream: boolean }): string | undefined {
   if (req.stream) return undefined;
   try {
     const u = req as unknown as UnaryRequest;
+    if (!READ_METHOD.test(u.method.name)) return undefined;
     return buildDedupeKey(u.method, u.message);
   } catch {
     return undefined;

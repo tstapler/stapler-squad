@@ -23,7 +23,7 @@ need `OTEL_ENABLED=true` on the server.
 
 | Label | Bound |
 |---|---|
-| `method` | must match `^[A-Za-z][A-Za-z0-9]{0,63}$`; at most 192 distinct values per process, then `other` |
+| `method` | must be an RPC method compiled into the binary (read from the proto registry), else `other`; junk names cannot use up the label budget |
 | `page` | first URL path segment only (`/sessions/<id>` -> `sessions`); `^[a-z0-9-]{1,24}$`; at most 32 distinct, then `other` |
 | `transport` | `ws`, `http`, `batch`, `stream` (server-streaming; duration is time-to-headers), else `unknown` |
 | `code` | the 17 Connect code names in snake_case, else `unknown` |

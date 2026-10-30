@@ -378,7 +378,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duplicate_inflight_total{method=~\"$method\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\"}[$__rate_interval]))",
+          "expr": "sum(rate(client_rpc_duplicate_inflight_total{method=~\"$method\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{method=~\"$method\",transport!=\"stream\"}[$__rate_interval]))",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -1407,7 +1407,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(client_rpc_duration_milliseconds_count{transport=\"batch\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count[$__rate_interval]))",
+          "expr": "sum(rate(client_rpc_duration_milliseconds_count{transport=\"batch\"}[$__rate_interval])) / sum(rate(client_rpc_duration_milliseconds_count{transport!=\"stream\"}[$__rate_interval]))",
           "legendFormat": "batch share",
           "refId": "A",
           "datasource": {

@@ -193,8 +193,7 @@ type unarySession struct {
 	mu       sync.Mutex
 	inflight map[uint32]*inflightCall
 
-	lastPingNanos atomic.Int64 // unix nanos of the outstanding ping, 0 when none
-	endReason     atomic.Value // string; first reason wins
+	endReason atomic.Value // string; first reason wins
 }
 
 // endWith records why the connection ended; the first caller wins.
@@ -225,8 +224,9 @@ func (s *unarySession) serve(parent context.Context) {
 	}()
 
 	_ = s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
-	s.conn.SetPongHandler(func(string) error {
-		if sent := s.lastPingNanos.Swap(0); sent != 0 {
+	s.conn.SetPongHandler(func(payload string) error {
+		// The pong echoes the ping payload (send time), so overlapping pings cannot cross-match.
+		if sent, err := strconv.ParseInt(payload, 10, 64); err == nil && sent > 0 {
 			s.b.metrics.pingRTT(s.listener, time.Since(time.Unix(0, sent)))
 		}
 		return s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
@@ -265,8 +265,8 @@ func (s *unarySession) keepalive() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			s.lastPingNanos.Store(time.Now().UnixNano())
-			if err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(unaryWriteWait)); err != nil {
+			payload := strconv.FormatInt(time.Now().UnixNano(), 10)
+			if err := s.conn.WriteControl(websocket.PingMessage, []byte(payload), time.Now().Add(unaryWriteWait)); err != nil {
 				s.endWith("ping_failed")
 				s.cancel()
 				return

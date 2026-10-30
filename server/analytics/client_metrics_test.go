@@ -65,12 +65,11 @@ func TestObserveRPCRecordsDurationByMethodTransportCode(t *testing.T) {
 
 func TestObserveRPCBoundsHostileLabels(t *testing.T) {
 	cm, r := newTestClientMetrics(t)
-	for i := 0; i < maxLabeledMethods+50; i++ {
+	for i := 0; i < 500; i++ {
 		cm.observe(context.Background(), Event{EventName: "rpc.x", DurationMs: ms(1),
-			Labels: map[string]string{"method": fmt.Sprintf("M%d", i), "transport": "evil/../path", "code": "<script>"}})
+			Labels: map[string]string{"method": fmt.Sprintf("Junk%d", i), "transport": "evil/../path", "code": "<script>"}})
 	}
-	cm.observe(context.Background(), Event{EventName: "rpc.x", DurationMs: ms(1),
-		Labels: map[string]string{"method": "has spaces/and-slash", "ok": "true"}})
+	cm.observe(context.Background(), Event{EventName: "rpc.x", DurationMs: ms(1), Labels: map[string]string{"method": "ListSessions", "ok": "true"}})
 	pts := histPoints[float64](collect(t, r)["client.rpc.duration"])
 	methods := map[string]bool{}
 	for _, p := range pts {
@@ -79,8 +78,8 @@ func TestObserveRPCBoundsHostileLabels(t *testing.T) {
 		tr, _ := p.Attributes.Value("transport")
 		assert.Equal(t, "unknown", tr.AsString())
 	}
-	assert.LessOrEqual(t, len(methods), maxLabeledMethods+1, "distinct methods are capped, the rest collapse to other")
-	assert.True(t, methods["other"])
+	assert.Equal(t, map[string]bool{"other": true, "ListSessions": true}, methods,
+		"junk names cannot consume label budget: a real method stays visible after 500 junk ones")
 }
 
 func TestObserveClampsDurationsAndCounts(t *testing.T) {

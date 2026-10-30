@@ -60,9 +60,13 @@ func upDownNamed(name, desc string) func() metric.Int64UpDownCounter {
 	})
 }
 
+// latencyBucketsMs reaches past the 30s default RPC deadline so timeouts are not lumped into +Inf.
+var latencyBucketsMs = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 8000, 15000, 30000, 60000}
+
 func histNamed(name, unit, desc string) func() metric.Float64Histogram {
 	return sync.OnceValue(func() metric.Float64Histogram {
-		h, err := telemetry.GetMeter().Float64Histogram(name, metric.WithUnit(unit), metric.WithDescription(desc))
+		h, err := telemetry.GetMeter().Float64Histogram(name, metric.WithUnit(unit), metric.WithDescription(desc),
+			metric.WithExplicitBucketBoundaries(latencyBucketsMs...))
 		if err != nil {
 			log.Error("services: failed to register "+name, "error", err)
 			return nil
