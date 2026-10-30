@@ -3,6 +3,7 @@
 package tymux
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -24,6 +25,7 @@ type tymuxPTYAdapter struct {
 	subID    string
 
 	closeOnce sync.Once
+	closed    chan struct{} // closed by close(); lets a retrying pumpInput stop
 }
 
 // newTymuxPTYAdapter subscribes to fanout and starts the two pump
@@ -49,7 +51,7 @@ func newTymuxPTYAdapter(fanout *ClientFanout, send func(*v1.AttachRequest) error
 
 	subID, outCh := fanout.Subscribe()
 
-	a := &tymuxPTYAdapter{external: external, internal: internal, fanout: fanout, subID: subID}
+	a := &tymuxPTYAdapter{external: external, internal: internal, fanout: fanout, subID: subID, closed: make(chan struct{})}
 
 	go a.pumpOutput(outCh)
 	go a.pumpInput(send)
@@ -79,15 +81,34 @@ func (a *tymuxPTYAdapter) pumpInput(send func(*v1.AttachRequest) error) {
 		if n > 0 {
 			input := make([]byte, n)
 			copy(input, buf[:n])
-			if sendErr := send(&v1.AttachRequest{
-				Payload: &v1.AttachRequest_Input{Input: input},
-			}); sendErr != nil {
-				log.Warn("tymux: PTY adapter: failed to forward input on standing stream", "err", sendErr)
-			}
+			a.forwardInput(send, input)
 		}
 		if err != nil {
 			return
 		}
+	}
+}
+
+// forwardInput sends one chunk, retrying while a long paste holds the input lock so keystrokes
+// queue behind it (this goroutine only reads the PTY) instead of being silently dropped. Gives up
+// on a non-busy error or once the adapter is closed.
+// The retry assumes a single-frame (<= 32 KiB) payload: resending a partially sent multi-chunk payload would duplicate its prefix.
+func (a *tymuxPTYAdapter) forwardInput(send func(*v1.AttachRequest) error, input []byte) {
+	for {
+		err := send(&v1.AttachRequest{Payload: &v1.AttachRequest_Input{Input: input}})
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, errInputBusy) && !errors.Is(err, errSendBusy) {
+			log.Warn("tymux: PTY adapter: failed to forward input on standing stream", "err", err)
+			return
+		}
+		select {
+		case <-a.closed:
+			return
+		default:
+		}
+		log.Warn("tymux: PTY adapter: input stream busy, retrying", "err", err)
 	}
 }
 
@@ -101,6 +122,7 @@ func (a *tymuxPTYAdapter) file() *os.File { return a.external }
 // a pumpInput mid-send() only exits once that call returns (see its doc).
 func (a *tymuxPTYAdapter) close() {
 	a.closeOnce.Do(func() {
+		close(a.closed)
 		a.fanout.Unsubscribe(a.subID)
 		_ = a.internal.Close()
 		_ = a.external.Close()

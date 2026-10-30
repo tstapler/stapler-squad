@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -59,7 +60,19 @@ type collector struct {
 
 type counters struct {
 	queries, slow, errors atomic.Int64
+	busy                  atomic.Int64 // SQLITE_BUSY / SQLITE_LOCKED errors, a subset of errors
 	totalNanos, maxNanos  atomic.Int64
+}
+
+// isBusyError reports a lock-contention failure: the writer lock or a table
+// lock could not be taken within busy_timeout.
+func isBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "SQLITE_LOCKED") ||
+		strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
 }
 
 // Wrap instruments drv. db must be the pool drv was opened on (used for
@@ -125,6 +138,16 @@ type txWrapper struct {
 	c *collector
 }
 
+// Commit and Rollback are observed too: a deferred write transaction usually
+// fails with SQLITE_BUSY at COMMIT, which Exec/Query alone would never see.
+func (t *txWrapper) Commit() error {
+	return t.c.observe(context.Background(), "COMMIT", t.Tx.Commit)
+}
+
+func (t *txWrapper) Rollback() error {
+	return t.c.observe(context.Background(), "ROLLBACK", t.Tx.Rollback)
+}
+
 func (t *txWrapper) Exec(ctx context.Context, q string, args, v any) error {
 	return t.c.observe(ctx, q, func() error { return t.Tx.Exec(ctx, q, args, v) })
 }
@@ -157,8 +180,13 @@ func (c *collector) record(k stmtKey, elapsed, wait time.Duration, err error) {
 	storeMax(&s.maxNanos, int64(elapsed))
 	if err != nil {
 		s.errors.Add(1)
+		if isBusyError(err) {
+			s.busy.Add(1)
+			recordBusy(c.cfg.Name)
+		}
 	}
 	recordHistogram(c.cfg.Name, elapsed)
+	recordPoolWait(c.cfg.Name, wait)
 	if c.cfg.SlowThreshold > 0 && elapsed >= c.cfg.SlowThreshold {
 		s.slow.Add(1)
 		c.cfg.Warn("slow database query",
