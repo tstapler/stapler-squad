@@ -1,0 +1,13 @@
+{
+  "xterm": {
+    "knownFailing": [
+      "kitty-keyboard-query"
+    ]
+  },
+  "ghostty": {
+    "knownFailing": [
+      "sync-output-decrqm",
+      "kitty-keyboard-query"
+    ]
+  }
+}
