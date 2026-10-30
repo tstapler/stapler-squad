@@ -963,6 +963,7 @@ func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAlive
 		"unary_over_ws_remote": false,
 		"window_keep_alive":    false,
 		"batch_unary":          false,
+		"ghostty_renderer":     false,
 	} {
 		enabled, registered := got[name]
 		require.True(t, registered, "%s is registered", name)
