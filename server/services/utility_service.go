@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -588,69 +587,6 @@ func (f logLineFilters) matchesSearch(parsed parsedLogLine) bool {
 	return strings.Contains(messageAndSource, f.searchQueryLower)
 }
 
-// lenientString decodes a JSON string and treats any other JSON type as
-// absent, mirroring how parseJSONLogLine's map[string]any lookups treat a
-// wrongly-typed value. A custom decoder (rather than `any`) avoids boxing and
-// lets the msg field record only that it was a string, without copying it.
-type lenientString struct {
-	value    string
-	isString bool
-}
-
-func (l *lenientString) UnmarshalJSON(data []byte) error {
-	l.value, l.isString = "", false
-	l.isString = len(data) >= 2 && data[0] == '"'
-	return nil
-}
-
-// stringValue is lenientString that also keeps the decoded value.
-type stringValue struct{ lenientString }
-
-func (s *stringValue) UnmarshalJSON(data []byte) error {
-	if err := s.lenientString.UnmarshalJSON(data); err != nil || !s.isString {
-		return err
-	}
-	if bytes.IndexByte(data, '\\') < 0 && utf8.Valid(data) {
-		s.value = string(data[1 : len(data)-1]) // no escapes: raw bytes are the value
-		return nil
-	}
-	return json.Unmarshal(data, &s.value)
-}
-
-// logLineHeader decodes only the fields the structural filters need; every
-// other attribute is skipped by the decoder without allocating.
-type logLineHeader struct {
-	Time    stringValue   `json:"time"`
-	Level   stringValue   `json:"level"`
-	Msg     lenientString `json:"msg"`
-	Session stringValue   `json:"session"`
-}
-
-// parseJSONLogHeader is the cheap first pass of parseJSONLogLine: it accepts
-// exactly the lines parseJSONLogLine accepts, but fills only Timestamp, Level
-// and Session. Keys
-// differing from time/level/msg/session only by case are the one divergence
-// (encoding/json matches struct keys case-insensitively); slog never emits
-// those.
-func parseJSONLogHeader(line []byte) (parsedLogLine, bool) {
-	var h logLineHeader
-	if err := json.Unmarshal(line, &h); err != nil {
-		return parsedLogLine{}, false
-	}
-	if h.Time.value == "" || !h.Msg.isString {
-		return parsedLogLine{}, false
-	}
-	ts, err := time.Parse(time.RFC3339Nano, h.Time.value)
-	if err != nil {
-		return parsedLogLine{}, false
-	}
-	level := h.Level.value
-	if level == "" {
-		level = "INFO"
-	}
-	return parsedLogLine{Timestamp: ts, Level: level, Session: h.Session.value}, true
-}
-
 // tailKeeper retains the last `cap` pushed lines in arrival order, so a
 // paginated "most recent first" page needs only offset+limit lines of memory
 // however many lines match overall.
@@ -731,7 +667,10 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter st
 	page := tail.newestFirst()[offset:end]
 	entries := make([]*sessionv1.LogEntry, 0, len(page))
 	for _, line := range page {
-		parsed, _ := parseLogLine(line) // matched in lineMatches, so it parses
+		parsed, ok := parseLogLine(line)
+		if !ok {
+			continue // matched in lineMatches, so unreachable; never emit a blank entry
+		}
 		entries = append(entries, &sessionv1.LogEntry{
 			Timestamp: timestamppb.New(parsed.Timestamp),
 			Level:     parsed.Level,
