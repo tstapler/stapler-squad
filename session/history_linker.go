@@ -100,11 +100,12 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 }
 
 // handleHistoryFileEvent is the watcher callback. It force-rescans all sessions
-// only for a JSONL no monitored session has claimed yet (a new conversation,
-// e.g. after /clear); every append to a linked session's own file would
-// otherwise re-check every session's pane PID and open files.
+// only when the write can change a link (see rescanNeeded): a new conversation
+// (e.g. after /clear) or a non-live owner's file while a session awaits a link.
+// Every append to a live session's own file would otherwise re-check every
+// session's pane PID and open files.
 func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
-	if !hl.isClaimedConversationFile(filePath) {
+	if hl.rescanNeeded(filePath) {
 		hl.ScanAll()
 	}
 	// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
@@ -116,19 +117,36 @@ func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
 	}
 }
 
-// isClaimedConversationFile reports whether filePath (<conversation-uuid>.jsonl)
-// is the conversation of a monitored session.
-func (hl *HistoryLinker) isClaimedConversationFile(filePath string) bool {
+// rescanNeeded reports whether a write to filePath (<conversation-uuid>.jsonl)
+// can change any link. It cannot when a live (active, unarchived) session owns
+// the conversation: that is just the owner appending. A non-live owner proves
+// nothing, since the writer may be a newer session that resumed the same
+// conversation, so then only the absence of unlinked sessions lets us skip.
+func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
 	uuid := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
 	if uuid == "" {
-		return false
+		return true
 	}
+	claimed, claimedByLive, anyUnlinked := false, false, false
 	for _, inst := range hl.Instances() {
+		if !inst.HasClaudeSession() {
+			anyUnlinked = true
+			continue
+		}
 		if inst.GetClaudeConversationUUID() == uuid {
-			return true
+			claimed = true
+			snap := inst.Snapshot()
+			claimedByLive = claimedByLive || (snap.Status == Active && snap.ArchivedAt == nil)
 		}
 	}
-	return false
+	switch {
+	case !claimed:
+		return true
+	case claimedByLive:
+		return false
+	default:
+		return anyUnlinked
+	}
 }
 
 // RegisterFileCallback registers a callback that receives the file path whenever
