@@ -47,6 +47,11 @@ func TestAddDetectedItem_Should_PersistLastAddedToQueueOnce_When_EntryUnchanged(
 		rqp.addDetectedItem(inst, snap, result, InstanceStatusInfo{})
 	}
 	assert.Equal(t, int64(1), writes.Load(), "five identical detections must persist once")
+	// The in-memory stamp feeds the 2-minute re-add rate limit and must keep advancing.
+	first := inst.LastAddedToQueue
+	rqp.addDetectedItem(inst, snap, result, InstanceStatusInfo{})
+	assert.True(t, inst.LastAddedToQueue.After(first), "in-memory LastAddedToQueue must advance on every add")
+	assert.Equal(t, int64(1), writes.Load())
 
 	result.Context = "idle, new output"
 	rqp.addDetectedItem(inst, snap, result, InstanceStatusInfo{})

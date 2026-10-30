@@ -135,6 +135,37 @@ func TestSaveInstances_Should_ConvergeToLatestData_When_SavesRace(t *testing.T) 
 	assert.Equal(t, inst.Snapshot().Note, loaded[0].Snapshot().Note, "stored note must match the in-memory note after the final save")
 }
 
+// A direct row writer changes the row behind the fingerprint; the caller's
+// re-save of the unchanged live instance (see ArchiveSessionByUUID) must still write.
+func TestSaveInstances_Should_WriteAgain_When_RowChangedByDirectWriter(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("dedup-direct")
+	require.NoError(t, storage.AddInstance(inst))
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	updates := countSessionUpdates(t, storage)
+
+	require.NoError(t, storage.UpdateInstanceArtifacts(inst.Title, "blob"))
+	afterDirect := updates.Load()
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	assert.Greater(t, updates.Load(), afterDirect, "re-save after a direct row write must not be skipped")
+}
+
+// DiffStats.Content is json:"-" yet persisted, so the fingerprint must cover it.
+func TestFingerprintInstanceData_Should_Differ_When_OnlyDiffContentDiffers(t *testing.T) {
+	t.Parallel()
+	a := InstanceData{Title: "t"}
+	b := a
+	a.DiffStats.Content = "-old line"
+	b.DiffStats.Content = "-new line"
+	sumA, okA := fingerprintInstanceData(a)
+	sumB, okB := fingerprintInstanceData(b)
+	require.True(t, okA && okB)
+	assert.NotEqual(t, sumA, sumB)
+}
+
 func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

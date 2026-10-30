@@ -27,7 +27,12 @@ func fingerprintInstanceData(data InstanceData) (sum [sha256.Size]byte, ok bool)
 	if err != nil {
 		return sum, false
 	}
-	return sha256.Sum256(raw), true
+	// DiffStats.Content is json:"-" but Update persists it, so hash it separately.
+	h := sha256.New()
+	_, _ = h.Write(raw)
+	_, _ = h.Write([]byte(data.DiffStats.Content))
+	copy(sum[:], h.Sum(nil))
+	return sum, true
 }
 
 // persist runs write unless data matches what was last written for its title,
@@ -60,4 +65,11 @@ func (f *savedFingerprints) forget(title string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.m, title)
+}
+
+// reset drops every fingerprint, for row writers that only know a session id.
+func (f *savedFingerprints) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.m = nil
 }

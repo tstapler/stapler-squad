@@ -552,6 +552,9 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 	}
 	data.ArchivedAt = &at
 	data.Status = Stopped
+	// The row now differs from what the live instance last saved; the caller's
+	// re-save must not be skipped as "unchanged".
+	s.saved.forget(data.Title)
 	if err := s.repo.Update(context.Background(), *data); err != nil {
 		return false, fmt.Errorf("update session %s: %w", id, err)
 	}
@@ -632,6 +635,7 @@ var ErrTitleConflict = errors.New("session with this title already exists")
 func (s *Storage) AddInstance(instance *Instance) error {
 	data := instance.ToInstanceData()
 	ctx := context.Background()
+	s.saved.forget(data.Title)
 	if err := s.repo.Create(ctx, data); err != nil {
 		if !ent.IsConstraintError(err) {
 			return fmt.Errorf("failed to persist session %q: %w", data.Title, err)
@@ -673,12 +677,15 @@ func (s *Storage) AddInstance(instance *Instance) error {
 // (e.g. e2e debug seed handlers). Use AddInstance for anything with a live
 // Instance.
 func (s *Storage) CreateInstanceData(ctx context.Context, data InstanceData) error {
+	s.saved.forget(data.Title)
 	return s.repo.Create(ctx, data)
 }
 
 // UpdateInstance updates an existing instance in storage.
 func (s *Storage) UpdateInstance(instance *Instance) error {
-	return s.repo.Update(context.Background(), instance.ToInstanceData())
+	data := instance.ToInstanceData()
+	s.saved.forget(data.Title)
+	return s.repo.Update(context.Background(), data)
 }
 
 // UpdateInstanceMetadata persists a narrow set of session metadata fields (title rename,
@@ -689,7 +696,9 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 // pointer leaves that field untouched.
 func (s *Storage) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
 	s.saved.forget(currentTitle)
-	return s.repo.UpdateSessionMetadata(context.Background(), currentTitle, newTitle, category, note, workingDir)
+	err := s.repo.UpdateSessionMetadata(context.Background(), currentTitle, newTitle, category, note, workingDir)
+	s.saved.forget(currentTitle) // an in-flight save may have re-recorded it before the rename landed
+	return err
 }
 
 // DeleteAllInstances removes all stored instances.
@@ -763,12 +772,14 @@ func (s *Storage) UpdateInstancePRStatus(title, _, _, _ string, _, _ int, _, ter
 	if !terminal {
 		return nil
 	}
+	s.saved.forget(title)
 	return s.repo.UpdateGitHubPRStatusTerminal(context.Background(), title, terminal)
 }
 
 // UpdateInstancePRNumber persists the discovered PR number for a session so it
 // survives restarts and avoids repeated branch-name lookups in PRStatusPoller.
 func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
+	s.saved.forget(title)
 	return s.repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
 }
 
@@ -782,6 +793,7 @@ func (s *Storage) UpdateInstanceForkFlag(_ string, _ bool) error {
 // UpdateInstanceArtifacts persists the JSON-encoded artifact blob for a session.
 // Only the session_artifacts column is touched; all other fields are unchanged.
 func (s *Storage) UpdateInstanceArtifacts(title string, blob string) error {
+	s.saved.forget(title)
 	return s.repo.UpdateSessionArtifacts(context.Background(), title, blob)
 }
 
@@ -808,6 +820,7 @@ func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, captured
 	if client == nil {
 		return false, fmt.Errorf("UpdateInstanceIfEpoch not supported by this backend")
 	}
+	s.saved.reset() // keyed by id, not title: any saved fingerprint may now be stale
 	n, err := client.Session.Update().
 		Where(
 			entsession.Or(entsession.UUID(id), entsession.Title(id)),
