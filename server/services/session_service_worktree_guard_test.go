@@ -184,8 +184,11 @@ func TestDeleteSession_AllowsWhenNoOtherLiveSessionInsideWorktree(t *testing.T) 
 	addInstanceToPoller(fix.poller, target)
 	require.NoError(t, fix.storage.AddInstance(target))
 
+	// Force: the fixture's worktree is a bare temp dir, so the dirty check can't run and an
+	// unforced delete fails closed. That is orthogonal to the sharing guard under test.
 	resp, err := fix.svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
-		Id: "guard-target-delete-alone",
+		Id:    "guard-target-delete-alone",
+		Force: true,
 	}))
 
 	require.NoError(t, err, "no other live session occupies the worktree, so delete must proceed")

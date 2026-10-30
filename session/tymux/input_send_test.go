@@ -3,10 +3,12 @@ package tymux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -288,4 +290,183 @@ func TestSendOnStream_StuckSendOnOldStream_DoesNotBlockTheReplacementStream(t *t
 	assert.Equal(t, []byte("on-new"), data)
 	g.release()
 	<-done
+}
+
+func TestSendInputViaControlMode_CallerContextBoundsTheLockWait(t *testing.T) {
+	sess, stream := sessionWith(t)
+	g := newGatedSends(true)
+	stream.sendFn = g.send // sendLockWait stays at its 30s default: only ctx can end the wait
+
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = sess.SendKeys("long-paste") }()
+	<-g.entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := sess.SendInputViaControlMode(ctx, []byte("k"))
+	g.release()
+	<-done
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestSendKeys_FailureAfterFirstChunk_ReturnsTheRealPartialCount(t *testing.T) {
+	sess, stream := sessionWith(t)
+	var calls atomic.Int32
+	stream.sendFn = func(*v1.AttachRequest) error {
+		if calls.Add(1) == 2 {
+			return errors.New("boom")
+		}
+		return nil
+	}
+
+	n, err := sess.SendKeys(string(bytes.Repeat([]byte("z"), 3*maxInputChunk)))
+
+	require.Error(t, err)
+	assert.Equal(t, maxInputChunk, n)
+	assert.Contains(t, err.Error(), "after 32768 of 98304 bytes")
+}
+
+func TestSendKeys_MidPasteFailure_ClosesTheBracketedPaste(t *testing.T) {
+	sess, stream := sessionWith(t)
+	var calls atomic.Int32
+	var sent [][]byte
+	stream.sendFn = func(r *v1.AttachRequest) error {
+		if calls.Add(1) == 2 {
+			return errors.New("boom")
+		}
+		sent = append(sent, r.GetInput())
+		return nil
+	}
+	body := bytes.Repeat([]byte("z"), 3*maxInputChunk)
+	payload := append(append([]byte("\x1b[200~"), body...), "\x1b[201~"...)
+
+	_, err := sess.SendKeys(string(payload))
+
+	require.Error(t, err)
+	require.Len(t, sent, 2) // first chunk, then the best-effort terminator
+	assert.Equal(t, []byte("\x1b[201~"), sent[1])
+}
+
+func TestInBracketedPaste(t *testing.T) {
+	assert.False(t, inBracketedPaste([]byte("plain")))
+	assert.True(t, inBracketedPaste([]byte("\x1b[200~abc")))
+	assert.False(t, inBracketedPaste([]byte("\x1b[200~abc\x1b[201~")))
+}
+
+func TestPTYAdapter_ForwardInput_RetriesWhileInputIsBusy(t *testing.T) {
+	a := &tymuxPTYAdapter{closed: make(chan struct{})}
+	var calls int
+	a.forwardInput(func(*v1.AttachRequest) error {
+		calls++
+		if calls < 3 {
+			return errInputBusy
+		}
+		return nil
+	}, []byte("k"))
+	assert.Equal(t, 3, calls)
+}
+
+func TestPTYAdapter_ForwardInput_StopsOnceClosed(t *testing.T) {
+	a := &tymuxPTYAdapter{closed: make(chan struct{})}
+	close(a.closed)
+	var calls atomic.Int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.forwardInput(func(*v1.AttachRequest) error {
+			if calls.Add(1) > 100 {
+				return nil // a hot loop ends here so the test fails on the count, not by hanging
+			}
+			return errInputBusy
+		}, []byte("k"))
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("forwardInput did not stop after the adapter closed")
+	}
+	assert.EqualValues(t, 1, calls.Load())
+}
+
+func TestSendOnStreamCtx_AlreadyCancelledContext_SendsNothingEvenWithFreeLocks(t *testing.T) {
+	sess, stream := sessionWith(t)
+	before := len(stream.sentRequests())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	n, err := sess.sendOnStreamCtx(ctx, &v1.AttachRequest{Payload: &v1.AttachRequest_Input{Input: []byte("k")}})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, n)
+	assert.Len(t, stream.sentRequests(), before)
+}
+
+func TestSendKeys_ContextCancelledBetweenChunks_StopsWithPartialCountAndClosesPaste(t *testing.T) {
+	sess, stream := sessionWith(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	var sent [][]byte
+	stream.sendFn = func(r *v1.AttachRequest) error {
+		sent = append(sent, r.GetInput())
+		cancel() // caller gives up right after the first chunk is delivered
+		return nil
+	}
+	body := bytes.Repeat([]byte("z"), 3*maxInputChunk)
+	payload := append(append([]byte("\x1b[200~"), body...), "\x1b[201~"...)
+
+	n, err := sess.sendOnStreamCtx(ctx, &v1.AttachRequest{Payload: &v1.AttachRequest_Input{Input: payload}})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, maxInputChunk, n)
+	require.Len(t, sent, 2, "later chunks must not be sent; only the first chunk and the paste terminator")
+	assert.Len(t, sent[0], maxInputChunk)
+	assert.Equal(t, []byte("\x1b[201~"), sent[1])
+}
+
+func TestPasteCloser(t *testing.T) {
+	start, end := "\x1b[200~", "\x1b[201~"
+	tests := []struct {
+		name string
+		data string
+		sent int
+		want string
+	}{
+		{"no paste open", "plain" + end, 5, ""},
+		{"open paste gets full terminator", start + "abcd" + end, len(start) + 2, end},
+		{"already closed", start + "ab" + end + "tail", len(start) + 2 + len(end), ""},
+		{"partial terminator: only the suffix", start + "ab" + end, len(start) + 2 + 4, "1~"},
+		{"partial terminator, one byte missing", start + "ab" + end, len(start) + 2 + 5, "~"},
+		{"sent below zero: nil, no panic", start + "ab", -1, ""},
+		{"sent past the end: nil, no panic", start + "ab", len(start) + 3, ""},
+		{"partial prefix that is not the terminator: skip", start + "ab\x1b[20" + "0~", len(start) + 2 + 4, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, string(pasteCloser([]byte(tc.data), tc.sent)))
+		})
+	}
+}
+
+func TestSendKeys_FailureInsideTerminatorBoundary_SendsOnlyTheMissingSuffix(t *testing.T) {
+	sess, stream := sessionWith(t)
+	var calls atomic.Int32
+	var sent [][]byte
+	stream.sendFn = func(r *v1.AttachRequest) error {
+		if calls.Add(1) == 2 {
+			return errors.New("boom")
+		}
+		sent = append(sent, r.GetInput())
+		return nil
+	}
+	// First chunk ends exactly after "ESC[20" of the terminator.
+	payload := append([]byte("\x1b[200~"), bytes.Repeat([]byte("z"), maxInputChunk-len("\x1b[200~")-4)...)
+	payload = append(payload, "\x1b[201~"...)
+
+	_, err := sess.SendKeys(string(payload))
+
+	require.Error(t, err)
+	require.Len(t, sent, 2)
+	assert.Equal(t, []byte("1~"), sent[1])
 }

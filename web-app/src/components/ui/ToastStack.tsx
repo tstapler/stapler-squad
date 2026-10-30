@@ -73,11 +73,12 @@ function ToastSlot({ notification, timers, onRemove, collapsible = false, offlin
   const pinned = isPinned(notification) || actionFailed;
 
   const requestClose = useCallback(
-    ({ acknowledge = false }: { acknowledge?: boolean } = {}) => {
+    ({ acknowledge = false, timedOut = false }: { acknowledge?: boolean; timedOut?: boolean } = {}) => {
       if (closingRef.current) return;
       closingRef.current = true;
       setExiting(true);
-      auditLogRef.current.logNotificationDismissed(id, notification.sessionId);
+      // Only a person dismissing is an audit event; logging every auto-close costs one RPC per toast with no input.
+      if (!timedOut) auditLogRef.current.logNotificationDismissed(id, notification.sessionId);
       timers.register(id, "exit", EXIT_ANIMATION_MS, () => {
         notification.onDismiss?.();
         if (acknowledge) notification.onAcknowledge?.();
@@ -98,7 +99,7 @@ function ToastSlot({ notification, timers, onRemove, collapsible = false, offlin
     // (the tray keeps it either way).
     if (pinned) return;
     const autoClose = toastAutoCloseMs(notification.notificationType);
-    if (autoClose > 0) timers.register(id, "close", autoClose, () => requestClose());
+    if (autoClose > 0) timers.register(id, "close", autoClose, () => requestClose({ timedOut: true }));
     return () => timers.cancel(id, "close");
   }, [presented, pinned, id, notification.notificationType, requestClose, timers]);
 

@@ -13,6 +13,7 @@
       { "datasource": { "type": "grafana", "uid": "-- Grafana --" }, "enable": true, "iconColor": "green", "name": "Deploys", "target": { "limit": 100, "matchAny": false, "tags": ["deploy", "stapler-squad"], "type": "tags" }, "type": "tags" }
     ]
   },
+  "links": [{"title": "Traces in Tempo (Explore)", "type": "link", "icon": "external link", "targetBlank": true, "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.control_mode.command%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "tooltip": "Open Grafana Explore on Tempo with this dashboard's time range"}],
   "panels": [
     { "type": "row", "title": "Golden signals", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 100 },
     {
@@ -21,7 +22,7 @@
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "fieldConfig": { "defaults": { "links": [{"title": "Command spans for this command in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.control_mode.command%5C%22%20%26%26%20span.command%20%3D%20%5C%22${__field.labels.command}%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}], "unit": "reqps" }, "overrides": [] },
       "targets": [
         {
           "expr": "sum(rate(tmux_control_mode_command_duration_ms_milliseconds_count[5m])) by (command)",
@@ -37,7 +38,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Errored / timed-out spans for this command in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.control_mode.command%5C%22%20%26%26%20span.command%20%3D%20%5C%22${__field.labels.command}%5C%22%20%26%26%20%28status%20%3D%20error%20%7C%7C%20span.timed_out%20%3D%20true%29%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "percentunit",
           "max": 1,
           "min": 0,
@@ -63,7 +64,7 @@
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "fieldConfig": { "defaults": { "links": [{"title": "Slow spans (> 500ms) for this command in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.control_mode.command%5C%22%20%26%26%20span.command%20%3D%20%5C%22${__field.labels.command}%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}], "unit": "ms" }, "overrides": [] },
       "targets": [
         {
           "expr": "histogram_quantile(0.5, sum(rate(tmux_control_mode_command_duration_ms_milliseconds_bucket[5m])) by (le, command))",
@@ -124,7 +125,7 @@
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "fieldConfig": { "defaults": { "links": [{"title": "Slow spans (> 500ms) for this command in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.control_mode.command%5C%22%20%26%26%20span.command%20%3D%20%5C%22${__field.labels.command}%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}], "unit": "ms" }, "overrides": [] },
       "targets": [
         {
           "expr": "histogram_quantile(0.999, sum(rate(tmux_control_mode_command_duration_ms_milliseconds_bucket[5m])) by (le, command))",
@@ -132,6 +133,85 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "Traces (Tempo)",
+      "id": 201,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "id": 202,
+      "title": "Slow tmux control-mode command spans (> 500ms)",
+      "type": "table",
+      "description": "tmux.control_mode.command spans slower than 500ms. Attributes: command, queue_wait_ms, exec_ms, timed_out. Click a trace id to open it in Tempo.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && name = \"tmux.control_mode.command\" && duration > 500ms }"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 203,
+      "title": "Errored / timed-out tmux control-mode command spans",
+      "type": "table",
+      "description": "tmux.control_mode.command spans with status=error or timed_out=true.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && name = \"tmux.control_mode.command\" && (status = error || span.timed_out = true) }"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
     }
   ]
 }

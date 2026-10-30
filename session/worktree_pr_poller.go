@@ -32,7 +32,19 @@ const (
 type polledState struct {
 	at          time.Time
 	fingerprint string
+	failures    int // consecutive fetch errors; drives exponential retry delay
 }
+
+// failureBackoffBase is the first retry delay after a fetch error (shorter than
+// a scan interval, so a one-off failure is retried on the next scan). It
+// doubles per consecutive failure up to PollInterval, which bounds the request
+// rate for permanently failing worktrees (404/403, deleted repo, SSO block).
+const failureBackoffBase = 5 * time.Second
+
+// noPRLiftMinInterval limits how often webhooks lift a repo's no-PR backoff.
+// The webhook handler does not pass the event type, so check_run-style events
+// would otherwise re-poll every no-PR branch of a busy repo on every scan.
+const noPRLiftMinInterval = 30 * time.Second
 
 var (
 	pollOutcomeCounterOnce sync.Once
@@ -135,6 +147,8 @@ type WorktreePRPoller struct {
 	mu            sync.Mutex
 	noPRPollAfter map[string]time.Time // key: worktreeCacheKey
 	lastPolled    map[string]polledState
+	keyRepo       map[string]string    // worktree key -> lowercase owner/repo, for targeted InvalidateCache
+	noPRLiftedAt  map[string]time.Time // repoID -> last InvalidateCache no-PR backoff lift
 
 	// now and fetch are test seams (fake clock, fake GitHub fetch).
 	now   func() time.Time
@@ -159,6 +173,8 @@ func NewWorktreePRPollerWithConfig(etagCache *github.ETagCache, prPoller *PRStat
 		config:        cfg,
 		noPRPollAfter: make(map[string]time.Time),
 		lastPolled:    make(map[string]polledState),
+		keyRepo:       make(map[string]string),
+		noPRLiftedAt:  make(map[string]time.Time),
 		now:           time.Now,
 	}
 	p.fetch = p.fetchAndStore
@@ -223,13 +239,43 @@ func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
 	if err != nil {
 		return
 	}
-	p.etagCache.Invalidate(ref, prNumber)
+	if p.etagCache != nil {
+		p.etagCache.Invalidate(ref, prNumber)
+	}
 
-	// lastPolled is keyed by local repo path + branch, which cannot be mapped
-	// back to owner/repo here, so re-arm every worktree: the next scan pass
-	// re-polls each (a 304 for the unchanged ones).
+	// Re-arm only worktrees of this repo (host-agnostic: the webhook carries
+	// none) so the next scan re-polls them; other repos stay gated.
+	want := repoID(owner, repo)
 	p.mu.Lock()
-	clear(p.lastPolled)
+	now := p.now()
+	liftNoPR := now.Sub(p.noPRLiftedAt[want]) >= noPRLiftMinInterval
+	if liftNoPR {
+		p.noPRLiftedAt[want] = now
+	}
+	for key, id := range p.keyRepo {
+		if id != want {
+			continue
+		}
+		if liftNoPR {
+			delete(p.noPRPollAfter, key) // a webhook may mean a PR was just opened
+		}
+		// A failing key keeps its retry schedule so a webhook stream cannot
+		// defeat the failure backoff.
+		if st, ok := p.lastPolled[key]; ok && st.failures == 0 {
+			delete(p.lastPolled, key)
+		}
+	}
+	p.mu.Unlock()
+}
+
+func repoID(owner, repo string) string {
+	return strings.ToLower(owner + "/" + repo)
+}
+
+// noteRepo records which GitHub repo a worktree key belongs to.
+func (p *WorktreePRPoller) noteRepo(key, owner, repo string) {
+	p.mu.Lock()
+	p.keyRepo[key] = repoID(owner, repo)
 	p.mu.Unlock()
 }
 
@@ -293,7 +339,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 
 	now := p.now()
 	seen := make(map[string]struct{}, len(items))
-	fingerprints := combinedFingerprints(items)
+	eligible := make([]WorktreeScanItem, 0, len(items))
 	for _, item := range items {
 		if _, owned := sessionPaths[item.WorktreePath]; owned {
 			continue // PRStatusPoller covers this one
@@ -301,10 +347,15 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 		if item.Branch == "" || item.RepoPath == "" {
 			continue
 		}
+		eligible = append(eligible, item)
+	}
+	fingerprints := combinedFingerprints(eligible)
+	for _, item := range eligible {
 
 		key := worktreeCacheKey(item.RepoPath, item.Branch)
 		if pollAfter, ok := noPRPollAfter[key]; ok && now.Before(pollAfter) {
-			continue // no-PR backoff still in effect
+			seen[key] = struct{}{} // keep its lastPolled/keyRepo so InvalidateCache can lift the backoff
+			continue               // no-PR backoff still in effect
 		}
 		if _, dup := seen[key]; dup {
 			recordPollOutcome(p.ctx, "skipped_duplicate") // same repo+branch from another worktree
@@ -326,9 +377,7 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 			defer cancel()
 			ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
-			if err := p.fetch(ctx, captured); err != nil {
-				p.forgetPolled(key) // retry on the next scan instead of waiting out PollInterval
-			}
+			p.recordResult(key, fingerprints[key], p.fetch(ctx, captured))
 		}()
 	}
 	p.pruneLastPolled(seen)
@@ -351,11 +400,33 @@ func combinedFingerprints(items []WorktreeScanItem) map[string]string {
 	return out
 }
 
-// forgetPolled clears the poll record for key so the next scan re-polls it.
-func (p *WorktreePRPoller) forgetPolled(key string) {
+// recordResult resets key's failure streak on success, or schedules an
+// exponentially growing retry (capped at PollInterval) on error by backdating
+// the poll record so the interval gate reopens after the delay.
+func (p *WorktreePRPoller) recordResult(key, fingerprint string, err error) {
 	p.mu.Lock()
-	delete(p.lastPolled, key)
-	p.mu.Unlock()
+	defer p.mu.Unlock()
+	st, ok := p.lastPolled[key]
+	if !ok {
+		if err == nil {
+			return // invalidated meanwhile; next scan polls anyway
+		}
+		// Invalidated mid-fetch: still count the failure, or it is lost.
+		st = polledState{fingerprint: fingerprint}
+	}
+	if err == nil {
+		st.failures = 0
+		p.lastPolled[key] = st
+		return
+	}
+	st.failures++
+	delay := failureBackoffBase
+	for i := 1; i < st.failures && delay < p.config.PollInterval; i++ {
+		delay *= 2
+	}
+	delay = min(delay, p.config.PollInterval)
+	st.at = p.now().Add(delay - p.config.PollInterval)
+	p.lastPolled[key] = st
 }
 
 // claimPoll reports whether key should be polled now and, if so, records it.
@@ -366,7 +437,7 @@ func (p *WorktreePRPoller) claimPoll(key, fingerprint string, now time.Time, tri
 		prev.fingerprint == fingerprint && now.Sub(prev.at) < p.config.PollInterval {
 		return false
 	}
-	p.lastPolled[key] = polledState{at: now, fingerprint: fingerprint}
+	p.lastPolled[key] = polledState{at: now, fingerprint: fingerprint, failures: p.lastPolled[key].failures}
 	return true
 }
 
@@ -379,6 +450,22 @@ func (p *WorktreePRPoller) pruneLastPolled(live map[string]struct{}) {
 			delete(p.lastPolled, k)
 		}
 	}
+	for k := range p.keyRepo {
+		if _, ok := live[k]; !ok {
+			delete(p.keyRepo, k)
+		}
+	}
+	now := p.now()
+	for k, until := range p.noPRPollAfter {
+		if _, ok := live[k]; !ok || !now.Before(until) {
+			delete(p.noPRPollAfter, k)
+		}
+	}
+	for repo, at := range p.noPRLiftedAt {
+		if now.Sub(at) >= noPRLiftMinInterval {
+			delete(p.noPRLiftedAt, repo)
+		}
+	}
 }
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
@@ -386,13 +473,14 @@ func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanI
 	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
-		return err
+		return nil // also covers transient git exec/lock errors: they wait a full PollInterval, which paces the warning
 	}
 	if !repoRef.IsValid() {
 		return nil // not a GitHub remote
 	}
 
 	key := worktreeCacheKey(item.RepoPath, item.Branch)
+	p.noteRepo(key, repoRef.Owner(), repoRef.Repo())
 
 	// Use ETag conditional fetch when we already know the PR number.
 	if existing := p.GetPRData(item.RepoPath, item.Branch); existing != nil && existing.Number > 0 {

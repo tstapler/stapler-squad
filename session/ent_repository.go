@@ -1164,6 +1164,23 @@ func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string
 	return nil
 }
 
+// UpdateLastUserResponse sets only last_user_response. Unlike UpdateReviewQueueState
+// it never clears processing_grace_until.
+func (r *EntRepository) UpdateLastUserResponse(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastUserResponse(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_user_response: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
 // UpdateTimestamps efficiently updates only timestamp fields for a session
 func (r *EntRepository) UpdateTimestamps(ctx context.Context, title string, lastTerminalUpdate, lastMeaningfulOutput time.Time, lastOutputSignature string) error {
 	// Direct UPDATE without prior SELECT — mirrors the pattern used by UpdateLastAddedToQueue.

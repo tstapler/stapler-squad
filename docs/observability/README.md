@@ -12,6 +12,7 @@ living in an unrelated repo.
 | `pprof-profiles.json` | `ssq-pprof-profiles` | Pyroscope flamegraphs (CPU/heap/goroutines), scraped from the pprof server |
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
 | `tymux-backend.json` | `ssq-tymux-backend` | tymux vs tmux operation latency (RED), attach stream health, backend mix, tymuxd supervision |
+| `client-network.json` | `ssq-client-network` | Browser RPC rate/latency/errors by method and transport, duplicates and coalescing, batch effectiveness, WebSocket lifecycle/RTT (client and `ws_unary_*` server side), web vitals, long tasks; see `docs/reference/client-network-telemetry.md` |
 
 ## tymux backend metrics
 
@@ -64,3 +65,32 @@ Point stapler-squad's own OTel exporter at this stack per
 (`telemetry.DefaultOTLPEndpoint`), which is exactly where the stack's
 collector listens, so there's usually nothing to configure beyond enabling
 the app's own OTel flag.
+
+## Traces on the dashboards
+
+All six dashboards carry a "Traces in Tempo (Explore)" dashboard link (top bar) that opens Explore on the
+Tempo datasource with the dashboard's time range. `cgroup-memory` and `pprof-profiles` have only that
+link, because no spans correspond to memory or profile data. The other four also have the following. The overview link on `cgroup-memory` and `pprof-profiles` is pre-filtered to server spans slower than 500ms:
+
+| Dashboard | Trace panels (TraceQL, `resource.service.name = "stapler-squad"`) | Metric-panel data links (click a series) |
+|---|---|---|
+| `http-rpc-connections` | slow (> 500ms) and errored Connect RPC server spans; `Watch*` streams are excluded | streams-by-method panel opens that method's spans |
+| `tmux-control-mode` | slow and errored/timed-out `tmux.control_mode.command` spans | rate, timeout, latency panels open spans for that `command` |
+| `tymux-backend` | slow and errored `session.backend.*` / `tymux.v1.*` spans (`Attach` excluded) | latency and rate panels open spans for that `backend` |
+| `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links filter on `error_code = "deadline_exceeded"` (server spans only, which are rare). Latency links filter to spans slower than 500ms, so they can open an empty result when the panel value is lower. Browser-side series are linked to the matching server spans |
+
+Notes:
+
+- Grafana 11.5's Tempo plugin runs TraceQL searches in the browser, so the tables cannot be checked with
+  `POST /api/ds/query` (it returns a 500; Grafana logs "backend TraceQL search queries are not supported"). Check a query with
+  `GET /api/datasources/proxy/uid/tempo/api/search?q=<traceql>&start=<s>&end=<s>` instead.
+- Span attributes used: `rpc.system`, `rpc.method`, `rpc.connect_rpc.error_code`, `command`, `timed_out`,
+  `backend`. Hot-path backend operations (`send_keys`, `write_stdin`, `capture_pane`, `resize`)
+  have no `session.backend.*` span, so a per-backend link from those series can open an empty result. The tymux
+  backend's gRPC client spans (`tymux.v1.*`) do appear in the tables but carry no `backend` attribute.
+- Not available: metric-to-trace exemplars. VictoriaMetrics returned no exemplars from
+  `/api/v1/query_exemplars` when checked (whether it can store them was not confirmed), and the provisioned Tempo datasource has no `tracesToMetrics`/`tracesToLogs`
+  settings (they live in the dotfiles stack, not this repo), so trace-to-metrics and trace-to-logs links
+  are not part of these dashboards.
+- The existing "Slow browser spans" table on `client-network` needs a web build with
+  `NEXT_PUBLIC_OTEL_ENABLED=true`; without it, the panel shows "No data".

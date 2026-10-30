@@ -295,6 +295,19 @@ func TestResetRemediation_should_ReArmParkedRow_ThenRefuseDuringCooldown(t *test
 	assert.Equal(t, ErrPermissionDenied, m["error"].(map[string]interface{})["code"])
 }
 
+func TestResetRemediation_should_RefuseReasonsThatNeedAHuman(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupDiagnoseSession(t, storage)
+	dh := &diagnoseHandlers{storage: storage}
+
+	for _, reason := range []domain.StuckReason{domain.StuckReasonReworkCap, domain.StuckReasonBounceCapExhausted, domain.StuckReasonPlanNotApproved} {
+		req := makeToolReq(map[string]interface{}{"item_id": itemID, "stuck_reason": string(reason)})
+		m := parseResult(t, mustCall(t, dh.resetRemediation, WithSessionUUID(context.Background(), sessUUID), req))
+		require.False(t, m["success"].(bool), reason)
+		assert.Equal(t, ErrInvalidArgument, m["error"].(map[string]interface{})["code"], reason)
+	}
+}
+
 func TestResetRemediation_should_RejectWrongRole(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	itemID, sessUUID := setupReviewSession(t, storage)

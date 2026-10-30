@@ -387,6 +387,11 @@ var recursiveEvalPrograms = map[string]recursiveEvalSpec{
 		"-n": true, "--classdata": true,
 	}},
 
+	// taskpolicy [-b|-B] [-c clamp] [-d policy] [-g policy] COMMAND [ARGS]  (macOS)
+	"taskpolicy": {flagArgs: map[string]bool{
+		"-c": true, "-d": true, "-g": true,
+	}},
+
 	// ── session / process control ─────────────────────────────────────────────
 	"setsid":    {flagArgs: map[string]bool{}}, // boolean flags only (-w/-c/-f)
 	"catchsegv": {flagArgs: map[string]bool{}}, // no flags before command

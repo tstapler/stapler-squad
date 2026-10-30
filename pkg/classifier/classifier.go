@@ -894,6 +894,17 @@ func SeedRules() []Rule {
 			RuleMeta:       RuleMeta{ID: "seed-deny-bash-redirect-env", Name: "Block shell redirects to .env files", Priority: 1000, Enabled: true, Source: "seed"},
 		},
 		{
+			// Agents background `yes >/dev/null &` loops as a CPU-load generator for flaky-test
+			// repros; an interrupted run skips its `pkill yes` and the orphans spin for hours.
+			ToolName:    "Bash",
+			Criteria:    &CommandCriteria{Programs: []string{"yes"}},
+			Decision:    AutoDeny,
+			RiskLevel:   RiskHigh,
+			Reason:      "yes spins a CPU core until killed and leaks when the launching shell dies (36 orphans once ran for 3 hours).",
+			Alternative: "Use a tool's --yes/-y flag or printf 'y\\n' for prompts; for contention tests use a bounded `timeout N` busy-loop that cleans up after itself.",
+			RuleMeta:    RuleMeta{ID: "seed-deny-yes", Name: "Block yes (CPU-burn / leaked process)", Priority: 1000, Enabled: true, Source: "seed"},
+		},
+		{
 			// Deny git reset --hard: destructive and hard to undo.
 			// git reset HEAD~1 (without --hard) remains allowed by seed-allow-git-write.
 			ToolName: "Bash",

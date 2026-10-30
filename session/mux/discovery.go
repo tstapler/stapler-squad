@@ -23,6 +23,35 @@ type Discovery struct {
 	sessions  map[string]*DiscoveredSession
 	mu        sync.RWMutex
 	callbacks []func(*DiscoveredSession, bool) // (session, isNew)
+
+	// Test seams; zero values mean os.TempDir(), probeSocketContext, time.Now,
+	// filepath.Glob, ScanByUserOptions.
+	dir         string
+	probe       func(ctx context.Context, socketPath string) (*SessionMetadata, error)
+	now         func() time.Time
+	glob        func(pattern string) ([]string, error)
+	userOptions func() ([]*DiscoveredSession, error)
+
+	scan scanState
+}
+
+const (
+	// fullScanBackstop bounds how long an unchanged directory mtime can
+	// suppress a rescan, covering coarse-mtime filesystems and missed updates.
+	fullScanBackstop = 30 * time.Second
+	// probeRetryBudget is how many consecutive scans a socket that fails its
+	// probe forces a rescan on its own (it may just not be listening yet);
+	// afterwards only the backstop retries it.
+	probeRetryBudget = 3
+)
+
+// scanState remembers what the last full scan saw so unchanged polls can
+// skip it. Guarded by its own mutex: scans may run concurrently with Scan().
+type scanState struct {
+	mu        sync.Mutex
+	dirMtime  time.Time
+	scannedAt time.Time
+	failed    map[string]int // socket path -> consecutive failed probes
 }
 
 // NewDiscovery creates a new session discovery service.
@@ -49,12 +78,21 @@ func (d *Discovery) Scan() ([]*DiscoveredSession, error) {
 // scanContext is Scan, abandoned (leaving known sessions untouched) once ctx is done, so a
 // socket that accepts but never sends metadata can't hold up shutdown for the probe timeout.
 func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, error) {
+	dir := d.socketDir()
+	// Stat before listing: a change landing mid-scan then differs from the
+	// recorded mtime and forces the next scan instead of being missed.
+	mtime, haveMtime := dirMtime(dir)
+	if haveMtime && d.canSkipScan(mtime) {
+		return d.touchKnownSessions(), nil
+	}
+
 	// Find all potential socket files
-	pattern := filepath.Join(os.TempDir(), "ssq-mux-*.sock")
-	matches, err := filepath.Glob(pattern)
+	pattern := filepath.Join(dir, "ssq-mux-*.sock")
+	matches, err := d.globSockets(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob socket files: %w", err)
 	}
+	failed := make(map[string]int)
 
 	var discovered []*DiscoveredSession
 	var newSessions []*DiscoveredSession
@@ -67,31 +105,33 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 		currentPaths[socketPath] = true
 
 		// Check if we already know about this session
-		d.mu.RLock()
+		d.mu.Lock()
 		existing, exists := d.sessions[socketPath]
-		d.mu.RUnlock()
+		if exists {
+			existing.LastSeen = d.clock() // under d.mu: scans may run concurrently
+		}
+		d.mu.Unlock()
 
 		if exists {
-			// Update last seen time
-			existing.LastSeen = time.Now()
 			discovered = append(discovered, existing)
 			continue
 		}
 
 		// Try to connect and get metadata
-		meta, err := probeSocketContext(ctx, socketPath)
+		meta, err := d.probeSocket(ctx, socketPath)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			// Socket exists but can't connect - might be stale
+			failed[socketPath] = d.previousFailures(socketPath) + 1
 			continue
 		}
 
 		session := &DiscoveredSession{
 			SocketPath: socketPath,
 			Metadata:   meta,
-			LastSeen:   time.Now(),
+			LastSeen:   d.clock(),
 		}
 
 		// Register the new session
@@ -102,6 +142,8 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 		discovered = append(discovered, session)
 		newSessions = append(newSessions, session)
 	}
+
+	d.recordScan(mtime, haveMtime, failed)
 
 	// Check for removed sessions
 	d.mu.Lock()
@@ -128,6 +170,104 @@ func (d *Discovery) scanContext(ctx context.Context) ([]*DiscoveredSession, erro
 	}
 
 	return discovered, nil
+}
+
+func (d *Discovery) globSockets(pattern string) ([]string, error) {
+	if d.glob != nil {
+		return d.glob(pattern)
+	}
+	return filepath.Glob(pattern)
+}
+
+func (d *Discovery) socketDir() string {
+	if d.dir != "" {
+		return d.dir
+	}
+	return os.TempDir()
+}
+
+func (d *Discovery) clock() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
+}
+
+func (d *Discovery) probeSocket(ctx context.Context, socketPath string) (*SessionMetadata, error) {
+	if d.probe != nil {
+		return d.probe(ctx, socketPath)
+	}
+	return probeSocketContext(ctx, socketPath)
+}
+
+func dirMtime(dir string) (time.Time, bool) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return info.ModTime(), true
+}
+
+// canSkipScan reports whether the socket directory is unchanged since the last
+// full scan, so listing and probing would find nothing new: creating or
+// removing a socket bumps the directory mtime. Sockets still within their
+// probe retry budget, and the periodic backstop, force a real scan.
+func (d *Discovery) canSkipScan(mtime time.Time) bool {
+	d.scan.mu.Lock()
+	defer d.scan.mu.Unlock()
+	if d.scan.scannedAt.IsZero() || !mtime.Equal(d.scan.dirMtime) {
+		return false
+	}
+	if d.clock().Sub(d.scan.scannedAt) >= fullScanBackstop {
+		return false
+	}
+	for _, attempts := range d.scan.failed {
+		if attempts < probeRetryBudget {
+			return false
+		}
+	}
+	return true
+}
+
+func (d *Discovery) previousFailures(socketPath string) int {
+	d.scan.mu.Lock()
+	defer d.scan.mu.Unlock()
+	return d.scan.failed[socketPath]
+}
+
+// invalidate makes the next scan a full one.
+func (st *scanState) invalidate() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.scannedAt = time.Time{}
+}
+
+// recordScan stores the outcome of a full scan. Without a readable mtime the
+// state is cleared so the next scan runs in full.
+func (d *Discovery) recordScan(mtime time.Time, haveMtime bool, failed map[string]int) {
+	d.scan.mu.Lock()
+	defer d.scan.mu.Unlock()
+	if !haveMtime {
+		d.scan.scannedAt = time.Time{}
+		return
+	}
+	d.scan.dirMtime = mtime
+	d.scan.scannedAt = d.clock()
+	d.scan.failed = failed
+}
+
+// touchKnownSessions is the skipped-scan result: every known session is still
+// present, so refresh LastSeen as a full scan would and return them.
+func (d *Discovery) touchKnownSessions() []*DiscoveredSession {
+	now := d.clock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sessions := make([]*DiscoveredSession, 0, len(d.sessions))
+	for _, session := range d.sessions {
+		session.LastSeen = now
+		sessions = append(sessions, session)
+	}
+	return sessions
 }
 
 // GetSessions returns all currently known sessions.
@@ -163,12 +303,18 @@ func (d *Discovery) GetClaudeSessions() []*DiscoveredSession {
 //
 // Results are merged into d.sessions and callbacks are fired for new sessions,
 // matching the behaviour of Scan(). Existing sessions are not removed — call
-// Scan() afterward to reconcile against the live socket set if needed.
+// Scan() afterward to reconcile against the live socket set if needed; the
+// merge invalidates the unchanged-directory skip so that Scan() is a full one.
 func (d *Discovery) ScanFromUserOptions() ([]*DiscoveredSession, error) {
-	discovered, err := ScanByUserOptions()
+	scanUserOptions := ScanByUserOptions
+	if d.userOptions != nil {
+		scanUserOptions = d.userOptions
+	}
+	discovered, err := scanUserOptions()
 	if err != nil {
 		return nil, err
 	}
+	d.scan.invalidate()
 
 	var newSessions []*DiscoveredSession
 
