@@ -3,6 +3,8 @@ package streamhub_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -315,4 +317,152 @@ func TestFirstPaint_should_DeliverFrameBroadcastDuringPaintAfterPaint(t *testing
 	}))
 	log.waitFor(t, 2)
 	require.Equal(t, []string{"paint", "frame:F"}, log.snapshot())
+}
+
+// seqTransport records every Send, in order, without back-pressure.
+type seqTransport struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (s *seqTransport) Send(d []byte) error {
+	s.mu.Lock()
+	s.events = append(s.events, string(d))
+	s.mu.Unlock()
+	return nil
+}
+func (s *seqTransport) Close() error { return nil }
+func (s *seqTransport) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.events...)
+}
+
+// More than the 100-deep queue arrives during a paint that outlasts the slow-subscriber grace:
+// nothing may be evicted or lost, and every frame follows the paint in order.
+func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
+	tr := &seqTransport{}
+	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	const n = 300
+	require.NoError(t, hub.FirstPaint(id, func() error {
+		for i := 0; i < n; i++ {
+			hub.Broadcast([]byte(fmt.Sprintf("f%03d", i)))
+		}
+		time.Sleep(150 * time.Millisecond) // many multiples of the grace
+		_ = tr.Send([]byte("paint"))
+		return nil
+	}))
+	require.Eventually(t, func() bool { return len(tr.snapshot()) >= n+1 }, 5*time.Second, 5*time.Millisecond)
+	ev := tr.snapshot()
+	require.Equal(t, "paint", ev[0])
+	for i := 0; i < n; i++ {
+		require.Equal(t, fmt.Sprintf("f%03d", i), ev[i+1])
+	}
+	require.Zero(t, hub.SlowSubscriberDropsTotal())
+}
+
+func TestFirstPaint_should_NotEvict_When_MaxAwaitExpiresMidPaint(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(20*time.Millisecond))
+	tr := &seqTransport{}
+	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	require.NoError(t, hub.FirstPaint(id, func() error { time.Sleep(150 * time.Millisecond); return nil }))
+	hub.Broadcast([]byte("live"))
+	require.Eventually(t, func() bool { return len(tr.snapshot()) == 1 }, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestFirstPaint_should_Fail_When_PaintBacklogOverflows(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	id := hub.AttachSubscriber(&seqTransport{}, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	err := hub.FirstPaint(id, func() error {
+		for i := 0; i < 5000; i++ { // past the hold limit
+			hub.Broadcast([]byte("x"))
+		}
+		return nil
+	})
+	require.Error(t, err, "a gap in the held frames must fail the paint, not pass silently")
+}
+
+// Producer-vs-capture stress: frames numbered above the capture's sequence must all follow the
+// paint contiguously (duplicates of lower ones are allowed, gaps are not).
+func TestFirstPaint_should_LeaveNoGap_When_FramesRaceTheCapture(t *testing.T) {
+	iterations := 300
+	if testing.Short() {
+		iterations = 30
+	}
+	for it := 0; it < iterations; it++ {
+		runFirstPaintRace(t, it)
+	}
+}
+
+func runFirstPaintRace(t *testing.T, it int) {
+	t.Helper()
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	tr := &seqTransport{}
+	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	var seq atomic.Int64
+	stop := make(chan struct{})
+	prodDone := make(chan struct{})
+	go func() {
+		defer close(prodDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			n := seq.Add(1)
+			hub.Broadcast([]byte(strconv.FormatInt(n, 10)))
+			time.Sleep(50 * time.Microsecond)
+		}
+	}()
+	time.Sleep(time.Duration(it%5) * time.Millisecond)
+
+	var snapSeq int64
+	require.NoError(t, hub.FirstPaint(id, func() error {
+		snapSeq = seq.Load()
+		time.Sleep(time.Duration(it%7) * 700 * time.Microsecond) // capture/write latency
+		_ = tr.Send([]byte("paint"))
+		return nil
+	}))
+	time.Sleep(5 * time.Millisecond)
+	close(stop)
+	<-prodDone
+	last := seq.Load()
+
+	delivered := func() map[int64]bool {
+		got := map[int64]bool{}
+		for _, e := range tr.snapshot() {
+			if n, err := strconv.ParseInt(e, 10, 64); err == nil {
+				got[n] = true
+			}
+		}
+		return got
+	}
+	missing := func() []int64 {
+		got := delivered()
+		var m []int64
+		for n := snapSeq + 1; n <= last; n++ { // lower ones are in the capture
+			if !got[n] {
+				m = append(m, n)
+			}
+		}
+		return m
+	}
+	require.Eventually(t, func() bool { return len(missing()) == 0 }, 5*time.Second, time.Millisecond,
+		"iteration %d: frames after the capture (saw %d, last %d) were lost: missing %v, events %d, first %v", it, snapSeq, last, missing(), len(tr.snapshot()), tr.snapshot()[:min(6, len(tr.snapshot()))])
+	require.Equal(t, "paint", tr.snapshot()[0], "iteration %d", it)
 }

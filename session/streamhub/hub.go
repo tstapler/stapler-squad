@@ -15,6 +15,8 @@ import (
 // errSlowSubscriberEvicted is the eviction reason logged when a subscriber's
 // outbound queue stays full past slowSubscriberGrace (Task 1.2.1e), as
 // opposed to a Transport.Send error (Task 1.2.1g).
+var errPaintBacklog = errors.New("streamhub: more than maxPaintBacklog frames arrived during the first paint")
+
 var errFirstPaintTimeout = errors.New("streamhub: subscriber never ran FirstPaint")
 
 var errSlowSubscriberEvicted = errors.New("streamhub: subscriber outbound queue full past grace period")
@@ -448,13 +450,13 @@ var ErrUnknownSubscriber = errors.New("streamhub: unknown subscriber")
 // and writes the subscriber's first snapshot directly (outside the hub's queue).
 //
 // Ordering: resizeApplyMu is held throughout, so no resize can capture-and-broadcast between
-// paint's capture and its write; a snapshot broadcast already queued for this subscriber predates
-// paint's capture and is discarded; live frames that arrive during paint queue behind it. The
-// subscriber therefore never sees an older snapshot after a newer one. paint blocks resizes for
-// its duration (one capture RPC plus one socket write), and is not given the hub's other locks.
-//
-// Live output frames queued before paint began are also discarded: the capture includes them
-// (to within the pump's latency), and replaying them over it would apply them twice.
+// paint's capture and its write. Frames broadcast before paint begins are dropped (the capture
+// includes them, and replaying them would apply them twice, and nothing drains a queue then).
+// Frames that arrive during paint are held, up to maxPaintBacklog, and the writer sends them
+// right after the paint, so none is lost (those the capture already contains are duplicated).
+// paint must return an error rather than paint blank when it captured nothing: the frames
+// dropped before it would otherwise be lost silently. paint blocks resizes for its duration
+// (one capture RPC plus one socket write), and is not given the hub's other locks.
 func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
 	h.mu.Lock()
 	sub, ok := h.subscribers[id]
@@ -466,12 +468,15 @@ func (h *StreamHub) FirstPaint(id SubscriberID, paint func() error) error {
 	h.resizeApplyMu.Lock()
 	defer h.resizeApplyMu.Unlock()
 
-	if sub.awaitingFirstPaint.CompareAndSwap(true, false) {
-		sub.stopFirstPaintTimeout()
-		sub.discardQueued()
+	if !sub.beginFirstPaint() {
+		return ErrUnknownSubscriber
 	}
 	err := paint()
+	overflowed := sub.endFirstPaint()
 	sub.startWriter(h.handleSubscriberSendError)
+	if err == nil && overflowed {
+		return errPaintBacklog
+	}
 	return err
 }
 

@@ -1050,7 +1050,7 @@ func (s *connectWebSocketStream) WriteMessage(messageType int, data []byte) erro
 
 // firstPaintWriteTimeout bounds a first-paint socket write: the hub holds its resize lock across
 // it, so a stalled client must not block every resize for the session.
-const firstPaintWriteTimeout = 5 * time.Second
+var firstPaintWriteTimeout = 5 * time.Second
 
 // WriteMessageTimeout is WriteMessage with a write deadline; it fails if the peer does not
 // accept the message within d. The deadline is cleared afterwards.
@@ -2192,10 +2192,9 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 // clears its loading spinner on a received message with non-empty output
 // bytes, and ansiSnapshotPrefix alone is non-empty, so an idle/empty session
 // still reaches "connected, nothing to show" instead of spinning forever with
-// no future event to ever clear it. A capture failure falls through to send
-// an empty snapshot rather than skipping the send entirely, for the same
-// reason (2026-09-01: skipping it left the client spinning forever with
-// nothing to signal a way out).
+// no future event to ever clear it. A capture failure returns an error (the
+// connection fails visibly): output dropped while awaiting this paint would
+// otherwise be lost behind a blank snapshot.
 func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSocketStream, hub *streamhub.StreamHub, subscriberID streamhub.SubscriberID, instance *session.Instance, sessionID string) error {
 	return hub.FirstPaint(subscriberID, func() error {
 		return h.writeHubInitialSnapshot(stream, instance, sessionID)
@@ -2212,8 +2211,9 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 	}
 	content, captureErr := instance.CapturePaneContentRaw()
 	if captureErr != nil {
-		log.Warn("[streamViaHub] failed to capture initial content, sending empty snapshot instead", "session", sessionID, "err", captureErr)
-		content = ""
+		// Output broadcast while the subscriber awaited this paint was dropped as superseded by
+		// the capture, so a blank paint would silently lose it; fail the connection instead.
+		return fmt.Errorf("failed to capture initial content: %w", captureErr)
 	}
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
 	altScreenActive := altScreenActiveForSnapshot(instance)

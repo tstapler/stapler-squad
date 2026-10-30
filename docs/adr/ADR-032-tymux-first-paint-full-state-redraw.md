@@ -44,9 +44,9 @@ Six places send a browser a full-screen snapshot:
    attach-time catch-up (it was captured, then discarded by the old `SuppressNextSend` hack, then captured again by the
    handler) and hold the subscriber's output. The handler then calls `StreamHub.FirstPaint`, which:
    - takes `resizeApplyMu`, so no resize can capture-and-broadcast between the paint's capture and its write;
-   - discards frames queued before the paint (an older resize snapshot, or output the capture already contains);
-   - runs the handler's capture-and-write, then starts the subscriber's writer, so live frames that arrived meanwhile
-     follow the paint instead of racing it.
+   - drops frames broadcast before the paint begins (an older resize snapshot, or output the capture already contains);
+   - runs the handler's capture-and-write, holding frames that arrive meanwhile (up to `maxPaintBacklog`, then the paint
+     fails visibly) and having the writer send them right after the paint, before switching to the live queue.
 
    While every subscriber is still waiting for its first paint, `applyNegotiatedSize` applies the resize but skips its own
    capture, which the paint would discard. `WebSocketTransport.SuppressNextSend` is removed.
@@ -115,12 +115,21 @@ side, as ADR-003 does for the attach stream. That closes the remaining window on
 - While a subscriber awaits its `FirstPaint` it has no writer, so `trySend` drops frames as superseded rather than queueing
   them (a full queue would otherwise trip the 250 ms slow-subscriber eviction when `FirstPaint` is delayed behind
   `resizeApplyMu` or a slow capture). If `FirstPaint` is never called, the subscriber is evicted after
-  `defaultFirstPaintMaxAwait` (30 s); the handler always calls it right after attach.
+  `defaultFirstPaintMaxAwait` (30 s); the check shares a lock with `beginFirstPaint`, so it cannot evict mid-paint.
+- **A paint must carry a capture.** Frames dropped while awaiting are safe to drop only because the capture covers them, so
+  `writeHubInitialSnapshot` returns an error (the connection fails visibly) when neither the redraw nor the text capture
+  works, instead of the old empty snapshot. This changes the hub path for a session whose capture fails: it now errors
+  rather than showing a blank terminal.
+- **Frames during the paint are held, not queued.** From `beginFirstPaint` until the writer has replayed them, frames go to a
+  bounded side list, not the 100-deep outbound queue, so a long capture or a stalled socket cannot trip the slow-subscriber
+  eviction. The writer sends the list before the queue and switches over under the same lock, so no frame falls between the
+  two. More than `maxPaintBacklog` (4096) frames fail the connection rather than leaving a gap.
 - **Residual duplicate window.** A frame broadcast after `FirstPaint` starts but while the capture RPC is in flight (up to
-  `fullStateCaptureTimeout`, 3 s) queues behind the paint and may already be in the capture, so it can be applied twice. No
-  clean cutoff exists: the hub cannot observe when, relative to the pump's frames, the daemon took its snapshot, so any
-  sequence cutoff would trade this duplicate for dropping a frame that is not in the capture. At-least-once was chosen over
-  possible loss; `TestFirstPaint_should_DeliverFrameBroadcastDuringPaintAfterPaint` pins it.
+  `fullStateCaptureTimeout`, 3 s) is held and replayed after the paint, and may already be in the capture, so it can be
+  applied twice. No clean cutoff exists: the hub cannot observe when, relative to the pump's frames, the daemon took its
+  snapshot, so any sequence cutoff would trade this duplicate for dropping a frame that is not in the capture. At-least-once
+  was chosen over possible loss; `TestFirstPaint_should_DeliverFrameBroadcastDuringPaintAfterPaint` pins it and
+  `TestFirstPaint_should_LeaveNoGap_When_FramesRaceTheCapture` checks that nothing after the capture is lost.
 - A control-mode connection whose first paint is a redraw gets no initial scrollback.
 
 ## Verification

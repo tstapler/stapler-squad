@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"net"
 	"strings"
@@ -265,18 +266,96 @@ func TestCaptureAndSendInitialSnapshot_should_ShareOneWaitBudget_When_NothingCap
 	assert.Contains(t, string(readOutput(t, conn).Data), "session stopped")
 }
 
+// withinBound fails t, instead of hanging the run, when fn does not return within d.
+func withinBound(t *testing.T, d time.Duration, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("%s did not return within %s: the write has no deadline", what, d)
+	}
+}
+
+func shortFirstPaintTimeout(t *testing.T) {
+	t.Helper()
+	old := firstPaintWriteTimeout
+	firstPaintWriteTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { firstPaintWriteTimeout = old })
+}
+
+func incompressible(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return string(b)
+}
+
 // A client that never reads must not hold a first-paint write (and the hub's resize lock) forever.
 func TestWriteMessageTimeout_should_FailWithinDeadline_When_PeerNeverReads(t *testing.T) {
 	stream, _, cleanup := createTestWebSocketPair(t) // the peer conn is never read
 	defer cleanup()
 	chunk := make([]byte, 1<<20)
-	start := time.Now()
 	var err error
-	for i := 0; i < 4096 && err == nil; i++ { // socket buffers fill long before 4 GiB
-		err = stream.WriteMessageTimeout(websocket.BinaryMessage, chunk, 200*time.Millisecond)
-	}
+	withinBound(t, 20*time.Second, "WriteMessageTimeout", func() {
+		for i := 0; i < 4096 && err == nil; i++ { // socket buffers fill long before 4 GiB
+			err = stream.WriteMessageTimeout(websocket.BinaryMessage, chunk, 200*time.Millisecond)
+		}
+	})
 	require.Error(t, err)
-	assert.Less(t, time.Since(start), 10*time.Second)
+}
+
+func TestWriteMessageTimeout_should_ClearDeadline_When_WriteSucceeds(t *testing.T) {
+	stream, conn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	require.NoError(t, stream.WriteMessageTimeout(websocket.BinaryMessage, []byte("a"), 100*time.Millisecond))
+	_, _, err := conn.ReadMessage()
+	require.NoError(t, err)
+	time.Sleep(250 * time.Millisecond) // past the deadline the first write set
+	require.NoError(t, stream.WriteMessage(websocket.BinaryMessage, []byte("b")), "a stale write deadline would fail this")
+}
+
+func TestSendFullStateFrame_should_UseWriteDeadline(t *testing.T) {
+	shortFirstPaintTimeout(t)
+	stream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	var err error
+	withinBound(t, 20*time.Second, "sendFullStateFrame", func() {
+		err = sendFullStateFrame(stream, "s", snapshotFrame{data: incompressible(16 << 20)})
+	})
+	require.Error(t, err)
+}
+
+func TestWriteHubInitialSnapshot_should_UseWriteDeadline_OnLegacyText(t *testing.T) {
+	shortFirstPaintTimeout(t)
+	stream, _, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	inst := firstPaintInstance(t, &paneFake{redrawOK: false, text: incompressible(16 << 20)})
+	var err error
+	withinBound(t, 30*time.Second, "writeHubInitialSnapshot", func() {
+		err = newFirstPaintHandler().writeHubInitialSnapshot(stream, inst, "s")
+	})
+	require.Error(t, err)
+}
+
+// Output dropped while a subscriber awaited its paint is only safe to drop if the paint carries a
+// capture; when neither capture works the connection must fail, not paint blank.
+func TestSendHubInitialSnapshot_should_Fail_When_NoCaptureSucceeds(t *testing.T) {
+	stream, conn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	boom := errors.New("daemon gone")
+	inst := firstPaintInstance(t, &paneFake{redrawOK: true, redrawErr: boom, textErr: boom})
+	hub := streamhub.NewStreamHub("s", nil, streamhub.WithTeardownGrace(time.Hour))
+	id := attachFirstPaintSubscriber(t, stream, hub)
+
+	err := newFirstPaintHandler().sendHubInitialSnapshot(stream, hub, id, inst, "s")
+
+	require.ErrorIs(t, err, boom)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	_, _, rerr := conn.ReadMessage()
+	var ne net.Error
+	require.ErrorAs(t, rerr, &ne)
+	require.True(t, ne.Timeout(), "a blank paint was sent: %v", rerr)
 }
 
 func scrollbackHandler(t *testing.T) *ConnectRPCWebSocketHandler {
