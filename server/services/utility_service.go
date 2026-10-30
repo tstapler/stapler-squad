@@ -2,6 +2,7 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -552,6 +554,13 @@ func newLogLineFilters(req *sessionv1.GetLogsRequest, sessionFilter string) logL
 
 // matches reports whether parsed satisfies every configured filter.
 func (f logLineFilters) matches(parsed parsedLogLine) bool {
+	return f.matchesStructural(parsed) && f.matchesSearch(parsed)
+}
+
+// matchesStructural applies every filter that needs only the cheap header
+// fields (Session, Level, Timestamp) — not the folded Message, which is what
+// makes a full JSON parse expensive.
+func (f logLineFilters) matchesStructural(parsed parsedLogLine) bool {
 	// Entries are tagged with the owning session's Title via
 	// log.ForSession, not filed into a separate log file.
 	if f.sessionFilter != "" && parsed.Session != f.sessionFilter {
@@ -567,18 +576,106 @@ func (f logLineFilters) matches(parsed parsedLogLine) bool {
 	if f.startTime != nil && parsed.Timestamp.Before(*f.startTime) {
 		return false
 	}
-	if f.endTime != nil && parsed.Timestamp.After(*f.endTime) {
-		return false
-	}
+	return f.endTime == nil || !parsed.Timestamp.After(*f.endTime)
+}
 
-	if f.searchQueryLower != "" {
-		messageAndSource := strings.ToLower(parsed.Message + " " + parsed.Source)
-		if !strings.Contains(messageAndSource, f.searchQueryLower) {
-			return false
-		}
+// matchesSearch applies the free-text filter, which needs the full Message.
+func (f logLineFilters) matchesSearch(parsed parsedLogLine) bool {
+	if f.searchQueryLower == "" {
+		return true
 	}
+	messageAndSource := strings.ToLower(parsed.Message + " " + parsed.Source)
+	return strings.Contains(messageAndSource, f.searchQueryLower)
+}
 
-	return true
+// lenientString decodes a JSON string and treats any other JSON type as
+// absent, mirroring how parseJSONLogLine's map[string]any lookups treat a
+// wrongly-typed value. A custom decoder (rather than `any`) avoids boxing and
+// lets the msg field record only that it was a string, without copying it.
+type lenientString struct {
+	value    string
+	isString bool
+}
+
+func (l *lenientString) UnmarshalJSON(data []byte) error {
+	l.value, l.isString = "", false
+	l.isString = len(data) >= 2 && data[0] == '"'
+	return nil
+}
+
+// stringValue is lenientString that also keeps the decoded value.
+type stringValue struct{ lenientString }
+
+func (s *stringValue) UnmarshalJSON(data []byte) error {
+	if err := s.lenientString.UnmarshalJSON(data); err != nil || !s.isString {
+		return err
+	}
+	if bytes.IndexByte(data, '\\') < 0 && utf8.Valid(data) {
+		s.value = string(data[1 : len(data)-1]) // no escapes: raw bytes are the value
+		return nil
+	}
+	return json.Unmarshal(data, &s.value)
+}
+
+// logLineHeader decodes only the fields the structural filters need; every
+// other attribute is skipped by the decoder without allocating.
+type logLineHeader struct {
+	Time    stringValue   `json:"time"`
+	Level   stringValue   `json:"level"`
+	Msg     lenientString `json:"msg"`
+	Session stringValue   `json:"session"`
+}
+
+// parseJSONLogHeader is the cheap first pass of parseJSONLogLine: it accepts
+// exactly the lines parseJSONLogLine accepts, but fills only Timestamp, Level
+// and Session. Keys
+// differing from time/level/msg/session only by case are the one divergence
+// (encoding/json matches struct keys case-insensitively); slog never emits
+// those.
+func parseJSONLogHeader(line []byte) (parsedLogLine, bool) {
+	var h logLineHeader
+	if err := json.Unmarshal(line, &h); err != nil {
+		return parsedLogLine{}, false
+	}
+	if h.Time.value == "" || !h.Msg.isString {
+		return parsedLogLine{}, false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, h.Time.value)
+	if err != nil {
+		return parsedLogLine{}, false
+	}
+	level := h.Level.value
+	if level == "" {
+		level = "INFO"
+	}
+	return parsedLogLine{Timestamp: ts, Level: level, Session: h.Session.value}, true
+}
+
+// tailKeeper retains the last `cap` pushed lines in arrival order, so a
+// paginated "most recent first" page needs only offset+limit lines of memory
+// however many lines match overall.
+type tailKeeper struct {
+	cap   int
+	lines []string
+	next  int // overwrite position once full
+}
+
+func (t *tailKeeper) push(line string) {
+	if len(t.lines) < t.cap {
+		t.lines = append(t.lines, line)
+		return
+	}
+	t.lines[t.next] = line
+	t.next = (t.next + 1) % t.cap
+}
+
+// newestFirst returns the kept lines, most recently pushed first.
+func (t *tailKeeper) newestFirst() []string {
+	out := make([]string, 0, len(t.lines))
+	for i := len(t.lines) - 1; i >= 0; i-- {
+		out = append(out, t.lines[(t.next+i)%len(t.lines)])
+	}
+	return out
 }
 
 // parseLogs reads log file and applies filters to return matching entries.
@@ -587,7 +684,6 @@ func (f logLineFilters) matches(parsed parsedLogLine) bool {
 // read off req, since the caller may need to resolve a UUID to a Title
 // first without mutating req itself.
 func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter string) (*parseLogsResult, error) {
-	var entries []*sessionv1.LogEntry
 	scanner := bufio.NewScanner(reader)
 
 	// Default limit if not specified
@@ -604,46 +700,26 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter st
 
 	filters := newLogLineFilters(req, sessionFilter)
 
+	// Only the newest offset+limit matches can land on the requested page, so
+	// keep just those raw lines and count the rest; the page is fully parsed
+	// below.
+	tail := tailKeeper{cap: offset + limit}
+	totalCount := 0
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		parsed, ok := parseLogLine(line)
-		if !ok {
-			// Skip lines that don't match either known format (e.g. a
-			// stray non-log line, or one truncated mid-write).
+		raw := scanner.Bytes()
+		if !filters.lineMatches(raw) {
 			continue
 		}
-
-		if !filters.matches(parsed) {
-			continue
-		}
-
-		// Create log entry
-		entry := &sessionv1.LogEntry{
-			Timestamp: timestamppb.New(parsed.Timestamp),
-			Level:     parsed.Level,
-			Message:   parsed.Message,
-			Source:    &parsed.Source,
-		}
-
-		entries = append(entries, entry)
+		totalCount++
+		tail.push(string(raw))
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("error reading log file: %w", err)
 	}
 
-	// Reverse entries to show most recent first
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-
-	// Store total count before pagination
-	totalCount := len(entries)
-
-	// Apply offset
-	if offset >= len(entries) {
-		// Offset beyond available entries, return empty result
+	// Offset beyond available entries, return empty result
+	if offset >= totalCount {
 		return &parseLogsResult{
 			Entries:    []*sessionv1.LogEntry{},
 			TotalCount: totalCount,
@@ -651,19 +727,44 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest, sessionFilter st
 		}, nil
 	}
 
-	// Apply offset and limit
-	start := offset
-	end := offset + limit
-	if end > len(entries) {
-		end = len(entries)
+	end := min(offset+limit, totalCount)
+	page := tail.newestFirst()[offset:end]
+	entries := make([]*sessionv1.LogEntry, 0, len(page))
+	for _, line := range page {
+		parsed, _ := parseLogLine(line) // matched in lineMatches, so it parses
+		entries = append(entries, &sessionv1.LogEntry{
+			Timestamp: timestamppb.New(parsed.Timestamp),
+			Level:     parsed.Level,
+			Message:   parsed.Message,
+			Source:    &parsed.Source,
+		})
 	}
 
-	paginatedEntries := entries[start:end]
-	hasMore := end < len(entries)
-
 	return &parseLogsResult{
-		Entries:    paginatedEntries,
+		Entries:    entries,
 		TotalCount: totalCount,
-		HasMore:    hasMore,
+		HasMore:    end < totalCount,
 	}, nil
+}
+
+// lineMatches reports whether one raw log line parses in either known format
+// and satisfies every filter. JSON lines are first checked via the cheap
+// header decode; the full parse (message folding) runs only when a free-text
+// search needs the message. Lines matching neither format are skipped (e.g.
+// a stray non-log line, or one truncated mid-write).
+func (f logLineFilters) lineMatches(raw []byte) bool {
+	trimmed := bytes.TrimLeft(raw, " \t")
+	if bytes.HasPrefix(trimmed, []byte("{")) {
+		if f.searchQueryLower != "" {
+			// Search needs the folded message anyway, so a header pass would
+			// only add a second decode.
+			if full, ok := parseJSONLogLine(string(trimmed)); ok {
+				return f.matches(full)
+			}
+		} else if header, ok := parseJSONLogHeader(trimmed); ok {
+			return f.matchesStructural(header)
+		}
+	}
+	parsed, ok := parseLegacyLogLine(string(raw))
+	return ok && f.matches(parsed)
 }
