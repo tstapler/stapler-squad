@@ -11,16 +11,18 @@ interface PanePickerKeysArgs {
   dispatch: Dispatch<PaneAction>;
   cancelPicker: () => void;
   openPeek: (session: Session) => void;
+  /** Eligible pane already showing the pending session; enables the O shortcut. */
+  alreadyOpenPaneId?: string | null;
 }
 
 /**
- * Capture-phase keydown for the pane picker: Escape cancels, M peeks, V/H split, A-Z picks the nth
+ * Capture-phase keydown for the pane picker: Escape cancels, M peeks, O focuses the pane already showing the session, V/H split, A-Z picks the nth
  * eligible pane. Inert unless `active` (the container's window is visible) so a hidden window with
  * a pending picker never swallows keys meant for the visible one.
  */
 export function usePanePickerKeys(
   active: boolean,
-  { pickerPendingSession, state, dispatch, cancelPicker, openPeek }: PanePickerKeysArgs,
+  { pickerPendingSession, state, dispatch, cancelPicker, openPeek, alreadyOpenPaneId = null }: PanePickerKeysArgs,
 ): void {
   useEffect(() => {
     if (!active || !pickerPendingSession) return;
@@ -35,6 +37,12 @@ export function usePanePickerKeys(
       if (upper === "M") {
         e.stopPropagation();
         openPeek(pickerPendingSession);
+        cancelPicker();
+        return;
+      }
+      if (upper === "O" && alreadyOpenPaneId) {
+        e.stopPropagation();
+        dispatch({ type: "FOCUS_PANE", paneId: alreadyOpenPaneId });
         cancelPicker();
         return;
       }
@@ -64,5 +72,5 @@ export function usePanePickerKeys(
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [active, pickerPendingSession, state.root, state.focusedPaneId, dispatch, cancelPicker, openPeek]);
+  }, [active, pickerPendingSession, state.root, state.focusedPaneId, dispatch, cancelPicker, openPeek, alreadyOpenPaneId]);
 }

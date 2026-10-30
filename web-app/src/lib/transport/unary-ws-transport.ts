@@ -12,6 +12,7 @@ import { Code, ConnectError, createContextKey, createContextValues } from "@conn
 import { createMethodUrl, runUnaryCall } from "@connectrpc/connect/protocol";
 import { codeFromString } from "@connectrpc/connect/protocol-connect";
 import { IDEMPOTENT_METHODS } from "@/lib/api/idempotentMethods";
+import { trackSharedEvent } from "@/lib/telemetry/rpcTiming";
 import allowlist from "./__fixtures__/ws-unary-allowlist.json";
 import {
   MAX_FRAME_BYTES,
@@ -40,6 +41,8 @@ export const SEND_QUEUE_MAX_FRAMES = 64;
 export const SEND_QUEUE_MAX_BYTES = 1024 * 1024;
 export const PING_INTERVAL_MS = 10_000;
 export const PONG_DEADLINE_MS = 5_000;
+/** Hidden tabs get throttled timers and delayed event delivery, so a late PONG is not a dead socket. */
+export const PONG_DEADLINE_HIDDEN_MS = 20_000;
 export const RECONNECT_BASE_MS = 100;
 export const RECONNECT_CAP_MS = 5_000;
 export const BREAKER_THRESHOLD = 3;
@@ -144,6 +147,10 @@ interface Call {
   viaHttp: () => Promise<UnaryResponse<DescMessage, DescMessage>>;
   detach: () => void;
   onWritten?: () => void;
+}
+
+function isHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
 }
 
 function concatParts(parts: Uint8Array[], total: number): Uint8Array {
@@ -299,6 +306,12 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
         this.queue.length + 1 > SEND_QUEUE_MAX_FRAMES ||
         this.queuedBytes + frame.length > SEND_QUEUE_MAX_BYTES
       ) {
+        if (call.replayable) {
+          // A read never surfaces "queue full"; count it where the policy counts its fallbacks.
+          trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason: "ws-send-queue-full" } });
+          this.runOverHttp(call);
+          return;
+        }
         this.settle(call);
         reject(new ConnectError("unary websocket send queue is full", Code.ResourceExhausted));
         return;
@@ -432,6 +445,7 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
 
   private onMessage(ws: WebSocket, data: unknown): void {
     if (this.ws !== ws) return;
+    this.clearPong(); // any inbound frame proves the socket is alive, not only a PONG
     if (!(data instanceof ArrayBuffer)) {
       this.dropSocket(ws, true);
       return;
@@ -565,10 +579,20 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
     const ws = this.ws;
     if (!ws || this.state !== "open" || this.pongTimer) return;
     this.sendRaw(encodeFrame({ type: "PING", id: 0 }));
+    const hiddenAtSend = isHidden();
     this.pongTimer = setTimeout(() => {
       this.pongTimer = null;
+      if (!hiddenAtSend && isHidden()) {
+        // Hidden while waiting: timers and message delivery were throttled, so give
+        // the PONG one more hidden-tab window before calling the socket dead.
+        this.pongTimer = setTimeout(() => {
+          this.pongTimer = null;
+          this.dropSocket(ws, true);
+        }, PONG_DEADLINE_HIDDEN_MS - PONG_DEADLINE_MS);
+        return;
+      }
       this.dropSocket(ws, true);
-    }, PONG_DEADLINE_MS);
+    }, hiddenAtSend ? PONG_DEADLINE_HIDDEN_MS : PONG_DEADLINE_MS);
   }
 
   private clearPong(): void {

@@ -117,14 +117,14 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
 
   // `force` skips a fresh prefetch-cache hit; the first fetch after mount reads
   // the cache and joins any in-flight prefetch (Story 2.1.6a).
-  const loadStatus = useCallback(async (force: boolean) => {
+  const loadStatus = useCallback(async (force: boolean, waitForFresh = false) => {
     if (stoppedRef.current) {
       setStatusLoading(false);
       return;
     }
     const signal = startStatus();
     try {
-      const entry = await fetchVcsEntry(sessionId, force, isActive);
+      const entry = await fetchVcsEntry(sessionId, force, isActive, waitForFresh);
       if (signal.aborted) return;
       if (entry.error) {
         setError(new Error(entry.error));
@@ -148,7 +148,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     }
   }, [sessionId, startStatus, isActive]);
 
-  const fetchStatus = useCallback(() => loadStatus(true), [loadStatus]);
+  // `waitForFresh` is for user-requested refreshes only; the interval poll leaves it false so the
+  // server may answer from its stale-while-revalidate entry.
+  const fetchStatus = useCallback((waitForFresh = false) => loadStatus(true, waitForFresh), [loadStatus]);
 
   // "<session>:<contextLines>" the diff was last requested for; null until a
   // consumer asks. Keyed on contextLines so changing it refetches, as before.
@@ -193,7 +195,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   }, [pollMode, diffKey, fetchDiff]);
 
   const refresh = useCallback(() => {
-    fetchStatus();
+    fetchStatus(true);
     if (diffRequestedForRef.current === diffKey) void fetchDiff();
   }, [fetchStatus, fetchDiff, diffKey]);
 
@@ -227,7 +229,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     // a duplicate. Once that fetch has settled, hydration may carry newer state than the cached
     // entry, and any change to an already-known session also warrants a forced refetch.
     const hydrating = !firstForSession && !knownBefore && sessionUpdatedAt !== null && mountFetchPendingRef.current;
-    const load = loadStatus(!firstForSession && !hydrating);
+    // A re-run after the first fetch is event-driven (session changed in Redux): wait for fresh data.
+    const eventDriven = !firstForSession && !hydrating;
+    const load = loadStatus(eventDriven, eventDriven);
     if (firstForSession) {
       mountFetchPendingRef.current = true;
       void load.finally(() => {
@@ -266,7 +270,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     diffLoading,
     loading: statusLoading,
     error,
-    refreshStatus: fetchStatus,
+    refreshStatus: () => fetchStatus(true),
     refreshDiff: fetchDiff,
     diffContextLines,
     setDiffContextLines,

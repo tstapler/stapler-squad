@@ -189,9 +189,9 @@ func (s *SessionService) ResumeCrashedSession(
 // context-bounded, so a hung removal can outlive a caller's timeout as an
 // untracked goroutine. Not fixed here — this helper inherits that property
 // from DeleteSession's existing chain rather than worsening it.
-func cleanupPartialCreation(instance *session.Instance) error {
+func cleanupPartialCreation(instance *session.Instance, force bool) error {
 	if instance.Started() {
-		return instance.Destroy()
+		return destroyInstance(instance, force)
 	}
 
 	// BUG-099: this branch never called Destroy(), so it never called
@@ -209,7 +209,7 @@ func cleanupPartialCreation(instance *session.Instance) error {
 	// of falling through to the defense-in-depth guard below, which is only
 	// safe for an instance that never finished starting.
 	if instance.Started() {
-		return instance.Destroy()
+		return destroyInstance(instance, force)
 	}
 
 	// Task 3.1.1d: defense-in-depth liveness guard. instance.Started() is
@@ -236,10 +236,30 @@ func cleanupPartialCreation(instance *session.Instance) error {
 	if worktreePath := instance.GetEffectiveRootDir(); instance.HasGitWorktree() && worktreeLooksAlive(worktreePath) {
 		log.Warn("cleanupPartialCreation: worktree looks alive/healthy despite instance.Started()==false; skipping removal (defense-in-depth guard)",
 			"session", instance.Title, "path", worktreePath)
-	} else if err := instance.CleanupWorktree(); err != nil {
+	} else if err := removeWorktreeUnlessDirty(instance, force); err != nil {
 		errs = append(errs, fmt.Errorf("failed to cleanup git worktree: %w", err))
 	}
 	return errors.Join(errs...)
+}
+
+// destroyInstance is Destroy, or ForceDestroy when the caller explicitly asked to discard
+// uncommitted work in the session's worktree.
+func destroyInstance(instance *session.Instance, force bool) error {
+	if force {
+		return instance.ForceDestroy()
+	}
+	return instance.Destroy()
+}
+
+// removeWorktreeUnlessDirty removes the worktree, refusing (session.ErrWorktreeDirty) when it
+// holds uncommitted changes unless force is set.
+func removeWorktreeUnlessDirty(instance *session.Instance, force bool) error {
+	if !force {
+		if err := instance.CheckWorktreeRemovable(); err != nil {
+			return err
+		}
+	}
+	return instance.CleanupWorktree()
 }
 
 // worktreeLooksAlive is the "cheap git-status check" backstop Task 3.1.1d
@@ -323,6 +343,15 @@ func (s *SessionService) DeleteSession(
 		return nil, err
 	}
 
+	// Refuse before the storage record goes away: the cleanup below runs after the delete
+	// has already been acknowledged, so a dirty worktree it declined to remove would be
+	// orphaned. Only force discards uncommitted work.
+	if liveInst != nil && !req.Msg.Force {
+		if err := liveInst.CheckWorktreeRemovable(); err != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+	}
+
 	// Fence out an in-flight Background Resolution Pipeline before cleanup,
 	// bumping the epoch before re-reading status exactly like
 	// CancelSessionCreation (see its doc comment for why that order, not the
@@ -351,7 +380,7 @@ func (s *SessionService) DeleteSession(
 	if liveInst != nil {
 		s.trackCleanup(func() {
 			err := waitForDestroyLoggingSlowCleanup(func() error {
-				return cleanupPartialCreation(liveInst)
+				return cleanupPartialCreation(liveInst, req.Msg.Force)
 			}, s.deleteSessionCleanupTimeout, func() {
 				log.Warn("session cleanup still running in background after timeout", "session", req.Msg.Id, "timeout", s.deleteSessionCleanupTimeout)
 			})
@@ -472,7 +501,7 @@ func (s *SessionService) CancelSessionCreation(
 		cancelFunc()
 	}
 
-	if err := cleanupPartialCreation(inst); err != nil {
+	if err := cleanupPartialCreation(inst, false); err != nil {
 		log.Warn("CancelSessionCreation: failed to clean up partial creation resources", "session", req.Msg.Id, "err", err)
 	}
 
@@ -549,7 +578,7 @@ func (s *SessionService) RetrySessionCreation(
 		cancelFunc()
 	}
 
-	if err := cleanupPartialCreation(inst); err != nil {
+	if err := cleanupPartialCreation(inst, false); err != nil {
 		log.Warn("RetrySessionCreation: failed to clean up partial creation resources", "session", req.Msg.Id, "err", err)
 	}
 

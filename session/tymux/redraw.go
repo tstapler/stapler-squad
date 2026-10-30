@@ -29,6 +29,9 @@ func RenderSnapshotRedraw(snap *v1.PaneSnapshot) (string, error) {
 	}
 	var b strings.Builder
 
+	// Close a hyperlink the client left open: SGR 0 does not, so it would wrap the repaint.
+	b.WriteString(esc + "]8;;" + st)
+
 	// A daemon older than v1.9 sends no terminal state at all; its zero values would read as
 	// "everything off" and reset modes the app set (mouse, paste, alt screen). Paint the grid
 	// and cursor only.

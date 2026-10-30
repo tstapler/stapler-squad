@@ -6,6 +6,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,17 +95,57 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 		instances: make([]*Instance, 0),
 		backoffs:  make(map[string]*sessionBackoff),
 	}
-	hl.watcher = NewHistoryFileWatcher(watchDir, func(filePath string) {
-		hl.ScanAll()
-		// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
-		hl.mu.RLock()
-		cbs := hl.extraCallbacks
-		hl.mu.RUnlock()
-		for _, cb := range cbs {
-			cb(filePath)
-		}
-	})
+	hl.watcher = NewHistoryFileWatcher(watchDir, hl.handleHistoryFileEvent)
 	return hl
+}
+
+// handleHistoryFileEvent is the watcher callback. It force-rescans all sessions
+// only when the write can change a link (see rescanNeeded): a new conversation
+// (e.g. after /clear) or a non-live owner's file while a session awaits a link.
+// Every append to a live session's own file would otherwise re-check every
+// session's pane PID and open files.
+func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
+	if hl.rescanNeeded(filePath) {
+		hl.ScanAll()
+	}
+	// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
+	hl.mu.RLock()
+	cbs := hl.extraCallbacks
+	hl.mu.RUnlock()
+	for _, cb := range cbs {
+		cb(filePath)
+	}
+}
+
+// rescanNeeded reports whether a write to filePath (<conversation-uuid>.jsonl)
+// can change any link. It cannot only when a live (active, unarchived) session
+// owns the conversation (just the owner appending) and no live session is still
+// waiting for a link (a live Claude session with no conversation yet). A non-live owner proves nothing, and a waiting session
+// may be the one that resumed an already-claimed conversation, which only the
+// pane-PID fast path in ScanAll can link. Assumes a resumed conversation is
+// appended in place rather than copied to a new file; if Claude Code copies, the
+// unclaimed-file branch already covers it.
+func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
+	uuid := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
+	if uuid == "" {
+		return true
+	}
+	claimedByLive, awaitingLink := false, false
+	for _, inst := range hl.Instances() {
+		snap := inst.Snapshot()
+		live := snap.Status == Active && snap.ArchivedAt == nil
+		if !inst.HasClaudeSession() {
+			// isClaude reads config from disk, so only evaluate it for the
+			// few live unlinked sessions. A parked session still counts: the
+			// rescan is its only wake-up besides the poll's backoff expiry.
+			awaitingLink = awaitingLink || (live && isClaude(snap.Program))
+			continue
+		}
+		if live && inst.GetClaudeConversationUUID() == uuid {
+			claimedByLive = true
+		}
+	}
+	return !claimedByLive || awaitingLink
 }
 
 // RegisterFileCallback registers a callback that receives the file path whenever

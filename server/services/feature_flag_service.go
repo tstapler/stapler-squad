@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/conditional"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -598,7 +599,7 @@ func (f *FeatureFlagService) SetFeatureController(name string, c FeatureControll
 // named feature flag. GetFeatureFlags calls fn on every request and populates
 // FeatureFlag.StatusDetail with its result (empty string when fn returns "").
 func (f *FeatureFlagService) SetStatusDetailProvider(name string, fn func() string) {
-	f.setStatusDetailSlot(name, providerSlotKey, fn)
+	f.setStatusDetailSlot(name, providerSlotKey, ignoreConfig(fn))
 }
 
 // providerSlotKey names the slot SetStatusDetailProvider owns; a second call
@@ -607,10 +608,15 @@ const providerSlotKey = "provider"
 
 type statusDetailSlot struct {
 	key string
-	fn  func() string
+	fn  func(*config.Config) string
 }
 
-func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() string) {
+// ignoreConfig adapts a config-free source to the cfg-taking slot signature.
+func ignoreConfig(fn func() string) func(*config.Config) string {
+	return func(*config.Config) string { return fn() }
+}
+
+func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func(*config.Config) string) {
 	if f.statusDetailSlots == nil {
 		f.statusDetailSlots = make(map[string][]statusDetailSlot)
 	}
@@ -628,13 +634,20 @@ func (f *FeatureFlagService) setStatusDetailSlot(name, key string, fn func() str
 // line. Several sources (stats writer, explicit global false, per-kind false)
 // each speak for the same flag without replacing one another.
 func (f *FeatureFlagService) AddStatusDetailSource(name string, fn func() string) {
+	f.setStatusDetailSlot(name, "", ignoreConfig(fn))
+}
+
+// AddConfigStatusDetailSource is AddStatusDetailSource for a source that reads
+// config.json: it is handed the one snapshot GetFeatureFlags loaded, so listing
+// flags parses the file once however many sources are wired.
+func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*config.Config) string) {
 	f.setStatusDetailSlot(name, "", fn)
 }
 
-func (f *FeatureFlagService) statusDetailFor(name string) string {
-	parts := autonomyFlagStatusDetail(name, config.LoadConfig())
+func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
+	parts := autonomyFlagStatusDetail(name, cfg)
 	for _, s := range f.statusDetailSlots[name] {
-		if d := s.fn(); d != "" {
+		if d := s.fn(cfg); d != "" {
 			parts = append(parts, d)
 		}
 	}
@@ -713,12 +726,18 @@ func (f *FeatureFlagService) GetFeatureFlags(
 			Name:         kf.name,
 			Enabled:      enabled,
 			Description:  kf.description,
-			StatusDetail: f.statusDetailFor(kf.name),
+			StatusDetail: f.statusDetailFor(kf.name, cfg),
 			Scopes:       flagScopeReadback(cfg, kf.name, kf.scopes),
 		})
 	}
 
-	return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Flags: flags}), nil
+	full := &sessionv1.GetFeatureFlagsResponse{Flags: flags}
+	etag, notModified := conditional.Check("GetFeatureFlags", conditional.Validator(req.Msg.GetIfNoneMatch()), full)
+	if notModified {
+		return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Etag: string(etag), NotModified: true}), nil
+	}
+	full.Etag = string(etag)
+	return connect.NewResponse(full), nil
 }
 
 // +api: feature-flags:update
@@ -773,7 +792,9 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	// update mutex so a stalled fsync cannot queue a kill switch behind it. The
 	// deferred `result` line is registered before the lock, so it runs after
 	// the unlock.
+	endAuditSpan := flagSpan(ctx, op, flagPhaseAudit)
 	audit, err := f.auditBegin(ctx, op, flagRequestFields(ctx, req.Peer().Addr, req.Header()))
+	endAuditSpan()
 	if err != nil {
 		log.Error("feature flag change not audited, nothing persisted", "feature", name, "err", err)
 		return nil, connect.NewError(connect.CodeInternal, errors.New("flag change not audited, nothing persisted"))
@@ -807,7 +828,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 			Name:         name,
 			Enabled:      enabled,
 			Description:  description,
-			StatusDetail: f.statusDetailFor(name),
+			StatusDetail: f.statusDetailFor(name, cfg),
 			Scopes:       flagScopeReadback(cfg, name, scopes),
 		},
 	}), nil
@@ -822,16 +843,22 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, audit *flagAudit) error {
 	name, enabled := op.name, op.enabled
 	var previous, hadKey bool
+	endPersistSpan := flagSpan(ctx, op, flagPhasePersist)
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
 			previous = featureFlagDefault(name)
 		}
+		// In-memory mutators: UpdateConfig saves once, so the saving setters
+		// here would fsync config.json twice per flip.
 		if op.isSet() {
-			return cfg.SetFeatureFlag(name, enabled)
+			cfg.ApplyFeatureFlag(name, enabled)
+		} else {
+			cfg.RemoveFeatureFlag(name)
 		}
-		return cfg.DeleteFeatureFlag(name)
+		return nil
 	})
+	endPersistSpan()
 	if audit.active() {
 		f.flagSeq++
 		audit.seq, audit.previous = f.flagSeq, previous
@@ -844,6 +871,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 		f.finishApplied(op, audit)
 		return nil
 	}
+	defer flagSpan(ctx, op, flagPhaseApply)()
 	// A failed toggle must not leave disk config and in-memory state disagreeing
 	// about whether the feature is on: GetFeatureFlags and RPC-gating
 	// interceptors read from different sources.
@@ -878,9 +906,11 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 func rollbackFlag(name string, previous, hadKey bool) error {
 	return config.UpdateConfig(func(cfg *config.Config) error {
 		if hadKey {
-			return cfg.SetFeatureFlag(name, previous)
+			cfg.ApplyFeatureFlag(name, previous)
+		} else {
+			cfg.RemoveFeatureFlag(name)
 		}
-		return cfg.DeleteFeatureFlag(name)
+		return nil
 	})
 }
 

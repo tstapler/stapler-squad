@@ -2091,6 +2091,7 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 			RepoPath:     r.RepoPath,
 			Branch:       r.Branch,
 			WorktreePath: r.WorktreePath,
+			Fingerprint:  worktreeFingerprint(r),
 		})
 	}
 	return items

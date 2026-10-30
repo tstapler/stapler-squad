@@ -20,7 +20,8 @@ const KEEP_ALIVE_FLAG = "window_keep_alive";
 /** Renderer choice is read synchronously at terminal mount, so it needs a persisted pre-load value. */
 export const GHOSTTY_RENDERER_FLAG = "ghostty_renderer";
 
-let cached: { at: number; flags: FeatureFlag[] } | null = null;
+// `etag` is the server validator for `flags`; empty when the server sent none or a local write made the body differ.
+let cached: { at: number; flags: FeatureFlag[]; etag: string } | null = null;
 let inFlight: Promise<FeatureFlag[]> | null = null;
 // Bumped on every invalidation so a response that started before a write cannot overwrite the write.
 let generation = 0;
@@ -121,12 +122,24 @@ export async function loadFlags(
   if (!inFlight) {
     const startedAt = generation;
     const client = createClient(SessionService, getConnectTransport());
-    inFlight = client
+    const fetchFlags = (ifNoneMatch: string) =>
       // Shared across consumers, so a per-component abort would cancel others' read; bound it by time instead.
-      .getFeatureFlags({}, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-      .then((res) => {
+      client.getFeatureFlags({ ifNoneMatch }, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    inFlight = fetchFlags(cached?.etag ?? "")
+      .then(async (res) => {
+        if (res.notModified) {
+          if (cached) {
+            // Unchanged: keep the held body (same reference, so no re-render); extend the TTL only if no write intervened.
+            if (startedAt === generation) cached = { ...cached, at: now() };
+            return cached.flags;
+          }
+          // Nothing held to keep (cleared mid-flight): ask again without a validator.
+          res = await fetchFlags("");
+          // An empty validator can never match; a server claiming it did is misbehaving, so keep what we hold.
+          if (res.notModified) return peekFlags() ?? [];
+        }
         if (startedAt !== generation) return res.flags;
-        cached = { at: now(), flags: res.flags };
+        cached = { at: now(), flags: res.flags, etag: res.etag };
         persistFlags(res.flags);
         notify();
         return res.flags;
@@ -149,7 +162,7 @@ export function recordFlagWrite(name: string, enabled: boolean, scope?: string):
     if (!scope) return { ...f, enabled } as FeatureFlag;
     return { ...f, scopes: f.scopes.map((s) => (s.scope === scope ? { ...s, enabled } : s)) } as FeatureFlag;
   });
-  cached = { at: Number.NEGATIVE_INFINITY, flags };
+  cached = { at: Number.NEGATIVE_INFINITY, flags, etag: "" };
   inFlight = null;
   generation++;
   notify();

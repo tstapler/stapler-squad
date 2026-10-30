@@ -194,13 +194,14 @@ export function useLogViewer(
     isFollowingRef.current = isFollowing;
   }, [isFollowing]);
 
-  const fetchNewLogs = useCallback(async () => {
-    if (!clientRef.current) return;
+  // Resolves true when the poll appended entries; useLiveTail backs off while it resolves false.
+  const fetchNewLogs = useCallback(async (): Promise<boolean> => {
+    if (!clientRef.current) return false;
     // A caller-supplied time range means "browse this historical window",
     // not "follow the tail" — polling for entries newer than knownTotalRef
     // would pull in current-time entries outside that window. The live-tail
     // toggle stays available but is a no-op until the range is cleared.
-    if (timeRangeStartMs !== undefined || timeRangeEndMs !== undefined) return;
+    if (timeRangeStartMs !== undefined || timeRangeEndMs !== undefined) return false;
     try {
       const knownTotal = knownTotalRef.current;
       // Pass multi-level filter via repeated levels field; fall back to no filter for "ALL"
@@ -219,7 +220,7 @@ export function useLogViewer(
       setServerTotalCount(serverTotal);
       setLastRefresh(new Date());
       setError(null);
-      if (newCount <= 0) return;
+      if (newCount <= 0) return false;
 
       // The first `newCount` entries in the newest-first response are the ones
       // we haven't seen yet. Slice them off and reverse so they're oldest-first
@@ -237,7 +238,7 @@ export function useLogViewer(
         },
         raw: e,
       }));
-      if (newEntries.length === 0) return;
+      if (newEntries.length === 0) return false;
 
       knownTotalRef.current = serverTotal;
       entriesRef.current = [...entriesRef.current, ...newEntries];
@@ -248,8 +249,10 @@ export function useLogViewer(
           setQueuedNewLineCount((prev) => prev + newEntries.length);
         }
       });
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh logs");
+      return false;
     }
   }, [source, sessionId, levelFilters, timeRangeStartMs, timeRangeEndMs]);
 
