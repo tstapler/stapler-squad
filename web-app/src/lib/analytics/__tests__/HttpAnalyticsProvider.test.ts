@@ -20,10 +20,10 @@ describe("HttpAnalyticsProvider", () => {
     jest.restoreAllMocks();
   });
 
-  it("should_batch_and_flush_after_25_events", async () => {
+  it("should_batch_and_flush_after_100_events", async () => {
     const provider = new HttpAnalyticsProvider();
 
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 100; i++) {
       provider.track(makeEvent(`event_${i}`));
     }
 
@@ -33,7 +33,7 @@ describe("HttpAnalyticsProvider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { events: AnalyticsEvent[] };
-    expect(body.events).toHaveLength(25);
+    expect(body.events).toHaveLength(100);
   });
 
   it("should_flush_after_20s_timer_not_before", async () => {
@@ -84,7 +84,7 @@ describe("HttpAnalyticsProvider", () => {
     const provider = new HttpAnalyticsProvider();
 
     // Track 201 events without flushing (we need to prevent flush from firing)
-    // Each 25th push triggers a flush, resetting the queue.
+    // Each 100th push triggers a flush, resetting the queue.
     // To test bounded queue in isolation, we inspect the internal queue.
     // We'll track 200 items (8 full batches = flushes), then add one more to hit the 201st
     // and verify the queue stays <= 200 between flushes.
@@ -172,27 +172,67 @@ describe("HttpAnalyticsProvider", () => {
     expect(sizes).toEqual([100, 100]);
   });
 
-  it("should_split_a_beacon_so_no_body_exceeds_the_size_cap_or_100_events", async () => {
+  it("should_send_one_beacon_chunk_per_drain_and_keep_the_rest_queued", async () => {
     const sendBeacon = jest.fn().mockReturnValue(true);
     Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: sendBeacon });
     const provider = new HttpAnalyticsProvider();
     await provider.initialize();
     const queue = (provider as unknown as { queue: AnalyticsEvent[] }).queue;
     const padding = "x".repeat(900);
-    for (let i = 0; i < 200; i++) queue.push({ ...makeEvent(`event_${i}`), labels: { padding } });
+    for (let i = 0; i < 150; i++) queue.push({ ...makeEvent(`event_${i}`), labels: { padding } });
 
     window.dispatchEvent(new Event("pagehide"));
 
-    expect(sendBeacon.mock.calls.length).toBeGreaterThan(2);
-    let total = 0;
-    for (const call of sendBeacon.mock.calls) {
-      const body = call[1] as string;
-      const events = (JSON.parse(body) as { events: unknown[] }).events;
-      expect(events.length).toBeLessThanOrEqual(100);
-      expect(body.length).toBeLessThanOrEqual(60_000);
-      total += events.length;
-    }
-    expect(total).toBe(200);
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    const body = sendBeacon.mock.calls[0][1] as string;
+    expect(body.length).toBeLessThanOrEqual(60_000);
+    const sent = (JSON.parse(body) as { events: unknown[] }).events.length;
+    expect(sent).toBeLessThanOrEqual(100);
+    expect(queue.length).toBe(150 - sent);
+    queue.length = 0; // window listeners outlive the provider, so leave nothing for later tests to drain
+  });
+
+  it("should_fall_back_to_a_keepalive_fetch_when_sendBeacon_refuses_the_chunk", async () => {
+    const sendBeacon = jest.fn().mockReturnValue(false);
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: sendBeacon });
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    provider.track(makeEvent());
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].keepalive).toBe(true);
+  });
+
+  it("should_requeue_the_chunk_when_both_beacon_and_fetch_fail", async () => {
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: jest.fn().mockReturnValue(false) });
+    fetchMock.mockRejectedValue(new Error("offline"));
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    provider.track(makeEvent());
+
+    window.dispatchEvent(new Event("pagehide"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const queue = (provider as unknown as { queue: AnalyticsEvent[] }).queue;
+    expect(queue).toHaveLength(1);
+    queue.length = 0;
+  });
+
+  it("should_register_the_hide_listeners_only_once", async () => {
+    const sendBeacon = jest.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: sendBeacon });
+    const provider = new HttpAnalyticsProvider();
+    await provider.initialize();
+    await provider.initialize();
+    provider.track(makeEvent());
+    provider.track(makeEvent());
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
   });
 });
-
