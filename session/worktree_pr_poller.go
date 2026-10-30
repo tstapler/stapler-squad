@@ -8,9 +8,51 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
+
+// pollTrigger says why a poll pass started. Scanner completions arrive every
+// few seconds under fsnotify and must not each cost a GitHub request per PR;
+// the PollInterval ticker is the guaranteed fallback and always polls.
+type pollTrigger int
+
+const (
+	pollTriggerScan pollTrigger = iota
+	pollTriggerTick
+)
+
+// polledState remembers when a worktree key was last dispatched and its
+// fingerprint at that time.
+type polledState struct {
+	at          time.Time
+	fingerprint string
+}
+
+var (
+	pollOutcomeCounterOnce sync.Once
+	pollOutcomeCounter     metric.Int64Counter
+)
+
+// recordPollOutcome counts poll decisions; outcome is one of polled,
+// skipped_min_interval, skipped_duplicate (low cardinality).
+func recordPollOutcome(ctx context.Context, outcome string) {
+	pollOutcomeCounterOnce.Do(func() {
+		var err error
+		pollOutcomeCounter, err = telemetry.GetMeter().Int64Counter("worktree_pr_poller.poll_total",
+			metric.WithDescription("Worktree PR poller per-worktree decisions by outcome"))
+		if err != nil {
+			log.Error("worktree PR poller: failed to register poll_total", "error", err)
+		}
+	})
+	if pollOutcomeCounter != nil {
+		pollOutcomeCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
+}
 
 // WorktreeScanItem is the minimal worktree info the poller needs from the
 // unfinished-work scanner. Using a local struct avoids an import cycle:
@@ -22,6 +64,10 @@ type WorktreeScanItem struct {
 	RepoPath     string
 	Branch       string
 	WorktreePath string
+	// Fingerprint changes whenever the worktree's HEAD/commit state changes
+	// (empty if the source cannot tell). A changed fingerprint bypasses the
+	// per-PR minimum interval so new commits are polled promptly.
+	Fingerprint string
 }
 
 // WorktreeSource provides the set of currently-known worktrees.
@@ -87,6 +133,11 @@ type WorktreePRPoller struct {
 
 	mu            sync.Mutex
 	noPRPollAfter map[string]time.Time // key: worktreeCacheKey
+	lastPolled    map[string]polledState
+
+	// now and fetch are test seams (fake clock, fake GitHub fetch).
+	now   func() time.Time
+	fetch func(ctx context.Context, item WorktreeScanItem)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -101,12 +152,16 @@ func NewWorktreePRPoller(etagCache *github.ETagCache, prPoller *PRStatusPoller) 
 
 // NewWorktreePRPollerWithConfig creates a WorktreePRPoller with custom configuration.
 func NewWorktreePRPollerWithConfig(etagCache *github.ETagCache, prPoller *PRStatusPoller, cfg WorktreePRPollerConfig) *WorktreePRPoller {
-	return &WorktreePRPoller{
+	p := &WorktreePRPoller{
 		etagCache:     etagCache,
 		prPoller:      prPoller,
 		config:        cfg,
 		noPRPollAfter: make(map[string]time.Time),
+		lastPolled:    make(map[string]polledState),
+		now:           time.Now,
 	}
+	p.fetch = p.fetchAndStore
+	return p
 }
 
 // SetSource sets the worktree data source. Safe to call before Start.
@@ -178,7 +233,7 @@ func (p *WorktreePRPoller) pollLoop() {
 
 	// Seed immediately if source is already available.
 	if p.source != nil {
-		p.pollWorktrees(p.source.GetWorktrees())
+		p.pollWorktrees(p.source.GetWorktrees(), pollTriggerTick)
 	}
 
 	for {
@@ -195,16 +250,18 @@ func (p *WorktreePRPoller) pollLoop() {
 		case <-p.ctx.Done():
 			return
 		case <-p.source.ScanDone():
-			p.pollWorktrees(p.source.GetWorktrees())
+			p.pollWorktrees(p.source.GetWorktrees(), pollTriggerScan)
 		case <-ticker.C:
-			p.pollWorktrees(p.source.GetWorktrees())
+			p.pollWorktrees(p.source.GetWorktrees(), pollTriggerTick)
 		}
 	}
 }
 
 // pollWorktrees iterates scan results, skips session-backed worktrees, and
-// fetches GitHub PR data for the remainder.
-func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
+// fetches GitHub PR data for the remainder. Scan-triggered passes poll a
+// worktree at most once per PollInterval unless its fingerprint changed;
+// ticker passes always poll.
+func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollTrigger) {
 	if limited, until := github.DefaultRateLimiter.IsLimited(); limited {
 		log.Info("worktree PR poller: rate limited, skipping tick", "until", until)
 		return
@@ -226,7 +283,8 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5) // match PRStatusPoller default concurrency
 
-	now := time.Now()
+	now := p.now()
+	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		if _, owned := sessionPaths[item.WorktreePath]; owned {
 			continue // PRStatusPoller covers this one
@@ -239,6 +297,16 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 		if pollAfter, ok := noPRPollAfter[key]; ok && now.Before(pollAfter) {
 			continue // no-PR backoff still in effect
 		}
+		if _, dup := seen[key]; dup {
+			recordPollOutcome(p.ctx, "skipped_duplicate") // same repo+branch from another worktree
+			continue
+		}
+		seen[key] = struct{}{}
+		if !p.claimPoll(key, item.Fingerprint, now, trigger) {
+			recordPollOutcome(p.ctx, "skipped_min_interval")
+			continue
+		}
+		recordPollOutcome(p.ctx, "polled")
 
 		captured := item
 		wg.Add(1)
@@ -249,10 +317,34 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 			defer cancel()
 			ctx = github.WithGitHubCallOrigin(ctx, github.OriginWorktreePRPoller)
-			p.fetchAndStore(ctx, captured)
+			p.fetch(ctx, captured)
 		}()
 	}
+	p.pruneLastPolled(seen)
 	wg.Wait()
+}
+
+// claimPoll reports whether key should be polled now and, if so, records it.
+func (p *WorktreePRPoller) claimPoll(key, fingerprint string, now time.Time, trigger pollTrigger) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if prev, ok := p.lastPolled[key]; ok && trigger == pollTriggerScan &&
+		prev.fingerprint == fingerprint && now.Sub(prev.at) < p.config.PollInterval {
+		return false
+	}
+	p.lastPolled[key] = polledState{at: now, fingerprint: fingerprint}
+	return true
+}
+
+// pruneLastPolled drops entries for worktrees no longer reported.
+func (p *WorktreePRPoller) pruneLastPolled(live map[string]struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k := range p.lastPolled {
+		if _, ok := live[k]; !ok {
+			delete(p.lastPolled, k)
+		}
+	}
 }
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
