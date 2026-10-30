@@ -166,6 +166,32 @@ func TestSummaryCache_WhenConcurrentIdenticalCallers_ExpectSingleCompute(t *test
 	}
 }
 
+// A caller that misses the cache just before another flight finishes and stores
+// its result must be served that result, not start a second compute.
+func TestSummaryCache_WhenFlightFinishesAfterLookupMiss_ExpectNoSecondCompute(t *testing.T) {
+	t.Parallel()
+	var c summaryCache
+	req := &sessionv1.GetInsightsSummaryRequest{}
+	var computes atomic.Int32
+	compute := func(context.Context) (*sessionv1.GetInsightsSummaryResponse, error) {
+		computes.Add(1)
+		return &sessionv1.GetInsightsSummaryResponse{TotalCostUsd: 1}, nil
+	}
+
+	var first *sessionv1.GetInsightsSummaryResponse
+	c.afterLookupMiss = func() {
+		c.afterLookupMiss = nil
+		var err error
+		first, err = c.get(context.Background(), req, notLoading, compute)
+		require.NoError(t, err)
+	}
+	second, err := c.get(context.Background(), req, notLoading, compute)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 1, computes.Load())
+	assert.Same(t, first, second)
+}
+
 func TestSummaryCache_WhenLeaderContextCanceled_ExpectFollowerStillServed(t *testing.T) {
 	t.Parallel()
 	var c summaryCache

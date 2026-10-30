@@ -155,6 +155,27 @@ type sessionDriverStopper struct {
 	once sync.Once
 }
 
+// sessionDriverStartHook lets a test binary record who started each driver; see
+// SetSessionDriverStartHookForTest.
+var sessionDriverStartHook atomic.Pointer[func(*Instance)]
+
+// SetSessionDriverStartHookForTest registers fn to run synchronously on the
+// goroutine that calls StartSessionDriver, each time it actually spawns a
+// driver. A leak detector uses it to capture the creating test's stack, which
+// the driver goroutine's own stack cannot show. Pass nil to clear.
+func SetSessionDriverStartHookForTest(fn func(*Instance)) {
+	if fn == nil {
+		sessionDriverStartHook.Store(nil)
+		return
+	}
+	sessionDriverStartHook.Store(&fn)
+}
+
+// SessionDriverRunningForTest reports whether inst still has a live driver goroutine.
+func SessionDriverRunningForTest(inst *Instance) bool {
+	return inst.driverRunning.Load()
+}
+
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
 // for approval dialogs throughout the session lifetime.
@@ -196,6 +217,9 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	inst.driverWG.Add(1)
 	inst.driverStopper.Store(stopper)
 	inst.driverMu.Unlock()
+	if hook := sessionDriverStartHook.Load(); hook != nil {
+		(*hook)(inst)
+	}
 	go func() {
 		defer inst.driverWG.Done()
 		defer inst.driverRunning.Store(false)
