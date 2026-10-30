@@ -3,10 +3,12 @@ package tymux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -288,4 +290,89 @@ func TestSendOnStream_StuckSendOnOldStream_DoesNotBlockTheReplacementStream(t *t
 	assert.Equal(t, []byte("on-new"), data)
 	g.release()
 	<-done
+}
+
+func TestSendInputViaControlMode_CallerContextBoundsTheLockWait(t *testing.T) {
+	sess, stream := sessionWith(t)
+	g := newGatedSends(true)
+	stream.sendFn = g.send // sendLockWait stays at its 30s default: only ctx can end the wait
+
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = sess.SendKeys("long-paste") }()
+	<-g.entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := sess.SendInputViaControlMode(ctx, []byte("k"))
+	g.release()
+	<-done
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestSendKeys_FailureAfterFirstChunk_ReturnsTheRealPartialCount(t *testing.T) {
+	sess, stream := sessionWith(t)
+	var calls atomic.Int32
+	stream.sendFn = func(*v1.AttachRequest) error {
+		if calls.Add(1) == 2 {
+			return errors.New("boom")
+		}
+		return nil
+	}
+
+	n, err := sess.SendKeys(string(bytes.Repeat([]byte("z"), 3*maxInputChunk)))
+
+	require.Error(t, err)
+	assert.Equal(t, maxInputChunk, n)
+	assert.Contains(t, err.Error(), "after 32768 of 98304 bytes")
+}
+
+func TestSendKeys_MidPasteFailure_ClosesTheBracketedPaste(t *testing.T) {
+	sess, stream := sessionWith(t)
+	var calls atomic.Int32
+	var sent [][]byte
+	stream.sendFn = func(r *v1.AttachRequest) error {
+		if calls.Add(1) == 2 {
+			return errors.New("boom")
+		}
+		sent = append(sent, r.GetInput())
+		return nil
+	}
+	body := bytes.Repeat([]byte("z"), 3*maxInputChunk)
+	payload := append(append([]byte("\x1b[200~"), body...), "\x1b[201~"...)
+
+	_, err := sess.SendKeys(string(payload))
+
+	require.Error(t, err)
+	require.Len(t, sent, 2) // first chunk, then the best-effort terminator
+	assert.Equal(t, []byte("\x1b[201~"), sent[1])
+}
+
+func TestInBracketedPaste(t *testing.T) {
+	assert.False(t, inBracketedPaste([]byte("plain")))
+	assert.True(t, inBracketedPaste([]byte("\x1b[200~abc")))
+	assert.False(t, inBracketedPaste([]byte("\x1b[200~abc\x1b[201~")))
+}
+
+func TestPTYAdapter_ForwardInput_RetriesWhileInputIsBusy(t *testing.T) {
+	a := &tymuxPTYAdapter{closed: make(chan struct{})}
+	var calls int
+	a.forwardInput(func(*v1.AttachRequest) error {
+		calls++
+		if calls < 3 {
+			return errInputBusy
+		}
+		return nil
+	}, []byte("k"))
+	assert.Equal(t, 3, calls)
+}
+
+func TestPTYAdapter_ForwardInput_StopsOnceClosed(t *testing.T) {
+	a := &tymuxPTYAdapter{closed: make(chan struct{})}
+	close(a.closed)
+	var calls int
+	a.forwardInput(func(*v1.AttachRequest) error { calls++; return errInputBusy }, []byte("k"))
+	assert.Equal(t, 1, calls)
 }

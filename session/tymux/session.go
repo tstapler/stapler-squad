@@ -433,6 +433,9 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 		if err != nil {
 			return classifyRPCError("RestoreWithWorkDir", err)
 		}
+		// ReviveSessionRequest carries only the session id, so launchEnv's forced
+		// TERM/COLORTERM are not re-sent here; a revived pane gets whatever env
+		// tymuxd persisted in the session record at CreateSession time.
 		if reviveResp.Msg.GetSession() != nil {
 			found = reviveResp.Msg.GetSession()
 		}
@@ -589,12 +592,10 @@ func (s *tymuxGRPCSession) GetPTY() (*os.File, error) {
 // onto one AttachRequest{Input(...)} send over the standing stream — no
 // per-call RPC, per architecture.md §1's noted simplification.
 func (s *tymuxGRPCSession) SendKeys(keys string) (int, error) {
-	if err := s.sendOnStream(&v1.AttachRequest{
+	// n is the real partial count on a mid-payload failure so callers do not resend the prefix.
+	return s.sendOnStreamCtx(context.Background(), &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: []byte(keys)},
-	}); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
+	})
 }
 
 func (s *tymuxGRPCSession) TapEnter() error {
@@ -631,16 +632,15 @@ func (s *tymuxGRPCSession) SendPromptWithEnter(p string) error {
 }
 
 func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	// sendOnStream/the standing stream's Send have no context parameter of
-	// their own to cancel against, so honor the caller's cancellation/
-	// timeout here before writing — otherwise ctx is accepted but has zero
-	// effect, silently sending on an already-cancelled/expired context.
+	// ctx bounds the wait for the input/frame locks; a Send already in flight cannot be interrupted.
+	// Checked first so a cancelled ctx wins over errSessionNotStarted.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.sendOnStream(&v1.AttachRequest{
+	_, err := s.sendOnStreamCtx(ctx, &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: data},
 	})
+	return err
 }
 
 // --- Terminal state ---
