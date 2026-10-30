@@ -800,17 +800,13 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 func destroyCreatedSession(t testing.TB, svc *SessionService, id string) {
 	t.Helper()
 	inst := svc.FindLiveInstance(id)
-	// Force: the creation pipeline writes .claude/settings.local.json into the
-	// worktree, so without it DeleteSession can refuse ("worktree has uncommitted
-	// changes") before Destroy() ever stops the SessionDriver.
-	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id, Force: true}))
+	_, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
 	if err != nil {
 		t.Logf("destroyCreatedSession: cleanup for %q failed (non-fatal): %v", id, err)
 	}
 	svc.waitForPendingCleanup()
 	if inst != nil {
-		// Backstop for a refused or failed delete: never leave the driver polling.
-		stopSessionDriver(inst)
+		session.JoinSessionDriver(inst)
 	}
 }
 

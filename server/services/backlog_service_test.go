@@ -77,8 +77,14 @@ func TestMain(m *testing.M) {
 	if n := awaitNoSessionDrivers(5 * time.Second); n > 0 {
 		fmt.Fprintf(os.Stderr, "TestMain: %d SessionDriver goroutine(s) outlived their tests; "+
 			"stop them with setupForkTestFixture or stopSessionDriverOnCleanup (see driver_leak_test.go)\n", n)
-		for _, rec := range leakedSessionDriverStarts() {
+		recs := leakedSessionDriverStarts()
+		for _, rec := range recs {
 			fmt.Fprintf(os.Stderr, "leaked driver: %s\n", rec)
+		}
+		if len(recs) < n { // e.g. a retry continuation whose original start record reads as stopped
+			for _, st := range liveSessionDriverStacks() {
+				fmt.Fprintf(os.Stderr, "live driver goroutine: %s\n", st)
+			}
 		}
 		code = 1
 	}

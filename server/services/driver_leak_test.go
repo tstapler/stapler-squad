@@ -77,7 +77,7 @@ func recordSessionDriverStarts() {
 		stack := make([]byte, 1<<14)
 		stack = stack[:runtime.Stack(stack, false)]
 		driverStartLog.mu.Lock()
-		driverStartLog.starts[inst] = fmt.Sprintf("session %q started by:\n%s", inst.Title, stack)
+		driverStartLog.starts[inst] = fmt.Sprintf("session %q started by:\n%s", inst.Snapshot().Title, stack)
 		driverStartLog.mu.Unlock()
 	})
 }
