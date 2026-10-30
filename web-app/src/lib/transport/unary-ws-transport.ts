@@ -365,8 +365,14 @@ class UnaryWsTransportImpl implements UnaryWsTransport {
       if (this.ws === ws) recordWsLifecycle("unary", "error");
       this.dropSocket(ws, true);
     };
+    // Browsers fire error then close (close code 1006 is the common case). dropSocket has already
+    // detached `ws` by then, so the close is recorded per socket, once, regardless of this.ws.
+    let closeRecorded = false;
     ws.onclose = (ev?: CloseEvent) => {
-      if (this.ws === ws) recordWsLifecycle("unary", "close", ev?.code);
+      if (!closeRecorded) {
+        closeRecorded = true;
+        recordWsLifecycle("unary", "close", ev?.code);
+      }
       this.dropSocket(ws, true);
     };
     this.windowTimer = setTimeout(() => {

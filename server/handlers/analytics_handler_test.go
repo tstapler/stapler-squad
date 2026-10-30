@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -105,23 +104,15 @@ func TestAnalytics_RateLimit(t *testing.T) {
 			map[string]any{"name": "click", "category": "user_action"},
 		},
 	}
-	// The global bucket is shared per AnalyticsHandler instance; spread 1000 requests over
-	// distinct clients so the per-client limit (tested separately) stays out of the way.
-	post := func(i int) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/api/analytics", bytes.NewReader(body))
-		req.RemoteAddr = fmt.Sprintf("192.0.2.%d:1000", i%50)
-		w := httptest.NewRecorder()
-		h.HandlePost(w, req)
-		return w
-	}
+	// The limiter is shared per AnalyticsHandler instance; exhaust 1000 requests.
 	for i := 0; i < 1000; i++ {
-		if w := post(i); w.Code != http.StatusNoContent {
+		w := postAnalytics(h, payload)
+		if w.Code != http.StatusNoContent {
 			t.Fatalf("unexpected status on request %d within limit: %d", i+1, w.Code)
 		}
 	}
 	// 1001st must be rejected.
-	w := post(1000)
+	w := postAnalytics(h, payload)
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("want 429, got %d", w.Code)
 	}

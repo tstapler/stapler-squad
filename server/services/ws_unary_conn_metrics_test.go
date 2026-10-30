@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,4 +155,31 @@ func TestUnaryWsBridge_should_LabelServerContextEndAsShutdown(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return sumWithReason(t, "ws_unary_connections_closed_total", "shutdown") == before+1
 	}, readWait, 5*time.Millisecond)
+}
+
+func TestUnaryWsBridge_should_RecordEachPingOnlyOnce_When_PongIsReplayed(t *testing.T) {
+	before := histogramCount(t, "ws_unary_ping_rtt")
+	h := newBridgeHarness(t, ListenerLocal, WithUnaryKeepalive(100*time.Millisecond, time.Hour))
+	c := h.connect(nil)
+	var answered atomic.Bool
+	c.SetPingHandler(func(payload string) error {
+		if answered.CompareAndSwap(false, true) { // answer the first ping twice, ignore the rest
+			for i := 0; i < 2; i++ {
+				if err := c.WriteControl(websocket.PongMessage, []byte(payload), time.Now().Add(time.Second)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	go func() {
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	require.Eventually(t, func() bool { return histogramCount(t, "ws_unary_ping_rtt") > before }, readWait, 5*time.Millisecond)
+	assert.Never(t, func() bool { return histogramCount(t, "ws_unary_ping_rtt") > before+1 }, 300*time.Millisecond, 20*time.Millisecond,
+		"the replayed pong must not record a second sample")
 }

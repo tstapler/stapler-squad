@@ -51,7 +51,8 @@ var (
 	coalesceOut = map[string]bool{"started": true, "joined": true}
 	wsKinds     = map[string]bool{"unary": true, "watch": true}
 	wsEvents    = map[string]bool{"open": true, "close": true, "error": true, "reconnect": true}
-	fallbacks   = map[string]bool{"breaker-open": true, "force-http": true, "ws-method-not-allowed": true, "ws-call-timeout": true}
+	fallbacks   = map[string]bool{"breaker-open": true, "force-http": true, "ws-method-not-allowed": true, "ws-call-timeout": true,
+		"ws-resource-exhausted": true, "ws-unavailable": true}
 	batchReason = map[string]bool{"request-failed": true, "server-declined": true}
 	vitalNames  = map[string]bool{"lcp": true, "inp": true, "cls": true, "fcp": true, "ttfb": true}
 	vitalRating = map[string]bool{"good": true, "needs-improvement": true, "poor": true}

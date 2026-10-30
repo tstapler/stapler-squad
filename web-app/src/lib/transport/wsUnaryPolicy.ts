@@ -28,7 +28,9 @@ const WS_METHOD_NOT_ALLOWED = "ws_method_not_allowed";
 const WS_ELIGIBLE = new Set<string>(IDEMPOTENT_METHODS.wsEligible);
 const REPLAYABLE = new Set<string>(IDEMPOTENT_METHODS.replayable);
 
-export type FallbackReason = "breaker-open" | "force-http" | "ws-method-not-allowed" | "ws-call-timeout";
+/** The server's client-metrics allow-list (server/analytics/client_metrics.go `fallbacks`) must contain each of these; wsUnaryPolicy.test.ts checks. */
+export const FALLBACK_REASONS = ["breaker-open", "force-http", "ws-method-not-allowed", "ws-call-timeout"] as const;
+export type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 // A browser WebSocket hides a rejected handshake's 401, so a 401 seen over HTTP is the only signal.
 let authRequired = false;

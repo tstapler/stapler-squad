@@ -232,7 +232,8 @@ func (s *unarySession) serve(parent context.Context) {
 	s.conn.SetPongHandler(func(payload string) error {
 		// A pong counts only if it echoes the latest ping's send time and is plausible; a client can
 		// send any pong payload, so anything else must not reach the histogram.
-		if sent, err := strconv.ParseInt(payload, 10, 64); err == nil && sent > 0 && sent == s.lastPingNanos.Load() {
+		// CompareAndSwap makes each ping answerable once; a replayed pong finds 0 and is ignored.
+		if sent, err := strconv.ParseInt(payload, 10, 64); err == nil && sent > 0 && s.lastPingNanos.CompareAndSwap(sent, 0) {
 			if rtt := time.Since(time.Unix(0, sent)); rtt >= 0 && rtt <= s.b.pongWait {
 				s.b.metrics.pingRTT(s.listener, rtt)
 			}

@@ -353,6 +353,26 @@ describe("client metrics events", () => {
   });
 });
 
+describe("close recording after an error", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("metrics_should_RecordTheCloseCode_When_ErrorIsFollowedByClose", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    const h = setup();
+    const read = callVcs(h.t);
+    h.sock().open();
+    h.sock().onerror?.();
+    h.sock().serverClose(1006);
+    h.sock().serverClose(1006); // a duplicate close event must not double count
+    await read;
+    const ws = track.mock.calls.map(([e]) => e).filter((e) => e.name === "cm.ws").map((e) => e.labels);
+    expect(ws.filter((l) => l.event === "error")).toHaveLength(1);
+    expect(ws.filter((l) => l.event === "close")).toEqual([{ kind: "unary", event: "close", code: "1006" }]);
+    h.t.close();
+  });
+});
+
 describe("reconnect and replay", () => {
   it("reconnect_should_ReplayReadOverHttp_And_RejectMutationUnavailable_When_Socket1006", async () => {
     const h = setup();

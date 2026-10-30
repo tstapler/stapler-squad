@@ -10,17 +10,20 @@ WebSocket bridge metrics. Dashboard: `ssq-client-network`
 SPA (rpcTiming interceptor, transports, WebVitalsReporter)
   -> HttpAnalyticsProvider (25 events / 2s batches, 200-event queue, pagehide beacon)
   -> POST /api/analytics            (existing: 1000 req/min, 512 KB body, <=100 events;
-                                      plus per-client 300 req/min and 6000 events/min, and a shared
-                                      30000 cm.* events/min budget; excess gets 429)
+                                      plus a 60000 events/min budget and a 30000 cm.* events/min budget;
+                                      excess gets 429)
   -> analytics.WithQualityMetrics   (server/analytics/client_metrics.go)
   -> OTel instruments -> collector -> VictoriaMetrics
 ```
 
-No new endpoint or auth surface. The per-client bucket is keyed on the TCP peer address (never `X-Forwarded-For`), is bounded
-at 2048 tracked clients (extras share one overflow bucket), and expires after a minute. Behind a
-reverse proxy all browsers share the proxy's bucket. The browser chunks each send to 100 events
-and about 60 KB (`HttpAnalyticsProvider.chunkBodies`), so a long flush interval cannot trip the
-server's 100-event limit.
+No new endpoint or auth surface. The limits are global on purpose: local browsers and same-box reverse proxies all arrive from a
+loopback address, so a per-peer limit would only be a lower limit shared by every tab. Sizing: a tab
+flushes about every 20s (3 requests/min) or at 100 queued events, so 10 tabs send about 30 requests/min
+against the 1000/min request bucket; one RPC emits about 2.5 events, so 50 RPC/s across tabs is about
+7,500 events/min against the 60,000/min event budget (8x headroom). Refusals increment
+`client_metrics_rate_limited_total{scope}` (`global_requests`, `global_events`, `cm_budget`) and log at
+most once a minute, because the browser swallows the 429. A flooding client can still exhaust the
+shared budget; it cannot add labels or series.
 
 Events named `cm.*` exist only to feed metrics
 and are not stored in the analytics table; `rpc.*`, `web_vital.*` and
@@ -36,7 +39,7 @@ need `OTEL_ENABLED=true` on the server.
 | `transport` | `ws`, `http`, `batch`, `stream` (server-streaming; duration is time-to-headers), else `unknown`. The dashboard's `All` for `$transport` is `ws\|http\|batch`, so `stream` and `unknown` are hidden unless selected |
 | `outcome` | class of the Connect code: `ok`, `canceled`, `deadline_exceeded`, `saturated` (`unavailable`, `resource_exhausted`), `error` |
 | `code` | the 17 Connect code names in snake_case, else `unknown`; only on `client_rpc_codes_total`, never combined with `method` |
-| `close_code` | allow-list of the codes browsers and the bridge produce (1000-1003, 1005, 1006, 1008, 1009, 1011-1013), `none` when absent, else `other` |
+| `close_code` | allow-list of the codes browsers and the bridge produce (1000-1003, 1005, 1006, 1008, 1009, 1011-1013), `none` when absent, else `other`; the browser records the close once per socket, even after an error event |
 | everything else | fixed enums; unknown values become `unknown` |
 
 Durations clamp to 0-10 min; count-like values (in-flight, pending, batch size) clamp to 0-64.
@@ -62,6 +65,7 @@ OTel names as registered; VictoriaMetrics appends the unit and `_bucket`/`_count
 | `client_batch_fallback_total` | counter | `reason` (`request-failed`, `server-declined`) | `cm.batch_fallback` |
 | `client_web_vital_*` | histogram | `vital` (`lcp`, `inp`, `cls`, `fcp`, `ttfb`), `rating`, `page` | `web_vital.*` from `WebVitalsReporter` (ms; CLS unitless) |
 | `client_long_task_duration_milliseconds_*` | histogram | `page` | `cm.longtask` from `lib/telemetry/longTasks.ts`; capped at 30 per minute per tab |
+| `client_metrics_rate_limited_total` | counter | `scope` | `server/handlers/analytics_rate_budget.go`: batches refused with 429 |
 | `client_metrics_rejected_total` | counter | `reason` (`unknown_event`, `bad_web_vital`, `missing_duration`) | server: events the allow-list refused. Old cached clients whose `rpc.*` events lack `method`/`transport` land as `other`/`unknown` rather than being rejected |
 
 Round-trip time for a unary WebSocket call is `client_rpc_duration` with
@@ -99,4 +103,4 @@ Round-trip time for a unary WebSocket call is `client_rpc_duration` with
 - The long-task observer uses `buffered: true`, so a remount of `WebVitalsReporter` replays the
   buffered tasks (visible in dev under React StrictMode; production mounts once).
 - Metric truthfulness is unauthenticated: a client that can reach `/api/analytics` can inflate
-  counts within the per-client and shared budgets. Labels and series counts stay bounded regardless.
+  counts within the shared budgets. Labels and series counts stay bounded regardless.

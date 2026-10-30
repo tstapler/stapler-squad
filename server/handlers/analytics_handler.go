@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -102,10 +101,8 @@ type analyticsSummaryResponse struct {
 type AnalyticsHandler struct {
 	provider analytics.AnalyticsProvider
 	limiter  *rateLimiter
-	clients  *perClientLimiter
-	cmMu     sync.Mutex
-	cmCount  int
-	cmResets time.Time
+	events   *minuteBudget
+	cmEvents *minuteBudget
 	client   *ent.Client // may be nil when only LogAnalyticsProvider is available
 }
 
@@ -119,26 +116,9 @@ func NewAnalyticsHandler(provider analytics.AnalyticsProvider) *AnalyticsHandler
 		limiter: &rateLimiter{
 			resetAt: time.Now().Add(time.Minute),
 		},
-		clients: newPerClientLimiter(),
+		events:   &minuteBudget{limit: analyticsEventsPerMinute},
+		cmEvents: &minuteBudget{limit: metricEventsPerMinute},
 	}
-}
-
-// allowMetricEvents admits n cm.* (metrics-only) events against the shared per-minute budget.
-func (h *AnalyticsHandler) allowMetricEvents(n int) bool {
-	if n == 0 {
-		return true
-	}
-	h.cmMu.Lock()
-	defer h.cmMu.Unlock()
-	now := time.Now()
-	if now.After(h.cmResets) {
-		h.cmCount, h.cmResets = 0, now.Add(time.Minute)
-	}
-	if h.cmCount+n > globalMetricEventsPerMinute {
-		return false
-	}
-	h.cmCount += n
-	return true
 }
 
 func countMetricEvents(events []analyticsEventRequest) int {
@@ -183,9 +163,8 @@ func (h *AnalyticsHandler) allow() bool {
 
 // HandlePost handles POST /api/analytics.
 func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
-	// Per-client first so a flooder is refused before it spends the shared budget.
-	key := clientKey(r)
-	if !h.clients.allowRequest(key) || !h.allow() {
+	if !h.allow() {
+		noteRateLimited(scopeGlobalRequests)
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
@@ -208,11 +187,6 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.clients.allowEvents(key, len(req.Events)) || !h.allowMetricEvents(countMetricEvents(req.Events)) {
-		http.Error(w, "Too many events", http.StatusTooManyRequests)
-		return
-	}
-
 	// Validate each event before recording any of them.
 	for i, ev := range req.Events {
 		if ev.EventName == "" {
@@ -224,6 +198,18 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid event category: must be one of user_action, performance, navigation, rpc", http.StatusBadRequest)
 			return
 		}
+	}
+
+	// Charged only after validation, so a malformed batch consumes no event budget.
+	if !h.events.take(len(req.Events)) {
+		noteRateLimited(scopeGlobalEvents)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
+	}
+	if !h.cmEvents.take(countMetricEvents(req.Events)) {
+		noteRateLimited(scopeMetricBudget)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
 	}
 
 	ctx := r.Context()
