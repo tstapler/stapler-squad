@@ -334,6 +334,11 @@ func (s *seqTransport) Send(d []byte) error {
 	return nil
 }
 func (s *seqTransport) Close() error { return nil }
+func (s *seqTransport) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.events)
+}
 func (s *seqTransport) snapshot() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -419,6 +424,8 @@ func runFirstPaintRace(t *testing.T, it int) {
 	defer hub.DetachSubscriber(id)
 
 	var seq atomic.Int64
+	var painted atomic.Bool
+	var paintSeq atomic.Int64 // frames up to this are in the capture, never delivered after the paint
 	stop := make(chan struct{})
 	prodDone := make(chan struct{})
 	go func() {
@@ -432,6 +439,13 @@ func runFirstPaintRace(t *testing.T, it int) {
 			n := seq.Add(1)
 			hub.Broadcast([]byte(strconv.FormatInt(n, 10)))
 			runtime.Gosched()
+			for !painted.Load() && seq.Load() >= 1500 { // stay under the paint-backlog limit while the capture runs
+				runtime.Gosched()
+			}
+			// Once painting is over, stay within the 100-deep queue so the stress cannot trip slow eviction.
+			for painted.Load() && seq.Load()-paintSeq.Load()-int64(tr.count()) > 60 {
+				runtime.Gosched()
+			}
 		}
 	}()
 	for seq.Load() < int64(it%5)*20 { // head start for the producer
@@ -447,6 +461,8 @@ func runFirstPaintRace(t *testing.T, it int) {
 		_ = tr.Send([]byte("paint"))
 		return nil
 	}))
+	paintSeq.Store(snapSeq)
+	painted.Store(true)
 	for seq.Load() < snapSeq+20 { // let the producer run past the capture
 		runtime.Gosched()
 	}
