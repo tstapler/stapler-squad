@@ -1,6 +1,9 @@
 package session
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,7 +67,10 @@ func TestHistoryLinker_FileEvent_should_UnparkSession_When_OwnerNotLive(t *testi
 	assert.True(t, bo == nil || !bo.parked, "ScanAll must unpark the waiting session")
 }
 
-func TestHistoryLinker_FileEvent_should_LeaveSessionParked_When_OwnerIsLive(t *testing.T) {
+// A live owner appending is not enough to skip while a live session still
+// awaits a link: that session may be the one that resumed the conversation, and
+// ScanAll is what unparks it.
+func TestHistoryLinker_FileEvent_should_UnparkWaitingSession_When_OwnerIsLive(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
 	linker, waiting := newOwnerAndUnlinked(t, Running, false, &calls)
@@ -72,13 +78,27 @@ func TestHistoryLinker_FileEvent_should_LeaveSessionParked_When_OwnerIsLive(t *t
 
 	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
 
-	assert.Zero(t, calls.Load(), "live owner's own append needs no rescan")
-	require.NotNil(t, linker.backoffs[waiting.Title])
-	assert.True(t, linker.backoffs[waiting.Title].parked, "intended: parked session stays parked")
+	assert.Positive(t, calls.Load(), "waiting session must be rescanned")
+	bo := linker.backoffs[waiting.Title]
+	assert.True(t, bo == nil || !bo.parked, "ScanAll must unpark the waiting session")
 }
 
-// Nobody is waiting for a link, so a non-live owner's write needs no rescan.
-func TestHistoryLinker_FileEvent_should_SkipRescan_When_OwnerNotLiveButNoSessionIsUnlinked(t *testing.T) {
+// An unlinked session that is not live cannot be waiting for a link, so it must
+// not defeat the skip.
+func TestHistoryLinker_FileEvent_should_SkipRescan_When_OnlyUnlinkedSessionIsNotLive(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int64
+	linker, waiting := newOwnerAndUnlinked(t, Running, false, &calls)
+	waiting.Status = Paused
+
+	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
+
+	assert.Zero(t, calls.Load())
+}
+
+// A non-live owner proves nothing even when no session is unlinked: a linked
+// live session could have resumed into the owner's conversation.
+func TestHistoryLinker_FileEvent_should_Rescan_When_OwnerNotLiveAndNoSessionIsUnlinked(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
 	linker := NewHistoryLinker(NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
@@ -89,5 +109,32 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_OwnerNotLiveButNoSession
 
 	linker.handleHistoryFileEvent("/projects/p/conv-u.jsonl")
 
-	assert.Zero(t, calls.Load())
+	assert.Positive(t, calls.Load())
+}
+
+// End to end through a real fsnotify watcher: an append to a live owner's file
+// skips the scan, a brand-new conversation file triggers it.
+func TestHistoryLinker_Watcher_should_SkipForLiveOwnerAndScanForNewFile(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int64
+	dir := t.TempDir()
+	linker := NewHistoryLinker(NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
+	owner := &Instance{Title: "owner", Path: t.TempDir(), Status: Running}
+	owner.processManager = panePIDCountingPM{calls: &calls}
+	owner.SetHistoryInfo("conv-u", filepath.Join(dir, "conv-u.jsonl"))
+	linker.SetInstances([]*Instance{owner})
+
+	var seen atomic.Value
+	linker.RegisterFileCallback(func(p string) { seen.Store(filepath.Base(p)) })
+	watcher := NewHistoryFileWatcher(dir, linker.handleHistoryFileEvent)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); <-watcher.Stopped() })
+	require.NoError(t, watcher.Start(ctx))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conv-u.jsonl"), []byte("{}\n"), 0o600))
+	require.Eventually(t, func() bool { return seen.Load() == "conv-u.jsonl" }, 5*time.Second, 5*time.Millisecond)
+	assert.Zero(t, calls.Load(), "append to a live owner's file must not rescan")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conv-new.jsonl"), []byte("{}\n"), 0o600))
+	require.Eventually(t, func() bool { return calls.Load() > 0 }, 5*time.Second, 5*time.Millisecond)
 }

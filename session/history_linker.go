@@ -118,35 +118,31 @@ func (hl *HistoryLinker) handleHistoryFileEvent(filePath string) {
 }
 
 // rescanNeeded reports whether a write to filePath (<conversation-uuid>.jsonl)
-// can change any link. It cannot when a live (active, unarchived) session owns
-// the conversation: that is just the owner appending. A non-live owner proves
-// nothing, since the writer may be a newer session that resumed the same
-// conversation, so then only the absence of unlinked sessions lets us skip.
+// can change any link. It cannot only when a live (active, unarchived) session
+// owns the conversation (just the owner appending) and no live session is still
+// waiting for a link. A non-live owner proves nothing, and a waiting session
+// may be the one that resumed an already-claimed conversation, which only the
+// pane-PID fast path in ScanAll can link. Assumes a resumed conversation is
+// appended in place rather than copied to a new file; if Claude Code copies, the
+// unclaimed-file branch already covers it.
 func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
 	uuid := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
 	if uuid == "" {
 		return true
 	}
-	claimed, claimedByLive, anyUnlinked := false, false, false
+	claimedByLive, awaitingLink := false, false
 	for _, inst := range hl.Instances() {
+		snap := inst.Snapshot()
+		live := snap.Status == Active && snap.ArchivedAt == nil
 		if !inst.HasClaudeSession() {
-			anyUnlinked = true
+			awaitingLink = awaitingLink || live
 			continue
 		}
-		if inst.GetClaudeConversationUUID() == uuid {
-			claimed = true
-			snap := inst.Snapshot()
-			claimedByLive = claimedByLive || (snap.Status == Active && snap.ArchivedAt == nil)
+		if live && inst.GetClaudeConversationUUID() == uuid {
+			claimedByLive = true
 		}
 	}
-	switch {
-	case !claimed:
-		return true
-	case claimedByLive:
-		return false
-	default:
-		return anyUnlinked
-	}
+	return !claimedByLive || awaitingLink
 }
 
 // RegisterFileCallback registers a callback that receives the file path whenever
