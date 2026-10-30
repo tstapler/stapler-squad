@@ -978,6 +978,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 
 	detectedAt := time.Now()
 	isUpdate := false
+	unchanged := false
 	var prior *ReviewItem
 	if existingItem, exists := rqp.queue.Get(snap.Title); exists {
 		isUpdate = true
@@ -987,6 +988,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 			existingItem.Priority == priority &&
 			existingItem.Context == context {
 			detectedAt = existingItem.DetectedAt
+			unchanged = true
 		}
 	}
 
@@ -1028,7 +1030,11 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 	log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 	rqp.addToQueue(item, prior)
 
-	rqp.persistLastAddedToQueue(inst, snap.Title)
+	// An unchanged entry is re-detected every poll cycle; re-stamping it would
+	// rewrite the same sessions row through the single writer connection forever.
+	if !unchanged {
+		rqp.persistLastAddedToQueue(inst, snap.Title)
+	}
 
 	if !isUpdate {
 		log.Debug("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)

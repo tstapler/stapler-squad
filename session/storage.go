@@ -279,6 +279,9 @@ var _ BundleStorage = (*Storage)(nil)
 type Storage struct {
 	repo *EntRepository
 
+	// saved lets saveInstancesToRepo skip instances unchanged since their last save.
+	saved savedFingerprints
+
 	// claimRecorder is set once at startup but read from every creation path
 	// (including background sync loops), so it is atomic.
 	claimRecorder atomic.Pointer[ClaimRecorder]
@@ -376,12 +379,20 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		log.Debug("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
+		sum, hashed := fingerprintInstanceData(data)
+		if hashed && s.saved.unchanged(data.Title, sum) {
+			continue
+		}
 		if err := s.repo.Update(ctx, data); err != nil {
 			// Not found → create it
 			if createErr := s.repo.Create(ctx, data); createErr != nil {
 				log.Error("SaveInstances: failed to upsert instance",
 					"session", data.Title, "update_err", err, "create_err", createErr)
+				continue
 			}
+		}
+		if hashed {
+			s.saved.record(data.Title, sum)
 		}
 	}
 	return nil
@@ -608,6 +619,7 @@ func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 
 // DeleteInstance removes an instance from storage.
 func (s *Storage) DeleteInstance(title string) error {
+	s.saved.forget(title)
 	err := s.repo.Delete(context.Background(), title)
 	clearLoggedMissingWorktree(title)
 	return err
@@ -679,6 +691,7 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 // in-memory by the caller — see EntRepository.UpdateSessionMetadata for why. A nil field
 // pointer leaves that field untouched.
 func (s *Storage) UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error {
+	s.saved.forget(currentTitle)
 	return s.repo.UpdateSessionMetadata(context.Background(), currentTitle, newTitle, category, note, workingDir)
 }
 
@@ -690,6 +703,7 @@ func (s *Storage) DeleteAllInstances() error {
 		return fmt.Errorf("failed to list instances for deletion: %w", err)
 	}
 	for _, data := range dataSlice {
+		s.saved.forget(data.Title)
 		if err := s.repo.Delete(ctx, data.Title); err != nil {
 			log.Warn("failed to delete instance", "session", data.Title, "err", err)
 		}
