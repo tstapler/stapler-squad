@@ -1,7 +1,5 @@
 package session
 
-import "time"
-
 // SessionEventKind enumerates the kinds of session events (plan Glossary: SessionEventKind).
 type SessionEventKind int
 
@@ -41,21 +39,6 @@ func (k SessionEventKind) String() string {
 		return "unknown"
 	}
 	return sessionEventKindNames[k]
-}
-
-// TurnEndSource says which path observed the end of an agent turn.
-type TurnEndSource string
-
-const (
-	TurnEndSourceHook   TurnEndSource = "hook"
-	TurnEndSourceScreen TurnEndSource = "screen"
-)
-
-// TurnEnded is the minimal turn-end fact; Episode/Kind arrive with Story 3.1 constructors.
-type TurnEnded struct {
-	Excerpt string
-	Source  TurnEndSource
-	At      time.Time
 }
 
 // SessionEventRecorder is the flag-gated, synchronous event-log writer.

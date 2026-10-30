@@ -1193,3 +1193,52 @@ func dropUnclassifiedIfOtherTagsPresentLocked(s *instanceState) {
 		delete(i.RuleTagProvenance, UnclassifiedTag)
 	}
 }
+
+// ---- TurnEnded --------------------------------------------------------------------
+
+// RecordClassifiedTurnEnd stores the turn-end fact and advances LastMeaningfulChangeAt in
+// one i.mu hold, publishes the snapshot, and only after releasing i.mu persists via the
+// sink and records the event. A sink error is logged; the in-memory fact stays. It never
+// starts or revives the session, so an archived session only gains the fact.
+func (i *Instance) RecordClassifiedTurnEnd(text string, source TurnEndSource, kind TurnEndKind, conf TurnEndConfidence) {
+	var turn TurnEnded
+	var title string
+	err := i.sendSyncErr(func(s *instanceState) error {
+		turn, title = recordTurnEndLocked(s, text, source, kind, conf)
+		return nil
+	})
+	if err != nil {
+		// Actor stopped: the fact was not stored, so don't persist or record under an empty title.
+		log.Warn("turn end dropped; actor unavailable", "error", err)
+		return
+	}
+	sink, rec := i.collaborators()
+	if sink != nil {
+		if err := sink.PersistTurnEnded(title, turn); err != nil {
+			log.ForSession(title).Warn("persist turn end failed; keeping in-memory fact", "error", err)
+		}
+	}
+	rec.RecordTurnEnded(title, turn)
+}
+
+func recordTurnEndLocked(s *instanceState, text string, source TurnEndSource, kind TurnEndKind, conf TurnEndConfidence) (TurnEnded, string) {
+	inst := s.inst
+	at := time.Now()
+	inst.mu.Lock()
+	title := inst.Title
+	var turn TurnEnded
+	switch source {
+	case TurnEndSourceScreen:
+		turn = FromScreen(title, text, at, kind, conf)
+	case TurnEndSourceTranscript:
+		turn = FromTranscript(title, text, at, kind, conf)
+	default:
+		turn = FromHook(title, text, at, kind, conf)
+	}
+	inst.TurnEnded = turn
+	inst.touchLocked(SessionEventTurnEnded, at)
+	snap := buildSnapshot(inst)
+	inst.mu.Unlock()
+	inst.snapshot.Store(snap)
+	return turn, title
+}
