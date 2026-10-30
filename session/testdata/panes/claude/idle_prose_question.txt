@@ -1,0 +1,8 @@
+● I found two ways to fix the flaky cache test.
+
+  Which approach would you like me to take: a fake clock or a longer timeout?
+
+╭──────────────────────────────────────────────────────────────╮
+│ >                                                            │
+╰──────────────────────────────────────────────────────────────╯
+  ? for shortcuts

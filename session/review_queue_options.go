@@ -5,6 +5,8 @@ package session
 type DeterminerOptions struct {
 	IdleClockOutput bool
 	ProseQuestion   bool
+	// ProseQuestionLLMTiebreak lets the screen stage ask a model about ambiguous turn ends.
+	ProseQuestionLLMTiebreak bool
 }
 
 // FlagOptionsSource resolves the current flag values. It is called once per poll

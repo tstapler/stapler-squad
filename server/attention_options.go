@@ -35,8 +35,9 @@ func (c *attentionFlagsCache) get() services.AttentionFlags {
 func (c *attentionFlagsCache) options() (session.DeterminerOptions, session.RuleOptions) {
 	f := c.get()
 	return session.DeterminerOptions{
-			IdleClockOutput: f.IdleClockOutput,
-			ProseQuestion:   f.ProseQuestionDetection,
+			IdleClockOutput:          f.IdleClockOutput,
+			ProseQuestion:            f.ProseQuestionDetection,
+			ProseQuestionLLMTiebreak: f.ProseQuestionLLMTiebreak,
 		},
 		session.RuleOptions{AckBypassFix: f.AckBypassFix}
 }

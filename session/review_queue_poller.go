@@ -135,6 +135,8 @@ type ReviewQueuePoller struct {
 	explain          suppressionExplainer       // Why-suppressed and why-skipped visibility
 	recorder         SessionEventRecorder       // Attention raised/cleared sink; nil = no-op
 
+	turnEndTiebreaker TurnEndTiebreaker // Optional LLM tiebreak for the screen stage; nil = off
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -916,6 +918,7 @@ func (rqp *ReviewQueuePoller) evaluateSession(inst *Instance, paneActivity map[s
 	// Uses cached content when the controller reports no new activity since the last
 	// poll — avoids a subprocess spawn on every tick for idle controller-managed sessions.
 	content := rqp.contentProvider.GetContent(inst, statusInfo, paneActivity)
+	rqp.recordScreenTurnEnd(inst, snap, content, statusInfo, opts)
 
 	// Status determination: pure evaluation, no side effects.
 	// Handles controller-based and terminal-content detection, idle/staleness checks.

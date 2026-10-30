@@ -1,0 +1,6 @@
+Tokens: 2.1k sent, 180 received.
+
+I can move the helper into utils.py or keep it in main.py.
+Do you want me to move it?
+
+> 

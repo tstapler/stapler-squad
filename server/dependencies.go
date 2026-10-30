@@ -447,6 +447,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		core.ReviewQueue, statusManager, core.Storage,
 	)
 	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
+	// Inert unless attention_prose_question_llm_tiebreak is on (default off).
+	reviewQueuePoller.SetTurnEndTiebreaker(session.NewLLMTurnEndTiebreaker(session.NewHeadlessTurnEndModelCall(), 0))
 	prStatusPoller := session.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
