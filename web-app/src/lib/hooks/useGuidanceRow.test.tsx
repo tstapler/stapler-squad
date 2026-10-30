@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { GUIDANCE_POLL_MS, isMoving, useGuidanceRow } from "./useGuidanceRow";
 import { resetGuidanceRowStore } from "./guidanceRowStore";
 import { makeGuidanceRow } from "@/components/ui/__fixtures__/notificationFixtures";
@@ -107,8 +108,44 @@ describe("useGuidanceRow", () => {
     listAllPendingGuidanceRequests.mockRejectedValue(new Error("busy"));
     mountMany();
     await act(async () => {});
-    for (let i = 0; i < 3; i++) await tickOnce();
-    expect(getGuidanceRequest).not.toHaveBeenCalled();
+    expect(listAllPendingGuidanceRequests).toHaveBeenCalled();
+    expect(getGuidanceRequest).not.toHaveBeenCalled(); // below the failure threshold: no 1+N burst
+  });
+
+  it("backs off a persistently failing list and reads rows individually, three at a time", async () => {
+    listAllPendingGuidanceRequests.mockRejectedValue(new Error("busy"));
+    let active = 0;
+    let maxActive = 0;
+    getGuidanceRequest.mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active--;
+      return { request: makeGuidanceRow() };
+    });
+    mountMany();
+    await act(async () => {});
+    for (let i = 0; i < 12; i++) await tickOnce();
+    expect(getGuidanceRequest).toHaveBeenCalled();
+    expect(maxActive).toBeLessThanOrEqual(3);
+    // without backoff the list would be retried on all 13 ticks
+    expect(listAllPendingGuidanceRequests.mock.calls.length).toBeLessThanOrEqual(7);
+  });
+
+  it("stops polling a row the server no longer has", async () => {
+    getGuidanceRequest.mockRejectedValue(new ConnectError("gone", Code.NotFound));
+    renderHook(() => useGuidanceRow("q1", true));
+    await act(async () => {});
+    for (let i = 0; i < 5; i++) await tickOnce();
+    expect(getGuidanceRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops polling a row when the read returns no row", async () => {
+    getGuidanceRequest.mockResolvedValue({ request: undefined });
+    renderHook(() => useGuidanceRow("q1", true));
+    await act(async () => {});
+    for (let i = 0; i < 5; i++) await tickOnce();
+    expect(getGuidanceRequest).toHaveBeenCalledTimes(1);
   });
 
   it("re-reads a settled row that is only held fresh every 15s, not every 3s", async () => {
