@@ -1645,10 +1645,15 @@ func LoadConfigCalls() int64 { return loadConfigCalls.Load() }
 // Callers must hold saveConfigLockFor(configPath) — factored out so
 // loadConfigWithDefaultFallback can share the same critical section as
 // saveConfig without re-entering (and deadlocking on) the same mutex.
-func saveConfigLocked(config *Config, configPath string) error {
+func saveConfigLocked(config *Config, configPath string) (saveErr error) {
 	start := time.Now()
 	var fsyncTook time.Duration
-	defer func() { recordSave(time.Since(start), fsyncTook) }()
+	// Only successful saves are recorded: a failure before the fsync would add a 0ms sample.
+	defer func() {
+		if saveErr == nil {
+			recordSave(time.Since(start), fsyncTook)
+		}
+	}()
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)

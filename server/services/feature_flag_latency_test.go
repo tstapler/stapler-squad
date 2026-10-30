@@ -5,7 +5,6 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -17,12 +16,11 @@ import (
 
 // countConfigSyncs counts config.json fsyncs; each may stall for seconds when
 // the disk is busy (F_FULLFSYNC on macOS), so the count is the latency multiplier.
-func countConfigSyncs(t *testing.T, stall time.Duration) *atomic.Int64 {
+func countConfigSyncs(t *testing.T) *atomic.Int64 {
 	t.Helper()
 	var n atomic.Int64
 	t.Cleanup(config.SetSyncConfigFileForTest(func(f *os.File) error {
 		n.Add(1)
-		time.Sleep(stall)
 		return f.Sync()
 	}))
 	return &n
@@ -31,7 +29,7 @@ func countConfigSyncs(t *testing.T, stall time.Duration) *atomic.Int64 {
 func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenGlobalFlagIsSet(t *testing.T) {
 	withIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
-	syncs := countConfigSyncs(t, 0)
+	syncs := countConfigSyncs(t)
 
 	_, err := mutateFlag(svc, "changelog", setOn, "global")
 	require.NoError(t, err)
@@ -42,7 +40,7 @@ func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenGlobalFlagIsSet(t *testing.
 func TestUpdateFeatureFlag_ShouldFsyncConfigOnce_WhenScopedFlagIsSetAndCleared(t *testing.T) {
 	withIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
-	syncs := countConfigSyncs(t, 0)
+	syncs := countConfigSyncs(t)
 
 	_, err := mutateFlag(svc, gateFlag, setOff, "kind:review")
 	require.NoError(t, err)
@@ -77,6 +75,6 @@ func TestGetFeatureFlags_ShouldReadConfigFileOnce_WhenListingEveryFlag(t *testin
 	require.NoError(t, err)
 	require.Greater(t, len(resp.Msg.Flags), 10)
 
-	assert.LessOrEqual(t, config.LoadConfigCalls()-before, int64(2),
+	assert.EqualValues(t, 1, config.LoadConfigCalls()-before,
 		"config.json is parsed a bounded number of times, not once per flag")
 }
