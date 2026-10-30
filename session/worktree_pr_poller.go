@@ -241,7 +241,13 @@ func (p *WorktreePRPoller) InvalidateCache(owner, repo string, prNumber int) {
 	want := repoID(owner, repo)
 	p.mu.Lock()
 	for key, id := range p.keyRepo {
-		if id == want {
+		if id != want {
+			continue
+		}
+		delete(p.noPRPollAfter, key) // a webhook may mean a PR was just opened
+		// A failing key keeps its retry schedule so a webhook stream cannot
+		// defeat the failure backoff.
+		if st, ok := p.lastPolled[key]; ok && st.failures == 0 {
 			delete(p.lastPolled, key)
 		}
 	}
@@ -334,7 +340,8 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem, trigger pollT
 
 		key := worktreeCacheKey(item.RepoPath, item.Branch)
 		if pollAfter, ok := noPRPollAfter[key]; ok && now.Before(pollAfter) {
-			continue // no-PR backoff still in effect
+			seen[key] = struct{}{} // keep its lastPolled/keyRepo so InvalidateCache can lift the backoff
+			continue               // no-PR backoff still in effect
 		}
 		if _, dup := seen[key]; dup {
 			recordPollOutcome(p.ctx, "skipped_duplicate") // same repo+branch from another worktree
@@ -437,7 +444,7 @@ func (p *WorktreePRPoller) fetchAndStore(ctx context.Context, item WorktreeScanI
 	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath, enterpriseHostsForRemoteParsing())
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
-		return nil // not fetchable until the remote changes; the interval gate paces the next warning
+		return nil // also covers transient git exec/lock errors: they wait a full PollInterval, which paces the warning
 	}
 	if !repoRef.IsValid() {
 		return nil // not a GitHub remote
