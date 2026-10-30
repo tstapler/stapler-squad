@@ -438,6 +438,8 @@ func TestPasteCloser(t *testing.T) {
 		{"already closed", start + "ab" + end + "tail", len(start) + 2 + len(end), ""},
 		{"partial terminator: only the suffix", start + "ab" + end, len(start) + 2 + 4, "1~"},
 		{"partial terminator, one byte missing", start + "ab" + end, len(start) + 2 + 5, "~"},
+		{"sent below zero: nil, no panic", start + "ab", -1, ""},
+		{"sent past the end: nil, no panic", start + "ab", len(start) + 3, ""},
 		{"partial prefix that is not the terminator: skip", start + "ab\x1b[20" + "0~", len(start) + 2 + 4, ""},
 	}
 	for _, tc := range tests {

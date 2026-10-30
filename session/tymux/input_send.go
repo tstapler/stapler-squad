@@ -196,11 +196,18 @@ func abortPayload(stream attachStream, gate *streamSendGate, data []byte, sent i
 }
 
 // pasteCloser returns the bytes that close a bracketed paste left open after data[:sent] was
-// delivered, or nil if none is open or closing is unsafe. When the delivered bytes end in a partial
-// ESC[201~ prefix (chunk boundary inside the terminator), only the missing suffix is sent, and only
-// if the undelivered remainder confirms that is what was coming; otherwise a full terminator would
-// garble the half-sent sequence, so recovery is skipped.
+// delivered, or nil if none is open, sent is out of range, or closing is unsafe.
+//
+// When the delivered bytes end in a partial ESC[201~ prefix (chunk boundary inside the terminator),
+// only the missing suffix is sent, and only if the undelivered remainder confirms that is what was
+// coming. Otherwise (the partial prefix is not continued by the remainder as ESC[201~, or the
+// payload was cut inside a trailing partial prefix with no remainder to confirm) recovery is
+// skipped and the paste may stay open: a full ESC[201~ after a half-sent sequence would garble it
+// into something the app could misread, which is worse than a paste the user can end themselves.
 func pasteCloser(data []byte, sent int) []byte {
+	if sent < 0 || sent > len(data) {
+		return nil
+	}
 	delivered := data[:sent]
 	if !inBracketedPaste(delivered) {
 		return nil
