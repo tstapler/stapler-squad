@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { defineConfig, devices, webkit } from '@playwright/test';
-import { baseUrl, serverSlot } from './helpers/base-url';
+import { baseUrl, pinWorkerEnv, serverSlot } from './helpers/base-url';
 import { themeFixturePath } from './helpers/theme-fixtures';
 
 /**
@@ -9,6 +9,8 @@ import { themeFixturePath } from './helpers/theme-fixtures';
  * browser build is not installed (npx playwright install webkit) the project is left out and the
  * reason is printed, so a missing WebKit never fails the suite (plan Story 7.8b).
  */
+pinWorkerEnv();
+
 function webkitMobileProjects() {
   let installed = false;
   try {

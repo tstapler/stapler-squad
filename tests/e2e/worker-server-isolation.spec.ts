@@ -8,20 +8,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { test, expect } from '@playwright/test';
-import { baseUrl, serverSlot, testDir } from './helpers/base-url';
+import { baseUrl, serverSlot, testDir, tmuxSocket } from './helpers/base-url';
 import { SessionClient } from './helpers/session-client';
 
 const urls: string[] = JSON.parse(process.env.TEST_SERVER_URLS ?? '[]');
 const dirs: string[] = JSON.parse(process.env.TEST_SERVER_TESTDIRS ?? '[]');
+const sockets: string[] = JSON.parse(process.env.TEST_SERVER_TMUX_SOCKETS ?? '[]');
+
 
 test.describe('worker server pool isolation', () => {
+  // One project is enough: the pool is shared by all of them.
+  test.beforeEach(({}, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', 'pool is shared across projects');
+  });
+
   test('every slot has a distinct port, data dir and tmux socket', async () => {
     expect(urls.length).toBeGreaterThanOrEqual(1);
     expect(urls).toHaveLength(dirs.length);
     expect(new Set(urls).size).toBe(urls.length);
     expect(new Set(dirs).size).toBe(dirs.length);
-    // TestServer.tmuxSocket() is `ssq-e2e-<port>`, so distinct ports imply distinct sockets.
-    const sockets = urls.map((u) => `ssq-e2e-${new URL(u).port}`);
+    expect(sockets).toHaveLength(urls.length);
     expect(new Set(sockets).size).toBe(sockets.length);
     for (const socket of sockets) {
       // Each server seeded live bash sessions into its own private tmux server, so every socket is live.
@@ -37,6 +43,10 @@ test.describe('worker server pool isolation', () => {
   test('this worker talks to the server of its own slot', async () => {
     expect(baseUrl()).toBe(urls[serverSlot()]);
     expect(testDir()).toBe(dirs[serverSlot()]);
+    expect(tmuxSocket()).toBe(sockets[serverSlot()]);
+    // Specs that still read the single-server env vars are re-pointed at this slot by pinWorkerEnv().
+    expect(process.env.TEST_SERVER_URL).toBe(urls[serverSlot()]);
+    expect(process.env.TEST_SERVER_TESTDIR).toBe(dirs[serverSlot()]);
   });
 
   for (const probe of ['a', 'b', 'c', 'd']) {

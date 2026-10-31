@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { randomBytes } from 'crypto';
 import { SessionClient } from './session-client';
 import { webBuildMode } from './web-build';
 
@@ -101,6 +102,9 @@ export class TestServer {
   private config: TestServerConfig;
   // Set when start() had to prepare its own assets, so stop() cleans them up.
   private ownedAssets: SharedAssets | null = null;
+  // Fixed per instance and independent of the port, so a retry after a lost port race can never
+  // kill the tmux server of the sibling that won that port.
+  private readonly socketId = randomBytes(4).toString('hex');
 
   constructor(config: Partial<TestServerConfig> = {}) {
     const pid = process.pid;
@@ -132,8 +136,10 @@ export class TestServer {
       this.config.assets = this.ownedAssets;
     }
     const autoPort = this.config.port === 0;
+    const autoRemotePort = this.config.remoteAuth && this.config.remotePort === 0;
     for (let attempt = 1; ; attempt++) {
-      if (autoPort) this.config.port = await (this.config.allocatePort ?? findFreePort)();
+      if (autoPort) this.config.port = await (attempt === 1 ? this.config.allocatePort ?? findFreePort : findFreePort)();
+      if (autoRemotePort) this.config.remotePort = 0;
       try {
         await this.startOnce();
         return;
@@ -237,9 +243,9 @@ export class TestServer {
     }
   }
 
-  /** The private tmux socket name of this run: port-scoped, so concurrent runs never share one. */
+  /** The private tmux socket name of this server: unique per instance, so concurrent servers never share one. */
   tmuxSocket(): string {
-    return `ssq-e2e-${this.config.port}`;
+    return `ssq-e2e-${this.socketId}`;
   }
 
   getBaseUrl(): string {
@@ -306,7 +312,7 @@ export class TestServer {
 
   /**
    * Seed demo sessions so tests that need session cards have data to work with.
-   * Mirrors the e2e-video.yml CI workflow: `go run ./tests/demo/seed <dir> <count>`
+   * Same seeder as the e2e-video.yml CI workflow (`go run ./tests/demo/seed <dir> <count>`), prebuilt once per run.
    */
   private async seedDemoData(assets: SharedAssets): Promise<void> {
     if (this.config.seedSessions <= 0) return;

@@ -16,10 +16,12 @@ async function globalSetup(config: FullConfig) {
     const { servers } = await startServerPool(size);
     const urls = servers.map((s) => s.getBaseUrl());
     const dirs = servers.map((s) => s.getTestDir());
+    const sockets = servers.map((s) => s.tmuxSocket());
     // process.env mutations here are inherited by Playwright worker processes (spawned after
     // global-setup). Workers pick their entry by TEST_PARALLEL_INDEX (see helpers/base-url.ts).
     process.env.TEST_SERVER_URLS = JSON.stringify(urls);
     process.env.TEST_SERVER_TESTDIRS = JSON.stringify(dirs);
+    process.env.TEST_SERVER_TMUX_SOCKETS = JSON.stringify(sockets);
     // Single-server consumers (and this process) see slot 0.
     process.env.TEST_SERVER_URL = urls[0];
     console.log(`Test server URLs exported: ${urls.join(', ')}`);

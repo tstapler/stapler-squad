@@ -31,3 +31,22 @@ export function testDir(): string | undefined {
 export function serverSlot(): number {
   return Number(process.env.TEST_PARALLEL_INDEX ?? 0);
 }
+
+export function tmuxSocket(): string | undefined {
+  return workerEntry('TEST_SERVER_TMUX_SOCKETS');
+}
+
+/**
+ * Re-point the single-server env vars at this worker's own server. Call from playwright.config.ts:
+ * Playwright re-evaluates the config in every worker (TEST_PARALLEL_INDEX already set) before it
+ * loads any spec, so specs that still read process.env.TEST_SERVER_URL / BASE_URL /
+ * TEST_SERVER_TESTDIR at module scope get their own slot's values instead of slot 0's.
+ * No-op outside a worker and with a single-server run.
+ */
+export function pinWorkerEnv(): void {
+  if (process.env.TEST_PARALLEL_INDEX === undefined || !process.env.TEST_SERVER_URLS) return;
+  process.env.TEST_SERVER_URL = baseUrl();
+  process.env.BASE_URL = baseUrl();
+  const dir = testDir();
+  if (dir) process.env.TEST_SERVER_TESTDIR = dir;
+}
