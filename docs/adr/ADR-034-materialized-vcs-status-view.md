@@ -1,11 +1,12 @@
 # ADR-034: Serve VCS status from an event-fed materialized view, pushed over a Watch stream
 
 Status: Proposed — 2026-10-30
+Numbering note: `project_plans/files-viewer-revamp/decisions/` also has ADR-033 to ADR-036, which are different documents from `docs/adr/ADR-033` to `ADR-035`; cite ADRs by full path.
 Owner request: "Lets not poll for background panes, instead we should have an event driven system that the backend keeps a materialized/cached view up to date to serve."
 
 ## Context
 
-The browser polls `GetVCSStatus` once per open session pane. Evidence (all VERIFIED by running the quoted command on 2026-10-30):
+The browser polls `GetVCSStatus` once per open session pane. Evidence (VERIFIED by running the quoted command on 2026-10-30; the HAR and live-instance figures are not reproducible from the repo, since the HAR file and the running service's state are not checked in):
 
 - HAR `stapler-squad-backend-har-10-30.har` (22 min, 468 entries; `python3 -I` script, path as argument): `GetVCSStatus` 42 calls over 12 sessions, p50 server wait 6.26 s, p95 17.42 s. The same capture holds `ListPendingApprovals` 88, `GetFeatureFlags` 45, `GetNotificationHistory` 44, `GetReviewQueue` 11 calls, all with p50 wait under 0.2 s (cheap per call, wasteful in count).
 - The data barely changes. Of the 4 `ACTIVE` sessions on the live instance (`ListSessions` on `:8543`, 41 sessions listed), `.git/HEAD` and `.git/index` mtimes are 114, 1530, 1529 and 3325 minutes old. Across the 33 sessions whose directory still exists the median HEAD/index age is 1738 min and 1 of 33 changed in the last hour. Polling re-derives an unchanged answer; the working-tree dirty state (edits that never touch `.git`) is the only fast-moving part.
@@ -33,7 +34,7 @@ Event infrastructure already in the repo, reused rather than reinvented:
 | FSEvents, 14 streams over those 14 roots, 20 s idle | fd delta 0, 85 ms CPU (includes setup), 6 events | throwaway `go test` in `internal/fsevents` (deleted after the run) |
 | `git commit` to first FSEvents `.git` event, 50 ms latency setting | 49 ms (the commit itself took 2.25 s) | same |
 
-Reading: a per-directory kqueue/fsnotify watch of these worktrees would need roughly 52,800 fds, on a process that already holds 17.9k from the history watcher. FSEvents costs no fds and negligible idle CPU, so the view uses FSEvents streams (one per repo root, not per file or directory). The 49 ms figure is the first `.git` event, not the final ref update, so the sub-second target is confirmed in Step 3 end to end, not here. The git metadata ages above show `.git` is quiet; they say nothing about dirty working-tree churn, which only the tree stream (FSEvents) observes, and which Step 3 measures as events per minute per active worktree. The measurement scripts are throwaway under `/tmp`; the commands are quoted so they can be rerun.
+Reading: a per-directory kqueue/fsnotify watch of these worktrees would need roughly 52,800 fds, on a process that already holds 17.9k fds, which this ADR does not attribute to a source (the ~1.2k per-file fds under `~/.claude/projects` suggest the history watcher accounts for part of them). FSEvents costs no fds and negligible idle CPU, so the view uses FSEvents streams: one stream per repo, with `Paths` = the worktree roots, the common dir and the linked-worktree admin dirs (not one per file or directory). The 49 ms figure is the first `.git` event, not the final ref update, so the sub-second target is confirmed in Step 3 end to end, not here. The git metadata ages above show `.git` is quiet; they say nothing about dirty working-tree churn, which only the tree stream (FSEvents) observes, and which Step 3 measures as events per minute per active worktree. The measurement scripts are throwaway under `/tmp`; the commands are quoted so they can be rerun.
 
 ## Options
 
@@ -105,7 +106,7 @@ Detection and repair, each with a metric:
 | Loss with no rescan flag (e.g. loose refs not watched today) | not detectable | per-repo staggered backstop (also the repair for the loose-refs gap until closed): interval 5 to 10 min, offset by hash(repo) plus per-cycle jitter, never a global cadence |
 | Slow subscriber | bounded per-subscriber queue, conflated to latest-per-key | no gap in state, only skipped intermediate states |
 
-Staleness bound (design target, verified in Step 3 with the before/after run): fs-visible change to published update is at most debounce (300 ms) + compute time, with a 2 s max-wait cap under continuous writes. Worst case with a lost event and no overflow flag is the backstop, at most 10 min plus jitter, equal to today's client backstop (today's server-side bound is the 15 s TTL plus 60 s stale-while-revalidate, which polling re-triggers; the view trades that for push plus the backstop). The serve-time staleness is exported as `vcs_view_staleness_seconds` and `status_as_of` stays on the wire.
+Staleness bound (design target, verified in Step 3 with the before/after run): fs-visible change to published update is at most debounce (300 ms) + compute time, with a 2 s max-wait cap under continuous writes. Worst case with a lost event and no overflow flag is the backstop, at most 10 min plus jitter, equal to today's client backstop. The 5 to 10 min backstop is a server-side correctness repair only and is never triggered by the client; on darwin the primary repair for lost events is FSEvents `NeedsRescan` plus `SinceWhen` replay, and the backstop covers only what those cannot detect (today's server-side bound is the 15 s TTL plus 60 s stale-while-revalidate, which polling re-triggers; the view trades that for push plus the backstop). The serve-time staleness is exported as `vcs_view_staleness_seconds` and `status_as_of` stays on the wire.
 
 ### 5. Wire protocol (proto additive only)
 
@@ -127,14 +128,14 @@ A module-level `vcsFeedStore` (`useSyncExternalStore`) owns the single stream, w
 
 `vcs_view_entries`, `vcs_view_events_total{source,outcome=received|coalesced|dropped|ignored}`, `vcs_view_recompute_total{reason}`, `vcs_view_recompute_seconds`, `vcs_view_queue_depth`, `vcs_view_staleness_seconds` (histogram at serve time), `vcs_view_subscribers`, `vcs_view_reconcile_total{cause=backstop|overflow|resume|gap}`, `vcs_view_watch_overflow_total`, `vcs_view_degraded_keys`. Tempo spans `vcs.view.recompute` (attributes: reason, key hash, queue wait) and `vcs.view.publish`. A Grafana row on the existing VCS dashboard with additive panels and stable uids, linked to Tempo like the sibling dashboards.
 
-## Follow-on candidates (not in scope here; estimates are INFERRED)
+## Follow-on candidates (not in scope here; estimates are INFERRED, and where they differ the [polling audit](../explanation/polling-audit.md) figures take precedence)
 
 | Poll | HAR calls (22 min) | Adoption | Expected reduction |
 |---|---|---|---|
-| `ListPendingApprovals` | 88 | `View[struct{}, []Approval]` fed by the approval store's change events | about 90 to 95 percent; keeps a slow reconcile |
-| `GetFeatureFlags` | 45 | `View` fed by flag writes | about 95 percent; flags change on operator action only |
-| `GetNotificationHistory` | 44 | `View` fed by notification inserts | about 90 percent |
-| `GetReviewQueue` | 11 | `WatchReviewQueue` already exists; the poll is redundant where the stream is healthy (confirm in code before claiming) | up to 100 percent where the stream works |
+| `ListPendingApprovals` | 88 | `View[struct{}, []Approval]` fed by the approval store's change events | about 95 percent (polling audit rank 5); keeps a 60 s backstop |
+| `GetFeatureFlags` | 45 | `View` fed by flag writes | 100 percent if pushed (polling audit rank 6); about 50 percent from a hidden-tab pause alone |
+| `GetNotificationHistory` | 44 | `View` fed by notification inserts | about 100 percent once the stream reports connected (polling audit rank 4) |
+| `GetReviewQueue` | 11 | `WatchReviewQueue` already exists; where the stream is live, `useReviewQueue.ts` stretches the poll to a 120 s reconcile (`LIVE_RECONCILE_MS`), so it does not reach zero | about 75 percent (30 s fallback to 120 s reconcile) where the stream works |
 
 ## Consequences
 
