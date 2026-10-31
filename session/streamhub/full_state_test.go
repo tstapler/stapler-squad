@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
@@ -506,8 +507,13 @@ func runFirstPaintRace(t *testing.T, it int) {
 		}
 		return m
 	}
-	require.Eventually(t, func() bool { return len(missing()) == 0 }, 5*time.Second, time.Millisecond,
-		"iteration %d: frames after the capture (saw %d, last %d) were lost: missing %v, events %d, first %v", it, snapSeq, last, missing(), len(tr.snapshot()), tr.snapshot()[:min(6, len(tr.snapshot()))])
+	// testify evaluates msgAndArgs before it starts polling, while delivery is still in flight (a
+	// racing slice of the growing event list panics), so build the detail only after a failure.
+	if !assert.Eventually(t, func() bool { return len(missing()) == 0 }, 5*time.Second, time.Millisecond) {
+		events := tr.snapshot()
+		t.Fatalf("iteration %d: frames after the capture (saw %d, last %d) were lost: missing %v, events %d, first %v",
+			it, snapSeq, last, missing(), len(events), events[:min(6, len(events))])
+	}
 	require.Equal(t, "paint", tr.snapshot()[0], "iteration %d", it)
 }
 
