@@ -568,6 +568,12 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 	return true, nil
 }
 
+// ArchivedSessionUUIDs returns the subset of uuids whose session row is
+// archived, in one query per 500 uuids. Unknown uuids are absent.
+func (s *Storage) ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map[string]bool, error) {
+	return s.repo.ArchivedSessionUUIDs(ctx, uuids)
+}
+
 // FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
 // an indexed WHERE clause (EntRepository.FindByIDWithOptions) rather than loading and
 // linear-scanning every session row — see that method's doc comment for the CPU-profile

@@ -3219,6 +3219,27 @@ func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]
 	return results, nil
 }
 
+// ArchivedSessionUUIDs returns the subset of sessionUUIDs whose session row has
+// archived_at set.
+func (r *EntRepository) ArchivedSessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	const chunkSize = 500
+	for start := 0; start < len(sessionUUIDs); start += chunkSize {
+		end := min(start+chunkSize, len(sessionUUIDs))
+		found, err := r.client.Session.Query().
+			Where(entSession.UUIDIn(sessionUUIDs[start:end]...), entSession.ArchivedAtNotNil()).
+			Select(entSession.FieldUUID).
+			Strings(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("ArchivedSessionUUIDs: %w", err)
+		}
+		for _, u := range found {
+			out[u] = true
+		}
+	}
+	return out, nil
+}
+
 // GetWorktreeDataBySessionUUIDs is GetWorktreeDataBySessionUUID for many
 // sessions in one query per 500 UUIDs. UUIDs with no session or no worktree are
 // absent from the result.
