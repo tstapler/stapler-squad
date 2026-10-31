@@ -32,8 +32,9 @@
 import { test, expect, APIRequestContext, Page } from "@playwright/test";
 import { BacklogPage } from "./pages/BacklogPage";
 import { PipelineModesSettingsPage } from "./pages/PipelineModesSettingsPage";
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 // Same rationale as backlog-sources-settings.spec.ts: BacklogService RPCs are
 // gated by an interceptor that re-reads config.LoadConfig() from disk, which
@@ -189,7 +190,7 @@ test.describe("backlog-pipeline-mode", () => {
 
       const itemTitle = `pipeline-mode-select-${Date.now()}`;
       await backlogPage.openNewItemForm();
-      await backlogPage.fillNewItemForm(itemTitle, { repoPath: "/tmp/e2e-pipeline-mode-test" });
+      await backlogPage.fillNewItemForm(itemTitle, { repoPath: slotTmp("e2e-pipeline-mode-test") });
 
       const option = backlogPage.getPipelineModeOption(slug);
       await expect(option).toBeVisible();

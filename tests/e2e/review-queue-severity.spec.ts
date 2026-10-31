@@ -14,8 +14,9 @@
  */
 
 import { test, expect, Page } from "@playwright/test";
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 type FixtureItem = {
   sessionId: string;
@@ -36,7 +37,7 @@ function makeReviewQueueResponse(items: FixtureItem[]) {
         context: "Claude Code file permission prompt",
         program: "claude",
         branch: "main",
-        path: "/tmp/e2e-repo",
+        path: slotTmp("e2e-repo"),
         tags: [],
         category: "",
         metadata: {

@@ -16,9 +16,10 @@ const _features = [FEATURE_CATALOG['review-queue-list'], FEATURE_CATALOG['review
 
 import { test, expect } from '@playwright/test';
 import { dismissOnboardingIfPresent } from './pages/OnboardingPage';
+import { baseUrl } from './helpers/base-url';
 
 // Base URL falls back to the test server port; playwright.config.ts sets baseURL
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('Review Queue Smoke Tests', () => {
   test('review queue page loads successfully', async ({ page }) => {

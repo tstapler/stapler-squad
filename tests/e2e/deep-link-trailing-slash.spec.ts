@@ -10,8 +10,9 @@ import { AppShellPage } from './pages/AppShellPage';
 import { createBacklogItemDirect, disableBacklogFeatureFlag, enableBacklogFeatureFlag } from './pages/BacklogMutations';
 import { SessionClient } from './helpers/session-client';
 import titles from './fixtures/route-titles.json';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const TITLES = titles as Record<string, string>;
 const WINDOW_PARAM = /[?&]window=([^&]+)/;
 

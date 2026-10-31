@@ -49,7 +49,7 @@ on:
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Steps after codegen use `!cancelled()` so one failing linter does not hide the others.
@@ -78,6 +78,8 @@ jobs:
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
           filter: blob:none
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -338,3 +340,9 @@ jobs:
           node_modules/.bin/tsc --noEmit --project tsconfig.node.json
           # 2. Runtime catalog validation — catches features with empty testIds
           bun run validate-catalog
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: lint

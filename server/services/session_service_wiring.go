@@ -117,10 +117,10 @@ func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
 	s.errorRegistry = r
 }
 
-// SetAnalyticsClient wires the ent client used for escape analytics queries.
+// SetEscapeEventsClient wires the escape-events database client used for escape analytics queries.
 // Must be called before the first QueryEscapeAnalytics or GetEscapeAnalyticsSummary RPC.
-func (s *SessionService) SetAnalyticsClient(c *ent.Client) {
-	s.analyticsClient = c
+func (s *SessionService) SetEscapeEventsClient(c *ent.Client) {
+	s.escapeEventsClient = c
 }
 
 // GetEventBus returns the event bus instance for wiring up reactive components.

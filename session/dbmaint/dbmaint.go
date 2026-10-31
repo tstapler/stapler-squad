@@ -54,6 +54,7 @@ type Config struct {
 	MinFreePages int64         // ...and free pages exceed this
 	ChunkPages   int64         // pages per incremental_vacuum call
 	ChunkPause   time.Duration // writer-friendly pause between chunks
+	StartupDelay time.Duration // wait before the first inspection so it stays out of the boot write burst
 	Disabled     bool
 }
 
@@ -64,6 +65,7 @@ const (
 	DefaultMinFreePages = 5000
 	DefaultChunkPages   = 2000
 	DefaultChunkPause   = 250 * time.Millisecond
+	DefaultStartupDelay = 30 * time.Second
 )
 
 // WithDefaults fills zero or invalid fields with the package defaults.
@@ -82,6 +84,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.ChunkPause <= 0 {
 		c.ChunkPause = DefaultChunkPause
+	}
+	if c.StartupDelay <= 0 {
+		c.StartupDelay = DefaultStartupDelay
 	}
 	return c
 }
@@ -163,6 +168,10 @@ func (m *Maintainer) Run(ctx context.Context) {
 	register(m)
 	defer unregister(m)
 
+	// Keep the boot-time inspection out of the startup write burst.
+	if err := m.clock.Pause(ctx, m.cfg.StartupDelay); err != nil {
+		return
+	}
 	m.inspectOnly(ctx)
 	ticks, stop := m.clock.NewTicker(m.cfg.Interval)
 	defer stop()
@@ -220,17 +229,7 @@ type sampleResult struct {
 // one-time offline-remedy WARN for auto_vacuum=NONE.
 func (m *Maintainer) sample(ctx context.Context) (sampleResult, error) {
 	var s sampleResult
-	mode, err := m.pragma(ctx, "auto_vacuum")
-	if err != nil {
-		return s, err
-	}
-	if s.pages, err = m.pragma(ctx, "page_count"); err != nil {
-		return s, err
-	}
-	if s.free, err = m.pragma(ctx, "freelist_count"); err != nil {
-		return s, err
-	}
-	pageSize, err := m.pragma(ctx, "page_size")
+	mode, pageSize, err := m.readPageStats(ctx, &s)
 	if err != nil {
 		return s, err
 	}
@@ -331,6 +330,26 @@ func (m *Maintainer) checkpointPassive(ctx context.Context) error {
 		return fmt.Errorf("wal_checkpoint: %w", err)
 	}
 	return nil
+}
+
+// readPageStats reads auto_vacuum, page_count, freelist_count and page_size in
+// one statement, so the single-connection pool is acquired once instead of four
+// times (each acquisition queues behind whatever write holds the writer).
+func (m *Maintainer) readPageStats(ctx context.Context, s *sampleResult) (mode, pageSize int64, err error) {
+	var rows entsql.Rows
+	const q = "SELECT a.auto_vacuum, c.page_count, f.freelist_count, z.page_size " +
+		"FROM pragma_auto_vacuum a, pragma_page_count c, pragma_freelist_count f, pragma_page_size z"
+	if err = m.q.Query(ctx, q, []any{}, &rows); err != nil {
+		return 0, 0, fmt.Errorf("page stats: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, 0, errors.New("page stats: no row")
+	}
+	if err = rows.Scan(&mode, &s.pages, &s.free, &pageSize); err != nil {
+		return 0, 0, fmt.Errorf("page stats: %w", err)
+	}
+	return mode, pageSize, rows.Err()
 }
 
 // pragma reads a single-integer PRAGMA.
