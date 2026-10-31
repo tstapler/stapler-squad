@@ -159,7 +159,8 @@ type BacklogLifecycleListener struct {
 	ciReruns   ciRerunLedger
 
 	// conflictRetries throttles conflict-only PR fixes (see remediatePRFixWithBackoffGate).
-	conflictRetries conflictRetryLedger
+	conflictRetries    conflictRetryLedger
+	conflictRetryClock func() time.Time // nil: time.Now
 
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
 	prCreatorMu      sync.RWMutex

@@ -245,6 +245,13 @@ func (f *vcsFlights) acquireSlot(ctx context.Context, m *vcsStatusMetrics) (time
 	defer span.End()
 	select {
 	case f.slots <- struct{}{}:
+		// select picks randomly when a slot frees up at the same moment ctx is cancelled;
+		// a flight nobody is waiting for must not take the slot and run git.
+		if err := ctx.Err(); err != nil {
+			<-f.slots
+			span.AddEvent("canceled_while_queued")
+			return 0, err
+		}
 	case <-ctx.Done():
 		span.AddEvent("canceled_while_queued")
 		return 0, ctx.Err()

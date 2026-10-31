@@ -2,7 +2,9 @@
 package nolintcomment
 
 import (
+	"go/ast"
 	"go/token"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -40,4 +42,73 @@ func Contains(pass *analysis.Pass, pos token.Pos, linterName string) bool {
 		}
 	}
 	return false
+}
+
+// Result is the outcome of looking up a //nolint:<name> directive for a site.
+type Result int
+
+const (
+	None    Result = iota // no directive covers the site
+	Missing               // a directive covers the site but gives no reason
+	OK                    // a directive with a reason covers the site
+)
+
+// Index maps each line of a file to the earliest AST node start on it, so a
+// trailing comment can be told apart from a standalone one.
+type Index struct {
+	file  *token.File
+	f     *ast.File
+	first map[int]token.Pos
+}
+
+// NewIndex builds an Index for f.
+func NewIndex(fset *token.FileSet, f *ast.File) *Index {
+	file := fset.File(f.Pos())
+	first := map[int]token.Pos{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		if _, isFile := n.(*ast.File); isFile {
+			return true
+		}
+		l := file.Line(n.Pos())
+		if p, ok := first[l]; !ok || n.Pos() < p {
+			first[l] = n.Pos()
+		}
+		return true
+	})
+	return &Index{file: file, f: f, first: first}
+}
+
+// Lookup finds //nolint:<list> <reason> naming linterName on pos's line, or on a
+// standalone comment line directly above. A trailing comment (one with code
+// before it on its line) never covers the next line. A directive with no reason
+// yields Missing.
+func (x *Index) Lookup(pos token.Pos, linterName string) Result {
+	line := x.file.Line(pos)
+	result := None
+	for _, cg := range x.f.Comments {
+		for _, c := range cg.List {
+			cl := x.file.Line(c.Pos())
+			p, hasNode := x.first[cl]
+			prevStandalone := cl == line-1 && !(hasNode && p < c.Pos())
+			if cl != line && !prevStandalone {
+				continue
+			}
+			text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
+			if !strings.HasPrefix(text, "nolint:") {
+				continue
+			}
+			list, reason, _ := strings.Cut(strings.TrimPrefix(text, "nolint:"), " ")
+			if !slices.Contains(strings.Split(list, ","), linterName) {
+				continue
+			}
+			if strings.TrimSpace(reason) != "" {
+				return OK
+			}
+			result = Missing
+		}
+	}
+	return result
 }

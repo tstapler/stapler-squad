@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -34,6 +35,11 @@ var (
 	wsUnaryCallsCounter         = counterNamed(metricWsUnaryCalls, "Unary calls served over the WebSocket bridge by method and Connect code")
 	wsUnaryDeniedCounter        = counterNamed(metricWsUnaryDenied, "Unary calls refused by the WebSocket bridge's deny-by-default allowlist")
 	wsUnaryUpgradeDeniedCounter = counterNamed(metricWsUnaryUpgradeDenied, "Unary WebSocket upgrades refused, by listener and reason")
+	wsUnaryConnsOpen            = upDownNamed("ws_unary_connections_open", "Unary WebSocket bridge connections currently open, by listener")
+	wsUnaryConnsClosed          = counterNamed("ws_unary_connections_closed_total", "Unary WebSocket bridge connections ended, by listener and reason")
+	wsUnaryWriteErrors          = counterNamed("ws_unary_write_errors_total", "Unary WebSocket bridge writer failures (each ends its connection), by listener")
+	wsUnaryPingRTT              = histNamed("ws_unary_ping_rtt", "ms", "Server ping to client pong round trip on the unary WebSocket bridge, by listener")
+	wsUnaryCallDuration         = histNamed("ws_unary_call_duration", "ms", "Unary call handling time on the WebSocket bridge (dispatch to reply enqueue; abandoned calls are not timed), by method")
 	wsUnaryAbandonedCounter     = counterNamed(metricWsUnaryAbandoned, "Unary calls abandoned server-side before the handler returned, by reason (cancel, deadline, shutdown, zombie_cap)")
 	wsUnaryZombiesGauge         = sync.OnceValue(func() metric.Int64UpDownCounter {
 		g, err := telemetry.GetMeter().Int64UpDownCounter(metricWsUnaryZombies,
@@ -54,6 +60,64 @@ var (
 		return g
 	})
 )
+
+func upDownNamed(name, desc string) func() metric.Int64UpDownCounter {
+	return sync.OnceValue(func() metric.Int64UpDownCounter {
+		c, err := telemetry.GetMeter().Int64UpDownCounter(name, metric.WithDescription(desc))
+		if err != nil {
+			log.Error("services: failed to register "+name, "error", err)
+			return nil
+		}
+		return c
+	})
+}
+
+// latencyBucketsMs reaches past the 30s default RPC deadline so timeouts are not lumped into +Inf.
+var latencyBucketsMs = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 8000, 15000, 30000, 60000}
+
+func histNamed(name, unit, desc string) func() metric.Float64Histogram {
+	return sync.OnceValue(func() metric.Float64Histogram {
+		h, err := telemetry.GetMeter().Float64Histogram(name, metric.WithUnit(unit), metric.WithDescription(desc),
+			metric.WithExplicitBucketBoundaries(latencyBucketsMs...))
+		if err != nil {
+			log.Error("services: failed to register "+name, "error", err)
+			return nil
+		}
+		return h
+	})
+}
+
+// Connection-level and timing instruments; labels stay bounded (listener is a
+// server-side constant, method goes through labelMethod, reason is an enum).
+
+func (m *unaryMetrics) connOpened(listener string) {
+	if g := wsUnaryConnsOpen(); g != nil {
+		g.Add(context.Background(), 1, metric.WithAttributes(attribute.String("listener", listener)))
+	}
+}
+
+func (m *unaryMetrics) connClosed(listener, reason string) {
+	if g := wsUnaryConnsOpen(); g != nil {
+		g.Add(context.Background(), -1, metric.WithAttributes(attribute.String("listener", listener)))
+	}
+	addOne(wsUnaryConnsClosed(), attribute.String("listener", listener), attribute.String("reason", reason))
+}
+
+func (m *unaryMetrics) writeError(listener string) {
+	addOne(wsUnaryWriteErrors(), attribute.String("listener", listener))
+}
+
+func (m *unaryMetrics) pingRTT(listener string, d time.Duration) {
+	if h := wsUnaryPingRTT(); h != nil {
+		h.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(attribute.String("listener", listener)))
+	}
+}
+
+func (m *unaryMetrics) callDuration(method string, d time.Duration) {
+	if h := wsUnaryCallDuration(); h != nil {
+		h.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(attribute.String("method", labelMethod(method))))
+	}
+}
 
 type unaryCallKey struct{ method, code string }
 type unaryUpgradeKey struct{ listener, reason string }

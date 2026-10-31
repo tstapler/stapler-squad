@@ -9,12 +9,12 @@
 	{
 		"heading": "Live Terminal Streaming",
 		"description": "Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.",
-		"category": "Visibility",
-		"demoClip": {
-			"tag": "website-demo-gifs-latest",
-			"name": "terminal-streaming",
-			"ext": "webm"
-		}
+		"category": "Visibility"
+	},
+	{
+		"heading": "Browser Element Inspector",
+		"description": "While watching an agent's browser in the Browser tab, click Inspect, then click any element in the live view.",
+		"category": "Visibility"
 	},
 	{
 		"heading": "Diff Viewer",
@@ -35,7 +35,7 @@
 	},
 	{
 		"heading": "Status Filtering",
-		"description": "Filter by status to surface agents that need your attention — spot every `Needs Approval` gate without scrolling through the full list.",
+		"description": "Filter by status to surface agents that need your attention — spot every Needs Approval gate without scrolling through the full list.",
 		"category": "Organisation",
 		"screenshot": "/features/03-needs-approval.png",
 		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden"
@@ -73,7 +73,7 @@
 	},
 	{
 		"heading": "Custom Rules",
-		"description": "Teach Stapler Squad what's always safe for your project. Add a pattern like `^git log` once and never review it again.",
+		"description": "Teach Stapler Squad what's always safe for your project. Add a pattern like ^git log once and never review it again.",
 		"category": "Organisation",
 		"screenshot": "/features/07-add-rule.png",
 		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again"
@@ -97,6 +97,11 @@
 		"heading": "Config Viewer",
 		"description": "Inspect your current Stapler Squad configuration directly from the UI — no hunting for JSON files.",
 		"category": "History & Debugging"
+	},
+	{
+		"heading": "Parallel Fan-Out",
+		"description": "Run one prompt across 2–5 isolated worktree sessions, compare their diffs side by side, and merge the best one.",
+		"category": "Review & Approval"
 	},
 	{
 		"heading": "Isolated Git Workspaces",

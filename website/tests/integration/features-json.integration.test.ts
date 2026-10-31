@@ -1,7 +1,7 @@
 // Story 3.2.1: runs buildFeaturesJson against the real README.md and
 // docs/features.md on disk, not fixtures -- see tests/unit/features-json.test.ts
 // for the mocked-fixture unit coverage.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -14,13 +14,15 @@ const REPO_ROOT = join(WEBSITE_DIR, '..');
 const PUBLIC_FEATURES_DIR = join(WEBSITE_DIR, 'public', 'features');
 
 describe('buildFeaturesJson against real on-disk content', () => {
-	it('buildFeaturesJson_should_Produce17CardsWithValidScreenshotPaths_When_RunAgainstRealReadmeAndFeaturesMd', () => {
+	it('buildFeaturesJson_should_ProduceCommittedCardsWithValidScreenshotPaths_When_RunAgainstRealReadmeAndFeaturesMd', () => {
 		const cards = buildFeaturesJson({
 			readmePath: join(REPO_ROOT, 'README.md'),
 			featuresMdPath: join(REPO_ROOT, 'docs', 'features.md'),
 		});
 
-		expect(cards).toHaveLength(17);
+		// features.json is committed generated output; fail on any drift from its sources.
+		const committed = JSON.parse(readFileSync(join(WEBSITE_DIR, 'src', 'content', 'features.json'), 'utf8'));
+		expect(cards).toEqual(committed);
 
 		const cardsWithScreenshot = cards.filter((card) => card.screenshot);
 		expect(cardsWithScreenshot).toHaveLength(8);

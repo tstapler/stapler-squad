@@ -348,6 +348,52 @@ describe("send queue and window", () => {
   });
 });
 
+describe("client metrics events", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("metrics_should_EmitOpenSendCloseAndReconnectWithTheCloseCode", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    const h = setup();
+    const read = callVcs(h.t);
+    h.sock().open();
+    h.sock().serverClose(1006);
+    await read;
+
+    const events = track.mock.calls.map(([e]) => e);
+    const ws = events.filter((e) => e.name === "cm.ws").map((e) => e.labels);
+    expect(ws).toEqual([
+      { kind: "unary", event: "open" },
+      { kind: "unary", event: "close", code: "1006" },
+      { kind: "unary", event: "reconnect" },
+    ]);
+    const send = events.find((e) => e.name === "cm.ws_send");
+    expect(send.labels).toEqual({ pending: "0" });
+    expect(typeof send.durationMs).toBe("number");
+    h.t.close();
+  });
+});
+
+describe("close recording after an error", () => {
+  afterEach(() => setRpcTimingSink(undefined));
+
+  it("metrics_should_RecordTheCloseCode_When_ErrorIsFollowedByClose", async () => {
+    const track = jest.fn();
+    setRpcTimingSink({ track });
+    const h = setup();
+    const read = callVcs(h.t);
+    h.sock().open();
+    h.sock().onerror?.();
+    h.sock().serverClose(1006);
+    h.sock().serverClose(1006); // a duplicate close event must not double count
+    await read;
+    const ws = track.mock.calls.map(([e]) => e).filter((e) => e.name === "cm.ws").map((e) => e.labels);
+    expect(ws.filter((l) => l.event === "error")).toHaveLength(1);
+    expect(ws.filter((l) => l.event === "close")).toEqual([{ kind: "unary", event: "close", code: "1006" }]);
+    h.t.close();
+  });
+});
+
 describe("reconnect and replay", () => {
   it("reconnect_should_ReplayReadOverHttp_And_RejectMutationUnavailable_When_Socket1006", async () => {
     const h = setup();

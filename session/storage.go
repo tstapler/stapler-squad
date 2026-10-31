@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
@@ -308,6 +310,12 @@ func (s *Storage) Close() error {
 // GetEntClient returns the *ent.Client from the underlying EntRepository.
 func (s *Storage) GetEntClient() *ent.Client {
 	return s.repo.GetEntClient()
+}
+
+// MaintenanceDriver returns the instrumented driver behind the sessions database
+// for session/dbmaint, or nil when the repository has none.
+func (s *Storage) MaintenanceDriver() dialect.ExecQuerier {
+	return s.repo.MaintenanceDriver()
 }
 
 // SetItemChangePublisher wires p into the underlying repository.

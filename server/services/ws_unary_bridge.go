@@ -307,7 +307,13 @@ type unarySession struct {
 	inflight  map[uint32]*inflightCall
 	zombies   int
 	capClosed bool // the zombie cap already closed this socket
+
+	lastPingNanos atomic.Int64 // send time of the latest ping; its pong must echo it
+	endReason     atomic.Value // string; first reason wins
 }
+
+// endWith records why the connection ended; the first caller wins.
+func (s *unarySession) endWith(reason string) { s.endReason.CompareAndSwap(nil, reason) }
 
 func newUnarySession(b *UnaryWsBridge, conn *websocket.Conn, upgrade *http.Request, listener string) *unarySession {
 	return &unarySession{
@@ -321,15 +327,33 @@ func newUnarySession(b *UnaryWsBridge, conn *websocket.Conn, upgrade *http.Reque
 // Per-call contexts derive from the upgrade context so shutdown cancels them.
 func (s *unarySession) serve(parent context.Context) {
 	s.ctx, s.cancel = context.WithCancel(parent)
+	s.b.metrics.connOpened(s.listener)
 	defer func() {
 		s.cancel()
 		s.wg.Wait()
 		s.writer.abort() // streams still queued will never be written
 		_ = s.conn.Close()
+		reason, _ := s.endReason.Load().(string)
+		switch {
+		case reason != "":
+		case parent.Err() != nil: // the upgrade context ended: server shutdown
+			reason = "shutdown"
+		default:
+			reason = "unknown"
+		}
+		s.b.metrics.connClosed(s.listener, reason)
 	}()
 
 	_ = s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
-	s.conn.SetPongHandler(func(string) error {
+	s.conn.SetPongHandler(func(payload string) error {
+		// A pong counts only if it echoes the latest ping's send time and is plausible; a client can
+		// send any pong payload, so anything else must not reach the histogram.
+		// CompareAndSwap makes each ping answerable once; a replayed pong finds 0 and is ignored.
+		if sent, err := strconv.ParseInt(payload, 10, 64); err == nil && sent > 0 && s.lastPingNanos.CompareAndSwap(sent, 0) {
+			if rtt := time.Since(time.Unix(0, sent)); rtt >= 0 && rtt <= s.b.pongWait {
+				s.b.metrics.pingRTT(s.listener, rtt)
+			}
+		}
 		return s.conn.SetReadDeadline(time.Now().Add(s.b.pongWait))
 	})
 	s.wg.Add(3)
@@ -342,6 +366,8 @@ func (s *unarySession) serve(parent context.Context) {
 	go func() {
 		defer s.wg.Done()
 		if err := s.writer.run(s.ctx); err != nil && s.ctx.Err() == nil {
+			s.endWith("write_error")
+			s.b.metrics.writeError(s.listener)
 			log.Warn("[UnaryWS] write failed", "listener", s.listener, "err", err)
 		}
 		s.cancel()
@@ -364,7 +390,11 @@ func (s *unarySession) keepalive() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			if err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(unaryWriteWait)); err != nil {
+			sent := time.Now().UnixNano()
+			s.lastPingNanos.Store(sent)
+			payload := strconv.FormatInt(sent, 10)
+			if err := s.conn.WriteControl(websocket.PingMessage, []byte(payload), time.Now().Add(unaryWriteWait)); err != nil {
+				s.endWith("ping_failed")
 				s.cancel()
 				return
 			}
@@ -403,6 +433,13 @@ func (s *unarySession) readLoop() {
 
 func (s *unarySession) logReadEnd(err error) {
 	switch {
+	case s.ctx.Err() != nil: // we cancelled first (shutdown, write or ping failure); that reason already won
+	case websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived):
+		s.endWith("peer_close")
+	default:
+		s.endWith("read_error")
+	}
+	switch {
 	case errors.Is(err, websocket.ErrReadLimit):
 		log.Warn("[UnaryWS] frame over hard read limit, closed 1009", "listener", s.listener)
 	case websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived):
@@ -413,6 +450,7 @@ func (s *unarySession) logReadEnd(err error) {
 }
 
 func (s *unarySession) closeProtocol(code int, reason, detail string) {
+	s.endWith("protocol")
 	log.Warn("[UnaryWS] closing socket", "listener", s.listener, "code", code, "reason", reason, "detail", detail)
 	closeWebSocket(s.conn, code, reason)
 }
@@ -643,10 +681,13 @@ func (s *unarySession) enqueueUnlessCanceled(id uint32, meta unaryResponseMeta, 
 // RemoteAddr, Origin, Cookie, proxy headers), so every guard reaches the same
 // verdict as for HTTP.
 func (s *unarySession) runCall(ctx context.Context, call *inflightCall, handler http.Handler, f unaryFrame) {
+	started := time.Now()
 	go s.runHandler(ctx, call, handler, f)
 	select {
 	case res := <-call.result:
 		s.respond(f, res)
+		// Timed only when the handler's result arrived: an abandoned call has no reply to time.
+		s.b.metrics.callDuration(f.Method, time.Since(started))
 	case <-ctx.Done():
 		s.abandon(ctx, call, f)
 	}

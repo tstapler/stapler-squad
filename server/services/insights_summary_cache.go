@@ -37,6 +37,8 @@ type summaryCache struct {
 	flight  singleflight.Group
 
 	now func() time.Time // test seam; nil means time.Now
+
+	afterLookupMiss func() // test seam: runs between get's cache miss and joining a flight
 }
 
 func (c *summaryCache) clock() time.Time {
@@ -95,9 +97,17 @@ func (c *summaryCache) get(
 	if ok {
 		return cached, nil
 	}
+	if c.afterLookupMiss != nil {
+		c.afterLookupMiss()
+	}
 	// The generation is part of the flight key so a caller arriving after an
 	// invalidation starts a fresh compute instead of joining a pre-invalidation one.
 	ch := c.flight.DoChan(strconv.FormatUint(gen, 10)+":"+key, func() (any, error) {
+		// A flight that finished (and stored its result) after our lookup miss but
+		// before we joined has left the group, so we would start a second compute.
+		if hit, _, ok := c.lookup(key); ok {
+			return hit, nil
+		}
 		resp, err := compute(context.WithoutCancel(ctx))
 		if err != nil {
 			return nil, err

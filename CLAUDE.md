@@ -338,6 +338,8 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Backlog dependencies: RPCs, MCP tools, `/api` prefix for direct Connect calls | `docs/reference/backlog-dependencies.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
+| CI job budget: checks per PR run, where each check runs, how to add a job without growing it | `docs/reference/ci-job-budget.md` |
+| Terminal WebSocket pool (`terminal_ws_pool`: flag, size knobs, wire format, limits, metrics) | `docs/reference/terminal-ws-pool.md`, `docs/how-to/tune-terminal-ws-pool.md`, `docs/adr/ADR-033-terminal-websocket-pool.md` |
 | Unary request batching (`batch_unary` flag, `POST /api/batch/unary`, allow-list, fallback) | `docs/reference/unary-request-batching.md` |
 | Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
@@ -365,6 +367,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
+| SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
@@ -376,6 +379,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
+| Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
 | Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
 | Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
 | Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |

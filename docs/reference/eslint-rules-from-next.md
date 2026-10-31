@@ -31,7 +31,7 @@ changed-files gate.
 | `bash scripts/eslint-gate.sh <files>` | the given files | any warning or error (`--max-warnings 0`) |
 | `bun run lint:affected` | files changed vs `origin/main` | any warning or error, via the gate |
 
-CI (`.github/workflows/lint.yml`, job `web-lint`) runs the gate over files changed by the push or PR.
+CI (`.github/workflows/lint.yml`, the `lint` job) runs the gate over files changed by the push or PR.
 Files outside `src/**` are skipped silently, as `next lint` covered only `src/`.
 
 ## Rollback

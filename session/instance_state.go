@@ -50,6 +50,9 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
+	if to == Creating {
+		i.creationProgressUpdatedAt = time.Now() // see transitionToLocked
+	}
 	i.touchUpdatedAt()
 	i.touchLocked(SessionEventStatusChanged, i.UpdatedAt)
 	// Store before calling After: After hooks may spawn goroutines that race with
@@ -101,6 +104,11 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
+	if to == Creating {
+		// Re-entering Creating (e.g. a retry) starts a new episode: without this the stale-creation
+		// sweeper reads the previous attempt's old timestamp and fails the session within a minute.
+		i.creationProgressUpdatedAt = time.Now()
+	}
 	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()
@@ -536,6 +544,8 @@ func (i *Instance) RecoverFromStopped() {
 	defer i.mu.Unlock()
 	if i.Status == Stopped || i.Status == PermanentlyFailed || i.Status == Failed {
 		i.loadStatus(Creating)
+		// A new Creating episode starts now; the stale-creation sweeper measures from this.
+		i.creationProgressUpdatedAt = time.Now()
 		i.touchUpdatedAt()
 		i.started.Store(false)
 		i.snapshot.Store(buildSnapshot(i))

@@ -1,5 +1,5 @@
 // Story 3.2.1: features.json reconciles README.md's 5-category Highlights
-// grouping with docs/features.md's flat 17-section detail. These tests run
+// grouping with docs/features.md's flat per-section detail. These tests run
 // against small fixture files (mkdtemp'd), not the real repo content -- see
 // tests/integration/features-json.integration.test.ts for the real-file run.
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';

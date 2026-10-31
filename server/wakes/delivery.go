@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // DefaultRetryInterval is how often held wakes re-check an owner that was not
@@ -203,7 +204,12 @@ func (d *SteerDelivery) endIfBusyTooLong(ctx context.Context, row *session.WakeT
 func (d *SteerDelivery) write(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
 	outcome, err := d.cfg.Steerer.WriteWake(ctx, row.OwnerSessionUUID, RenderWake(row))
 	if err != nil {
-		log.Warn("wake delivery: write failed; will retry", "trigger_id", row.ID, errKey, err)
+		if tymux.IsFinalExit(err) {
+			// A pane that exited for good fails every retry; stay quiet until the busy hold ends the row.
+			log.Debug("wake delivery: owner pane exited; will retry until the busy hold ends", "trigger_id", row.ID, errKey, err)
+		} else {
+			log.Warn("wake delivery: write failed; will retry", "trigger_id", row.ID, errKey, err)
+		}
 		d.endIfBusyTooLong(ctx, row, id, now)
 		return
 	}

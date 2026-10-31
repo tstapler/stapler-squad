@@ -22,6 +22,14 @@ const ReadPoolEnv = "STAPLER_SQUAD_DB_READ_CONNS"
 
 const defaultReadPoolSize = 4
 
+// tuneEntDSN applies synchronous=NORMAL, which is safe with WAL (a power loss
+// may drop the last commits, never corrupts) and removes an fsync from every
+// commit; the modernc default is FULL. cache_size/mmap_size/temp_store showed no
+// measurable gain on this workload, so they are left at SQLite defaults.
+func tuneEntDSN(b *sqlitedsn.Builder) *sqlitedsn.Builder {
+	return b.WithSynchronousNormal()
+}
+
 func readPoolSize() int {
 	n, err := strconv.Atoi(os.Getenv(ReadPoolEnv))
 	if err != nil || n < 0 {
@@ -39,7 +47,7 @@ func isOnDiskDatabase(path string) bool {
 
 // openReadPool opens n query_only connections on the same WAL file as the writer.
 func openReadPool(path string, n int) (*sql.DB, error) {
-	dsn := sqlitedsn.New(path).
+	dsn := tuneEntDSN(sqlitedsn.New(path)).
 		WithWAL().
 		WithBusyTimeout(5000 * time.Millisecond).
 		WithQueryOnly().
@@ -58,12 +66,13 @@ func openReadPool(path string, n int) (*sql.DB, error) {
 // newInstrumentedEntClient builds the ent client over db with query timing,
 // slow-query logging, spans and pool stats (session/dbobs). On by default.
 // A non-nil readDB routes plain SELECTs to it (session/dbsplit); stats for
-// that pool are reported as "ent-read".
-func newInstrumentedEntClient(db, readDB *sql.DB) *ent.Client {
+// that pool are reported as "ent-read". The driver is also returned so
+// background maintenance (session/dbmaint) runs through the same instrumentation.
+func newInstrumentedEntClient(db, readDB *sql.DB) (*ent.Client, dialect.Driver) {
 	drv := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, db), db, dbobs.ConfigFromEnv("ent"))
 	if readDB != nil {
 		reader := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, readDB), readDB, dbobs.ConfigFromEnv("ent-read"))
 		drv = dbsplit.New(drv, reader)
 	}
-	return ent.NewClient(ent.Driver(drv))
+	return ent.NewClient(ent.Driver(drv)), drv
 }

@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { create, toBinary } from "@bufbuild/protobuf";
 import type { DescMethodUnary } from "@bufbuild/protobuf";
 import type { Transport, UnaryResponse } from "@connectrpc/connect";
@@ -10,6 +12,7 @@ import {
   _resetAuthRequiredForTesting,
   AuthAwareBreaker,
   createWsUnaryPolicyTransport,
+  FALLBACK_REASONS,
   markAuthRequired,
   WS_CALL_TIMEOUT_MS,
   type FallbackReason,
@@ -271,5 +274,16 @@ describe("WsUnaryPolicy", () => {
     await vcs(h.policy);
     expect(h.http.unary).toHaveBeenCalledTimes(1);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+describe("fallback reasons vs the server allow-list", () => {
+  it("every FallbackReason is accepted by server/analytics/client_metrics.go", () => {
+    const file = path.join(process.cwd(), "..", "server", "analytics", "client_metrics.go");
+    const src = fs.readFileSync(file, "utf8");
+    const block = /fallbacks\s*=\s*map\[string\]bool\{([\s\S]*?)\}/.exec(src)?.[1] ?? "";
+    const allowed = new Set([...block.matchAll(/"([a-z-]+)":\s*true/g)].map((m) => m[1]));
+    // Add the reason to the Go `fallbacks` map when this fails, or the server labels it "unknown".
+    expect(FALLBACK_REASONS.filter((r) => !allowed.has(r))).toEqual([]);
   });
 });

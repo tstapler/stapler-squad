@@ -5,6 +5,7 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import { codeFromString } from "@connectrpc/connect/protocol-connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { isBatchEligible } from "./idempotentMethods";
+import { markRpcTransport, trackSharedEvent } from "@/lib/telemetry/rpcTiming";
 
 /**
  * Transport decorator (flag `batch_unary`): independent cheap reads issued within one
@@ -198,6 +199,7 @@ class BatchTransport implements Transport {
   }
 
   private async send(batch: Entry[]): Promise<void> {
+    trackSharedEvent({ name: "cm.batch", category: "performance", labels: { size: String(batch.length) } });
     const controller = new AbortController();
     const timeoutMs = Math.max(...batch.map((e) => e.timeoutMs ?? DEFAULT_TIMEOUT_MS)) + FETCH_GRACE_MS;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -209,7 +211,7 @@ class BatchTransport implements Transport {
       const results = await this.post(batch, controller.signal);
       for (const e of batch) this.deliver(e, results.get(e.id));
     } catch {
-      for (const e of batch) this.runIndividually(e);
+      for (const e of batch) this.fallbackIndividually(e, "request-failed");
     } finally {
       clearTimeout(timer);
       for (const e of batch) e.signal?.removeEventListener("abort", stopIfAbandoned);
@@ -237,9 +239,17 @@ class BatchTransport implements Transport {
     return new Map(json.results.map((r) => [r.id, r]));
   }
 
+  /** Re-runs a batch member on its own and counts why; the metric is the batch's effectiveness signal. */
+  private fallbackIndividually(e: Entry, reason: "request-failed" | "server-declined"): void {
+    if (e.settled) return;
+    trackSharedEvent({ name: "cm.batch_fallback", category: "performance", labels: { reason } });
+    this.runIndividually(e);
+  }
+
   private deliver(e: Entry, r: WireResult | undefined): void {
     if (e.settled) return;
-    if (!r || r.fallback) return this.runIndividually(e);
+    if (!r || r.fallback) return this.fallbackIndividually(e, "server-declined");
+    markRpcTransport(e.contextValues, "batch");
     if (r.error) {
       const err = r.error;
       return this.settle(e, () => e.reject(new ConnectError(err.message ?? "", codeFromString(err.code) ?? Code.Unknown)));
