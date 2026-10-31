@@ -23,7 +23,7 @@ var (
 	muxWriteErrors   = counterNamed("terminal_mux_write_errors_total", "Mux socket write failures (each ends its socket)")
 	muxHolWait       = histNamed("terminal_mux_hol_wait", "ms", "Time from a message being queued to its first frame being written")
 	muxQueueBytes    = sync.OnceValue(func() metric.Float64Histogram {
-		h, err := telemetry.GetMeter().Float64Histogram("terminal_mux_queue_bytes", metric.WithUnit("By"),
+		h, err := telemetry.GetMeter().Float64Histogram("terminal_mux_queue_bytes",
 			metric.WithDescription("Per-stream unsent output bytes observed at each enqueue"),
 			metric.WithExplicitBucketBoundaries(1024, 4096, 16384, 65536, 262144, 1048576))
 		if err != nil {
