@@ -1,6 +1,6 @@
 # profile-blocking-and-locking reference
 
-Every query below was run against the live service, VictoriaMetrics (`:8428`) and Pyroscope (`:4040`) on 2026-10-31 and returned data unless marked GAP. Run PromQL with `python3 -I scripts/pq.py '<expr>' ...` (a plain `curl | python` pipe is blocked by the repo's hook). Metric names are as stored in VictoriaMetrics (suffixes appended).
+Every query below was run against the live service, VictoriaMetrics (`:8428`) and Pyroscope (`:4040`) on 2026-10-31 and returned data unless marked GAP or EMPTY-WHEN-IDLE (counters with no recent events return nothing for a short window: widen to `[1h]` or use `increase(...[1h])`/`last_over_time(...[1h])`). Run PromQL with `python3 -I scripts/pq.py '<expr>' ...` (a plain `curl | python` pipe is blocked by the repo's hook). Metric names are as stored in VictoriaMetrics (suffixes appended).
 
 ## Scripts
 
@@ -23,28 +23,29 @@ go_runtime_sched_latency_seconds                                     # quantile=
 max_over_time(go_runtime_sched_latency_seconds{quantile="0.99"}[1h])
 go_runtime_goroutines   go_runtime_gomaxprocs
 go_runtime_gc_pause_seconds                                          # quantile label
+# runtime.unlock / _LostContendedRuntimeLock lead an unfiltered mutex ranking: use --match or -hide
 process_open_fds / process_fd_limit
 ```
-`process_start_time_seconds` is GAP (empty). Get the restart time from `ps -o lstart,etime -p $(pgrep -x stapler-squad)` or `launchctl list | grep stapler-squad` (PID in column 1).
+`process_start_time_seconds` is GAP (empty). Get the restart time from `ps -o lstart,etime -p $(pgrep -x stapler-squad)`.
 
 tmux exec gate (`session/tmux/exec_gate_observability.go`, `docs/observability/README.md`):
 ```
 histogram_quantile(0.99, sum by (le,pool)(rate(tmux_exec_gate_wait_duration_ms_milliseconds_bucket[15m])))   # wait for a slot
 histogram_quantile(0.99, sum by (le,pool)(rate(tmux_exec_gate_exec_duration_ms_milliseconds_bucket[15m])))   # time holding it
-tmux_exec_gate_in_flight                       # by pool (default, default_nonblocking, resync, input)
+tmux_exec_gate_in_flight                       # by pool; only pools with a live series appear (default, resync seen)
 sum by (pool)(rate(tmux_exec_gate_acquired_total[15m]))
 sum by (pool)(increase(tmux_exec_gate_timeouts_total[1h]))
 sum by (subcommand)(rate(tmux_exec_total[15m]))
 topk(5, sum by (caller)(rate(tmux_exec_total[15m])))   # logical owner of the spawns
-tmux_control_mode_timeouts_total   histogram_quantile(0.99,sum by (le)(rate(tmux_control_mode_pending_depth_bucket[15m])))
+increase(tmux_control_mode_timeouts_total[1h])   histogram_quantile(0.99,sum by (le)(rate(tmux_control_mode_pending_depth_bucket[15m])))
 ```
 
 Network, mux and request fan-out:
 ```
 histogram_quantile(0.99, sum by (le)(rate(terminal_mux_hol_wait_milliseconds_bucket[15m])))
-terminal_mux_sockets_open   terminal_mux_streams_open   rate(terminal_mux_write_errors_total[15m])
+terminal_mux_sockets_open   terminal_mux_streams_open   rate(terminal_mux_write_errors_total[1h])
 histogram_quantile(0.99, sum by (le)(rate(client_ws_send_queue_delay_milliseconds_bucket[15m])))
-histogram_quantile(0.99, sum by (le)(rate(client_rpc_network_queue_delay_milliseconds_bucket[15m])))
+histogram_quantile(0.99, sum by (le)(rate(client_rpc_network_queue_delay_milliseconds_bucket[1h])))
 sum(rate(client_rpc_coalesce_total[15m]))   rate(client_ws_unary_fallback_total[15m])
 rpc_server_inflight                          # by rpc_method; sort -k2 for the busiest
 http_server_connections_open
@@ -54,7 +55,7 @@ histogram_quantile(0.5,  sum by (le)(rate(vcs_status_compute_duration_millisecon
 ```
 `http_server_request_duration_seconds` includes long-lived streams, so its p99 is not a stall signal.
 
-DB (owned by `profile-db-usage`): `rate(db_pool_wait_duration_ms[15m])` by `db_name`, `histogram_quantile(0.99,sum by (le,pool)(rate(db_query_pool_wait_milliseconds_bucket[15m])))`, `curl -s localhost:8543/actuator/metrics | jq '.db'`.
+DB (owned by `profile-db-usage`): `rate(db_pool_wait_duration_ms[15m])` by `db_name`, `histogram_quantile(0.99,sum by (le)(rate(db_query_pool_wait_milliseconds_bucket[15m])))`, `curl -s localhost:8543/actuator/metrics | jq '.db'`.
 
 ## Endpoints
 
@@ -65,7 +66,7 @@ DB (owned by `profile-db-usage`): `rate(db_pool_wait_duration_ms[15m])` by `db_n
 | `localhost:6060/debug/pprof/delta_{mutex,block,heap}` | per-interval profile; do not call by hand (steals Alloy's interval) |
 | `localhost:6060/debug/fork-pressure`, `/debug/blob-cache` | spawn/zombie counters; blob cache hit rate |
 | `localhost:8543/actuator/health` | runtime goroutine status (`degraded` when over the goroutine threshold) |
-| `localhost:8543/actuator/ws-unary` | `ws_unary_inflight`, `ws_unary_zombies`, per-method call counts |
+| `localhost:8543/actuator/ws-unary` | `ws_unary_inflight`, `ws_unary_zombies`, per-method call counts (JSON fields, not Prometheus series) |
 | `localhost:8543/actuator/terminal-mux` | `poolSize`, `sockets`, `streams` |
 | `localhost:8543/actuator/metrics` | blob cache and DB pool stats with top statements and wait time |
 | `localhost:4040/querier.v1.QuerierService/{ProfileTypes,LabelValues,SelectMergeStacktraces}` | Pyroscope (Connect JSON POST) |
