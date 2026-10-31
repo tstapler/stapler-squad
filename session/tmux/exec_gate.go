@@ -206,8 +206,8 @@ func runGated[T any](ctx context.Context, serverSocket string, fn func() (T, err
 // runGatedFastLane is runGated's resync-only counterpart: it acquires from
 // the separate "<serverSocket>#resync" pool (AcquireResyncExecSlot) instead
 // of the shared default pool, bounded by resyncFastLaneAcquireTimeout instead
-// of execGateAcquireTimeout. Used by CapturePaneContentPriority/
-// RefreshClientPriority so resync-triggered tmux subprocess calls never queue
+// of execGateAcquireTimeout. Used by the CapturePaneContent*Priority
+// methods so resync-triggered tmux subprocess calls never queue
 // behind ordinary tmux traffic on the same socket.
 //
 // Note this only bounds the *wait* for a free slot (via ctx passed down into
