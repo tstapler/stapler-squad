@@ -100,8 +100,7 @@ where it replays a slow read. W after socket loss replays immediately with its k
   batch id (header `Idempotency-Key`) and per-event ids so a re-send is deduped by the key store and by `ON CONFLICT DO NOTHING`.
   The unary response is the ack. No ack in 10 s or an `unavailable`: retry the same batch up to 3 times with backoff, then drop
   with `reason=retry_exhausted`. A closed or unavailable telemetry socket never reconnect-loops faster than the existing
-  backoff, and while it is down events go to the HTTP path (today's `fetch`), with the same bounds, so telemetry is never
-  silently black-holed by the flag.
+  backoff, and while it is down events go to the HTTP path (today's `fetch`) at the existing cadence: at most one request per 20 s per tab, batched, with the same queue bounds, so the fallback cannot reintroduce connection pressure and telemetry is never silently black-holed by the flag. Owner decision 2026-10-30.
 * Backpressure: if `WebSocket.bufferedAmount` or the lane's unacked bytes exceed 128 KiB the lane stops handing out new
   batches (events queue, then drop oldest). A refusal from the T class cap (bridge-side, so `not_executed`) or from the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`, which fire inside the dispatcher and carry no marker) makes the lane drop that batch (`dropped_budget`); class T never retries a refusal, to avoid amplifying the overload it signals.
 * **Unload.** WebSockets cannot be flushed on `pagehide`. On `pagehide` and `visibilitychange: hidden` the lane moves every
@@ -216,9 +215,7 @@ and HTTP/1.1 connection usage from the HAR-equivalent resource timing. Numbers g
 
 A fresh reviewer found an unsound `not_executed` rule, beacon dedupe without ids, undefined key-store cancel/error semantics, `anon` key collisions, auth lifetime on long sockets and unenforced class caps; all are folded into the sections above. HAR figures and ADR-033's numbers are cited from the brief and that ADR, not re-derived.
 
-## Open questions for the owner
+## Owner decisions (2026-10-30)
 
-1. Should class M stay empty at launch (this ADR's recommendation), or should a first M pilot (for example the session
-   create path) be chosen now?
-2. Telemetry fallback: while the telemetry socket is down, send over HTTP (this ADR) or drop. HTTP fallback costs connections
-   exactly when the WS path is unhealthy.
+1. Class M stays empty at launch; no pilot.
+2. Telemetry falls back to HTTP while the telemetry socket is down, rate-capped as above.
