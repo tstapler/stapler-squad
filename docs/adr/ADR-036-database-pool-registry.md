@@ -125,7 +125,7 @@ I did not enumerate every read path for the `core`-stay row; its "no FK, single-
    | `telemetry` | NORMAL | 5 s | 4000 | 64 MB | 2 | classification, contexthistory, escape, analytics_events, errors |
    | `cache` | OFF | 1 s | 4000 | 64 MB | 1 | none yet |
 
-   All numbers are target values. PR 1 keeps today's values for the existing `analytics.db` (no reader pool, `wal_autocheckpoint` 1000) and for `sessions.db` (`synchronous` stays at the driver default until #1289 merges) until a benchmark justifies the change; the table above is where each class is headed, not what PR 1 ships. Every ent-backed profile
+   All numbers are target values. PR 1 keeps today's values for the existing `analytics.db` (no reader pool, `wal_autocheckpoint` 1000) and for `sessions.db` (`synchronous` stays at the driver default until #1289 merges) until a benchmark justifies the change; the table above is where each class is headed, not what PR 1 ships. The one deliberate addition on both existing files is `journal_size_limit` 64 MB (caps the WAL file left after a checkpoint; no effect on reads or durability). Every ent-backed profile
    includes `WithEntTimeCompat` so reads on any pool parse the `T`/offset and Go `time.String()` text forms already present.
 4. **WAL enforced.** Registry paths must be plain file paths without a query string, because `sqlitedsn.WithWAL()` is a no-op on a path that already has one (`internal/sqlitedsn/sqlitedsn.go:42-48`); the read-back below fails the open rather than trusting the DSN. The registry sets `journal_mode=WAL` on open for every file it opens, reads it back and fails the open if it is
    not `wal` (except `:memory:`/URI test DBs). It exports `db_journal_mode{db}` (1 = WAL) and `db_synchronous{db}`, also shown in
