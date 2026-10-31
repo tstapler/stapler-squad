@@ -53,6 +53,10 @@ const (
 	// context.WithTimeout so an early upstream disconnect still cancels
 	// promptly instead of waiting out this ceiling.
 	captureTimeout = 5 * time.Second
+
+	// captureRetryTimeout bounds the single post-resize capture retry; the resize
+	// apply lock is held across it, so it is shorter than the first attempt.
+	captureRetryTimeout = 2 * time.Second
 )
 
 // HubOption configures a StreamHub at construction time. Tests use these to
@@ -898,7 +902,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 		// Our own budget ran out while the caller is still connected. Dropping the
 		// capture would leave subscribers on the pre-resize screen (output was
 		// suppressed during the resize and nothing re-arms a capture), so retry once.
-		retryCtx, retryCancel := context.WithTimeout(callerCtx, captureTimeout)
+		retryCtx, retryCancel := context.WithTimeout(callerCtx, captureRetryTimeout)
 		content, err = h.controller.CapturePaneContentRawContext(retryCtx)
 		retryCancel()
 	}
