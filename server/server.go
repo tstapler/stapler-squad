@@ -487,7 +487,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
 	muxPool := services.TerminalMuxPoolSizeFromEnv()
-	srv.mux.Handle(services.TerminalMuxPath, services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool))
+	srv.mux.Handle(services.TerminalMuxPath, services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
+		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy())))
 	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)
 
 	// Register VNC browser-passthrough WebSocket proxy.

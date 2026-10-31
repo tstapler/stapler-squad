@@ -26,6 +26,8 @@ const (
 	muxReadIdle = 60 * time.Second
 	// muxMaxSockets bounds mux sockets per bridge.
 	muxMaxSockets = 64
+	// muxControlQueueLimit bounds queued priority frames (PONG, refused OPEN, CONFIG).
+	muxControlQueueLimit = 1024
 )
 
 // muxServeFunc runs one StreamTerminal call over a virtual connection.
@@ -36,16 +38,35 @@ type muxServeFunc func(conn streamConn, methodPath string)
 type TerminalMuxBridge struct {
 	serve    muxServeFunc
 	poolSize atomic.Int32
+	// stallTimeout is a field so tests can shrink it without mutating shared state.
+	stallTimeout time.Duration
+
+	// policies is the upgrade origin rule per listener; a listener without one is refused.
+	policies map[string]func(*http.Request) bool
 
 	mu      sync.Mutex
 	sockets map[*muxSocket]struct{}
 }
 
+// TerminalMuxOption configures a TerminalMuxBridge.
+type TerminalMuxOption func(*TerminalMuxBridge)
+
+// WithTerminalMuxOriginPolicy sets the upgrade origin rule for a listener name.
+func WithTerminalMuxOriginPolicy(listener string, policy func(*http.Request) bool) TerminalMuxOption {
+	return func(b *TerminalMuxBridge) { b.policies[listener] = policy }
+}
+
 // NewTerminalMuxBridge returns a bridge advertising poolSize sockets to clients. A poolSize
 // of 0 disables the endpoint (404), which makes clients use one WebSocket per stream.
-func NewTerminalMuxBridge(serve muxServeFunc, poolSize int) *TerminalMuxBridge {
-	b := &TerminalMuxBridge{serve: serve, sockets: map[*muxSocket]struct{}{}}
+func NewTerminalMuxBridge(serve muxServeFunc, poolSize int, opts ...TerminalMuxOption) *TerminalMuxBridge {
+	b := &TerminalMuxBridge{
+		serve: serve, sockets: map[*muxSocket]struct{}{}, stallTimeout: defaultMuxStallTimeout,
+		policies: map[string]func(*http.Request) bool{ListenerLocal: loopbackOriginAllowed},
+	}
 	b.poolSize.Store(int32(poolSize))
+	for _, o := range opts {
+		o(b)
+	}
 	return b
 }
 
@@ -75,14 +96,11 @@ func (b *TerminalMuxBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket upgrade required", http.StatusUpgradeRequired)
 		return
 	}
-	b.mu.Lock()
-	full := len(b.sockets) >= muxMaxSockets
-	b.mu.Unlock()
-	if full {
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	if !b.admit(w, r) {
 		return
 	}
-	conn, err := upgradeWebSocket(w, r, isAllowedOrigin, muxReadLimitBytes)
+	// Origin was decided in admit; no subprotocol is negotiated.
+	conn, err := upgradeWebSocket(w, r, func(*http.Request) bool { return true }, muxReadLimitBytes)
 	if err != nil {
 		log.Warn("[TerminalMux] upgrade failed", "err", err)
 		return
@@ -97,6 +115,32 @@ func (b *TerminalMuxBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.mu.Unlock()
 	}()
 	s.run(r.Context())
+}
+
+// admit applies the same gates as /api/ws/unary: a known listener, authenticated remote
+// access, and a per-listener origin rule (the primary CSWSH control on the remote listener).
+func (b *TerminalMuxBridge) admit(w http.ResponseWriter, r *http.Request) bool {
+	rec, ok := RequestRecordFrom(r.Context())
+	if !ok || rec.Listener == "" {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	if rec.Listener == ListenerRemote && rec.AuthMode != AuthModeRequired {
+		http.Error(w, "authentication required", http.StatusForbidden)
+		return false
+	}
+	if policy := b.policies[rec.Listener]; policy == nil || !policy(r) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return false
+	}
+	b.mu.Lock()
+	full := len(b.sockets) >= muxMaxSockets
+	b.mu.Unlock()
+	if full {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
 }
 
 // muxSocket is one shared WebSocket and its single writer.
@@ -133,6 +177,11 @@ func (s *muxSocket) wake() {
 // sendControl queues a priority frame (HELLO, CONFIG, PONG, CLOSE for refused OPENs).
 func (s *muxSocket) sendControl(frame []byte) {
 	s.mu.Lock()
+	if len(s.control) >= muxControlQueueLimit {
+		s.mu.Unlock()
+		_ = s.conn.Close() // peer is not reading control replies; tear the socket down
+		return
+	}
 	s.control = append(s.control, frame)
 	s.mu.Unlock()
 	s.wake()
@@ -223,7 +272,7 @@ func (s *muxSocket) dispatch(ctx context.Context, f muxFrame) {
 	case muxFrameClose:
 		if st := s.lookup(f.ID); st != nil {
 			st.remoteClose(f.Code, f.Reason)
-			s.forget(f.ID)
+			s.forget(f.ID, st)
 		}
 	case muxFramePing:
 		s.sendControl(encodeMuxEmpty(muxFramePong, 0))
@@ -236,10 +285,14 @@ func (s *muxSocket) lookup(id uint32) *muxStreamConn {
 	return s.streams[id]
 }
 
-func (s *muxSocket) forget(id uint32) {
+// forget removes st from the stream table, but only if id still maps to st: a client may
+// reuse an id after closing it, and the old handler's late forget must not evict the new stream.
+func (s *muxSocket) forget(id uint32, st *muxStreamConn) {
 	s.mu.Lock()
-	_, had := s.streams[id]
-	delete(s.streams, id)
+	had := s.streams[id] == st
+	if had {
+		delete(s.streams, id)
+	}
 	s.mu.Unlock()
 	if had {
 		muxMetrics.streamClosed()
@@ -267,7 +320,7 @@ func (s *muxSocket) openStream(ctx context.Context, id uint32) {
 func (s *muxSocket) runStream(ctx context.Context, st *muxStreamConn) {
 	_, span := telemetry.GetTracer().Start(ctx, "terminal_mux.stream")
 	defer span.End()
-	defer s.forget(st.id)
+	defer s.forget(st.id, st)
 	s.bridge.serve(st, "/api/session.v1.SessionService/StreamTerminal")
 	_ = st.Close()
 }
@@ -319,6 +372,9 @@ func (s *muxSocket) nextFrame() []byte {
 			muxMetrics.creditStall()
 		}
 		if frame != nil {
+			if muxFrameType(frame[0]) == muxFrameClose {
+				s.forget(st.id, st) // CLOSE sent: free the slot even if the handler is still unwinding
+			}
 			if hol > 0 {
 				muxMetrics.holWait(hol)
 			}
@@ -345,6 +401,6 @@ func TerminalMuxPoolSizeFromEnv() int {
 }
 
 // NewTerminalMuxBridgeForHandler serves StreamTerminal calls on h over mux sockets.
-func NewTerminalMuxBridgeForHandler(h *ConnectRPCWebSocketHandler, poolSize int) *TerminalMuxBridge {
-	return NewTerminalMuxBridge(h.serveTerminalStream, poolSize)
+func NewTerminalMuxBridgeForHandler(h *ConnectRPCWebSocketHandler, poolSize int, opts ...TerminalMuxOption) *TerminalMuxBridge {
+	return NewTerminalMuxBridge(h.serveTerminalStream, poolSize, opts...)
 }

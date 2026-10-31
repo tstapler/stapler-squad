@@ -22,6 +22,10 @@ const (
 	muxCloseFlushWait = 5 * time.Second
 )
 
+// defaultMuxStallTimeout ends a stream whose client has granted no credit for this long
+// while output is queued, so a wedged tab cannot pin a handler and a stream slot forever.
+const defaultMuxStallTimeout = 30 * time.Second
+
 var errMuxStreamClosed = errors.New("terminal mux stream closed")
 
 type muxOutMessage struct {
@@ -61,6 +65,7 @@ type muxStreamConn struct {
 	closeSent bool
 	ended     bool // no more frames either way
 	flushTmr  *time.Timer
+	stallTmr  *time.Timer
 }
 
 func newMuxStreamConn(id uint32, sock *muxSocket) *muxStreamConn {
@@ -212,6 +217,7 @@ func (s *muxStreamConn) endLocked(err error) {
 	if s.ended {
 		return
 	}
+	s.stopStallLocked()
 	s.ended, s.closeSent = true, true
 	if s.readErr == nil || errors.Is(s.readErr, errMuxStreamClosed) {
 		s.readErr = err
@@ -234,7 +240,7 @@ func (s *muxStreamConn) deliver(kind int, fin bool, payload []byte) {
 		s.partKind = kind
 	}
 	s.partial = append(s.partial, payload...)
-	if len(s.partial) > muxMaxMessageBytes {
+	if len(s.partial) > muxInboundBytes {
 		s.partial = nil
 		go s.abort(websocket.CloseMessageTooBig)
 		return
@@ -256,7 +262,10 @@ func (s *muxStreamConn) deliver(kind int, fin bool, payload []byte) {
 // addCredit grants more send window and reports whether output is now sendable.
 func (s *muxStreamConn) addCredit(n int) {
 	s.mu.Lock()
-	s.credit += n
+	s.credit = min(s.credit+n, muxStreamWindow)
+	if s.credit > 0 {
+		s.stopStallLocked()
+	}
 	pending := len(s.out) > 0
 	s.mu.Unlock()
 	if pending {
@@ -285,8 +294,12 @@ func (s *muxStreamConn) nextFrame() (frame []byte, more bool, stalled bool, holW
 	remaining := len(head.data) - head.sent
 	n := min(muxChunkBytes, remaining)
 	if n > 0 && s.credit <= 0 {
+		if s.stallTmr == nil {
+			s.stallTmr = time.AfterFunc(s.sock.bridge.stallTimeout, func() { s.abort(websocket.CloseTryAgainLater) })
+		}
 		return nil, false, true, 0
 	}
+	s.stopStallLocked()
 	n = min(n, max(s.credit, 0))
 	if remaining == 0 {
 		n = 0
@@ -306,4 +319,11 @@ func (s *muxStreamConn) nextFrame() (frame []byte, more bool, stalled bool, holW
 	s.notifyLocked() // writers blocked on queue room
 	more = len(s.out) > 0 || (s.closing && !s.closeSent)
 	return frame, more, false, holWait
+}
+
+func (s *muxStreamConn) stopStallLocked() {
+	if s.stallTmr != nil {
+		s.stallTmr.Stop()
+		s.stallTmr = nil
+	}
 }

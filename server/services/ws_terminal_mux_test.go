@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -30,7 +31,7 @@ type muxTestClient struct {
 func newMuxTestClient(t *testing.T, serve muxServeFunc, poolSize int) (*muxTestClient, *TerminalMuxBridge) {
 	t.Helper()
 	bridge := NewTerminalMuxBridge(serve, poolSize)
-	srv := httptest.NewServer(bridge)
+	srv := httptest.NewServer(WithRequestRecord(ListenerLocal, false)(bridge))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.NoError(t, err)
@@ -161,7 +162,7 @@ func TestMuxBridge_should_AdvertisePoolSize_When_SocketConnects(t *testing.T) {
 
 func TestMuxBridge_should_Return404_When_PoolSizeIsZero(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(NewTerminalMuxBridge(echoServe, 0))
+	srv := httptest.NewServer(WithRequestRecord(ListenerLocal, false)(NewTerminalMuxBridge(echoServe, 0)))
 	defer srv.Close()
 	_, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.Error(t, err)
@@ -240,13 +241,14 @@ func TestMuxBridge_should_NotBlockOtherStreams_When_OneStreamHasNoCredit(t *test
 	c.send(encodeMuxData(2, websocket.BinaryMessage, true, []byte("fast")))
 	assert.Equal(t, []byte("fast-reply"), c.collect(2))
 
-	// Granting credit resumes the parked stream.
-	c.send(encodeMuxCredit(1, len(big)))
+	// Granting credit as frames arrive (what the client pool does) resumes the parked stream.
+	c.send(encodeMuxCredit(1, muxStreamWindow))
 	var rest int
 	for drained+rest < len(big) {
 		f := c.next(muxFrameData)
 		if f.ID == 1 {
 			rest += len(f.Payload)
+			c.send(encodeMuxCredit(1, len(f.Payload)))
 		}
 	}
 	assert.Equal(t, len(big), drained+rest)
@@ -397,4 +399,66 @@ func TestMuxFrame_should_MatchSharedVectors(t *testing.T) {
 			assert.Equal(t, wire, encodeMuxClose(f.ID, f.Code, f.Reason), v.Name)
 		}
 	}
+}
+
+// A client that reuses a stream id after closing it must get a working new stream even
+// though the old handler is still unwinding.
+func TestMuxBridge_should_KeepNewStream_When_IdReusedWhileOldHandlerUnwinds(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	serve := func(conn streamConn, p string) {
+		kind, data, err := conn.ReadMessage()
+		if err != nil { // the old stream: it sees the client CLOSE but lingers
+			<-release
+			return
+		}
+		_ = conn.WriteMessage(kind, data)
+		echoServe(conn, p)
+	}
+	c, _ := newMuxTestClient(t, serve, 1)
+	c.send(encodeMuxEmpty(muxFrameOpen, 1))
+	c.send(encodeMuxClose(1, websocket.CloseNormalClosure, ""))
+	c.send(encodeMuxEmpty(muxFrameOpen, 1))
+	c.send(encodeMuxData(1, websocket.BinaryMessage, true, []byte("again")))
+	assert.Equal(t, []byte("again"), c.collect(1))
+	close(release) // old handler returns only now; it must not evict the new stream
+	c.send(encodeMuxData(1, websocket.BinaryMessage, true, []byte("still")))
+	assert.Equal(t, []byte("still"), c.collect(1))
+}
+
+func TestMuxStream_should_AbortWith1013_When_NoCreditForStallTimeout(t *testing.T) {
+	t.Parallel()
+	serve := func(conn streamConn, _ string) {
+		_ = conn.WriteMessage(websocket.BinaryMessage, make([]byte, 2*muxStreamWindow))
+		_, _, _ = conn.ReadMessage()
+	}
+	c, bridge := newMuxTestClient(t, serve, 1)
+	bridge.stallTimeout = 50 * time.Millisecond // before any stream exists
+	c.send(encodeMuxEmpty(muxFrameOpen, 1))
+	f := c.next(muxFrameClose)
+	assert.Equal(t, uint16(websocket.CloseTryAgainLater), f.Code)
+}
+
+func TestMuxBridge_should_RefuseUpgrade_When_RemoteListenerLacksAuthOrOriginMatches(t *testing.T) {
+	t.Parallel()
+	dial := func(listener string, requiresAuth bool, origin string) int {
+		bridge := NewTerminalMuxBridge(echoServe, 1,
+			WithTerminalMuxOriginPolicy(ListenerRemote, func(r *http.Request) bool { return r.Header.Get("Origin") == "https://ok.example" }))
+		srv := httptest.NewServer(WithRequestRecord(listener, requiresAuth)(bridge))
+		defer srv.Close()
+		h := http.Header{}
+		if origin != "" {
+			h.Set("Origin", origin)
+		}
+		conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), h)
+		if err == nil {
+			_ = conn.Close()
+			return http.StatusSwitchingProtocols
+		}
+		return resp.StatusCode
+	}
+	assert.Equal(t, http.StatusForbidden, dial(ListenerRemote, false, "https://ok.example"), "remote without auth")
+	assert.Equal(t, http.StatusForbidden, dial(ListenerRemote, true, "https://evil.example"), "remote bad origin")
+	assert.Equal(t, http.StatusSwitchingProtocols, dial(ListenerRemote, true, "https://ok.example"))
+	assert.Equal(t, http.StatusForbidden, dial(ListenerLocal, false, "https://evil.example"), "local non-loopback origin")
 }

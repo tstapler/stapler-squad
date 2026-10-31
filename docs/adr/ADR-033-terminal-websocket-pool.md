@@ -50,25 +50,26 @@ Option b, with option a as `N=1`, behind the `terminal_ws_pool` feature flag (de
    stall-eviction path). One writer goroutine per socket round-robins runnable streams one chunk at a time, like
    `unaryWriter`'s CHUNK interleave. A stream sends only while it has credit; the client grants credit as it consumes
    output, so a slow terminal parks its own queue and never blocks the others. Control frames have priority.
-5. **Zombie/slot/deadline lessons from #1265.** The socket writer has a per-frame write deadline (a client that stops
+5. **Admission.** Same gates as `/api/ws/unary`: a known listener, `AuthModeRequired` on the remote listener, and a per-listener origin policy (strict origin match on remote, loopback on local). Stream ids are client-chosen; the server refuses id 0 and duplicates, and a late `forget` by an old handler never evicts a reused id. Reassembly is capped at the inbound byte bound, `CREDIT` is clamped to the window, the control queue is capped, and a stream with queued output and no credit for 30 s is closed with 1013.
+6. **Zombie/slot/deadline lessons from #1265.** The socket writer has a per-frame write deadline (a client that stops
    reading kills the socket, not a goroutine pile); each socket has a stream cap (`maxStreams`, close 1013 beyond it);
    `PING`/`PONG` plus a read deadline reap dead peers; closing a stream flushes its queue before `CLOSE` with a bounded
-   wait; socket close drops every stream with a close error so handlers exit. Per-stream context is the socket's.
-6. **Assignment.** `AssignmentPolicy` (client) picks the socket for a new stream: `leastLoaded` (fewest in-flight
+   wait; socket close drops every stream with a close error so handlers exit. The socket's request context parents the socket and stream spans; handlers do not receive it (they end when the stream or socket ends).
+7. **Assignment.** `AssignmentPolicy` (client) picks the socket for a new stream: `leastLoaded` (fewest in-flight
    unacknowledged output bytes, then stream count) is the default, `hashBySession` the baseline. Assignment is sticky for
    the life of the stream. Sockets open lazily up to N and stay warm.
-7. **Pool size N is one tunable.** Precedence: `localStorage ssq:terminal-pool-size` > server `HELLO.poolSize`
-   (`STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE`, default 2; `0` unregisters the endpoint so the client falls back) > default 2.
+8. **Pool size N is one tunable.** Precedence: `localStorage ssq:terminal-pool-size` > server `HELLO.poolSize`
+   (`STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE`, default 2; `0` makes the endpoint answer 404 so the client falls back; the env var is read at startup, `TerminalMuxBridge.SetPoolSize` is the programmatic seam that pushes `CONFIG` to live sockets) > default 2.
    Growing takes effect on the next assignment; shrinking marks the highest sockets "draining": they accept no new
    streams and close when empty. `CONFIG` frames carry runtime changes to connected clients. Flag off or N=0 is the
    per-stream path.
-8. **Failover.** If a mux socket drops, each of its streams is surfaced to the transport as a closed socket exactly like
+9. **Failover.** If a mux socket drops, each of its streams is surfaced to the transport as a closed socket exactly like
    a plain WebSocket close, so the existing reconnect path in `useTerminalStream` reopens and the hub's first-paint
    replay repaints; the pool opens the replacement on a surviving or new socket. No new resume protocol.
-9. **Compatibility.** Old clients keep using the per-stream endpoint; the mux endpoint is additive. If the mux socket
+10. **Compatibility.** Old clients keep using the per-stream endpoint; the mux endpoint is additive. If the mux socket
    cannot be established (404, 4xx, breaker) the pool falls back to a plain `WebSocket` per stream.
-10. **Observability.** Server metrics (bounded labels): `terminal_mux_sockets_open`, `terminal_mux_streams_open`,
-    `terminal_mux_frames_total{dir,type}`, `terminal_mux_queue_bytes` (gauge across streams), `terminal_mux_hol_wait`
+11. **Observability.** Server metrics (bounded labels): `terminal_mux_sockets_open`, `terminal_mux_streams_open`,
+    `terminal_mux_frames_total{dir,type}`, `terminal_mux_queue_bytes` (per-stream unsent bytes, a histogram sampled at each enqueue), `terminal_mux_hol_wait`
     (ms from enqueue to first frame written), `terminal_mux_credit_stalls_total`, `terminal_mux_socket_closed_total{reason}`.
     Each socket and each stream gets a Tempo span (`terminal_mux.socket`, `terminal_mux.stream`).
 

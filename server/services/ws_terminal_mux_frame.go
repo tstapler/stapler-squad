@@ -25,8 +25,6 @@ const (
 	muxMaxStreamsPerSocket = 64
 	// muxReadLimitBytes is the gorilla backstop; a frame is at most muxChunkBytes plus headers.
 	muxReadLimitBytes = 4 * muxChunkBytes
-	// muxMaxMessageBytes bounds one reassembled client -> server message.
-	muxMaxMessageBytes = 8 << 20
 )
 
 type muxFrameType uint8
