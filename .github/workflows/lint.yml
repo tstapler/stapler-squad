@@ -52,112 +52,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Generates protobuf/ent code once and stubs the web dist directory, then
-  # shares the result via artifact with shell-lint/go-lint/web-lint below —
-  # replaces the old single job's inline codegen (each of the 3 concerns used
-  # to wait on this serially; now they download it and run in parallel).
-  lint-prepare:
-    name: Prepare generated code
+  # Steps after codegen use `!cancelled()` so one failing linter does not hide the others.
+  # One job (was five: lint-prepare, proto-breaking, shell-lint, go-lint, web-lint): every one of them
+  # re-checked-out, re-set-up Go/Bun and shared generated code through an artifact. Serial steps add
+  # ~4 min versus the old parallel shape, still well under the e2e shards that dominate PR wall time.
+  lint:
+    name: Lint (Go, web, shell, proto)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      # web-lint's Jest tests jest.mock() modules under web-app/src/gen/ — module
-      # resolution needs the file to exist even for a mocked import. That requires
-      # web-app/node_modules/.bin/protoc-gen-es, so web-app deps must be installed
-      # before buf generate proto runs (same ordering this job's predecessor
-      # required — see the original lint.yml's "Ordering bug history" comment).
-      - name: Install web-app dependencies
-        working-directory: web-app
-        run: bun install --frozen-lockfile
-
-      - uses: ./.github/actions/prepare-stub
-        with:
-          buf-template: buf.gen.yaml
-
-      - name: Upload generated files
-        uses: actions/upload-artifact@v4
-        with:
-          name: lint-generated-files
-          path: |
-            gen/
-            session/ent/
-            server/web/dist/
-            web-app/src/gen/
-
-  # Standalone: `buf breaking` reads only proto/ from git history, so it needs no
-  # codegen. Needs fetch-depth: 0 so origin/main is resolvable (same as go-lint).
-  proto-breaking:
-    name: Proto breaking changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      # Full-history fetch (fetch-depth: 0) pulls every backlog/* branch and
-      # intermittently ate the whole job budget; buf only needs the tip of main.
-      - uses: actions/checkout@v4
-
-      - name: Fetch origin/main (tip only)
-        run: git fetch --depth=1 origin '+refs/heads/main:refs/remotes/origin/main'
-
-      - name: Set up buf
-        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
-        with:
-          version: '1.41.0'
-          setup_only: 'true'
-
-      - name: buf breaking against origin/main
-        run: buf breaking proto --against '.git#branch=origin/main,subdir=proto'
-
-  # Standalone — no codegen dependency, so it isn't blocked on lint-prepare.
-  shell-lint:
-    name: ShellCheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-
-      # ubuntu-latest ships shellcheck preinstalled; no setup step needed.
-      # Runs 'make lint-shell' rather than duplicating its file-discovery
-      # logic here, so there's one source of truth for which scripts are
-      # checked and with what flags (also runnable locally: make lint-shell).
-      - name: ShellCheck
-        run: make lint-shell
-
-      # Guards the generated-files artifact-name literal (see
-      # tools/ci/check-generated-files-literal.sh's own header comment) —
-      # fails if any workflow outside _prepare.yml retypes the literal
-      # string instead of referencing needs.prepare.outputs.artifact-name.
-      - name: Guard against stray "generated-files" literal
-        run: tools/ci/check-generated-files-literal.sh
-
-      # Fails when go.mod's tymux client pin and the Makefile's TYMUX_VERSION
-      # point at different tymux commits.
-      - name: Check tymux client/daemon pin agreement
-        run: tools/ci/check-tymux-pin.sh
-
-      - name: Test tymux pin check
-        run: tools/ci/check-tymux-pin_test.sh
-
-  go-lint:
-    name: Go lint
-    runs-on: ubuntu-latest
-    needs: lint-prepare
-    timeout-minutes: 20
+    # 45m: Go and web lint plus codegen/buf breaking/ShellCheck in one job (golangci-lint step capped at 16m, ESLint at 16m).
+    timeout-minutes: 45
     steps:
       # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
       # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
@@ -182,12 +85,56 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      # Generated code is gitignored, not committed (see #445) — produced once by
-      # lint-prepare and downloaded here so `go build`/golangci-lint compile cleanly.
-      - name: Download generated files
-        uses: actions/download-artifact@v4
+      # Generated code is gitignored (see #445): generated inline here (was a separate
+      # lint-prepare job + artifact hand-off, i.e. two more checks per run).
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          name: lint-generated-files
+          node-version: '22'
+
+      # web-lint's Jest tests jest.mock() modules under web-app/src/gen/ — module resolution
+      # needs the file to exist even for a mocked import. That needs
+      # web-app/node_modules/.bin/protoc-gen-es, so web-app deps install before buf generate.
+      - name: Install web-app dependencies
+        working-directory: web-app
+        run: bun install --frozen-lockfile
+
+      - uses: ./.github/actions/prepare-stub
+        with:
+          buf-template: buf.gen.yaml
+
+      # Folded in from the former proto-breaking and shell-lint jobs. Cheap, but each was a
+      # separate runner and a separate check.
+      # No separate fetch: this job's fetch-depth: 0 checkout already has origin/main, and a
+      # `git fetch --depth=1` here would truncate it and break the complexity gate's merge-base.
+      # buf 1.41.0 is already on PATH from prepare-stub above.
+      - name: buf breaking against origin/main
+        if: ${{ !cancelled() }}
+        run: buf breaking proto --against '.git#branch=origin/main,subdir=proto'
+
+      # ubuntu-latest ships shellcheck; `make lint-shell` is the single source of truth for which
+      # scripts are checked (also runnable locally).
+      - name: ShellCheck
+        if: ${{ !cancelled() }}
+        run: make lint-shell
+
+      # Fails if any workflow outside _prepare.yml retypes the generated-files artifact literal
+      # (see tools/ci/check-generated-files-literal.sh).
+      - name: Guard against stray "generated-files" literal
+        if: ${{ !cancelled() }}
+        run: tools/ci/check-generated-files-literal.sh
+
+      # Fails when go.mod's tymux client pin and the Makefile's TYMUX_VERSION differ.
+      - name: Check tymux client/daemon pin agreement
+        if: ${{ !cancelled() }}
+        run: tools/ci/check-tymux-pin.sh
+
+      - name: Test tymux pin check
+        if: ${{ !cancelled() }}
+        run: tools/ci/check-tymux-pin_test.sh
 
       # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
       # golangci-lint-action is a `uses:` step, so it can't be wrapped with the shell
@@ -199,6 +146,7 @@ jobs:
       # mistaken for a budget breach). This is this job's longest-running step (a full
       # whole-codebase lint pass, unscoped, vs. the new-code-only gate below).
       - name: golangci-lint
+        if: ${{ !cancelled() }}
         id: golangci-lint
         timeout-minutes: 16
         uses: golangci/golangci-lint-action@v7
@@ -242,6 +190,7 @@ jobs:
       # tripped the 5m limit right after reporting "0 issues" -- a runner-speed
       # timeout, not a finding. Matches the full-lint step's 10m above.
       - name: golangci-lint (complexity/size/duplication gate — new code only)
+        if: ${{ !cancelled() }}
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
@@ -252,12 +201,15 @@ jobs:
       # Project-specific go/analysis passes in tools/lint (norawexec, notimesleeptest, ...).
       # Not covered by golangci-lint; also runs under `make lint` and `make ci`.
       - name: Custom lint (tools/lint analyzers)
+        if: ${{ !cancelled() }}
         run: make lint-custom
 
       - name: Import cycle check
+        if: ${{ !cancelled() }}
         run: go build ./...
 
       - name: Check formatting (PR-changed files only)
+        if: ${{ !cancelled() }}
         run: |
           # Only check files modified in this PR to avoid pre-existing issues in
           # untouched files (which may have been formatted with an older gofmt).
@@ -281,58 +233,15 @@ jobs:
           fi
           echo "All changed Go files are properly formatted"
 
-  web-lint:
-    name: Web lint
-    runs-on: ubuntu-latest
-    needs: lint-prepare
-    timeout-minutes: 20
-    steps:
-      # fetch-depth: 0 (full history) so ESLint's file-scoped diff below can
-      # resolve github.event.before -- a shallow (default depth-1) checkout
-      # doesn't have that parent commit's object, so `git cat-file -e` on it
-      # always failed, BASE_SHA stayed empty, and the script silently fell
-      # through to an unscoped full-repo scan on every push to main.
-      #
-      # ref: pins the checkout to the PR's actual head commit. Without it, actions/checkout
-      # defaults to GitHub's synthetic refs/pull/N/merge for pull_request events -- a merge
-      # of the PR head into main's CURRENT tip, which moves independently of BASE_SHA
-      # (captured once, at the PR's last push/sync). Once main has advanced past BASE_SHA,
-      # `git diff BASE_SHA...HEAD` picks up every file from every PR merged to main in
-      # between, not just this PR's own diff -- surfaced 2026-10-22 as unrelated
-      # pre-existing warnings in files this PR never touched (see PR #1144's CI history).
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          # Blobless: full commit/tree history (merge-base and origin/main resolve)
-          # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
-          filter: blob:none
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      # Generated code is gitignored, not committed (see #445) — produced once by
-      # lint-prepare and downloaded here so Jest/tsc/ESLint resolve gen/ imports.
-      - name: Download generated files
-        uses: actions/download-artifact@v4
-        with:
-          name: lint-generated-files
-
-      - name: Install web-app dependencies
-        working-directory: web-app
-        run: bun install --frozen-lockfile
-
+      # ── web lint (was the separate web-lint job; same checkout/codegen/bun install as above) ──
       - name: Jest
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: npx jest --ci --maxWorkers=4
 
       # Codemod liveness tests (node --test, no Jest project yet); needs the pinned ast-grep from bun install.
       - name: Codemod tests
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: bun run test:codemods
 
@@ -347,6 +256,7 @@ jobs:
       # Long-term, true diff-aware cross-file duplicate detection belongs in kibitzer
       # (github.com/tstapler/kibitzer) — see tstapler/kibitzer#28.
       - name: jscpd (web-app duplication)
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: bun run lint:duplicates
 
@@ -355,6 +265,7 @@ jobs:
       # unchanged in a function so `timeout` can bound it as a single command.
       # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
       - name: ESLint (no-100vh, mobile regression rules)
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: |
           run_eslint() {
@@ -408,10 +319,12 @@ jobs:
           timeout 16m bash -c run_eslint || { echo "::error::CI-BUDGET-EXCEEDED: 'web-lint' exceeded its 16m budget"; echo "CI-BUDGET-EXCEEDED: 'web-lint' exceeded its 16m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: CSS lint (stylelint + undefined variable check)
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: bun run lint:css
 
       - name: Validate feature catalog (typed feature registry)
+        if: ${{ !cancelled() }}
         working-directory: web-app
         run: |
           # 1. TypeScript compile check on the features catalog — catches unknown FeatureId references

@@ -36,14 +36,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  prepare:
-    name: Generate & Build Web UI
-    uses: ./.github/workflows/_prepare.yml
-
   ux-analysis:
     name: UX Analysis (Axe + Lighthouse + Claude)
     runs-on: ubuntu-latest
-    needs: prepare
     # This job runs in parallel with other jobs, never blocks main build.
     # Typical runtime is 6-9 min; 10 min cancelled otherwise-green runs (#1221, #1206).
     timeout-minutes: 15
@@ -53,6 +48,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -85,10 +82,9 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Download generated files
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact-name }}
+      # Inlined (was a separate reusable-workflow `prepare` job = one extra check per run).
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
 
       - name: Build binary
         run: go build -o stapler-squad .
