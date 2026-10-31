@@ -24,6 +24,14 @@ func isSessionGone(err error) bool {
 	return err != nil && connect.CodeOf(err) == connect.CodeNotFound
 }
 
+// definitivelyGone is isSessionGone plus a fresh backend liveness check. IsAlive
+// confirms a pane NotFound with a ListSessions round trip, and treats an
+// unreachable daemon (Unavailable, retriable) as not-gone, so a daemon restart
+// or mid-restore blip never reaches the SPA as the permanent not_found.
+func definitivelyGone(err error, backendAlive func() bool) bool {
+	return isSessionGone(err) && !backendAlive()
+}
+
 // wrapSessionGone tags a NotFound capture error as errSessionGone, keeping the cause.
 func wrapSessionGone(err error) error {
 	if !isSessionGone(err) {
@@ -44,9 +52,19 @@ func newLogThrottle(interval time.Duration) *logThrottle {
 	return &logThrottle{interval: interval, last: make(map[string]time.Time)}
 }
 
+// logThrottleSweepAt is the map size past which allow drops expired keys.
+const logThrottleSweepAt = 256
+
 func (t *logThrottle) allow(key string, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.last) >= logThrottleSweepAt {
+		for k, prev := range t.last {
+			if now.Sub(prev) >= t.interval {
+				delete(t.last, k)
+			}
+		}
+	}
 	if prev, ok := t.last[key]; ok && now.Sub(prev) < t.interval {
 		return false
 	}

@@ -109,6 +109,7 @@ func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
 		b.TymuxManager().SetCommand(cmd)
 	}
 	b.TymuxManager().SetSessionLabel(opts.SessionName)
+	b.TymuxManager().SetStoredSessionID(opts.TymuxSessionID)
 	return b
 }
 

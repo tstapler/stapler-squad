@@ -368,6 +368,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Backend != "" {
 		sessionCreate.SetBackend(string(data.Backend))
 	}
+	if data.TymuxSessionID != "" {
+		sessionCreate.SetTymuxSessionID(data.TymuxSessionID)
+	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -670,6 +673,9 @@ func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData
 	// instance today, so this guard is intentionally set-only, never clear.
 	if data.Backend != "" {
 		sessionUpdate.SetBackend(string(data.Backend))
+	}
+	if data.TymuxSessionID != "" {
+		sessionUpdate.SetTymuxSessionID(data.TymuxSessionID)
 	}
 }
 
@@ -1506,6 +1512,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
 		Backend:             ProcessManagerBackend(sess.Backend),
+		TymuxSessionID:      sess.TymuxSessionID,
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,

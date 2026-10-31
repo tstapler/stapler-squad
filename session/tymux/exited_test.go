@@ -21,6 +21,7 @@ func deadSnapshot(exitCode *int32) *v1.PaneSnapshot {
 }
 
 func TestCapturePaneContent_ShouldFailWithPaneExitedAndExitCode_WhenSnapshotIsDead(t *testing.T) {
+	resetClaims(t)
 	code := int32(3)
 	sess := startedSession(t, deadSnapshot(&code))
 
@@ -36,6 +37,7 @@ func TestCapturePaneContent_ShouldFailWithPaneExitedAndExitCode_WhenSnapshotIsDe
 }
 
 func TestCapturePaneContent_ShouldReportNoExitCode_WhenDaemonOmitsIt(t *testing.T) {
+	resetClaims(t)
 	sess := startedSession(t, deadSnapshot(nil))
 
 	_, err := sess.CapturePaneContent()
@@ -46,6 +48,7 @@ func TestCapturePaneContent_ShouldReportNoExitCode_WhenDaemonOmitsIt(t *testing.
 }
 
 func TestCapturePaneContent_ShouldSucceed_WhenSnapshotIsLiveOrUnspecified(t *testing.T) {
+	resetClaims(t)
 	for _, l := range []v1.Liveness{v1.Liveness_LIVENESS_LIVE, v1.Liveness_LIVENESS_UNSPECIFIED} {
 		sess := startedSession(t, &v1.PaneSnapshot{Liveness: l, Grid: []*v1.Row{{Cells: []*v1.Cell{{Text: "x"}}}}})
 		content, err := sess.CapturePaneContent()
@@ -55,6 +58,7 @@ func TestCapturePaneContent_ShouldSucceed_WhenSnapshotIsLiveOrUnspecified(t *tes
 }
 
 func TestExitedPane_ShouldStillYieldFinalGrid_ThroughRawWithOptionsViewportAndFinalScreen(t *testing.T) {
+	resetClaims(t)
 	sess := startedSession(t, deadSnapshot(nil))
 
 	raw, err := sess.CapturePaneContentRaw()
@@ -75,11 +79,13 @@ func TestExitedPane_ShouldStillYieldFinalGrid_ThroughRawWithOptionsViewportAndFi
 }
 
 func TestExitedPane_ShouldReportNotAlive(t *testing.T) {
+	resetClaims(t)
 	sess := startedSession(t, deadSnapshot(nil))
 	assert.False(t, sess.IsAlive())
 }
 
 func TestFinalScreen_ShouldPassOtherResultsThrough(t *testing.T) {
+	resetClaims(t)
 	boom := errors.New("boom")
 	c, err := FinalScreen("keep", nil)
 	assert.Equal(t, "keep", c)

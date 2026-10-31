@@ -2274,7 +2274,7 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 	// during the paint are still replayed after it; only frames dropped before it are lost.
 	content, captureErr := pollWhileResuming(instanceStatus(instance), time.Now().Add(hubCaptureRetryWindow),
 		capturePollEvery, instance.CapturePaneContentRaw)
-	if isSessionGone(captureErr) {
+	if definitivelyGone(captureErr, instance.IsBackendProcessAlive) {
 		// A browser receiving not_found stops reconnecting (isNonRetriableConnectError).
 		logSessionGone("[streamViaHub] initial capture", sessionID, captureErr)
 		return wrapSessionGone(captureErr)

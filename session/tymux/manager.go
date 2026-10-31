@@ -38,6 +38,11 @@ type TymuxManager interface {
 	// sessions. Call before Start()/RestoreWithWorkDir(); empty keeps Name == dir.
 	SetSessionLabel(label string)
 
+	// SetStoredSessionID hands RestoreWithWorkDir the daemon session id persisted
+	// with the Instance record, so restore is immune to label (title) changes.
+	// Empty means an old record: fall back to label, then legacy Name == dir.
+	SetStoredSessionID(id string)
+
 	// AppendEnv adds KEY=VALUE entries to the environment the next Start()
 	// passes to tymuxd. Later entries for the same key replace earlier ones;
 	// entries without '=' are ignored. The command's own env still wins.

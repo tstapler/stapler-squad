@@ -266,7 +266,13 @@ type fakeTymuxManagerForSetCommand struct {
 	startErr           error
 	gotEnv             []string
 	gotLabel           string
+	gotStoredID        string
+	sessionID          string
 }
+
+func (f *fakeTymuxManagerForSetCommand) SetStoredSessionID(id string) { f.gotStoredID = id }
+
+func (f *fakeTymuxManagerForSetCommand) GetSessionIdentifier() string { return f.sessionID }
 
 func (f *fakeTymuxManagerForSetCommand) AppendEnv(env ...string) {
 	f.gotEnv = append(f.gotEnv, env...)
