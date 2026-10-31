@@ -173,9 +173,12 @@ func (q *Queue) add(path string, c class) {
 }
 
 func (q *Queue) wakeSleepersLocked() {
+	// One live item needs one free worker, so wake one sleeper: waking all would
+	// switch the throttle off for every busy-but-covered worker.
 	for id, cancel := range q.sleepers {
 		cancel()
 		delete(q.sleepers, id)
+		return
 	}
 }
 
@@ -286,6 +289,11 @@ func (q *Queue) throttle(ctx context.Context, worked time.Duration) {
 	}
 	sctx, cancel := context.WithCancel(ctx)
 	q.mu.Lock()
+	if len(q.lives) > 0 { // live work arrived while the item ran; do not sit out a sleep
+		q.mu.Unlock()
+		cancel()
+		return
+	}
 	id := q.sleeperID
 	q.sleeperID++
 	q.sleepers[id] = cancel

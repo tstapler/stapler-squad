@@ -147,6 +147,7 @@ func (ae *ArtifactExtractor) setPosition(filePath, owner string, p scanstate.Pos
 	t := trackedPos{Position: p, owner: owner}
 	ae.posMu.Lock()
 	ae.positions[filePath] = t
+	delete(ae.restored, filePath) // freshly scanned: not a stale restored row
 	ae.posMu.Unlock()
 	if ae.writer != nil {
 		ae.writer.Mark(filePath, t)

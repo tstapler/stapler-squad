@@ -110,3 +110,20 @@ func TestWriter_FailedSaveRequeuesUnlessSuperseded(t *testing.T) {
 	require.Len(t, s.saved, 1)
 	assert.Equal(t, []byte{1}, s.saved[0][0].State)
 }
+
+func TestWriter_BuildErrorsAreReportedAndOthersStillSaved(t *testing.T) {
+	t.Parallel()
+	s := &fakeSaver{}
+	w := scanstate.NewWriter(s, func(path string, _ int) (scanstate.Record, error) {
+		if path == "bad" {
+			return scanstate.Record{}, errors.New("encode failed")
+		}
+		return scanstate.Record{}, nil
+	})
+	w.Mark("bad", 1)
+	w.Mark("good", 1)
+	err := w.Flush(context.Background(), 0)
+	require.Error(t, err)
+	require.Len(t, s.saved, 1)
+	assert.Len(t, s.saved[0], 1, "the good record is saved despite the bad one")
+}

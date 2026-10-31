@@ -238,3 +238,35 @@ func TestQueue_StartTwiceIsANoOp(t *testing.T) {
 	q.Start(ctx)
 	assert.NotPanics(t, func() { q.Start(ctx) })
 }
+
+func TestQueue_NoThrottleSleepWhenLiveWorkArrivedDuringTheItem(t *testing.T) {
+	t.Parallel()
+	var q *Queue
+	var clockMu sync.Mutex
+	now := time.Time{}
+	sleeps := make(chan time.Duration, 4)
+	rec := newRecorder()
+	q = New(Config{
+		Workers: 1, BackfillDuty: 0.1,
+		Now:   func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now },
+		Sleep: func(_ context.Context, d time.Duration) { sleeps <- d },
+	}, func(p string) {
+		if p == "backfill" {
+			clockMu.Lock()
+			now = now.Add(time.Second)
+			clockMu.Unlock()
+			q.Enqueue("live") // a live change lands before the worker reaches its throttle
+		}
+		rec.handle(p)
+	})
+	q.EnqueueBackfill("backfill")
+	start(t, q)
+
+	assert.Equal(t, "backfill", recv(t, rec.ch))
+	assert.Equal(t, "live", recv(t, rec.ch))
+	select {
+	case d := <-sleeps:
+		t.Fatalf("worker slept %v with live work pending", d)
+	default:
+	}
+}

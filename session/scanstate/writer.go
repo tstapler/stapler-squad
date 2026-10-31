@@ -2,6 +2,8 @@ package scanstate
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -45,8 +47,9 @@ func (w *Writer[T]) Pending() int {
 }
 
 // Flush writes up to limit pending values (all when limit <= 0). A value that
-// fails to build is dropped until its next Mark; a failed Save re-queues the
-// batch unless newer values arrived.
+// fails to build is dropped until its next Mark and its error returned (joined)
+// after the rest are saved; a failed Save re-queues the batch unless newer
+// values arrived.
 func (w *Writer[T]) Flush(ctx context.Context, limit int) error {
 	w.flushMu.Lock()
 	defer w.flushMu.Unlock()
@@ -55,9 +58,11 @@ func (w *Writer[T]) Flush(ctx context.Context, limit int) error {
 		return nil
 	}
 	recs := make([]Record, 0, len(batch))
+	var buildErrs []error
 	for path, v := range batch {
 		rec, err := w.build(path, v)
 		if err != nil {
+			buildErrs = append(buildErrs, fmt.Errorf("build %s: %w", path, err))
 			continue
 		}
 		rec.Path = path
@@ -67,7 +72,7 @@ func (w *Writer[T]) Flush(ctx context.Context, limit int) error {
 		w.requeue(batch)
 		return err
 	}
-	return nil
+	return errors.Join(buildErrs...)
 }
 
 func (w *Writer[T]) take(limit int) map[string]T {
