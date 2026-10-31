@@ -12,6 +12,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,6 +61,19 @@ func shellToProto(sh *session.Shell) *sessionv1.Shell {
 // session_id may be a Title or a UUID; we scan instance data to find the canonical title.
 // Returns (title, nil) on success or (_, connect.Error) on failure.
 func (s *SessionService) resolveSessionTitle(sessionID string) (string, error) {
+	// Polled endpoints (ListShells) call this per request: use the indexed
+	// title-or-uuid lookup instead of loading every session row.
+	if s.concStorage != nil {
+		data, err := s.concStorage.FindInstanceDataByID(sessionID)
+		switch {
+		case err == nil:
+			return data.Title, nil
+		case errors.Is(err, session.ErrInstanceDataNotFound):
+			return "", connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", sessionID))
+		default:
+			return "", connect.NewError(connect.CodeInternal, fmt.Errorf("failed to look up session: %w", err))
+		}
+	}
 	dataSlice, err := s.storage.ListInstanceData()
 	if err != nil {
 		return "", connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sessions: %w", err))

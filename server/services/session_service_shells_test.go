@@ -14,6 +14,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -320,4 +321,31 @@ func TestDeleteShell_Success(t *testing.T) {
 	}))
 	require.NoError(t, listErr)
 	assert.Empty(t, listResp.Msg.Shells, "shell must be removed from memory after DeleteShell")
+}
+
+// scanForbiddenStore fails the test if anything loads every session row.
+type scanForbiddenStore struct {
+	session.InstanceStore
+	t *testing.T
+}
+
+func (s scanForbiddenStore) ListInstanceData() ([]session.InstanceData, error) {
+	s.t.Helper()
+	s.t.Error("ListShells must resolve the session by indexed lookup, not ListInstanceData (full scan)")
+	return nil, errors.New("full scan not allowed")
+}
+
+func TestListShells_ResolvesSessionWithoutFullScan(t *testing.T) {
+	t.Parallel()
+	fix := setupShellsFixture(t)
+	inst := fix.addLiveSession(t, "no-scan-session")
+	inst.AddShellInMemory(makeRunningShell("sh-1", "one"))
+	fix.svc.storage = scanForbiddenStore{InstanceStore: fix.svc.storage, t: t}
+
+	resp, err := fix.svc.ListShells(context.Background(), connect.NewRequest(&sessionv1.ListShellsRequest{SessionId: "no-scan-session"}))
+	require.NoError(t, err)
+	assert.Len(t, resp.Msg.Shells, 1)
+
+	_, err = fix.svc.ListShells(context.Background(), connect.NewRequest(&sessionv1.ListShellsRequest{SessionId: "does-not-exist"}))
+	assertConnectCode(t, err, connect.CodeNotFound)
 }
