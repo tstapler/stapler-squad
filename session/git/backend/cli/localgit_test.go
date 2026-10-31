@@ -27,16 +27,33 @@ func writeExec(t *testing.T, dir, name, body string) string {
 	return p
 }
 
-func TestResolveDirectGit_should_BypassWrapperOnly_When_PathGitIsSSHFallback(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	wrapper := writeExec(t, dir, "git", "#!/usr/bin/env sh\n# git-ssh-fallback: transparent wrapper\nexec /usr/bin/git \"$@\"\n")
-	real := writeExec(t, dir, "realgit", "\x7fELF-not-a-script")
-	lookup := func(string) (string, error) { return wrapper, nil }
+const wrapperBody = "#!/usr/bin/env sh\n# git-ssh-fallback: transparent wrapper\nexec /usr/bin/git \"$@\"\n"
 
-	assert.Equal(t, real, resolveDirectGit(lookup, real, nil), "wrapper on PATH: use the real binary")
-	assert.Equal(t, "git", resolveDirectGit(lookup, "", []string{wrapper, filepath.Join(dir, "missing")}), "no usable real git: fall back to PATH lookup")
-	assert.Equal(t, "git", resolveDirectGit(func(string) (string, error) { return real, nil }, real, nil), "PATH git is not the wrapper: unchanged")
+func TestResolveDirectGit_should_WalkPathPastTheWrapper(t *testing.T) {
+	t.Parallel()
+	wrapDir, brewDir, sysDir := t.TempDir(), t.TempDir(), t.TempDir()
+	writeExec(t, wrapDir, "git", wrapperBody)
+	brew := writeExec(t, brewDir, "git", "\x7fELF-brew")
+	writeExec(t, sysDir, "git", "\x7fELF-system")
+	path := wrapDir + string(os.PathListSeparator) + brewDir + string(os.PathListSeparator) + sysDir
+
+	assert.Equal(t, brew, resolveDirectGit(path, ""), "same git the wrapper would pick: first non-wrapper on PATH, not a hardcoded /usr/bin")
+	assert.Equal(t, "git", resolveDirectGit(brewDir+string(os.PathListSeparator)+wrapDir, ""), "PATH git is not the wrapper: unchanged")
+	assert.Equal(t, "git", resolveDirectGit(wrapDir, ""), "nothing but the wrapper: unchanged")
+}
+
+func TestResolveDirectGit_should_HonorRealGitOnlyWhenNamedGit(t *testing.T) {
+	t.Parallel()
+	wrapDir, otherDir, sysDir := t.TempDir(), t.TempDir(), t.TempDir()
+	writeExec(t, wrapDir, "git", wrapperBody)
+	named := writeExec(t, otherDir, "git", "\x7fELF-pinned")
+	odd := writeExec(t, otherDir, "git-real", "\x7fELF-odd")
+	sys := writeExec(t, sysDir, "git", "\x7fELF-system")
+	path := wrapDir + string(os.PathListSeparator) + sysDir
+
+	assert.Equal(t, named, resolveDirectGit(path, named))
+	assert.Equal(t, sys, resolveDirectGit(path, odd), "a REAL_GIT not named git would lose RequiredGitEnv and spawn counting (both key on basename)")
+	assert.Equal(t, sys, resolveDirectGit(path, wrapDir+"/git"), "REAL_GIT pointing at the wrapper is ignored")
 }
 
 func TestLocalGitName_should_KeepNetworkOpsOnPath(t *testing.T) {

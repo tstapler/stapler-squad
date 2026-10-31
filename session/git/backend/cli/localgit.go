@@ -3,7 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"sync"
 )
 
@@ -49,23 +49,44 @@ func localGitName(args []string) string {
 // directGit is the real git binary when PATH's git is the ssh-fallback wrapper,
 // else "git" (resolved by the runner as before).
 var directGit = sync.OnceValue(func() string { // var so tests with fake runners can pin it
-	return resolveDirectGit(exec.LookPath, os.Getenv("REAL_GIT"), []string{"/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"})
+	return resolveDirectGit(os.Getenv("PATH"), os.Getenv("REAL_GIT"))
 })
 
-func resolveDirectGit(lookPath func(string) (string, error), realGit string, candidates []string) string {
-	p, err := lookPath("git")
-	if err != nil || !isSSHFallbackWrapper(p) {
+// resolveDirectGit mirrors the wrapper's own _find_real_git: the first executable
+// `git` on PATH that is not the wrapper (REAL_GIT wins when set). Only binaries named
+// "git" qualify, because the runner injects RequiredGitEnv and counts spawns by
+// basename. Returns "git" when PATH's git is not the wrapper or nothing else is found.
+func resolveDirectGit(pathEnv, realGit string) string {
+	first := ""
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
+		}
+		if c := filepath.Join(dir, "git"); isExecutableFile(c) {
+			first = c
+			break
+		}
+	}
+	if first == "" || !isSSHFallbackWrapper(first) {
 		return "git"
 	}
-	if realGit != "" {
-		candidates = append([]string{realGit}, candidates...)
+	if realGit != "" && filepath.Base(realGit) == "git" && isExecutableFile(realGit) && !isSSHFallbackWrapper(realGit) {
+		return realGit
 	}
-	for _, c := range candidates {
-		if st, err := os.Stat(c); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 && !isSSHFallbackWrapper(c) {
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
+		}
+		if c := filepath.Join(dir, "git"); isExecutableFile(c) && !isSSHFallbackWrapper(c) {
 			return c
 		}
 	}
 	return "git"
+}
+
+func isExecutableFile(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0
 }
 
 func isSSHFallbackWrapper(path string) bool {
