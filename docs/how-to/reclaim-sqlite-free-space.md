@@ -1,4 +1,4 @@
-# Reclaim SQLite free space (analytics.db, sessions.db)
+# Reclaim SQLite free space (analytics.db, escape_events.db, sessions.db)
 
 SQLite never shrinks a file when rows are deleted; freed pages go on a freelist.
 `analytics.db` once reached 2.9 GB with 71% free pages (505702 of 709053 pages at
@@ -71,6 +71,27 @@ sqlite3 <db> 'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'
 Restart the service. The in-app loop takes over from there. The directory follows `config.GetConfigDir`
 (`workspaces/<hash-or-name>/` or `instances/<name>/` under `~/.stapler-squad/`); see
 `docs/reference/state-isolation.md`.
+
+## escape_events moved to its own database
+
+Escape events live in `<config dir>/db/escape_events.db` (pool `escape-events`, listed in
+`/actuator/db` under `databases` and `maintenance`), with their own writer, retention and
+incremental vacuum. A background copy (feature flag `escape_events_db_migrate`, default on, starts
+one minute after boot) fills it from the legacy `escape_events` table in `analytics.db` in
+adaptive batches of about 40 ms writer hold; the ledger is the table `escape_events_migration` in
+the new file (`phase`, `cursor`, `scanned`, `inserted`). It resumes after a restart and ends
+`done` only when the source row count equals the rows scanned.
+
+The legacy table is **not dropped**: a follow-up change drops it after a soak. Deleting its rows
+is as expensive as the old retention deletes, so reclaim the space offline instead, with the
+service stopped and free disk about the size of `analytics.db`:
+
+```bash
+sqlite3 <analytics.db> 'PRAGMA auto_vacuum=INCREMENTAL; DROP TABLE escape_events; VACUUM;'
+```
+
+Run it only after `SELECT phase FROM escape_events_migration` reads `done` in `escape_events.db`.
+An older binary recreates the empty table on its next start; that is harmless.
 
 ## Fallback external job
 

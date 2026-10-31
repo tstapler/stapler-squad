@@ -8,8 +8,9 @@ const _features = [
 // All locators use data-testid or ARIA roles — no CSS class selectors.
 
 import { test, expect } from "@playwright/test";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 const VALID_YAML_3_RULES = `rules:
 - name: E2E Allow git log

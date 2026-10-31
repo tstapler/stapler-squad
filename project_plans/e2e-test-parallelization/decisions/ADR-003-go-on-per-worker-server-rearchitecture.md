@@ -1,7 +1,7 @@
 # ADR-003: Go on the per-worker N-server rearchitecture — sequenced behind a cheaper duration-aware shard balancer
 
 **Date**: 2026-10-27
-**Status**: Accepted
+**Status**: Accepted; implementation in progress (server pool + `TEST_PARALLEL_INDEX` routing: PR #1329; spec migration codemod follows; CI shard sizing is gated on measured runs)
 **Supersedes**: extends [ADR-001](ADR-001-isolate-via-seam-defer-n-server-rearchitecture.md) (not reversed — ADR-001's "isolate via seam, defer implementation" call was correct given what was known 2026-10-25; this ADR acts on Story 3.3.1's checkpoint, which ADR-001 itself named as the forcing function for revisiting it)
 
 ## Context

@@ -27,8 +27,9 @@
  * session's static state rather than the literal transition-in-progress moment.
  */
 import { test, expect, Page } from "@playwright/test";
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 async function mockIdleSession(page: Page, sessionId: string, title: string) {
   await page.route("**/api/session.v1.SessionService/ListSessions", async (route) => {
@@ -41,7 +42,7 @@ async function mockIdleSession(page: Page, sessionId: string, title: string) {
       status: "SESSION_STATUS_ACTIVE",
       subStatus: "SUB_STATUS_IDLE",
       program: "claude",
-      path: "/tmp/e2e-idle-chip",
+      path: slotTmp("e2e-idle-chip"),
       branch: "main",
     });
     await route.fulfill({ response, json: { ...json, sessions } });
@@ -64,7 +65,7 @@ test.describe("idle-session-chip", () => {
     // all -- the abbreviated path always does, regardless of column config.
     const row = page
       .locator('[data-testid="session-card"], [data-testid="session-row"]')
-      .filter({ hasText: "/tmp/e2e-idle-chip" });
+      .filter({ hasText: slotTmp("e2e-idle-chip") });
     await expect(row).toBeVisible({ timeout: 10000 });
 
     const chip = row.getByRole("status", { name: "Session is idle" });

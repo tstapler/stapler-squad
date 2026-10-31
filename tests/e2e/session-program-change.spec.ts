@@ -2,8 +2,9 @@ import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
 const _features = [FEATURE_CATALOG['session-update']] as const;
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // Seeded by tests/demo/seed (see tests/demo/helpers.go): a Paused session with
 // Program "claude", so this is deterministic without a beforeAll fixture.

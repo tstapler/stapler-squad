@@ -1,11 +1,12 @@
 import { Page, Locator } from "@playwright/test";
+import { baseUrl } from '../helpers/base-url';
 
 export class BacklogSourcesSettingsPage {
   constructor(private page: Page) {}
 
   async goto() {
     await this.page.goto(
-      (process.env.TEST_SERVER_URL ?? "http://localhost:8544") + "/settings/backlog-sources",
+      baseUrl() + "/settings/backlog-sources",
       { waitUntil: "domcontentloaded", timeout: 15000 }
     );
   }
