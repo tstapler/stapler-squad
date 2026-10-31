@@ -295,6 +295,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:handoff-summary": {
 		exempt: "read-only mirror: HandoffSummaryFeatureController.Enable and Disable refuse (feature_flag_service.go), so UpdateFeatureFlag cannot flip it; the real setting is config.json handoff_summary.enabled, read via HandoffSummaryConfig.EnabledOrDefault, which is not a feature_flags surface",
 	},
+	"flag:driver_pane_activity_gate": {
+		testName:   "TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:hidden_session_gate": {
 		testName:   "TestConfigSurfaceProof_HiddenSessionGate_ChangesDeliveryGateCache",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",

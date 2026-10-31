@@ -2093,6 +2093,14 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 	if instance.Started() {
 		return
 	}
+	// Creating and Active (a boot-restored session whose Start() is queued or in
+	// flight) can still become started and are the only states MarkStartedIfTmuxAlive
+	// heals. Any other status (e.g. PermanentlyFailed with tmux alive) will never
+	// publish a Started event, so waiting just adds startupWaitTimeout to every connect.
+	if status := instance.GetLifecycleStatus(); status != session.Creating && status != session.Active {
+		log.Info("[streamViaHub] instance not started and not starting, attaching without waiting", "session", sessionID, "status", status.String())
+		return
+	}
 	log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
 	if waitForInstanceStartedEvent(h.sessionService.GetEventBus(), instance, startupWaitTimeout) {
 		return

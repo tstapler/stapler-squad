@@ -301,7 +301,28 @@ describe("terminal socket pool", () => {
     h.muxes[0].open();
     await flush();
     s.close();
+    const before = h.muxes[0].frames("DATA").length;
     expect(() => s.send("x")).not.toThrow();
+    expect(h.muxes[0].frames("DATA")).toHaveLength(before);
+  });
+
+  it("closing a stream that is still connecting fires error then close(1006), as a native WebSocket does", () => {
+    const h = setup({ size: 1 });
+    const s = h.pool.openStream(URL);
+    const events: string[] = [];
+    s.addEventListener("error", () => events.push("error"));
+    s.addEventListener("close", (e) => events.push("close:" + (e as unknown as { code: number }).code));
+    s.close();
+    expect(events).toEqual(["error", "close:1006"]);
+  });
+
+  it("answers a server PING with a PONG", async () => {
+    const h = setup({ size: 1 });
+    h.pool.openStream(URL);
+    h.muxes[0].open();
+    await flush();
+    h.muxes[0].feed(new Uint8Array([6, 0, 0, 0, 0]));
+    expect(h.muxes[0].frames("PONG")).toHaveLength(1);
   });
 
   it("hashByStream is deterministic and leastLoaded prefers the idle socket", () => {

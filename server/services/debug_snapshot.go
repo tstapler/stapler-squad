@@ -173,7 +173,7 @@ func collectSessionSnapshots(ctx context.Context, instances []*session.Instance)
 
 		// Capture pane content with per-instance timeout
 		paneCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		content, err := inst.CapturePaneContent()
+		content, err := inst.CapturePaneContentFinal()
 		cancel()
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("capture-pane for session '%s': %v", inst.Title, err))

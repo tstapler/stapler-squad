@@ -299,6 +299,27 @@ func TestMuxStream_should_FlushThenClose_When_HandlerReturns(t *testing.T) {
 	assert.Equal(t, uint16(websocket.CloseNormalClosure), f.Code)
 }
 
+func TestMuxStream_should_DeliverWholeTail_When_HandlerReturnsWithoutCredit(t *testing.T) {
+	t.Parallel()
+	total := 3 * muxStreamWindow
+	serve := func(conn streamConn, _ string) {
+		_ = conn.WriteMessage(websocket.BinaryMessage, make([]byte, total))
+	}
+	c, _ := newMuxTestClient(t, serve, 1)
+	c.send(encodeMuxEmpty(muxFrameOpen, 1))
+	got := 0
+	for {
+		f := c.next(muxFrameData)
+		got += len(f.Payload)
+		c.send(encodeMuxCredit(1, len(f.Payload)))
+		if f.Fin {
+			break
+		}
+	}
+	assert.Equal(t, total, got)
+	assert.Equal(t, uint16(websocket.CloseNormalClosure), c.next(muxFrameClose).Code)
+}
+
 func TestMuxStream_should_SurfaceCloseError_When_ClientClosesStream(t *testing.T) {
 	t.Parallel()
 	got := make(chan error, 1)

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestPrepareSnapshotContent is the direct unit test for the transform at the
@@ -164,17 +163,24 @@ func TestWithCursorSync_should_ReturnWithinTimeout_When_PositionLookupIsSlow(t *
 	// return via withCursorSync's timeout branch.
 	release := make(chan struct{})
 	slow := slowCursorPositioner{release: release, calledCh: calledCh}
-	maxElapsed := withCursorSyncTimeout + 50*time.Millisecond
+	clock := newRecordingClock()
 
-	start := time.Now()
-	got := withCursorSync(realClock{}, "content", slow)
-	elapsed := time.Since(start)
+	result := make(chan string, 1)
+	go func() { result <- withCursorSync(clock, "content", slow) }()
+	armed := <-clock.armed
+	if armed.d != withCursorSyncTimeout {
+		t.Fatalf("withCursorSync armed a %s timer, want withCursorSyncTimeout (%s)", armed.d, withCursorSyncTimeout)
+	}
+	select {
+	case got := <-result:
+		t.Fatalf("withCursorSync returned %q before the timeout elapsed", got)
+	default:
+	}
+	clock.Advance(withCursorSyncTimeout)
+	got := <-result
 
 	if got != "content" {
 		t.Errorf("withCursorSync() = %q, want content left unchanged when the lookup times out", got)
-	}
-	if elapsed >= maxElapsed {
-		t.Errorf("withCursorSync() took %s, want it bounded by withCursorSyncTimeout (%s)", elapsed, withCursorSyncTimeout)
 	}
 	close(release)
 

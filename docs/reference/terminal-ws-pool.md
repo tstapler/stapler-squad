@@ -1,6 +1,6 @@
 # Terminal WebSocket pool (`terminal_ws_pool`)
 
-Carries `StreamTerminal` over a few shared WebSockets (`/api/ws/terminal-mux`) instead of one per terminal. Design and measurements: [ADR-033](../adr/ADR-033-terminal-websocket-pool.md). Default off.
+Carries `StreamTerminal` over a few shared WebSockets (`/api/ws/terminal-mux`) instead of one per terminal. Design and measurements (13 terminals: first output ~0.45 s per-stream vs under 50 ms pooled, echo latency unchanged): [ADR-033](../adr/ADR-033-terminal-websocket-pool.md#measured-latency-pool-vs-per-stream). Default off.
 
 ## Knobs
 
@@ -31,7 +31,7 @@ Binary WebSocket messages, big-endian: `type u8 | stream id u32 | body`. Codecs:
 
 - Each stream starts with 256 KiB of send credit. The server stops sending on a stream at zero credit and keeps serving other streams; the client returns credit as frames arrive (transport-level, since the browser WebSocket API gives no application backpressure).
 - Per-stream queue cap 1 MiB; `WriteMessage` blocks with the caller's write deadline when full.
-- A stream with queued output and no credit for 30 s is closed with 1013. Streams per socket: 64 (`OPEN` beyond it gets `CLOSE 1013`). Socket idle timeout 60 s (client pings every 20 s); socket write deadline 10 s.
+- A stream with queued output and no credit for 30 s is closed with 1013. Streams per socket: 64 (`OPEN` beyond it gets `CLOSE 1013`). Socket idle timeout 60 s (client and server each ping every 20 s; the peer answers with `PONG`); socket write deadline 10 s.
 - Admission matches `/api/ws/unary`: remote listener requires authentication and a strict origin match; local requires a loopback origin.
 
 ## Failure behaviour

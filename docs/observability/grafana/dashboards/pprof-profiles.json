@@ -1,6 +1,6 @@
 {
   "title": "stapler-squad: pprof profiles (flamegraphs)",
-  "description": "Continuous CPU/memory/goroutine profiling via Grafana Alloy scraping stapler-squad's net/http/pprof endpoint (only present when the app runs with --profile — see docs/how-to/profile-lockups.md) into Pyroscope. Answers: what is the process actually spending CPU/memory/goroutines on, right now or at a specific point in the past.",
+  "description": "Continuous CPU/memory/goroutine/lock-contention profiling via Grafana Alloy scraping stapler-squad's net/http/pprof endpoint (only present when the app runs with --profile — see docs/how-to/profile-lockups.md) into Pyroscope. Answers: what is the process actually spending CPU/memory/goroutines/lock-wait on, right now or at a specific point in the past.",
   "uid": "ssq-pprof-profiles",
   "schemaVersion": 39,
   "version": 1,
@@ -138,6 +138,74 @@
         {
           "queryType": "profile",
           "profileTypeId": "mutex:delay:nanoseconds:contentions:count",
+          "labelSelector": "{service_name=\"stapler-squad\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Mutex contentions (events)",
+      "description": "Number of contended lock acquisitions (sampled via --profile-mutex-fraction, default 10; the runtime scales values back up). Read with the mutex delay above: many contentions with tiny delay is cheap, a few with huge delay is a long critical section. Go attributes the wait to the stack that RELEASED the lock (the holder). Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\") the source is the cumulative-since-start profile: values are lifetime totals, so the shape is right but absolute numbers are not.",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 80 },
+      "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "queryType": "metrics",
+          "profileTypeId": "mutex:contentions:count:contentions:count",
+          "labelSelector": "{service_name=\"stapler-squad\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    { "type": "row", "title": "Lock contention: block (channels, select, sync, cond)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 87 }, "id": 104 },
+    {
+      "id": 10,
+      "title": "Block delay (drag to select a range for the flamegraph below)",
+      "description": "Total time goroutines spent blocked on channels, select, sync.Cond, WaitGroup and mutexes. Dominated by idle waiting (selectgo / chanrecv in event loops), which is normal; look for unexpected frames, not the biggest bar. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\") the source is the cumulative-since-start profile: values are lifetime totals, so the shape is right but absolute numbers are not.",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 88 },
+      "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
+      "fieldConfig": { "defaults": { "unit": "ns" }, "overrides": [] },
+      "targets": [
+        {
+          "queryType": "metrics",
+          "profileTypeId": "block:delay:nanoseconds:contentions:count",
+          "labelSelector": "{service_name=\"stapler-squad\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Block contentions (events)",
+      "description": "Number of blocking events (events shorter than --profile-block-rate ns are sampled and scaled up). Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\") the source is the cumulative-since-start profile: values are lifetime totals, so the shape is right but absolute numbers are not.",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 88 },
+      "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "queryType": "metrics",
+          "profileTypeId": "block:contentions:count:contentions:count",
+          "labelSelector": "{service_name=\"stapler-squad\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Block flamegraph (delay: where goroutines wait)",
+      "description": "Idle runtime.selectgo and runtime.chanrecv frames at the top are goroutines parked waiting for work (event loops, tickers) and are NOT contention. Focus on sync.(*Mutex).Lock, sync.(*RWMutex).Lock/RLock, sync.(*WaitGroup).Wait and channel sends on request paths. CLI: go tool pprof -top -cum -focus='sync\\.' http://localhost:6060/debug/pprof/block.",
+      "type": "flamegraph",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 95 },
+      "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
+      "targets": [
+        {
+          "queryType": "profile",
+          "profileTypeId": "block:delay:nanoseconds:contentions:count",
           "labelSelector": "{service_name=\"stapler-squad\"}",
           "refId": "A"
         }

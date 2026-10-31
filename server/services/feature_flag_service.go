@@ -335,6 +335,11 @@ var knownFeatureFlags = []struct {
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
+		name:         session.FeatureFlagDriverPaneActivityGate,
+		description:  "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
+		defaultValue: config.DriverPaneActivityGateDefault,
+	},
+	{
 		name:         "request_coalescing",
 		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
 		defaultValue: true,
