@@ -26,9 +26,7 @@ on:
   pull_request:
     branches: [ main ]
 
-# Cancel a superseded run's in-flight jobs. Applies to both pull_request and
-# push-to-main triggers — cancelling a superseded push-to-main run is
-# harmless here since this workflow writes no shared state.
+# Cancel a superseded PR run's in-flight jobs; main-branch runs are never cancelled.
 concurrency:
   group: mcp-integration-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
