@@ -18,7 +18,33 @@ import (
 var (
 	queriesPerRequestOnce sync.Once
 	queriesPerRequest     metric.Int64Histogram
+	inflightOnce          sync.Once
+	inflightUnary         metric.Int64UpDownCounter
 )
+
+// trackUnaryInflight bumps rpc.server.inflight for the method until the
+// returned func runs; a rising value with flat throughput is queueing.
+func trackUnaryInflight(ctx context.Context, procedure string) func() {
+	inflightOnce.Do(func() {
+		c, err := telemetry.GetMeter().Int64UpDownCounter("rpc.server.inflight",
+			metric.WithDescription("Unary RPC calls currently being handled, by rpc.method"))
+		if err != nil {
+			log.Error("interceptors: failed to register rpc.server.inflight", "error", err)
+			return
+		}
+		inflightUnary = c
+	})
+	if inflightUnary == nil {
+		return func() {}
+	}
+	opt := metric.WithAttributes(attribute.String("rpc.method", methodName(procedure)))
+	inflightUnary.Add(ctx, 1, opt)
+	return func() { inflightUnary.Add(context.WithoutCancel(ctx), -1, opt) }
+}
+
+func methodName(procedure string) string {
+	return procedure[strings.LastIndex(procedure, "/")+1:] // bounded by the proto method set
+}
 
 // queriesPerRequestBuckets span a healthy request (a handful of statements) up
 // to the N+1 pathologies seen in traces (hundreds).
@@ -35,7 +61,7 @@ func recordQueriesPerRequest(ctx context.Context, procedure string, n int64) {
 		}
 		queriesPerRequest = h
 	})
-	method := procedure[strings.LastIndex(procedure, "/")+1:] // bounded by the proto method set
+	method := methodName(procedure)
 	if queriesPerRequest != nil {
 		queriesPerRequest.Record(ctx, n, metric.WithAttributes(attribute.String("rpc.method", method)))
 	}
@@ -55,6 +81,7 @@ type dbQueryCountInterceptor struct{}
 func (dbQueryCountInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 		ctx, counter := dbobs.WithQueryCounter(ctx)
+		defer trackUnaryInflight(ctx, req.Spec().Procedure)()
 		resp, err := next(ctx, req)
 		recordQueriesPerRequest(ctx, req.Spec().Procedure, counter.Count())
 		return resp, err

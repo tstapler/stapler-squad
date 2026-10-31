@@ -175,8 +175,8 @@ type BacklogService struct {
 	// repoSettingsFast, when set, serves non-refresh stuck reports from cache
 	// without waiting on GitHub; refresh=true still uses repoSettings.
 	repoSettingsFast RepoSettingsLookup
-	engine       session.WorkflowEngine
-	engineStatus *WorkflowEngineStatusSource
+	engine           session.WorkflowEngine
+	engineStatus     *WorkflowEngineStatusSource
 	// reviewGuard is the listener's process-wide review-spawn reservation, so
 	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
 	reviewGuard *session.ReviewSpawnGuard
