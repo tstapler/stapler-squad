@@ -228,3 +228,14 @@ func TestFailedRegistrationFallsBackToNoopInstruments(t *testing.T) {
 		}
 	})
 }
+
+func TestObserve_should_AggregateAndConsumeRoutineFallbacks_ButStoreRealOnes(t *testing.T) {
+	cm, _ := newTestClientMetrics(t)
+	ctx := context.Background()
+
+	routine := Event{EventName: eventWsUnaryFallback, Labels: map[string]string{"reason": "not-eligible", "count": "40"}}
+	assert.True(t, cm.observe(ctx, routine), "routine HTTP routing must not become an analytics row per flush")
+
+	real := Event{EventName: eventWsUnaryFallback, Labels: map[string]string{"reason": "ws-call-timeout"}}
+	assert.False(t, cm.observe(ctx, real), "true fallbacks keep being stored")
+}

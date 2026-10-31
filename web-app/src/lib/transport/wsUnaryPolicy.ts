@@ -97,8 +97,32 @@ function forceHttpSet(): boolean {
   }
 }
 
+const ROUTINE_REASONS = new Set<FallbackReason>(["not-eligible", "flag-off", "flags-not-loaded", "remote-flag-off", "session-parked"]);
+const ROUTINE_FLUSH_MS = 15_000;
+const routineCounts = new Map<FallbackReason, number>();
+let routineTimer: ReturnType<typeof setTimeout> | undefined;
+
+export function _flushRoutineFallbacksForTesting(): void {
+  if (routineTimer) clearTimeout(routineTimer);
+  flushRoutine();
+}
+
+function flushRoutine(): void {
+  routineTimer = undefined;
+  for (const [reason, count] of routineCounts) {
+    trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason, count: String(count) } });
+  }
+  routineCounts.clear();
+}
+
+/** Real fallbacks are rare and sent at once; routine HTTP routing is aggregated per reason so it adds no per-call event. */
 function recordFallback(reason: FallbackReason): void {
-  trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason } });
+  if (!ROUTINE_REASONS.has(reason)) {
+    trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason } });
+    return;
+  }
+  routineCounts.set(reason, (routineCounts.get(reason) ?? 0) + 1);
+  routineTimer ??= setTimeout(flushRoutine, ROUTINE_FLUSH_MS);
 }
 
 function recordQueueMs(ms: number): void {

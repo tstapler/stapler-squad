@@ -302,3 +302,20 @@ describe("fallback reasons vs the server allow-list", () => {
     expect(FALLBACK_REASONS.filter((r) => !allowed.has(r))).toEqual([]);
   });
 });
+
+describe("routine HTTP routing counts", () => {
+  it("recordFallback_should_AggregateRoutineReasonsIntoOneEventPerFlush", async () => {
+    const track = jest.fn();
+    const rpcTiming = await import("@/lib/telemetry/rpcTiming");
+    const spy = jest.spyOn(rpcTiming, "trackSharedEvent").mockImplementation(track);
+    const { createWsUnaryPolicyTransport: make, _flushRoutineFallbacksForTesting: flush } = await import("./wsUnaryPolicy");
+    const h = setup();
+    const policy = make({ http: h.http as unknown as Transport, getWs: () => h.ws, breaker: h.breaker, readFlag: () => true });
+    for (let i = 0; i < 25; i++) await policy.unary(listSessions, undefined, undefined, undefined, {});
+    expect(track).not.toHaveBeenCalled();
+    flush();
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track.mock.calls[0][0].labels).toEqual({ reason: "not-eligible", count: "25" });
+    spy.mockRestore();
+  });
+});
