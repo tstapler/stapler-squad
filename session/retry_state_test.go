@@ -711,3 +711,31 @@ func TestIsRetryPending_should_ReturnFalse_When_NoRetryScheduledOrInFlight(t *te
 		t.Error("IsRetryPending() = true, want false for a fresh instance")
 	}
 }
+
+// A PermanentlyFailed session that never started this process (boot Start
+// rejected PermanentlyFailed -> Active) must still be restartable by the user,
+// e.g. "migrate to tymux" via RestartSession; it used to fail with ErrCannotRestart.
+func TestRestart_should_RecoverAndActivate_When_PermanentlyFailedAndNotStarted(t *testing.T) {
+	t.Parallel()
+	for _, status := range []Status{PermanentlyFailed, Failed, Stopped} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{
+				Title:          "t",
+				Path:           "/tmp",
+				Status:         status,
+				processManager: &fakeLivenessProcessManager{alive: false},
+			}
+
+			if err := inst.Restart(false, ""); err != nil {
+				t.Fatalf("Restart() err = %v, want nil", err)
+			}
+			if inst.Status != Active {
+				t.Errorf("Status = %v, want Active", inst.Status)
+			}
+			if !inst.Started() {
+				t.Error("Started() = false, want true")
+			}
+		})
+	}
+}
