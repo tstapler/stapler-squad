@@ -118,7 +118,7 @@ func TestSQLiteAnalyticsProvider_Record_NilOptionals(t *testing.T) {
 	assert.Empty(t, row.Component)
 }
 
-// countingDriver counts statements that reach SQLite.
+// countedClient returns an ent client whose INSERT statements are counted.
 func countedClient(t *testing.T) (*ent.Client, *atomic.Int64) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "a.db")+"?_pragma=busy_timeout(5000)&_fk=1")
@@ -180,11 +180,12 @@ func TestQualityMetricsProvider_RecordBatch_should_DropMetricsOnlyEvents(t *test
 	p := WithQualityMetrics(inner)
 	require.NoError(t, RecordAll(context.Background(), p, []Event{
 		{EventName: "stored", EventCategory: "user_action"},
-		{EventName: EventInlineActionUndo, EventCategory: "user_action", Labels: map[string]string{"kind": "approve"}},
+		{EventName: clientEventPrefix + "web_vital.lcp", EventCategory: "performance"}, // metrics-only, never stored
+		{EventName: "also.stored", EventCategory: "user_action"},
 	}))
 	names := []string{}
 	for _, e := range inner.got {
 		names = append(names, e.EventName)
 	}
-	assert.Contains(t, names, "stored")
+	assert.Equal(t, []string{"stored", "also.stored"}, names)
 }
