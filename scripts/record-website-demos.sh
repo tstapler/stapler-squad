@@ -74,10 +74,10 @@ process_clip() {
   local clip="$1" name meta title fps trim_frames
   name="$(basename "$clip" .webm)"
   meta="$OUT_DIR/$name.meta.json"
-  title="$(jq -r .title "$meta")"
-  fps="$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$clip")"
+  title="$(jq -r .title "$meta")" || return 1
+  fps="$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$clip")" || return 1
   # Frame-count trim from the measured load time (never a sleep), per demo-post-process.sh.
-  trim_frames="$(awk -v ms="$(jq -r .trimStartMs "$meta")" -v fps="$fps" 'BEGIN{split(fps,f,"/"); printf "%d", ms/1000*f[1]/(f[2]?f[2]:1)}')"
+  trim_frames="$(awk -v ms="$(jq -r .trimStartMs "$meta")" -v fps="$fps" 'BEGIN{split(fps,f,"/"); printf "%d", ms/1000*f[1]/(f[2]?f[2]:1)}')" || return 1
   "$REPO_ROOT/scripts/demo-post-process.sh" --no-gif --title-card "$title" \
     --trim-start-frames "$trim_frames" "$clip"
 }
