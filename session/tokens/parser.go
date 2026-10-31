@@ -80,57 +80,44 @@ func (p *Parser) ParseReader(r io.Reader) (*ParseResult, error) {
 	defer scanbuf.Put(bufPtr)
 	scanner.Buffer(*bufPtr, maxScannerTokenSize)
 
-	result := &ParseResult{
-		ToolUsage: make(map[string]ToolTokenStats),
-	}
-
-	modelCounts := make(map[string]int)
-	healthRing := &healthTurnRing{}
-	humanTurnIndex := 0
-
+	st := newParseState()
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		var entry jsonlEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			// Skip malformed lines.
-			continue
-		}
-
-		// The outer envelope uses "type" field: "assistant", "user", etc.
-		// Some older entries may use "role" instead.
-		entryType := entry.Type
-		if entryType == "" {
-			entryType = entry.Role
-		}
-
-		switch entryType {
-		case "assistant":
-			p.processAssistantEntry(entry, result, modelCounts, healthRing)
-		case "user":
-			p.processUserEntry(entry, result, humanTurnIndex)
-			humanTurnIndex++
-		case "system":
-			p.processSystemEntry(entry, result)
-		}
+		p.feed(st, scanner.Bytes())
 	}
 
 	// Ignore scanner errors for partial writes (EOF mid-line).
 	_ = scanner.Err()
 
-	resolveCompactTokensAfter(result)
-	result.ContextHealth = extractContextHealthSignals(healthRing)
+	return st.finalize(), nil
+}
 
-	// Determine primary model (most frequently used).
-	result.PrimaryModel = primaryModel(modelCounts)
+// feed applies one transcript line to st. Empty and malformed lines are skipped.
+func (p *Parser) feed(st *parseState, line []byte) {
+	if len(line) == 0 {
+		return
+	}
 
-	// Build sorted deduplicated Models list.
-	result.Models = sortedKeys(modelCounts)
+	var entry jsonlEntry
+	if err := json.Unmarshal(line, &entry); err != nil {
+		return
+	}
 
-	return result, nil
+	// The outer envelope uses "type" field: "assistant", "user", etc.
+	// Some older entries may use "role" instead.
+	entryType := entry.Type
+	if entryType == "" {
+		entryType = entry.Role
+	}
+
+	switch entryType {
+	case "assistant":
+		p.processAssistantEntry(entry, st.result, st.modelCounts, &st.ring)
+	case "user":
+		p.processUserEntry(entry, st.result, st.humanTurnIndex)
+		st.humanTurnIndex++
+	case "system":
+		p.processSystemEntry(entry, st.result)
+	}
 }
 
 // processAssistantEntry extracts token counts and tool usage from an assistant turn.
