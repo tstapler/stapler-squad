@@ -410,6 +410,7 @@ export function useTerminalStream({
 
       // Message processing loop
       (async () => {
+        let serverReportedError = false;
         try {
           for await (const msg of stream) {
             // Task 2.2.3 — a superseded generation's loop must not mutate
@@ -538,6 +539,7 @@ export function useTerminalStream({
               onAppScrollback?.(text, resp.outcome, resp.program, resp.forwardId, resp.blockedReason);
               setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
             } else if (msg.data.case === "error") {
+              serverReportedError = true;
               const err = new Error(msg.data.value.message);
               setError(err);
               onError?.(err);
@@ -560,7 +562,10 @@ export function useTerminalStream({
           // The server ended the stream without an error (e.g. a hub eviction or teardown,
           // sent as a clean EndStream). Surface it as a lost connection: with
           // NEXT_PUBLIC_RECONNECT_V2 off, TerminalOutput's auto-reconnect is driven by `error`.
+          // Shell tabs end normally when the shell exits, and an error frame was already surfaced.
           if (myGeneration === connectionGenerationRef.current
+              && !shellId
+              && !serverReportedError
               && shouldReconnectRef.current
               && !isDisconnectingRef.current
               && !connectTimeoutAbortedRef.current) {
