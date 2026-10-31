@@ -391,6 +391,22 @@ func releaseGogitstoreRef(entry *cachedRepo) {
 	}
 }
 
+// evictRepoEntry removes exactly entry from repoCache and does the matching
+// accounting. CompareAndDelete makes the removal exactly-once: sync.Map.Range
+// is not a snapshot, so concurrent prune/ClearCache passes can both reach the
+// same entry (or reach a key since re-stored with a fresh entry), and an
+// unconditional Delete let each of them decrement repoCacheSize for one
+// increment. Only the caller that actually removed the entry accounts for it.
+func (g *GoGitVCSReader) evictRepoEntry(key string, entry *cachedRepo) bool {
+	if !g.repoCache.CompareAndDelete(key, entry) {
+		return false
+	}
+	atomic.AddInt64(&g.repoCacheSize, -1)
+	atomic.AddInt64(&g.repoCacheEvictions, 1)
+	releaseGogitstoreRef(entry)
+	return true
+}
+
 // pruneRepoCache evicts entries not accessed within repoCacheTTL, then trims
 // the oldest entries if the cache still exceeds the current memory-derived
 // budget (effectiveCacheMaxEntries) — NOT a flat constant, so the effective
@@ -414,10 +430,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 		entry := v.(*cachedRepo)
 		ts := atomic.LoadInt64(&entry.accessedAtNs)
 		if ts < cutoff {
-			g.repoCache.Delete(k)
-			atomic.AddInt64(&g.repoCacheSize, -1)
-			atomic.AddInt64(&g.repoCacheEvictions, 1)
-			releaseGogitstoreRef(entry)
+			g.evictRepoEntry(k.(string), entry)
 		} else {
 			live = append(live, liveEntry{k.(string), ts, entry})
 		}
@@ -432,10 +445,7 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 			return cmp.Compare(a.accessedAtNs, b.accessedAtNs)
 		})
 		for _, e := range live[:int64(len(live))-maxEntries] {
-			g.repoCache.Delete(e.key)
-			atomic.AddInt64(&g.repoCacheSize, -1)
-			atomic.AddInt64(&g.repoCacheEvictions, 1)
-			releaseGogitstoreRef(e.entry)
+			g.evictRepoEntry(e.key, e.entry)
 		}
 	}
 
@@ -479,10 +489,7 @@ func (g *GoGitVCSReader) PruneToMemoryBudget() {
 // ones and forces needless re-opens for anything still actively in use.
 func (g *GoGitVCSReader) ClearCache() {
 	g.repoCache.Range(func(k, v any) bool {
-		g.repoCache.Delete(k)
-		atomic.AddInt64(&g.repoCacheSize, -1)
-		atomic.AddInt64(&g.repoCacheEvictions, 1)
-		releaseGogitstoreRef(v.(*cachedRepo))
+		g.evictRepoEntry(k.(string), v.(*cachedRepo))
 		return true
 	})
 	g.dropAllRepoStates()
