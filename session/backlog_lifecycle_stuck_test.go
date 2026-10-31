@@ -6274,11 +6274,57 @@ func TestReconcileTerminalItemSessions_should_ReprocessItem_When_ItemChangedInsi
 	title := "retitled"
 	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "round-2", SessionRole: SessionRoleWork})
-	require.NoError(t, err)
 
 	listener.reconcileTerminalItemSessions(ctx)
-	assert.Contains(t, archiver.archivedUUIDs, "round-2", "an updated item (new updated_at) bypasses the settled cache")
+	assert.Equal(t, []string{"round-1", "round-1"}, archiver.archivedUUIDs, "an updated item (new updated_at) bypasses the settled cache")
+}
+
+// Attaching an item session does not bump the item's updated_at, so the settled key
+// must also change with the session count or a late-spawned session would linger.
+func TestReconcileTerminalItemSessions_should_ReprocessItem_When_SessionAttachedLate(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "late session", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "early", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "late", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "late")
+}
+
+func TestReconcileTerminalItemSessions_should_RetryNextTick_When_KillFailed(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "kill fails once", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "stuck-pane", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{killErrForUUID: map[string]error{"stuck-pane": errors.New("tmux busy")}}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	archiver.killErrForUUID = nil
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"stuck-pane"}, archiver.killedUUIDs, "a failed kill must not settle the item")
 }
 
 func TestReconcileTerminalItemWorktrees_should_SkipSettledItem_UntilTTLElapses(t *testing.T) {

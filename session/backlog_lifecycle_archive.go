@@ -126,9 +126,10 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 	}
 	processed := 0
 	now := l.sweepNow()
+	counts, countsOK := l.terminalSessionCounts(ctx)
 	for _, item := range items {
-		settleKey := terminalSweepKey("sessions", item)
-		if l.terminalSettled.isSettled(settleKey, now) {
+		settleKey := terminalSweepKey("sessions", item, counts[item.ID])
+		if countsOK && l.terminalSettled.isSettled(settleKey, now) {
 			continue
 		}
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
@@ -152,7 +153,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			}
 			processed++
 		}
-		if clean {
+		if clean && countsOK {
 			l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
 		}
 	}
@@ -196,15 +197,18 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 		return
 	}
 	now := l.sweepNow()
+	counts, countsOK := l.terminalSessionCounts(ctx)
 	for _, item := range items {
-		settleKey := terminalSweepKey("worktrees", item)
-		if l.terminalSettled.isSettled(settleKey, now) {
+		settleKey := terminalSweepKey("worktrees", item, counts[item.ID])
+		if countsOK && l.terminalSettled.isSettled(settleKey, now) {
 			continue
 		}
 		l.cleanupTerminalItemSync(ctx, item.ID)
 		// WorktreeCleaner is best-effort and reports nothing, so a failed cleanup is
 		// retried after the TTL rather than on the next tick.
-		l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
+		if countsOK {
+			l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
+		}
 	}
 	if len(items) > 0 {
 		log.InfoLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees: re-swept worktree cleanup for %d terminal item(s)", len(items))
@@ -220,6 +224,23 @@ func (l *BacklogLifecycleListener) sweepNow() time.Time {
 }
 
 // terminalSweepKey scopes a settled entry to one sweep and one version of the item.
-func terminalSweepKey(sweep string, item BacklogItemData) string {
-	return sweep + "/" + item.ID + "@" + strconv.FormatInt(item.UpdatedAt.UnixNano(), 10)
+// sessionCount is part of the key because attaching an item session does not bump
+// the item's updated_at, and a session attached late must re-enter the sweep.
+func terminalSweepKey(sweep string, item BacklogItemData, sessionCount int) string {
+	return sweep + "/" + item.ID + "@" + strconv.FormatInt(item.UpdatedAt.UnixNano(), 10) + "#" + strconv.Itoa(sessionCount)
+}
+
+// terminalSessionCounts returns item id -> item_sessions row count from one query.
+// ok is false when it failed; callers then bypass the settled cache entirely.
+func (l *BacklogLifecycleListener) terminalSessionCounts(ctx context.Context) (counts map[string]int, ok bool) {
+	entries, err := l.storage.GetAllItemSessionsWithBacklogInfo(ctx)
+	if err != nil {
+		log.WarningLog().Printf("[BacklogLifecycle] terminal sweep session counts: %v (settled cache bypassed this tick)", err)
+		return nil, false
+	}
+	counts = make(map[string]int)
+	for _, e := range entries {
+		counts[e.ItemID]++
+	}
+	return counts, true
 }
