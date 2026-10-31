@@ -280,7 +280,7 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 			// the rest of the loop bounds the wait with waitReadable instead.
 			if pty != lastPTY {
 				// A swapped-in PTY (UpdatePTY) may differ in poller support.
-				lastPTY, deadlineUnsupported.confirmed = pty, false
+				lastPTY, deadlineUnsupported.confirmed = pty, !readDeadlineTrusted
 			}
 			if !deadlineUnsupported.confirmed {
 				if err := pty.SetReadDeadline(time.Now().Add(ptyReadPollInterval)); err != nil {
