@@ -327,6 +327,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Topic | File |
 |---|---|
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
+| Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
