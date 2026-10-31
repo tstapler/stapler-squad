@@ -679,7 +679,7 @@ jobs:
       # nightly.yml's secondary-browser jobs — see its header for why.
       - name: Run e2e shard ${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} (Bun build)
         env:
-          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          TEST_SERVER_BINARY: /nonexistent/stapler-squad
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           WEB_BUILD: bun
