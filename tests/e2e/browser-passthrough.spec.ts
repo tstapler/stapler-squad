@@ -5,8 +5,9 @@ const _features = [
 ] as const;
 import { test, expect } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('browser-passthrough', () => {
   let sessionId: string;

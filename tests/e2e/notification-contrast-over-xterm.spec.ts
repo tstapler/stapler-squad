@@ -13,8 +13,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { SessionClient } from './helpers/session-client';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const OUT = process.env.MC1_OUT || '/tmp/mc1-contrast';
 const MODES = ['brightfill', 'whitebg', 'brightwhitebg', 'yellowbg', 'syntax'] as const;
 const THEMES = (process.env.MC1_THEMES || 'light,dark,clean,matrix,cyberpunk77,wh40k').split(',');

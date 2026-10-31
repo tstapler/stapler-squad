@@ -34,4 +34,30 @@ describe("e2e server isolation", () => {
     expect(setup).toMatch(/process\.env\.TEST_SERVER_URL = urls\[0\]/);
     expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIR = dirs\[0\]/);
   });
+
+  it("keeps specs off the raw single-server env vars (they would all hit worker slot 0)", () => {
+    const allowed = [
+      "helpers/base-url.ts",
+      "helpers/test-server.ts",
+      "global-setup",
+      "playwright.config.ts",
+      "playwright.dev-mode.config.ts",
+      "worker-server-isolation.spec.ts",
+      ".dev-mode.spec.ts",
+      "helpers/session-client.ts", // doc comment only
+    ];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = path.relative(E2E, path.join(dir, entry.name));
+        if (entry.isDirectory()) {
+          if (!["node_modules", "allure-results", "perf", "baseline", "scripts"].includes(entry.name)) walk(path.join(dir, entry.name));
+        } else if (entry.name.endsWith(".ts") && !allowed.some((a) => rel.includes(a))) {
+          if (/process\.env\.(TEST_SERVER_URL|BASE_URL|TEST_SERVER_TESTDIR)\b/.test(read(rel))) offenders.push(rel);
+        }
+      }
+    };
+    walk(E2E);
+    expect(offenders).toEqual([]);
+  });
 });

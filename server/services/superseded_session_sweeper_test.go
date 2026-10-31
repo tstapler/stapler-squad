@@ -140,3 +140,34 @@ func TestSupersededSessionSweeper_should_JoinCleanly_When_ContextCancelled(t *te
 
 	goleak.VerifyNone(t, baseline)
 }
+
+type liveCheckCounter struct {
+	*mockSessionStopper
+	liveChecks []string
+}
+
+func (c *liveCheckCounter) IsSessionLive(uuid string) bool {
+	c.liveChecks = append(c.liveChecks, uuid)
+	return c.mockSessionStopper.IsSessionLive(uuid)
+}
+
+// Archived sessions stay superseded forever; re-checking each one every tick
+// cost two session queries apiece (11k+ in 36 minutes on the live service).
+func TestSupersededSessionSweeper_should_SkipAlreadyArchived_WithoutPerSessionChecks(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+
+	now := time.Now()
+	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-3 * time.Hour), now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
+	archivedUUID, pendingUUID := uuids[0], uuids[1]
+	_, err := storage.GetEntClient().Session.Create().
+		SetTitle("already-archived").SetPath("/tmp/x").SetProgram("claude").SetStatus(int(session.Stopped)).
+		SetUUID(archivedUUID).SetArchivedAt(now).Save(t.Context())
+	require.NoError(t, err)
+
+	stopper := &liveCheckCounter{mockSessionStopper: &mockSessionStopper{}}
+	NewSupersededSessionSweeper(storage, stopper).sweep(t.Context())
+
+	assert.Equal(t, []string{pendingUUID}, stopper.liveChecks, "the archived session must not be re-checked")
+	assert.Equal(t, []string{pendingUUID}, stopper.archivedUUIDs, "the unarchived superseded session is still archived")
+}

@@ -1,56 +1,17 @@
 package artifacts
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
-
-	"github.com/tstapler/stapler-squad/log"
 )
 
-// syncBuffer wraps bytes.Buffer with a mutex, matching the pattern already used in
-// executor/safeexec/safeexec_pg_test.go and server/services/autonomous_orchestration_service_test.go.
-// A plain bytes.Buffer here would be a real -race hazard the moment a future test drives
-// concurrent writes through captureLogs (e.g. by calling Start()), even though today's
-// sole caller is synchronous.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func (b *syncBuffer) Len() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Len()
-}
-
-// captureLogs redirects slog's default logger to a JSON-lines buffer for the
-// duration of the test, restoring the previous default on cleanup. Not safe
-// to use from a t.Parallel() test — it mutates the process-wide slog default.
-func captureLogs(t *testing.T) *syncBuffer {
-	t.Helper()
-	buf := &syncBuffer{}
-	prev := log.SetSlogDefaultForTest(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
-	return buf
+// offsetOf is the scan offset recorded for path (0 when none).
+func (ae *ArtifactExtractor) offsetOf(path string) int64 {
+	pos, _ := ae.position(path)
+	return pos.Offset
 }
 
 // writeJSONLLine writes a minimal JSONL user/tool_result line containing the given text.
@@ -164,7 +125,7 @@ func TestScanFile_IncrementalOffset(t *testing.T) {
 	}
 }
 
-// C-2: TestScanFile_SkipsAgentFiles checks the queue channel directly rather than
+// C-2: TestScanFile_SkipsAgentFiles checks the queue directly rather than
 // relying on a worker running. An agent- file must never be enqueued.
 func TestScanFile_SkipsAgentFiles(t *testing.T) {
 	t.Parallel()
@@ -174,11 +135,8 @@ func TestScanFile_SkipsAgentFiles(t *testing.T) {
 		func(filePath string) (string, bool) { return "test", true },
 	)
 	ae.OnHistoryFileChanged("/home/user/.claude/projects/foo/agent-abc123.jsonl")
-	select {
-	case path := <-ae.queue:
-		t.Fatalf("agent- file must not be enqueued, got: %q", path)
-	default:
-		// correct: queue is empty
+	if n := ae.queue.Pending(); n != 0 {
+		t.Fatalf("agent- file must not be enqueued, %d pending", n)
 	}
 }
 
@@ -192,13 +150,8 @@ func TestOnHistoryFileChanged_EnqueuesNonAgentJSONL(t *testing.T) {
 	)
 	const path = "/home/user/.claude/projects/foo/session.jsonl"
 	ae.OnHistoryFileChanged(path)
-	select {
-	case got := <-ae.queue:
-		if got != path {
-			t.Fatalf("unexpected path enqueued: %q", got)
-		}
-	default:
-		t.Fatal("expected non-agent .jsonl to be enqueued")
+	if n := ae.queue.Pending(); n != 1 {
+		t.Fatalf("expected non-agent .jsonl to be enqueued once, got %d pending", n)
 	}
 }
 
@@ -259,9 +212,7 @@ func TestSeedOffsets_RestoresOffsetFromStoredBlob(t *testing.T) {
 	instances := []InstanceInfo{{Title: "s1", HistoryFilePath: "/path/to/s1.jsonl"}}
 	ae.SeedOffsets(instances)
 
-	ae.offsetsMu.Lock()
-	got := ae.offsets["/path/to/s1.jsonl"]
-	ae.offsetsMu.Unlock()
+	got := ae.offsetOf("/path/to/s1.jsonl")
 
 	if got != 1234 {
 		t.Fatalf("SeedOffsets: offset = %d, want 1234", got)
@@ -277,9 +228,7 @@ func TestSeedOffsets_IgnoresMissingBlob(t *testing.T) {
 		func(filePath string) (string, bool) { return "s", true },
 	)
 	ae.SeedOffsets([]InstanceInfo{{Title: "s1", HistoryFilePath: "/path/to/s1.jsonl"}})
-	ae.offsetsMu.Lock()
-	got := ae.offsets["/path/to/s1.jsonl"]
-	ae.offsetsMu.Unlock()
+	got := ae.offsetOf("/path/to/s1.jsonl")
 	if got != 0 {
 		t.Fatalf("SeedOffsets: expected 0 offset for missing blob, got %d", got)
 	}
@@ -338,9 +287,7 @@ func TestScanFile_AdvancesOffsetWhenNoArtifactsFound(t *testing.T) {
 	}
 
 	// But the offset must be advanced past the processed line so we don't re-scan.
-	ae.offsetsMu.Lock()
-	offset := ae.offsets[path]
-	ae.offsetsMu.Unlock()
+	offset := ae.offsetOf(path)
 	if offset == 0 {
 		t.Fatal("expected offset to advance past processed line, got 0")
 	}
@@ -364,16 +311,13 @@ func TestScanFile_DoesNotAdvanceOffsetOnStoreFnError(t *testing.T) {
 	ae.scanFile(path)
 
 	// After storeFn failure, offset should NOT advance (so data can be retried).
-	ae.offsetsMu.Lock()
-	offset := ae.offsets[path]
-	ae.offsetsMu.Unlock()
+	offset := ae.offsetOf(path)
 	if offset != 0 {
 		t.Fatalf("expected offset=0 after storeFn error (so data can be retried), got %d", offset)
 	}
 }
 
-// M-17: TestEnqueue_DeduplicatesInflightPaths verifies inflight dedup prevents
-// the same path from being enqueued twice.
+// M-17: enqueueing the same path repeatedly is one unit of work.
 func TestEnqueue_DeduplicatesInflightPaths(t *testing.T) {
 	t.Parallel()
 	ae := NewArtifactExtractor(
@@ -383,57 +327,31 @@ func TestEnqueue_DeduplicatesInflightPaths(t *testing.T) {
 	)
 	const path = "/some/session.jsonl"
 	ae.enqueue(path)
-	ae.enqueue(path) // second enqueue of the same path should be dropped
+	ae.enqueue(path)
 
-	// Drain the queue — should have only 1 item.
-	count := 0
-	for {
-		select {
-		case <-ae.queue:
-			count++
-		default:
-			goto done
-		}
-	}
-done:
-	if count != 1 {
-		t.Fatalf("expected 1 enqueued item (dedup), got %d", count)
+	if n := ae.queue.Pending(); n != 1 {
+		t.Fatalf("expected 1 pending item (coalesced), got %d", n)
 	}
 }
 
-// TestEnqueue_RateLimitsQueueFullWarnings guards the drop-log rate limiting
-// that motivated log.DropCounter: without it, sustained backpressure logs a
-// Warn line for every single dropped file. Not t.Parallel(): it captures the
-// process-wide slog default.
-func TestEnqueue_RateLimitsQueueFullWarnings(t *testing.T) {
+// A burst far beyond the old 256-slot queue must neither drop nor duplicate work.
+func TestEnqueue_BurstCoalescesByPathAndNeverDrops(t *testing.T) {
+	t.Parallel()
 	ae := NewArtifactExtractor(
 		func(title, blob string) error { return nil },
 		func(title string) (string, error) { return "", nil },
 		func(filePath string) (string, bool) { return "s", true },
 	)
-
-	// Saturate the queue so every subsequent enqueue takes the drop path.
-	// Start() is deliberately not called — nothing drains ae.queue.
-	for i := 0; i < artifactQueueSize; i++ {
-		ae.enqueue(fmt.Sprintf("/some/fill-%d.jsonl", i))
+	const distinct = 1000
+	for round := 0; round < 3; round++ {
+		for i := 0; i < distinct; i++ {
+			ae.enqueue(fmt.Sprintf("/some/burst-%d.jsonl", i))
+		}
 	}
-
-	buf := captureLogs(t)
-
-	const drops = log.DropLogInterval + 5 // 105: crosses one rate-limit boundary
-	for i := 0; i < drops; i++ {
-		ae.enqueue(fmt.Sprintf("/some/drop-%d.jsonl", i))
+	if n := ae.queue.Pending(); n != distinct {
+		t.Fatalf("pending = %d, want %d (every distinct path once)", n, distinct)
 	}
-
-	lines := 0
-	if buf.Len() > 0 {
-		lines = strings.Count(strings.TrimRight(buf.String(), "\n"), "\n") + 1
-	}
-	// The counter logs on drop #1 and again on drop #101 (n%DropLogInterval==1),
-	// so 105 drops produce 2 log lines — far fewer than 105, which is the
-	// property under test.
-	const wantLines = 2
-	if lines != wantLines {
-		t.Fatalf("got %d log lines for %d drops, want %d (rate limiting not applied): %s", lines, drops, wantLines, buf.String())
+	if st := ae.QueueStats(); st.Coalesced != 2*distinct {
+		t.Fatalf("coalesced = %d, want %d", st.Coalesced, 2*distinct)
 	}
 }
