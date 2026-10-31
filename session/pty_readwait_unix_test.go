@@ -14,6 +14,14 @@ func TestWaitReadable(t *testing.T) {
 	if ready, err := waitReadable(master, time.Millisecond); err != nil || ready {
 		t.Fatalf("silent PTY: ready=%v err=%v, want false,nil", ready, err)
 	}
+	// poll(2) is only used for fds beyond FD_SETSIZE, so check its idle result here.
+	if rc, err := master.SyscallConn(); err == nil {
+		_ = rc.Control(func(fd uintptr) {
+			if ready, err := pollReadable(int(fd), time.Millisecond); err != nil || ready {
+				t.Errorf("poll on silent PTY: ready=%v err=%v, want false,nil", ready, err)
+			}
+		})
+	}
 	if _, err := slave.Write([]byte("x")); err != nil {
 		t.Fatal(err)
 	}

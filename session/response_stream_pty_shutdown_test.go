@@ -111,7 +111,6 @@ func stopWithin(t *testing.T, rs *ResponseStream, bound time.Duration) {
 	}
 }
 
-// Not parallel: waitUntilStreamLoopParked scans every goroutine.
 // TestResponseStream_StopWithSilentPTY proves that cancelling the stream never
 // depends on the PTY producing data or being closed. Stop() joins the stream
 // goroutine, so a read that ignores cancellation hangs it forever.

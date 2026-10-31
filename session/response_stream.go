@@ -240,6 +240,7 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 	// goroutine, so a plain struct (no lock, no atomic) is safe.
 	deadlineUnsupported := &ptyDeadlineUnsupported{}
 	var lastPTY *os.File
+	waitErrLogged := false
 
 	for {
 		select {
@@ -295,7 +296,10 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 				case werr != nil:
 					// The wait itself failed; never fall into a Read that cannot be
 					// interrupted. Back off (cancellably) and retry.
-					log.Warn("polling PTY for readability failed", "session", rs.sessionName, "err", werr)
+					if !waitErrLogged {
+						waitErrLogged = true // once per stream; a persistent error would repeat every interval
+						log.Warn("polling PTY for readability failed", "session", rs.sessionName, "err", werr)
+					}
 					select {
 					case <-ctx.Done():
 					case <-time.After(ptyReadPollInterval):
