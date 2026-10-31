@@ -46,8 +46,9 @@ func ResolveSessionBackendForTitle(cfg *config.Config, title string, requestOver
 
 // pinResolvedBackend records the backend the process manager actually resolved
 // when no per-session pin exists, so a later change of the process-wide default
-// cannot silently move this Instance to another backend. Call only before the
-// Instance is shared.
+// cannot silently move this Instance to another backend. Used for new Instances
+// only: restored unpinned records keep following the live default. Call before
+// the Instance is shared.
 func (i *Instance) pinResolvedBackend() {
 	if i.Backend != "" {
 		return

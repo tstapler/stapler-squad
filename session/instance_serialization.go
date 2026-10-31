@@ -441,7 +441,6 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
-	instance.pinResolvedBackend()
 
 	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
 	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(

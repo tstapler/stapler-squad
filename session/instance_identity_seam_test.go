@@ -83,20 +83,17 @@ func TestSeam_UnpinnedRecordWithDaemonIDRestoresOnTymux(t *testing.T) {
 	assert.Equal(t, BackendTymux, inst.ToInstanceData().Backend)
 }
 
-// An unpinned Instance records the backend it actually resolved, so a later
-// change of the default cannot move it.
-func TestSeam_ResolvedBackendIsPinnedAndPersisted(t *testing.T) {
+// A newly built Instance records the backend it actually resolved, as the
+// CreateSession path already does, so later default changes cannot move it.
+// Restored unpinned records deliberately keep following the live default.
+func TestSeam_NewInstancePinsResolvedBackend(t *testing.T) {
 	useSeamFake(t)
-	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "pin-me"))
-	require.NoError(t, err)
-	want := ProcessManagerBackend(processManagerBackendLabel(inst.processManager))
-
-	assert.Equal(t, want, inst.Backend)
-	assert.Equal(t, want, inst.ToInstanceData().Backend)
-
 	created, err := NewInstance(InstanceOptions{Title: "pin-new", Path: t.TempDir(), Program: "claude"})
 	require.NoError(t, err)
-	assert.Equal(t, ProcessManagerBackend(processManagerBackendLabel(created.processManager)), created.Backend)
+	want := ProcessManagerBackend(processManagerBackendLabel(created.processManager))
+
+	assert.Equal(t, want, created.Backend)
+	assert.Equal(t, want, created.ToInstanceData().Backend)
 }
 
 // A daemon id on a record pinned to another backend is ignored, never routed to
