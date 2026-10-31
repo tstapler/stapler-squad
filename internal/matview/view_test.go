@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var t0 = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+func t0() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }
 
 // fakeCompute is a controllable compute function. gate, when set, blocks every
 // compute until the test sends on it (one token per compute).
@@ -66,7 +66,7 @@ func (f *fakeCompute) fn(ctx context.Context, k string) (string, error) {
 
 func newTestView(t *testing.T, mut func(*Config[string, string])) (*View[string, string], *FakeClock, *fakeCompute) {
 	t.Helper()
-	clk := NewFakeClock(t0)
+	clk := NewFakeClock(t0())
 	fc := newFakeCompute()
 	cfg := Config[string, string]{Compute: fc.fn, ETag: func(s string) string { return s }, Clock: clk}
 	if mut != nil {
@@ -393,7 +393,7 @@ func TestPriorityWaiterBeforePinnedBeforeOther(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	var order []string
+	order := make([]string, 0, 3)
 	for range 3 {
 		v.mu.Lock()
 		var best *entry[string, string]
