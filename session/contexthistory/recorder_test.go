@@ -4,9 +4,11 @@ import (
 	"context"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -273,4 +275,37 @@ func TestRecord_BackToBackCompactionsSharingTurnIndexAreBothKept(t *testing.T) {
 	require.Len(t, evs, 2)
 	assert.Equal(t, "manual", evs[0].Trigger)
 	assert.Equal(t, "auto", evs[1].Trigger)
+}
+
+func countCompactionWrites(s *Store) *atomic.Int64 {
+	var n atomic.Int64
+	s.client.CompactionEvent.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			n.Add(1)
+			return next.Mutate(ctx, m)
+		})
+	})
+	return &n
+}
+
+func TestRecord_SkipsCompactionUpsertWhenEventsUnchanged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, filepath.Join(t.TempDir(), "s.db"))
+	writes := countCompactionWrites(s)
+	rec := newRecorder(s)
+	res := result("a", turn(0, 1000))
+	res.CompactEvents = []tokens.CompactEvent{{Timestamp: t0, Trigger: "auto", TurnIndex: 0, TokensBefore: 90_000, TokensAfter: 8_000}}
+
+	for range 4 {
+		require.NoError(t, rec.Record(ctx, res))
+	}
+	assert.Equal(t, int64(1), writes.Load(), "re-parsing unchanged events must not write")
+
+	res.CompactEvents = append(res.CompactEvents, tokens.CompactEvent{Timestamp: t0.Add(time.Minute), Trigger: "manual", TurnIndex: 0, TokensBefore: 70_000, TokensAfter: 5_000})
+	require.NoError(t, rec.Record(ctx, res))
+	assert.Equal(t, int64(3), writes.Load(), "a new event must be written (bulk create runs one mutation per row: 1 + 2)")
+	evs, err := s.Compactions(ctx, "a")
+	require.NoError(t, err)
+	assert.Len(t, evs, 2)
 }
