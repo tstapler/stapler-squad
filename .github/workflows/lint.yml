@@ -62,8 +62,6 @@ jobs:
     # 60m: Go and web lint plus codegen/buf breaking/ShellCheck in one job (golangci-lint step capped at 16m, ESLint at 16m).
     timeout-minutes: 60
     steps:
-      - name: Runner utilization sampler
-        uses: ./.github/actions/runner-utilization
       # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
       # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
       # see that step's comment for why.
@@ -80,6 +78,8 @@ jobs:
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
           filter: blob:none
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
