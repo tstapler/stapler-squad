@@ -10,5 +10,5 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), nowrongdbentity.Analyzer,
-		"example.com/m/session", "example.com/m/server/analytics", "example.com/m/other")
+		"example.com/m/session", "example.com/m/server/analytics", "example.com/m/server/analytics/escapedb", "example.com/m/other")
 }

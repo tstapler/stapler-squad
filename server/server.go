@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -70,6 +71,7 @@ type Server struct {
 	verifiedHostnames          atomic.Pointer[[]string]                   // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                                   // allowed CORS origins
 	shutdownHooks              []func()                                   // called before HTTP server stops
+	closeAfterJoin             []func()                                   // run after background tasks join (databases whose writers those tasks drive)
 	connCtxCancel              context.CancelFunc                         // cancels BaseContext → closes active streams on shutdown
 	availablePrograms          []string                                   // cached once at startup; programs change only on system changes
 	startedAt                  time.Time                                  // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
@@ -1263,17 +1265,27 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cfg := config.LoadConfig()
 	if deps.AnalyticsEntClient != nil {
 		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
-			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(),
-			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(), &srv.backgroundTasksWG)
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
+	}
+	// Escape events have their own database and retention.
+	if deps.EscapeEventsClient != nil {
+		escapedb.StartRetentionEnforcer(serverCtx, deps.EscapeEventsClient,
+			cfg.EscapeAnalyticsRetentionDays, cfg.EscapeAnalyticsMaxRowsPerSession, &srv.backgroundTasksWG)
+		srv.closeAfterJoin = append(srv.closeAfterJoin, func() {
+			if err := deps.EscapeEventsClient.Close(); err != nil {
+				log.Warn("escape events DB close failed", "err", err)
+			}
+		})
+		srv.startEscapeEventsMigration(serverCtx, deps, cfg)
 	}
 
 	srv.startDBMaintenance(serverCtx, deps)
 
 	// Start escape analytics batch writer and register it as the global writer.
 	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
-	if deps.AnalyticsEntClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
-		escapeWriter := analytics.NewEscapeEventBatchWriter(deps.AnalyticsEntClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+	if deps.EscapeEventsClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := escapedb.NewEscapeEventBatchWriter(deps.EscapeEventsClient, cfg.EscapeAnalyticsMaxRowsPerSession)
 		srv.goBackground(func() { escapeWriter.Start(serverCtx) })
 		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
 		log.Info("Escape analytics batch writer started",
@@ -1284,10 +1296,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Escape analytics disabled (no DB client or captureLevel=off)")
 	}
 
-	// Wire analytics ent client into SessionService for escape analytics RPC handlers.
-	if deps.AnalyticsEntClient != nil {
-		deps.SessionService.SetAnalyticsClient(deps.AnalyticsEntClient)
-		log.Info("Wired analytics ent client into SessionService for escape analytics RPCs")
+	// Wire the escape-events ent client into SessionService for escape analytics RPC handlers.
+	if deps.EscapeEventsClient != nil {
+		deps.SessionService.SetEscapeEventsClient(deps.EscapeEventsClient)
+		log.Info("Wired escape events ent client into SessionService for escape analytics RPCs")
 	}
 
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
@@ -1750,6 +1762,12 @@ func (s *Server) Shutdown() error {
 	// while they're still mid-tick (backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec).
 	if !syncutil.WaitWithTimeout(&s.backgroundTasksWG, s.backgroundTasksJoinTimeout) {
 		log.Warn("[shutdown] background tasks (sweepers, pollers, watchers, subscribers, tmux tickers) did not all exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
+	} else {
+		// Writers have drained and stopped: close (and checkpoint) their databases.
+		// Skipped on a join timeout, where a task may still be writing; WAL replays on next open.
+		for _, closeFn := range s.closeAfterJoin {
+			closeFn()
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

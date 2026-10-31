@@ -13,8 +13,12 @@ type UseCase string
 const (
 	// UseCaseCore is sessions.db: the session graph, backlog and workflow state.
 	UseCaseCore UseCase = "core"
-	// UseCaseEscape is analytics.db: escape and analytics events.
+	// UseCaseEscape is analytics.db: analytics_events (escape_events moved out, see UseCaseEscapeEvents).
 	UseCaseEscape UseCase = "escape"
+	// UseCaseEscapeEvents is db/escape_events.db: the terminal escape-event stream,
+	// on its own writer so its bulk inserts and retention deletes never queue
+	// analytics_events inserts.
+	UseCaseEscapeEvents UseCase = "escape_events"
 )
 
 // fkMode is how foreign-key enforcement is requested in the DSN.
@@ -69,5 +73,14 @@ func CoreSpec(path string, readers int) Spec {
 // EscapeSpec is analytics.db: a single writer connection, foreign keys, incremental auto_vacuum.
 func EscapeSpec(path string) Spec {
 	return Spec{UseCase: UseCaseEscape, PoolName: "analytics", Path: path, Class: ClassTelemetry,
+		Profile: ProfileFor(ClassTelemetry), autoVacuumIncremental: true, foreignKeys: fkLong}
+}
+
+// EscapeEventsSpec is db/escape_events.db: telemetry class with its own single
+// writer. escape_events has no foreign keys, but ent's SQLite migrator refuses a
+// connection without foreign_keys on, so it is requested like analytics.db. Incremental
+// auto_vacuum lets retention deletes return pages.
+func EscapeEventsSpec(path string) Spec {
+	return Spec{UseCase: UseCaseEscapeEvents, PoolName: "escape-events", Path: path, Class: ClassTelemetry,
 		Profile: ProfileFor(ClassTelemetry), autoVacuumIncremental: true, foreignKeys: fkLong}
 }

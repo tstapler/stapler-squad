@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -115,6 +117,13 @@ type ServerDependencies struct {
 	// AnalyticsDriver is the instrumented driver behind AnalyticsEntClient, used
 	// by background SQLite maintenance. Nil whenever AnalyticsEntClient is nil.
 	AnalyticsDriver dialect.ExecQuerier
+
+	// Escape-event storage: db/escape_events.db, its own SQLite file and single
+	// writer so escape inserts and retention deletes never queue analytics_events.
+	// All three are nil when the database failed to open (escape capture is then off).
+	EscapeEventsClient *ent.Client
+	EscapeEventsDriver dialect.ExecQuerier
+	EscapeEventsDB     *dbpool.Database
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	// Available=false means the Browser tab will be hidden on all sessions.
@@ -220,6 +229,9 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		BacklogEnabledCheck:            rt.BacklogEnabledCheck,
 		AnalyticsEntClient:             rt.AnalyticsEntClient,
 		AnalyticsDriver:                rt.AnalyticsDriver,
+		EscapeEventsClient:             rt.EscapeEventsClient,
+		EscapeEventsDriver:             rt.EscapeEventsDriver,
+		EscapeEventsDB:                 rt.EscapeEventsDB,
 		VNCDeps:                        rt.VNCDeps,
 		CDPDeps:                        rt.CDPDeps,
 		HeadlessPool:                   rt.HeadlessPool,
@@ -545,6 +557,11 @@ type RuntimeDeps struct {
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
 	AnalyticsDriver    dialect.ExecQuerier
+
+	// Escape-event storage (see ServerDependencies).
+	EscapeEventsClient *ent.Client
+	EscapeEventsDriver dialect.ExecQuerier
+	EscapeEventsDB     *dbpool.Database
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	VNCDeps vnc.DepsResult
@@ -1350,8 +1367,17 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
 	var analyticsClient *ent.Client
 	var analyticsDriver dialect.ExecQuerier
+	var escapeEventsClient *ent.Client
+	var escapeEventsDriver dialect.ExecQuerier
+	var escapeEventsDB *dbpool.Database
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
 		ctx := context.Background()
+		if ec, edb, ecErr := escapedb.Open(ctx, configDir); ecErr != nil {
+			log.Warn("could not open escape events DB (escape capture disabled)", "err", ecErr)
+		} else {
+			escapeEventsClient, escapeEventsDriver, escapeEventsDB = ec, edb.Driver(), edb
+			log.Info("escape events DB opened", "path", escapedb.Path(configDir))
+		}
 		if ac, drv, acErr := analytics.OpenAnalyticsDBWithDriver(ctx, configDir); acErr != nil {
 			log.Warn("could not open analytics DB (will use log-only fallback)", "err", acErr)
 		} else {
@@ -2020,6 +2046,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		Config:                         cfg,
 		AnalyticsEntClient:             analyticsClient,
 		AnalyticsDriver:                analyticsDriver,
+		EscapeEventsClient:             escapeEventsClient,
+		EscapeEventsDriver:             escapeEventsDriver,
+		EscapeEventsDB:                 escapeEventsDB,
 		VNCDeps:                        vncDeps,
 		CDPDeps:                        cdpDeps,
 		WorkflowRepo:                   workflowRepo,
