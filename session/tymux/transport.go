@@ -33,6 +33,7 @@ type rpcTransport interface {
 	ReviveSession(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error)
 	CapturePane(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error)
 	GetServerInfo(context.Context, *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error)
+	GetPaneStatus(context.Context, *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error)
 	// Attach opens the standing bidi stream. The returned attachStream exposes
 	// only Send/Receive/CloseRequest/CloseResponse — the subset of
 	// *connect.BidiStreamForClient[v1.AttachRequest, v1.AttachEvent] that
@@ -96,6 +97,10 @@ func (t *grpcTransport) ReviveSession(ctx context.Context, req *connect.Request[
 
 func (t *grpcTransport) CapturePane(ctx context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
 	return t.client.CapturePane(ctx, req)
+}
+
+func (t *grpcTransport) GetPaneStatus(ctx context.Context, req *connect.Request[v1.GetPaneStatusRequest]) (*connect.Response[v1.PaneStatus], error) {
+	return t.client.GetPaneStatus(ctx, req)
 }
 
 func (t *grpcTransport) GetServerInfo(ctx context.Context, req *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
