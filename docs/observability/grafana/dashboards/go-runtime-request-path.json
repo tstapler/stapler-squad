@@ -332,8 +332,8 @@
     },
     {
       "id": 7,
-      "title": "HTTP p95 vs RPC handler p95",
-      "description": "The gap is time outside the handler: middleware, header read, response write. Buckets run to 120s, so a stall longer than 10s no longer clamps to exactly 10s.",
+      "title": "HTTP p50 vs unary RPC handler p50",
+      "description": "The gap is time outside the handler: middleware, header read, response write, connection queueing. HTTP has no route label and includes long-lived streams, so compare medians; unary RPCs exclude Watch*/Stream* methods. Buckets run to 120s, so a stall past 10s no longer clamps to exactly 10s.",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -366,13 +366,13 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le)(rate(http_server_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "http (accept to response)",
+          "expr": "histogram_quantile(0.5, sum by (le)(rate(http_server_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "http p50 (accept to response)",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le)(rate(rpc_server_duration_milliseconds_bucket[5m]))) / 1000",
-          "legendFormat": "rpc (handler + interceptors)",
+          "expr": "histogram_quantile(0.5, sum by (le)(rate(rpc_server_duration_milliseconds_bucket{rpc_method!~\"Watch.*|Stream.*\"}[5m]))) / 1000",
+          "legendFormat": "unary rpc p50 (handler + interceptors)",
           "refId": "B"
         }
       ]
