@@ -403,6 +403,7 @@ func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *ses
 	if baseSHA == "" {
 		return
 	}
+	statusCtx := ctx
 	ctx, span := telemetry.GetTracer().Start(ctx, "vcs.status.shipped_commits")
 	defer span.End()
 	headSHA, headErr := git.GetHeadCommitSHA(workDir)
@@ -423,7 +424,9 @@ func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *ses
 		log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
 		status.CommitsUnavailable = true
 	}
-	diffCtx, diffSpan := telemetry.GetTracer().Start(ctx, "vcs.status.diff_stat")
+	// Sibling of shipped_commits (not a child) so each span times only its own stage.
+	diffCtx, diffSpan := telemetry.GetTracer().Start(statusCtx, "vcs.status.diff_stat",
+		trace.WithAttributes(attribute.String("vcs.head_sha", headSHA)))
 	defer diffSpan.End()
 	if diffStat, diffErr := ws.rangeStages.aggregateDiffStat(diffCtx, key); diffErr == nil {
 		status.AggregateDiffStat = &diffStat
