@@ -56,17 +56,58 @@ func (c *paneActivityCache) get(maxAge time.Duration) map[string]time.Time {
 
 var sharedPaneActivity = newPaneActivityCache(func() map[string]time.Time { return batchWindowActivity("") }, time.Now)
 
-func driverPaneActivityGateEnabled() bool {
+// driverPaneActivityGateFlagTTL bounds how often the flag is re-read from config; LoadConfig reads
+// and parses the config file, and every driver asks on every tick.
+const driverPaneActivityGateFlagTTL = 5 * time.Second
+
+var driverGateFlag = &cachedFlag{read: func() bool {
 	return config.LoadConfig().GetFeatureFlagWithDefault(FeatureFlagDriverPaneActivityGate, true)
+}, ttl: driverPaneActivityGateFlagTTL, now: time.Now}
+
+func driverPaneActivityGateEnabled() bool { return driverGateFlag.get() }
+
+// cachedFlag memoizes a boolean read for ttl.
+type cachedFlag struct {
+	read func() bool
+	ttl  time.Duration
+	now  func() time.Time
+
+	mu      sync.Mutex
+	value   bool
+	readAt  time.Time
+	hasRead bool
 }
+
+func (f *cachedFlag) get() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if now := f.now(); !f.hasRead || now.Sub(f.readAt) >= f.ttl {
+		f.value, f.readAt, f.hasRead = f.read(), now, true
+	}
+	return f.value
+}
+
+// driverPaneSnapshot is the snapshot source a driver hands its gate: the shared local snapshot,
+// or nil for a remote instance (the snapshot is the local tmux server's).
+func driverPaneSnapshot(remote bool) map[string]time.Time {
+	if remote {
+		return nil
+	}
+	return sharedPaneActivity.get(paneSnapshotMaxAgeDriver)
+}
+
+// captureStaleness bounds how old the content behind a capture can be: the process manager serves
+// a cached capture for up to capturePaneCacheTTL, so a capture that began at T may show the pane as
+// of T-capturePaneCacheTTL.
+const captureStaleness = capturePaneCacheTTL
 
 // paneActivityGate lets one driver skip a capture-pane when its pane has produced no output since
 // the last capture. One gate belongs to one driver goroutine; it is not safe for concurrent use.
 //
 // A cached capture is reused only when all hold: the session is in the snapshot with the same
-// pane_last_activity as at the last capture, that capture began in a later second than the
-// activity (so any output after the capture moves the activity to a later second), and the capture
-// is under paneGateMaxCaptureAge old. Otherwise it captures, exactly as before.
+// pane_last_activity as at the last capture, that capture's content is provably newer than the
+// activity second (capture start minus captureStaleness falls in a later whole second, so any later
+// output moves the activity), and the capture is under paneGateMaxCaptureAge old. Otherwise it captures, exactly as before.
 type paneActivityGate struct {
 	snapshot func() map[string]time.Time
 	now      func() time.Time
@@ -92,11 +133,13 @@ func (g *paneActivityGate) preview(ctx context.Context, tmuxName string, capture
 	activity, inSnapshot := g.snapshot()[tmuxName]
 	start := g.now()
 	if inSnapshot && g.valid && activity.Equal(g.activity) &&
-		g.capturedAt.Unix() > activity.Unix() && start.Sub(g.capturedAt) < paneGateMaxCaptureAge {
+		g.capturedAt.Add(-captureStaleness).Unix() > activity.Unix() && start.Sub(g.capturedAt) < paneGateMaxCaptureAge {
 		return g.content, nil
 	}
 	content, err := capture(ctx)
-	if err != nil || !inSnapshot {
+	// "" is also what previewBlocked returns for a paused/stopped/not-started instance; caching it
+	// would serve a blank pane after the instance resumes.
+	if err != nil || !inSnapshot || content == "" {
 		g.valid = false
 		return content, err
 	}

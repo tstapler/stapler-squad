@@ -1,4 +1,4 @@
-# ADR-036: Cut tmux subprocess spawns with a shared pane-activity snapshot, then move the snapshot onto control mode
+# ADR-037: Cut tmux subprocess spawns with a shared pane-activity snapshot, then move the snapshot onto control mode
 
 Status: Proposed — 2026-10-30
 
@@ -16,7 +16,7 @@ Method: throwaway instance (`STAPLER_SQUAD_INSTANCE`, private socket `ssq-manual
 time come from a wrapper binary set as `TMUX_BIN` that runs the real tmux and logs `wait4` rusage (user+sys) and wall time per
 process. The wrapper adds its own process, so wall times include roughly one extra exec; CPU is the tmux process's own.
 
-Baseline, 20 sessions, per minute (two independent windows, 594.7 and 596.6 capture-pane/min):
+Baseline, 20 sessions, per minute (this table is one 10-minute window; a second window measured 594.7 capture-pane/min against this one's 596.6):
 
 | subcommand | spawns/min | wall s/min | CPU s/min |
 |---|---|---|---|
@@ -33,18 +33,19 @@ Baseline, 20 sessions, per minute (two independent windows, 594.7 and 596.6 capt
 | `sync.(*WaitGroup).Go` (misc: exit-status, dead-pane, list-sessions checks) | 14.2 |
 | `session.(*ReviewQueuePoller).pollLoop` | 7.2 |
 | `server.(*ReactiveQueueManager).OnControllerStatusChange` | 4.4 |
+| other (below 0.5/min each: registry, runActor, main) | 17.4 |
 
-Findings (all VERIFIED by the table above unless marked):
+Findings (1, 2 and 4 are VERIFIED by the tables above; 3 by the tmux command shown):
 
 1. 88% of spawns are the session driver's per-tick `capture-pane`: every driver runs `Instance.PreviewContext` on every 2 s tick
-   (`session/session_driver.go`, main loop), so spawns scale as 30 per session per minute. 20 sessions give about 600.
+   (`session/session_driver.go`, main loop), so spawns scale with session count: 27.3 per session per minute measured (one capture per 2 s tick would be 30). capture-pane is 96% of all spawns; the driver's share is 88%.
 2. The review-queue poller is already batched: one `list-panes -a` per tick, not one call per session.
 3. **`#{pane_last_activity}` is not a tmux 3.7b format variable.** `tmux list-panes -a -F '#{session_name} #{pane_last_activity}'`
    prints an empty second column (verified against tmux 3.7b). `batchPaneActivity` therefore always returns an empty map, so the
    poller's documented "skip capture-pane when the pane is unchanged" path never fires on this tmux; it falls back to its 30 s
    TTL. `#{window_activity}` is populated and changes only on output (verified by sampling).
-4. The per-spawn CPU is 4–10 ms of tmux CPU, and the wall time is 12 ms p50 and 195 ms p95 for capture-pane under this host's
-   load. The cost is the spawn rate, not any single call.
+4. The per-spawn CPU is about 9 ms of tmux CPU (5.43 s / 596.6), and the wrapper log gives capture-pane wall time of 12 ms p50 and
+   195 ms p95 (5,966 samples) under this host's load. The cost is the spawn rate, not any single call.
 
 Control mode today, and what it can and cannot replace:
 
@@ -65,7 +66,7 @@ Control mode today, and what it can and cannot replace:
 
 Two phases.
 
-**Phase 1 (this ADR's PR): one shared snapshot, and skip provably-redundant captures.** Behind the `driver_pane_activity_gate`
+**Phase 1 (the PR carrying this ADR): one shared snapshot, and skip provably-redundant captures.** Behind the `driver_pane_activity_gate`
 feature flag, default on (kill switch: set it false and every tick captures as before).
 
 1. `batchWindowActivity` runs `list-panes -a -F '#{session_name} #{window_active}#{pane_active} #{window_activity}'` once and a
@@ -81,6 +82,12 @@ feature flag, default on (kill switch: set it false and every tick captures as b
    for the same window, so every caller takes its uncached path), flag off, capture error (never cached).
 3. Counters and gauges: `tmux_exec_total`, `tmux_exec_site_total`, `tmux_exec_gate_in_flight`, and a Grafana dashboard
    (`ssq-tmux-spawns`). `tmux_exec_gate_wait_duration_ms` and `tmux_exec_gate_exec_duration_ms` already exist per pool.
+
+The capture reaches tmux through `TmuxProcessManager.CapturePaneContentContext`, which serves a cached result for up to
+`capturePaneCacheTTL` (1 s), so a capture that began at T may show the pane as of T minus 1 s. The gate therefore requires the capture
+start minus 1 s to fall in a later whole second than the activity; a review found the counterexample that the first draft of the
+rule missed, and `TestPaneActivityGate_ParityUnderCaptureCacheStaleness` enumerates it. An empty capture (what `previewBlocked`
+returns for a paused or not-started instance) is never cached.
 
 Window activity covers every pane in the window, so it can over-report change but never miss it. It reads the session's active
 window and active pane, the pane `capture-pane -t <session>` targets.
@@ -102,6 +109,8 @@ correlation and timeout in the registry reader that does not exist today, so it 
   format; a missed update is bounded by the poll interval.
 - **Control-mode disconnect.** Phase 1 does not depend on control mode. Phase 2 falls back to the Phase 1 spawned `list-panes -a`
   while the registry reports unhealthy, and runs one backstop spawn per 30 s while healthy to catch a silently stalled connection.
+- **Cache staleness and blocked previews.** Covered above: the gate allows for the 1 s capture cache and never caches an empty preview, so a
+  resumed instance captures on its first tick.
 - **Detection latency.** A driver may act on a snapshot up to 2 s old plus its 2 s tick, so worst-case detection of a new dialog is
   about 4 s against 2 s today. This is the one semantic difference; the 30 s recapture bound limits any stale content to that.
 - **Socket scoping.** `listAllPanes` resolves its socket through `tmux.ResolveSocket` and builds args with `Socket.Args`, the form
@@ -135,7 +144,7 @@ Expected, from the throwaway instance (20 sessions, 10 minutes, same method as t
 | capture-pane/min | 596.6 | 96.6 |
 | list-panes/min | 15.1 | 42.5 |
 
-The remaining capture-pane are the driver's 30 s bound (38/min in the after window by `StartSessionDriver`) and the poller's captures (51/min; INFERRED to be its 30 s TTL path, the window baseline showed 28/min, so this figure is noisy). The live
+Of the 96.6 capture-pane/min, 38.1 come from `StartSessionDriver` (the 30 s bound) and 51.4 from `ReviewQueuePoller.checkSessions`; the poller was 30.2/min in the baseline although its code is untouched. INFERRED cause: drivers no longer warm the 1 s capture cache the poller shares, so the poller's captures stop coalescing with theirs. Not tested. The rest is the 8.5/min of other subcommands. The live
 service's session count is not known to this ADR, so its absolute saving will differ; the spawn count now scales with output
 and with 2 per session per minute instead of 30. Not measured: the pollers' tick duration (no such metric exists) and the live
 service (off limits).

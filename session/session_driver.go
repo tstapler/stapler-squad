@@ -346,10 +346,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	// Skips the per-tick capture-pane while the pane is provably unchanged (pane_activity_gate.go).
 	// Local tmux only: the snapshot is the local server's list-panes.
 	paneGate := newPaneActivityGate(func() map[string]time.Time {
-		if inst.IsRemote() {
-			return nil
-		}
-		return sharedPaneActivity.get(paneSnapshotMaxAgeDriver)
+		return driverPaneSnapshot(inst.IsRemote())
 	}, time.Now, driverPaneActivityGateEnabled)
 
 	// Once a PR URL is found in terminal output we stop scanning.

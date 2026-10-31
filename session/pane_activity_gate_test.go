@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,6 +75,111 @@ func TestPaneActivityGate_ParityWithAlwaysCapture(t *testing.T) {
 		}
 	}
 	assert.Less(t, p.captures, ticks, "an idle pane must not be captured every tick")
+}
+
+// ttlPane is a fakePane whose capture is served from a capturePaneCacheTTL-old cache, like
+// TmuxProcessManager.CapturePaneContentContext.
+type ttlPane struct {
+	*fakePane
+	cached   string
+	cachedAt time.Time
+	hasCache bool
+}
+
+func (p *ttlPane) capture(ctx context.Context) (string, error) {
+	if !p.hasCache || p.clock.now().Sub(p.cachedAt) >= capturePaneCacheTTL {
+		p.cached, p.cachedAt, p.hasCache = p.content, p.clock.now(), true
+		p.captures++
+	}
+	return p.cached, nil
+}
+
+// Parity against an always-capture driver on an identical pane, over every combination of output
+// offset, other-consumer capture offset and tick phase (100 ms steps). The other consumer warms the
+// capture cache just before the output, so a capture can show content older than its start time.
+func TestPaneActivityGate_ParityUnderCaptureCacheStaleness(t *testing.T) {
+	t.Parallel()
+	const step = 100 * time.Millisecond
+	for write := 0; write < 20; write++ {
+		for warm := 0; warm <= write; warm++ {
+			for phase := 0; phase < 10; phase++ {
+				gated, plain := newTTLPane(), newTTLPane()
+				g := gateFor(gated.fakePane, freshSnapshot(gated.fakePane, "s"))
+				for i := 0; i < 80; i++ { // 8 s
+					for _, p := range []*ttlPane{gated, plain} {
+						p.clock.advance(step)
+					}
+					if i == warm {
+						gated.capture(context.Background())
+						plain.capture(context.Background())
+					}
+					if i == write {
+						gated.write("dialog\n")
+						plain.write("dialog\n")
+					}
+					if i >= phase && (i-phase)%20 == 0 {
+						got, _ := g.preview(context.Background(), "s", gated.capture)
+						want, _ := plain.capture(context.Background())
+						require.Equal(t, want, got, "write=%d warm=%d phase=%d tick@%d", write, warm, phase, i)
+					}
+				}
+			}
+		}
+	}
+}
+
+func newTTLPane() *ttlPane {
+	p, _ := newTestPane()
+	return &ttlPane{fakePane: p}
+}
+
+func TestPaneActivityGate_EmptyContentIsNotCached(t *testing.T) {
+	t.Parallel()
+	p, clock := newTestPane()
+	g := gateFor(p, freshSnapshot(p, "s"))
+	clock.advance(3 * time.Second)
+	empty := func(context.Context) (string, error) { p.captures++; return "", nil }
+
+	_, _ = g.preview(context.Background(), "s", empty) // e.g. previewBlocked on a paused instance
+	got, _ := g.preview(context.Background(), "s", p.capture)
+	assert.Equal(t, p.content, got)
+	assert.Equal(t, 2, p.captures)
+}
+
+func TestDriverPaneSnapshot_RemoteInstanceGetsNil(t *testing.T) {
+	t.Parallel()
+	assert.Nil(t, driverPaneSnapshot(true))
+}
+
+func TestCachedFlag_ReadsOncePerTTL(t *testing.T) {
+	t.Parallel()
+	clock := &paneTestClock{t: time.Unix(1_000_000, 0)}
+	reads, value := 0, true
+	f := &cachedFlag{read: func() bool { reads++; return value }, ttl: 5 * time.Second, now: clock.now}
+
+	assert.True(t, f.get())
+	value = false
+	clock.advance(4 * time.Second)
+	assert.True(t, f.get(), "still inside the TTL")
+	clock.advance(time.Second)
+	assert.False(t, f.get(), "TTL elapsed, re-read")
+	assert.Equal(t, 2, reads)
+}
+
+// Concurrent callers coalesce into one fetch (run under -race).
+func TestPaneActivityCache_ConcurrentCallersCoalesce(t *testing.T) {
+	t.Parallel()
+	clock := &paneTestClock{t: time.Unix(1_000_000, 0)}
+	var fetches atomic.Int32
+	cache := newPaneActivityCache(func() map[string]time.Time { fetches.Add(1); return nil }, clock.now)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); cache.get(paneSnapshotMaxAgeDriver) }()
+	}
+	wg.Wait()
+	assert.EqualValues(t, 1, fetches.Load())
 }
 
 func TestPaneActivityGate_IdlePaneCapturesOnceUntilMaxAge(t *testing.T) {
