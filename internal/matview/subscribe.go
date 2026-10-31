@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 )
 
 type subscriber[K comparable, V any] struct {
@@ -75,10 +76,11 @@ func (v *View[K, V]) Subscribe(ctx context.Context, keys []K) (<-chan Update[K, 
 		if e.has {
 			s.put(Update[K, V]{Key: k, Versioned: e.cur})
 		}
-		if !e.has || e.dirty {
-			v.enqueueLocked(e)
+		if !e.has || e.dirty || e.cancelled {
+			v.requestLocked(e, false)
 		}
 	}
+	v.streams++
 	v.pumpLocked()
 	v.mu.Unlock()
 
@@ -113,6 +115,7 @@ func (v *View[K, V]) serve(ctx context.Context, s *subscriber[K, V], out chan<- 
 func (v *View[K, V]) unpin(s *subscriber[K, V]) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.streams--
 	for _, k := range s.keys {
 		e, ok := v.entries[k]
 		if !ok {
@@ -123,6 +126,7 @@ func (v *View[K, V]) unpin(s *subscriber[K, V]) {
 			e.pins--
 			if e.pins == 0 {
 				v.pinned--
+				v.releaseInterestLocked(e)
 			}
 			e.lastRead = v.cfg.Clock.Now()
 		}
@@ -199,3 +203,24 @@ func (s semaphore) TryAcquire() bool {
 }
 
 func (s semaphore) Release() { <-s }
+
+// releaseInterestLocked runs when the last subscriber leaves: pending work for
+// an entry nobody watches is dropped, and the entry is marked dirty so the next
+// read refreshes it instead.
+func (v *View[K, V]) releaseInterestLocked(e *entry[K, V]) {
+	if len(e.waiters) > 0 {
+		return
+	}
+	pending := e.timer != nil || e.queued || e.rerun || !e.firstDirty.IsZero()
+	v.stopTimerLocked(e)
+	if e.queued {
+		delete(v.queued, e)
+		e.queued = false
+	}
+	e.rerun, e.rerunNow = false, false
+	e.firstDirty = time.Time{}
+	v.cancelRunLocked(e)
+	if pending {
+		e.dirty = true
+	}
+}

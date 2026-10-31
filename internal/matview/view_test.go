@@ -790,3 +790,204 @@ func TestETagPanicIsContained(t *testing.T) {
 	_, err = v.Get(context.Background(), "a", GetOpts{WaitFresh: true})
 	require.NoError(t, err, "limiter slot released")
 }
+
+func TestEventDuringUnpinnedRefreshThenPinIsNotLost(t *testing.T) {
+	t.Parallel()
+	var val atomic.Value
+	val.Store("old")
+	started := make(chan struct{}, 8)
+	gate := make(chan struct{}, 8)
+	v, clk, _ := newTestView(t, func(c *Config[string, string]) {
+		c.Compute = func(context.Context, string) (string, error) {
+			s := val.Load().(string) // state is read at compute start
+			started <- struct{}{}
+			<-gate
+			return s, nil
+		}
+	})
+	gate <- struct{}{}
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	recv(t, started)
+	clk.Advance(20 * time.Second) // stale tier: refresh starts, unpinned, no waiters
+	_, err = v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	recv(t, started)
+	val.Store("new")
+	v.Invalidate("a", ReasonFS) // lands on the running refresh: dirty only
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := v.Subscribe(ctx, []string{"a"}) // first interest must convert dirty into a rerun
+	gate <- struct{}{}                       // the refresh finishes with the pre-event value
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 2 })
+	clk.Advance(300 * time.Millisecond)
+	recv(t, started)
+	gate <- struct{}{}
+	for range 3 {
+		if recv(t, ch).Value == "new" {
+			return
+		}
+	}
+	t.Fatal("pinned entry stuck on the pre-event value")
+}
+
+func TestGetDoesNotJoinComputeThatAbandonCancelled(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{}, 8)
+	proceed := make(chan struct{})
+	var calls atomic.Int64
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.Compute = func(ctx context.Context, _ string) (string, error) {
+			if calls.Add(1) > 1 {
+				return "ok", nil
+			}
+			started <- struct{}{}
+			<-ctx.Done()
+			<-proceed
+			return "", ctx.Err()
+		}
+	})
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	d1 := make(chan error, 1)
+	go func() { _, err := v.Get(ctx1, "a", GetOpts{}); d1 <- err }()
+	recv(t, started)
+	cancel1()
+	recv(t, d1)
+	g2 := getAsync(v, "a", GetOpts{}) // arrives after the cancel, before the compute returns
+	spinUntil(t, func() bool { return len(v.waitersFor("a")) == 1 })
+	close(proceed)
+	r := recv(t, g2)
+	require.NoError(t, r.err, "must not inherit the previous caller's cancellation")
+	assert.Equal(t, "ok", r.v.Value)
+}
+
+func TestPinnedFailedRecomputeIsRetriedAndServedStale(t *testing.T) {
+	t.Parallel()
+	v, clk, fc := newTestView(t, nil)
+	ch := pin(t, v, "a")
+	require.Equal(t, "v0", recv(t, ch).Value)
+	fc.setErr(errors.New("transient"))
+	fc.set("a", "new")
+	v.Invalidate("a", ReasonFS)
+	clk.Advance(300 * time.Millisecond)
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 2 })
+	r, err := v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	assert.True(t, r.Stale, "a failed refresh must not look fresh")
+	assert.Equal(t, "v0", r.Value)
+
+	fc.setErr(nil)
+	clk.Advance(5 * time.Second) // ErrorRetry
+	assert.Equal(t, "new", recv(t, ch).Value)
+	r, _ = v.Get(context.Background(), "a", GetOpts{})
+	assert.False(t, r.Stale)
+}
+
+func TestFailingStaleRefreshBacksOffInsteadOfRerunningPerRead(t *testing.T) {
+	t.Parallel()
+	v, clk, fc := newTestView(t, nil)
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	clk.Advance(20 * time.Second)
+	fc.setErr(errors.New("down"))
+	_, _ = v.Get(context.Background(), "a", GetOpts{}) // stale tier: one refresh, fails
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 2 })
+	for range 5 {
+		r, err := v.Get(context.Background(), "a", GetOpts{})
+		require.NoError(t, err)
+		assert.True(t, r.Stale)
+	}
+	assert.True(t, idle(v))
+	assert.EqualValues(t, 2, fc.calls.Load(), "reads inside the backoff window do not recompute")
+	clk.Advance(5 * time.Second)
+	_, _ = v.Get(context.Background(), "a", GetOpts{})
+	recv(t, fc.started)
+	recv(t, fc.started)
+	recv(t, fc.started)
+	assert.EqualValues(t, 3, fc.calls.Load())
+}
+
+func TestRemoveWhileRunningCancelsAndSerializesRecreatedKey(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	var inflight, maxInflight, calls atomic.Int64
+	started := make(chan struct{}, 4)
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.Compute = func(context.Context, string) (string, error) {
+			n := inflight.Add(1)
+			defer inflight.Add(-1)
+			if n > maxInflight.Load() {
+				maxInflight.Store(n)
+			}
+			if calls.Add(1) == 1 {
+				started <- struct{}{}
+				<-release // ignores ctx: a stuck old compute
+			}
+			return "ok", nil
+		}
+	})
+	old := getAsync(v, "a", GetOpts{})
+	recv(t, started)
+	v.Remove("a")
+	assert.ErrorIs(t, recv(t, old).err, ErrRemoved)
+	assert.EqualValues(t, 1, v.Stats().Running, "dropped-but-running compute still counts")
+
+	fresh := getAsync(v, "a", GetOpts{})
+	spinUntil(t, func() bool { return v.Stats().Queued == 1 })
+	assert.EqualValues(t, 1, calls.Load(), "recreated key waits for the old compute")
+	close(release)
+	r := recv(t, fresh)
+	require.NoError(t, r.err)
+	assert.EqualValues(t, 1, maxInflight.Load(), "never two computes for one key")
+}
+
+func TestCloseRacingARunningComputeCancelsIt(t *testing.T) {
+	t.Parallel()
+	cancelled := make(chan struct{})
+	started := make(chan struct{})
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.Compute = func(ctx context.Context, _ string) (string, error) {
+			close(started)
+			<-ctx.Done()
+			close(cancelled)
+			return "", ctx.Err()
+		}
+	})
+	res := getAsync(v, "a", GetOpts{})
+	recv(t, started)
+	v.Close()
+	assert.ErrorIs(t, recv(t, res).err, ErrClosed)
+	recv(t, cancelled)
+}
+
+func TestLastUnsubscribeDropsPendingWorkAndMarksEntryDirty(t *testing.T) {
+	t.Parallel()
+	v, clk, fc := newTestView(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, _ := v.Subscribe(ctx, []string{"a"})
+	recv(t, ch)
+	v.Invalidate("a", ReasonFS) // arms the debounce
+	cancel()
+	for range ch {
+	}
+	clk.Advance(time.Second)
+	assert.True(t, idle(v), "nobody watches: the pending recompute is dropped")
+	assert.EqualValues(t, 1, fc.calls.Load())
+	fc.set("a", "new")
+	_, err := v.Get(context.Background(), "a", GetOpts{}) // dirty: refreshed on read
+	require.NoError(t, err)
+	recv(t, fc.started)
+	recv(t, fc.started)
+}
+
+func TestStatsCountsStreamsAndSubscriptionsSeparately(t *testing.T) {
+	t.Parallel()
+	v, _, _ := newTestView(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	v.Subscribe(ctx, []string{"a", "b"})
+	v.Subscribe(ctx, []string{"a", "b"})
+	st := v.Stats()
+	assert.Equal(t, 2, st.Subscribers)
+	assert.Equal(t, 4, st.Subscriptions)
+}

@@ -3,6 +3,10 @@
 // per-key debounce and a bounded, prioritised scheduler recompute them off the
 // request path; readers get the cached value and subscribers get conflated
 // updates. Get never runs the compute function on the caller's goroutine.
+//
+// Values are shared between readers and subscribers, so V must be treated as
+// immutable once Compute returns it. Limiter methods run under the view's lock
+// (TryAcquire) and must never call back into the view.
 package matview
 
 import (
@@ -140,10 +144,12 @@ func (c *Config[K, V]) defaults() {
 
 // Stats is a point-in-time copy of the view's counters, for metrics.
 type Stats struct {
-	Entries, Pinned, Queued, Running, Degraded, Subscribers int
-	EventsReceived, EventsCoalesced, EventsIgnored          uint64
-	Recomputes, RecomputeErrors, Evictions                  uint64
-	PinRejected                                             uint64
+	Entries, Pinned, Queued, Running, Degraded     int
+	Subscribers                                    int // live Subscribe streams
+	Subscriptions                                  int // (stream, key) pairs
+	EventsReceived, EventsCoalesced, EventsIgnored uint64
+	Recomputes, RecomputeErrors, Evictions         uint64
+	PinRejected                                    uint64
 }
 
 type waiter[V any] struct {
@@ -174,7 +180,10 @@ type entry[K comparable, V any] struct {
 	rerun      bool
 	dirty      bool // an event arrived for an entry nobody watches or waits on; refresh on next read
 	cancel     context.CancelFunc
-	rerunNow   bool // an immediate-reason event arrived during the running compute
+	cancelled  bool      // abandon cancelled the running compute; its result is discarded
+	failing    bool      // the last compute failed; the served value is Stale
+	retryAfter time.Time // no reader-initiated refresh before this (failed refresh backoff)
+	rerunNow   bool      // an immediate-reason event arrived during the running compute
 	waiters    []*waiter[V]
 	subs       map[*subscriber[K, V]]struct{}
 }
@@ -197,6 +206,8 @@ type View[K comparable, V any] struct {
 	pinned  int
 	closed  bool
 	done    chan struct{}
+	zombies map[K]int // computes still running for entries dropped from the map
+	streams int
 	stats   Stats
 }
 
@@ -210,6 +221,7 @@ func New[K comparable, V any](cfg Config[K, V]) *View[K, V] {
 		cfg:     cfg,
 		entries: map[K]*entry[K, V]{},
 		queued:  map[*entry[K, V]]struct{}{},
+		zombies: map[K]int{},
 		done:    make(chan struct{}),
 	}
 	if cfg.IdleEvictAfter > 0 {
@@ -314,8 +326,8 @@ func (v *View[K, V]) abandon(e *entry[K, V], w *waiter[V], cause error) (Version
 	if len(e.waiters) == 0 && e.firstDirty.IsZero() {
 		e.rerun = false // it was only set on this waiter's behalf
 	}
-	if len(e.waiters) == 0 && e.pins == 0 && e.running && e.cancel != nil {
-		e.cancel() // nobody wants this result any more (#1264)
+	if len(e.waiters) == 0 && e.pins == 0 {
+		v.cancelRunLocked(e) // nobody wants this result any more (#1264)
 	}
 	if e.has && errors.Is(cause, ErrTimeout) {
 		cur := e.cur
@@ -325,21 +337,39 @@ func (v *View[K, V]) abandon(e *entry[K, V], w *waiter[V], cause error) (Version
 	return Versioned[V]{}, cause
 }
 
+// cancelRunLocked cancels a running compute and marks its result as discarded,
+// so a reader arriving before it returns starts a fresh compute instead of
+// joining the cancelled one.
+func (v *View[K, V]) cancelRunLocked(e *entry[K, V]) {
+	if e.running && !e.cancelled && e.cancel != nil {
+		e.cancelled = true
+		e.cancel()
+	}
+}
+
+// served is the entry's value as readers see it.
+func (e *entry[K, V]) served() Versioned[V] {
+	cur := e.cur
+	cur.Stale = cur.Stale || e.failing
+	return cur
+}
+
 // serveLocked applies the freshness tiers. Watched entries are always served;
 // unwatched ones are fresh up to FreshTTL, served while refreshing up to
 // StaleTTL, and a miss beyond that.
 func (v *View[K, V]) serveLocked(e *entry[K, V], now time.Time) (Versioned[V], bool) {
 	if e.watched() {
-		return e.cur, true
+		return e.served(), true
 	}
 	age := now.Sub(e.cur.ComputedAt)
 	switch {
 	case age <= v.cfg.FreshTTL && !e.dirty:
-		return e.cur, true
+		return e.served(), true
 	case age <= v.cfg.StaleTTL:
-		v.enqueueLocked(e)
-		v.pumpLocked()
-		return e.cur, true
+		if !now.Before(e.retryAfter) { // a failing refresh backs off instead of re-running per read
+			v.requestLocked(e, false)
+		}
+		return e.served(), true
 	}
 	return Versioned[V]{}, false
 }
@@ -348,7 +378,16 @@ func (v *View[K, V]) serveLocked(e *entry[K, V], now time.Time) (Versioned[V], b
 // waiter registered.
 func (v *View[K, V]) requestLocked(e *entry[K, V], needsNewer bool) {
 	if e.running {
-		e.rerun = e.rerun || needsNewer
+		// A running compute serves a new reader unless it may predate what the
+		// reader needs: it is being cancelled, an event landed on it while nobody
+		// was interested (dirty), or the caller wants a strictly newer result.
+		if needsNewer || e.cancelled || e.dirty {
+			e.rerun = true
+			e.dirty = false
+			if e.firstDirty.IsZero() {
+				e.firstDirty = v.cfg.Clock.Now()
+			}
+		}
 		return
 	}
 	v.enqueueLocked(e)
@@ -464,9 +503,15 @@ func (v *View[K, V]) pumpLocked() {
 	for len(v.queued) > 0 {
 		var best *entry[K, V]
 		for e := range v.queued {
+			if v.zombies[e.key] > 0 {
+				continue // an abandoned compute for this key still runs; its exit pumps again
+			}
 			if best == nil || better(e, best) {
 				best = e
 			}
+		}
+		if best == nil {
+			return
 		}
 		if !v.cfg.Limiter.TryAcquire() {
 			v.armRetryLocked()
@@ -504,18 +549,44 @@ func (v *View[K, V]) run(ctx context.Context, e *entry[K, V], startSeq uint64) {
 	e.cancel() // release the timeout; e.cancel is only replaced after running clears
 
 	v.mu.Lock()
-	defer v.mu.Unlock()
+	v.finishLocked(e, startSeq, val, etag, err)
+	v.mu.Unlock()
+
+	// Release outside the lock: the Limiter may be shared and must never be
+	// able to deadlock against the view.
+	v.releaseSlot()
+	v.mu.Lock()
+	v.pumpLocked()
+	v.mu.Unlock()
+}
+
+func (v *View[K, V]) releaseSlot() {
+	defer func() { _ = recover() }()
 	v.cfg.Limiter.Release()
+}
+
+func (v *View[K, V]) finishLocked(e *entry[K, V], startSeq uint64, val V, etag string, err error) {
 	e.running = false
 	v.stats.Recomputes++
 	if v.entries[e.key] != e || v.closed {
-		v.finishWaitersLocked(e, startSeq, Versioned[V]{}, ErrRemoved)
+		if v.zombies[e.key]--; v.zombies[e.key] <= 0 {
+			delete(v.zombies, e.key)
+		}
 		return
 	}
+	if e.cancelled {
+		v.finishCancelledLocked(e)
+		return
+	}
+	now := v.cfg.Clock.Now()
 	if err != nil {
 		v.stats.RecomputeErrors++
-		v.finishWaitersLocked(e, startSeq, v.staleCopy(e), failureOrNil(e, err))
+		e.failing = e.has
+		e.retryAfter = now.Add(v.cfg.ErrorRetry)
+		v.finishWaitersLocked(e, startSeq, e.served(), failureOrNil(e, err))
 	} else {
+		e.failing = false
+		e.retryAfter = time.Time{}
 		v.publishLocked(e, val, etag)
 		v.finishWaitersLocked(e, startSeq, e.cur, nil)
 	}
@@ -525,11 +596,24 @@ func (v *View[K, V]) run(ctx context.Context, e *entry[K, V], startSeq uint64) {
 	case len(e.waiters) > 0 || rerunNow:
 		v.enqueueLocked(e)
 	case rerun:
-		v.armDebounceLocked(e, v.cfg.Clock.Now())
-	case err != nil && !e.has && e.pins > 0:
+		v.armDebounceLocked(e, now)
+	case err != nil && e.pins > 0:
 		v.armTimerLocked(e, v.cfg.ErrorRetry)
 	}
-	v.pumpLocked()
+}
+
+// finishCancelledLocked discards the result of a compute abandon cancelled.
+// Interest that arrived since (waiters, pins, queued events) gets a new compute;
+// otherwise the entry is marked dirty so the next read refreshes it.
+func (v *View[K, V]) finishCancelledLocked(e *entry[K, V]) {
+	e.cancelled = false
+	wanted := len(e.waiters) > 0 || e.pins > 0 || e.rerun
+	e.rerun, e.rerunNow = false, false
+	if wanted {
+		v.enqueueLocked(e)
+		return
+	}
+	e.dirty = true
 }
 
 // safeCompute turns a panicking Compute into an error so the limiter slot and
@@ -545,12 +629,6 @@ func (v *View[K, V]) safeCompute(ctx context.Context, k K) (val V, etag string, 
 		etag = v.cfg.ETag(val)
 	}
 	return val, etag, err
-}
-
-func (v *View[K, V]) staleCopy(e *entry[K, V]) Versioned[V] {
-	cur := e.cur
-	cur.Stale = true
-	return cur
 }
 
 // failureOrNil hides a compute error behind a previous value: readers keep the
@@ -616,8 +694,11 @@ func (v *View[K, V]) dropLocked(e *entry[K, V], cause error) {
 		v.pinned--
 	}
 	e.pins = 0
-	if e.running && e.cancel != nil {
-		e.cancel()
+	if e.running {
+		v.zombies[e.key]++
+		if e.cancel != nil {
+			e.cancel()
+		}
 	}
 	delete(v.entries, e.key)
 }
@@ -638,6 +719,10 @@ func (v *View[K, V]) Stats() Stats {
 	defer v.mu.Unlock()
 	s := v.stats
 	s.Entries, s.Pinned, s.Queued = len(v.entries), v.pinned, len(v.queued)
+	s.Subscribers = v.streams
+	for _, n := range v.zombies {
+		s.Running += n
+	}
 	for _, e := range v.entries {
 		if e.running {
 			s.Running++
@@ -645,7 +730,7 @@ func (v *View[K, V]) Stats() Stats {
 		if e.degraded {
 			s.Degraded++
 		}
-		s.Subscribers += len(e.subs)
+		s.Subscriptions += len(e.subs)
 	}
 	return s
 }
