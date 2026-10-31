@@ -1675,7 +1675,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 			// Handle a mid-stream CurrentPaneRequest (e.g. a client-initiated resync) via the
 			// same shared helper the initial handshake and streamViaTmuxCapturePane use.
-			return handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptionsFor(writer))
+			return answerCurrentPane(ctx, sessionID, instance, req, writer)
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -2472,7 +2472,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			})
 		},
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-			return handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptionsFor(writer))
+			return answerCurrentPane(ctx, sessionID, instance, req, writer)
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -3039,7 +3039,10 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 	if skip {
 		return false
 	}
-	dispatchInputReadLoopFrame(p, incomingData)
+	if err := dispatchInputReadLoopFrame(p, incomingData); err != nil {
+		p.errChan <- err
+		return true
+	}
 	return false
 }
 
@@ -3048,7 +3051,7 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 // BatchedCurrentPaneRequest lives in their own handleXFrame functions, split
 // out purely to keep this loop's cognitive complexity under the lint gate;
 // behavior is unchanged from when they lived inline.
-func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.TerminalData) {
+func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.TerminalData) error {
 	if input := incomingData.GetInput(); input != nil {
 		if p.writer != nil {
 			p.onInput(input.Data)
@@ -3073,7 +3076,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	// (carrying a resync_id to correlate the reply) is answered without a full
 	// reconnect.
 	if paneReq := incomingData.GetCurrentPaneRequest(); paneReq != nil {
-		handleCurrentPaneRequestFrame(p.stream, p.sessionID, paneReq, p.onCurrentPaneRequest, p.resizeSettling)
+		if err := handleCurrentPaneRequestFrame(p.stream, p.sessionID, paneReq, p.onCurrentPaneRequest, p.resizeSettling); err != nil {
+			return err
+		}
 	}
 	// BatchedCurrentPaneRequest (Epic 5.2, terminal:resync-batching): the
 	// client's stagger coordinator coalesced several sibling terminals'
@@ -3082,8 +3087,9 @@ func dispatchInputReadLoopFrame(p inputReadLoopParams, incomingData *sessionv1.T
 	// handleBatchedCurrentPaneRequestFrame's doc comment for why each reply is
 	// still written as its own individually-resync_id-tagged frame).
 	if batchReq := incomingData.GetBatchedCurrentPaneRequest(); batchReq != nil {
-		handleBatchedCurrentPaneRequestFrame(p.stream, p.sessionID, batchReq, p.onCurrentPaneRequest, p.resizeSettling)
+		return handleBatchedCurrentPaneRequestFrame(p.stream, p.sessionID, batchReq, p.onCurrentPaneRequest, p.resizeSettling)
 	}
+	return nil
 }
 
 // ScrollbackResult is onScrollbackRequest's return type (Task 1.3.3b): the
@@ -3270,7 +3276,7 @@ func handleCurrentPaneRequestFrame(
 	paneReq *sessionv1.CurrentPaneRequest,
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
-) {
+) error {
 	ctx, span := telemetry.StartSpan(context.Background(), "terminal.mid_stream_current_pane_request")
 	span.SetAttributes(
 		attribute.String("session_id", sessionID),
@@ -3289,16 +3295,37 @@ func handleCurrentPaneRequestFrame(
 	output, err := onCurrentPaneRequest(ctx, paneReq)
 	if err != nil {
 		span.RecordError(err)
-		if isSessionGone(err) {
-			logSessionGone("[streamViaControlMode] mid-stream current pane request", sessionID, err)
-			return
-		}
-		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "resync_id", paneReq.GetResyncId(), "err", err)
-		return
+		return logCurrentPaneFailure("mid-stream current pane request", sessionID, paneReq.GetResyncId(), err)
 	}
 	span.SetAttributes(attribute.Int("output.bytes", len(output.GetData())))
 	log.Debug("[runInputReadLoop] answered mid-stream currentPaneRequest", "session", sessionID, "resync_id", paneReq.GetResyncId(), "output_bytes", len(output.GetData()))
 	writeCurrentPaneResponse(stream, sessionID, "", output)
+	return nil
+}
+
+// answerCurrentPane answers a mid-stream current-pane request, tagging a NotFound as
+// errSessionGone only once the backend confirms the session is gone (a restarting daemon is not).
+func answerCurrentPane(ctx context.Context, sessionID string, instance *session.Instance, req *sessionv1.CurrentPaneRequest, writer TerminalWriter) (*sessionv1.TerminalOutput, error) {
+	out, err := handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptionsFor(writer))
+	if definitivelyGone(err, instance.IsBackendProcessAlive) {
+		return nil, wrapSessionGone(err)
+	}
+	return out, err
+}
+
+// logCurrentPaneFailure logs a failed current-pane request and returns the error only when it
+// must end the stream (the session is definitively gone), so a resyncing client reconnects once
+// and reads not_found instead of re-asking a dead pane forever. Gone failures are throttled.
+func logCurrentPaneFailure(what, sessionID, resyncID string, err error) error {
+	if isSessionGone(err) || errors.Is(err, errSessionGone) {
+		logSessionGone("[streamViaControlMode] "+what, sessionID, err)
+		if errors.Is(err, errSessionGone) {
+			return err
+		}
+		return nil
+	}
+	log.Error("[streamViaControlMode] failed to handle "+what, "session", sessionID, "resync_id", resyncID, "err", err)
+	return nil
 }
 
 // terminalResyncCompressionThresholdBytes is the marshaled-payload size above which
@@ -3386,7 +3413,7 @@ func handleBatchedCurrentPaneRequest(
 	sessionID string,
 	batchReq *sessionv1.BatchedCurrentPaneRequest,
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
-) []*sessionv1.TerminalOutput {
+) ([]*sessionv1.TerminalOutput, error) {
 	requests := batchReq.GetRequests()
 	// One span for the whole coalesced batch (not one per request): the point of
 	// batching is that these requests were coalesced into a single wire message,
@@ -3397,16 +3424,19 @@ func handleBatchedCurrentPaneRequest(
 	defer span.End()
 
 	outputs := make([]*sessionv1.TerminalOutput, 0, len(requests))
+	var endErr error
 	for _, paneReq := range requests {
 		output, err := onCurrentPaneRequest(ctx, paneReq)
 		if err != nil {
 			span.RecordError(err)
-			log.Error("[streamViaControlMode] failed to handle coalesced current pane request", "session", sessionID, "resyncId", paneReq.GetResyncId(), "err", err)
+			if gone := logCurrentPaneFailure("coalesced current pane request", sessionID, paneReq.GetResyncId(), err); gone != nil {
+				endErr = gone
+			}
 			continue
 		}
 		outputs = append(outputs, output)
 	}
-	return outputs
+	return outputs, endErr
 }
 
 // handleBatchedCurrentPaneRequestFrame answers a BatchedCurrentPaneRequest that arrives
@@ -3420,12 +3450,14 @@ func handleBatchedCurrentPaneRequestFrame(
 	batchReq *sessionv1.BatchedCurrentPaneRequest,
 	onCurrentPaneRequest func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error),
 	resizeSettling *atomic.Bool,
-) {
+) error {
 	resizeSettling.Store(true)
 	defer resizeSettling.Store(false)
-	for _, output := range handleBatchedCurrentPaneRequest(sessionID, batchReq, onCurrentPaneRequest) {
+	outputs, endErr := handleBatchedCurrentPaneRequest(sessionID, batchReq, onCurrentPaneRequest)
+	for _, output := range outputs {
 		writeCurrentPaneResponse(stream, sessionID, "", output)
 	}
+	return endErr
 }
 
 // capturePaneTarget bundles streamViaTmuxCapturePane's resolved routing

@@ -2948,7 +2948,7 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{Writer: testWriter(), EchoResyncID: true})
 	}
 
-	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
+	outputs, _ := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
 
 	if len(outputs) != 3 {
 		t.Fatalf("expected 3 outputs, got %d", len(outputs))
@@ -2990,7 +2990,7 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 		return handleCurrentPaneRequest(ctx, "test-session", target, req, ResyncOptions{Writer: testWriter(), EchoResyncID: true})
 	}
 
-	outputs := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
+	outputs, _ := handleBatchedCurrentPaneRequest("test-session", batch, onCurrentPaneRequest)
 
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 outputs (bravo skipped), got %d", len(outputs))
@@ -3201,7 +3201,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
 	}
-	outputs := handleBatchedCurrentPaneRequest("test-session", batch, batchOnCurrentPaneRequest)
+	outputs, _ := handleBatchedCurrentPaneRequest("test-session", batch, batchOnCurrentPaneRequest)
 	if len(outputs) != 2 || outputs[0].ResyncId != "batch-1" || outputs[1].ResyncId != "batch-2" {
 		t.Errorf("expected 2 individually-tagged batched outputs, got %+v", outputs)
 	}
