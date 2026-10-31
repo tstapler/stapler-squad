@@ -13,6 +13,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 INTERVAL_S = 5
@@ -47,16 +48,21 @@ def read_psi():
 
 def sample_loop(d):
     os.makedirs(d, exist_ok=True)
-    stop = []
-    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
     prev, prev_t, prev_psi = read_cpu(), time.time(), read_psi()
     with open(os.path.join(d, "samples.jsonl"), "a", buffering=1) as out:
-        while not stop:
-            time.sleep(INTERVAL_S)
-            cur, now, psi = read_cpu(), time.time(), read_psi()
-            dt = cur["total"] - prev["total"]
-            if dt > 0:
+        while True:
+            stopping = stop.wait(INTERVAL_S)  # wakes at once on SIGTERM; the final partial window is still sampled
+            try:
+                cur, now, psi = read_cpu(), time.time(), read_psi()
+                dt = cur["total"] - prev["total"]
                 _, used = read_mem_mb()
+            except (OSError, ValueError, KeyError):
+                if stopping:
+                    break
+                continue
+            if dt > 0:
                 row = {
                     "cpu": 100.0 * (dt - (cur["idle"] - prev["idle"]) - (cur["iowait"] - prev["iowait"])) / dt,
                     "iowait": 100.0 * (cur["iowait"] - prev["iowait"]) / dt,
@@ -68,6 +74,8 @@ def sample_loop(d):
                         row["psi_" + res] = 100.0 * (tot - prev_psi[res]) / ((now - prev_t) * 1e6)
                 out.write(json.dumps(row) + "\n")
             prev, prev_t, prev_psi = cur, now, psi
+            if stopping:
+                break
 
 
 def start(d):
@@ -91,6 +99,7 @@ def pct(vals, p):
 def finish(d, label):
     try:
         os.kill(int(open(os.path.join(d, "pid")).read()), signal.SIGTERM)
+        time.sleep(0.3)  # let the sampler flush its last sample
     except (OSError, ValueError):
         pass
     wall = time.time() - float(open(os.path.join(d, "started")).read())
@@ -104,7 +113,7 @@ def finish(d, label):
     s = {
         "label": label, "run_id": os.environ.get("GITHUB_RUN_ID"), "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "workflow": os.environ.get("GITHUB_WORKFLOW"), "job": os.environ.get("GITHUB_JOB"),
-        "event": os.environ.get("GITHUB_EVENT_NAME"), "ref": os.environ.get("GITHUB_REF_NAME"),
+        "event": os.environ.get("GITHUB_EVENT_NAME"), "runner": os.environ.get("RUNNER_NAME"), "ref": os.environ.get("GITHUB_REF_NAME"),
         "cores": cores, "mem_total_mb": mem_total, "wall_s": round(wall), "samples": len(rows),
     }
     if rows:

@@ -11,6 +11,7 @@ textfile collector, or VictoriaMetrics e.g. http://localhost:8428); CI never use
 import argparse
 import collections
 import json
+import re
 import statistics
 import subprocess
 import sys
@@ -29,6 +30,24 @@ def gh(*args):
 
 def ts(s):
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+
+
+NUMERIC = ("cores", "wall_s", "cpu_avg", "cpu_p95", "iowait_avg", "mem_peak_mb")
+
+
+def valid(path):
+    """Artifacts from fork PR runs are attacker-controlled: accept only a strictly shaped record."""
+    try:
+        u = json.loads(path.read_text())
+        ok = isinstance(u, dict) and isinstance(u.get("label"), str) and re.fullmatch(r"[A-Za-z0-9_.${}-]{1,60}", u["label"])
+        ok = ok and all(isinstance(u.get(k), (int, float)) and not isinstance(u.get(k), bool) for k in NUMERIC)
+        for k in ("psi_cpu_avg",):
+            ok = ok and (k not in u or isinstance(u[k], (int, float)))
+        if ok and not isinstance(u.get("runner"), (str, type(None))):
+            ok = False
+        return u if ok else None
+    except (OSError, ValueError):
+        return None
 
 
 def verdict(cpu, iowait, psi_cpu):
@@ -54,6 +73,8 @@ def main():
     ap.add_argument("--prom-out")
     ap.add_argument("--push-vm")
     a = ap.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9 _.-]{1,60}", a.workflow):
+        sys.exit("invalid --workflow")
 
     cmd = ["run", "list", "--repo", a.repo, "--workflow", a.workflow, "--status", "completed",
            "--limit", str(a.runs), "--json", "databaseId,event,headBranch"]
@@ -74,16 +95,16 @@ def main():
         queue = {}
         try:
             for j in json.loads(gh("api", "--paginate", f"repos/{a.repo}/actions/runs/{rid}/jobs?per_page=100",
-                                   "--jq", "[.jobs[]|{name,created_at,started_at}]")):
+                                   "--jq", "[.jobs[]|{runner_name,created_at,started_at}]")):
                 if j["started_at"]:
-                    queue[j["name"]] = (ts(j["started_at"]) - ts(j["created_at"])).total_seconds()
+                    queue[j["runner_name"]] = (ts(j["started_at"]) - ts(j["created_at"])).total_seconds()
         except (SystemExit, json.JSONDecodeError):
             pass
         for f in files:
-            u = json.loads(f.read_text())
-            if "cpu_avg" in u:
-                u["queue_s"] = next((q for n, q in queue.items() if n.startswith(u["label"]) or u["label"] in n), None)
-                by_label[u["label"].rsplit("-", 1)[0] if u["label"].rsplit("-", 1)[-1].isdigit() else u["label"]].append(u)
+            u = valid(f)
+            if u:
+                u["queue_s"] = queue.get(u.get("runner"))
+                by_label[re.sub(r"-shard-\d+$", "-shard", u["label"])].append(u)
 
     if not by_label:
         sys.exit("no utilization artifacts found (jobs not instrumented yet, or artifacts expired after 7 days)")
