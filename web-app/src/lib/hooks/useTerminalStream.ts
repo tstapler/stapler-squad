@@ -16,6 +16,10 @@ import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
 import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
 
+/** A stream that lived this long counts as healthy and resets the clean-end streak. */
+const STABLE_STREAM_MS = 10_000;
+const MAX_CLEAN_SERVER_ENDS = 5;
+
 interface ScrollbackMetadata {
   hasMore: boolean;
   oldestSequence: number;
@@ -196,6 +200,7 @@ export function useTerminalStream({
   // is a deliberate, internal fast-retry optimization, not a real failure the caller
   // should count toward its own attempt/error UI.
   const connectTimeoutAbortedRef = useRef(false);
+  const cleanServerEndsRef = useRef(0);
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number, options?: { isAutoRetry?: boolean }) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
@@ -410,6 +415,7 @@ export function useTerminalStream({
 
       // Message processing loop
       (async () => {
+        let serverReportedError = false;
         try {
           for await (const msg of stream) {
             // Task 2.2.3 — a superseded generation's loop must not mutate
@@ -538,6 +544,7 @@ export function useTerminalStream({
               onAppScrollback?.(text, resp.outcome, resp.program, resp.forwardId, resp.blockedReason);
               setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
             } else if (msg.data.case === "error") {
+              serverReportedError = true;
               const err = new Error(msg.data.value.message);
               setError(err);
               onError?.(err);
@@ -555,6 +562,23 @@ export function useTerminalStream({
                 setIsHardFailed(true);
                 console.warn(`[reconnect] stream=terminal trigger=hub-start-failed, giving up`);
               }
+            }
+          }
+          // The server ended the stream without an error (e.g. a hub eviction or teardown,
+          // sent as a clean EndStream). Surface it as a lost connection: with
+          // NEXT_PUBLIC_RECONNECT_V2 off, TerminalOutput's auto-reconnect is driven by `error`.
+          // Shell tabs end normally when the shell exits, and an error frame was already surfaced.
+          if (myGeneration === connectionGenerationRef.current
+              && !shellId
+              && !serverReportedError
+              && shouldReconnectRef.current
+              && !isDisconnectingRef.current
+              && !connectTimeoutAbortedRef.current) {
+            // TerminalOutput resets its attempt counter on every connect, so a stream that
+            // connects and then ends cleanly each time would reconnect forever; cap the streak.
+            cleanServerEndsRef.current = Date.now() - connectStartedAt >= STABLE_STREAM_MS ? 1 : cleanServerEndsRef.current + 1;
+            if (cleanServerEndsRef.current <= MAX_CLEAN_SERVER_ENDS) {
+              handleError(new Error("terminal stream closed by server"));
             }
           }
         } catch (err) {
