@@ -31,7 +31,7 @@ esac
 	got := batchPaneActivity("")
 
 	require.Len(t, got, 2, "empty map means the format variable expands to nothing")
-	require.Equal(t, int64(1700000000), got["sess-a"].Unix(), "first pane wins")
+	require.Equal(t, int64(1700000999), got["sess-a"].Unix(), "newest window wins")
 	require.Equal(t, int64(1700000050), got["sess-b"].Unix())
 }
 
