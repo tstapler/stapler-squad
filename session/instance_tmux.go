@@ -921,7 +921,8 @@ func (i *Instance) initTmuxSession() {
 
 // KillSession terminates the tmux session only (leaves worktree intact).
 func (i *Instance) KillSession() error {
-	if i.pm().HasSession() {
+	// An unrestored tymux record has no pane yet but still owns a daemon session.
+	if i.pm().HasSession() || i.tymuxSessionID() != "" {
 		if err := i.pm().Close(); err != nil {
 			return fmt.Errorf("failed to close tmux session: %w", err)
 		}
@@ -1109,6 +1110,10 @@ func (i *Instance) TmuxAlive() bool {
 // once a pane PID has actually been cached.
 func (i *Instance) IsBackendProcessAlive() bool {
 	if !i.pm().HasSession() {
+		// A never-started view still knows its record's daemon session by id.
+		if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
+			return p.StoredSessionLive()
+		}
 		return false
 	}
 	if i.pm().HasLiveSessionNoCache() {
