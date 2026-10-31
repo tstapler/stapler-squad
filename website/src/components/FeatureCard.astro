@@ -33,7 +33,7 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 			<video
 				src={clipSrc}
 				poster={screenshotSrc}
-				aria-label={`${heading} demo`}
+				aria-label={alt ? `${heading} demo: ${alt}` : `${heading} demo`}
 				controls
 				muted
 				loop
