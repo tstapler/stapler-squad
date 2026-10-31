@@ -2565,7 +2565,7 @@ func (t *TmuxSession) CapturePaneContentRawPriority(ctx context.Context) (string
 	})
 	if err != nil {
 		log.Warn("failed to capture raw pane content for session (fast lane)", t.capturePaneFailureLogArgs(err)...)
-		return "", fmt.Errorf("error capturing raw pane content for session '%s': %v", t.sanitizedName, err)
+		return "", fmt.Errorf("error capturing raw pane content for session '%s': %w", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
 }
@@ -2613,7 +2613,7 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 		recordFailure(time.Now())
 		t.invalidateExistsCache()
 		log.Warn("failed to capture raw pane content for session", "session", t.sanitizedName, "err", err)
-		return "", fmt.Errorf("error capturing raw pane content: %v", err)
+		return "", fmt.Errorf("error capturing raw pane content: %w", err)
 	}
 	return sanitizeUTF8String(output), nil
 }
