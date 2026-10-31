@@ -181,7 +181,11 @@ func runGatedWith[T any](ctx context.Context, serverSocket, pool string, timeout
 		var zero T
 		return zero, fmt.Errorf("exec gate: %w", err)
 	}
-	defer release()
+	addExecGateInFlight(pool, 1)
+	defer func() {
+		addExecGateInFlight(pool, -1)
+		release()
+	}()
 
 	execStart := time.Now()
 	result, fnErr := fn()

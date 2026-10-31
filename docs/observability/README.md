@@ -11,8 +11,22 @@ living in an unrelated repo.
 | `http-rpc-connections.json` | `ssq-http-rpc-connections` | RED-method HTTP/RPC connection saturation (`http.server.connections_*`, `rpc.server_streams.open`) |
 | `pprof-profiles.json` | `ssq-pprof-profiles` | Pyroscope flamegraphs (CPU/heap/goroutines), scraped from the pprof server |
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
+| `tmux-spawns.json` | `ssq-tmux-spawns` | tmux client-process spawns by subcommand, caller and spawning function; exec-gate wait/run latency, in-flight and timeouts |
 | `tymux-backend.json` | `ssq-tymux-backend` | tymux vs tmux operation latency (RED), attach stream health, backend mix, tymuxd supervision |
 | `client-network.json` | `ssq-client-network` | Browser RPC rate/latency/errors by method and transport, duplicates and coalescing, batch effectiveness, WebSocket lifecycle/RTT (client and `ws_unary_*` server side), web vitals, long tasks; see `docs/reference/client-network-telemetry.md` |
+
+## tmux spawn metrics
+
+Names as written in code (VictoriaMetrics appends `_milliseconds_bucket` etc.). Labels are bounded: `subcommand` is a closed list (`other` for the rest), `caller` and `site` admit 64 distinct values each (`other` beyond that), `pool` is `default`, `default_nonblocking`, `resync` or `input`.
+
+| Metric | Type | Labels | Source |
+|---|---|---|---|
+| `tmux_exec_total` | counter | `subcommand`, `caller` | `executor/safeexec/tmuxspawn.go`; every tmux process built through `safeexec.CommandContext`; `caller` is the goroutine's entry function (the logical owner) |
+| `tmux_exec_site_total` | counter | `subcommand`, `site` | same; `site` is the function that built the command |
+| `tmux_exec_gate_wait_duration_ms` / `_exec_duration_ms` | histogram | `pool` | `session/tmux/exec_gate_observability.go` |
+| `tmux_exec_gate_in_flight` | up-down counter | `pool` | same; calls currently holding a slot |
+
+Long-lived control-mode attach clients are started with `exec.CommandContext` and are not counted. The counter fires when the command is built, as `git_cli_spawn_backstop_total` does.
 
 ## tymux backend metrics
 
@@ -76,6 +90,7 @@ link, because no spans correspond to memory or profile data. The other four also
 |---|---|---|
 | `http-rpc-connections` | slow (> 500ms) and errored Connect RPC server spans; `Watch*` streams are excluded | streams-by-method panel opens that method's spans |
 | `tmux-control-mode` | slow and errored/timed-out `tmux.control_mode.command` spans | rate, timeout, latency panels open spans for that `command` |
+| `tmux-spawns` | slow (> 500 ms) `tmux.exec_gate` spans | spawn-rate panels open all gate spans; wait/exec/timeout panels open the matching slow or timed-out spans |
 | `tymux-backend` | slow and errored `session.backend.*` / `tymux.v1.*` spans (`Attach` excluded) | latency and rate panels open spans for that `backend` |
 | `client-network` | slow and errored server RPC spans for the selected `$method` (`Watch*` streams excluded) | error/timeout/p95 stats and per-method panels open server spans for the method(s); the timeout links filter on `error_code = "deadline_exceeded"` (server spans only, which are rare). Latency links filter to spans slower than 500ms, so they can open an empty result when the panel value is lower. Browser-side series are linked to the matching server spans |
 
