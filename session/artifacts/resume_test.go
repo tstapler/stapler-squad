@@ -257,3 +257,32 @@ func TestWalk_PrunesStateOfDeletedTranscriptsOnlyAfterCleanWalk(t *testing.T) {
 		t.Fatal("an unreadable history dir wiped persisted state")
 	}
 }
+
+func TestRestoreState_KeepsSeededOffsetAheadOfStalePersistedOne(t *testing.T) {
+	t.Parallel()
+	const path = "/p/s.jsonl"
+	states := &memStates{recs: map[string]scanstate.Record{
+		path: {Path: path, Position: scanstate.Position{Size: 50, Offset: 50}},
+	}}
+	h := newHarness(states)
+	h.ae.positions[path] = trackedPos{Position: scanstate.Position{Offset: 80}} // blob's ScanOffsetBytes seed
+	h.ae.restoreState(context.Background())
+	if got := h.ae.offsetOf(path); got != 80 {
+		t.Fatalf("offset = %d, want the seeded 80 (the blob is ahead of the batched position write)", got)
+	}
+}
+
+func TestMergeAndPersist_DedupsRepeatedCommands(t *testing.T) {
+	t.Parallel()
+	cmd := CommandArtifact{Type: "git_commit", Command: "git commit -m x", Detail: "x"}
+	raw, _ := json.Marshal(SessionArtifactsBlob{Commands: []CommandArtifact{cmd}})
+	ae := NewArtifactExtractor(
+		func(string, string) error { return nil },
+		func(string) (string, error) { return string(raw), nil },
+		func(string) (string, bool) { return "s", true },
+	)
+	blob := ae.mergeAndPersist("s", 1, nil, nil, nil, []CommandArtifact{cmd})
+	if len(blob.Commands) != 1 {
+		t.Fatalf("commands = %v, want the repeat dropped", blob.Commands)
+	}
+}

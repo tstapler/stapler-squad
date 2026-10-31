@@ -167,7 +167,14 @@ func (ae *ArtifactExtractor) restoreState(ctx context.Context) {
 	for path, rec := range recs {
 		// A live scan already recorded a real position (Size > 0), newer than the
 		// persisted one; a SeedOffsets entry (no Size) is the coarser one to replace.
-		if cur, ok := ae.positions[path]; ok && cur.Size != 0 {
+		cur, ok := ae.positions[path]
+		if ok && cur.Size != 0 {
+			continue
+		}
+		// The blob (written synchronously) can be ahead of the batched position
+		// write; resuming from the older persisted offset would re-extract and
+		// duplicate what the blob already holds.
+		if ok && cur.Offset > rec.Offset {
 			continue
 		}
 		ae.positions[path] = trackedPos{Position: rec.Position, owner: string(rec.State)}
@@ -265,7 +272,7 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 			existing = &SessionArtifactsBlob{}
 		}
 	}
-	mergedCmds := append(existing.Commands, newCommands...)
+	mergedCmds := dedupCommands(append(existing.Commands, newCommands...))
 	if len(mergedCmds) > maxCommands {
 		mergedCmds = mergedCmds[:maxCommands]
 	}
@@ -329,6 +336,20 @@ func (ae *ArtifactExtractor) dropUnseenRestored(ctx context.Context) {
 			log.Warn("[ArtifactExtractor] delete stale scan state failed", "count", len(gone), "err", err)
 		}
 	}
+}
+
+// dedupCommands drops repeats (a rescan after truncation or an owner change
+// re-extracts commands the blob already holds), keeping first occurrences.
+func dedupCommands(cs []CommandArtifact) []CommandArtifact {
+	seen := make(map[CommandArtifact]struct{}, len(cs))
+	out := make([]CommandArtifact, 0, len(cs))
+	for _, c := range cs {
+		if _, ok := seen[c]; !ok {
+			seen[c] = struct{}{}
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func dedup(ss []string) []string {
