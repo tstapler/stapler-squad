@@ -172,8 +172,11 @@ type BacklogService struct {
 	// repoSettings looks up a repo's merge settings for the stuck report; nil
 	// (the default) skips the lookup so every item reports UNSPECIFIED.
 	repoSettings RepoSettingsLookup
-	engine       session.WorkflowEngine
-	engineStatus *WorkflowEngineStatusSource
+	// repoSettingsFast, when set, serves non-refresh stuck reports from cache
+	// without waiting on GitHub; refresh=true still uses repoSettings.
+	repoSettingsFast RepoSettingsLookup
+	engine           session.WorkflowEngine
+	engineStatus     *WorkflowEngineStatusSource
 	// reviewGuard is the listener's process-wide review-spawn reservation, so
 	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
 	reviewGuard *session.ReviewSpawnGuard
@@ -478,6 +481,12 @@ func (s *BacklogService) SetGateSatisfactionRepository(repo session.GateSatisfac
 // auto-merge fields of the stuck report. nil disables the lookup.
 func (s *BacklogService) SetRepoSettingsLookup(l RepoSettingsLookup) {
 	s.repoSettings = l
+}
+
+// SetRepoSettingsNonBlockingLookup wires the cache-only lookup used when the
+// stuck report is not force-refreshed, keeping GitHub off the handler path.
+func (s *BacklogService) SetRepoSettingsNonBlockingLookup(l RepoSettingsLookup) {
+	s.repoSettingsFast = l
 }
 
 // SetLivenessRepository wires the repository backing the LivenessDefinition
