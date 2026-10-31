@@ -1,13 +1,13 @@
 # profile-db-usage: PromQL reference
 
-Every query here was run against the live VictoriaMetrics on 2026-10-31 and returned series. `[W]` is the window; use `5m` for live panels, `6h` for a shift, or a window starting after the last restart.
+Every query here was run against the live VictoriaMetrics on 2026-10-31 and returned series. Queries use `[6h]`; use `5m` for live panels or a window starting after the last restart.
 
 ```promql
 # queries per second per pool, and per call site
 sum by (db_name)(rate(db_query_duration_milliseconds_count[6h]))
 topk(5, sum by (db_caller)(rate(db_query_duration_milliseconds_count{db_name="ent-read"}[6h])))
 
-# execution seconds per second per pool (utilisation of a single-writer pool when db_name is ent or analytics)
+# latency seconds per second per pool (includes queue time, so it can exceed 1 for a single-writer pool)
 sum by (db_name)(rate(db_query_duration_milliseconds_sum[6h])) / 1000
 
 # p99 wait and p99 exec per pool
@@ -31,7 +31,7 @@ topk(5, sum by (rpc_method)(rate(db_queries_per_request_sum[6h])) / sum by (rpc_
 # pool wait over time (look for restarts: startup bursts are not steady state)
 sum by (db_name)(rate(db_pool_wait_duration_ms[5m]))
 
-# configuration drift: 1 = WAL / synchronous NORMAL per pool
+# configuration drift: 1 = WAL / synchronous NORMAL (series exist for ent and analytics only, not ent-read)
 db_journal_mode
 db_synchronous
 
