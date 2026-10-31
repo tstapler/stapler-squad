@@ -30,8 +30,9 @@ import {
   setFeatureFlag,
 } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 // Any toast about a failed or refused action; unrelated toasts (a new approval) may be on screen.
 const ERROR_COPY = /couldn.t|failed|error|isn.t valid|not sent/i;
 const BACKLOG_FLAG = 'backlog';

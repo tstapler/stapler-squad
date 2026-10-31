@@ -13,8 +13,9 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 // Worktree content lives on the Worktrees tab; the default tab is PRs.
 const UNFINISHED_URL = `${BASE_URL}/unfinished?tab=worktrees`;
 

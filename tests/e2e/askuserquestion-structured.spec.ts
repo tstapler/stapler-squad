@@ -13,8 +13,9 @@ import { SessionClient } from './helpers/session-client';
 import { DIALOG_QUESTION, fakePaneSession, postToolUseInTerminal, readGuidanceRow, seedQuestionCard } from './helpers/notification-action-seed';
 import { INLINE_ACTIONS_FLAG, QuestionCard, openNotificationTray, setFeatureFlag } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const STRUCTURED_FLAG = 'askuserquestion_structured';
 const HOOK = 'ask_user_question_hook';
 const ACK_TIMEOUT = 30_000;

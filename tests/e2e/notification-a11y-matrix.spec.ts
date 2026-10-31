@@ -12,8 +12,9 @@ import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { NotificationTray, ToastDeck, sendNotification } from './pages/NotificationPanel';
 import { profiles, setKeyboardOpen } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 

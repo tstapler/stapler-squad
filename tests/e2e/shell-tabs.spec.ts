@@ -6,8 +6,9 @@ const _features = [
 import { test, expect } from '@playwright/test';
 import { ShellTabsPage } from './pages/ShellTabsPage';
 import { SessionClient } from './helpers/session-client';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // ---------------------------------------------------------------------------
 // Helper: navigate to the app, wait for a session to be visible, then open it.

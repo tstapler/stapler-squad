@@ -13,8 +13,9 @@ import { AppShellPage } from './pages/AppShellPage';
 import { disableBacklogFeatureFlag } from './pages/BacklogMutations';
 import titles from './fixtures/route-titles.json';
 import baseline from './fixtures/next-baseline.json';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const FIXTURE = titles as Record<string, string>;
 const REDIRECTS = baseline.redirects as Record<string, string>;
 const MIN_NAV_ROUTES = 5;
