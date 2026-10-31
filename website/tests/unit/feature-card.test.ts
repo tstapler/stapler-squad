@@ -60,4 +60,24 @@ describe('FeatureCard', () => {
 		);
 		expect(html).toContain('<video');
 	});
+
+	// A published clip replaces the screenshot, which stays as the video poster.
+	it('featureCard_should_PlayClipWithScreenshotAsPoster_When_BothScreenshotAndDemoClipPresent', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(FeatureCard, {
+			props: {
+				heading: 'Dashboard',
+				description: 'All agents at a glance.',
+				category: 'Visibility',
+				screenshot: '/features/01-dashboard.png',
+				alt: 'Dashboard',
+				demoClip: { tag: 'website-demo-gifs-latest', name: 'session-dashboard', ext: 'webm' },
+			},
+		});
+
+		expect(html).toContain('<video');
+		expect(html).toContain('session-dashboard.webm');
+		expect(html).toMatch(/poster="[^"]*01-dashboard\.png"/);
+		expect(html).not.toContain('<img');
+	});
 });

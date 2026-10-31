@@ -8,13 +8,13 @@ export default defineConfig({
   testMatch: 'website-demos.spec.ts',
   workers: 1,
   retries: 0,
-  timeout: 120_000,
+  timeout: 240_000,
   reporter: 'list',
   use: {
     ...devices['Desktop Chrome'],
     viewport: { width: 1280, height: 720 },
     // Fail on the step that is stuck instead of hanging to the test timeout.
-    actionTimeout: 15_000,
-    navigationTimeout: 30_000,
+    actionTimeout: 30_000,
+    navigationTimeout: 60_000,
   },
 });

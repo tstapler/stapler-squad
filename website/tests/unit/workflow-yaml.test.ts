@@ -15,7 +15,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 
 const WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-demo-publish.yml');
-const DEMO_PUBLISH_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/demo-publish.yml');
 const DEPLOY_WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/deploy-website.yml');
 const UTF8 = 'utf8';
 
@@ -43,28 +42,6 @@ function extractOnTriggerKeys(yamlText: string): string[] {
     .map((line) => line.trim().replace(/:.*$/, ''));
 }
 
-function extractFeatureSpecs(yamlText: string): string[] {
-  const envBody = extractTopLevelBlock(yamlText, 'env');
-  const specsLineIndex = envBody.findIndex((line) => line.trim().startsWith('FEATURE_SPECS:'));
-  if (specsLineIndex === -1) {
-    throw new Error('No FEATURE_SPECS entry found in env: block');
-  }
-  const specLines: string[] = [];
-  for (let i = specsLineIndex + 1; i < envBody.length; i++) {
-    const line = envBody[i];
-    if (!/^\s{4}\S/.test(line)) break; // FEATURE_SPECS's own nested indent level
-    specLines.push(line.trim());
-  }
-  return specLines.filter(Boolean);
-}
-
-function specsMatch(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const sortedA = [...a].sort();
-  const sortedB = [...b].sort();
-  return sortedA.every((spec, i) => spec === sortedB[i]);
-}
-
 test('websiteDemoWorkflow_should_HaveWorkflowDispatchOnlyTrigger_When_YamlParsed', () => {
   const yamlText = readFileSync(WEBSITE_WORKFLOW_PATH, UTF8);
   const triggers = extractOnTriggerKeys(yamlText);
@@ -75,22 +52,17 @@ test('websiteDemoWorkflow_should_HaveWorkflowDispatchOnlyTrigger_When_YamlParsed
   }
 });
 
-test('websiteDemoWorkflow_should_RejectUnvettedSpec_When_FeatureSpecsListDiffersFromDemoPublishYml', () => {
-  const websiteSpecs = extractFeatureSpecs(readFileSync(WEBSITE_WORKFLOW_PATH, UTF8));
-  const demoPublishSpecs = extractFeatureSpecs(readFileSync(DEMO_PUBLISH_WORKFLOW_PATH, UTF8));
+// The clip publisher must never touch demo-publish.yml's release (it feeds the
+// README), must record through the shared script, and must start the deploy:
+// its manifest push is made with GITHUB_TOKEN, which does not trigger workflows.
+test('websiteDemoWorkflow_should_PublishOnlyToItsOwnReleaseAndDeploy_When_TextInspected', () => {
+  const text = readFileSync(WEBSITE_WORKFLOW_PATH, UTF8);
 
-  // Happy-path baseline: today's two files carry the exact same five specs.
-  assert.ok(
-    specsMatch(websiteSpecs, demoPublishSpecs),
-    'website-demo-publish.yml FEATURE_SPECS must exactly match demo-publish.yml',
-  );
-
-  // Error path: a 6th, unvetted spec must be caught by the same diff.
-  const tampered = [...websiteSpecs, 'unvetted-new.spec.ts'];
-  assert.ok(
-    !specsMatch(tampered, demoPublishSpecs),
-    'a 6th, unvetted spec added to FEATURE_SPECS must be detected as a mismatch',
-  );
+  assert.ok(text.includes('scripts/record-website-demos.sh'), 'must record via scripts/record-website-demos.sh');
+  assert.ok(text.includes('website-demo-gifs-latest'));
+  assert.ok(!/gh release \w+ demo-gifs-latest/.test(text), 'must not run gh release against demo-publish.yml\'s release');
+  assert.ok(text.includes('gh workflow run deploy-website.yml'), 'must dispatch the deploy after publishing');
+  assert.ok(text.includes('website/src/content/features.json'), 'must commit regenerated features.json with the manifest');
 });
 
 // Phase 6, Story 6.3.1: deploy-website.yml's build job must run its

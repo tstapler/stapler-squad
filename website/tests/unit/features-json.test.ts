@@ -105,4 +105,21 @@ describe('buildFeaturesJson', () => {
 		const dashboard = cards.find((card) => card.heading === 'Dashboard');
 		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
 	});
+
+	// A clip must never reach features.json before it is published (the deploy
+	// gate 404s on it), so it is attached only when the manifest lists it.
+	it.each([
+		['published', { 'session-dashboard.webm': 'abc123' }, true],
+		['not yet published', {}, false],
+	])('buildFeaturesJson_should_AttachDemoClipOnlyWhenPublished_When_%s', async (_label, manifest, attached) => {
+		const manifestPath = join(dir, 'manifest.json');
+		await writeFile(manifestPath, JSON.stringify(manifest), ENCODING);
+
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, manifestPath });
+
+		const dashboard = cards.find((card) => card.heading === 'Dashboard');
+		expect(dashboard?.demoClip?.name).toBe(attached ? 'session-dashboard' : undefined);
+		// The screenshot is kept either way: it is the clip's poster.
+		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
+	});
 });

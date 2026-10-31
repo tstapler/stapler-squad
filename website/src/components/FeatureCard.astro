@@ -71,7 +71,7 @@ const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
 	.feature-card video {
 		width: 100%;
 		height: auto;
-		aspect-ratio: 16 / 10;
+		aspect-ratio: 16 / 10; /* reserved up front: no layout shift when the clip loads */
 		object-fit: cover;
 		border-radius: 0.5rem;
 	}

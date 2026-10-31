@@ -2,6 +2,7 @@
 // name (<name>.webm) and the DemoClip reference in website/scripts/build-features.mjs;
 // `title` is the title-card text. Add a clip here and it is recorded, branded,
 // and published by .github/workflows/website-demo-publish.yml with no other change.
+import { expect } from '@playwright/test';
 import { caption, typeSlowly, type ClipSpec } from './recorder';
 
 export type Clip = ClipSpec;
@@ -14,7 +15,7 @@ export const CLIPS: Clip[] = [
     title: 'Every agent, one dashboard',
     scenes: async (page, clip) => {
       await page.goto('/');
-      await page.waitForSelector(SEARCH, { timeout: 15_000 });
+      await page.waitForSelector(SEARCH, { timeout: 30_000 });
       clip.ready();
       await page.mouse.move(1240, 700); // park the pointer off the content
       await page.waitForTimeout(800);
@@ -40,7 +41,7 @@ export const CLIPS: Clip[] = [
     title: 'Automate the predictable',
     scenes: async (page, clip) => {
       await page.goto('/rules');
-      await page.getByText('Approval Rules').first().waitFor({ timeout: 15_000 });
+      await page.getByText('Approval Rules').first().waitFor({ timeout: 30_000 });
       clip.ready();
       await page.waitForTimeout(600);
       const builtIn = page.getByRole('button', { name: /built.in/i }).first();
@@ -75,15 +76,21 @@ export const CLIPS: Clip[] = [
     scenes: async (page, clip) => {
       await page.goto('/settings?tab=appearance');
       const themes = page.getByRole('radiogroup', { name: 'Theme selection' });
-      await themes.waitFor({ timeout: 15_000 });
+      await themes.waitFor({ timeout: 30_000 });
       clip.ready();
       await themes.scrollIntoViewIfNeeded();
       await caption(page, 'Pick a theme', 1200);
-      for (const label of ['WH40K', 'Matrix', 'Cyberpunk 77', 'Clean']) {
-        await themes.getByRole('radio', { name: new RegExp(label, 'i') }).click();
+      // Swatches animate on selection and the app re-themes under the pointer, so
+      // Playwright's "stable" wait can outlast the action timeout on a loaded
+      // machine. Skip it and assert the outcome (aria-checked) instead.
+      const choose = async (label: RegExp) => {
+        const radio = themes.getByRole('radio', { name: label });
+        await radio.click({ force: true });
+        await expect(radio).toHaveAttribute('aria-checked', 'true');
         await page.waitForTimeout(1400);
-      }
-      await themes.getByRole('radio', { name: /WH40K/i }).click();
+      };
+      for (const label of [/WH40K/i, /Matrix/i, /Cyberpunk 77/i, /Clean/i]) await choose(label);
+      await choose(/WH40K/i);
       await caption(page, 'Grimdark parchment and gold, if you must', 2000);
     },
   },
