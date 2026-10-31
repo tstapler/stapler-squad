@@ -8,6 +8,7 @@ living in an unrelated repo.
 | Dashboard | uid | Covers |
 |---|---|---|
 | `cgroup-memory.json` | `ssq-cgroup-memory` | USE-method cgroup memory (`cgroup_memory_*`, see `docs/how-to/enable-opentelemetry.md`) |
+| `go-runtime-request-path.json` | `ssq-go-runtime` | Go scheduler/GC/memory (`go.runtime.*`), in-flight unary RPCs, DB statements per request (`db.queries_per_request`), HTTP-vs-handler p95 |
 | `http-rpc-connections.json` | `ssq-http-rpc-connections` | RED-method HTTP/RPC connection saturation (`http.server.connections_*`, `rpc.server_streams.open`) |
 | `pprof-profiles.json` | `ssq-pprof-profiles` | Pyroscope flamegraphs (CPU/heap/goroutines), scraped from the pprof server |
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
