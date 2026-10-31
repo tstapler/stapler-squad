@@ -188,6 +188,10 @@ func runRangeStage[V any](ctx context.Context, s *vcsRangeStages, stage string, 
 		cache.store(k, val, time.Time{})
 	case ctx.Err() != nil:
 		outcome = vcsOutcomeCanceled
+	case errors.Is(err, git.ErrRangeWalkLimit):
+		// Deterministic for this SHA range: remember it so a pathological range is not re-walked on every status miss.
+		outcome = "walk_limit"
+		cache.store(k, val, s.now().Add(vcsRangeFailureTTL))
 	case stageCtx.Err() != nil:
 		outcome = "budget_exceeded"
 		log.Warn("GetVCSStatus: stage exceeded its budget", "stage", stage, "workDir", k.workDir, "budget", budget)

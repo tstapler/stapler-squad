@@ -43,7 +43,7 @@ func OpenRepoKeepDescriptors(path string) (*git.Repository, func(), error) {
 	if !ok {
 		return base, func() {}, nil
 	}
-	kept := filesystem.NewStorageWithOptions(st.Filesystem(), cache.NewObjectLRUDefault(), filesystem.Options{KeepDescriptors: true})
+	kept := filesystem.NewStorageWithOptions(st.Filesystem(), cache.NewObjectLRU(16*cache.MiByte), filesystem.Options{KeepDescriptors: true})
 	repo, err := git.Open(kept, nil) //nolint:norawgitopen same repo; only swaps the storage options
 	if err != nil {
 		_ = kept.Close()

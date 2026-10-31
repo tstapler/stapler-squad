@@ -87,6 +87,28 @@ func TestRangeStages_should_BoundStageAndRememberFailure_When_BudgetExceeded(t *
 	assert.EqualValues(t, 2, calls.Load(), "retried once the failure TTL passed")
 }
 
+func TestRangeStages_should_RememberFailure_When_RangeWalkLimitHit(t *testing.T) {
+	clock := newRangeTestClock()
+	var calls atomic.Int32
+	s := &vcsRangeStages{
+		now: clock.now,
+		listShipped: func(context.Context, string, string, string) ([]git.ShippedCommit, bool, error) {
+			calls.Add(1)
+			return nil, false, git.ErrRangeWalkLimit
+		},
+	}
+
+	_, err := s.shippedCommits(context.Background(), testRange)
+	require.ErrorIs(t, err, git.ErrRangeWalkLimit)
+	_, err = s.shippedCommits(context.Background(), testRange)
+	require.ErrorIs(t, err, errVCSStageBudget)
+	assert.EqualValues(t, 1, calls.Load(), "a deterministic walk-limit failure is not re-walked on every cache miss")
+
+	clock.advance(vcsRangeFailureTTL + time.Second)
+	_, _ = s.shippedCommits(context.Background(), testRange)
+	assert.EqualValues(t, 2, calls.Load(), "retried once the failure TTL passed")
+}
+
 func TestRangeStages_should_NotCache_When_CallerCanceled(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

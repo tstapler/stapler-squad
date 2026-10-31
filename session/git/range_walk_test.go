@@ -309,5 +309,5 @@ func TestWalkShippedRange_should_ReportUnavailable_When_PopBudgetExhaustedBefore
 	base := f.chain(1000, 200, root) // base-only commits all newer than head's
 
 	_, _, err := walkShippedRange(context.Background(), f.st, head, base, 100)
-	require.ErrorIs(t, err, errRangeWalkLimit)
+	require.ErrorIs(t, err, ErrRangeWalkLimit)
 }

@@ -21,9 +21,9 @@ const (
 // variable so a test can lower it.
 var rangeWalkMaxPops = 20_000 //nolint:gochecknoglobals
 
-// errRangeWalkLimit means the walk hit rangeWalkMaxPops before finding maxCommits commits, so the
+// ErrRangeWalkLimit means the walk hit rangeWalkMaxPops before finding maxCommits commits, so the
 // partial list can't be trusted (a long base-only stretch may hide head's commits).
-var errRangeWalkLimit = errors.New("range walk exceeded its commit budget")
+var ErrRangeWalkLimit = errors.New("range walk exceeded its commit budget")
 
 const (
 	// rangeWalkSlop is how many more commits to pop after every queued commit is
@@ -103,12 +103,14 @@ func walkShippedRange(ctx context.Context, s storer.EncodedObjectStorer, head, b
 		}
 	}
 	// The cap applies only after base's boundary is settled: cutting the walk at the cap would
-	// leave base-reachable commits in the result and count them toward it.
+	// leave base-reachable commits in the result and count them toward it. (If the pop budget
+	// ended the walk early, the newest-first order makes the capped head of the list reliable
+	// in practice, but the boundary is not proven settled.)
 	if len(shipped) >= maxCommits {
 		return shipped[:maxCommits], true, nil
 	}
 	if walkLimited {
-		return nil, false, errRangeWalkLimit
+		return nil, false, ErrRangeWalkLimit
 	}
 	return shipped, false, nil
 }
