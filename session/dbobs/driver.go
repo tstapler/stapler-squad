@@ -158,6 +158,7 @@ func (t *txWrapper) Query(ctx context.Context, q string, args, v any) error {
 
 // observe runs fn and records duration, approximate pool wait, a span and a slow-query WARN.
 func (c *collector) observe(ctx context.Context, q string, fn func() error) error {
+	countQuery(ctx)
 	end := c.startSpan(ctx, q)
 	waitBefore := c.db.Stats().WaitDuration
 	start := time.Now()
