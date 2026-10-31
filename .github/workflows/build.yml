@@ -445,9 +445,10 @@ jobs:
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           WEB_BUILD: next
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/shard-report.json
         run: |
           cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
+          timeout 40m npx playwright test --reporter=list,blob,json --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -456,6 +457,11 @@ jobs:
             fi
             ls blob-report/*.zip > /dev/null
           }
+
+      # The run step above tolerates raw test failures (report-only). A server that never started or a
+      # global-setup error leaves a blob report with zero executed tests and used to pass the shard.
+      - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Next build)
+        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-next shard ${{ matrix.shard }}"
 
       - name: Upload blob report
         if: always()
@@ -506,6 +512,10 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
         run: cd tests/e2e && npx playwright merge-reports --reporter=json ./all-blobs
+
+      - name: Fail if the merged report is empty or has runner errors
+        if: needs.e2e-next-shard.result == 'success'
+        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/playwright-report/report.json --label "merged e2e-next"
 
       - name: Fail if any shard did not complete
         if: needs.e2e-next-shard.result != 'success'
@@ -673,9 +683,10 @@ jobs:
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           WEB_BUILD: bun
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/shard-report.json
         run: |
           cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
+          timeout 40m npx playwright test --reporter=list,blob,json --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -684,6 +695,11 @@ jobs:
             fi
             ls blob-report/*.zip > /dev/null
           }
+
+      # The run step above tolerates raw test failures (report-only). A server that never started or a
+      # global-setup error leaves a blob report with zero executed tests and used to pass the shard.
+      - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Bun build)
+        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"
 
       - name: Upload blob report
         if: always()
@@ -737,6 +753,10 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/playwright-report/report.json
         run: cd tests/e2e && npx playwright merge-reports --reporter=json ./all-blobs
+
+      - name: Fail if the merged report is empty or has runner errors
+        if: needs.e2e-bun-shard.result == 'success'
+        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/playwright-report/report.json --label "merged e2e-bun"
 
       - name: Fail if any shard did not complete
         if: needs.e2e-bun-shard.result != 'success'
