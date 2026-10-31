@@ -27,33 +27,76 @@ function getCached(sessionId: string): VcsCacheEntry | null {
 }
 
 const vcsGeneration = new Map<string, number>();
-const vcsInflight = new Map<string, { promise: Promise<VcsCacheEntry>; focused: boolean }>();
+
+/** One GetVCSStatus request shared by every caller for a session. */
+interface VcsFlight {
+  promise: Promise<VcsCacheEntry>;
+  focused: boolean;
+  /** Settles `promise`; lets a replacement flight answer the callers of one it supersedes. */
+  settle: { resolve: (e: VcsCacheEntry) => void; reject: (err: unknown) => void };
+  /** Stops a superseded request (dequeues it, or aborts it on the wire). */
+  cancel: () => void;
+  /** The single refresh that starts when this flight lands, shared by every caller that needed newer data. */
+  trailing?: { promise: Promise<VcsCacheEntry>; focused: boolean };
+}
+const vcsInflight = new Map<string, VcsFlight>();
 
 /**
- * Resolve a session's VCS status through the shared cache and a shared in-flight
- * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
- * `force` skips a fresh cache hit and never joins an in-flight request, which may predate the write that prompted it.
- * `waitForFresh` (server side) opts out of stale-while-revalidate; set it only for event-driven or
- * user-requested refreshes, never for the interval poll, or the server's stale path never serves it.
- * `focused` false marks the call deferred (Story 2.1.9); a focused caller never joins a deferred flight.
- * Rejects on RPC failure; callers own error handling.
+ * Unfocused (background) calls: at most this many on the wire at once. Unfocused panes all poll on the
+ * same cadence, and a burst of slow GetVCSStatus calls otherwise holds every HTTP/1.1 connection
+ * (6 per origin), starving the focused pane and every other RPC behind them.
  */
-export function fetchVcsEntry(sessionId: string, force = false, focused = true, waitForFresh = false): Promise<VcsCacheEntry> {
-  if (!force) {
-    const cached = getCached(sessionId);
-    if (cached) return Promise.resolve(cached);
+export const MAX_BACKGROUND_VCS_CALLS = 2;
+let backgroundRunning = 0;
+const backgroundQueue: Array<() => void> = [];
+
+function acquireBackgroundSlot(): Promise<void> {
+  if (backgroundRunning < MAX_BACKGROUND_VCS_CALLS) {
+    backgroundRunning++;
+    return Promise.resolve();
   }
-  const existing = vcsInflight.get(sessionId);
-  if (!force && existing && (existing.focused || !focused)) return existing.promise;
+  return new Promise<void>((resolve) => backgroundQueue.push(resolve));
+}
+
+function releaseBackgroundSlot(): void {
+  const next = backgroundQueue.shift();
+  if (next) next(); // the slot passes straight to the next waiter
+  else backgroundRunning--;
+}
+
+function startFlight(sessionId: string, focused: boolean, waitForFresh: boolean): VcsFlight {
   const generation = (vcsGeneration.get(sessionId) ?? 0) + 1;
   vcsGeneration.set(sessionId, generation);
   const client = createClient(SessionService, getConnectTransport());
-  // Shared by several callers, so no single caller's signal may cancel it; each
-  // caller drops the result itself when its own signal has aborted.
-  // abort-signal-exempt
-  const promise: Promise<VcsCacheEntry> = client
-    .getVCSStatus({ id: sessionId, waitForFresh }, deferUnless(focused))
-    .then((response) => {
+  const controller = new AbortController();
+  let cancelled = false;
+  const flight = { focused } as VcsFlight;
+  flight.promise = new Promise<VcsCacheEntry>((resolve, reject) => {
+    flight.settle = { resolve, reject };
+  });
+  flight.cancel = () => {
+    cancelled = true;
+    controller.abort();
+  };
+  const finish = () => {
+    if (vcsInflight.get(sessionId) === flight) vcsInflight.delete(sessionId);
+  };
+  const run = async (): Promise<VcsCacheEntry> => {
+    if (!focused) {
+      await acquireBackgroundSlot();
+      if (cancelled) {
+        releaseBackgroundSlot();
+        throw new ConnectError("superseded", Code.Canceled);
+      }
+    }
+    try {
+      // Shared by several callers, so no caller's own signal may cancel it. The only signal here is
+      // ours, fired when a focused caller supersedes a background request; focused calls carry none.
+      // abort-signal-exempt
+      const response = await client.getVCSStatus(
+        { id: sessionId, waitForFresh },
+        focused ? undefined : { ...deferUnless(false), signal: controller.signal },
+      );
       const entry: VcsCacheEntry = {
         data: response.vcsStatus ?? null,
         error: response.error || null,
@@ -62,11 +105,57 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true, 
       // A superseded (older) flight must not overwrite a newer forced result.
       if (vcsGeneration.get(sessionId) === generation) vcsCache.set(sessionId, entry);
       return entry;
-    })
-    .finally(() => {
-      if (vcsInflight.get(sessionId)?.promise === promise) vcsInflight.delete(sessionId);
-    });
-  vcsInflight.set(sessionId, { promise, focused });
+    } finally {
+      if (!focused) releaseBackgroundSlot();
+    }
+  };
+  run().then(
+    (entry) => {
+      finish();
+      flight.settle.resolve(entry);
+    },
+    (err) => {
+      finish();
+      if (!cancelled) flight.settle.reject(err); // a superseded flight's callers are answered by its replacement
+    },
+  );
+  vcsInflight.set(sessionId, flight);
+  return flight;
+}
+
+/** A focused caller needs a request a background flight is only queued or running at low priority: replace it, and answer its callers from the replacement. */
+function supersede(sessionId: string, old: VcsFlight, waitForFresh: boolean): VcsFlight {
+  old.cancel();
+  const next = startFlight(sessionId, true, waitForFresh);
+  next.promise.then(old.settle.resolve, old.settle.reject);
+  return next;
+}
+
+/**
+ * Resolve a session's VCS status through the shared cache and a shared in-flight
+ * promise, so a prefetch and any number of hooks mounting at once cost one RPC.
+ * `force` skips a fresh cache hit. A plain forced poll joins an in-flight request; a forced call
+ * with `waitForFresh` (event-driven or user-requested, so the in-flight answer may predate what
+ * prompted it) instead waits for that request and runs ONE trailing refresh shared by all such callers.
+ * `waitForFresh` (server side) opts out of stale-while-revalidate; never set it for the interval poll,
+ * or the server's stale path never serves it.
+ * `focused` false marks the call deferred and limited to MAX_BACKGROUND_VCS_CALLS in flight; a focused
+ * caller supersedes a background flight rather than starting a duplicate beside it.
+ * Rejects on RPC failure; callers own error handling.
+ */
+export function fetchVcsEntry(sessionId: string, force = false, focused = true, waitForFresh = false): Promise<VcsCacheEntry> {
+  if (!force) {
+    const cached = getCached(sessionId);
+    if (cached) return Promise.resolve(cached);
+  }
+  const existing = vcsInflight.get(sessionId);
+  if (!existing) return startFlight(sessionId, focused, waitForFresh).promise;
+  if (focused && !existing.focused) return supersede(sessionId, existing, waitForFresh || force).promise;
+  if (!(force && waitForFresh)) return existing.promise;
+  if (existing.trailing && (existing.trailing.focused || !focused)) return existing.trailing.promise;
+  const settled = () => undefined;
+  const promise = existing.promise.then(settled, settled).then(() => fetchVcsEntry(sessionId, true, focused, true));
+  existing.trailing = { promise, focused };
   return promise;
 }
 
@@ -80,6 +169,8 @@ export function resetVcsCacheForTests(): void {
   vcsCache.clear();
   vcsInflight.clear();
   vcsGeneration.clear();
+  backgroundRunning = 0;
+  backgroundQueue.length = 0;
 }
 
 /**

@@ -238,14 +238,27 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
         mountFetchPendingRef.current = false;
       });
     }
-    const fallback = setInterval(() => {
+    let fallback: ReturnType<typeof setInterval> | undefined;
+    const tick = () => {
       if (stoppedRef.current) {
         clearInterval(fallback);
         return;
       }
       if (!document.hidden) fetchStatus();
-    }, pollMs);
-    return () => clearInterval(fallback);
+    };
+    // Panes mounted together would otherwise poll in lockstep forever (a 10-minute burst of every
+    // unfocused session at once); a random phase spreads them. The focused pane keeps its own cadence.
+    const phase = setTimeout(
+      () => {
+        tick();
+        fallback = setInterval(tick, pollMs);
+      },
+      pollMode === "fast" ? pollMs : Math.floor(Math.random() * pollMs),
+    );
+    return () => {
+      clearTimeout(phase);
+      clearInterval(fallback);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 
