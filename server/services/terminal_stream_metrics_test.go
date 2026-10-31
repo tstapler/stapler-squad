@@ -21,6 +21,7 @@ func TestTerminalCreation_should_TrackInFlightAndEndExactlyOnce(t *testing.T) {
 	require.Equal(t, 30*time.Millisecond, c.Mark(stageHandshake), "each stage measures from the previous mark")
 
 	c.End(true)
+	require.Zero(t, c.Mark(stageHubAttach), "Mark after End records nothing")
 	c.End(false) // second End must not decrement again
 	require.Equal(t, base, terminalCreationsInFlight.Load())
 }
