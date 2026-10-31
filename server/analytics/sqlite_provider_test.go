@@ -183,7 +183,7 @@ func TestQualityMetricsProvider_RecordBatch_should_DropMetricsOnlyEvents(t *test
 		{EventName: clientEventPrefix + "web_vital.lcp", EventCategory: "performance"}, // metrics-only, never stored
 		{EventName: "also.stored", EventCategory: "user_action"},
 	}))
-	names := []string{}
+	names := make([]string, 0, len(inner.got))
 	for _, e := range inner.got {
 		names = append(names, e.EventName)
 	}

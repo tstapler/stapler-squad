@@ -103,45 +103,36 @@ func runRetention(ctx context.Context, client *ent.Client, maxRows int, maxAgeDa
 
 // runEscapeEventPerSessionRetention removes the oldest rows above the durable
 // per-session cap. Unlike the writer's cache, this remains correct across restarts.
+// One grouped scan of the (session_id, wall_time) index finds the over-cap
+// sessions, instead of a DISTINCT scan plus one COUNT per session.
 func runEscapeEventPerSessionRetention(ctx context.Context, client *ent.Client, maxRows int) {
 	if maxRows <= 0 {
 		return
 	}
-	sessionIDs, err := client.EscapeEvent.Query().Unique(true).Select(escapeevent.FieldSessionID).Strings(ctx)
-	if err != nil {
-		log.Warn("analytics/retention escape_event session query failed", "err", err)
+	var counts []struct {
+		SessionID string `json:"session_id"`
+		Count     int    `json:"count"`
+	}
+	if err := client.EscapeEvent.Query().GroupBy(escapeevent.FieldSessionID).Aggregate(ent.Count()).Scan(ctx, &counts); err != nil {
+		log.Warn("analytics/retention escape_event session count query failed", "err", err)
 		return
 	}
-	for _, sessionID := range sessionIDs {
-		count, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Count(ctx)
+	for _, c := range counts {
+		if c.Count <= maxRows {
+			continue
+		}
+		// The writer may have trimmed this session since the grouped scan; re-count so
+		// eviction never goes below the cap.
+		count, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(c.SessionID)).Count(ctx)
 		if err != nil || count <= maxRows {
 			continue
 		}
-		excess, deletedTotal := count-maxRows, 0
-		for excess > 0 {
-			limit := excess
-			if limit > 500 {
-				limit = 500
-			}
-			ids, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).
-				Order(escapeevent.ByWallTime()).Limit(limit).IDs(ctx)
-			if err != nil || len(ids) == 0 {
-				log.Warn("analytics/retention escape_event oldest rows query failed", "err", err, "session_id", sessionID)
-				break
-			}
-			deleted, err := client.EscapeEvent.Delete().Where(escapeevent.IDIn(ids...)).Exec(ctx)
-			if err != nil {
-				log.Warn("analytics/retention escape_event per-session eviction failed", "err", err, "session_id", sessionID)
-				break
-			}
-			if deleted == 0 {
-				break
-			}
-			deletedTotal += deleted
-			excess -= deleted
+		deleted, err := evictOldestEscapeEvents(ctx, client, c.SessionID, count-maxRows, nil)
+		if err != nil {
+			log.Warn("analytics/retention escape_event per-session eviction failed", "err", err, "session_id", c.SessionID)
 		}
-		if deletedTotal > 0 {
-			log.Info("analytics/retention escape_event per-session eviction deleted rows", "deleted", deletedTotal, "session_id", sessionID, "limit", maxRows)
+		if deleted > 0 {
+			log.Info("analytics/retention escape_event per-session eviction deleted rows", "deleted", deleted, "session_id", c.SessionID, "limit", maxRows)
 		}
 	}
 }
