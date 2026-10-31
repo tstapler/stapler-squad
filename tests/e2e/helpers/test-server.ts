@@ -79,12 +79,18 @@ export async function prepareSharedAssets(): Promise<SharedAssets> {
     await fs.promises.copyFile(path.join(projectRoot, 'stapler-squad'), binary);
     await fs.promises.chmod(binary, 0o755);
   }
-  const seedDemo = path.join(dir, 'seed-demo');
-  const seedHidden = path.join(dir, 'seed-hidden');
-  await Promise.all([
-    execPromise(`go build -o "${seedDemo}" ./tests/demo/seed`, { cwd: projectRoot }),
-    execPromise(`go build -o "${seedHidden}" ./tests/e2e/seed-hidden`, { cwd: projectRoot }),
-  ]);
+  // CI shards run in the Playwright image (no Go, no generated sources), so the binary job prebuilds
+  // the seed tools and the shard points at them.
+  let seedDemo = process.env.TEST_SEED_DEMO || '';
+  let seedHidden = process.env.TEST_SEED_HIDDEN || '';
+  if (!seedDemo || !seedHidden) {
+    seedDemo = path.join(dir, 'seed-demo');
+    seedHidden = path.join(dir, 'seed-hidden');
+    await Promise.all([
+      execPromise(`go build -o "${seedDemo}" ./tests/demo/seed`, { cwd: projectRoot }),
+      execPromise(`go build -o "${seedHidden}" ./tests/e2e/seed-hidden`, { cwd: projectRoot }),
+    ]);
+  }
   return { binary, seedDemo, seedHidden, dir };
 }
 

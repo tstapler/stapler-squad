@@ -37,10 +37,11 @@ import { test, expect, Page } from '@playwright/test';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
+import { baseUrl } from '../helpers/base-url';
 
 const execPromise = promisify(exec);
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = baseUrl();
 
 // ─── tmux helpers ─────────────────────────────────────────────────────────────
 

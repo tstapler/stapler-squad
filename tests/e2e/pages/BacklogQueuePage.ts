@@ -1,6 +1,7 @@
 import { APIRequestContext } from "@playwright/test";
+import { baseUrl } from '../helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 /**
  * Seeds a backlog item directly in "queued" status, bypassing the real

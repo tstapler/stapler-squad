@@ -8,8 +8,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import { isBunBuild } from './helpers/web-build';
 import { AppShellPage } from './pages/AppShellPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const THEMES = ['matrix', 'cyberpunk77', 'wh40k', 'clean', 'light', 'dark'] as const;
 const DARK_THEMES = ['matrix', 'cyberpunk77', 'wh40k', 'dark'] as const;
 const FONT_VARS = ['--font-jetbrains-mono', '--font-rajdhani', '--font-cinzel', '--font-inter'];

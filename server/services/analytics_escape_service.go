@@ -26,7 +26,7 @@ func (s *SessionService) QueryEscapeAnalytics(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
 	}
 
-	if s.analyticsClient == nil {
+	if s.escapeEventsClient == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
@@ -57,12 +57,12 @@ func (s *SessionService) QueryEscapeAnalytics(
 		filters = append(filters, escapeevent.WallTimeLTE(req.Msg.EndTime.AsTime()))
 	}
 
-	totalCount, err := s.analyticsClient.EscapeEvent.Query().Where(filters...).Count(ctx)
+	totalCount, err := s.escapeEventsClient.EscapeEvent.Query().Where(filters...).Count(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	query := s.analyticsClient.EscapeEvent.Query().
+	query := s.escapeEventsClient.EscapeEvent.Query().
 		Where(filters...).
 		Order(ent.Asc(escapeevent.FieldSessionSeq)).
 		Limit(pageSize + 1) // fetch one extra to determine if there's a next page
@@ -136,11 +136,11 @@ func (s *SessionService) GetEscapeAnalyticsSummary(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
 	}
 
-	if s.analyticsClient == nil {
+	if s.escapeEventsClient == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
-	query := s.analyticsClient.EscapeEvent.Query().
+	query := s.escapeEventsClient.EscapeEvent.Query().
 		Where(escapeevent.SessionID(req.Msg.SessionId))
 
 	if req.Msg.StartTime != nil {
@@ -248,7 +248,7 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetEscapeAnalyticsGlobalSummaryRequest],
 ) (*connect.Response[sessionv1.GetEscapeAnalyticsGlobalSummaryResponse], error) {
-	if s.analyticsClient == nil {
+	if s.escapeEventsClient == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("escape analytics not available"))
 	}
 
@@ -265,7 +265,7 @@ func (s *SessionService) GetEscapeAnalyticsGlobalSummary(
 	// the total event volume, avoiding an unbounded raw-event allocation on
 	// this global endpoint.
 	var events []escapeAggregateRow
-	err := s.analyticsClient.EscapeEvent.Query().Where(timeFilters...).
+	err := s.escapeEventsClient.EscapeEvent.Query().Where(timeFilters...).
 		GroupBy(
 			escapeevent.FieldSessionID,
 			escapeevent.FieldProjectPath,

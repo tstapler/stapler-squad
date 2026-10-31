@@ -476,6 +476,7 @@ type Config struct {
 	// Default: 1.0.
 	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
 	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
+	// A session may briefly hold up to 10% more between trims; each trim returns it to this cap.
 	// Default: 10000.
 	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
 	// EscapeAnalyticsDisableOSCRedaction disables OSC payload redaction when true.
@@ -550,6 +551,19 @@ const StreamHubFeatureFlag = "stream_hub"
 // vouched for tymux as the global default yet, so an explicit opt-in is
 // still required, same as the STAPLER_SQUAD_USE_TYMUX env var it replaces.
 const TymuxFeatureFlag = "tymux"
+
+// EscapeEventsDBMigrateFeatureFlag gates the background copy of escape_events rows
+// from analytics.db into db/escape_events.db. Off leaves the new database empty
+// and the old table untouched (nothing reads it).
+const EscapeEventsDBMigrateFeatureFlag = "escape_events_db_migrate"
+
+// EscapeEventsDBMigrateDefault is the registry default for the flag above.
+const EscapeEventsDBMigrateDefault = true
+
+// EscapeEventsDBMigrateEnabled reports whether the escape_events copy should run.
+func (c *Config) EscapeEventsDBMigrateEnabled() bool {
+	return c.GetFeatureFlagWithDefault(EscapeEventsDBMigrateFeatureFlag, EscapeEventsDBMigrateDefault)
+}
 
 // HiddenSessionGateFeatureFlag is the config.FeatureFlags key backing the
 // hidden-session delivery gate (server/deliverygate). On by default; setting it

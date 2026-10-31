@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
-	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
 // insertOldEvents inserts n events with the given createdAt timestamp using
@@ -57,7 +56,7 @@ func TestRetention_AgeEviction(t *testing.T) {
 	assert.Equal(t, 8, total)
 
 	// Run retention with 90-day age limit and no row cap.
-	runRetention(ctx, client, 0, 90, 0, 0)
+	runRetention(ctx, client, 0, 90)
 
 	// Only the 3 recent rows should remain.
 	remaining, err := client.AnalyticsEvent.Query().Count(ctx)
@@ -96,39 +95,11 @@ func TestRetention_CountEviction(t *testing.T) {
 	}
 
 	// Run retention with maxRows=6 and no age limit.
-	runRetention(ctx, client, 6, 0, 0, 0)
+	runRetention(ctx, client, 6, 0)
 
 	remaining, err := client.AnalyticsEvent.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 6, remaining, "count eviction should trim to maxRows=6")
-}
-
-// TestRetention_Noop verifies that enforcement is a no-op when within limits.
-func TestRetention_EscapeEventPerSessionCapKeepsNewest(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	client, err := OpenAnalyticsDB(ctx, dir)
-	require.NoError(t, err)
-	defer client.Close()
-
-	base := time.Now()
-	for _, sessionID := range []string{"one", "two"} {
-		for i := 0; i < 5; i++ {
-			_, err := client.EscapeEvent.Create().
-				SetID(sessionID + string(rune('a'+i))).SetSessionID(sessionID).
-				SetStage("pty_read").SetSequenceType("SGR").SetByteLength(4).
-				SetWallTime(base.Add(time.Duration(i) * time.Second)).SetSessionSeq(int64(i)).Save(ctx)
-			require.NoError(t, err)
-		}
-	}
-
-	runRetention(ctx, client, 0, 0, 0, 3)
-	for _, sessionID := range []string{"one", "two"} {
-		events, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Order(escapeevent.ByWallTime()).All(ctx)
-		require.NoError(t, err)
-		require.Len(t, events, 3)
-		assert.Equal(t, int64(2), events[0].SessionSeq)
-	}
 }
 
 func TestRetention_Noop(t *testing.T) {
@@ -146,7 +117,7 @@ func TestRetention_Noop(t *testing.T) {
 	}
 
 	// Limits well above current count — nothing should be deleted.
-	runRetention(ctx, client, 100_000, 90, 0, 0)
+	runRetention(ctx, client, 100_000, 90)
 
 	count, err := client.AnalyticsEvent.Query().Count(ctx)
 	require.NoError(t, err)
