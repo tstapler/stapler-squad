@@ -711,3 +711,74 @@ func TestIsRetryPending_should_ReturnFalse_When_NoRetryScheduledOrInFlight(t *te
 		t.Error("IsRetryPending() = true, want false for a fresh instance")
 	}
 }
+
+// A PermanentlyFailed session that never started this process (boot Start
+// rejected PermanentlyFailed -> Active) must still be restartable by the user,
+// e.g. "migrate to tymux" via RestartSession; it used to fail with ErrCannotRestart.
+func TestRestart_should_RecoverAndActivate_When_PermanentlyFailedAndNotStarted(t *testing.T) {
+	t.Parallel()
+	for _, status := range []Status{PermanentlyFailed, Failed} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{
+				Title:          "t",
+				Path:           "/tmp",
+				Status:         status,
+				processManager: &fakeLivenessProcessManager{alive: false},
+			}
+
+			if err := inst.Restart(false, ""); err != nil {
+				t.Fatalf("Restart() err = %v, want nil", err)
+			}
+			if inst.Status != Active {
+				t.Errorf("Status = %v, want Active", inst.Status)
+			}
+			if !inst.Started() {
+				t.Error("Started() = false, want true")
+			}
+		})
+	}
+}
+
+// Stopped is a deliberate state and Active/Paused with started=false is a load
+// anomaly; neither may be revived through Restart.
+func TestRestart_should_ReturnErrCannotRestart_When_NotStartedAndNotPermanentlyFailedOrFailed(t *testing.T) {
+	t.Parallel()
+	for _, status := range []Status{Stopped, Active, Paused} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			inst := &Instance{Title: "t", Path: "/tmp", Status: status, processManager: &fakeLivenessProcessManager{alive: false}}
+			if err := inst.Restart(false, ""); !errors.Is(err, ErrCannotRestart) {
+				t.Fatalf("Restart() err = %v, want ErrCannotRestart", err)
+			}
+			if inst.Status != status {
+				t.Errorf("Status = %v, want unchanged %v", inst.Status, status)
+			}
+		})
+	}
+}
+
+// A restart that fails after the terminal reset must hand the session back as
+// PermanentlyFailed so the user can retry, not strand it in Creating.
+type failingStartProcessManager struct{ fakeLivenessProcessManager }
+
+func (m *failingStartProcessManager) Start(string) error { return errors.New("boom") }
+
+func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Path:           "/tmp",
+		Status:         PermanentlyFailed,
+		processManager: &failingStartProcessManager{},
+	}
+	if err := inst.Restart(false, ""); err == nil {
+		t.Fatal("Restart() err = nil, want the Start failure")
+	}
+	if inst.Status != PermanentlyFailed {
+		t.Errorf("Status = %v, want PermanentlyFailed restored", inst.Status)
+	}
+	if inst.Started() {
+		t.Error("Started() = true, want false")
+	}
+}
