@@ -91,7 +91,7 @@ def main():
                                capture_output=True, text=True)
             if r.returncode:
                 continue  # no artifacts (expired or job not instrumented)
-            files = list(Path(d).glob("*/utilization.json"))
+            records = [u for u in map(valid, Path(d).glob("*/utilization.json")) if u]
         queue = {}
         try:
             for j in json.loads(gh("api", "--paginate", f"repos/{a.repo}/actions/runs/{rid}/jobs?per_page=100",
@@ -100,8 +100,7 @@ def main():
                     queue[j["runner_name"]] = (ts(j["started_at"]) - ts(j["created_at"])).total_seconds()
         except (SystemExit, json.JSONDecodeError):
             pass
-        for f in files:
-            u = valid(f)
+        for u in records:
             if u:
                 u["queue_s"] = queue.get(u.get("runner"))
                 by_label[re.sub(r"-shard-\d+$", "-shard", u["label"])].append(u)
