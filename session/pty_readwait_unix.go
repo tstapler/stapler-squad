@@ -12,9 +12,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// pollPTYBeforeRead makes the stream loop wait with waitReadable before every
-// Read rather than trusting SetReadDeadline (see ptyDeadlineUnsupported).
-const pollPTYBeforeRead = true
+// readDeadlineTrusted is false on unix: SetReadDeadline can return nil yet not
+// bound the Read. creack/pty's Open/Setsize call File.Fd(), which flips the
+// master to blocking mode, after which Read ignores the deadline (reproduced on
+// Linux: Read blocked past a 200ms deadline) and Stop() hangs on a silent PTY.
+// The loop therefore always bounds the wait with waitReadable.
+const readDeadlineTrusted = false
 
 // fdSetSize is how many fd numbers a select(2) FdSet can hold.
 var fdSetSize = len(unix.FdSet{}.Bits) * int(unsafe.Sizeof(unix.FdSet{}.Bits[0])) * 8
@@ -22,9 +25,9 @@ var fdSetSize = len(unix.FdSet{}.Bits) * int(unsafe.Sizeof(unix.FdSet{}.Bits[0])
 // waitReadable blocks for at most timeout until f has data to read or has hung
 // up, and reports whether a Read would now return without blocking.
 //
-// It exists because a PTY master Read cannot be interrupted: darwin rejects
-// SetReadDeadline and Linux accepts it but leaves the fd blocking. Waiting with
-// a short timeout lets the caller re-check cancellation between waits.
+// It exists for PTY masters the Go runtime cannot poll (darwin: "file type does
+// not support deadline"), where Read cannot be interrupted. Waiting with a
+// short timeout lets the caller re-check cancellation between waits.
 //
 // The fd is reached through RawConn.Control, which (unlike File.Fd) leaves it
 // in blocking mode so concurrent Write calls keep their blocking semantics,
