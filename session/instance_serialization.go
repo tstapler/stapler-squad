@@ -431,6 +431,11 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
 		}
 	}
+	// Persisted sessions predate backend pinning and were tmux; a later global tymux flip must
+	// not re-route them (and their stream) to tymux.
+	if instance.Backend == "" && getSelectedBackend() == BackendTymux {
+		instance.Backend = BackendTmux
+	}
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
