@@ -451,8 +451,8 @@ class PoolImpl implements TerminalSocketPool {
   }
 
   recordMuxFailure(): void {
-    this.failures++;
-    if (this.failures >= 2) this.breakerUntil = this.now() + BREAKER_MS;
+    this.failures = 0;
+    this.breakerUntil = this.now() + BREAKER_MS;
   }
 
   stats(): PoolStats {

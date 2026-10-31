@@ -6,8 +6,8 @@ Carries `StreamTerminal` over a few shared WebSockets (`/api/ws/terminal-mux`) i
 
 | Knob | Where | Effect |
 |---|---|---|
-| `terminal_ws_pool` | Feature flag (Settings -> Features), read by the web client | Off: one WebSocket per terminal (unchanged). On: pooled. Applies on next page load. |
-| `STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE` | Server env, read at startup (default `2`, max `64`) | Socket count advertised to clients in `HELLO`. `0` makes `/api/ws/terminal-mux` answer 404, so clients use one WebSocket per terminal. |
+| `terminal_ws_pool` | Feature flag (Settings -> Features), read by the web client | Off: one WebSocket per terminal (unchanged). On: pooled. Evaluated per new stream; follows the 30 s flag refresh, so already-open terminals keep their socket until they reconnect. |
+| `STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE` | Server env, read at startup (default `2`, max `64`) | Socket count advertised to clients in `HELLO`. `0` makes `/api/ws/terminal-mux` answer 404; the first streams fail once, then clients use one WebSocket per terminal. |
 | `localStorage["ssq:terminal-pool-size"]` | Per browser | Overrides the advertised size. `0` disables the pool for this browser. |
 | `TerminalMuxBridge.SetPoolSize(n)` | Go seam | Pushes a `CONFIG` frame to live sockets; clients that have not pinned a size resize without a reload. |
 
@@ -36,7 +36,7 @@ Binary WebSocket messages, big-endian: `type u8 | stream id u32 | body`. Codecs:
 
 ## Failure behaviour
 
-A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream`'s reconnect path treats like any WebSocket loss; the reopened stream gets a first-paint replay from the hub. Two mux failures before any `HELLO` open a 60 s breaker during which streams use plain WebSockets.
+A dropped mux socket closes each of its streams with code 1006, which `useTerminalStream`'s reconnect path treats like any WebSocket loss; the reopened stream gets a first-paint replay from the hub. A mux failure before any `HELLO` (404, 403, unreachable) fails the streams that were waiting on it once; they reconnect on plain WebSockets, and new streams use plain WebSockets for 60 s before the pool tries the mux again.
 
 ## Metrics
 

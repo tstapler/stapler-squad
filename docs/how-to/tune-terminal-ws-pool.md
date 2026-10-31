@@ -5,6 +5,6 @@
 3. Pick a size. Start with the default 2. Use 1 for the fewest sockets (all terminals share one TCP stream, so one stalled network path delays all of them); raise it if the Grafana panel "Terminal mux: head-of-line wait p95" is high while "credit stalls" stays low.
    - Server-wide, at startup: `STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE=3`.
    - One browser: `localStorage.setItem("ssq:terminal-pool-size", "1")` in the console, then reload.
-4. Roll back: turn the flag off and reload (no restart). To also remove the endpoint, start the server with `STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE=0`.
+4. Roll back: turn the flag off; new streams use per-terminal sockets within about 30 s, and open terminals switch when they reconnect or the page reloads (no restart). To also remove the endpoint, start the server with `STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE=0`.
 
 Reference: [terminal-ws-pool](../reference/terminal-ws-pool.md).

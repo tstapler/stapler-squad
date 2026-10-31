@@ -197,12 +197,10 @@ describe("terminal socket pool", () => {
     expect(h.muxes).toHaveLength(2);
   });
 
-  it("uses the plain WebSocket path after repeated mux failures before any HELLO", () => {
+  it("uses the plain WebSocket path after a mux failure before any HELLO", () => {
     const h = setup({ size: 1 });
     h.pool.openStream(URL);
     h.muxes[0].drop();
-    h.pool.openStream(URL);
-    h.muxes[1].drop();
     h.pool.openStream(URL);
     expect(h.fallbacks).toEqual([URL]);
     h.clock.t += 61_000;

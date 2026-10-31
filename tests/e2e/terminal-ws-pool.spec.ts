@@ -5,7 +5,7 @@
  * per-stream socket is unchanged.
  */
 import { test, expect, type Page, type WebSocket } from '@playwright/test';
-import { setFlag } from './helpers/feature-flag';
+import { flagEnabled, setFlag } from './helpers/feature-flag';
 import { SessionClient } from './helpers/session-client';
 import { ShellTabsPage } from './pages/ShellTabsPage';
 
@@ -17,12 +17,12 @@ function trackSockets(page: Page): { muxFrames: () => number; perStream: () => n
   let muxDataFrames = 0;
   let perStream = 0;
   page.on('websocket', (ws: WebSocket) => {
-    if (ws.url().endsWith('/api/ws/terminal-mux')) {
+    if (/\/api\/ws\/terminal-mux(\?|$)/.test(ws.url())) {
       ws.on('framereceived', (f) => {
         const payload = f.payload;
         if (typeof payload !== 'string' && payload.length > 0 && payload[0] === MUX_FRAME_DATA) muxDataFrames++;
       });
-    } else if (ws.url().endsWith('/SessionService/StreamTerminal')) {
+    } else if (/session\.v1\.SessionService\/StreamTerminal(\?|$)/.test(ws.url())) {
       perStream++;
     }
   });
@@ -50,8 +50,13 @@ test.beforeAll(async () => {
 });
 
 test.describe('terminal-ws-pool', () => {
+  test.describe.configure({ mode: 'serial' });
+  let initialFlag = false;
+  test.beforeAll(async ({ request }) => {
+    initialFlag = await flagEnabled(request, 'terminal_ws_pool');
+  });
   test.afterAll(async ({ request }) => {
-    await setFlag(request, 'terminal_ws_pool', false);
+    await setFlag(request, 'terminal_ws_pool', initialFlag);
   });
 
   test('terminalStream_should_UseSharedMuxSocket_When_PoolFlagIsOn', async ({ page, request }) => {
