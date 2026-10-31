@@ -51,9 +51,15 @@ type HistoryLinker struct {
 	backoffs       map[string]*sessionBackoff
 	extraCallbacks []func(string) // additional per-file callbacks (e.g. TokenStore)
 
-	// correlateMu serializes correlateSession so two new sessions in one directory
-	// can't both pick the same unclaimed file.
-	correlateMu deadlock.Mutex
+	// claimMu guards only the claim commit: re-checking that the chosen
+	// conversation is still unclaimed and writing it to the session. Detection
+	// I/O (pane PID, open files, directory scans) runs outside it, so two new
+	// sessions in one directory still can't both take the same unclaimed file
+	// but unrelated sessions no longer queue behind each other's I/O.
+	claimMu deadlock.Mutex
+
+	// scanFlight coalesces concurrent ScanAll calls (see ScanAll).
+	scanFlight scanCoalescer
 
 	runWG sync.WaitGroup // tracks the run goroutine launched by Start; see Wait
 }
@@ -264,6 +270,10 @@ func (hl *HistoryLinker) run(ctx context.Context) {
 // so that UUID changes (e.g., /clear creating a new conversation) are detected
 // promptly rather than waiting for the next cold restore.
 func (hl *HistoryLinker) ScanAll() {
+	hl.scanFlight.do(hl.scanAllOnce)
+}
+
+func (hl *HistoryLinker) scanAllOnce() {
 	// Hold the write lock for both the backoff clear and the snapshot so there
 	// is no window where a concurrent AddInstance call adds an instance that is
 	// missed by the snapshot while the backoffs map is already cleared.
@@ -303,9 +313,6 @@ func (hl *HistoryLinker) scanAllSessions() {
 // re-checked so that UUID changes from /clear are detected and stored promptly. This
 // ensures cold restores use the correct --resume UUID rather than a stale pre-/clear one.
 func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
-	hl.correlateMu.Lock()
-	defer hl.correlateMu.Unlock()
-
 	alreadyLinked := inst.HasClaudeSession()
 
 	// In non-force polling mode, skip already-linked sessions for performance.
@@ -326,38 +333,7 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 		}
 	}
 
-	var info *HistoryFileInfo
-	var err error
-
-	// Fast path: inspect open files of the live tmux pane process.
-	pid, pidErr := inst.GetPanePID()
-	if pidErr == nil {
-		info, err = hl.detector.Detect(pid)
-		if err != nil {
-			log.Warn("HistoryLinker: detect error", "session", inst.Title, "pid", pid, "err", err)
-		}
-	}
-
-	// Fallback: scan the project directory by path (works after reboot / tmux kill).
-	// Use the effective root dir (worktree path for worktree sessions) so we look in
-	// the right ~/.claude/projects/ subdirectory, not the base repository path.
-	//
-	// Skip this fallback for already-linked Paused or Hibernated sessions: the
-	// "most recently modified" heuristic is wrong when other sessions have run in
-	// the same directory after the pause, because their newer JSONL files would
-	// replace the correct stored UUID with a different session's conversation UUID.
-	// Active sessions still use the fallback so that /clear-triggered UUID changes
-	// (new conversation file created while the session is live) are detected promptly.
-	pathFallbackAllowed := !alreadyLinked ||
-		(inst.Status != Paused && inst.Status != Hibernated && inst.Status != Stopped)
-	if info == nil && pathFallbackAllowed {
-		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
-			info, err = hl.detectUnclaimedByPath(inst, effectivePath, !alreadyLinked)
-			if err != nil {
-				log.Warn("HistoryLinker: path-based detect error", "session", inst.Title, "err", err)
-			}
-		}
-	}
+	info, viaPath := hl.detectLink(inst, alreadyLinked)
 
 	if info == nil {
 		// Only record a miss for sessions not yet linked: the backoff mechanism
@@ -393,7 +369,79 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 			"session", inst.Title, "conv_uuid", info.ConversationUUID)
 		log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	}
+	hl.commitLink(inst, info, viaPath, alreadyLinked)
+}
+
+// detectLink runs the slow detection (tmux pane PID, open files, directory
+// scans) without holding any HistoryLinker lock. viaPath reports that the result
+// came from the claim-sensitive path fallback and must be re-validated at commit.
+func (hl *HistoryLinker) detectLink(inst *Instance, alreadyLinked bool) (info *HistoryFileInfo, viaPath bool) {
+	var err error
+
+	// Fast path: inspect open files of the live tmux pane process.
+	pid, pidErr := inst.GetPanePID()
+	if pidErr == nil {
+		info, err = hl.detector.Detect(pid)
+		if err != nil {
+			log.Warn("HistoryLinker: detect error", "session", inst.Title, "pid", pid, "err", err)
+		}
+	}
+
+	// Fallback: scan the project directory by path (works after reboot / tmux kill).
+	// Use the effective root dir (worktree path for worktree sessions) so we look in
+	// the right ~/.claude/projects/ subdirectory, not the base repository path.
+	//
+	// Skip this fallback for already-linked Paused or Hibernated sessions: the
+	// "most recently modified" heuristic is wrong when other sessions have run in
+	// the same directory after the pause, because their newer JSONL files would
+	// replace the correct stored UUID with a different session's conversation UUID.
+	// Active sessions still use the fallback so that /clear-triggered UUID changes
+	// (new conversation file created while the session is live) are detected promptly.
+	pathFallbackAllowed := !alreadyLinked ||
+		(inst.Status != Paused && inst.Status != Hibernated && inst.Status != Stopped)
+	if info == nil && pathFallbackAllowed {
+		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
+			info, err = hl.detectUnclaimedByPath(inst, effectivePath, !alreadyLinked)
+			if err != nil {
+				log.Warn("HistoryLinker: path-based detect error", "session", inst.Title, "err", err)
+			}
+			viaPath = info != nil
+		}
+	}
+	return info, viaPath
+}
+
+// commitLink publishes info to inst under claimMu. A path-derived choice was
+// made against a claimed-set read taken before the lock, so it is re-checked
+// here: if a sibling claimed that conversation in the meantime, the selection is
+// redone under the lock (rare; costs one directory scan). Pane-PID results are
+// authoritative and committed as-is, as before.
+func (hl *HistoryLinker) commitLink(inst *Instance, info *HistoryFileInfo, viaPath, alreadyLinked bool) {
+	hl.claimMu.Lock()
+	defer hl.claimMu.Unlock()
+	if viaPath && hl.claimedByOther(inst, info.ConversationUUID) {
+		effectivePath := inst.GetEffectiveRootDir()
+		redo, err := hl.detectUnclaimedByPath(inst, effectivePath, !alreadyLinked)
+		if err != nil {
+			log.Warn("HistoryLinker: path-based re-detect error", "session", inst.Title, "err", err)
+		}
+		if redo == nil {
+			return
+		}
+		info = redo
+	}
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
+}
+
+// claimedByOther reports whether a monitored instance other than inst is linked
+// to the conversation.
+func (hl *HistoryLinker) claimedByOther(inst *Instance, uuid string) bool {
+	for _, other := range hl.Instances() {
+		if other != inst && other.GetClaudeConversationUUID() == uuid {
+			return true
+		}
+	}
+	return false
 }
 
 // detectUnclaimedByPath is DetectByPath minus conversations linked to another
