@@ -17,6 +17,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
@@ -168,37 +169,40 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// through — special-cases "UTC" to return that singleton directly).
 	// auto_vacuum=INCREMENTAL only takes effect on a database with no tables yet;
 	// session/dbmaint reclaims the freelist of such databases in the background.
-	dbPath := tuneEntDSN(sqlitedsn.New(expandedPath)).
-		WithPragma("auto_vacuum", "incremental").
-		WithWAL().
-		WithBusyTimeout(5000 * time.Millisecond).
-		WithForeignKeysShort().
-		WithEntTimeCompat().
-		Build()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	// SQLite supports only one writer at a time; serialise all writes (and
-	// every transaction) through a single connection to eliminate "database is
-	// locked" contention and keep the Go-side dedup/CAS transactions atomic.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
-
 	// Plain SELECTs run on a separate query_only pool: WAL lets them proceed
-	// while the writer connection is busy. Seeded and URI (in-memory) databases
-	// stay single-pool.
-	var readDB *sql.DB
+	// while the writer connection is busy. On-disk databases open through
+	// session/dbpool (ADR-036), which builds the same DSN, enforces WAL and owns
+	// the pools. Seeded and URI (in-memory) databases stay single-pool and are
+	// opened directly because dbpool accepts only plain file paths.
+	var (
+		db   *sql.DB
+		core *dbpool.CoreDB
+	)
 	if repo.seedURI == "" && isOnDiskDatabase(expandedPath) {
-		if n := readPoolSize(); n > 0 {
-			readDB, err = openReadPool(expandedPath, n)
-			if err != nil {
-				_ = db.Close()
-				return nil, err
-			}
+		opened, err := dbpool.OpenCore(expandedPath, readPoolSize())
+		if err != nil {
+			return nil, fmt.Errorf("failed to open database: %w", err)
 		}
+		core, db = &opened, opened.Writer()
+	} else {
+		dbPath := tuneEntDSN(sqlitedsn.New(expandedPath)).
+			WithPragma("auto_vacuum", "incremental").
+			WithWAL().
+			WithBusyTimeout(5000 * time.Millisecond).
+			WithForeignKeysShort().
+			WithEntTimeCompat().
+			Build()
+		var err error
+		db, err = sql.Open("sqlite", dbPath) //nolint:norawdb in-memory/URI/seeded test databases are not files dbpool can own
+		if err != nil {
+			return nil, fmt.Errorf("failed to open database: %w", err)
+		}
+		// SQLite supports only one writer at a time; serialise all writes (and
+		// every transaction) through a single connection to eliminate "database is
+		// locked" contention and keep the Go-side dedup/CAS transactions atomic.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(time.Hour)
 	}
 
 	if repo.seedURI != "" {
@@ -212,7 +216,16 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
 
 	// Create Ent client with the existing database connection
-	client, drv := newInstrumentedEntClient(db, readDB)
+	var (
+		client *ent.Client
+		drv    dialect.Driver
+	)
+	if core != nil {
+		drv = core.Driver()
+		client = ent.NewClient(ent.Driver(drv))
+	} else {
+		client, drv = newInstrumentedEntClient(db, nil)
+	}
 
 	// Run automatic schema migration. entSchemaCreateMu serializes this call
 	// process-wide: even though each caller opens its own isolated SQLite
@@ -221,7 +234,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// NewEntRepository calls run schema creation concurrently.
 	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
 	EntSchemaCreateMu.Lock()
-	err = client.Schema.Create(context.Background())
+	err := client.Schema.Create(context.Background())
 	EntSchemaCreateMu.Unlock()
 	stopSlowWatch()
 	if err != nil {
@@ -2028,6 +2041,7 @@ func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program
 // the given session UUID, ordered by created_at DESC (most-recent first).
 // The 2000-row cap prevents unbounded reads for long-lived sessions.
 func (r *EntRepository) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error) {
+	//nolint:nowrongdbentity known latent bug (ADR-036): analytics_events rows live in analytics.db, so this reads an empty table; fixed when analytics_events gets its own handle
 	entries, err := r.client.AnalyticsEvent.Query().
 		Where(analyticsevent.SessionIDEQ(sessionID)).
 		Order(ent.Desc(analyticsevent.FieldCreatedAt)).

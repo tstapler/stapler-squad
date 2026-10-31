@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
@@ -674,4 +676,31 @@ func TestActuatorInboxPRWatch_should_AnswerFeatureFlagOffNotNotFound_When_NoProv
 	if rec.Code != http.StatusOK || !strings.Contains(body, "Feature flag: off") || !strings.Contains(body, "This process polls: no") {
 		t.Fatalf("flag off live: code=%d body=%s", rec.Code, body)
 	}
+}
+
+func TestHandleActuatorDB_ReportsDatabaseRowsWithWAL(t *testing.T) {
+	core, err := dbpool.OpenCore(filepath.Join(t.TempDir(), "sessions.db"), 2)
+	if err != nil {
+		t.Fatalf("OpenCore: %v", err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+
+	rec := httptest.NewRecorder()
+	handleActuatorDB(rec, httptest.NewRequest(http.MethodGet, "/actuator/db", nil))
+
+	var body struct {
+		Databases []dbpool.Info `json:"databases"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, d := range body.Databases {
+		if d.Path == core.Path() {
+			if d.UseCase != dbpool.UseCaseCore || d.JournalMode != "wal" || d.ReaderConns != 2 {
+				t.Fatalf("unexpected row %+v", d)
+			}
+			return
+		}
+	}
+	t.Fatalf("no row for %s in %+v", core.Path(), body.Databases)
 }
