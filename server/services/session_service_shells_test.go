@@ -349,3 +349,24 @@ func TestListShells_ResolvesSessionWithoutFullScan(t *testing.T) {
 	_, err = fix.svc.ListShells(context.Background(), connect.NewRequest(&sessionv1.ListShellsRequest{SessionId: "does-not-exist"}))
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
+
+func TestResolveSessionTitle_should_MatchByUUIDOrTitle(t *testing.T) {
+	t.Parallel()
+	fix := setupShellsFixture(t)
+	inst := &session.Instance{
+		Title: "resolve-by-either", UUID: "11111111-2222-4333-8444-555555555555", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, fix.storage.AddInstance(inst))
+
+	byUUID, err := fix.svc.resolveSessionTitle("11111111-2222-4333-8444-555555555555")
+	require.NoError(t, err)
+	assert.Equal(t, "resolve-by-either", byUUID)
+
+	byTitle, err := fix.svc.resolveSessionTitle("resolve-by-either")
+	require.NoError(t, err)
+	assert.Equal(t, "resolve-by-either", byTitle)
+
+	_, err = fix.svc.resolveSessionTitle("missing")
+	assertConnectCode(t, err, connect.CodeNotFound)
+}
