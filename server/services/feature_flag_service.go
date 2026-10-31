@@ -335,6 +335,11 @@ var knownFeatureFlags = []struct {
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
+		name:         session.FeatureFlagDriverPaneActivityGate,
+		description:  "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
+		defaultValue: config.DriverPaneActivityGateDefault,
+	},
+	{
 		name:         "request_coalescing",
 		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
 		defaultValue: true,
@@ -346,6 +351,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        "unary_over_ws_remote",
 		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
+	},
+	{
+		name:        "terminal_ws_pool",
+		description: "Carry terminal streams over a small shared pool of multiplexed WebSockets (/api/ws/terminal-mux) instead of one WebSocket per terminal, so a page with many terminals opens a few sockets instead of one each. Kill switch: turn off to restore one WebSocket per terminal. Pool size: server STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE (default 2) or per-browser localStorage ssq:terminal-pool-size. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
 		name:        "batch_unary",

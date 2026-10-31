@@ -52,7 +52,7 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 		scanned++
 
 		statusInfo := ss.statusManager.GetStatus(inst)
-		// nil paneActivity: startup scan has no prior #{pane_last_activity} snapshot.
+		// nil paneActivity: startup scan has no prior #{window_activity} snapshot.
 		// GetContent falls back to TTL-based cache logic, which is appropriate for a
 		// one-shot scan that runs before the regular poll cycle establishes a baseline.
 		content := ss.contentProvider.GetContent(inst, statusInfo, nil)

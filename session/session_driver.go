@@ -176,6 +176,18 @@ func SessionDriverRunningForTest(inst *Instance) bool {
 	return inst.driverRunning.Load()
 }
 
+// StartSessionDriverForTest starts inst's driver and registers its stop+join on
+// t's cleanup in the same call, so a test cannot forget to stop it. Tests outside
+// package session must use this instead of StartSessionDriver (enforced by the
+// nosessiondrivertest analyzer). t is satisfied by testing.TB.
+func StartSessionDriverForTest(t interface{ Cleanup(func()) }, inst *Instance, allowedPath string) {
+	t.Cleanup(func() {
+		StopSessionDriver(inst)
+		JoinSessionDriver(inst)
+	})
+	StartSessionDriver(inst, allowedPath)
+}
+
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
 // for approval dialogs throughout the session lifetime.
@@ -331,6 +343,12 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
+	// Skips the per-tick capture-pane while the pane is provably unchanged (pane_activity_gate.go).
+	// Local tmux only: the snapshot is the local server's list-panes.
+	paneGate := newPaneActivityGate(func() map[string]time.Time {
+		return driverPaneSnapshot(inst.IsRemote())
+	}, time.Now, driverPaneActivityGateEnabled)
+
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
@@ -417,7 +435,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
-		output, previewErr := inst.PreviewContext(ctx)
+		output, previewErr := driverPreview(ctx, paneGate, inst)
 		hasOutput := previewErr == nil && output != ""
 		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
 		// buffer (not a tailed "current screen" snapshot, despite its doc comment),

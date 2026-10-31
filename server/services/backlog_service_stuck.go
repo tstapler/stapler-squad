@@ -178,6 +178,10 @@ func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*session
 	if refresh {
 		ctx = githubpkg.WithRepoSettingsRefresh(ctx)
 	}
+	lookup := s.repoSettings
+	if !refresh && s.repoSettingsFast != nil {
+		lookup = s.repoSettingsFast
+	}
 	hosts := s.EnterpriseHosts()
 	byRepo := make(map[githubpkg.RepoRef]githubpkg.RepoSettingsResult)
 	for _, item := range items {
@@ -194,7 +198,7 @@ func (s *BacklogService) populateAutoMerge(ctx context.Context, items []*session
 		}
 		res, ok := byRepo[ref]
 		if !ok {
-			res = s.repoSettings(ctx, ref)
+			res = lookup(ctx, ref)
 			byRepo[ref] = res
 		}
 		applyAutoMerge(item, res)
@@ -266,16 +270,28 @@ func (s *BacklogService) ListStuckBacklogItems(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list stuck backlog items: %w", err))
 	}
 
+	// Review-status items need their sessions for the duplicate-pending hint;
+	// fetch them for every such item in one batch instead of per row.
+	var reviewIDs []string
+	for _, row := range rows {
+		if row.ItemStatus == session.BacklogStatusReview {
+			reviewIDs = append(reviewIDs, row.ItemID)
+		}
+	}
+	var sessionsByItem map[string][]session.ItemSessionSummary
+	if len(reviewIDs) > 0 {
+		var sessErr error
+		if sessionsByItem, sessErr = s.storage.ListItemSessionsForItems(ctx, reviewIDs); sessErr != nil {
+			log.Warn("stuck report: batched item-session lookup failed; duplicate hints omitted", "err", sessErr)
+		}
+	}
+
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
-		if row.ItemStatus == session.BacklogStatusReview {
-			if sessions, sessErr := s.storage.ListItemSessions(ctx, row.ItemID); sessErr == nil {
-				if ref := session.PendingDuplicateRef(sessions); ref != "" {
-					items[i].DuplicatePending = true
-					items[i].DuplicateRef = ref
-				}
-			}
+		if ref := session.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
+			items[i].DuplicatePending = true
+			items[i].DuplicateRef = ref
 		}
 	}
 

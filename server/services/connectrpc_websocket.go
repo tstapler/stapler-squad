@@ -763,6 +763,10 @@ const (
 	capturePollEvery  = 150 * time.Millisecond
 )
 
+// hubCaptureRetryWindow bounds the text-capture retries inside a hub first paint, which holds
+// the hub's resize lock; much shorter than firstPaintMaxWait for that reason.
+var hubCaptureRetryWindow = time.Second
+
 // waitForPaneContent polls CapturePaneContentRaw until deadline while the instance is still in a
 // transient state (i.e. a concurrent Instance.Resume() may be mid-restore), giving up
 // immediately once the status settles into one that means capture will never succeed.
@@ -943,8 +947,13 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	defer conn.Close()
 
 	log.Info("ConnectRPC WebSocket connection established")
+	h.serveTerminalStream(conn, r.URL.Path)
+}
 
-	stream, ok := negotiateConnectStream(conn, r)
+// serveTerminalStream runs one StreamTerminal call over conn, which is either a real
+// WebSocket or a virtual mux stream (ADR-033).
+func (h *ConnectRPCWebSocketHandler) serveTerminalStream(conn streamConn, methodPath string) {
+	stream, ok := negotiateConnectStream(conn, methodPath)
 	if !ok {
 		return
 	}
@@ -953,7 +962,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
 	// it is always sent regardless of which code path streamTerminal takes.
 	streamDone := TrackOpenStream("StreamTerminal")
-	err = h.streamTerminal(stream)
+	err := h.streamTerminal(stream)
 	streamDone()
 	if err != nil {
 		log.Error("StreamTerminal error", "err", err)
@@ -968,7 +977,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 // and sends the response headers + initial empty response body. Returns
 // ok=false on any failure — already logged, and reported to the client as
 // an error frame wherever the protocol got far enough to send one.
-func negotiateConnectStream(conn *websocket.Conn, r *http.Request) (*connectWebSocketStream, bool) {
+func negotiateConnectStream(conn streamConn, methodPath string) (*connectWebSocketStream, bool) {
 	// 30s deadline: a client that never sends headers should not hold the connection open.
 	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, headersBytes, err := conn.ReadMessage()
@@ -995,7 +1004,7 @@ func negotiateConnectStream(conn *websocket.Conn, r *http.Request) (*connectWebS
 	}
 
 	// Only StreamTerminal is supported today.
-	if methodPath := r.URL.Path; !strings.HasSuffix(methodPath, sessionv1connect.SessionServiceStreamTerminalProcedure) {
+	if !strings.HasSuffix(methodPath, sessionv1connect.SessionServiceStreamTerminalProcedure) {
 		log.Error("unsupported RPC method", "method", methodPath)
 		sendErrorResponse(conn, fmt.Sprintf("Unsupported method: %s", methodPath))
 		return nil, false
@@ -1012,7 +1021,7 @@ func negotiateConnectStream(conn *websocket.Conn, r *http.Request) (*connectWebS
 // sendConnectHandshakeResponse sends the response headers and the initial
 // empty response body ConnectRPC's streaming protocol requires to acknowledge
 // the connection before the real stream begins (no EndStream flag yet).
-func sendConnectHandshakeResponse(conn *websocket.Conn) bool {
+func sendConnectHandshakeResponse(conn streamConn) bool {
 	responseHeaders := "Status-Code: 200\r\nContent-Type: application/proto\r\n\r\n"
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(responseHeaders)); err != nil {
 		log.Error("failed to send response headers", "err", err)
@@ -1034,11 +1043,25 @@ func sendConnectHandshakeResponse(conn *websocket.Conn) bool {
 	return true
 }
 
+// streamConn is the slice of *websocket.Conn the StreamTerminal handlers use. A
+// *websocket.Conn satisfies it; a muxStreamConn is one virtual stream carried by a
+// shared terminal mux socket (ADR-033).
+type streamConn interface {
+	ReadMessage() (messageType int, p []byte, err error)
+	WriteMessage(messageType int, data []byte) error
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
+	Close() error
+}
+
 // connectWebSocketStream wraps a WebSocket connection for ConnectRPC streaming
 type connectWebSocketStream struct {
-	conn       *websocket.Conn
+	conn       streamConn
 	requestMsg []byte
 	writeMutex sync.Mutex // Protects concurrent writes to WebSocket
+	// serverClosing is set by WebSocketTransport.Close before it forces the read
+	// deadline, so the input loop can tell that interrupt from a real read failure.
+	serverClosing atomic.Bool
 }
 
 // WriteMessage safely writes a message to the WebSocket with mutex protection
@@ -2070,6 +2093,14 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 	if instance.Started() {
 		return
 	}
+	// Creating and Active (a boot-restored session whose Start() is queued or in
+	// flight) can still become started and are the only states MarkStartedIfTmuxAlive
+	// heals. Any other status (e.g. PermanentlyFailed with tmux alive) will never
+	// publish a Started event, so waiting just adds startupWaitTimeout to every connect.
+	if status := instance.GetLifecycleStatus(); status != session.Creating && status != session.Active {
+		log.Info("[streamViaHub] instance not started and not starting, attaching without waiting", "session", sessionID, "status", status.String())
+		return
+	}
 	log.Info("[streamViaHub] instance not started yet, waiting briefly before attaching", "session", sessionID)
 	if waitForInstanceStartedEvent(h.sessionService.GetEventBus(), instance, startupWaitTimeout) {
 		return
@@ -2192,9 +2223,9 @@ func (h *ConnectRPCWebSocketHandler) attachHubSubscriber(connCtx context.Context
 // clears its loading spinner on a received message with non-empty output
 // bytes, and ansiSnapshotPrefix alone is non-empty, so an idle/empty session
 // still reaches "connected, nothing to show" instead of spinning forever with
-// no future event to ever clear it. A capture failure returns an error (the
-// connection fails visibly): output dropped while awaiting this paint would
-// otherwise be lost behind a blank snapshot.
+// no future event to ever clear it. A capture that still fails after a short
+// retry paints blank rather than failing the connection, since live frames
+// would otherwise reconnect-loop on a session whose output works.
 func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSocketStream, hub *streamhub.StreamHub, subscriberID streamhub.SubscriberID, instance *session.Instance, sessionID string) error {
 	return hub.FirstPaint(subscriberID, func() error {
 		return h.writeHubInitialSnapshot(stream, instance, sessionID)
@@ -2209,11 +2240,15 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 	if frame, ok := fullStateFrame(ctx, instance); ok {
 		return sendFullStateFrame(stream, sessionID, frame)
 	}
-	content, captureErr := instance.CapturePaneContentRaw()
+	// A capture that keeps failing (e.g. ErrSessionNotStarted mid-resume) must not end the
+	// connection while live output still works: retry briefly, then paint blank. Frames held
+	// during the paint are still replayed after it; only frames dropped before it are lost.
+	content, captureErr := pollWhileResuming(instanceStatus(instance), time.Now().Add(hubCaptureRetryWindow),
+		capturePollEvery, instance.CapturePaneContentRaw)
 	if captureErr != nil {
-		// Output broadcast while the subscriber awaited this paint was dropped as superseded by
-		// the capture, so a blank paint would silently lose it; fail the connection instead.
-		return fmt.Errorf("failed to capture initial content: %w", captureErr)
+		log.Warn("[streamViaHub] initial capture failed, painting blank and streaming live output",
+			"session", sessionID, "err", captureErr)
+		content = ""
 	}
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(content), instance)
 	altScreenActive := altScreenActiveForSnapshot(instance)
@@ -2935,6 +2970,9 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 	_, message, err := p.stream.conn.ReadMessage()
 	if err != nil {
 		if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			p.errChan <- nil
+		} else if p.stream.serverClosing.Load() && errors.Is(err, os.ErrDeadlineExceeded) {
+			log.Debug("[streamViaControlMode] input loop interrupted by server-initiated close", "session", p.sessionID)
 			p.errChan <- nil
 		} else {
 			log.Error("[streamViaControlMode] WebSocket read error", "session", p.sessionID, "err", err)
@@ -3933,7 +3971,7 @@ func parseConnectHeaders(headersText string) map[string]string {
 }
 
 // sendErrorResponse sends an error response over WebSocket
-func sendErrorResponse(conn *websocket.Conn, errorMsg string) {
+func sendErrorResponse(conn streamConn, errorMsg string) {
 	responseHeaders := fmt.Sprintf("Status-Code: 500\r\nContent-Type: text/plain\r\n\r\n%s", errorMsg)
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(responseHeaders)); err != nil {
 		log.Error("failed to send error response headers", "err", err)

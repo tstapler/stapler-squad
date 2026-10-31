@@ -20,6 +20,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -992,4 +993,79 @@ func TestListStuckBacklogItems_should_KeepStaleValue_When_ForcedRefreshFails(t *
 	require.Len(t, items, 1)
 	assert.Equal(t, sessionv1.AutoMergeLookupStatus_AUTO_MERGE_LOOKUP_STATUS_OK, items[0].AutoMergeLookupStatus)
 	assert.WithinDuration(t, checked, items[0].AutoMergeCheckedAt.AsTime(), time.Second)
+}
+
+// TestListStuckBacklogItems_should_BatchItemSessionLookups is the query-count
+// budget for the stuck report: duplicate hints for N review items must cost a
+// constant number of statements, not two per item (the Tempo-observed N+1),
+// while still surfacing each item's own duplicate_ref.
+func TestListStuckBacklogItems_should_BatchItemSessionLookups(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	const items = 12
+	wantRef := map[string]string{}
+	for i := range items {
+		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+			Title: fmt.Sprintf("review item %d", i), Status: string(session.BacklogStatusReview),
+		})
+		require.NoError(t, err)
+		seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now(), "ctx")
+		if i%2 == 0 {
+			is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleReview})
+			require.NoError(t, err)
+			ref := fmt.Sprintf("dup%d", i)
+			require.NoError(t, storage.UpdateItemSessionVerificationNotes(ctx, is.ID, "duplicate_ref="+ref+" same change"))
+			wantRef[item.ID] = ref
+		}
+	}
+
+	countCtx, counter := dbobs.WithQueryCounter(ctx)
+	resp, err := svc.ListStuckBacklogItems(countCtx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Items, items)
+
+	for _, it := range resp.Msg.Items {
+		ref, dup := wantRef[it.ItemId]
+		assert.Equal(t, dup, it.DuplicatePending, it.ItemId)
+		assert.Equal(t, ref, it.DuplicateRef, it.ItemId)
+	}
+	assert.LessOrEqual(t, counter.Count(), int64(6), "statements for %d review items", items)
+}
+
+// TestListStuckBacklogItems_should_NotBlockOnGitHub_When_NotRefreshing proves a
+// plain poll uses the cache-only lookup and only RefreshAutoMerge pays for the
+// blocking one.
+func TestListStuckBacklogItems_should_NotBlockOnGitHub_When_NotRefreshing(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	var blocking, fast atomic.Int32
+	svc.SetRepoSettingsLookup(func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		blocking.Add(1)
+		return githubpkg.RepoSettingsResult{}
+	})
+	svc.SetRepoSettingsNonBlockingLookup(func(context.Context, githubpkg.RepoRef) githubpkg.RepoSettingsResult {
+		fast.Add(1)
+		return githubpkg.RepoSettingsResult{}
+	})
+	ctx := t.Context()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "pr", Status: string(session.BacklogStatusPRPending)})
+	require.NoError(t, err)
+	url := "https://github.com/example/repo/pull/1"
+	n := 1
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now(), "c")
+
+	_, err = svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, blocking.Load())
+	assert.EqualValues(t, 1, fast.Load())
+
+	_, err = svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{RefreshAutoMerge: true}))
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, blocking.Load())
 }

@@ -1,12 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { defineConfig, devices, webkit } from '@playwright/test';
+import { baseUrl, pinWorkerEnv, serverSlot } from './helpers/base-url';
+import { themeFixturePath } from './helpers/theme-fixtures';
 
 /**
  * WebKit (iPhone) project for mobile-webkit.spec.ts. Report-only by construction: when the
  * browser build is not installed (npx playwright install webkit) the project is left out and the
  * reason is printed, so a missing WebKit never fails the suite (plan Story 7.8b).
  */
+pinWorkerEnv();
+
 function webkitMobileProjects() {
   let installed = false;
   try {
@@ -94,8 +98,8 @@ export default defineConfig({
   // Retry failed tests once
   retries: 1,
 
-  // Number of parallel workers
-  workers: 1,
+  // Number of parallel workers; global-setup starts one isolated server per worker slot.
+  workers: Math.max(1, Number(process.env.E2E_WORKERS) || 1),
 
   // Reporter configuration
   reporter: [
@@ -109,8 +113,8 @@ export default defineConfig({
 
   // Global test setup
   use: {
-    // Base URL for tests — dynamically assigned by global-setup; override with TEST_SERVER_URL
-    baseURL: process.env.TEST_SERVER_URL || 'http://localhost:8544',
+    // Base URL for tests — this worker's server (see helpers/base-url.ts); override with TEST_SERVER_URL
+    baseURL: baseUrl(),
 
     // Both first-visit tours (app-wide + backlog) open a modal that aria-hides the page and intercepts
     // pointer events, which fails every spec that forgets to dismiss them. Specs that exercise a tour
@@ -120,7 +124,7 @@ export default defineConfig({
       cookies: [],
       origins: [
         {
-          origin: new URL(process.env.TEST_SERVER_URL || 'http://localhost:8544').origin,
+          origin: new URL(baseUrl()).origin,
           localStorage: [
             { name: 'stapler-squad:onboarded', value: 'true' },
             { name: 'stapler-squad:backlog-onboarded', value: 'true' },
@@ -158,7 +162,7 @@ export default defineConfig({
       name: 'visual-matrix',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: path.join(__dirname, 'fixtures', 'matrix-theme.json'),
+        storageState: themeFixturePath('matrix', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -167,7 +171,7 @@ export default defineConfig({
       name: 'visual-cyberpunk77',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: path.join(__dirname, 'fixtures', 'cyberpunk77-theme.json'),
+        storageState: themeFixturePath('cyberpunk77', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -176,7 +180,7 @@ export default defineConfig({
       name: 'visual-wh40k',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: path.join(__dirname, 'fixtures', 'wh40k-theme.json'),
+        storageState: themeFixturePath('wh40k', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',
@@ -185,7 +189,7 @@ export default defineConfig({
       name: 'visual-clean',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: path.join(__dirname, 'fixtures', 'clean-theme.json'),
+        storageState: themeFixturePath('clean', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',

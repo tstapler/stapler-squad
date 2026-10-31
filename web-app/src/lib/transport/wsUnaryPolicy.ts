@@ -37,6 +37,12 @@ export const FALLBACK_REASONS = [
   "ws-resource-exhausted",
   "ws-unavailable",
   "ws-send-queue-full",
+  // Routine HTTP routing, counted so "why is this call on HTTP" is answerable from metrics.
+  "not-eligible",
+  "flag-off",
+  "flags-not-loaded",
+  "remote-flag-off",
+  "session-parked",
 ] as const;
 export type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
@@ -91,8 +97,35 @@ function forceHttpSet(): boolean {
   }
 }
 
+const ROUTINE_REASONS = new Set<FallbackReason>(["not-eligible", "flag-off", "flags-not-loaded", "remote-flag-off", "session-parked"]);
+const ROUTINE_FLUSH_MS = 15_000;
+const routineCounts = new Map<FallbackReason, number>();
+let routineTimer: ReturnType<typeof setTimeout> | undefined;
+
+export function _flushRoutineFallbacksForTesting(): void {
+  if (routineTimer) clearTimeout(routineTimer);
+  flushRoutine();
+}
+
+function flushRoutine(): void {
+  routineTimer = undefined;
+  for (const [reason, count] of routineCounts) {
+    trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason, count: String(count) } });
+  }
+  routineCounts.clear();
+}
+
+/** Real fallbacks are rare and sent at once; routine HTTP routing is aggregated per reason so it adds no per-call event. */
 function recordFallback(reason: FallbackReason): void {
-  trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason } });
+  if (!ROUTINE_REASONS.has(reason)) {
+    trackSharedEvent({ name: "ws_unary_fallback_total", category: "performance", labels: { reason } });
+    return;
+  }
+  routineCounts.set(reason, (routineCounts.get(reason) ?? 0) + 1);
+  if (routineTimer === undefined) {
+    routineTimer = setTimeout(flushRoutine, ROUTINE_FLUSH_MS);
+    (routineTimer as { unref?: () => void }).unref?.(); // never hold a Node/Jest process open
+  }
 }
 
 function recordQueueMs(ms: number): void {
@@ -147,7 +180,11 @@ class WsUnaryPolicy implements Transport {
       markRpcTransport(contextValues, "http");
       return this.opt.http.unary(method, signal, timeout, header, input, contextValues);
     };
-    if (!this.wsAllowed(method.name)) return viaHttp();
+    const httpReason = this.httpRouteReason(method.name);
+    if (httpReason) {
+      this.onFallback(httpReason);
+      return viaHttp();
+    }
     if (this.denylist.has(method.name)) {
       this.onFallback("ws-method-not-allowed");
       return viaHttp();
@@ -163,10 +200,13 @@ class WsUnaryPolicy implements Transport {
     return this.viaWs(method, signal, timeoutMs, header, input, contextValues, viaHttp);
   }
 
-  /** Flag, origin and eligibility gates; routine HTTP routing, not counted as a fallback. */
-  private wsAllowed(methodName: string): boolean {
-    if (this.parked || !WS_ELIGIBLE.has(methodName) || !this.readFlag(MASTER_FLAG)) return false;
-    return this.originClass() === "local" || this.readFlag(REMOTE_FLAG);
+  /** Flag, origin and eligibility gates: why this call goes over HTTP, or undefined if it may use WS. */
+  private httpRouteReason(methodName: string): FallbackReason | undefined {
+    if (this.parked) return "session-parked";
+    if (!WS_ELIGIBLE.has(methodName)) return "not-eligible";
+    if (!this.readFlag(MASTER_FLAG)) return peekFlags() ? "flag-off" : "flags-not-loaded";
+    if (this.originClass() === "remote" && !this.readFlag(REMOTE_FLAG)) return "remote-flag-off";
+    return undefined;
   }
 
   private async viaWs<I extends DescMessage, O extends DescMessage>(
