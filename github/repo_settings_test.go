@@ -496,4 +496,11 @@ func TestRepoSettingsNonBlocking_ServesStaleWhileRefreshing(t *testing.T) {
 	assert.Equal(t, RepoSettingsOK, res.Status)
 	assert.True(t, res.Stale)
 	close(staleGate)
+	// Drain the detached refresh: it dials GhBaseURL() when it runs, so outliving
+	// this test lets it hit (and race with) whatever server a later test installs.
+	require.Eventually(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.refreshing) == 0
+	}, 5*time.Second, 5*time.Millisecond)
 }
