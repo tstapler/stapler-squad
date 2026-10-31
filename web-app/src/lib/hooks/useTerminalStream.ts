@@ -16,6 +16,10 @@ import type { Terminal } from '@xterm/xterm';
 import { ShellStatus } from "@/gen/session/v1/types_pb";
 import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
 
+/** A stream that lived this long counts as healthy and resets the clean-end streak. */
+const STABLE_STREAM_MS = 10_000;
+const MAX_CLEAN_SERVER_ENDS = 5;
+
 interface ScrollbackMetadata {
   hasMore: boolean;
   oldestSequence: number;
@@ -196,6 +200,7 @@ export function useTerminalStream({
   // is a deliberate, internal fast-retry optimization, not a real failure the caller
   // should count toward its own attempt/error UI.
   const connectTimeoutAbortedRef = useRef(false);
+  const cleanServerEndsRef = useRef(0);
   const connectRef = useRef<(overrideCols?: number, overrideRows?: number, options?: { isAutoRetry?: boolean }) => Promise<void>>(async () => {});
   const textDecoderRef = useRef(new TextDecoder());
   const scrollbackDecoderRef = useRef(new TextDecoder());
@@ -569,7 +574,12 @@ export function useTerminalStream({
               && shouldReconnectRef.current
               && !isDisconnectingRef.current
               && !connectTimeoutAbortedRef.current) {
-            handleError(new Error("terminal stream closed by server"));
+            // TerminalOutput resets its attempt counter on every connect, so a stream that
+            // connects and then ends cleanly each time would reconnect forever; cap the streak.
+            cleanServerEndsRef.current = Date.now() - connectStartedAt >= STABLE_STREAM_MS ? 1 : cleanServerEndsRef.current + 1;
+            if (cleanServerEndsRef.current <= MAX_CLEAN_SERVER_ENDS) {
+              handleError(new Error("terminal stream closed by server"));
+            }
           }
         } catch (err) {
           // Task 2.2.3 — a superseded generation's error/teardown must not

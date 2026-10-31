@@ -535,6 +535,25 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it('connect_should_stopSurfacingErrors_When_streamsKeepEndingCleanlyRightAfterConnecting', async () => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    mockStreamTerminal.mockImplementation(() => {
+      const s = makePushStream<object>();
+      s.end();
+      return s.iterable;
+    });
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, onError }));
+    for (let i = 0; i < 8; i++) {
+      await act(async () => { await result.current.connect(); });
+      await act(async () => { await Promise.resolve(); });
+    }
+
+    expect(onError.mock.calls.length).toBeGreaterThan(0);
+    expect(onError.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
   it('connect_should_notSurfaceError_When_shellStreamEndsCleanly', async () => {
     delete process.env.NEXT_PUBLIC_RECONNECT_V2;
     const stream = makePushStream<object>();
