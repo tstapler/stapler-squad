@@ -839,6 +839,7 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	// manufactured timeouts — an early upstream disconnect (ctx canceled)
 	// stops this pipeline immediately instead of waiting out a fixed
 	// ceiling neither call could otherwise be told about.
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
 	defer cancel()
 
@@ -893,6 +894,14 @@ func (h *StreamHub) applyNegotiatedSize(ctx context.Context, size TerminalSize) 
 	}
 
 	content, err := h.controller.CapturePaneContentRawContext(ctx)
+	if errors.Is(err, context.DeadlineExceeded) && callerCtx.Err() == nil {
+		// Our own budget ran out while the caller is still connected. Dropping the
+		// capture would leave subscribers on the pre-resize screen (output was
+		// suppressed during the resize and nothing re-arms a capture), so retry once.
+		retryCtx, retryCancel := context.WithTimeout(callerCtx, captureTimeout)
+		content, err = h.controller.CapturePaneContentRawContext(retryCtx)
+		retryCancel()
+	}
 	if err != nil {
 		if errors.Is(err, ErrSessionNotStarted) {
 			log.Info("streamhub: session not started yet, skipping this resize's capture (will retry on the next negotiated size)", "session", h.sessionName)

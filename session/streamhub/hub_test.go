@@ -3,7 +3,9 @@ package streamhub_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -461,5 +463,53 @@ func TestStream_ShouldStreamOutputToClient_WhenHiddenPaneProducesOutput(t *testi
 
 	if !waitFor(t, time.Second, func() bool { return transport.receivedCount() >= 1 }) {
 		t.Fatal("a read-only subscriber received no output")
+	}
+}
+
+// deadlineOnceCaptureController fails the first armed capture with a wrapped
+// context.DeadlineExceeded (an exec-gate timeout), then behaves normally.
+type deadlineOnceCaptureController struct {
+	*fakeSessionController
+	armed atomic.Bool
+	calls atomic.Int32
+}
+
+func (c *deadlineOnceCaptureController) CapturePaneContentRawContext(ctx context.Context) (streamhub.RawPaneContent, error) {
+	if c.armed.Load() {
+		if c.calls.Add(1) == 1 {
+			return "", fmt.Errorf("capturing pane: exec gate: %w", context.DeadlineExceeded)
+		}
+	}
+	return c.fakeSessionController.CapturePaneContentRawContext(ctx)
+}
+
+// A post-resize capture that hits our own deadline must neither tear the hub
+// down (subscribers would all be dropped) nor be skipped (they would keep the
+// pre-resize screen): it is retried once.
+func TestStreamHub_should_RetryCaptureAndStayAlive_When_PostResizeCaptureTimesOut(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	controller := &deadlineOnceCaptureController{fakeSessionController: newFakeSessionController()}
+	controller.captureContent = "snapshot"
+	hub := streamhub.NewStreamHub("retry-session", controller,
+		streamhub.WithTeardownGrace(time.Hour),
+		streamhub.WithQuiescenceTimeout(30*time.Millisecond),
+		streamhub.WithQuiescenceQuietPeriod(5*time.Millisecond),
+	)
+	defer hub.ForceTeardown()
+
+	transport := newMemoryTransport()
+	id := hub.AttachSubscriber(transport, streamhub.SubscriberCapability{CanResize: true})
+	controller.armed.Store(true)
+	hub.RequestResize(context.Background(), id, mustSize(t, 100, 30))
+
+	if got := controller.calls.Load(); got != 2 {
+		t.Fatalf("expected the timed-out capture to be retried once (2 calls), got %d", got)
+	}
+	if got := controller.stopCalls.Load(); got != 0 {
+		t.Fatalf("hub must not tear down on a capture timeout, StopControlMode called %d times", got)
+	}
+	if hub.State() == streamhub.HubTornDown {
+		t.Fatal("hub torn down after a transient capture timeout")
 	}
 }
