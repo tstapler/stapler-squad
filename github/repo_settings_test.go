@@ -467,3 +467,32 @@ func TestRepoSettings_ForcedRefreshStillCoalescesAndHonorsBreaker(t *testing.T) 
 	assert.Equal(t, before, atomic.LoadInt32(hits), "open breaker blocks forced fetches too")
 	assert.Equal(t, "circuit_open", res.Reason)
 }
+
+func TestRepoSettingsNonBlocking_ServesStaleWhileRefreshing(t *testing.T) {
+	release := make(chan struct{})
+	var gate atomic.Bool
+	l, clk, hits := newRepoSettingsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		if gate.Load() {
+			<-release
+		}
+		jsonOK(w, `{"allow_auto_merge":true,"allow_squash_merge":true}`)
+	})
+	ref := repoSettingsRef(t, "acme", "web", "")
+
+	// Cold: returns immediately with nothing while the refresh runs in the background.
+	gate.Store(true)
+	assert.Equal(t, RepoSettingsUnspecified, l.lookupNonBlocking(context.Background(), ref).Status)
+	assert.Equal(t, RepoSettingsUnspecified, l.lookupNonBlocking(context.Background(), ref).Status)
+	close(release)
+	require.Eventually(t, func() bool { return l.lookupNonBlocking(context.Background(), ref).Status == RepoSettingsOK },
+		5*time.Second, 5*time.Millisecond)
+	assert.EqualValues(t, 1, atomic.LoadInt32(hits), "concurrent cold calls share one fetch")
+
+	// Expired: serves the last value, marked Stale, without waiting on the blocked fetch.
+	release = make(chan struct{})
+	clk.advance(repoSettingsTTL + time.Second)
+	res := l.lookupNonBlocking(context.Background(), ref)
+	assert.Equal(t, RepoSettingsOK, res.Status)
+	assert.True(t, res.Stale)
+	close(release)
+}

@@ -1691,6 +1691,11 @@ func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]ItemSe
 	return s.repo.ListItemSessions(ctx, itemID)
 }
 
+// ListItemSessionsForItems batches ListItemSessions across UUID-shaped item IDs.
+func (s *Storage) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]ItemSessionSummary, error) {
+	return s.repo.ListItemSessionsForItems(ctx, itemIDs)
+}
+
 // UpdateItemSessionSessionUUID updates the session_uuid on an existing ItemSession record.
 func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, sessionUUID string) error {
 	return s.repo.UpdateItemSessionSessionUUID(ctx, id, sessionUUID)

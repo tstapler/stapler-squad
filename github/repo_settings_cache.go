@@ -111,9 +111,10 @@ type repoSettingsLookup struct {
 
 	sf singleflight.Group
 
-	mu       sync.Mutex
-	entries  map[string]*repoSettingsEntry
-	breakers map[string]*hostBreaker
+	mu         sync.Mutex
+	entries    map[string]*repoSettingsEntry
+	refreshing map[string]bool // repos with a background refresh in flight (lookupNonBlocking)
+	breakers   map[string]*hostBreaker
 
 	countMu sync.Mutex
 	counts  map[string]int64
@@ -373,4 +374,60 @@ func (c *repoSettingsLookup) outcomeCount(outcome string) int64 {
 	c.countMu.Lock()
 	defer c.countMu.Unlock()
 	return c.counts[outcome]
+}
+
+// RepoSettingsNonBlocking returns the cached repo settings without ever waiting
+// on the network, for read handlers on a hot poll path. A fresh entry is served
+// as-is; an expired or missing one starts one background refresh per repo and
+// serves the last known value (marked Stale) or RepoSettingsUnspecified until
+// the refresh lands.
+func RepoSettingsNonBlocking(ctx context.Context, ref RepoRef) RepoSettingsResult {
+	return defaultRepoSettings.lookupNonBlocking(ctx, ref)
+}
+
+func (c *repoSettingsLookup) lookupNonBlocking(ctx context.Context, ref RepoRef) RepoSettingsResult {
+	if !ref.IsValid() {
+		return RepoSettingsResult{Status: RepoSettingsError, Reason: "invalid_ref"}
+	}
+	key := ref.repoKey()
+	c.mu.Lock()
+	e := c.entries[key]
+	if res, ok := e.cachedResultIfAny(c.now()); ok {
+		c.mu.Unlock()
+		return res
+	}
+	var stale RepoSettingsResult
+	if e != nil && e.hasValue {
+		stale = e.valueResult()
+		stale.Stale = true
+	}
+	startRefresh := !c.refreshing[key]
+	if startRefresh {
+		if c.refreshing == nil {
+			c.refreshing = map[string]bool{}
+		}
+		c.refreshing[key] = true
+	}
+	c.mu.Unlock()
+
+	if startRefresh {
+		bg := context.WithoutCancel(ctx)
+		go func() {
+			defer func() {
+				c.mu.Lock()
+				delete(c.refreshing, key)
+				c.mu.Unlock()
+			}()
+			c.lookup(bg, ref)
+		}()
+	}
+	return stale
+}
+
+// cachedResultIfAny is cachedResult tolerant of a nil entry.
+func (e *repoSettingsEntry) cachedResultIfAny(now time.Time) (RepoSettingsResult, bool) {
+	if e == nil {
+		return RepoSettingsResult{}, false
+	}
+	return e.cachedResult(now)
 }

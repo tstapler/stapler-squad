@@ -2223,6 +2223,7 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 		connect.WithInterceptors(
 			interceptors.NewErrorRecorderInterceptor(registry),
 			otelInterceptor,
+			interceptors.NewDBQueryCountInterceptor(),
 		),
 	}
 }
