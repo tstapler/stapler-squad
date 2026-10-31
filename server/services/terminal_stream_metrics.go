@@ -22,7 +22,7 @@ import (
 const (
 	stageUpgrade         = "upgrade"          // handler entry -> 101 written
 	stageHandshake       = "handshake"        // 101 -> Connect headers/body read and acknowledged
-	stageResolve         = "resolve"          // handshake -> session resolved and routed to the hub path
+	stageResolve         = "resolve"          // handshake -> session resolved, hibernate-resume done, routed to the hub path
 	stageBackendReady    = "backend_ready"    // restore/start wait: backend process alive and instance started
 	stageControlMode     = "control_mode"     // StartControlMode
 	stageHubCreate       = "hub_create"       // HubRegistry get-or-create

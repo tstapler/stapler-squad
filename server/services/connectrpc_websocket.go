@@ -1121,6 +1121,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 // on the same low-latency event-driven pipeline as the main terminal by
 // default instead of falling back to capture-pane polling.
 func (h *ConnectRPCWebSocketHandler) routeShellStream(stream *connectWebSocketStream, instance *session.Instance, sessionID, shellID string) error {
+	stream.creation.End(false) // creation timing covers the hub path only
 	shellTmuxSessionName, ok := instance.GetShellTmuxSessionName(shellID)
 	if !ok {
 		return fmt.Errorf("shell not found: %s (session %s)", shellID, sessionID)
@@ -1172,6 +1173,7 @@ func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebS
 	}
 
 	log.Info("[WebSocket] routing session to capture-pane polling", "session", sessionID)
+	stream.creation.End(false) // creation timing covers the hub path only
 	return h.streamViaTmuxCapturePane(stream, instance, "")
 }
 
@@ -1459,6 +1461,7 @@ func buildInitialScrollbackResponse(sessionID string, sbData []byte, sbStats scr
 //
 // See: https://github.com/tmux/tmux/wiki/Control-Mode
 func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSocketStream, instance *session.Instance) error {
+	stream.creation.End(false) // creation timing covers the hub path only
 	sessionID, tmuxSessionName, joinedHub, err := h.resolveControlModeOwnershipOrJoinHub(stream, instance)
 	if joinedHub {
 		return err
