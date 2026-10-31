@@ -97,9 +97,13 @@ func driverPaneSnapshot(remote bool) map[string]time.Time {
 }
 
 // captureStaleness bounds how old the content behind a capture can be: the process manager serves
-// a cached capture for up to capturePaneCacheTTL, so a capture that began at T may show the pane as
-// of T-capturePaneCacheTTL.
-const captureStaleness = capturePaneCacheTTL
+// a cached capture for up to capturePaneCacheTTL, stamped at completion, so a capture that began at T
+// may show the pane as of T minus the TTL minus the capture latency.
+const captureStaleness = capturePaneCacheTTL + captureLatencyAllowance
+
+// captureLatencyAllowance covers the cache being stamped when a capture finishes while its content is
+// as of when tmux ran it; 3 s is the control-mode capture timeout, the longest a capture runs.
+const captureLatencyAllowance = 3 * time.Second
 
 // paneActivityGate lets one driver skip a capture-pane when its pane has produced no output since
 // the last capture. One gate belongs to one driver goroutine; it is not safe for concurrent use.
@@ -122,6 +126,9 @@ type paneActivityGate struct {
 func newPaneActivityGate(snapshot func() map[string]time.Time, now func() time.Time, enabled func() bool) *paneActivityGate {
 	return &paneActivityGate{snapshot: snapshot, now: now, enabled: enabled}
 }
+
+// reset drops the cached capture; the driver calls it when the instance's preview is blocked.
+func (g *paneActivityGate) reset() { g.valid = false }
 
 // preview returns the pane content for tmuxName, calling capture only when the cache cannot be
 // proven current. Capture errors are returned unchanged and never cached.
@@ -181,4 +188,15 @@ func parseWindowActivity(out []byte) map[string]time.Time {
 		result[name], active[name] = time.Unix(ts, 0), isActive
 	}
 	return result
+}
+
+// driverPreview is the driver's per-tick preview: gated, except that a blocked instance (paused,
+// stopped, hibernated, not started) always goes through PreviewContext so it gets its "" and the
+// gate forgets any cached content.
+func driverPreview(ctx context.Context, gate *paneActivityGate, inst *Instance) (string, error) {
+	if inst.previewBlocked() {
+		gate.reset()
+		return inst.PreviewContext(ctx)
+	}
+	return gate.preview(ctx, inst.GetTmuxSessionName(), inst.PreviewContext)
 }

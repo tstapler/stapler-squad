@@ -84,12 +84,16 @@ feature flag, default on (kill switch: set it false and every tick captures as b
    (`ssq-tmux-spawns`). `tmux_exec_gate_wait_duration_ms` and `tmux_exec_gate_exec_duration_ms` already exist per pool.
 
 The capture reaches tmux through `TmuxProcessManager.CapturePaneContentContext`, which serves a cached result for up to
-`capturePaneCacheTTL` (1 s), so a capture that began at T may show the pane as of T minus 1 s. The gate therefore requires the capture
-start minus 1 s to fall in a later whole second than the activity; a review found the counterexample that the first draft of the
-rule missed, and `TestPaneActivityGate_ParityUnderCaptureCacheStaleness` enumerates it. An empty capture (what `previewBlocked`
-returns for a paused or not-started instance) is never cached.
+`capturePaneCacheTTL` (1 s), stamped when the capture finishes. A capture that began at T may therefore show the pane as of T
+minus 1 s minus the capture latency (up to 3 s, the control-mode capture timeout). The gate requires the capture start minus 4 s
+to fall in a later whole second than the activity. Two review rounds found counterexamples to earlier, narrower margins;
+`TestPaneActivityGate_ParityUnderCaptureCacheStaleness` enumerates output offset, cache warm-up offset, tick phase and capture
+latency. An empty capture (what `previewBlocked` returns for a paused or not-started instance) is never cached, and a blocked
+instance bypasses the gate (`driverPreview`).
 
-Window activity covers every pane in the window, so it can over-report change but never miss it. It reads the session's active
+Window activity covers every pane in the window, so it over-reports output but does not move on a pane or window *selection*: after
+`select-pane` the active pane changes while `window_activity` stays put (reported by review, tmux 3.7b), so a gate hit can show the
+previous pane for up to the 30 s bound. Sessions here run one pane; the bound is accepted rather than fixed. It reads the session's active
 window and active pane, the pane `capture-pane -t <session>` targets.
 
 **Phase 2 (proposed, not built): put the snapshot on the registry's control connection.** Add a command channel to
@@ -112,7 +116,9 @@ correlation and timeout in the registry reader that does not exist today, so it 
 - **Cache staleness and blocked previews.** Covered above: the gate allows for the 1 s capture cache and never caches an empty preview, so a
   resumed instance captures on its first tick.
 - **Detection latency.** A driver may act on a snapshot up to 2 s old plus its 2 s tick, so worst-case detection of a new dialog is
-  about 4 s against 2 s today. This is the one semantic difference; the 30 s recapture bound limits any stale content to that.
+  about 4 s against 2 s today. After output, the gate recaptures for about 4 more seconds before trusting a capture again.
+  Pane or window selection (above) and a hung `list-panes` are the remaining differences: a hung one holds the cache lock for up to
+  its 5 s timeout, which delays driver shutdown by that much because the snapshot call ignores the driver's ctx.
 - **Socket scoping.** `listAllPanes` resolves its socket through `tmux.ResolveSocket` and builds args with `Socket.Args`, the form
   `tools/lint/tmuxsocketscope` requires, so `STAPLER_SQUAD_TMUX_SOCKET` applies and a test binary never reaches the shared default
   socket. The counters read the already-built argv and never touch a socket.

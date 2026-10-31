@@ -81,6 +81,7 @@ func TestPaneActivityGate_ParityWithAlwaysCapture(t *testing.T) {
 // TmuxProcessManager.CapturePaneContentContext.
 type ttlPane struct {
 	*fakePane
+	latency  time.Duration // cache is stamped at completion: capture start plus latency
 	cached   string
 	cachedAt time.Time
 	hasCache bool
@@ -88,7 +89,7 @@ type ttlPane struct {
 
 func (p *ttlPane) capture(ctx context.Context) (string, error) {
 	if !p.hasCache || p.clock.now().Sub(p.cachedAt) >= capturePaneCacheTTL {
-		p.cached, p.cachedAt, p.hasCache = p.content, p.clock.now(), true
+		p.cached, p.cachedAt, p.hasCache = p.content, p.clock.now().Add(p.latency), true
 		p.captures++
 	}
 	return p.cached, nil
@@ -100,27 +101,29 @@ func (p *ttlPane) capture(ctx context.Context) (string, error) {
 func TestPaneActivityGate_ParityUnderCaptureCacheStaleness(t *testing.T) {
 	t.Parallel()
 	const step = 100 * time.Millisecond
-	for write := 0; write < 20; write++ {
-		for warm := 0; warm <= write; warm++ {
-			for phase := 0; phase < 10; phase++ {
-				gated, plain := newTTLPane(), newTTLPane()
-				g := gateFor(gated.fakePane, freshSnapshot(gated.fakePane, "s"))
-				for i := 0; i < 80; i++ { // 8 s
-					for _, p := range []*ttlPane{gated, plain} {
-						p.clock.advance(step)
-					}
-					if i == warm {
-						gated.capture(context.Background())
-						plain.capture(context.Background())
-					}
-					if i == write {
-						gated.write("dialog\n")
-						plain.write("dialog\n")
-					}
-					if i >= phase && (i-phase)%20 == 0 {
-						got, _ := g.preview(context.Background(), "s", gated.capture)
-						want, _ := plain.capture(context.Background())
-						require.Equal(t, want, got, "write=%d warm=%d phase=%d tick@%d", write, warm, phase, i)
+	for _, latency := range []time.Duration{0, 200 * time.Millisecond, 3 * time.Second} {
+		for write := 0; write < 20; write++ {
+			for warm := 0; warm <= write; warm++ {
+				for phase := 0; phase < 10; phase++ {
+					gated, plain := newTTLPane(latency), newTTLPane(latency)
+					g := gateFor(gated.fakePane, freshSnapshot(gated.fakePane, "s"))
+					for i := 0; i < 80; i++ { // 8 s
+						for _, p := range []*ttlPane{gated, plain} {
+							p.clock.advance(step)
+						}
+						if i == warm {
+							gated.capture(context.Background())
+							plain.capture(context.Background())
+						}
+						if i == write {
+							gated.write("dialog\n")
+							plain.write("dialog\n")
+						}
+						if i >= phase && (i-phase)%20 == 0 {
+							got, _ := g.preview(context.Background(), "s", gated.capture)
+							want, _ := plain.capture(context.Background())
+							require.Equal(t, want, got, "latency=%v write=%d warm=%d phase=%d tick@%d", latency, write, warm, phase, i)
+						}
 					}
 				}
 			}
@@ -128,16 +131,16 @@ func TestPaneActivityGate_ParityUnderCaptureCacheStaleness(t *testing.T) {
 	}
 }
 
-func newTTLPane() *ttlPane {
+func newTTLPane(latency time.Duration) *ttlPane {
 	p, _ := newTestPane()
-	return &ttlPane{fakePane: p}
+	return &ttlPane{fakePane: p, latency: latency}
 }
 
 func TestPaneActivityGate_EmptyContentIsNotCached(t *testing.T) {
 	t.Parallel()
 	p, clock := newTestPane()
 	g := gateFor(p, freshSnapshot(p, "s"))
-	clock.advance(3 * time.Second)
+	clock.advance(5 * time.Second)
 	empty := func(context.Context) (string, error) { p.captures++; return "", nil }
 
 	_, _ = g.preview(context.Background(), "s", empty) // e.g. previewBlocked on a paused instance
@@ -186,7 +189,7 @@ func TestPaneActivityGate_IdlePaneCapturesOnceUntilMaxAge(t *testing.T) {
 	t.Parallel()
 	p, clock := newTestPane()
 	g := gateFor(p, freshSnapshot(p, "s"))
-	clock.advance(3 * time.Second) // capture lands in a later second than the last output
+	clock.advance(5 * time.Second) // capture lands in a later second than the last output
 
 	for i := 0; i < 10; i++ {
 		_, err := g.preview(context.Background(), "s", p.capture)
@@ -214,7 +217,7 @@ func TestPaneActivityGate_SameSecondCaptureIsNotTrusted(t *testing.T) {
 	assert.Equal(t, p.content, got)
 	assert.Equal(t, 2, p.captures)
 
-	clock.advance(2 * time.Second)
+	clock.advance(5 * time.Second)
 	_, _ = g.preview(context.Background(), "s", p.capture)
 	_, _ = g.preview(context.Background(), "s", p.capture)
 	assert.Equal(t, 3, p.captures, "one capture in the later second, then cache hits")
@@ -229,7 +232,7 @@ func TestPaneActivityGate_FallsBackToCaptureWhenSessionNotInSnapshot(t *testing.
 	} {
 		g := gateFor(p, snap)
 		before := p.captures
-		clock.advance(3 * time.Second)
+		clock.advance(5 * time.Second)
 		for i := 0; i < 3; i++ {
 			_, err := g.preview(context.Background(), "s", p.capture)
 			require.NoError(t, err)
@@ -242,7 +245,7 @@ func TestPaneActivityGate_CaptureErrorIsReturnedAndNotCached(t *testing.T) {
 	t.Parallel()
 	p, clock := newTestPane()
 	g := gateFor(p, freshSnapshot(p, "s"))
-	clock.advance(3 * time.Second)
+	clock.advance(5 * time.Second)
 	boom := errors.New("session not found")
 
 	_, err := g.preview(context.Background(), "s", func(context.Context) (string, error) { return "", boom })
@@ -256,7 +259,7 @@ func TestPaneActivityGate_DisabledAlwaysCaptures(t *testing.T) {
 	t.Parallel()
 	p, clock := newTestPane()
 	g := newPaneActivityGate(freshSnapshot(p, "s"), p.clock.now, func() bool { return false })
-	clock.advance(3 * time.Second)
+	clock.advance(5 * time.Second)
 	for i := 0; i < 4; i++ {
 		_, _ = g.preview(context.Background(), "s", p.capture)
 	}
