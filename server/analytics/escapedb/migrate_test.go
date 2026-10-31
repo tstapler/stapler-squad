@@ -245,4 +245,14 @@ func TestMigrate_should_KeepLegacyRowsWithNullColumns_Not_DropThemSilently(t *te
 	var n int
 	require.NoError(t, dst.Writer().QueryRow("SELECT COUNT(*) FROM escape_events").Scan(&n))
 	assert.Equal(t, 3, n)
+
+	// ent must be able to read the defaulted rows back.
+	client := openForTest(ctx, t, dir)
+	got, err := client.EscapeEvent.Query().Order(ent.Asc("id")).All(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, "", got[2].SessionID)
+	assert.EqualValues(t, 0, got[2].SessionSeq)
+	assert.False(t, got[2].Mangled)
+	assert.Equal(t, 1970, got[2].WallTime.Year())
 }
