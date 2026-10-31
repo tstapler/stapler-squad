@@ -97,6 +97,8 @@ type WorkspaceService struct {
 	// check and the cache store (and the bump and the delete) atomic with each other.
 	vcsMu     sync.Mutex
 	vcsEpochs map[string]uint64
+	// rangeStages memoizes shipped commits / diff stat per immutable (base, head) SHA range.
+	rangeStages vcsRangeStages
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -347,11 +349,13 @@ func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *sess
 	_, statusSpan := telemetry.GetTracer().Start(ctx, "vcs.status.git_status",
 		trace.WithAttributes(attribute.String("vcs.type", provider.Name())))
 	var status *vc.VCSStatus
+	gitStatusStart := time.Now()
 	if gp, ok := provider.(*vc.GitProvider); ok {
 		status, err = gp.GetStatusContext(ctx)
 	} else {
 		status, err = provider.GetStatus()
 	}
+	recordVCSStage(ctx, vcsStageGitStatus, stageResult(err), time.Since(gitStatusStart))
 	if err != nil {
 		statusSpan.RecordError(err)
 		statusSpan.End()
@@ -410,17 +414,21 @@ func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *ses
 	if headSHA == baseSHA {
 		return
 	}
-	commits, truncated, listErr := git.ListShippedCommits(ctx, workDir, baseSHA, headSHA)
-	if listErr == nil {
-		status.Commits = commits
-		status.CommitsTruncated = truncated
+	key := vcsRangeKey{workDir: workDir, baseSHA: baseSHA, headSHA: headSHA}
+	span.SetAttributes(attribute.String("vcs.head_sha", headSHA))
+	if res, listErr := ws.rangeStages.shippedCommits(ctx, key); listErr == nil {
+		status.Commits = res.commits
+		status.CommitsTruncated = res.truncated
 	} else {
 		log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
 		status.CommitsUnavailable = true
 	}
-	if diffStat, diffErr := git.DiffStatBetween(ctx, workDir, baseSHA, headSHA); diffErr == nil {
+	_, diffSpan := telemetry.GetTracer().Start(ctx, "vcs.status.diff_stat")
+	defer diffSpan.End()
+	if diffStat, diffErr := ws.rangeStages.aggregateDiffStat(ctx, key); diffErr == nil {
 		status.AggregateDiffStat = &diffStat
 	} else {
+		diffSpan.RecordError(diffErr)
 		log.Debug("GetVCSStatus: failed to compute aggregate diff stat", "workDir", workDir, "err", diffErr)
 	}
 }
