@@ -1039,6 +1039,9 @@ type connectWebSocketStream struct {
 	conn       *websocket.Conn
 	requestMsg []byte
 	writeMutex sync.Mutex // Protects concurrent writes to WebSocket
+	// serverClosing is set by WebSocketTransport.Close before it forces the read
+	// deadline, so the input loop can tell that interrupt from a real read failure.
+	serverClosing atomic.Bool
 }
 
 // WriteMessage safely writes a message to the WebSocket with mutex protection
@@ -2935,6 +2938,9 @@ func readOneInputFrame(p inputReadLoopParams) bool {
 	_, message, err := p.stream.conn.ReadMessage()
 	if err != nil {
 		if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			p.errChan <- nil
+		} else if p.stream.serverClosing.Load() && errors.Is(err, os.ErrDeadlineExceeded) {
+			log.Debug("[streamViaControlMode] input loop interrupted by server-initiated close", "session", p.sessionID)
 			p.errChan <- nil
 		} else {
 			log.Error("[streamViaControlMode] WebSocket read error", "session", p.sessionID, "err", err)
