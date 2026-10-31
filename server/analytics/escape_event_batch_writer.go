@@ -9,9 +9,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
+
+// escapeFlushBatchSize is the queued-event count that triggers an immediate flush.
+const escapeFlushBatchSize = 100
 
 // EscapeEventBatchWriter persists escape events to SQLite via batched ent writes.
 // It implements pkganalytics.EscapeEventWriter.
@@ -53,7 +57,13 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		w.flushBatch(ctx, batch)
+		flushCtx := ctx
+		if ctx.Err() != nil { // shutdown drain: the cancelled ctx would fail the insert
+			var cancel context.CancelFunc
+			flushCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+		}
+		w.flushBatch(flushCtx, batch)
 		batch = batch[:0]
 	}
 
@@ -61,7 +71,7 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 		select {
 		case ev := <-w.ch:
 			batch = append(batch, ev)
-			if len(batch) >= 100 {
+			if len(batch) >= escapeFlushBatchSize {
 				flush()
 			}
 		case <-ticker.C:
@@ -128,6 +138,8 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 		addedBySession[ev.SessionID]++
 	}
 
+	// ent nests one stack frame per bulk row, hiding this frame from dbobs' stack walk.
+	ctx = dbobs.WithCaller(ctx, "server/analytics.EscapeEventBatchWriter.flushBatch")
 	if err := w.client.EscapeEvent.CreateBulk(creators...).Exec(ctx); err != nil {
 		log.Warn("escape analytics: flush batch failed", "err", err, "batch_size", len(batch))
 		return
@@ -136,53 +148,56 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 		return
 	}
 	for sessionID, added := range addedBySession {
-		count, known := w.sessionRowCounts[sessionID]
-		if !known {
-			var err error
-			count, err = w.client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Count(ctx)
-			if err != nil {
-				log.Warn("escape analytics: count rows for cap failed", "err", err, "session_id", sessionID)
-				continue
-			}
-		} else {
-			count += added
-		}
-		if count > w.maxRowsPerSession {
-			if err := w.deleteOldestRows(ctx, sessionID, count-w.maxRowsPerSession); err != nil {
-				log.Warn("escape analytics: enforce per-session row cap failed", "err", err, "session_id", sessionID)
-				continue
-			}
-			count = w.maxRowsPerSession
-		}
-		w.sessionRowCounts[sessionID] = count
+		w.enforceSessionCap(ctx, sessionID, added)
 	}
 }
 
-func (w *EscapeEventBatchWriter) deleteOldestRows(ctx context.Context, sessionID string, count int) error {
-	if count <= 0 {
-		return nil
+// enforceSessionCap keeps the in-memory row count for sessionID current and
+// trims the session back to the cap once it exceeds the cap plus slack. The count
+// is seeded from the database the first time a session is seen (after the insert,
+// so it already includes added), then moves with inserts and deletes.
+func (w *EscapeEventBatchWriter) enforceSessionCap(ctx context.Context, sessionID string, added int) {
+	count, known := w.sessionRowCounts[sessionID]
+	if known {
+		count += added
+	} else {
+		var err error
+		if count, err = w.countRows(ctx, sessionID); err != nil {
+			return
+		}
 	}
-	const deleteChunkSize = 500
-	for count > 0 {
-		limit := count
-		if limit > deleteChunkSize {
-			limit = deleteChunkSize
+	if count > escapeEvictionThreshold(w.maxRowsPerSession) {
+		// The cached count can drift high when the hourly retention pass also
+		// deletes; re-count so eviction never trims below the cap.
+		if known {
+			var err error
+			if count, err = w.countRows(ctx, sessionID); err != nil {
+				delete(w.sessionRowCounts, sessionID) // reseed on the next flush
+				return
+			}
 		}
-		ids, err := w.client.EscapeEvent.Query().
-			Where(escapeevent.SessionID(sessionID)).
-			Order(escapeevent.ByWallTime()).
-			Limit(limit).
-			IDs(ctx)
-		if err != nil || len(ids) == 0 {
-			return err
+		if excess := count - w.maxRowsPerSession; excess > 0 {
+			deleted, err := evictOldestEscapeEvents(ctx, w.client, sessionID, excess, w.writerBusy)
+			count -= deleted
+			if err != nil {
+				log.Warn("escape analytics: enforce per-session row cap failed", "err", err, "session_id", sessionID)
+			}
 		}
-		if _, err = w.client.EscapeEvent.Delete().Where(escapeevent.IDIn(ids...)).Exec(ctx); err != nil {
-			return err
-		}
-		count -= len(ids)
 	}
-	return nil
+	w.sessionRowCounts[sessionID] = count
 }
+
+func (w *EscapeEventBatchWriter) countRows(ctx context.Context, sessionID string) (int, error) {
+	count, err := w.client.EscapeEvent.Query().Where(escapeevent.SessionID(sessionID)).Count(ctx)
+	if err != nil {
+		log.Warn("escape analytics: count rows for cap failed", "err", err, "session_id", sessionID)
+	}
+	return count, err
+}
+
+// writerBusy reports a full batch already queued: eviction yields to the next
+// insert flush rather than delaying it.
+func (w *EscapeEventBatchWriter) writerBusy() bool { return len(w.ch) >= escapeFlushBatchSize }
 
 func generateEscapeEventID() string {
 	b := make([]byte, 8)

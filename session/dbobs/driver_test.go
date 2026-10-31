@@ -241,3 +241,17 @@ func TestNormalizeStatement(t *testing.T) {
 	multibyte := NormalizeStatement("SELECT " + strings.Repeat("é", 400) + " FROM t")
 	assert.True(t, utf8.ValidString(multibyte), "truncation must not split a rune")
 }
+
+func TestStatementsUseExplicitCaller_When_WithCaller(t *testing.T) {
+	drv, _ := newDriver(t, Config{Name: "explicitcaller", SlowThreshold: time.Hour, Warn: func(string, ...any) {}})
+	insertSecret(t, drv, WithCaller(context.Background(), "pkg.Writer.flush"))
+
+	var top []StatementStat
+	for _, s := range Snapshot() {
+		if s.Name == "explicitcaller" {
+			top = s.TopStatements
+		}
+	}
+	require.NotEmpty(t, top)
+	assert.Equal(t, "pkg.Writer.flush", top[0].Caller)
+}

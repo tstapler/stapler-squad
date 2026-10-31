@@ -13,7 +13,8 @@ const (
 	EnvFreeRatio    = "STAPLER_SQUAD_DB_MAINT_FREE_RATIO" // 0..1
 	EnvMinFreePages = "STAPLER_SQUAD_DB_MAINT_MIN_FREE_PAGES"
 	EnvChunkPages   = "STAPLER_SQUAD_DB_MAINT_CHUNK_PAGES"
-	EnvChunkPause   = "STAPLER_SQUAD_DB_MAINT_CHUNK_PAUSE" // Go duration, e.g. "250ms"
+	EnvChunkPause   = "STAPLER_SQUAD_DB_MAINT_CHUNK_PAUSE"   // Go duration, e.g. "250ms"
+	EnvStartupDelay = "STAPLER_SQUAD_DB_MAINT_STARTUP_DELAY" // Go duration, e.g. "30s"
 )
 
 // ConfigFromEnv returns the defaults overridden by the Env* variables. Invalid
@@ -39,6 +40,9 @@ func configFromLookup(getenv func(string) string) Config {
 	}
 	if d, err := time.ParseDuration(getenv(EnvChunkPause)); err == nil {
 		c.ChunkPause = d
+	}
+	if d, err := time.ParseDuration(getenv(EnvStartupDelay)); err == nil {
+		c.StartupDelay = d
 	}
 	return c.WithDefaults()
 }

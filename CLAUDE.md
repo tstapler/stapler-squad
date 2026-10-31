@@ -327,6 +327,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Topic | File |
 |---|---|
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
+| Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
@@ -361,6 +362,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
 | Why autonomous-mode sessions stop early: every driver exit path, cited, with verdicts | `docs/explanation/autonomous-stall-causes.md` |
+| Profile DB usage from Grafana/VictoriaMetrics (pool wait, SQLite contention, slow queries, ent-read sizing, decision tree, verified PromQL) | `profile-db-usage` skill |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
 | Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
