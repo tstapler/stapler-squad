@@ -28,9 +28,9 @@ python3 -I .claude/skills/profile-blocking-and-locking/scripts/goroutine-states.
 | Signal | Kind | Next |
 |---|---|---|
 | `go_runtime_sched_latency_seconds{quantile="0.99"}` over ~50 ms and host `load average` well above `go_runtime_gomaxprocs` | **CPU starvation** (host or GC) | 1a |
-| `rate(go_runtime_mutex_wait_seconds_total)` over ~0.1 (goroutine-seconds lost per second) | **Lock contention** | 1b |
+| `rate(go_runtime_mutex_wait_seconds_total[5m])` over ~0.1 (goroutine-seconds lost per second) | **Lock contention** | 1b |
 | goroutine groups piling up in `chan send`, `select`, `sync.Cond.Wait`, or a count that only grows | **Channel/queue block or leak** | 1c |
-| `tmux_exec_gate_wait_duration_ms` p99 high, `tmux_exec_gate_timeouts_total` rising, many `[syscall]` goroutines, `syscall.releaseForkLock` in the mutex profile | **Subprocess/IO blocking** | 1d |
+| `tmux_exec_gate_wait_duration_ms` p99 high, `increase(tmux_exec_gate_timeouts_total[1h])` above 0, many `[syscall]` goroutines, `syscall.releaseForkLock` in the mutex profile | **Subprocess/IO blocking** | 1d |
 | `terminal_mux_hol_wait_milliseconds`, `client_ws_send_queue_delay_milliseconds`, `client_rpc_network_queue_delay_milliseconds` p99 high | **Network head-of-line** | 1e |
 | `database/sql` frames, `db_query_pool_wait_milliseconds` | **DB pool** | skill `profile-db-usage` |
 | Slow but no local wait signal | **External resource** (GitHub, git remote, tymuxd) | span/log timing, `vcs_status_compute_duration_*` |
@@ -54,7 +54,7 @@ go tool pprof -peek '<holder frame from the top table>' -sample_index=delay b.pb
 ```
 
 Pitfalls (each hit in this repo):
-- `-ignore` drops every sample containing a matching frame, and every mutex stack contains `sync.(*Mutex).Unlock`, so `-ignore='^sync\.'` returns an empty table (`docs/how-to/find-lock-contention.md` suggests `-ignore='^runtime\.'`, UNVERIFIED but likely the same failure). Use `-hide`. (`-ignore` is right for block: `-ignore='selectgo|chanrecv'`.)
+- `-ignore` drops every sample containing a matching frame, and every mutex stack contains `sync.(*Mutex).Unlock`, so `-ignore='^sync\.'` leaves only runtime-internal lock samples (`runtime.unlock`, `runtime._LostContendedRuntimeLock`, about 58% on the live profile), a plausible but wrong table; `docs/how-to/find-lock-contention.md` suggests `-ignore='^runtime\.'`, which drops every stack ending in a runtime frame (UNVERIFIED). Use `-hide`, and `--match` in `pyro-top.py`. (`-ignore` is right for block: `-ignore='selectgo|chanrecv'`.)
 - Cumulative vs delta: `/mutex` is lifetime totals and Alloy scrapes the cumulative types, so Pyroscope mutex/block ranks are right but absolute values are inflated (`docs/observability/README.md`, "Per-interval lock profiles"). Use `-base` for absolute. Sampling: 1 in `--profile-mutex-fraction` events (default 10, scaled back up) and blocks under `--profile-block-rate` ns (default 1000) are skipped, so values are estimates.
 - Block-profile stacks are the **waiting** call site (including `sync.Mutex.Lock` waits); mutex-profile stacks are the **holder**. Read both to pair a lock's waiter and holder.
 - Pyroscope CPU: the CPU profile lock may be held by Alloy, so `curl .../profile?seconds=N` can return empty. Use `scripts/pyro-top.py cpu` instead.
@@ -73,7 +73,7 @@ Pitfalls (each hit in this repo):
 
 ### 1e. Network head-of-line
 - Browser HTTP/1.1 caps 6 connections per origin; long polls and streams starve unary calls. Prefer the unary WebSocket (`/actuator/ws-unary`: `ws_unary_inflight`, `ws_unary_zombies`) and the terminal mux (`/actuator/terminal-mux`: sockets/streams).
-- Terminal mux queueing: `terminal_mux_hol_wait_milliseconds`, `terminal_mux_queue_bytes`. Client-side queueing: `client_ws_send_queue_delay_milliseconds`, `client_rpc_network_queue_delay_milliseconds`, `client_rpc_coalesce_total`.
+- Terminal mux queueing: `terminal_mux_hol_wait_milliseconds`, `terminal_mux_queue_bytes_bucket`. Client-side queueing: `client_ws_send_queue_delay_milliseconds`, `client_rpc_network_queue_delay_milliseconds`, `client_rpc_coalesce_total`.
 - Server-side GetVCSStatus: `vcs_status_in_flight`, `vcs_status_queue_wait_duration_milliseconds`, `vcs_status_compute_duration_milliseconds`. Slot saturation (`vcsFlights.saturated()`) is not exported as a metric.
 
 ## Step 2. Hang / deadlock playbook
@@ -86,18 +86,18 @@ Pitfalls (each hit in this repo):
 5. Scheduler view: `curl -s 'localhost:6060/debug/pprof/trace?seconds=5' -o /tmp/t.out` then `go tool trace /tmp/t.out` (tabs: Synchronization blocking, Scheduler latency, Goroutine analysis) or headless `go tool trace -pprof=sync /tmp/t.out > s.pb; go tool pprof -top s.pb` (`sync|sched|syscall|net`). Keep it to 5 s; it adds overhead, `goroutine?debug=2` briefly stops the world in proportion to goroutine count, and `/debug/pprof/trace` fails while the app runs with `--trace` (only one trace at a time).
 6. `GODEBUG=schedtrace=1000,scheddetail=1`, `gctrace=1` (GC-assist branch of 1a) and `GOTRACEBACK=all` need a process restart, so use them only on a manual instance (CLAUDE.md "Manual/interactive testing"), never on `:8543`.
 
-Known repo-specific hang shapes: `sync.Once` reentrancy (a `Close` that re-enters itself through the Once; `WebSocketTransport.Close` now guards with `CompareAndSwap`, `server/services/websocket_transport.go:83`); an observer/callback invoked while holding the lock that re-enters it (copy the slice under the lock, call after unlock); an actor result variable shared with a still-running command (#1321).
+Known repo-specific hang shapes: `sync.Once` reentrancy (a `Close` that re-enters itself through the Once; `WebSocketTransport.Close` now guards with `CompareAndSwap`, `server/services/websocket_transport.go:84`); an observer/callback invoked while holding the lock that re-enters it (copy the slice under the lock, call after unlock); an actor result variable shared with a still-running command (#1321).
 
 ## Step 3. Fix catalog (cheapest first)
 
 | # | Fix | When | Repo example |
 |---|---|---|---|
-| 1 | Shrink the critical section: read/copy under the lock, do I/O and exec outside | lock held across exec, SQL, file or network | `HistoryLinker.correlateMu` held over `GetPanePID` + `Detect` (PR #1287, open); `paneActivityCache.get` fetches (tmux exec) under its mutex (`session/pane_activity_gate.go:54`; deliberate coalescing, a stall source only because waiters cannot honor ctx and a hung fetch stalls all); `savedFingerprints.persist` holds its mutex across `write()` (`session/storage_save_dedup.go:48`) |
+| 1 | Shrink the critical section: read/copy under the lock, do I/O and exec outside | lock held across exec, SQL, file or network | `HistoryLinker.correlateMu` held over `GetPanePID` + `Detect` (PR #1287, open); `paneActivityCache.get` fetches (tmux exec) under its mutex (`session/pane_activity_gate.go:46-51`; deliberate coalescing, a stall source only because waiters cannot honor ctx and a hung fetch stalls all); `savedFingerprints.persist` holds its mutex across `write()` (`session/storage_save_dedup.go:48`) |
 | 2 | Immutable snapshot + `atomic.Pointer` publish (value immutable after `Store`; read-modify-write needs CAS or one writer; large structs pay copy cost per write) | read-mostly state | `InstanceSnapshot` (`session/instance_snapshot.go`, rule `instance-lock-free-reads.md`); notification store (#1306) |
 | 3 | Atomic for single values; `RWMutex` only when reads dominate a non-trivial section | counters, flags, timestamps | `/go:optimize` pattern A |
 | 4 | `singleflight` / coalescing so N callers share one run | identical expensive calls | `vcsFlights` (`server/services/vcs_status_flight.go`), scan coalescer, startup scan queue (#1334, open) |
-| 5 | Per-call deadline from `ctx`; never block forever on a gate | exec gates, RPC fan-out | exec-gate slot timeouts counted by `tmux_exec_gate_timeouts_total` (`session/tmux/exec_gate_observability.go:70`); caller attribution via `tmux_exec_total` (#1326) |
-| 6 | Bounded queue with coalescing, not silent drop | producer faster than consumer | `streamhub` batch windows (`streamhub_batch_flush_frames_coalesced`) |
+| 5 | Per-call deadline from `ctx`; never block forever on a gate | exec gates, RPC fan-out | exec-gate slot timeouts counted by `tmux_exec_gate_timeouts_total` (`session/tmux/exec_gate_observability.go:70`; counter introduced by #724, INFERRED from `git log -S`); caller attribution via `tmux_exec_total` (#1326) |
+| 6 | Bounded queue with coalescing, not silent drop | producer faster than consumer | `streamhub` batch windows (`streamhub_batch_flush_frames_coalesced_bucket`) |
 | 7 | Single owner goroutine (actor) | state with many writers | session actor + `sendSyncValue` (#1321) |
 | 8 | Shard or `xsync.MapOf` | one hot map with independent keys | `/golang-concurrency` ladder rung 5 |
 | 9 | Move the slow call off the event loop | callback runs inside a watcher/poller loop | `HistoryFileWatcher.run` calls the linker callback synchronously (`session/history_watcher.go:138`) |
