@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ func (c *countingStore) EncodedObject(t plumbing.ObjectType, h plumbing.Hash) (p
 type fakeHistory struct {
 	t  *testing.T
 	st *countingStore
+	n  int
 }
 
 func newFakeHistory(t *testing.T) *fakeHistory {
@@ -45,7 +47,8 @@ var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 func (f *fakeHistory) commit(sec int, parents ...*object.Commit) *object.Commit {
 	f.t.Helper()
 	sig := object.Signature{Name: "t", Email: "t@example.com", When: epoch.Add(time.Duration(sec) * time.Second)}
-	c := &object.Commit{Author: sig, Committer: sig, Message: "c", TreeHash: plumbing.ZeroHash}
+	f.n++
+	c := &object.Commit{Author: sig, Committer: sig, Message: fmt.Sprintf("c%d", f.n), TreeHash: plumbing.ZeroHash} // unique message: equal-time siblings must not hash alike
 	for _, p := range parents {
 		c.ParentHashes = append(c.ParentHashes, p.Hash)
 	}
@@ -227,13 +230,71 @@ func TestWalkShippedRange_should_MatchSetDifference_When_RandomDAGs(t *testing.T
 			}
 		}
 
-		got, truncated, err := walkShippedRange(context.Background(), f.st, head, base, 1000)
+		capN := 1000
+		if round%2 == 1 {
+			capN = 1 + rng.Intn(12)
+		}
+		got, truncated, err := walkShippedRange(context.Background(), f.st, head, base, capN)
 		require.NoError(t, err)
-		require.False(t, truncated)
+		if len(want) >= capN {
+			require.True(t, truncated, "round %d", round)
+			require.Len(t, got, capN, "round %d", round)
+			for _, c := range got {
+				require.True(t, want[c.Hash], "round %d: %s is base-reachable", round, c.Hash)
+			}
+			continue
+		}
+		require.False(t, truncated, "round %d", round)
 		gotSet := map[plumbing.Hash]bool{}
 		for _, c := range got {
 			gotSet[c.Hash] = true
 		}
 		require.Equal(t, want, gotSet, "round %d", round)
 	}
+}
+
+func TestWalkShippedRange_should_NotCountBaseReachableCommits_When_CapHitWithTies(t *testing.T) {
+	t.Parallel()
+	f := newFakeHistory(t)
+	m := f.commit(0)
+	h1 := f.commit(0, m)
+	h2 := f.commit(0, h1)
+	h3 := f.commit(0, h2)
+	base := m
+	for i := 0; i < 10; i++ {
+		base = f.commit(0, base)
+	}
+
+	got, truncated, err := walkShippedRange(context.Background(), f.st, h3, base, 4)
+	require.NoError(t, err)
+	assert.False(t, truncated, "3 shipped commits do not reach a cap of 4")
+	assert.Equal(t, []plumbing.Hash{h3.Hash, h2.Hash, h1.Hash}, hashes(got))
+}
+
+func TestWalkShippedRange_should_NotCountBaseReachableCommits_When_CapHitWithSkew(t *testing.T) {
+	t.Parallel()
+	f := newFakeHistory(t)
+	shared := f.chain(1000, 200, nil)
+	base := f.commit(5, shared) // committed "before" its parent
+	head := f.commit(5000, shared)
+
+	got, truncated, err := walkShippedRange(context.Background(), f.st, head, base, 100)
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	assert.Equal(t, []plumbing.Hash{head.Hash}, hashes(got))
+}
+
+func TestWalkShippedRange_should_DropSharedRoot_When_BaseChainTiesWithIt(t *testing.T) {
+	t.Parallel()
+	f := newFakeHistory(t)
+	r := f.commit(0)
+	h := f.commit(0, r)
+	base := r
+	for i := 0; i < 10; i++ {
+		base = f.commit(0, base)
+	}
+
+	got, _, err := walkShippedRange(context.Background(), f.st, h, base, 100)
+	require.NoError(t, err)
+	assert.Equal(t, []plumbing.Hash{h.Hash}, hashes(got))
 }
