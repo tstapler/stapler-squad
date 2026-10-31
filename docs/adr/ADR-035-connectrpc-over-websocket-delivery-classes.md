@@ -1,6 +1,8 @@
 # ADR-035: Unary ConnectRPC over WebSocket for writes and telemetry, by delivery class
 
-Status: Proposed — 2026-10-30. Extends ADR-001/002 (unary mux, reads only). Composes with ADR-033 (terminal pool).
+Status: Proposed — 2026-10-30. Extends `project_plans/frontend-responsiveness/decisions/ADR-001-unary-over-websocket-wire-framing.md` and `project_plans/frontend-responsiveness/decisions/ADR-002-ws-unary-fallback-retry-and-auth-semantics.md` (unary mux, reads only); socket topology and head-of-line mitigation are in `project_plans/frontend-responsiveness/decisions/ADR-003-ws-unary-socket-topology-and-hol-mitigation.md`. Composes with `docs/adr/ADR-033-terminal-websocket-pool.md`.
+
+Numbering note: `project_plans/files-viewer-revamp/decisions/` also has ADR-033 to ADR-036, which are different documents from `docs/adr/ADR-033` to `ADR-035`; cite ADRs by full path.
 
 ## Context
 
@@ -30,7 +32,7 @@ slow or bulky telemetry from interactive calls, and (4) an unload story.
 
 ## Decision
 
-Keep one wire protocol (the ADR-001 unary mux frames; additive fields only) and one dispatcher re-entry. Add **delivery classes**
+Keep one wire protocol (the unary mux frames of `project_plans/frontend-responsiveness/decisions/ADR-001-unary-over-websocket-wire-framing.md`; additive fields only) and one dispatcher re-entry. Add **delivery classes**
 that decide, per procedure, which transport rules apply. The class table lives on the server (authoritative) and is mirrored
 in the client fixture `ws-unary-allowlist.json`; a parity test fails when they differ (same pattern as #1300). A client can
 never upgrade its own class: the server ignores any client-claimed class.
@@ -40,11 +42,11 @@ never upgrade its own class: the server ignores any client-claimed class.
 | Class | Meaning | On WS timeout / socket drop after the frame was written | Initial members |
 |---|---|---|---|
 | **R** idempotent read | Today's behaviour, unchanged. | Replay over HTTP (unchanged). | Current allow-list (#1300). |
-| **W** idempotent write with key | Handler is naturally idempotent for a repeated request; server also dedupes by `Idempotency-Key`. | Replay over HTTP **with the same key**. The server store makes the replay join or return the original execution. | Analytics ingest, `LogClientEvents`, `PinSession`/`UnpinSession` (proto comments say "Idempotent"). |
+| **W** idempotent write with key | Handler is naturally idempotent for a repeated request; server also dedupes by `Idempotency-Key`. | Replay over HTTP **with the same key**. The server store makes the replay join or return the original execution. | Analytics ingest and `LogClientEvents` (both on the telemetry lane, Round 2), `PinSession`/`UnpinSession` (proto comments say "Idempotent"). |
 | **M** at-most-once mutation | Not safe to run twice. | **Never replayed automatically.** The call rejects with `unavailable` plus marker `outcome_unknown`. See "Class M". | Empty at launch; per-method opt-in only. |
-| **T** fire-and-forget telemetry | Loss of some events is acceptable; duplicates are not. | Not replayed per call; the lane's own retry-with-same-batch-id applies, then drop. | Analytics, `LogClientEvents`, client-logs. |
+| **T** fire-and-forget telemetry | Loss of some events is acceptable; duplicates are not. | Not replayed per call; the lane's own retry-with-same-batch-id applies, then drop. | Client-logs; analytics and `LogClientEvents` are listed here as the telemetry lane's traffic but are class W in the table (Round 2). |
 
-A procedure that is both W and T (analytics) is class T on the client lane and W on the server (dedupe is what makes the
+A procedure that is both W and T (analytics) is class W on the telemetry lane (Round 2: the table carries `class` and a separate `lane`); the lane's retries are safe because the server dedupes (dedupe is what makes the
 lane's retries safe). The server table therefore stores `{class, requiresKey, maxBody, perClassInflightCap}`.
 
 Admission rule for W: a method may be listed only if a repeat of the same request body is harmless **without** the key store,
@@ -60,14 +62,14 @@ that calls twice.
   failure uses the identical mechanism and the identical store.
 * The store is **middleware inside the dispatcher chain**, after auth and `LocalWriteGuard`, so it sees a transport-independent
   `*http.Request` and cannot be bypassed by choosing HTTP. Only procedures with `requiresKey` consult it; a missing or malformed
-  key on such a procedure is `invalid_argument` (never silently unkeyed).
+  key on such a procedure is `invalid_argument` for calls the bridge stamps `transport=ws`; on HTTP the key is optional (Round 2).
 * Entry: `(listener, principal-or-"anon", procedure, key) -> {bodyHash, state in_flight|done, status, response bytes}`.
   Same key and same body hash while `in_flight` joins the original (singleflight, waits on the joiner's own deadline); while
   `done` returns the stored response byte for byte. Same key with a different body hash is `failed_precondition` marker
   `idempotency_key_reuse`. Principal comes from the auth layer. On the unauthenticated local listener every local caller is `anon`, so the key must carry a client-generated per-window random prefix (`<windowId>.<uuid>`, window id generated once per page life) to avoid cross-tab collisions; the bridge validates the key pattern at the REQUEST, not only the middleware.
-* Bounds: TTL 10 min, LRU, total retained bytes capped at 8 MiB, one stored response at most 64 KiB (a larger response is
+* Bounds: TTL 10 min, LRU, total retained bytes capped at 8 MiB and 10 000 entries, one stored response at most 4 KiB (a larger response is
   stored as `done` with no body; a replay then gets `unavailable` marker `result_not_retained` and the caller must reconcile).
-  Only a terminal 2xx or a deterministic 4xx (`invalid_argument`, `failed_precondition`, `not_found`) becomes `done`; a 5xx, `unavailable`, `deadline_exceeded`, `canceled` or a handler panic deletes the entry so a retry re-executes. A keyed handler runs on a context detached from the first caller's CANCEL (it keeps the 5 min clamp and server shutdown), so one caller aborting does not fail joiners; if every waiter has gone, the handler is cancelled. `in_flight` entries are never evicted; when the byte cap is full of them, a new keyed call is refused `resource_exhausted` with `not_executed` (checked before dispatch). Counters: hits, joins, conflicts, evictions, bytes.
+  Only a terminal 2xx or a deterministic 4xx (`invalid_argument`, `failed_precondition`, `not_found`) becomes `done`; for W, a 5xx, `unavailable`, `deadline_exceeded`, `canceled` or a handler panic deletes the entry so a retry re-executes (for M these become `done(unknown)` and a replay returns `outcome_unknown`, per Round 2). A keyed handler runs on a context detached from the first caller's CANCEL (it keeps the 5 min clamp and server shutdown), so one caller aborting does not fail joiners; an abandoned keyed handler keeps running and its entry stays `in_flight` until it returns (Round 2), bounded by the keyed in-flight quota. `in_flight` entries are never evicted; when the byte cap is full of them, a new keyed call is refused `resource_exhausted` with `not_executed` (checked before dispatch). Counters: hits, joins, conflicts, evictions, bytes.
 * Not durable. A restart forgets keys. This is acceptable for W (handler is idempotent anyway) and is stated as a limit for M.
 
 ### Class M (at-most-once)
@@ -81,7 +83,7 @@ Ambiguity is defined by the client socket state machine, not by timing:
 | Frame sent, then socket close, ping timeout, call deadline, or client abort, with no RESPONSE/ERROR | Ambiguous. Reject with `unavailable` and marker `outcome_unknown`; `outcome_unknown` is synthesized by the client, never sent by the server, and also replaces a server `deadline_exceeded` for M (the server keeps running an abandoned handler, `abandon()`). No auto-replay. |
 
 The caller (UI) decides: it may reconcile by reading state, or the user retries. A retry **reuses the call's idempotency key**
-(the client generates one per user intent and keeps it on the pending-action object, the pattern `ReplyToPendingQuestion.reply_id` already uses, `session.proto:1958`), so within the store's TTL and process life the server returns the original result instead of
+(the client generates one per user intent and keeps it on the pending-action object, the pattern `ReplyToPendingQuestion.reply_id` already uses, `session.proto:1959`), so within the store's TTL and process life the server returns the original result instead of
 running twice. That is the "query by key": retry-with-same-key, no new status RPC. Outside that window (restart, TTL) a retry
 can run twice; M methods therefore stay on HTTP until their UI path reconciles, and the table starts empty. M adds no new
 failure mode on HTTP: the same rules apply to an HTTP network error, and the key store covers both.
@@ -92,7 +94,7 @@ where it replays a slow read. W after socket loss replays immediately with its k
 
 * Own **socket** (second `/api/ws/unary` connection, same endpoint and admission) so a telemetry frame, a stuck write queue or a
   slow ack cannot delay interactive reads in the client send queue or in TCP. The server also gives each class its own in-flight
-  cap inside a socket (R 48, W/M 8, T 8 of the default 64; at other totals R gets the remainder after fixed W/M 8 and T 8, floor 16; enforced before the `inflight` insert so a refusal is `not_executed`. The 32-zombie cap stays per socket, so a telemetry or write zombie flood closes only the telemetry/interactive socket it is on, which is another reason telemetry has its own socket) and
+  cap inside a socket (R 48, W/M 8, T 8 of the default 64; at totals of 32 or more R gets the remainder after fixed W/M 8 and T 8, below that one shared cap, per Round 2; enforced before the `inflight` insert so a refusal is `not_executed`. The 32-zombie cap stays per socket, so a telemetry or write zombie flood closes only the telemetry/interactive socket it is on, which is another reason telemetry has its own socket) and
   the writer already puts small frames ahead of CHUNKs, so even a single-socket fallback (see tuning) cannot let telemetry
   starve reads of slots.
 * Client `TelemetryLane`: queue bounded by events (200) and bytes (256 KiB); on overflow **drop oldest** and count
@@ -102,7 +104,7 @@ where it replays a slow read. W after socket loss replays immediately with its k
   with `reason=retry_exhausted`. A closed or unavailable telemetry socket never reconnect-loops faster than the existing
   backoff, and while it is down events go to the HTTP path (today's `fetch`) at the existing cadence: at most one request per 20 s per tab, batched, with the same queue bounds, so the fallback cannot reintroduce connection pressure and telemetry is never silently black-holed by the flag. Owner decision 2026-10-30.
 * Backpressure: if `WebSocket.bufferedAmount` or the lane's unacked bytes exceed 128 KiB the lane stops handing out new
-  batches (events queue, then drop oldest). A refusal from the T class cap (bridge-side, so `not_executed`) or from the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`, which fire inside the dispatcher and carry no marker) makes the lane drop that batch (`dropped_budget`); class T never retries a refusal, to avoid amplifying the overload it signals.
+  batches (events queue, then drop oldest). A refusal from the telemetry lane's class cap (T, or W on the telemetry lane; bridge-side, so `not_executed`) or from the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`, which fire inside the dispatcher and carry no marker) makes the lane drop that batch (`dropped_budget`); the telemetry lane never retries a refusal, to avoid amplifying the overload it signals.
 * **Unload.** WebSockets cannot be flushed on `pagehide`. On `pagehide` and `visibilitychange: hidden` the lane moves every
   queued and every unacked batch to the existing `sendBeacon`/keepalive path (HTTP `/api/analytics`, `/api/client-logs`,
   `LogClientEvents` over the keepalive transport), **same batch ids**. A beacon cannot set headers, so the batch id also travels in the **body** (new additive `batch_id` field on the analytics JSON body, `IngestClientLogs`, and `LogClientEventsRequest`), and the two HTTP handlers dedupe on it themselves (the key store is not on the plain-HTTP path). Analytics dedupes per event id (#1307 `ON CONFLICT`); #1307's id is optional today, so the client now always sends one. `ClientLogEntry` has no id today: Step 2 adds `entry_id` and a unique index with `DoNothing`, otherwise log batches are at-least-once with duplicates, and the ADR does not claim otherwise. Where a WS frame had been received the beacon copy is deduped; where it had not, the beacon delivers it. The sum is at-least-once with dedupe, so the
@@ -160,10 +162,10 @@ never queue behind it, and an RPC cap must never close a terminal.
 
 Share the **shape**, not the sockets: an `RpcSocketProvider` interface (`transportFor(deliveryClass) -> UnaryWsTransport`)
 mirrors `TerminalSocketPool.openStream`. Callers never know how many sockets exist. Default mapping: lane `interactive`
-(R, W, M) and lane `telemetry` (T) onto 2 sockets. Tuning precedence copies ADR-033 item 8: `localStorage ssq:rpc-socket-count`
+(R, W, M) and lane `telemetry` (T, plus W for analytics and `LogClientEvents`) onto 2 sockets. Tuning precedence copies ADR-033 item 8: `localStorage ssq:rpc-socket-count`
 (1 or 2) > server value > default 2. Count 1 maps all classes onto the interactive socket and relies on the per-class server
 caps (a valid but weaker isolation). Both RPC sockets together plus terminal sockets stay inside the browser's ~255 global
-WebSocket budget measured in ADR-033; the process-level `unary sockets per process = 64` cap is raised proportionally with a
+WebSocket budget measured in ADR-033; the process-level `unary sockets per process` cap is raised from 64 to 128 with a
 test, not silently.
 
 ### Flags and rollout
@@ -216,6 +218,8 @@ and HTTP/1.1 connection usage from the HAR-equivalent resource timing. Numbers g
 A fresh reviewer found an unsound `not_executed` rule, beacon dedupe without ids, undefined key-store cancel/error semantics, `anon` key collisions, auth lifetime on long sockets and unenforced class caps; all are folded into the sections above. HAR figures and ADR-033's numbers are cited from the brief and that ADR, not re-derived.
 
 ## Round 2 amendments (these supersede earlier text where they conflict)
+
+Body lines superseded by this section: the class table's analytics row and the "W and T" paragraph (analytics is class W on the telemetry lane, not class T); the "floor 16" in-flight split (now: W+M 8, T 8, R the remainder, only for totals of 32 or more); the "missing key is `invalid_argument`" rule (now enforced only for `transport=ws`); the 8 MiB / 64 KiB store bounds (now 4 KiB bodies and a 10 000-entry cap alongside the 8 MiB total); and the process unary socket cap 64 (now 128).
 
 Three fresh reviewers (delivery, security, concurrency) found the following; each is a decision.
 

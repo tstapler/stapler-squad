@@ -6,7 +6,7 @@ Owner question: *"for the materialized view can you evaluate all of the datastru
 
 ## Short answer
 
-**Should we use libraries for these structures? Almost never.** At this scale (tens of live keys, at most 512 pinned and 256 unpinned entries, event bursts of low hundreds per second) every structure is fast enough in its simplest form, so the criteria that decide are correctness under concurrency and simplicity, not ns/op. Of ten structures, zero need a new third-party dependency, and two library candidates fail on semantics, not speed:
+**Should we use libraries for these structures? Almost never.** At this scale (tens of live keys, at most 512 pinned and 256 unpinned entries, event bursts of low hundreds per second) every structure is fast enough in its simplest form, so the criteria that decide are correctness under concurrency and simplicity, not ns/op. Of ten structures, zero need a new third-party dependency (no new module; one indirect-to-direct promotion, `xxhash`), and two library candidates fail on semantics, not speed:
 
 - `golang.org/x/sync/semaphore` adds nothing: the view does its own ordering and only needs `TryAcquire`/`Release`, which the existing channel semaphore already provides (its `Acquire` waiters are FIFO, so it could not do the ordering itself).
 - `hashicorp/golang-lru/v2` has no pin or veto API; pins would have to be emulated with `Remove` on pin and `Add` on unpin, which is just the `container/list` design with a new `require` line and an MPL-2.0 licence.

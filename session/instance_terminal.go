@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // GetCreatedAt returns the time this instance was created. The field is immutable after creation.
@@ -192,12 +193,19 @@ func (i *Instance) Preview() (string, error) {
 	// No controller at all (e.g. external/attached sessions): try capture-pane
 	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
 	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
-	content, err := i.pm().CapturePaneContent()
+	content, err := tymux.FinalScreen(i.pm().CapturePaneContent())
 	if err != nil {
 		return "", nil
 	}
 
 	return content, nil
+}
+
+// CapturePaneContentFinal is CapturePaneContent for readers that want what an
+// exited pane last showed (previews, debug dumps) rather than a fail-fast
+// ErrPaneExited. Liveness-sensitive loops keep calling CapturePaneContent.
+func (i *Instance) CapturePaneContentFinal() (string, error) {
+	return tymux.FinalScreen(i.CapturePaneContent())
 }
 
 // PreviewContext is Preview with an external context threaded onto the

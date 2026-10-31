@@ -370,6 +370,20 @@ export function PaneTilingContainer({
               <span className={mobilePickerPaneLabel}>+</span>
               New full-screen pane
             </button>
+            <button
+              className={mobilePickerPaneItem}
+              data-testid="mobile-picker-peek-modal"
+              onClick={() => {
+                setPeekSession(mobilePickerSession);
+                cancelPicker();
+              }}
+            >
+              {/* analytics-exempt */}
+              <span className={mobilePickerPaneLabel}>
+                <Maximize2 size={14} />
+              </span>
+              Temporary modal
+            </button>
             {mobilePickerPanes.map((p) => (
               <button
                 key={p.id}

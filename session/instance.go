@@ -2480,6 +2480,7 @@ func (i *Instance) Resume() error {
 				}
 				return fmt.Errorf("failed to start new session: %w", err)
 			}
+			i.attachPTYAfterStart(worktreePath)
 		}
 	} else {
 		// Tmux session is dead (killed on pause to free memory).
@@ -2506,6 +2507,7 @@ func (i *Instance) Resume() error {
 			}
 			return fmt.Errorf("failed to start new session: %w", err)
 		}
+		i.attachPTYAfterStart(worktreePath)
 	}
 
 	i.mu.Lock()
@@ -2526,6 +2528,17 @@ func (i *Instance) Resume() error {
 	}
 
 	return nil
+}
+
+// attachPTYAfterStart attaches the write PTY that pm().Start() leaves unattached
+// (it only creates the detached session). Without it, SendKeys on a resumed
+// session fails with "PTY not initialized". RestoreWithWorkDir returns nil even
+// when the attach fails, so GetPTY() is the real check.
+func (i *Instance) attachPTYAfterStart(workDir string) {
+	_ = i.pm().RestoreWithWorkDir(workDir)
+	if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+		logPTYUnavailableIfUnexpected("resume: pty attach failed after retries, controller and sendkeys unavailable", i.Title, ptyErr)
+	}
 }
 
 // StopByUser transitions an Active, Paused, or Hibernated session to Stopped in
