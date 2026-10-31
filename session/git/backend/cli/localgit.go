@@ -47,10 +47,24 @@ func localGitName(args []string) string {
 }
 
 // directGit is the real git binary when PATH's git is the ssh-fallback wrapper,
-// else "git" (resolved by the runner as before).
-var directGit = sync.OnceValue(func() string { // var so tests with fake runners can pin it
-	return resolveDirectGit(os.Getenv("PATH"), os.Getenv("REAL_GIT"))
-})
+// else "git" (resolved by the runner as before). Memoized per (PATH, REAL_GIT) so a
+// process that changes PATH (tests installing a fake git) is not served a stale binary.
+var directGit = func() string { // var so tests with fake runners can pin it
+	key := [2]string{os.Getenv("PATH"), os.Getenv("REAL_GIT")}
+	directGitMu.Lock()
+	defer directGitMu.Unlock()
+	if v, ok := directGitCache[key]; ok {
+		return v
+	}
+	v := resolveDirectGit(key[0], key[1])
+	directGitCache[key] = v
+	return v
+}
+
+var (
+	directGitMu    sync.Mutex
+	directGitCache = map[[2]string]string{}
+)
 
 // resolveDirectGit mirrors the wrapper's own _find_real_git: the first executable
 // `git` on PATH that is not the wrapper (REAL_GIT wins when set). Only binaries named
