@@ -2,7 +2,6 @@ package services
 
 import (
 	"fmt"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -86,22 +85,6 @@ func recordSessionDriverStarts() {
 		driverStartLog.starts[inst] = fmt.Sprintf("session %q started by:\n%s", inst.Snapshot().Title, stack)
 		driverStartLog.mu.Unlock()
 	})
-}
-
-var testFrameRE = regexp.MustCompile(`services\.(Test\w+)`)
-
-// testFramesIn names the Test* functions on a start stack. Empty ("<none: async start>")
-// when the driver was started from a goroutine the test spawned, e.g. CreateSession's
-// async init; the stack's frames then show which production path did it.
-func testFramesIn(stack string) string {
-	var names []string
-	for _, m := range testFrameRE.FindAllStringSubmatch(stack, -1) {
-		names = append(names, m[1])
-	}
-	if len(names) == 0 {
-		return "<none: async start>"
-	}
-	return strings.Join(names, ",")
 }
 
 // leakedSessionDriverStarts returns the creation record of each driver still running.
