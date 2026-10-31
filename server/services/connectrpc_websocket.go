@@ -1182,6 +1182,16 @@ func resumeHibernatedInstance(instance *session.Instance, sessionID string) erro
 	return nil
 }
 
+// controlModeStreamingFor reports whether a main terminal takes the hub/control-mode path.
+// The capture-pane fallback drives a tmux session by name (pipe-pane, send-keys), which a tymux
+// session does not have, so tymux ignores STAPLER_SQUAD_USE_CONTROL_MODE=false.
+func controlModeStreamingFor(controlModeEnv string, managed bool, backend session.ProcessManagerBackend) bool {
+	if !managed {
+		return false
+	}
+	return backend == session.BackendTymux || controlModeEnv == "" || controlModeEnv == "true"
+}
+
 // routeMainTerminalStream picks the streaming path for a main-session (non-shell)
 // terminal: hub-owned or control-mode for a managed session with control mode
 // enabled (STAPLER_SQUAD_USE_CONTROL_MODE, default on), else capture-pane
@@ -1190,8 +1200,8 @@ func resumeHibernatedInstance(instance *session.Instance, sessionID string) erro
 // and only updates its buffer on pane-content change rather than streaming
 // continuously.
 func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebSocketStream, instance *session.Instance, sessionID string) error {
-	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
-	if (useControlMode == "" || useControlMode == "true") && instance.Snapshot().IsManaged {
+	snap := instance.Snapshot()
+	if controlModeStreamingFor(os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE"), snap.IsManaged, snap.Backend) {
 		// Resolved once per tmux session via StreamOwnershipLock.Resolve and cached
 		// sticky for that session's lifetime (Epic 3.1) — see ADR-003 for why a
 		// per-connection re-read would let a flag flip mid-rollout split one
@@ -2331,7 +2341,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	sessionID := snap.Title
 	tmuxSessionName := streamHubSessionKey(snap.Title, snap.TmuxPrefix)
 
-	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName)
+	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName, "backend", snap.Backend)
 
 	instance.MarkViewed()
 	stream.creation.Mark(stageResolve)
