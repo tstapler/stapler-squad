@@ -147,5 +147,10 @@ func (ItemSession) Indexes() []ent.Index {
 		index.Fields("conversation_uuid"),
 		// Composite index for "all sessions for an item ordered by time" queries.
 		index.Fields("created_at").Edges("backlog_item"),
+		// Leading-column lookup by item: the composite above leads with created_at, so
+		// "WHERE backlog_item_item_sessions = ?" (ListItemSessions, ListBacklogItems'
+		// correlated subqueries, FK checks on item delete) cannot seek into it and
+		// scanned all of item_sessions.
+		index.Edges("backlog_item"),
 	}
 }
