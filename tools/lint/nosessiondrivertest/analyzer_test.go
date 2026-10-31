@@ -9,5 +9,7 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), nosessiondrivertest.Analyzer, "user")
+	t.Cleanup(nosessiondrivertest.SetSessionPkgPath("example.com/session"))
+	analysistest.Run(t, analysistest.TestData(), nosessiondrivertest.Analyzer,
+		"user", "dot", "example.com/session", "other/session", "lib", "nonsession")
 }
