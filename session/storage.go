@@ -387,8 +387,8 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		log.Debug("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-		s.saved.persist(data, func() bool {
-			if err := s.repo.Update(ctx, data); err != nil {
+		s.saved.persist(data, func(skip updateSkip) bool {
+			if err := s.repo.updateSkipping(ctx, data, skip); err != nil {
 				// Not found → create it
 				if createErr := s.repo.Create(ctx, data); createErr != nil {
 					log.Error("SaveInstances: failed to upsert instance",
@@ -566,6 +566,12 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 		return false, fmt.Errorf("update session %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// ArchivedSessionUUIDs returns the subset of uuids whose session row is
+// archived, in one query per 500 uuids. Unknown uuids are absent.
+func (s *Storage) ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map[string]bool, error) {
+	return s.repo.ArchivedSessionUUIDs(ctx, uuids)
 }
 
 // FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
@@ -1490,6 +1496,11 @@ func (s *Storage) IsDiagnoseCaller(ctx context.Context, sessionUUID string) bool
 // attempt — see EntRepository.ClaimDiagnoseNudgeAttempt's doc comment.
 func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
 	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
+}
+
+// GetWorktreeDataBySessionUUIDs forwards to EntRepository.GetWorktreeDataBySessionUUIDs.
+func (s *Storage) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
+	return s.repo.GetWorktreeDataBySessionUUIDs(ctx, sessionUUIDs)
 }
 
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with

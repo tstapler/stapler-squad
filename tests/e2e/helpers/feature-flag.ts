@@ -1,6 +1,7 @@
 import { expect, type APIRequestContext } from '@playwright/test';
+import { baseUrl } from './base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const rpc = (name: string) => `${BASE_URL}/api/session.v1.SessionService/${name}`;
 const json = { 'Content-Type': 'application/json' };
 

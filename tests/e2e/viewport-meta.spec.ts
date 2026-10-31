@@ -6,8 +6,9 @@
  */
 import { test, expect } from '@playwright/test';
 import { AppShellPage } from './pages/AppShellPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover';
 const ROUTES = ['/', '/history', '/settings', '/review-queue', '/rules'];
 

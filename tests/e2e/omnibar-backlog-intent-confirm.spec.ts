@@ -1,7 +1,8 @@
 // @feature backlog:parse-item-intent, session:create
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || process.env.BASE_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('Omnibar Backlog Intent Intake Confirmation', () => {
   test('typing backlog: prefix opens the LLM intent review form', async ({ page }) => {

@@ -10,8 +10,9 @@ import { AppShellPage } from './pages/AppShellPage';
 import { NotificationTray, sendNotification } from './pages/NotificationPanel';
 import { UpNextPage } from './pages/UpNextPage';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 const pathOf = (url: string) => new URL(url).pathname.replace(/(.)\/$/, '$1');
 

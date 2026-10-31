@@ -33,8 +33,9 @@ import {
 import { SessionClient } from './helpers/session-client';
 import { dismissNotificationInterference } from './pages/NotificationPanel';
 import { WindowTabStripPage } from './pages/WindowTabStripPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // Seeded stuck items persist on the shared test server; remove them so other specs don't see them.
 test.afterEach(async ({ request }) => {

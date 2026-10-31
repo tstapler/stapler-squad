@@ -7,9 +7,11 @@
 // encodes the ownership by package.
 //
 //   - sessions.db code (package session and its subpackages) must not select
-//     entities that live in analytics.db: EscapeEvent, AnalyticsEvent.
-//   - package server/analytics, which owns analytics.db, may select only those
-//     entities.
+//     entities that live elsewhere: AnalyticsEvent, EscapeEvent.
+//   - package server/analytics, which owns analytics.db, may select only
+//     AnalyticsEvent.
+//   - package server/analytics/escapedb, which owns db/escape_events.db, may
+//     select only EscapeEvent.
 //
 // The motivating bug: session.EntRepository.ListAnalyticsBySessionID read
 // AnalyticsEvent through the sessions.db client, whose analytics_events table is
@@ -37,32 +39,53 @@ var Analyzer = &analysis.Analyzer{
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
 
-// escapeEntities live in analytics.db. Hand-maintained until per-DB table subsets exist (ADR-036 PR 2 adds the registry-equals-analyzer check).
-var escapeEntities = map[string]bool{"EscapeEvent": true, "AnalyticsEvent": true}
-
-type side int
-
-const (
-	sideNone   side = iota
-	sideCore        // sessions.db code
-	sideEscape      // analytics.db owner
-)
-
-func sideOf(pkgPath string) side {
-	switch {
-	case strings.HasSuffix(pkgPath, "/server/analytics"):
-		return sideEscape
-	case strings.HasSuffix(pkgPath, "/session/dbpool"), strings.HasSuffix(pkgPath, "/session/ent"), strings.Contains(pkgPath, "/session/ent/"):
-		return sideNone
-	case strings.HasSuffix(pkgPath, "/session"), strings.Contains(pkgPath, "/session/"):
-		return sideCore
-	}
-	return sideNone
+// entityOwner maps each entity that lives outside sessions.db to the database
+// that holds it. Hand-maintained until per-DB table subsets exist (ADR-036 PR 2
+// adds the registry-equals-analyzer check).
+var entityOwner = map[string]owner{
+	"AnalyticsEvent": ownerAnalytics,
+	"EscapeEvent":    ownerEscapeEvents,
 }
 
+type owner int
+
+const (
+	ownerCore         owner = iota // sessions.db: every entity not in entityOwner
+	ownerAnalytics                 // analytics.db (server/analytics)
+	ownerEscapeEvents              // db/escape_events.db (server/analytics/escapedb)
+)
+
+func (o owner) String() string {
+	switch o {
+	case ownerAnalytics:
+		return "analytics.db"
+	case ownerEscapeEvents:
+		return "db/escape_events.db"
+	}
+	return "sessions.db"
+}
+
+// packageOwner returns the database a package's client points at, and false for
+// packages the check does not cover.
+func packageOwner(pkgPath string) (owner, bool) {
+	switch {
+	case strings.HasSuffix(pkgPath, "/server/analytics/escapedb"):
+		return ownerEscapeEvents, true
+	case strings.HasSuffix(pkgPath, "/server/analytics"):
+		return ownerAnalytics, true
+	case strings.HasSuffix(pkgPath, "/session/dbpool"), strings.HasSuffix(pkgPath, "/session/ent"), strings.Contains(pkgPath, "/session/ent/"):
+		return ownerCore, false
+	case strings.HasSuffix(pkgPath, "/session"), strings.Contains(pkgPath, "/session/"):
+		return ownerCore, true
+	}
+	return ownerCore, false
+}
+
+func entityOwnerOf(entity string) owner { return entityOwner[entity] }
+
 func run(pass *analysis.Pass) (interface{}, error) {
-	s := sideOf(pass.Pkg.Path())
-	if s == sideNone {
+	pkgDB, covered := packageOwner(pass.Pkg.Path())
+	if !covered {
 		return nil, nil
 	}
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -75,8 +98,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if strings.HasSuffix(pass.Fset.Position(sel.Pos()).Filename, "_test.go") {
 			return
 		}
-		wrong := (s == sideCore && escapeEntities[entity]) || (s == sideEscape && !escapeEntities[entity])
-		if !wrong {
+		entityDB := entityOwnerOf(entity)
+		if entityDB == pkgDB {
 			return
 		}
 		switch nolintcomment.Lookup(pass, sel.Pos(), "nowrongdbentity") {
@@ -86,11 +109,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			pass.Reportf(sel.Pos(), "//nolint:nowrongdbentity needs a one-line reason")
 			return
 		}
-		if s == sideCore {
-			pass.Reportf(sel.Pos(), "entity %s lives in analytics.db but this code holds the sessions.db client; use the analytics client from server/analytics (or //nolint:nowrongdbentity with a reason)", entity)
-			return
-		}
-		pass.Reportf(sel.Pos(), "entity %s lives in sessions.db but server/analytics owns analytics.db; this client has no such table in use (or //nolint:nowrongdbentity with a reason)", entity)
+		pass.Reportf(sel.Pos(), "entity %s lives in %s but this package holds the %s client; use the client from the package that owns that database (or //nolint:nowrongdbentity with a reason)", entity, entityDB, pkgDB)
 	})
 	return nil, nil
 }

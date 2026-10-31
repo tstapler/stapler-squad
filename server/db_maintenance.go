@@ -7,7 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 )
 
-// startDBMaintenance reclaims free SQLite pages of the sessions and analytics
+// startDBMaintenance reclaims free SQLite pages of the sessions, analytics and escape-events
 // databases in the background until ctx is cancelled (see session/dbmaint).
 func (s *Server) startDBMaintenance(ctx context.Context, deps *ServerDependencies) {
 	cfg := dbmaint.ConfigFromEnv()
@@ -23,6 +23,10 @@ func (s *Server) startDBMaintenance(ctx context.Context, deps *ServerDependencie
 	}
 	if deps.AnalyticsDriver != nil {
 		m := dbmaint.New("analytics", deps.AnalyticsDriver, cfg)
+		s.goBackground(func() { m.Run(ctx) })
+	}
+	if deps.EscapeEventsDriver != nil {
+		m := dbmaint.New("escape-events", deps.EscapeEventsDriver, cfg)
 		s.goBackground(func() { m.Run(ctx) })
 	}
 }

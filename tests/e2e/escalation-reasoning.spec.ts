@@ -29,8 +29,9 @@ import { test, expect } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 import type { ReviewQueue } from './helpers/session-client';
 import { dismissOnboardingIfPresent } from './pages/OnboardingPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // A command guaranteed to match no seed classifier rule, so the hook falls
 // through to the generic "No matching rule; escalated for manual review."

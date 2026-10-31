@@ -14,10 +14,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -825,4 +827,41 @@ func TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilt
 
 	sparse := &session.BacklogItemData{ID: "item-1"}
 	assert.False(t, backlogItemMatchesFilters(sparse, msg), "a sparse snapshot with no Status/RepoPath (the pre-fix shape) would have been silently dropped by a non-empty filter")
+}
+
+// A fresh WatchBacklogItems connection used to issue one worktree lookup per
+// item session; the whole snapshot must now cost a fixed number of session
+// queries regardless of how many items it carries.
+func TestSnapshotEventsForItems_Should_BatchWorktreeLookups(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	var sessionQueries atomic.Int64
+	storage.GetEntClient().Session.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
+		return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) {
+			sessionQueries.Add(1)
+			return next.Query(ctx, q)
+		})
+	}))
+
+	build := func(n int) []*session.BacklogItemData {
+		items := make([]*session.BacklogItemData, n)
+		for i := range items {
+			items[i] = &session.BacklogItemData{
+				ID: fmt.Sprintf("item-%d", i),
+				ItemSessions: []session.ItemSessionSummary{
+					{ID: fmt.Sprintf("is-%d", i), SessionUUID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i)},
+				},
+			}
+		}
+		return items
+	}
+
+	sessionQueries.Store(0)
+	snapshotEventsForItems(context.Background(), storage, session.NewDefaultWorkflowEngine(), build(3), nil, nil)
+	small := sessionQueries.Load()
+	sessionQueries.Store(0)
+	evs := snapshotEventsForItems(context.Background(), storage, session.NewDefaultWorkflowEngine(), build(40), nil, nil)
+	assert.Len(t, evs, 40)
+	assert.Equal(t, small, sessionQueries.Load(), "session queries must not grow with item count")
+	assert.LessOrEqual(t, small, int64(2))
 }

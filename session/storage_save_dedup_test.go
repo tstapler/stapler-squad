@@ -115,7 +115,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.persist(InstanceData{Title: "t"}, func() bool {
+		f.persist(InstanceData{Title: "t"}, func(updateSkip) bool {
 			close(inWrite)
 			<-release
 			return true
@@ -137,17 +137,17 @@ func TestWriteRow_Should_ForgetAfterWrite(t *testing.T) {
 	t.Parallel()
 	s := &Storage{}
 	data := InstanceData{Title: "t"}
-	s.saved.persist(data, func() bool { return true })
+	s.saved.persist(data, func(updateSkip) bool { return true })
 
 	err := s.writeRow("t", func() error {
 		// simulates a save racing with the write and re-recording the title
-		s.saved.persist(data, func() bool { return true })
+		s.saved.persist(data, func(updateSkip) bool { return true })
 		return nil
 	})
 	require.NoError(t, err)
 
 	wrote := false
-	s.saved.persist(data, func() bool { wrote = true; return true })
+	s.saved.persist(data, func(updateSkip) bool { wrote = true; return true })
 	assert.True(t, wrote, "fingerprint recorded during the write must not survive it")
 }
 
@@ -257,4 +257,95 @@ func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *tes
 	got, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, got, 1, "an unchanged instance deleted from storage must be re-created by the next save")
+}
+
+func recordSkip(f *savedFingerprints, data InstanceData, ok bool) updateSkip {
+	var got updateSkip
+	f.persist(data, func(skip updateSkip) bool { got = skip; return ok })
+	return got
+}
+
+func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
+	t.Parallel()
+	var f savedFingerprints
+	base := InstanceData{Title: "t", Tags: []string{"b", "a"}, DiffStats: DiffStatsData{Added: 1, Content: "x"}}
+	recordSkip(&f, base, true)
+
+	scalar := base
+	scalar.Tags = []string{"a", "b"} // reorder is not a change
+	scalar.Path = "/other"
+	assert.Equal(t, updateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, recordSkip(&f, scalar, true),
+		"a session-column change must skip every child section")
+
+	diff := scalar
+	diff.DiffStats.Content = "y"
+	assert.Equal(t, updateSkip{Tags: true, Worktree: true, Claude: true}, recordSkip(&f, diff, true))
+
+	tags := diff
+	tags.Tags = []string{"a", "c"}
+	assert.Equal(t, updateSkip{DiffStats: true, Worktree: true, Claude: true}, recordSkip(&f, tags, true))
+
+	wt := tags
+	wt.Worktree.BranchName = "br"
+	wt.ClaudeSession.ConversationUUID = "conv"
+	assert.Equal(t, updateSkip{DiffStats: true, Tags: true}, recordSkip(&f, wt, true))
+}
+
+// A failed write rolls back, so the row still holds the previous data: the next
+// attempt must compare against that, never against the failed attempt.
+func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
+	t.Parallel()
+	var f savedFingerprints
+	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	recordSkip(&f, base, true)
+
+	changed := base
+	changed.Tags = []string{"a", "b"}
+	changed.Path = "/p"
+	recordSkip(&f, changed, false)
+
+	assert.False(t, recordSkip(&f, changed, true).Tags, "tags never reached the row, so they must be rewritten")
+}
+
+func TestPersist_Should_WriteEverything_When_TitleUnseen(t *testing.T) {
+	t.Parallel()
+	var f savedFingerprints
+	assert.Equal(t, updateSkip{}, recordSkip(&f, InstanceData{Title: "new"}, true))
+}
+
+// End to end: skipping unchanged sections must not lose a changed one.
+func TestSaveInstances_Should_PersistChangedSections_When_OthersSkipped(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("dedup-sections")
+	require.NoError(t, storage.AddInstance(inst))
+	inst.Tags = []string{"one"}
+	inst.UpdatedAt = time.Now()
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	inst.Path = "/tmp/changed" // session column only: tags/diff skipped
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	inst.Tags = []string{"one", "two"} // tags only
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	loaded, err := storage.LoadInstances()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, "/tmp/changed", loaded[0].Path)
+	assert.ElementsMatch(t, []string{"one", "two"}, loaded[0].Tags)
+}
+
+func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
+	t.Parallel()
+	var f savedFingerprints
+	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	recordSkip(&f, base, true)
+
+	bad := base
+	bad.CreatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) // json.Marshal fails: year out of range
+	f.persist(bad, func(updateSkip) bool { return true })
+
+	assert.Equal(t, updateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
 }

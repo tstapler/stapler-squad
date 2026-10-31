@@ -171,3 +171,25 @@ func TestLazy_should_RefuseUse_When_Closed(t *testing.T) {
 	require.ErrorIs(t, err, ErrLazyClosed)
 	assert.Equal(t, 1, lz.Opens(), "a closed Lazy never reopens")
 }
+
+func TestOpenEscapeEvents_should_OwnItsWriterAndFile_When_OpenedBesideEscape(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	esc, err := OpenEscape(filepath.Join(dir, "analytics.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = esc.Close() })
+	ev, err := OpenEscapeEvents(filepath.Join(dir, "db", "escape_events.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ev.Close() })
+
+	assert.Equal(t, "wal", queryString(t, ev.Writer(), "PRAGMA journal_mode"))
+	assert.Equal(t, "1", queryString(t, ev.Writer(), "PRAGMA synchronous"))
+	assert.Equal(t, "2", queryString(t, ev.Writer(), "PRAGMA auto_vacuum"))
+	assert.Equal(t, 1, ev.Writer().Stats().MaxOpenConnections)
+	assert.NotSame(t, esc.Writer(), ev.Writer(), "two files, two writers")
+
+	infos := infoFor(ev.Path())
+	require.Len(t, infos, 1)
+	assert.Equal(t, UseCaseEscapeEvents, infos[0].UseCase)
+	assert.Equal(t, "escape-events", infos[0].Pool)
+}

@@ -1,8 +1,9 @@
 // @feature backlog:item-form, upload:backlog-attachment
 import { test, expect } from '@playwright/test';
 import { BacklogPage } from './pages/BacklogPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 // Minimal valid 1x1 PNG (magic bytes + IHDR/IDAT/IEND), used to exercise the
 // real upload endpoint's magic-byte validation rather than a fake extension.

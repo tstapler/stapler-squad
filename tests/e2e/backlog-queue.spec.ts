@@ -24,8 +24,9 @@
 import { test, expect, APIRequestContext } from "@playwright/test";
 import { seedQueuedItem } from "./pages/BacklogQueuePage";
 import { enableBacklogFeatureFlag, disableBacklogFeatureFlag } from "./pages/StuckItemsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 async function waitForBacklogRPCsEnabled(request: APIRequestContext) {
   for (let attempt = 0; attempt < 20; attempt++) {

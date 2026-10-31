@@ -10,6 +10,7 @@ const _features = [
 import { test, expect } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
+import { baseUrl } from './helpers/base-url';
 
 /**
  * Demo recording spec — "Mission Control for AI Agents"
@@ -42,7 +43,7 @@ import * as fs from 'fs';
  *   09 - Unfinished Work       surface pending changes across worktrees
  */
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const SNAP_DIR = process.env.PLAYWRIGHT_VIDEO_OUTPUT_DIR || '/tmp/demo-video-output';
 
 function snap(page: import('@playwright/test').Page, name: string) {
