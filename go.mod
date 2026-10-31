@@ -99,7 +99,7 @@ require (
 
 require (
 	github.com/grafana/pyroscope-go v1.2.8
-	github.com/grafana/pyroscope-go/godeltaprof v0.1.9 // indirect
+	github.com/grafana/pyroscope-go/godeltaprof v0.1.9
 )
 
 require (

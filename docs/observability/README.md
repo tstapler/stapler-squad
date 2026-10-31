@@ -10,7 +10,7 @@ living in an unrelated repo.
 | `cgroup-memory.json` | `ssq-cgroup-memory` | USE-method cgroup memory (`cgroup_memory_*`, see `docs/how-to/enable-opentelemetry.md`) |
 | `go-runtime-request-path.json` | `ssq-go-runtime` | Go scheduler/GC/memory (`go.runtime.*`), in-flight unary RPCs, DB statements per request (`db.queries_per_request`), HTTP-vs-handler p95 |
 | `http-rpc-connections.json` | `ssq-http-rpc-connections` | RED-method HTTP/RPC connection saturation (`http.server.connections_*`, `rpc.server_streams.open`) |
-| `pprof-profiles.json` | `ssq-pprof-profiles` | Pyroscope flamegraphs (CPU/heap/goroutines), scraped from the pprof server |
+| `pprof-profiles.json` | `ssq-pprof-profiles` | Pyroscope flamegraphs (CPU/heap/goroutines, mutex and block lock contention), scraped from the pprof server; see `docs/how-to/find-lock-contention.md` |
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
 | `tymux-backend.json` | `ssq-tymux-backend` | tymux vs tmux operation latency (RED), attach stream health, backend mix, tymuxd supervision |
 | `client-network.json` | `ssq-client-network` | Browser RPC rate/latency/errors by method and transport, duplicates and coalescing, batch effectiveness, WebSocket lifecycle/RTT (client and `ws_unary_*` server side), web vitals, long tasks; see `docs/reference/client-network-telemetry.md` |
@@ -38,6 +38,69 @@ stapler-squad's calls to tymuxd carry a W3C `traceparent` header (an
 `otelconnect` client interceptor in `session/tymux/transport.go`), so a trace
 that starts in stapler-squad continues into tymuxd once the daemon extracts
 it. tymuxd does not export spans yet.
+
+## Per-interval lock profiles (delta endpoints)
+
+`--profile` serves the standard cumulative `/debug/pprof/{mutex,block,heap}`
+profiles and, on the same port, per-interval variants from
+`github.com/grafana/pyroscope-go/godeltaprof` (Apache-2.0, pure Go, already in
+the module graph through `pyroscope-go`): `/debug/pprof/delta_mutex`,
+`/debug/pprof/delta_block`, `/debug/pprof/delta_heap`. Each request returns only
+what accumulated since the previous request to that endpoint.
+
+Why: Pyroscope sums every scrape inside a query window. Scraping the cumulative
+`/mutex` or `/block` each 60 s therefore shows lifetime totals multiplied by the
+number of scrapes, not contention in the window. The delta endpoints fix that.
+The profile type ids (`mutex:delay:nanoseconds:contentions:count`, ...) are the
+same either way, so the dashboard panels need no change when Alloy switches.
+
+Two consequences:
+
+- The delta profilers are process-global. A manual `curl .../delta_mutex` consumes
+  the interval Alloy would have received. For manual analysis use the cumulative
+  `/debug/pprof/mutex` and `/block`.
+- Until Alloy is switched, the lock panels on `ssq-pprof-profiles` still render but
+  show inflated lifetime totals (the flamegraph shape is right, absolute values
+  are not).
+
+Alloy lives in the dotfiles repo (`stapler-scripts/observability/alloy-config.alloy`).
+In its `pyroscope.scrape "stapler_squad"` block, enable the three `godeltaprof_*`
+profile types and disable the cumulative `memory`, `mutex` and `block` ones
+(keep `process_cpu` and `goroutine`):
+
+```alloy
+profiling_config {
+  profile.process_cpu         { enabled = true }
+  profile.goroutine           { enabled = true }
+  profile.memory              { enabled = false }
+  profile.mutex               { enabled = false }
+  profile.block               { enabled = false }
+  profile.godeltaprof_memory  { enabled = true }
+  profile.godeltaprof_mutex   { enabled = true }
+  profile.godeltaprof_block   { enabled = true }
+}
+```
+
+Order matters: redeploy the service with a build that has the delta handlers
+first (`make install-service`), then restart Alloy
+(`docker compose restart alloy`). Against an older build the delta scrapes 404 and
+memory/mutex/block go blank.
+
+### Sampling cost
+
+`--profile` samples 1 in `--profile-mutex-fraction` mutex events (default 10) and
+blocking events of at least `--profile-block-rate` ns (default 1000). Passing `1`
+for either records every event. Microbenchmark on an 18-core Apple machine
+(`go test ./profiling -run xxx -bench LockProfile -count=2`, noisy; worst-case shapes, not the app):
+
+| Setting | Uncontended-ish mutex loop | Channel ping-pong (every op blocks) |
+|---|---|---|
+| off | 44-50 ns/op | 221-223 ns/op |
+| mutex fraction 10 / block rate 1000 | 43 ns/op | 337-423 ns/op |
+| mutex fraction 1 / block rate 1 | 43-44 ns/op | 540-922 ns/op |
+
+The mutex profile cost was not measurable in that loop; block profiling is the
+expensive one and rate 1 costs 2-4x on a path where every operation blocks.
 
 ## Viewing them
 
