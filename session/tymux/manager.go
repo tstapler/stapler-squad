@@ -43,6 +43,11 @@ type TymuxManager interface {
 	// Empty means an old record: fall back to label, then legacy Name == dir.
 	SetStoredSessionID(id string)
 
+	// PersistedSessionID is the daemon session id to save with the Instance
+	// record: the live id, else a loaded-but-not-yet-restored id, and "" once the
+	// session was closed.
+	PersistedSessionID() string
+
 	// AppendEnv adds KEY=VALUE entries to the environment the next Start()
 	// passes to tymuxd. Later entries for the same key replace earlier ones;
 	// entries without '=' are ignored. The command's own env still wins.

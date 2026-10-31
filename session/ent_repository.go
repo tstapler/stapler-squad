@@ -674,9 +674,10 @@ func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData
 	if data.Backend != "" {
 		sessionUpdate.SetBackend(string(data.Backend))
 	}
-	if data.TymuxSessionID != "" {
-		sessionUpdate.SetTymuxSessionID(data.TymuxSessionID)
-	}
+	// Unlike Backend, this is cleared when empty: a tmux switch or a killed
+	// session must not leave a stale id behind. ToInstanceData keeps a loaded,
+	// not-yet-restored id (PersistedSessionID), so an unstarted load never clears it.
+	sessionUpdate.SetTymuxSessionID(data.TymuxSessionID)
 }
 
 func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {

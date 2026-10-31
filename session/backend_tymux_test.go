@@ -268,6 +268,8 @@ type fakeTymuxManagerForSetCommand struct {
 	gotLabel           string
 	gotStoredID        string
 	sessionID          string
+	startCalls         int
+	restoreCalls       int
 }
 
 func (f *fakeTymuxManagerForSetCommand) SetStoredSessionID(id string) { f.gotStoredID = id }
@@ -287,7 +289,15 @@ func (f *fakeTymuxManagerForSetCommand) SetSessionLabel(label string) {
 	f.gotLabel = label
 }
 
+func (f *fakeTymuxManagerForSetCommand) PersistedSessionID() string { return f.sessionID }
+
+func (f *fakeTymuxManagerForSetCommand) RestoreWithWorkDir(string) error {
+	f.restoreCalls++
+	return nil
+}
+
 func (f *fakeTymuxManagerForSetCommand) Start(string) error {
+	f.startCalls++
 	return f.startErr
 }
 

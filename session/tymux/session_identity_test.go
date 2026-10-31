@@ -274,3 +274,118 @@ func deadSession(id, dir string) *v1.Session {
 	s.Liveness = v1.Liveness_LIVENESS_DEAD
 	return s
 }
+
+func TestStart_DoesNotKillStaleSessionReadoptedByAnotherOwner(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	var killed []string
+	var listedID string // the id a's Start created; the daemon lists it dead
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(namedSession(fmt.Sprintf("m6-%d", atomic.AddInt32(&freshCounter, 1)), dir, dir)), nil
+		},
+		killSessionFn: func(_ context.Context, r *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			killed = append(killed, r.Msg.GetSessionId())
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
+		},
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{deadSession(listedID, dir)}}), nil
+		},
+	}
+	a := NewTymuxGRPCSession(transport)
+	require.NoError(t, a.Start(dir))
+	oldID := a.GetSessionIdentifier()
+	listedID = oldID
+	other := NewTymuxGRPCSession(transport)
+	claimedSessions.Store(oldID, any(other)) // another owner re-adopted a's cached id
+	require.NoError(t, a.Start(dir))
+	t.Cleanup(func() { _ = a.Close() })
+	assert.NotContains(t, killed, oldID)
+}
+
+func TestRestoreWithWorkDir_StoredIDAbsent_FallsBackToLabel(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	starts := 0
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("by-label", dir+" [t]", dir)}}), nil
+		},
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			starts++
+			return connect.NewResponse(namedSession("new-one", dir, dir)), nil
+		},
+	}
+	s := NewTymuxGRPCSession(transport)
+	s.SetSessionLabel("t")
+	s.SetStoredSessionID("gone-id")
+	require.NoError(t, s.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = s.Close() })
+	assert.Equal(t, "by-label", s.GetSessionIdentifier())
+	assert.Zero(t, starts)
+}
+
+func TestRestoreWithWorkDir_StoredIDClaimedByOther_DoesNotFallBack(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{
+				namedSession("held", dir+" [t]", dir),
+			}}), nil
+		},
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(namedSession("fresh-held", dir+" [t]", dir)), nil
+		},
+	}
+	claimedSessions.Store("held", any(NewTymuxGRPCSession(transport)))
+	s := NewTymuxGRPCSession(transport)
+	s.SetSessionLabel("t")
+	s.SetStoredSessionID("held")
+	require.NoError(t, s.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = s.Close() })
+	assert.Equal(t, "fresh-held", s.GetSessionIdentifier())
+}
+
+func TestIsAlive_NotFoundButSessionListedLiveUnderNewPane_StaysAliveAndRecachesPane(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	respawned := namedSession("resp-1", dir, dir)
+	respawned.Windows = fakeSession("resp-1", "new-pane", dir, v1.Liveness_LIVENESS_LIVE).Windows
+	transport := &fakeTransport{
+		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(namedSession("resp-1", dir, dir)), nil
+		},
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{respawned}}), nil
+		},
+		capturePaneFn: func(_ context.Context, r *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			if r.Msg.GetPaneId() == "new-pane" {
+				return connect.NewResponse(&v1.PaneSnapshot{PaneId: "new-pane", Liveness: v1.Liveness_LIVENESS_LIVE}), nil
+			}
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
+		},
+	}
+	s := NewTymuxGRPCSession(transport)
+	require.NoError(t, s.Start(dir))
+	t.Cleanup(func() { _ = s.Close() })
+	assert.True(t, s.IsAlive())
+	assert.True(t, s.IsAlive(), "second call uses the re-cached pane")
+}
+
+func TestPersistedSessionID_StoredBeforeRestore_ClearedOnClose(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("p-1", dir, dir)}}), nil
+		},
+	}
+	s := NewTymuxGRPCSession(transport)
+	s.SetStoredSessionID("p-1")
+	assert.Equal(t, "p-1", s.PersistedSessionID(), "not-yet-restored instance keeps its loaded id")
+	require.NoError(t, s.RestoreWithWorkDir(dir))
+	assert.Equal(t, "p-1", s.PersistedSessionID())
+	require.NoError(t, s.Close())
+	assert.Empty(t, s.PersistedSessionID(), "a killed session must not be persisted")
+}

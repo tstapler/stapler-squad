@@ -422,6 +422,21 @@ func (s *tymuxGRPCSession) killStaleGeneration(ctx context.Context) {
 	if !claimedSessions.CompareAndDelete(oldID, any(s)) {
 		return
 	}
+	// Only kill what the daemon says is dead; a failed list, an absent session
+	// (already gone) or a live one (e.g. respawned pane) is left alone.
+	resp, listErr := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	if listErr != nil {
+		return
+	}
+	var listed *v1.Session
+	for _, sess := range resp.Msg.GetSessions() {
+		if sess.GetId() == oldID {
+			listed = sess
+		}
+	}
+	if listed == nil || listed.GetLiveness() == v1.Liveness_LIVENESS_LIVE {
+		return
+	}
 	_, err := s.transport.KillSession(ctx, connect.NewRequest(&v1.KillSessionRequest{SessionId: oldID}))
 	if err != nil && connect.CodeOf(err) != connect.CodeNotFound {
 		log.Warn("tymux: failed to kill stale session before Start", logKeySessionID, oldID, logKeyErr, err)
@@ -434,6 +449,19 @@ func (s *tymuxGRPCSession) SetSessionLabel(label string) {
 	s.mu.Lock()
 	s.label = label
 	s.mu.Unlock()
+}
+
+// PersistedSessionID: see TymuxManager.
+func (s *tymuxGRPCSession) PersistedSessionID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return ""
+	}
+	if s.sessionID != "" {
+		return s.sessionID
+	}
+	return s.storedID
 }
 
 func (s *tymuxGRPCSession) SetStoredSessionID(id string) {
@@ -478,11 +506,15 @@ func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Sessio
 	s.mu.RUnlock()
 	if storedID != "" {
 		for _, sess := range sessions {
-			if sess.GetId() == storedID && s.tryClaim(storedID) {
+			if sess.GetId() != storedID {
+				continue
+			}
+			if s.tryClaim(storedID) {
 				return sess
 			}
+			return nil // present but another owner holds it: never share, never guess by name
 		}
-		return nil
+		// Absent from the daemon (it lost the session): fall through to label/legacy.
 	}
 	labeled := s.sessionName(workDir)
 	for _, name := range []string{labeled, workDir} {
@@ -573,6 +605,7 @@ func (s *tymuxGRPCSession) Close() error {
 	}
 	s.mu.Lock()
 	s.closed = true
+	s.storedID = ""
 	s.liveness = v1.Liveness_LIVENESS_DEAD
 	s.mu.Unlock()
 	if connect.CodeOf(err) == connect.CodeNotFound {
@@ -648,10 +681,17 @@ func (s *tymuxGRPCSession) daemonConfirmsPaneGone(sessionID, paneID string) bool
 	}
 	for _, sess := range resp.Msg.GetSessions() {
 		if sess.GetId() == sessionID {
-			if p := firstPane(sess); p != nil && p.GetId() == paneID && sess.GetLiveness() == v1.Liveness_LIVENESS_LIVE {
-				return false // daemon still lists it live; the NotFound was transient
+			p := firstPane(sess)
+			if p == nil || sess.GetLiveness() != v1.Liveness_LIVENESS_LIVE {
+				return true // session listed but dead: needs recovery
 			}
-			return true // session listed but pane gone/dead: needs recovery
+			if p.GetId() != paneID {
+				// Respawned pane inside a live session: follow it instead of replacing the session.
+				s.mu.Lock()
+				s.paneID = p.GetId()
+				s.mu.Unlock()
+			}
+			return false
 		}
 	}
 	return true
