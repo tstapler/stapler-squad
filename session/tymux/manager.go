@@ -33,6 +33,11 @@ type TymuxManager interface {
 	// SetSession(). Call it before Start().
 	SetCommand(command launchcmd.LaunchCommand)
 
+	// SetSessionLabel records a per-Instance label that Start() folds into the
+	// tymuxd session name so Instances sharing one directory get distinct
+	// sessions. Call before Start()/RestoreWithWorkDir(); empty keeps Name == dir.
+	SetSessionLabel(label string)
+
 	// AppendEnv adds KEY=VALUE entries to the environment the next Start()
 	// passes to tymuxd. Later entries for the same key replace earlier ones;
 	// entries without '=' are ignored. The command's own env still wins.

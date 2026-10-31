@@ -49,6 +49,10 @@ type tymuxGRPCSession struct {
 	// before Start(). Nil means tymuxd defaults to $SHELL.
 	command launchcmd.LaunchCommand
 
+	// label disambiguates this Instance's tymuxd session name from other
+	// Instances rooted at the same directory (see sessionName).
+	label string
+
 	// extraEnv is launch env added via AppendEnv; merged into the create
 	// request at Start() (see launchEnv for precedence).
 	extraEnv map[string]string
@@ -283,6 +287,10 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 		return fmt.Errorf("tymux: session %q has no pane", sess.GetId())
 	}
 	s.mu.Lock()
+	if s.sessionID != "" && s.sessionID != sess.GetId() {
+		claimedSessions.CompareAndDelete(s.sessionID, any(s))
+	}
+	claimedSessions.Store(sess.GetId(), any(s))
 	s.sessionID = sess.GetId()
 	s.paneID = pane.GetId()
 	s.cwd = pane.GetCwd()
@@ -320,16 +328,11 @@ func (s *tymuxGRPCSession) beginClosing() {
 	}
 }
 
-// Start creates a real tymux session rooted at dir. dir also becomes the
-// session's tymux-side Name — the only stable string Start and
-// RestoreWithWorkDir share across a stapler-squad process restart (the
-// constructor takes no separate session-name parameter), so
-// RestoreWithWorkDir's ListSessions lookup (Task 2.2.1b) can find this
-// session again by matching on it. This does mean two sessions started
-// against the identical directory aren't distinguishable by name alone —
-// acceptable for v1 (mirrors the plan's other Unresolved-Questions-style
-// scope calls); a future epic can widen this if it becomes a real
-// constraint.
+// Start creates a real tymux session rooted at dir. Its tymux-side Name is
+// sessionName(dir): the string Start and RestoreWithWorkDir share across a
+// stapler-squad process restart, so RestoreWithWorkDir's ListSessions lookup
+// (Task 2.2.1b) can find the session again. The per-Instance label keeps
+// Instances that share a directory on distinct tymuxd sessions.
 func (s *tymuxGRPCSession) Start(dir string) error {
 	if err := validateWorkDir(dir); err != nil {
 		return err
@@ -338,7 +341,7 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	command := s.command
 	s.mu.RUnlock()
 	ctx := context.Background()
-	req := &v1.CreateSessionRequest{Name: dir, Cwd: dir, Env: s.launchEnv()}
+	req := &v1.CreateSessionRequest{Name: s.sessionName(dir), Cwd: dir, Env: s.launchEnv()}
 	if err := s.applyLaunch(ctx, req, command); err != nil {
 		return err
 	}
@@ -399,6 +402,53 @@ func (s *tymuxGRPCSession) SetCommand(command launchcmd.LaunchCommand) {
 	s.mu.Unlock()
 }
 
+// SetSessionLabel records the per-Instance label folded into the tymuxd
+// session name. Call before Start()/RestoreWithWorkDir().
+func (s *tymuxGRPCSession) SetSessionLabel(label string) {
+	s.mu.Lock()
+	s.label = label
+	s.mu.Unlock()
+}
+
+// sessionName is dir alone for an unlabeled session (legacy records), else
+// "dir [label]".
+func (s *tymuxGRPCSession) sessionName(dir string) string {
+	s.mu.RLock()
+	label := s.label
+	s.mu.RUnlock()
+	if label == "" {
+		return dir
+	}
+	return dir + " [" + label + "]"
+}
+
+// claimedSessions maps tymuxd session id -> owning *tymuxGRPCSession so two
+// Instances never adopt (and later kill) the same daemon session. Known
+// limit: legacy Name==dir records stay ambiguous across process restarts;
+// the first restorer wins and the session is never shared.
+var claimedSessions sync.Map
+
+// findOwnSession picks the session this owner may adopt: an unclaimed one
+// named for its label first, then an unclaimed legacy Name == workDir match.
+func (s *tymuxGRPCSession) findOwnSession(workDir string, sessions []*v1.Session) *v1.Session {
+	labeled := s.sessionName(workDir)
+	var legacy *v1.Session
+	for _, sess := range sessions {
+		if owner, claimed := claimedSessions.Load(sess.GetId()); claimed && owner != any(s) {
+			continue
+		}
+		switch sess.GetName() {
+		case labeled:
+			return sess
+		case workDir:
+			if legacy == nil {
+				legacy = sess
+			}
+		}
+	}
+	return legacy
+}
+
 // RestoreWithWorkDir reconciles this session against tymuxd after a
 // stapler-squad process restart: ListSessions to find the session by the
 // name Start() gave it (workDir, see Start's doc comment), ReviveSession if
@@ -416,13 +466,7 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 	if err != nil {
 		return classifyRPCError("RestoreWithWorkDir", err)
 	}
-	var found *v1.Session
-	for _, sess := range listResp.Msg.GetSessions() {
-		if sess.GetName() == workDir {
-			found = sess
-			break
-		}
-	}
+	found := s.findOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
 		return s.Start(workDir)
 	}
@@ -476,6 +520,12 @@ func (s *tymuxGRPCSession) Close() error {
 	s.closed = true
 	s.liveness = v1.Liveness_LIVENESS_DEAD
 	s.mu.Unlock()
+	claimedSessions.CompareAndDelete(sessionID, any(s))
+	if connect.CodeOf(err) == connect.CodeNotFound {
+		// Already gone daemon-side: the goal of Close is met.
+		log.Info("tymux: session already gone at Close", logKeySessionID, sessionID)
+		return nil
+	}
 	if err != nil {
 		log.Warn("tymux: KillSession failed during Close", logKeySessionID, sessionID, logKeyErr, err)
 		return classifyRPCError("Close", err)
@@ -514,6 +564,14 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	}
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
+		if connect.CodeOf(err) == connect.CodeNotFound {
+			// The daemon answered: this session is gone, not merely unreachable.
+			s.mu.Lock()
+			s.liveness = v1.Liveness_LIVENESS_DEAD
+			s.mu.Unlock()
+			log.Warn("tymux: IsAlive: session not found daemon-side", logKeySessionID, sessionID, logKeyErr, err)
+			return false
+		}
 		if errors.Is(err, ErrTymuxdUnreachable) {
 			log.Warn("tymux: IsAlive: tymuxd unreachable, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		} else {

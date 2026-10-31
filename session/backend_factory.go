@@ -108,6 +108,7 @@ func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
 	if cmd := opts.launchCommand(); cmd != nil {
 		b.TymuxManager().SetCommand(cmd)
 	}
+	b.TymuxManager().SetSessionLabel(opts.SessionName)
 	return b
 }
 

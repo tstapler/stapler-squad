@@ -265,6 +265,7 @@ type fakeTymuxManagerForSetCommand struct {
 	gotLaunch          launchcmd.LaunchCommand
 	startErr           error
 	gotEnv             []string
+	gotLabel           string
 }
 
 func (f *fakeTymuxManagerForSetCommand) AppendEnv(env ...string) {
@@ -274,6 +275,10 @@ func (f *fakeTymuxManagerForSetCommand) AppendEnv(env ...string) {
 func (f *fakeTymuxManagerForSetCommand) SetCommand(command launchcmd.LaunchCommand) {
 	f.gotLaunch = command
 	f.gotCommand = shellString(command)
+}
+
+func (f *fakeTymuxManagerForSetCommand) SetSessionLabel(label string) {
+	f.gotLabel = label
 }
 
 func (f *fakeTymuxManagerForSetCommand) Start(string) error {
@@ -328,4 +333,15 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 
 	assert.Equal(t, BackendTymux, inst.Backend)
 	assert.NotEmpty(t, fake.gotCommand, "SetCommand must be called with the rebuilt launch command on an in-place tymux respawn")
+}
+
+func TestNewTymuxBackendFromOpts_AppliesSessionNameAsLabel(t *testing.T) {
+	fake := &fakeTymuxManagerForSetCommand{}
+	orig := newTymuxSessionFn
+	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
+	defer func() { newTymuxSessionFn = orig }()
+
+	newTymuxBackendFromOpts(ProcessManagerOptions{SessionName: "stapler-squad-2"})
+
+	assert.Equal(t, "stapler-squad-2", fake.gotLabel)
 }
