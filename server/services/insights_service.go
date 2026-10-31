@@ -84,6 +84,9 @@ type InsightsService struct {
 
 	// summaries caches GetInsightsSummary responses (see summaryCache).
 	summaries summaryCache
+
+	// watchMeta throttles the per-event backlog scan in watchInsights.
+	watchMeta sessionMetaCache
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -674,7 +677,9 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 				if s.associator != nil {
 					snapshot = s.associator.Snapshot()
 				}
-				sessionMeta := s.sessionMetaForSessions(ctx).meta
+				sessionMeta := s.watchMeta.get(ctx, func(ctx context.Context) map[string]SessionMeta {
+					return s.sessionMetaForSessions(ctx).meta
+				})
 				summary, _ := buildSessionSummary(result, s.pricing, s.associator, snapshot, sessionMeta)
 				evt = &sessionv1.InsightsEvent{
 					EventType: "update",
