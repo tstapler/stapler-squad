@@ -476,6 +476,7 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 	}
 
 	scanner := bufio.NewScanner(stdout)
+	spanEnded := false // set once the in-loop %exit route ends this generation's span
 
 	for scanner.Scan() {
 		select {
@@ -517,6 +518,7 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 				// future edit that decouples the two invariants can't reintroduce a
 				// nil-span panic.
 				t.endControlModeGenerationV2(span, t.classifyControlModeExit(), exit.message)
+				spanEnded = true
 			}
 		}
 	}
@@ -536,7 +538,7 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 	if !owner {
 		// A newer generation owns the shared state and the exit callback; this
 		// stale reader must not fire onExit or consume the shared onExitOnce.
-		if v2Enabled {
+		if v2Enabled && !spanEnded {
 			lifecycle.EndGeneration(span, "tmux_control_mode", lifecycle.ReasonDeliberateClose)
 		}
 		return
@@ -1357,7 +1359,9 @@ func closeDoneChLocked(doneCh chan struct{}) {
 // Ownership: the field still holds doneCh, or is nil (StopControlMode already
 // closed and cleared it and nothing replaced it). A nil doneCh with a non-nil
 // field is stale. Runs under controlModeSubMu, which also orders this drain
-// before any later generation's reader starts using the reader-only fields.
+// before a later generation's reader starts using the reader-only fields, for
+// readers that reach this EOF path only; a reader that returns early on a closed
+// doneCh, or one still looping after a %exit, has no such barrier.
 func (t *TmuxSession) teardownControlModeGeneration(doneCh chan struct{}) (owner bool) {
 	t.controlModeSubMu.Lock()
 	defer t.controlModeSubMu.Unlock()
