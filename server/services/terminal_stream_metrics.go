@@ -56,7 +56,7 @@ func registerTerminalStreamMetrics() error {
 	var err error
 	if terminalStageHist, err = meter.Float64Histogram("terminal_stream.stage_duration",
 		metric.WithUnit("ms"),
-		metric.WithDescription("StreamTerminal creation latency by stage: upgrade, handshake, hub_attach, initial_snapshot, total"),
+		metric.WithDescription("StreamTerminal creation latency by stage: upgrade, handshake, resolve, backend_ready, control_mode, hub_create, hub_attach, initial_snapshot, total"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2000, 4000, 8000, 16000)); err != nil {
 		return err
 	}
