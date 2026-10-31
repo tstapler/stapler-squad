@@ -9,12 +9,12 @@ package notimesleeptest
 
 import (
 	"go/ast"
-	"go/token"
 	"go/types"
-	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
+
+	"github.com/tstapler/stapler-squad/tools/lint/internal/nolintcomment"
 )
 
 // Analyzer is the exported analysis.Analyzer for the notimesleeptest check.
@@ -42,16 +42,15 @@ func run(pass *analysis.Pass) (interface{}, error) {
 // checkFile reports on identifiers only: pass.TypesInfo.Uses holds the Sel of
 // time.Sleep (direct, aliased, func value) and the bare Sleep of a dot-import alike.
 func checkFile(pass *analysis.Pass, f *ast.File) {
-	file := pass.Fset.File(f.Pos())
-	firstNode := firstNodePosByLine(file, f)
+	nolints := nolintcomment.NewIndex(pass.Fset, f)
 	ast.Inspect(f, func(n ast.Node) bool {
 		id, ok := n.(*ast.Ident)
 		if !ok || id.Name != "Sleep" || !isTimeSleep(pass, id) {
 			return true
 		}
-		switch nolintFor(f, file, firstNode, id.Pos()) {
-		case reasonOK:
-		case reasonMissing:
+		switch nolints.Lookup(id.Pos(), directive) {
+		case nolintcomment.OK:
+		case nolintcomment.Missing:
 			pass.Reportf(id.Pos(), "//nolint:%s requires a reason, e.g. //nolint:%s waits on real subprocess exit", directive, directive)
 		default:
 			pass.Reportf(id.Pos(), "time.Sleep in a test (ADR-003): use a fake clock, channels, or require.Eventually; move genuinely wall-clock tests to tests/realtime/ or add //nolint:%s <reason>", directive)
@@ -71,64 +70,4 @@ func isRealtimePackage(path string) bool {
 	path = strings.TrimSuffix(path, "_test")
 	return path == "tests/realtime" || strings.HasSuffix(path, "/tests/realtime") ||
 		strings.HasPrefix(path, "tests/realtime/") || strings.Contains(path, "/tests/realtime/")
-}
-
-type nolintResult int
-
-const (
-	reasonNone nolintResult = iota // no directive
-	reasonMissing
-	reasonOK
-)
-
-// firstNodePosByLine maps each line to the earliest AST node start on it, so a
-// trailing comment can be told apart from a standalone one.
-func firstNodePosByLine(file *token.File, f *ast.File) map[int]token.Pos {
-	first := map[int]token.Pos{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		if n == nil {
-			return false
-		}
-		if _, isFile := n.(*ast.File); isFile {
-			return true
-		}
-		l := file.Line(n.Pos())
-		if p, ok := first[l]; !ok || n.Pos() < p {
-			first[l] = n.Pos()
-		}
-		return true
-	})
-	return first
-}
-
-// nolintFor finds //nolint:<list> <reason> on pos's line, or on a standalone
-// comment line directly above (a trailing comment never covers the next line).
-func nolintFor(f *ast.File, file *token.File, firstNode map[int]token.Pos, pos token.Pos) nolintResult {
-	line := file.Line(pos)
-	result := reasonNone
-	for _, cg := range f.Comments {
-		for _, c := range cg.List {
-			cl := file.Line(c.Pos())
-			sameLine := cl == line
-			prevStandalone := cl == line-1 && !hasCodeBefore(firstNode, cl, c.Pos())
-			if !sameLine && !prevStandalone {
-				continue
-			}
-			text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
-			list, reason, _ := strings.Cut(strings.TrimPrefix(text, "nolint:"), " ")
-			if !strings.HasPrefix(text, "nolint:") || !slices.Contains(strings.Split(list, ","), directive) {
-				continue
-			}
-			if strings.TrimSpace(reason) != "" {
-				return reasonOK
-			}
-			result = reasonMissing
-		}
-	}
-	return result
-}
-
-func hasCodeBefore(firstNode map[int]token.Pos, line int, commentPos token.Pos) bool {
-	p, ok := firstNode[line]
-	return ok && p < commentPos
 }

@@ -176,6 +176,18 @@ func SessionDriverRunningForTest(inst *Instance) bool {
 	return inst.driverRunning.Load()
 }
 
+// StartSessionDriverForTest starts inst's driver and registers its stop+join on
+// t's cleanup in the same call, so a test cannot forget to stop it. Tests outside
+// package session must use this instead of StartSessionDriver (enforced by the
+// nosessiondrivertest analyzer). t is satisfied by testing.TB.
+func StartSessionDriverForTest(t interface{ Cleanup(func()) }, inst *Instance, allowedPath string) {
+	t.Cleanup(func() {
+		StopSessionDriver(inst)
+		JoinSessionDriver(inst)
+	})
+	StartSessionDriver(inst, allowedPath)
+}
+
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
 // for approval dialogs throughout the session lifetime.

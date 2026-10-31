@@ -110,6 +110,38 @@
           "refId": "A"
         }
       ]
+    },
+    { "type": "row", "title": "Lock contention (mutex delay)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 }, "id": 103 },
+    {
+      "id": 7,
+      "title": "Mutex delay over time (nanoseconds goroutines waited on locks)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 61 },
+      "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
+      "fieldConfig": { "defaults": { "unit": "ns" }, "overrides": [] },
+      "targets": [
+        {
+          "queryType": "metrics",
+          "profileTypeId": "mutex:delay:nanoseconds:contentions:count",
+          "labelSelector": "{service_name=\"stapler-squad\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Mutex flamegraph (where lock waits are billed)",
+      "type": "flamegraph",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 68 },
+      "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
+      "targets": [
+        {
+          "queryType": "profile",
+          "profileTypeId": "mutex:delay:nanoseconds:contentions:count",
+          "labelSelector": "{service_name=\"stapler-squad\"}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }
