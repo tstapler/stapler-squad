@@ -13,8 +13,10 @@ import (
 // entry that has no real repository behind it.
 func insertFakeRepo(g *GoGitVCSReader, key string, accessedAtNs int64) {
 	entry := &cachedRepo{accessedAtNs: accessedAtNs}
-	if _, loaded := g.repoCache.LoadOrStore(key, entry); !loaded {
-		atomic.AddInt64(&g.repoCacheSize, 1)
+	atomic.AddInt64(&g.repoCacheSize, 1)
+	if _, loaded := g.repoCache.LoadOrStore(key, entry); loaded {
+		atomic.AddInt64(&g.repoCacheSize, -1)
+	} else {
 		atomic.AddInt64(&g.repoCacheColdOpens, 1)
 	}
 }
@@ -61,7 +63,8 @@ func TestRepoCacheSize_should_matchLiveEntries_When_EvictionPassesRace(t *testin
 				} else {
 					g.ClearCache()
 				}
-				if got := atomic.LoadInt64(&g.repoCacheSize); got < -int64(workers*keys) {
+				if got := atomic.LoadInt64(&g.repoCacheSize); got < 0 {
+					t.Errorf("repoCacheSize observed negative: %d", got)
 					return
 				}
 			}
@@ -73,8 +76,29 @@ func TestRepoCacheSize_should_matchLiveEntries_When_EvictionPassesRace(t *testin
 	assertRepoCacheSizeMatchesMap(t, g)
 }
 
-// Evicting the same entry twice must account for it once.
-func TestRepoCacheSize_should_notDecrementTwice_When_SameEntryEvictedTwice(t *testing.T) {
+// A stale entry pointer must not evict (or decrement for) the fresh entry
+// that replaced it under the same key; this is the deterministic form of the
+// race the concurrent test exercises.
+func TestEvictRepoEntry_should_ignoreStaleEntry_When_KeyWasRestored(t *testing.T) {
+	g := &GoGitVCSReader{}
+	stale := &cachedRepo{}
+	g.repoCache.Store("repo", stale)
+	atomic.StoreInt64(&g.repoCacheSize, 1)
+	if !g.evictRepoEntry("repo", stale) {
+		t.Fatal("first eviction of the live entry should succeed")
+	}
+	insertFakeRepo(g, "repo", time.Now().UnixNano())
+	if g.evictRepoEntry("repo", stale) {
+		t.Fatal("stale entry must not evict its replacement")
+	}
+	assertRepoCacheSizeMatchesMap(t, g)
+	if got := atomic.LoadInt64(&g.repoCacheSize); got != 1 {
+		t.Fatalf("size=%d, want 1", got)
+	}
+}
+
+// Sanity check: repeated passes over an already-empty cache change nothing.
+func TestRepoCacheSize_should_stayConsistent_When_EvictionPassesRepeat(t *testing.T) {
 	g := &GoGitVCSReader{}
 	seedFakeCacheEntries(g, 3)
 	g.ClearCache()

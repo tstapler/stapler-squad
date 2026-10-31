@@ -1295,11 +1295,15 @@ func (g *GoGitVCSReader) openRepoEntry(path string) (*cachedRepo, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	entry := &cachedRepo{repo: repo, accessedAtNs: now}
+	// Count before publishing: a concurrent eviction can only decrement after
+	// the entry is visible, so the gauge never dips below zero. A lost race
+	// undoes the provisional increment.
+	atomic.AddInt64(&g.repoCacheSize, 1)
 	actual, loaded := g.repoCache.LoadOrStore(path, entry)
 	if !loaded {
-		atomic.AddInt64(&g.repoCacheSize, 1)
 		atomic.AddInt64(&g.repoCacheColdOpens, 1)
 	} else {
+		atomic.AddInt64(&g.repoCacheSize, -1)
 		// Another goroutine won the race to store the canonical entry for
 		// this path first. The repo we just opened here — and its
 		// WorktreeStorer's claim on the shared gogitstore Registry entry —
