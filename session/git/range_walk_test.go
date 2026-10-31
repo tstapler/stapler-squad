@@ -52,9 +52,9 @@ func (f *fakeHistory) commit(sec int, parents ...*object.Commit) *object.Commit 
 	for _, p := range parents {
 		c.ParentHashes = append(c.ParentHashes, p.Hash)
 	}
-	obj := f.st.EncodedObjectStorer.NewEncodedObject()
+	obj := f.st.NewEncodedObject()
 	require.NoError(f.t, c.Encode(obj))
-	h, err := f.st.EncodedObjectStorer.SetEncodedObject(obj)
+	h, err := f.st.SetEncodedObject(obj)
 	require.NoError(f.t, err)
 	got, err := object.GetCommit(f.st.EncodedObjectStorer, h)
 	require.NoError(f.t, err)
