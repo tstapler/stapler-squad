@@ -22,6 +22,14 @@ const ReadPoolEnv = "STAPLER_SQUAD_DB_READ_CONNS"
 
 const defaultReadPoolSize = 4
 
+// tuneEntDSN applies synchronous=NORMAL, which is safe with WAL (a power loss
+// may drop the last commits, never corrupts) and removes an fsync from every
+// commit; the modernc default is FULL. cache_size/mmap_size/temp_store showed no
+// measurable gain on this workload, so they are left at SQLite defaults.
+func tuneEntDSN(b *sqlitedsn.Builder) *sqlitedsn.Builder {
+	return b.WithSynchronousNormal()
+}
+
 func readPoolSize() int {
 	n, err := strconv.Atoi(os.Getenv(ReadPoolEnv))
 	if err != nil || n < 0 {
@@ -39,7 +47,7 @@ func isOnDiskDatabase(path string) bool {
 
 // openReadPool opens n query_only connections on the same WAL file as the writer.
 func openReadPool(path string, n int) (*sql.DB, error) {
-	dsn := sqlitedsn.New(path).
+	dsn := tuneEntDSN(sqlitedsn.New(path)).
 		WithWAL().
 		WithBusyTimeout(5000 * time.Millisecond).
 		WithQueryOnly().
