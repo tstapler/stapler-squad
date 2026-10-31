@@ -239,7 +239,7 @@
       "id": 4,
       "title": "Range cache lookups by result",
       "type": "timeseries",
-      "description": "hit, miss, and negative_hit (stage exceeded its budget recently and is not retried for 1 minute).",
+      "description": "hit, miss, and negative_hit (stage exceeded its budget or its range-walk limit recently and is not retried for 30 seconds).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -294,7 +294,7 @@
       "id": 5,
       "title": "Stage budget overruns and errors",
       "type": "timeseries",
-      "description": "Stage executions that ended budget_exceeded or error, per second.",
+      "description": "Stage executions that ended budget_exceeded, walk_limit, timeout or error, per second.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -335,7 +335,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(vcs_status_stage_duration_milliseconds_count{result=~\"budget_exceeded|timeout|error\"}[$__rate_interval])) by (stage, result)",
+          "expr": "sum(rate(vcs_status_stage_duration_milliseconds_count{result=~\"budget_exceeded|walk_limit|timeout|error\"}[$__rate_interval])) by (stage, result)",
           "legendFormat": "{{stage}} {{result}}",
           "refId": "A",
           "datasource": {

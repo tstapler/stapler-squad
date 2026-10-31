@@ -84,12 +84,12 @@ var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
 	}
 	if m.stage, err = meter.Float64Histogram("vcs.status.stage.duration",
 		metric.WithUnit("ms"),
-		metric.WithDescription("Wall time of one stage of a GetVCSStatus computation, labeled by stage (git_status, shipped_commits, diff_stat) and result (ok, error, canceled, timeout, budget_exceeded; the last only for shipped_commits/diff_stat)"),
+		metric.WithDescription("Wall time of one stage of a GetVCSStatus computation, labeled by stage (git_status, shipped_commits, diff_stat) and result (ok, error, canceled, timeout, budget_exceeded, walk_limit; the last two only for shipped_commits/diff_stat)"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000)); err != nil {
 		log.Error("services: register vcs.status.stage.duration", "error", err)
 	}
 	if m.rangeCache, err = meter.Int64Counter("vcs.status.range_cache",
-		metric.WithDescription("Shipped-commit/diff-stat cache lookups keyed by (workdir, base SHA, head SHA), by stage and result: hit, miss, negative_hit (stage recently exceeded its budget)")); err != nil {
+		metric.WithDescription("Shipped-commit/diff-stat cache lookups keyed by (workdir, base SHA, head SHA), by stage and result: hit, miss, negative_hit (stage recently exceeded its budget or range-walk limit)")); err != nil {
 		log.Error("services: register vcs.status.range_cache", "error", err)
 	}
 	return m
