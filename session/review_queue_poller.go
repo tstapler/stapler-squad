@@ -161,7 +161,7 @@ type ReviewQueuePoller struct {
 type contentCacheEntry struct {
 	cachedContent        string
 	lastSeenActivity     time.Time // last IdleDetector.lastActivity seen (controller path)
-	lastSeenPaneActivity time.Time // last #{pane_last_activity} seen (no-controller path)
+	lastSeenPaneActivity time.Time // last #{window_activity} seen (no-controller path)
 	lastPreviewTime      time.Time // fallback TTL timestamp (no-controller path)
 }
 
@@ -714,9 +714,18 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 
 // previewCacheTTL is the fallback maximum age of a cached Preview() result when
 // pane activity timestamps are unavailable (e.g. tmux not running). The primary
-// invalidation mechanism is #{pane_last_activity} from batchPaneActivity(); this
+// invalidation mechanism is #{window_activity} from batchPaneActivity(); this
 // TTL is only a safety net and is intentionally long.
 const previewCacheTTL = 30 * time.Second
+
+// paneActivitySettled reports whether an activity timestamp is safe to use for the
+// "unchanged, skip capture-pane" shortcut. #{window_activity} has one-second
+// resolution, so output arriving after a capture within the same second as the
+// recorded timestamp would be invisible to an equality check; only timestamps
+// from an earlier second than the capture are trusted.
+func paneActivitySettled(activity, captureStart time.Time) bool {
+	return !activity.IsZero() && activity.Unix() < captureStart.Unix()
+}
 
 // GetContent returns the terminal content for inst, using a cache to avoid
 // spawning a subprocess when no new output has arrived since the last poll.
@@ -724,7 +733,7 @@ const previewCacheTTL = 30 * time.Second
 // For sessions with an active ClaudeController: the idle detector's lastActivity
 // timestamp (driven by PTY reads, no subprocess) is the change signal.
 //
-// For sessions without a ClaudeController: #{pane_last_activity} from the
+// For sessions without a ClaudeController: #{window_activity} from the
 // paneActivity snapshot (one `tmux list-panes -a` call shared across all sessions)
 // is the change signal. capture-pane is only called when that timestamp advances.
 // A 30s TTL acts as a fallback when paneActivity is nil (tmux unavailable).
@@ -760,6 +769,7 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 		}
 	}
 
+	captureStart := time.Now()
 	content, err := inst.Preview()
 	if err != nil {
 		log.Debug("Preview() error", "session", inst.Title, "err", err)
@@ -791,7 +801,7 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 	var newPaneActivity time.Time
 	if !isController && paneActivity != nil {
 		tmuxName := inst.GetTmuxSessionName()
-		if t, ok := paneActivity[tmuxName]; ok && !t.IsZero() {
+		if t, ok := paneActivity[tmuxName]; ok && paneActivitySettled(t, captureStart) {
 			newPaneActivity = t
 		}
 	}
@@ -801,9 +811,7 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 		if isController && !newActivity.IsZero() {
 			e.lastSeenActivity = newActivity
 		} else {
-			if !newPaneActivity.IsZero() {
-				e.lastSeenPaneActivity = newPaneActivity
-			}
+			e.lastSeenPaneActivity = newPaneActivity // zero forces a recapture next tick
 			e.lastPreviewTime = now
 		}
 		return e, xsync.UpdateOp
