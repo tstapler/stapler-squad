@@ -119,6 +119,11 @@ func (w tlsHandshakeWriter) Write(p []byte) (int, error) {
 		if li := listenerMetrics(); li != nil {
 			li.tlsErrors.Add(context.Background(), 1, metric.WithAttributes(attribute.String("listener", w.name)))
 		}
+		log.Debug("http server", "listener", w.name, "msg", msg) // kept for diagnosis when metrics are off
+		return len(p), nil
+	}
+	if strings.Contains(msg, "panic serving") {
+		log.Error("http server handler panic", "listener", w.name, "msg", msg)
 		return len(p), nil
 	}
 	log.Warn("http server", "listener", w.name, "msg", msg)

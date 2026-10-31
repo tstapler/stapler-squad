@@ -12,8 +12,9 @@ import (
 )
 
 // TestWebSocketSurvivesServerReadTimeout pins that the http.Server ReadTimeout
-// (newServerBase sets 15s) does not close an upgraded WebSocket: gorilla clears
-// the connection deadlines on Upgrade. Uses a short timeout so it needs no 15s wait.
+// (newServerBase sets 15s) does not close an upgraded WebSocket. Both net/http's
+// Hijack and gorilla's Upgrade clear the connection deadlines, so this test cannot
+// say which one does; it uses a plain upgrader, not the app's real handler chain. Uses a short timeout so it needs no 15s wait.
 func TestWebSocketSurvivesServerReadTimeout(t *testing.T) {
 	const readTimeout = 150 * time.Millisecond
 	up := websocket.Upgrader{}
