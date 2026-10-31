@@ -140,20 +140,22 @@ correlation and timeout in the registry reader that does not exist today, so it 
 
 ## Consequences
 
-Expected, from the throwaway instance (20 sessions, 10 minutes, same method as the baseline):
+Measured on the throwaway instance with the final code (20 sessions, one 10-minute window, same method as the baseline). Spawn counts
+are comparable across runs; CPU and wall time are not, because host load differed (capture-pane wall time was 44 ms/call in the baseline
+window and 11.9 ms/call in this one), so the CPU row is shown per spawn.
 
 | | before | after |
 |---|---|---|
-| tmux spawns/min | 620.3 | 147.6 |
-| tmux CPU s/min | 5.63 | 1.53 |
-| tmux wall s/min | 27.2 | 6.4 |
-| capture-pane/min | 596.6 | 96.6 |
-| list-panes/min | 15.1 | 42.5 |
+| tmux spawns/min | 620.3 | 198.9 |
+| capture-pane/min | 596.6 | 147.5 |
+| list-panes/min | 15.1 | 42.8 |
+| tmux CPU per spawn | 9.1 ms (5.63 s/min over 620 spawns) | 5.2 ms (1.03 s/min over 199 spawns) |
 
-Of the 96.6 capture-pane/min, 38.1 come from `StartSessionDriver` (the 30 s bound) and 51.4 from `ReviewQueuePoller.checkSessions`; the poller was 30.2/min in the baseline although its code is untouched. INFERRED cause: drivers no longer warm the 1 s capture cache the poller shares, so the poller's captures stop coalescing with theirs. Not tested. The rest is the 8.5/min of other subcommands. The live
-service's session count is not known to this ADR, so its absolute saving will differ; the spawn count now scales with output
-and with 2 per session per minute instead of 30. Not measured: the pollers' tick duration (no such metric exists) and the live
-service (off limits).
+Earlier builds of the gate with narrower staleness margins measured 147.6 and 146.8 spawns/min; the 4 s margin costs about 50 more
+spawns/min because each output now triggers a few more recaptures (INFERRED from the delta; the stand-in prints every 30 s). The
+remaining capture-pane are output-triggered recaptures, the 30 s bound, and the review-queue poller's own captures. The live
+service's session count and output rate are not known to this ADR, so its absolute saving will differ. Not measured: the pollers'
+tick duration (no such metric exists) and the live service (off limits).
 
 Follow-ups: Phase 2 above; fix `batchPaneActivity`'s format variable and harden the poller's equality check; give the gate wait
 histogram a `subcommand` label by threading the subcommand into `runGatedWith`.
