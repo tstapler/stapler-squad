@@ -4,8 +4,9 @@ const _features = [
   FEATURE_CATALOG['session-create'],
 ] as const;
 import { test, expect } from '@playwright/test';
+import { baseUrl, slotTmp } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = baseUrl();
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -88,7 +89,7 @@ test.describe('new project session creation', () => {
     await page.getByRole('radio', { name: 'New Project' }).click();
 
     await page.getByRole('textbox', { name: /^Session Name/ }).fill('e2e-new-project');
-    await page.getByLabel('Parent Directory *').fill('/tmp/e2e-projects');
+    await page.getByLabel('Parent Directory *').fill(slotTmp('e2e-projects'));
     await page.getByLabel('Project Name *').fill('test-repo');
 
     // Switch to Directory mode (simpler — no branch required)
@@ -107,7 +108,7 @@ test.describe('new project session creation', () => {
 
     // sessionType 4 = SESSION_TYPE_NEW_PROJECT
     expect(body.sessionType).toBe(4);
-    expect(body.path).toBe('/tmp/e2e-projects/test-repo');
+    expect(body.path).toBe(`${slotTmp('e2e-projects')}/test-repo`);
     expect(body.oneOff).toBeFalsy();
   });
 

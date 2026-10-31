@@ -9,8 +9,9 @@
 
 import { test, expect } from "@playwright/test";
 import { SettingsPage } from "./pages/SettingsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 test.describe("alias-settings", () => {
   let settings: SettingsPage;

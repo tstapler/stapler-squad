@@ -16,9 +16,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { test, expect } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
+import { baseUrl, testDir } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
-const TEST_DIR = process.env.TEST_SERVER_TESTDIR;
+const BASE_URL = baseUrl();
+const TEST_DIR = testDir();
 
 function writePresetsFixture(presets: unknown[]) {
   if (!TEST_DIR) {

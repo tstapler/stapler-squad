@@ -13,8 +13,9 @@ import {
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from './pages/BacklogMutations';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('Item budget warning (design/ux.md Surface D2)', () => {
   test.beforeAll(async ({ request }) => {

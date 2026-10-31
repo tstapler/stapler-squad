@@ -1,0 +1,10 @@
+name: 'Runner utilization: start sampler'
+description: >
+  Starts a background CPU/memory/PSI sampler (tools/ci/runner-utilization.py, stdlib python, ~0.1 s).
+  Put it first in a heavy job and pair it with ./.github/actions/runner-utilization/report
+  (`if: always()`) as the last step. Never fails the job. Aggregate with tools/ci/utilization-report.py.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python3 -I "$GITHUB_WORKSPACE/tools/ci/runner-utilization.py" start "$RUNNER_TEMP/runner-util" || true

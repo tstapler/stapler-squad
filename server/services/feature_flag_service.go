@@ -380,6 +380,11 @@ var knownFeatureFlags = []struct {
 		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
 	},
 	{
+		name:         config.EscapeEventsDBMigrateFeatureFlag,
+		defaultValue: config.EscapeEventsDBMigrateDefault,
+		description:  "Copy existing escape_events rows from analytics.db into the dedicated db/escape_events.db in small background batches after startup (resumable; the old table is left in place). Turn off to skip the copy: the new database then starts empty. Read once at startup. Default: on.",
+	},
+	{
 		name:         config.HiddenSessionGateFeatureFlag,
 		defaultValue: config.HiddenSessionGateDefault,
 		description:  "Hidden-session delivery gate: a hidden session (review, diagnose) notifies only for failures and needs-human events; routine completions are dropped on every channel. Turning it off (globally or per kind) is the rollback: hidden sessions then deliver everything and the gate only counts what it would have suppressed (see the status line). Can be enabled only while the stats writer runs, so the evidence is recorded. Can be overridden per hidden-session kind (review, diagnose, other). Default: on.",
