@@ -1,10 +1,11 @@
 package session
 
 import (
-	"github.com/stretchr/testify/assert"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // slowPanePM models the tmux exec behind GetPanePID: it blocks for delay
@@ -23,10 +24,13 @@ func (p slowPanePM) GetPanePID() (int32, error) {
 }
 
 // BenchmarkHistoryLinker_CorrelateParallel measures concurrent correlation of
-// distinct linked sessions with a 200us pane-PID lookup, the shape of the
-// fsnotify ScanAll plus poll loop contention seen in the live mutex profile.
-// With a global correlate lock ns/op is ~the lookup latency regardless of
-// GOMAXPROCS; without it ns/op falls as cores are added.
+// distinct linked sessions with a synthetic 200us pane-PID lookup (a timer
+// wait, not a real tmux exec, so it parks the goroutine rather than a thread
+// and ns/op scales with the RunParallel goroutine count). It isolates the
+// effect of a global lock held across that wait, the shape seen in the live
+// mutex profile; it does not exercise the claim commit. With a global lock
+// ns/op stays ~the lookup latency at any -cpu; without it ns/op falls as -cpu
+// grows. Run with -cpu 1,4,8.
 func BenchmarkHistoryLinker_CorrelateParallel(b *testing.B) {
 	const n = 64
 	var calls atomic.Int64

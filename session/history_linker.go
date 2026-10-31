@@ -334,12 +334,16 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	}
 
 	info, viaPath := hl.detectLink(inst, alreadyLinked)
+	if info != nil {
+		info = hl.commitLink(inst, info, viaPath, alreadyLinked)
+	}
 
 	if info == nil {
 		// Only record a miss for sessions not yet linked: the backoff mechanism
 		// is an optimisation for sessions that never got a UUID. For already-linked
 		// sessions where detection temporarily fails, we keep the stored UUID.
-		if !alreadyLinked {
+		// A candidate lost at commit (claimed by a sibling meanwhile) counts as a miss.
+		if !alreadyLinked && !inst.HasClaudeSession() {
 			log.Debug("HistoryLinker: no JSONL found", "session", inst.Title, "path", inst.Path)
 			hl.recordMiss(inst.Title, now)
 		}
@@ -352,24 +356,6 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 		delete(hl.backoffs, inst.Title)
 		hl.mu.Unlock()
 	}
-
-	// SetHistoryInfo is idempotent: if UUID and path already match it returns early.
-	// Log only when we are actually updating a linked session's UUID (e.g., after /clear) —
-	// correlateSession runs on every poll/force-rescan, so an unconditional log here would
-	// re-announce the same unchanged link on every tick for every already-linked session.
-	if alreadyLinked {
-		cs := inst.GetClaudeSession()
-		if cs != nil && cs.ConversationUUID != info.ConversationUUID {
-			log.Info("HistoryLinker: updating session UUID after conversation change",
-				"session", inst.Title, "old_uuid", cs.ConversationUUID, "new_uuid", info.ConversationUUID)
-			log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
-		}
-	} else {
-		log.Info("HistoryLinker: linked session to conversation UUID",
-			"session", inst.Title, "conv_uuid", info.ConversationUUID)
-		log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
-	}
-	hl.commitLink(inst, info, viaPath, alreadyLinked)
 }
 
 // detectLink runs the slow detection (tmux pane PID, open files, directory
@@ -411,26 +397,51 @@ func (hl *HistoryLinker) detectLink(inst *Instance, alreadyLinked bool) (info *H
 	return info, viaPath
 }
 
-// commitLink publishes info to inst under claimMu. A path-derived choice was
-// made against a claimed-set read taken before the lock, so it is re-checked
-// here: if a sibling claimed that conversation in the meantime, the selection is
-// redone under the lock (rare; costs one directory scan). Pane-PID results are
-// authoritative and committed as-is, as before.
-func (hl *HistoryLinker) commitLink(inst *Instance, info *HistoryFileInfo, viaPath, alreadyLinked bool) {
+// commitLink publishes info to inst under claimMu and returns what was
+// committed, or nil if nothing was. A path-derived choice was made against a
+// claimed-set read taken before the lock, so it is re-checked here: if a
+// sibling claimed that conversation in the meantime, the selection is redone
+// under the lock (rare; costs one directory scan). Pane-PID results are
+// authoritative and committed as-is, as before. A never-linked session that a
+// concurrent correlation linked while this one was detecting is left alone,
+// so a stale result cannot overwrite the newer link.
+func (hl *HistoryLinker) commitLink(inst *Instance, info *HistoryFileInfo, viaPath, alreadyLinked bool) *HistoryFileInfo {
 	hl.claimMu.Lock()
 	defer hl.claimMu.Unlock()
+	if !alreadyLinked && inst.HasClaudeSession() {
+		return nil
+	}
 	if viaPath && hl.claimedByOther(inst, info.ConversationUUID) {
-		effectivePath := inst.GetEffectiveRootDir()
-		redo, err := hl.detectUnclaimedByPath(inst, effectivePath, !alreadyLinked)
+		redo, err := hl.detectUnclaimedByPath(inst, inst.GetEffectiveRootDir(), !alreadyLinked)
 		if err != nil {
 			log.Warn("HistoryLinker: path-based re-detect error", "session", inst.Title, "err", err)
 		}
 		if redo == nil {
-			return
+			return nil
 		}
 		info = redo
 	}
+	logLinkChange(inst, info, alreadyLinked)
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
+	return info
+}
+
+// logLinkChange logs only when a link is new or its UUID changes (e.g. after
+// /clear): correlateSession runs on every poll/force-rescan, so an unconditional
+// log would re-announce the same unchanged link on every tick.
+func logLinkChange(inst *Instance, info *HistoryFileInfo, alreadyLinked bool) {
+	if alreadyLinked {
+		cs := inst.GetClaudeSession()
+		if cs != nil && cs.ConversationUUID != info.ConversationUUID {
+			log.Info("HistoryLinker: updating session UUID after conversation change",
+				"session", inst.Title, "old_uuid", cs.ConversationUUID, "new_uuid", info.ConversationUUID)
+			log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
+		}
+		return
+	}
+	log.Info("HistoryLinker: linked session to conversation UUID",
+		"session", inst.Title, "conv_uuid", info.ConversationUUID)
+	log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 }
 
 // claimedByOther reports whether a monitored instance other than inst is linked

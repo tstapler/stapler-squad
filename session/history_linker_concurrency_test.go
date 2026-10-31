@@ -1,6 +1,7 @@
 package session
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,12 +16,13 @@ const concurrencyTestGuard = 10 * time.Second // failure guard only; never reach
 // blockingPanePM blocks GetPanePID until release is closed, signalling entered.
 type blockingPanePM struct {
 	ProcessManager
+	enter   *sync.Once
 	entered chan struct{}
 	release chan struct{}
 }
 
 func (p blockingPanePM) GetPanePID() (int32, error) {
-	close(p.entered)
+	p.enter.Do(func() { close(p.entered) })
 	<-p.release
 	return 0, assert.AnError
 }
@@ -33,7 +35,10 @@ func TestHistoryLinker_Correlate_should_NotBlockOtherSessions_When_OneDetectionI
 	f.write(t, claimOther, "{}", time.Second)
 
 	slow := &Instance{Title: "slow", Path: t.TempDir(), Status: Running}
-	pm := blockingPanePM{entered: make(chan struct{}), release: make(chan struct{})}
+	pm := blockingPanePM{enter: new(sync.Once), entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
+	t.Cleanup(releasePane) // unblock slow even if an assertion fails first
 	slow.processManager = pm
 	fast := &Instance{Title: "fast", Path: "/repo/slowio", Status: Running}
 	fast.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
@@ -52,7 +57,7 @@ func TestHistoryLinker_Correlate_should_NotBlockOtherSessions_When_OneDetectionI
 	}
 	assert.Equal(t, claimOther, fast.GetClaudeSession().ConversationUUID)
 
-	close(pm.release)
+	releasePane()
 	<-slowDone
 }
 
@@ -106,8 +111,9 @@ func TestHistoryLinker_Commit_should_NotDoubleLink_When_SiblingClaimsBetweenDete
 	require.True(t, viaPath)
 	b.SetHistoryInfo(claimOther, path) // sibling wins the race
 
-	f.linker.commitLink(a, info, viaPath, false)
+	committed := f.linker.commitLink(a, info, viaPath, false)
 
+	assert.Nil(t, committed)
 	assert.False(t, a.HasClaudeSession(), "a must not take a conversation b already owns")
 	assert.Equal(t, claimOther, b.GetClaudeSession().ConversationUUID)
 }
@@ -128,16 +134,81 @@ func TestHistoryLinker_Commit_should_Reselect_When_ChosenConversationWasClaimed(
 	require.Equal(t, claimOther, info.ConversationUUID)
 	b.SetHistoryInfo(claimOther, newest)
 
-	f.linker.commitLink(a, info, viaPath, false)
+	committed := f.linker.commitLink(a, info, viaPath, false)
 
+	require.NotNil(t, committed)
+	assert.Equal(t, claimOwnStart, committed.ConversationUUID)
 	assert.Equal(t, claimOwnStart, a.GetClaudeSession().ConversationUUID)
 }
 
-func TestScanCoalescer_should_RunOnceMoreThanInFlight_When_ManyCallersArriveDuringRun(t *testing.T) {
+// A session linked by a concurrent correlation while this one was still
+// detecting must keep the newer link rather than be overwritten by the stale result.
+func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t *testing.T) {
+	t.Parallel()
+	f := newClaimFixture(t, "/repo/stale")
+	f.write(t, claimOwnStart, "{}", 5*time.Second)
+	a := &Instance{Title: "a", Path: "/repo/stale", Status: Running}
+	f.linker.SetInstances([]*Instance{a})
+
+	stale := &HistoryFileInfo{ConversationUUID: claimOwnStart}
+	a.SetHistoryInfo(claimOther, "/p/"+claimOther+".jsonl") // newer link landed first
+
+	assert.Nil(t, f.linker.commitLink(a, stale, false, false))
+	assert.Equal(t, claimOther, a.GetClaudeSession().ConversationUUID)
+}
+
+// A session that ends up unlinked because a sibling owns the only candidate
+// must count as a miss, so exponential backoff and parking still apply. The
+// outcome is the same whether the sibling's claim lands before detection or
+// between detection and commit (the gate is held to widen the second window).
+func TestHistoryLinker_Correlate_should_RecordMiss_When_SiblingOwnsOnlyCandidate(t *testing.T) {
+	t.Parallel()
+	f := newClaimFixture(t, "/repo/miss")
+	path := f.write(t, claimOther, "{}", time.Second)
+	a := &Instance{Title: "a", Path: "/repo/miss", Status: Running}
+	a.processManager = panePIDCountingPM{calls: new(atomic.Int64)}
+	sibling := &Instance{Title: "b", Path: "/repo/miss", Status: Running}
+	f.linker.SetInstances([]*Instance{a, sibling})
+
+	f.linker.claimMu.Lock()
+	done := make(chan struct{})
+	go func() { defer close(done); f.linker.correlateSession(a, false) }()
+	sibling.SetHistoryInfo(claimOther, path)
+	f.linker.claimMu.Unlock()
+	<-done
+
+	assert.False(t, a.HasClaudeSession())
+	f.linker.mu.RLock()
+	bo := f.linker.backoffs["a"]
+	f.linker.mu.RUnlock()
+	require.NotNil(t, bo, "no miss recorded for the unlinked session")
+	assert.Equal(t, 1, bo.consecutiveMisses)
+}
+
+// awaitJoined blocks until n callers are queued on the coalescer. Spinning with
+// Gosched is a scheduler yield, not a timed sleep.
+func awaitJoined(t *testing.T, c *scanCoalescer, n int) {
+	t.Helper()
+	deadline := time.Now().Add(concurrencyTestGuard)
+	for {
+		c.mu.Lock()
+		got := len(c.joined)
+		c.mu.Unlock()
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d callers joined", got, n)
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestScanCoalescer_should_RunExactlyTwice_When_ManyCallersJoinDuringOneRun(t *testing.T) {
 	t.Parallel()
 	var c scanCoalescer
 	var runs atomic.Int64
-	entered := make(chan struct{}, 8)
+	entered := make(chan struct{}, 4)
 	release := make(chan struct{})
 	run := func() {
 		runs.Add(1)
@@ -151,30 +222,46 @@ func TestScanCoalescer_should_RunOnceMoreThanInFlight_When_ManyCallersArriveDuri
 	<-entered // first run in flight
 
 	const waiters = 20
-	var joined sync.WaitGroup
 	for i := 0; i < waiters; i++ {
 		wg.Add(1)
-		joined.Add(1)
-		go func() { joined.Done(); defer wg.Done(); c.do(run) }()
+		go func() { defer wg.Done(); c.do(run) }()
 	}
-	joined.Wait()
-	// Waiters have started but may not have enqueued yet; release runs until all finish.
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	for {
-		select {
-		case release <- struct{}{}:
-		case <-done:
-			// Each waiter either joined the single trailing run or, if it arrived
-			// after that run finished, started its own; never one run per waiter
-			// while runs are in flight is the property under test.
-			assert.GreaterOrEqual(t, runs.Load(), int64(2))
-			assert.Less(t, runs.Load(), int64(waiters+1))
-			return
-		case <-time.After(concurrencyTestGuard):
-			t.Fatal("coalescer did not finish")
-		}
+	awaitJoined(t, &c, waiters)
+
+	release <- struct{}{} // finish run 1
+	<-entered             // the single trailing run starts
+	close(release)        // finish it (and unblock any further run)
+	wg.Wait()
+
+	assert.Equal(t, int64(2), runs.Load(), "%d joiners must share one trailing run", waiters)
+}
+
+func TestHistoryLinker_ScanAll_should_CoalesceConcurrentCalls(t *testing.T) {
+	t.Parallel()
+	f := newClaimFixture(t, "/repo/coalesce")
+	inst := &Instance{Title: "slow", Path: t.TempDir(), Status: Running}
+	pm := blockingPanePM{enter: new(sync.Once), entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
+	t.Cleanup(releasePane)
+	inst.processManager = pm
+	f.linker.SetInstances([]*Instance{inst})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); f.linker.ScanAll() }()
+	<-pm.entered // first scan blocked inside GetPanePID
+
+	const callers = 10
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); f.linker.ScanAll() }()
 	}
+	awaitJoined(t, &f.linker.scanFlight, callers)
+	releasePane()
+	wg.Wait()
+	// All joiners were released by one trailing scan; reaching here without
+	// callers+1 serialized blocked scans (pane stays released) is the property.
 }
 
 func TestScanCoalescer_should_ReleaseWaiters_When_RunPanics(t *testing.T) {
@@ -189,8 +276,11 @@ func TestScanCoalescer_should_ReleaseWaiters_When_RunPanics(t *testing.T) {
 	}()
 	<-entered
 	waiterDone := make(chan struct{})
-	go func() { defer close(waiterDone); c.do(func() {}) }()
-	// Let the waiter enqueue: it can only return once the panic releases it.
+	go func() {
+		defer close(waiterDone)
+		c.do(func() { t.Error("waiter must be released by the panic, not run") })
+	}()
+	awaitJoined(t, &c, 1) // waiter is queued behind the doomed run
 	close(release)
 	<-panicked
 	select {
