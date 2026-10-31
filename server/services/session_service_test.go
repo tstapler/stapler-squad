@@ -697,7 +697,7 @@ func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *test
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
 	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
 
-	session.StartSessionDriver(inst, t.TempDir())
+	session.StartSessionDriverForTest(t, inst, t.TempDir())
 
 	err := cleanupPartialCreation(inst, false)
 	require.NoError(t, err)
