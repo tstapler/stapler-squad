@@ -74,10 +74,13 @@ func (v *View[K, V]) Subscribe(ctx context.Context, keys []K) (<-chan Update[K, 
 		e.subs[s] = struct{}{}
 		s.keys = append(s.keys, k)
 		if e.has {
-			s.put(Update[K, V]{Key: k, Versioned: e.cur})
+			s.put(Update[K, V]{Key: k, Versioned: e.served()})
 		}
-		if !e.has || e.dirty || e.cancelled {
-			v.requestLocked(e, false)
+		// A newly watched entry that aged unwatched has no event history behind
+		// it, so refresh it once rather than trusting its age.
+		aged := e.pins == 1 && e.has && v.cfg.Clock.Now().Sub(e.cur.ComputedAt) > v.cfg.FreshTTL
+		if !e.has || e.dirty || e.cancelled || aged {
+			v.requestLocked(e)
 		}
 	}
 	v.streams++

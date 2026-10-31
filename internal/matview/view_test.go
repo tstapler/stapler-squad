@@ -991,3 +991,56 @@ func TestStatsCountsStreamsAndSubscriptionsSeparately(t *testing.T) {
 	assert.Equal(t, 2, st.Subscribers)
 	assert.Equal(t, 4, st.Subscriptions)
 }
+
+func TestAbandonedGetDequeuesItsQueuedCompute(t *testing.T) {
+	t.Parallel()
+	lim := &toggleLimiter{}
+	v, clk, fc := newTestView(t, func(c *Config[string, string]) { c.Limiter = lim })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := v.Get(ctx, "a", GetOpts{}); done <- err }()
+	spinUntil(t, func() bool { return len(v.waitersFor("a")) == 1 })
+	cancel()
+	recv(t, done)
+	lim.allow()
+	clk.Advance(time.Second)
+	assert.True(t, idle(v))
+	assert.Zero(t, fc.calls.Load(), "no compute runs for a caller that left")
+}
+
+func TestAbandonedWaitFreshDoesNotCauseRecompute(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	v, clk, fc := newTestView(t, nil)
+	fc.gate = gate
+	first := getAsync(v, "a", GetOpts{})
+	recv(t, fc.started)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := v.Get(ctx, "a", GetOpts{WaitFresh: true}); done <- err }()
+	spinUntil(t, func() bool { return len(v.waitersFor("a")) == 2 })
+	cancel()
+	recv(t, done)
+	gate <- struct{}{}
+	require.NoError(t, recv(t, first).err)
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 1 })
+	clk.Advance(5 * time.Second)
+	assert.True(t, idle(v))
+	assert.EqualValues(t, 1, fc.calls.Load())
+}
+
+func TestSubscribeRefreshesEntryThatAgedUnwatched(t *testing.T) {
+	t.Parallel()
+	v, clk, fc := newTestView(t, nil)
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	clk.Advance(10 * time.Minute)
+	fc.set("a", "new")
+	ch := pin(t, v, "a")
+	for range 3 {
+		if recv(t, ch).Value == "new" {
+			return
+		}
+	}
+	t.Fatal("pinning must not trust an entry that aged without event coverage")
+}

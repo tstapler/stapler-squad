@@ -284,7 +284,7 @@ func (v *View[K, V]) Get(ctx context.Context, k K, opt GetOpts) (Versioned[V], e
 		w.since = v.seq
 	}
 	e.waiters = append(e.waiters, w)
-	v.requestLocked(e, opt.WaitFresh)
+	v.requestLocked(e)
 	v.mu.Unlock()
 
 	deadline := opt.Deadline
@@ -323,11 +323,13 @@ func (v *View[K, V]) abandon(e *entry[K, V], w *waiter[V], cause error) (Version
 			break
 		}
 	}
-	if len(e.waiters) == 0 && e.firstDirty.IsZero() {
-		e.rerun = false // it was only set on this waiter's behalf
-	}
 	if len(e.waiters) == 0 && e.pins == 0 {
 		v.cancelRunLocked(e) // nobody wants this result any more (#1264)
+		if e.queued {
+			delete(v.queued, e)
+			e.queued = false
+			e.dirty = true // the work was dropped; the next read refreshes
+		}
 	}
 	if e.has && errors.Is(cause, ErrTimeout) {
 		cur := e.cur
@@ -367,21 +369,22 @@ func (v *View[K, V]) serveLocked(e *entry[K, V], now time.Time) (Versioned[V], b
 		return e.served(), true
 	case age <= v.cfg.StaleTTL:
 		if !now.Before(e.retryAfter) { // a failing refresh backs off instead of re-running per read
-			v.requestLocked(e, false)
+			v.requestLocked(e)
 		}
 		return e.served(), true
 	}
 	return Versioned[V]{}, false
 }
 
-// requestLocked starts a compute a waiter can trust: one that begins after the
-// waiter registered.
-func (v *View[K, V]) requestLocked(e *entry[K, V], needsNewer bool) {
+// requestLocked starts a compute for a new interest (waiter, pin or stale read).
+func (v *View[K, V]) requestLocked(e *entry[K, V]) {
 	if e.running {
 		// A running compute serves a new reader unless it may predate what the
 		// reader needs: it is being cancelled, an event landed on it while nobody
 		// was interested (dirty), or the caller wants a strictly newer result.
-		if needsNewer || e.cancelled || e.dirty {
+		// A waiter arriving here is served by the follow-up compute that
+		// finishLocked queues while waiters remain, so only an event needs rerun.
+		if e.dirty {
 			e.rerun = true
 			e.dirty = false
 			if e.firstDirty.IsZero() {
@@ -607,7 +610,7 @@ func (v *View[K, V]) finishLocked(e *entry[K, V], startSeq uint64, val V, etag s
 // otherwise the entry is marked dirty so the next read refreshes it.
 func (v *View[K, V]) finishCancelledLocked(e *entry[K, V]) {
 	e.cancelled = false
-	wanted := len(e.waiters) > 0 || e.pins > 0 || e.rerun
+	wanted := len(e.waiters) > 0 || e.pins > 0
 	e.rerun, e.rerunNow = false, false
 	if wanted {
 		v.enqueueLocked(e)
@@ -710,6 +713,10 @@ func (v *View[K, V]) SetDegraded(k K, degraded bool) {
 	defer v.mu.Unlock()
 	if e, ok := v.entries[k]; ok {
 		e.degraded = degraded
+		if !degraded && e.has && e.pins > 0 {
+			v.requestLocked(e) // events may have been missed while degraded
+			v.pumpLocked()
+		}
 	}
 }
 
