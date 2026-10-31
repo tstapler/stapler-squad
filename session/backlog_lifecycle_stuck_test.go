@@ -2783,11 +2783,18 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 	archiver := &fakeSessionArchiver{}
 	listener.SetSessionArchiver(archiver)
 
-	listener.reconcileTerminalItemSessions(ctx)
-	listener.reconcileTerminalItemSessions(ctx)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	listener.sweepClock = func() time.Time { return clock }
 
+	listener.reconcileTerminalItemSessions(ctx)
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"swept-twice-work-session"}, archiver.archivedUUIDs,
+		"a fully-processed terminal item is skipped inside the settle TTL")
+
+	clock = clock.Add(terminalSweepSettleTTL)
+	listener.reconcileTerminalItemSessions(ctx)
 	assert.Equal(t, []string{"swept-twice-work-session", "swept-twice-work-session"}, archiver.archivedUUIDs,
-		"the sweep itself calls ArchiveSessionByUUID once per tick per session — idempotency is the archiver's responsibility (CAS), proven separately for SessionService.ArchiveSessionByUUID")
+		"the safety net still re-verifies once the TTL elapses (idempotency is the archiver's CAS)")
 }
 
 // --- cleanup_terminal_worktrees: safety-net sweep for backlog item worktrees that
@@ -2885,37 +2892,6 @@ func TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired(t *test
 	assert.NotPanics(t, func() {
 		listener.reconcileTerminalItemWorktrees(ctx)
 	})
-}
-
-// TestReconcileTerminalItemWorktrees_should_BeIdempotent_When_RunTwice proves the sweep
-// is safe to re-run every tick: a second run over an already-cleaned item must not error
-// or panic. The real WorktreeCleaner implementation (BacklogService.CleanupTerminalItem)
-// is itself safe to re-run — its git.Cleanup() call no-ops (logs at Info, not
-// Warn/Error) when the worktree directory is already gone, verified directly against
-// session/git/native/worktree_remove.go's RemoveWorktree — so this test only proves the
-// sweep's own iteration doesn't choke on repeated runs, mirroring
-// TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice above.
-func TestReconcileTerminalItemWorktrees_should_BeIdempotent_When_RunTwice(t *testing.T) {
-	t.Parallel()
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "done item swept twice",
-		Status: string(BacklogStatusDone),
-	})
-	require.NoError(t, err)
-
-	listener := NewBacklogLifecycleListener(storage)
-	cleaner := &fakeWorktreeCleaner{}
-	listener.SetWorktreeCleaner(cleaner)
-
-	listener.reconcileTerminalItemWorktrees(ctx)
-	listener.reconcileTerminalItemWorktrees(ctx)
-
-	assert.Equal(t, []string{item.ID, item.ID}, cleaner.calls(),
-		"the sweep itself calls CleanupTerminalItem once per tick per item — idempotency is the cleaner's responsibility, proven separately for BacklogService.CleanupTerminalItem")
 }
 
 // TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees proves the
@@ -6250,4 +6226,81 @@ func TestTriageEndReasonWithDetail(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReconcileTerminalItemSessions_should_RetryNextTick_When_ArchiveFailed(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "archive fails once", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "flaky-session", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{errForUUID: map[string]error{"flaky-session": errors.New("boom")}}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Empty(t, archiver.archivedUUIDs)
+
+	archiver.errForUUID = nil
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Equal(t, []string{"flaky-session"}, archiver.archivedUUIDs, "a failed item must not be settled")
+}
+
+func TestReconcileTerminalItemSessions_should_ReprocessItem_When_ItemChangedInsideTTL(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "reopened and re-terminated", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "round-1", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	listener.reconcileTerminalItemSessions(ctx)
+	require.Equal(t, []string{"round-1"}, archiver.archivedUUIDs)
+
+	title := "retitled"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "round-2", SessionRole: SessionRoleWork})
+	require.NoError(t, err)
+
+	listener.reconcileTerminalItemSessions(ctx)
+	assert.Contains(t, archiver.archivedUUIDs, "round-2", "an updated item (new updated_at) bypasses the settled cache")
+}
+
+func TestReconcileTerminalItemWorktrees_should_SkipSettledItem_UntilTTLElapses(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "done, worktree swept", Status: string(BacklogStatusDone)})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	listener.sweepClock = func() time.Time { return clock }
+
+	listener.reconcileTerminalItemWorktrees(ctx)
+	listener.reconcileTerminalItemWorktrees(ctx)
+	assert.Equal(t, []string{item.ID}, cleaner.calls())
+
+	clock = clock.Add(terminalSweepSettleTTL)
+	listener.reconcileTerminalItemWorktrees(ctx)
+	assert.Equal(t, []string{item.ID, item.ID}, cleaner.calls())
 }

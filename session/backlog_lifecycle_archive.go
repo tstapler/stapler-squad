@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -124,24 +125,35 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 		return
 	}
 	processed := 0
+	now := l.sweepNow()
 	for _, item := range items {
+		settleKey := terminalSweepKey("sessions", item)
+		if l.terminalSettled.isSettled(settleKey, now) {
+			continue
+		}
 		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
 		if sessErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
+		clean := true
 		for _, is := range sessions {
 			if is.SessionUUID == "" || !IsTmuxBackedSessionRole(is.Role) {
 				continue
 			}
 			if archErr := archiver.ArchiveSessionByUUID(ctx, is.SessionUUID); archErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to archive session=%s item=%s: %v", is.SessionUUID, item.ID, archErr)
+				clean = false
 				continue
 			}
 			if killErr := archiver.KillTmuxPaneOnly(ctx, is.SessionUUID); killErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to kill tmux pane session=%s item=%s: %v", is.SessionUUID, item.ID, killErr)
+				clean = false
 			}
 			processed++
+		}
+		if clean {
+			l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
 		}
 	}
 	if processed > 0 {
@@ -183,10 +195,31 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees ListBacklogItems error: %v", err)
 		return
 	}
+	now := l.sweepNow()
 	for _, item := range items {
+		settleKey := terminalSweepKey("worktrees", item)
+		if l.terminalSettled.isSettled(settleKey, now) {
+			continue
+		}
 		l.cleanupTerminalItemSync(ctx, item.ID)
+		// WorktreeCleaner is best-effort and reports nothing, so a failed cleanup is
+		// retried after the TTL rather than on the next tick.
+		l.terminalSettled.settle(settleKey, now, terminalSweepSettleTTL)
 	}
 	if len(items) > 0 {
 		log.InfoLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees: re-swept worktree cleanup for %d terminal item(s)", len(items))
 	}
+}
+
+// sweepNow returns the sweep clock (overridable so tests can step the TTL).
+func (l *BacklogLifecycleListener) sweepNow() time.Time {
+	if l.sweepClock != nil {
+		return l.sweepClock()
+	}
+	return time.Now()
+}
+
+// terminalSweepKey scopes a settled entry to one sweep and one version of the item.
+func terminalSweepKey(sweep string, item BacklogItemData) string {
+	return sweep + "/" + item.ID + "@" + strconv.FormatInt(item.UpdatedAt.UnixNano(), 10)
 }
