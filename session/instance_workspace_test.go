@@ -298,8 +298,8 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	// call returns in well under a second (VCS detection dominates).
 	select {
 	case <-done:
-		// Result/error are not asserted: a stray .git above the temp dir would
-		// route through real VCS detection and legitimately fail the switch.
+		// Result/error are not asserted: they depend on VCS detection of the temp
+		// dir. Kill/restart happen exactly once on either path (checked below).
 	case <-time.After(10 * time.Second):
 		t.Fatal("SwitchWorkspace did not return within 10s - actor deadlock in switchWorkspaceLocked (see instance_workspace.go)")
 	}
