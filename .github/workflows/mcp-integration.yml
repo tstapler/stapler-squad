@@ -22,6 +22,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/mcp-integration.yml'
+      - '.github/scripts/mcp-suite.sh'
 
 # Cancel a superseded PR run's in-flight jobs; main-branch runs are never cancelled.
 concurrency:
@@ -56,7 +57,7 @@ jobs:
       # without), and server/services has 308 createTestStorage(t) call sites (BUG-083/BUG-099).
       # build.yml's test-affected/test-rest already run server/services under -race.
       #
-      # Each suite has a 25m soft budget under the job's 40m hard ceiling, so a breach fails with a
+      # Each suite has a 25m soft budget under the job's 60m hard ceiling, so a breach fails with a
       # diagnosable marker. Both suites always run so one failure does not hide the other.
       - name: Run MCP integration tests (mcp, -race)
         id: suite-mcp

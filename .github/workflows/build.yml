@@ -36,8 +36,8 @@ on:
   pull_request:
     branches: [ main ]
     # Docs/planning-only PRs trigger nothing here (a skipped job still shows as a check; the old
-    # shape was ~25 skipped checks per docs PR). docs/registry/** JSON is deliberately not ignored:
-    # test-affected regenerates and diffs it.
+    # shape was ~25 skipped checks per docs PR). docs/registry/** JSON is not ignored, but
+    # detect-changes does not list it either, so a registry-only PR already skipped test-affected.
     paths-ignore:
       - 'docs/**/*.md'
       - 'docs/*.md'
@@ -221,7 +221,7 @@ jobs:
       # Single -f: leaves the submodule checkouts alone.
       - name: Reset to a clean tree for the Bun smoke
         if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
-        run: git clean -fdx
+        run: git clean -fdx -e web-app/.next/cache
 
       # Retried once: wall time is a budget (maxWallMs) and a loaded runner can miss it.
       - name: make web-build (WEB_BUILD=bun, unminified cutover default)
@@ -1079,31 +1079,31 @@ jobs:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
       - name: Build pinned tmux 3.8
-        id: ready
+        id: tmux
         uses: ./.github/actions/build-tmux
 
       - name: Run sinkguard-tagged guard tests
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         run: make test-delivery-guards-run
 
       - name: Run gitoracle-tagged tests
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         run: make test-oracle
 
       - name: Build binary (native)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         run: go build -o stapler-squad .
 
       - name: Verify binary runs
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() }}
         run: ./stapler-squad version
 
       - name: Install go-stress
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.tmux.conclusion == 'success' }}
         run: go install golang.org/x/tools/cmd/stress@v0.47.0
 
       - name: Compile PTY-triple regression test binaries
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.tmux.conclusion == 'success' }}
         run: |
           go test -race -c -o server.test ./server
           go test -race -c -o tmux.test ./session/tmux
@@ -1112,7 +1112,7 @@ jobs:
       # real tmux servers). `timeout` exit 124 means "ran clean for the whole 90s budget" and is a
       # pass; any other nonzero exit is a real failure from stress.
       - name: PTY-triple race regression (parallel amplification via go-stress)
-        if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
+        if: ${{ !cancelled() && steps.tmux.conclusion == 'success' }}
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |

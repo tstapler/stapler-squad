@@ -77,6 +77,7 @@ jobs:
       # fresh before every consuming CI step; force-adding it (git add -f) has shipped stale
       # bindings before (PR #445). Excludes removed files so deleting a stray one is allowed.
       - name: Check PR diff for committed generated protobuf files
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
