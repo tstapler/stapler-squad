@@ -212,3 +212,48 @@ func TestScanFile_NewOwnerRescansFileFromTheTop(t *testing.T) {
 		t.Fatalf("new owner missed artifacts from before it owned the file: %v", got)
 	}
 }
+
+func (m *memStates) Delete(_ context.Context, paths []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range paths {
+		delete(m.recs, p)
+	}
+	return nil
+}
+
+func TestWalk_PrunesStateOfDeletedTranscriptsOnlyAfterCleanWalk(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	keep, gone := filepath.Join(dir, "keep.jsonl"), filepath.Join(dir, "gone.jsonl")
+	appendLines(t, keep, "x")
+	appendLines(t, gone, "x")
+	states := &memStates{recs: map[string]scanstate.Record{}}
+	first := newHarness(states)
+	first.ae.scanFile(keep)
+	first.ae.scanFile(gone)
+	if err := first.ae.FlushState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newHarness(states)
+	second.ae.restoreState(context.Background())
+	second.ae.walkAndEnqueue(context.Background(), dir)
+	if _, ok := states.recs[gone]; ok {
+		t.Fatal("state of a deleted transcript was not pruned")
+	}
+	if _, ok := states.recs[keep]; !ok {
+		t.Fatal("state of a live transcript was pruned")
+	}
+
+	missing := filepath.Join(dir, "no-such-dir")
+	third := newHarness(states)
+	third.ae.restoreState(context.Background())
+	third.ae.walkAndEnqueue(context.Background(), missing)
+	if _, ok := states.recs[keep]; !ok {
+		t.Fatal("an unreadable history dir wiped persisted state")
+	}
+}

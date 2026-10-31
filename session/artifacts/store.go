@@ -28,6 +28,7 @@ const (
 type StateStore interface {
 	Load(ctx context.Context) (map[string]scanstate.Record, error)
 	Save(ctx context.Context, recs []scanstate.Record) error
+	Delete(ctx context.Context, paths []string) error
 }
 
 // ArtifactExtractor reads Claude Code JSONL files and extracts structured
@@ -42,6 +43,7 @@ type ArtifactExtractor struct {
 	positions map[string]trackedPos
 
 	states     StateStore
+	restored   map[string]struct{} // paths loaded from states that the walk has not yet seen
 	writer     *scanstate.Writer[trackedPos]
 	flushEvery time.Duration
 
@@ -75,6 +77,7 @@ func NewArtifactExtractor(
 ) *ArtifactExtractor {
 	ae := &ArtifactExtractor{
 		positions:      make(map[string]trackedPos),
+		restored:       make(map[string]struct{}),
 		flushEvery:     flushInterval,
 		storeFn:        storeFn,
 		readFn:         readFn,
@@ -168,6 +171,7 @@ func (ae *ArtifactExtractor) restoreState(ctx context.Context) {
 			continue
 		}
 		ae.positions[path] = trackedPos{Position: rec.Position, owner: string(rec.State)}
+		ae.restored[path] = struct{}{}
 	}
 	ae.posMu.Unlock()
 }
@@ -279,11 +283,19 @@ func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir stri
 	if historyDir == "" {
 		return
 	}
+	walkClean := true
 	err := filepath.WalkDir(historyDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			walkClean = false // part of the tree is unreadable: absence proves nothing
+			return nil
+		}
+		if d.IsDir() {
 			return nil
 		}
 		if strings.HasSuffix(path, ".jsonl") && !strings.HasPrefix(d.Name(), "agent-") {
+			ae.posMu.Lock()
+			delete(ae.restored, path)
+			ae.posMu.Unlock()
 			ae.queue.EnqueueBackfill(path)
 		}
 		select {
@@ -295,6 +307,27 @@ func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir stri
 	})
 	if err != nil {
 		log.Warn("[ArtifactExtractor] walkAndEnqueue error", "dir", historyDir, "err", err)
+		return
+	}
+	if walkClean && ctx.Err() == nil {
+		ae.dropUnseenRestored(ctx)
+	}
+}
+
+// dropUnseenRestored forgets persisted positions of transcripts the (complete) walk did not find.
+func (ae *ArtifactExtractor) dropUnseenRestored(ctx context.Context) {
+	ae.posMu.Lock()
+	gone := make([]string, 0, len(ae.restored))
+	for path := range ae.restored {
+		gone = append(gone, path)
+		delete(ae.positions, path)
+	}
+	ae.restored = make(map[string]struct{})
+	ae.posMu.Unlock()
+	if len(gone) > 0 && ae.states != nil {
+		if err := ae.states.Delete(ctx, gone); err != nil {
+			log.Warn("[ArtifactExtractor] delete stale scan state failed", "count", len(gone), "err", err)
+		}
 	}
 }
 

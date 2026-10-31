@@ -147,3 +147,39 @@ func TestNextTurnIndex_ConcurrentWritersAndReadersAgreeWithTable(t *testing.T) {
 	assert.Equal(t, truth, got)
 	assert.Equal(t, writers*per, got)
 }
+
+func TestNextTurnIndex_JoinerStartedAfterWriteDoesNotSeeStaleFlight(t *testing.T) {
+	t.Parallel()
+	queried, proceed := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	s, _ := countingStore(t, func() {
+		if first.CompareAndSwap(false, true) {
+			queried <- struct{}{}
+			<-proceed
+		}
+	})
+	ctx := context.Background()
+
+	initiator := make(chan int, 1)
+	go func() { n, _ := s.NextTurnIndex(ctx, "a"); initiator <- n }()
+	<-queried // flight read 0 and is held
+	require.NoError(t, s.UpsertSamples(ctx, samples("a", 0, 9)))
+
+	joiner := make(chan int, 1)
+	go func() { n, _ := s.NextTurnIndex(ctx, "a"); joiner <- n }()
+	close(proceed)
+	<-initiator
+	assert.Equal(t, 9, <-joiner)
+}
+
+func TestNextTurnIndex_CancelledCallerDoesNotFailTheSharedFlight(t *testing.T) {
+	t.Parallel()
+	s, _ := countingStore(t, nil)
+	require.NoError(t, s.UpsertSamples(context.Background(), samples("a", 0, 3)))
+	s2 := NewStore(s.client) // cold
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	n, err := s2.NextTurnIndex(cancelled, "a")
+	require.NoError(t, err, "the shared cold read must not inherit its caller's cancellation")
+	assert.Equal(t, 3, n)
+}

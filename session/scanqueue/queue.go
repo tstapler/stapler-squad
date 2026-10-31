@@ -66,8 +66,14 @@ type Queue struct {
 	lives   []string
 	backs   []string
 
-	wake  chan struct{}
-	ready chan struct{} // closed once StartDelay has elapsed
+	// sleepers cancel in-progress throttle sleeps when live work arrives, so a
+	// throttled worker slot never makes a live change wait out the sleep.
+	sleepers  map[int]context.CancelFunc
+	sleeperID int
+
+	wake      chan struct{}
+	ready     chan struct{} // closed once StartDelay has elapsed
+	startOnce sync.Once
 
 	enqueued, coalesced, processed atomic.Uint64
 }
@@ -89,7 +95,8 @@ func New(cfg Config, handle func(path string)) *Queue {
 	return &Queue{
 		cfg: cfg, handle: handle,
 		pending: map[string]class{}, rerun: map[string]class{}, running: map[string]struct{}{},
-		wake: make(chan struct{}, 1), ready: make(chan struct{}),
+		sleepers: map[int]context.CancelFunc{},
+		wake:     make(chan struct{}, 1), ready: make(chan struct{}),
 	}
 }
 
@@ -103,7 +110,12 @@ func realSleep(ctx context.Context, d time.Duration) {
 }
 
 // Start launches the workers; they stop when ctx is done.
+// Calling Start again is a no-op.
 func (q *Queue) Start(ctx context.Context) {
+	q.startOnce.Do(func() { q.start(ctx) })
+}
+
+func (q *Queue) start(ctx context.Context) {
 	go func() {
 		if q.cfg.StartDelay > 0 {
 			q.cfg.Sleep(ctx, q.cfg.StartDelay)
@@ -153,8 +165,18 @@ func (q *Queue) add(path string, c class) {
 		q.pending[path] = c
 		q.push(path, c)
 	}
+	if c == live {
+		q.wakeSleepersLocked()
+	}
 	q.mu.Unlock()
 	q.signal()
+}
+
+func (q *Queue) wakeSleepersLocked() {
+	for id, cancel := range q.sleepers {
+		cancel()
+		delete(q.sleepers, id)
+	}
 }
 
 func (q *Queue) isRunning(path string) bool { _, ok := q.running[path]; return ok }
@@ -235,9 +257,7 @@ func (q *Queue) worker(ctx context.Context) {
 		// Another worker may find more to do; chain the wake-up.
 		q.signal()
 		start := q.cfg.Now()
-		q.handle(path)
-		q.processed.Add(1)
-		q.finish(path)
+		q.run(path)
 		if c == backfill {
 			q.throttle(ctx, q.cfg.Now().Sub(start))
 		}
@@ -245,6 +265,14 @@ func (q *Queue) worker(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// run calls the handler; finish is deferred so a panicking handler cannot
+// leave its path marked running (which would silently swallow later enqueues).
+func (q *Queue) run(path string) {
+	defer q.finish(path)
+	q.handle(path)
+	q.processed.Add(1)
 }
 
 func (q *Queue) throttle(ctx context.Context, worked time.Duration) {
@@ -256,7 +284,17 @@ func (q *Queue) throttle(ctx context.Context, worked time.Duration) {
 		runtime.Gosched()
 		return
 	}
-	q.cfg.Sleep(ctx, time.Duration(float64(worked)*(1/duty-1)))
+	sctx, cancel := context.WithCancel(ctx)
+	q.mu.Lock()
+	id := q.sleeperID
+	q.sleeperID++
+	q.sleepers[id] = cancel
+	q.mu.Unlock()
+	q.cfg.Sleep(sctx, time.Duration(float64(worked)*(1/duty-1)))
+	q.mu.Lock()
+	delete(q.sleepers, id)
+	q.mu.Unlock()
+	cancel()
 }
 
 // HostBusy reports whether the 1-minute load average exceeds twice the CPU

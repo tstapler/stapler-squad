@@ -161,7 +161,8 @@ func (s *Store) NextTurnIndex(ctx context.Context, sessionUUID string) (int, err
 		s.mu.Lock()
 		genAtStart := s.gen
 		s.mu.Unlock()
-		n, err := s.queryNextTurnIndex(ctx, sessionUUID)
+		// The flight is shared, so it must not die with its first caller's ctx.
+		n, err := s.queryNextTurnIndex(context.WithoutCancel(ctx), sessionUUID)
 		if err != nil {
 			return 0, err
 		}
@@ -171,17 +172,32 @@ func (s *Store) NextTurnIndex(ctx context.Context, sessionUUID string) (int, err
 			s.nextIdx[sessionUUID] = n
 		}
 		s.mu.Unlock()
-		return n, nil
+		return flight{n: n, gen: genAtStart}, nil
 	})
 	if err != nil {
 		return 0, err
 	}
-	n := v.(int)
-	// A joined flight can predate a write that has since raised the cache.
+	f := v.(flight)
+	n := f.n
 	if cached, ok := s.cachedNext(sessionUUID); ok {
-		n = max(n, cached)
+		// A joined flight can predate a write that has since raised the cache.
+		return max(n, cached), nil
+	}
+	s.mu.Lock()
+	wroteSince := s.gen != f.gen
+	s.mu.Unlock()
+	if wroteSince {
+		// A write landed after the flight began and nothing was cached to
+		// correct it, so its value may predate the write: read the table directly.
+		return s.queryNextTurnIndex(ctx, sessionUUID)
 	}
 	return n, nil
+}
+
+// flight is a cold read's result and the write generation it started at.
+type flight struct {
+	n   int
+	gen uint64
 }
 
 func (s *Store) cachedNext(sessionUUID string) (int, bool) {

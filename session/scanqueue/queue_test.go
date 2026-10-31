@@ -182,3 +182,59 @@ func TestQueue_BackfillIsThrottledToDutyAndLiveIsNot(t *testing.T) {
 	recv(t, rec.ch)
 	assert.Equal(t, 1500*time.Millisecond, recv(t, sleeps), "a busy host quarters the duty")
 }
+
+func TestQueue_LiveEnqueueCutsShortAThrottleSleep(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	sleeping := make(chan struct{}, 1)
+	var clock struct {
+		sync.Mutex
+		now time.Time
+	}
+	q := New(Config{
+		Workers: 1, BackfillDuty: 0.1,
+		Now: func() time.Time { clock.Lock(); defer clock.Unlock(); return clock.now },
+		Sleep: func(ctx context.Context, _ time.Duration) {
+			sleeping <- struct{}{}
+			<-ctx.Done() // a real sleep that only ends when woken
+		},
+	}, func(p string) {
+		clock.Lock()
+		clock.now = clock.now.Add(time.Second)
+		clock.Unlock()
+		rec.handle(p)
+	})
+	q.EnqueueBackfill("b")
+	start(t, q)
+	recv(t, rec.ch)
+	recv(t, sleeping) // the only worker is now throttle-sleeping after backfill
+
+	q.Enqueue("live")
+	assert.Equal(t, "live", recv(t, rec.ch), "a live change must not wait out the backfill throttle")
+}
+
+func TestQueue_PanickingHandlerDoesNotWedgeItsPath(t *testing.T) {
+	t.Parallel()
+	q := New(Config{Workers: 1}, func(string) {})
+	q.mu.Lock()
+	q.running["a"] = struct{}{}
+	q.mu.Unlock()
+	func() {
+		defer func() { _ = recover() }()
+		q.handle = func(string) { panic("boom") }
+		q.run("a")
+	}()
+	q.mu.Lock()
+	_, stuck := q.running["a"]
+	q.mu.Unlock()
+	assert.False(t, stuck, "run must clear the running mark even when the handler panics")
+}
+
+func TestQueue_StartTwiceIsANoOp(t *testing.T) {
+	t.Parallel()
+	q := New(Config{Workers: 1}, func(string) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.Start(ctx)
+	assert.NotPanics(t, func() { q.Start(ctx) })
+}
