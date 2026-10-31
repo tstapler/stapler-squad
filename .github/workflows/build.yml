@@ -127,6 +127,10 @@ jobs:
     # gotcha (e.g. actions/runner#2205).
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     uses: ./.github/workflows/_prepare.yml
+    with:
+      # PRs skip the Next web build (~130 s on the critical path): nothing downstream reads it
+      # (e2e-binary-bun rebuilds for Bun; e2e-binary-next is main-only and keeps the real build).
+      build-web-ui: ${{ github.event_name != 'pull_request' }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # web-checks: the former web-build-smoke-next, web-build-smoke-bun, built-assets-guard,
@@ -610,6 +614,13 @@ jobs:
         env:
           WEB_BUILD: bun
         run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
+
+      - name: Verify the real web UI was embedded (not prepare's stub)
+        run: |
+          if grep -q '<body></body>' server/web/dist/index.html; then
+            echo "::error::server/web/dist is still the prepare stub: the Bun build did not replace it"
+            exit 1
+          fi
 
       - name: Build e2e seed tools
         run: |

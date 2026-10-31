@@ -15,6 +15,15 @@ name: Prepare (reusable)
 
 on:
   workflow_call:
+    inputs:
+      build-web-ui:
+        description: >-
+          Build the real web UI into server/web/dist. When false, only protos and ent are
+          generated and dist is a one-file stub (enough for go:embed). build.yml passes false
+          on pull_request: test-affected and go-guards never read the UI bytes, and
+          e2e-binary-bun rebuilds it in Bun mode anyway.
+        type: boolean
+        default: true
     outputs:
       artifact-name:
         description: "Name of the uploaded generated-code artifact"
@@ -32,7 +41,19 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Generate protos and build web UI
+        if: ${{ inputs.build-web-ui }}
         uses: ./.github/actions/prepare
+
+      - name: Set up Go (stub mode)
+        if: ${{ !inputs.build-web-ui }}
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Generate protos and ent (web UI stubbed)
+        if: ${{ !inputs.build-web-ui }}
+        uses: ./.github/actions/prepare-stub
 
       - name: Upload generated files
         uses: actions/upload-artifact@v4
