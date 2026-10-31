@@ -1,9 +1,6 @@
-// Structural assertions on .github/workflows/website-demo-publish.yml for
-// plan.md Story 5.1.1 / validation.md rows 54-55. No YAML-parsing dependency
-// is wired into website/ yet, so this inspects the raw text with the same
-// "near-mechanical diff against demo-publish.yml" approach research/pitfalls.md
-// §4 calls for -- sufficient for a flat, 2-space-indented GitHub Actions file,
-// not a general-purpose YAML parser.
+// Structural assertions on .github/workflows/deploy-website.yml and
+// website-ci.yml: the PR gate must run the same checks as the deploy, and the
+// deploy must record clips without committing anything. Parsed with js-yaml.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -51,6 +48,7 @@ test('deployWorkflow_should_RecordAndShipClipsWithoutCommitting_When_YamlParsed'
   assert.ok(doc.jobs['record-clips'], 'deploy must have a record-clips job');
   assert.ok(doc.jobs['record-clips'].steps.some((step) => step.run?.includes('scripts/record-website-demos.sh')));
   assert.equal(doc.jobs.build.needs, 'record-clips');
+  assert.ok((doc.jobs.notify.needs as string[]).includes('record-clips'), 'a failed recording must reach notify');
 
   const steps = doc.jobs.build.steps;
   const download = steps.findIndex((step) => step.name === 'Download demo clips');

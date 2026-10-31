@@ -18,6 +18,10 @@ on:
       - 'docs/how-to/**'
       - 'docs/features.md'
       - 'README.md'
+      - 'tests/e2e/website-demos/**'
+      - 'tests/e2e/playwright.website-demos.config.ts'
+      - 'scripts/record-website-demos.sh'
+      - 'scripts/demo-post-process.sh'
       - '.github/workflows/deploy-website.yml'
   schedule:
     - cron: '17 6 * * 1'
@@ -40,6 +44,8 @@ jobs:
   record-clips:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
         with:
@@ -55,11 +61,7 @@ jobs:
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
-        with:
-          node-version: '22'
-
+      # The prepare action sets up Node itself.
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
 
@@ -77,7 +79,7 @@ jobs:
           cd tests/e2e
           bun install --frozen-lockfile
           npx playwright install chromium --with-deps
-          sudo apt-get install -y ffmpeg librsvg2-bin jq
+          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux
 
       - name: Record, trim and brand the clips
         run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/website-demo-clips"
@@ -225,7 +227,7 @@ jobs:
   # fails, and closes it on the next success, so a broken site is never silent
   # again (it failed 25 consecutive times unnoticed before this existed).
   notify:
-    needs: [build, deploy]
+    needs: [record-clips, build, deploy]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-22.04
     permissions:
@@ -233,20 +235,25 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TITLE: Website deploy is failing
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       DEPLOYED: ${{ needs.deploy.result }}
+      RECORDED: ${{ needs.record-clips.result }}
     steps:
-      - name: Open, update or close the tracking issue
+      # One tracking issue per problem: opened (or commented on) while it
+      # persists, closed on the first healthy run. A failed recording does not
+      # block the deploy, so without its own issue it would degrade silently.
+      - name: Open, update or close the tracking issues
         run: |
-          existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
-          if [ "$DEPLOYED" = "success" ]; then
-            [ -n "$existing" ] && gh issue close "$existing" --comment "Recovered: $RUN_URL"
-            exit 0
-          fi
-          body="Deploy Website failed (build or deploy job): $RUN_URL"
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "$TITLE" --body "$body"
-          fi
+          track() {
+            local title="$1" result="$2" body="$3" existing
+            existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+            if [ "$result" = "success" ]; then
+              if [ -n "$existing" ]; then gh issue close "$existing" --comment "Recovered: $RUN_URL"; fi
+            elif [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body"
+            fi
+          }
+          track "Website deploy is failing" "$DEPLOYED" "Deploy Website failed (build or deploy job): $RUN_URL"
+          track "Website demo clips failed to record" "$RECORDED" "The record-clips job did not succeed, so the site shipped without (some) demo clips: $RUN_URL"

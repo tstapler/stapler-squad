@@ -7,7 +7,6 @@ import { CLIPS } from './website-demos/clips';
 import { recordClip } from './website-demos/recorder';
 
 const BASE_URL = process.env.TEST_SERVER_URL;
-test.describe.configure({ mode: 'serial' });
 
 for (const clip of CLIPS) {
   test(`record ${clip.name}`, async ({ browser }) => {

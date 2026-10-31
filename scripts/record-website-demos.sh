@@ -18,7 +18,11 @@ READY_TIMEOUT_S=300   # hostname detection alone can take minutes on a corporate
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --out) OUT_DIR="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
+    --out)
+      mkdir -p "$2"
+      OUT_DIR="$(cd "$2" && pwd)"
+      shift 2
+      ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -44,13 +48,22 @@ if [[ -z "${TEST_SERVER_URL:-}" ]]; then
   SERVER_PID=$!
   export TEST_SERVER_URL="http://localhost:$PORT"
   echo "⏳  Waiting for $TEST_SERVER_URL (up to ${READY_TIMEOUT_S}s) …"
-  timeout "$READY_TIMEOUT_S" bash -c "until curl -sf '$TEST_SERVER_URL/' >/dev/null; do sleep 2; done" \
-    || { echo "❌  server never became ready; log tail:" >&2; tail -20 "$DEMO_DIR/server.log" >&2; exit 1; }
+  deadline=$((SECONDS + READY_TIMEOUT_S))
+  until curl -sf "$TEST_SERVER_URL/" >/dev/null; do
+    if ! kill -0 "$SERVER_PID" 2>/dev/null || [[ $SECONDS -ge $deadline ]]; then
+      echo "❌  server never became ready; log tail:" >&2
+      tail -20 "$DEMO_DIR/server.log" >&2
+      exit 1
+    fi
+    sleep 2
+  done
 fi
 
-rm -rf "$OUT_DIR"
+rm -f "$OUT_DIR"/*.webm "$OUT_DIR"/*.meta.json
+# A failing clip must not discard the others: keep going, then report it.
+record_status=0
 (cd "$REPO_ROOT/tests/e2e" && WEBSITE_DEMO_OUT="$OUT_DIR" \
-  npx playwright test -c playwright.website-demos.config.ts)
+  npx playwright test -c playwright.website-demos.config.ts) || record_status=$?
 
 shopt -s nullglob
 clips=("$OUT_DIR"/*.webm)
@@ -68,5 +81,21 @@ for clip in "${clips[@]}"; do
 done
 rm -f "$OUT_DIR"/*.meta.json
 
-echo "✅  Recorded ${#clips[@]} clip(s) in $OUT_DIR:"
+# A zero-length or truncated file would otherwise ship; drop it so the card keeps its screenshot.
+good=()
+for clip in "$OUT_DIR"/*.webm; do
+  duration="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$clip" 2>/dev/null || true)"
+  if awk -v d="${duration:-0}" 'BEGIN{exit !(d > 2)}'; then
+    good+=("$clip")
+  else
+    echo "::warning::dropping $(basename "$clip"): unplayable or under 2s (duration '${duration:-none}')" >&2
+    rm -f "$clip"
+  fi
+done
+[[ ${#good[@]} -gt 0 ]] || { echo "❌  no playable clips" >&2; exit 1; }
+if [[ "$record_status" -ne 0 ]]; then
+  echo "::warning::some clips failed to record (playwright exit $record_status); shipping the ${#good[@]} that did" >&2
+fi
+
+echo "✅  Recorded ${#good[@]} clip(s) in $OUT_DIR:"
 (cd "$OUT_DIR" && shasum -a 256 -- *.webm)
