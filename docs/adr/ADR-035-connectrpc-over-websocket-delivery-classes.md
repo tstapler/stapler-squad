@@ -69,7 +69,7 @@ that calls twice.
   `idempotency_key_reuse`. Principal comes from the auth layer. On the unauthenticated local listener every local caller is `anon`, so the key must carry a client-generated per-window random prefix (`<windowId>.<uuid>`, window id generated once per page life) to avoid cross-tab collisions; the bridge validates the key pattern at the REQUEST, not only the middleware.
 * Bounds: TTL 10 min, LRU, total retained bytes capped at 8 MiB and 10 000 entries, one stored response at most 4 KiB (a larger response is
   stored as `done` with no body; a replay then gets `unavailable` marker `result_not_retained` and the caller must reconcile).
-  Only a terminal 2xx or a deterministic 4xx (`invalid_argument`, `failed_precondition`, `not_found`) becomes `done`; a 5xx, `unavailable`, `deadline_exceeded`, `canceled` or a handler panic deletes the entry so a retry re-executes. A keyed handler runs on a context detached from the first caller's CANCEL (it keeps the 5 min clamp and server shutdown), so one caller aborting does not fail joiners; if every waiter has gone, the handler is cancelled. `in_flight` entries are never evicted; when the byte cap is full of them, a new keyed call is refused `resource_exhausted` with `not_executed` (checked before dispatch). Counters: hits, joins, conflicts, evictions, bytes.
+  Only a terminal 2xx or a deterministic 4xx (`invalid_argument`, `failed_precondition`, `not_found`) becomes `done`; for W, a 5xx, `unavailable`, `deadline_exceeded`, `canceled` or a handler panic deletes the entry so a retry re-executes (for M these become `done(unknown)` and a replay returns `outcome_unknown`, per Round 2). A keyed handler runs on a context detached from the first caller's CANCEL (it keeps the 5 min clamp and server shutdown), so one caller aborting does not fail joiners; an abandoned keyed handler keeps running and its entry stays `in_flight` until it returns (Round 2), bounded by the keyed in-flight quota. `in_flight` entries are never evicted; when the byte cap is full of them, a new keyed call is refused `resource_exhausted` with `not_executed` (checked before dispatch). Counters: hits, joins, conflicts, evictions, bytes.
 * Not durable. A restart forgets keys. This is acceptable for W (handler is idempotent anyway) and is stated as a limit for M.
 
 ### Class M (at-most-once)
@@ -162,7 +162,7 @@ never queue behind it, and an RPC cap must never close a terminal.
 
 Share the **shape**, not the sockets: an `RpcSocketProvider` interface (`transportFor(deliveryClass) -> UnaryWsTransport`)
 mirrors `TerminalSocketPool.openStream`. Callers never know how many sockets exist. Default mapping: lane `interactive`
-(R, W, M) and lane `telemetry` (T) onto 2 sockets. Tuning precedence copies ADR-033 item 8: `localStorage ssq:rpc-socket-count`
+(R, W, M) and lane `telemetry` (T, plus W for analytics and `LogClientEvents`) onto 2 sockets. Tuning precedence copies ADR-033 item 8: `localStorage ssq:rpc-socket-count`
 (1 or 2) > server value > default 2. Count 1 maps all classes onto the interactive socket and relies on the per-class server
 caps (a valid but weaker isolation). Both RPC sockets together plus terminal sockets stay inside the browser's ~255 global
 WebSocket budget measured in ADR-033; the process-level `unary sockets per process` cap is raised from 64 to 128 with a
