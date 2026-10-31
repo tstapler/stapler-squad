@@ -4,8 +4,8 @@ package telemetry
 // "everything is slow at once": scheduler latency (time runnable goroutines wait
 // for a P — the direct measure of CPU starvation), GC pause, goroutine count,
 // heap, and cumulative sync.Mutex wait. Percentiles are computed over the delta
-// since the previous scrape, so a gauge reflects the last scrape interval rather
-// than the process lifetime. Read from runtime/metrics in one callback.
+// since the previous callback (the first call covers the process lifetime; a
+// gauge is omitted when no new samples arrived; one reader is assumed). Read from runtime/metrics in one callback.
 
 import (
 	"context"

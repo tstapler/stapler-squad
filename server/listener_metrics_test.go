@@ -1,9 +1,11 @@
 package server
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -126,4 +128,43 @@ func TestTLSHandshakeLog_should_PassThroughWithoutError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Positive(t, n)
 	assert.NotNil(t, tlsHandshakeCounter, "counter is created on the first handshake error")
+}
+
+// Wrapping must not hide *net.TCPConn's ReadFrom (sendfile path) or CloseWrite from net/http.
+func TestMeteredConn_should_ForwardReadFromAndCloseWrite(t *testing.T) {
+	t.Parallel()
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	ln := withListenerMetrics("test-fwd", raw)
+	defer ln.Close()
+
+	got := make(chan []byte, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		mc := c.(*meteredConn)
+		n, err := mc.ReadFrom(strings.NewReader("hello"))
+		if err != nil || n != 5 {
+			got <- nil
+			return
+		}
+		_ = mc.CloseWrite()
+	}()
+
+	cl, err := net.Dial("tcp", raw.Addr().String())
+	require.NoError(t, err)
+	defer cl.Close()
+	b, err := io.ReadAll(cl) // returns only because CloseWrite half-closed the stream
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(b))
+	select {
+	case v := <-got:
+		t.Fatalf("server side failed: %v", v)
+	default:
+	}
+
+	var _ io.ReaderFrom = (*meteredConn)(nil)
 }
