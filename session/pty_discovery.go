@@ -132,13 +132,14 @@ func parseProcessState(state string) PTYStatus {
 }
 
 // batchPaneActivity returns the last-activity timestamp for each session (first pane wins)
-// by running a single `tmux list-panes -a` call. The tmux format #{pane_last_activity}
-// is a Unix timestamp updated whenever the pane produces output. Use it to detect whether
+// by running a single `tmux list-panes -a` call. The tmux format #{window_activity}
+// is a Unix timestamp updated whenever the window produces output (#{pane_last_activity}
+// is not a tmux format variable and expands to empty). Use it to detect whether
 // a session has produced new output since the last capture, without spawning capture-pane.
 // Returns nil when tmux is unavailable.
 func batchPaneActivity(socket string) map[string]time.Time {
 	resolved := tmux.ResolveSocket(socket)
-	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}")
+	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{window_activity}")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
