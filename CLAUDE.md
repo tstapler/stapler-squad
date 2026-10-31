@@ -338,6 +338,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Backlog dependencies: RPCs, MCP tools, `/api` prefix for direct Connect calls | `docs/reference/backlog-dependencies.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
+| Terminal WebSocket pool (`terminal_ws_pool`: flag, size knobs, wire format, limits, metrics) | `docs/reference/terminal-ws-pool.md`, `docs/how-to/tune-terminal-ws-pool.md`, `docs/adr/ADR-033-terminal-websocket-pool.md` |
 | Unary request batching (`batch_unary` flag, `POST /api/batch/unary`, allow-list, fallback) | `docs/reference/unary-request-batching.md` |
 | Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |

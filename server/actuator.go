@@ -42,6 +42,37 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
 	s.mux.HandleFunc("/actuator/inbox-pr-watch", handleActuatorInboxPRWatch)
 	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
+	s.mux.HandleFunc("/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load))
+}
+
+// handleActuatorTerminalMux reports the terminal socket pool (docs/reference/terminal-ws-pool.md).
+// POST ?poolSize=N changes the advertised size at runtime and pushes it to connected clients; it is
+// accepted only on the local (loopback) listener, never on remote access.
+func handleActuatorTerminalMux(bridge func() *services.TerminalMuxBridge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		b := bridge()
+		if b == nil {
+			http.Error(w, "terminal mux not running", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if rec, ok := services.RequestRecordFrom(r.Context()); !ok || rec.Listener != services.ListenerLocal {
+				http.Error(w, "local listener only", http.StatusForbidden)
+				return
+			}
+			n, valid := services.ParseTerminalMuxPoolSize(r.URL.Query().Get("poolSize"))
+			if !valid {
+				http.Error(w, "poolSize must be an integer 0-64", http.StatusBadRequest)
+				return
+			}
+			b.SetPoolSize(n)
+		} else if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(b.Report())
+	}
 }
 
 // handleActuatorInboxPRWatch serves the PR watch status snapshot (D14). JSON by default;
