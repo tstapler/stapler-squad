@@ -369,6 +369,8 @@ func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []
 			uuids = append(uuids, u)
 		}
 	}
+	// Results are keyed by canonical lowercase UUID string; callers holding
+	// another spelling must look up with uuid.Parse(id).String().
 	for start := 0; start < len(uuids); start += itemSessionBatchChunk {
 		chunk := uuids[start:min(start+itemSessionBatchChunk, len(uuids))]
 		rows, err := r.client.ItemSession.Query().

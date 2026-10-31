@@ -469,30 +469,31 @@ func TestRepoSettings_ForcedRefreshStillCoalescesAndHonorsBreaker(t *testing.T) 
 }
 
 func TestRepoSettingsNonBlocking_ServesStaleWhileRefreshing(t *testing.T) {
-	release := make(chan struct{})
-	var gate atomic.Bool
+	var gate atomic.Pointer[chan struct{}] // nil means the handler answers immediately
 	l, clk, hits := newRepoSettingsFixture(t, func(w http.ResponseWriter, _ *http.Request) {
-		if gate.Load() {
-			<-release
+		if g := gate.Load(); g != nil {
+			<-*g
 		}
 		jsonOK(w, `{"allow_auto_merge":true,"allow_squash_merge":true}`)
 	})
 	ref := repoSettingsRef(t, "acme", "web", "")
 
 	// Cold: returns immediately with nothing while the refresh runs in the background.
-	gate.Store(true)
+	coldGate := make(chan struct{})
+	gate.Store(&coldGate)
 	assert.Equal(t, RepoSettingsUnspecified, l.lookupNonBlocking(context.Background(), ref).Status)
 	assert.Equal(t, RepoSettingsUnspecified, l.lookupNonBlocking(context.Background(), ref).Status)
-	close(release)
+	close(coldGate)
 	require.Eventually(t, func() bool { return l.lookupNonBlocking(context.Background(), ref).Status == RepoSettingsOK },
 		5*time.Second, 5*time.Millisecond)
 	assert.EqualValues(t, 1, atomic.LoadInt32(hits), "concurrent cold calls share one fetch")
 
-	// Expired: serves the last value, marked Stale, without waiting on the blocked fetch.
-	release = make(chan struct{})
+	// Expired: serves the last value, marked Stale, without waiting on the gated fetch.
+	staleGate := make(chan struct{})
+	gate.Store(&staleGate)
 	clk.advance(repoSettingsTTL + time.Second)
 	res := l.lookupNonBlocking(context.Background(), ref)
 	assert.Equal(t, RepoSettingsOK, res.Status)
 	assert.True(t, res.Stale)
-	close(release)
+	close(staleGate)
 }

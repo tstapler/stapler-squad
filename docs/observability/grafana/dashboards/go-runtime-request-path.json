@@ -291,7 +291,7 @@
     {
       "id": 6,
       "title": "DB statements per request (p95)",
-      "description": "N+1 detector: a handler above ~30 statements per call is a batching candidate. Also on the RPC span as db.queries.",
+      "description": "N+1 detector: a handler above ~30 statements per call is a batching candidate. Also on the RPC span as db.queries. Undercounts statements issued with a context not derived from the request (context.Background); streams record one sample at close.",
       "type": "timeseries",
       "gridPos": {
         "h": 8,

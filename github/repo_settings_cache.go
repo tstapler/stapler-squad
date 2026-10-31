@@ -414,6 +414,9 @@ func (c *repoSettingsLookup) lookupNonBlocking(ctx context.Context, ref RepoRef)
 		bg := context.WithoutCancel(ctx)
 		go func() {
 			defer func() {
+				if r := recover(); r != nil {
+					log.Error("github: repo settings background refresh panicked", "repo", key, "panic", r)
+				}
 				c.mu.Lock()
 				delete(c.refreshing, key)
 				c.mu.Unlock()
