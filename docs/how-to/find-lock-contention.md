@@ -14,8 +14,10 @@ nobody receives, a `WaitGroup` that never finishes).
 
 ## In Grafana
 
-Open the **stapler-squad: pprof profiles** dashboard, rows "Lock contention:
-mutex" and "Lock contention: block". Drag-select a spike on the delay timeseries,
+Open the **stapler-squad: pprof profiles** dashboard, rows "Lock contention
+(mutex delay)" and "Lock contention: block". The always-on OTel counter
+`go.runtime.mutex_wait` (cumulative seconds, works without `--profile`) shows
+whether lock waits are trending up before you reach for profiles. Drag-select a spike on the delay timeseries,
 then read the flamegraph below it; switch the flamegraph to Top Table for a flat
 ranking. Until Alloy scrapes the `delta_*` endpoints
 (`docs/observability/README.md`, "Per-interval lock profiles") the values are
