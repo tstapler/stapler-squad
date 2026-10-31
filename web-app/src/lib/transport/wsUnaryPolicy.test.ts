@@ -103,6 +103,21 @@ describe("WsUnaryPolicy", () => {
     expect(h.sock().requestIds()).toHaveLength(1);
   });
 
+  it("policy_should_ReportWhyACallWentOverHttp", async () => {
+    const h = setup();
+    await h.policy.unary(listSessions, undefined, undefined, undefined, {});
+    expect(h.reasons).toEqual(["not-eligible"]);
+
+    const off = setup({ flags: { unary_over_ws: false } });
+    await vcs(off.policy);
+    // No flag payload is loaded in this harness, so "off" is reported as not-yet-loaded.
+    expect(off.reasons).toEqual(["flags-not-loaded"]);
+
+    const remote = setup({ origin: "remote" });
+    await vcs(remote.policy);
+    expect(remote.reasons).toEqual(["remote-flag-off"]);
+  });
+
   it("policy_should_UseHttpWithoutOpen_When_FlagOff", async () => {
     const h = setup({ flags: { unary_over_ws: false } });
     await vcs(h.policy);
