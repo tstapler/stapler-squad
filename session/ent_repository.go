@@ -534,6 +534,12 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 
 // Update modifies an existing session in the database
 func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
+	return r.updateSkipping(ctx, data, updateSkip{})
+}
+
+// updateSkipping is Update minus the child-table sections the caller knows are
+// already persisted unchanged (see savedFingerprints).
+func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, skip updateSkip) error {
 	// Start transaction
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
@@ -702,7 +708,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 
 	// Update or create worktree
-	if data.Worktree.RepoPath != "" {
+	if data.Worktree.RepoPath != "" && !skip.Worktree {
 		existingWorktree, err := tx.Worktree.Query().Where(worktree.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
@@ -735,30 +741,34 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 
 	// Upsert diff stats — single INSERT … ON CONFLICT DO UPDATE, no prior SELECT needed.
-	diffCreate := tx.DiffStats.Create().
-		SetSessionID(sess.ID).
-		SetAdded(data.DiffStats.Added).
-		SetRemoved(data.DiffStats.Removed)
-	if data.DiffStats.Content != "" {
-		diffCreate = diffCreate.SetContent(data.DiffStats.Content)
-	}
-	upsertDiff := diffCreate.
-		OnConflictColumns(diffstats.SessionColumn).
-		UpdateAdded().
-		UpdateRemoved()
-	if data.DiffStats.Content != "" {
-		upsertDiff = upsertDiff.UpdateContent()
-	}
-	if err := upsertDiff.Exec(ctx); err != nil {
-		return fmt.Errorf("failed to upsert diff stats: %w", err)
+	if !skip.DiffStats {
+		diffCreate := tx.DiffStats.Create().
+			SetSessionID(sess.ID).
+			SetAdded(data.DiffStats.Added).
+			SetRemoved(data.DiffStats.Removed)
+		if data.DiffStats.Content != "" {
+			diffCreate = diffCreate.SetContent(data.DiffStats.Content)
+		}
+		upsertDiff := diffCreate.
+			OnConflictColumns(diffstats.SessionColumn).
+			UpdateAdded().
+			UpdateRemoved()
+		if data.DiffStats.Content != "" {
+			upsertDiff = upsertDiff.UpdateContent()
+		}
+		if err := upsertDiff.Exec(ctx); err != nil {
+			return fmt.Errorf("failed to upsert diff stats: %w", err)
+		}
 	}
 
 	// Update tags - clear existing and add new ones
-	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
-		return fmt.Errorf("failed to clear tags: %w", err)
+	if !skip.Tags {
+		if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
+			return fmt.Errorf("failed to clear tags: %w", err)
+		}
 	}
 
-	if len(data.Tags) > 0 {
+	if len(data.Tags) > 0 && !skip.Tags {
 		tagIDs := make([]int, 0, len(data.Tags))
 		for _, tagName := range data.Tags {
 			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
@@ -780,7 +790,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 
 	// Update Claude session if present
-	if data.ClaudeSession.ConversationUUID != "" {
+	if data.ClaudeSession.ConversationUUID != "" && !skip.Claude {
 		var claudeSessionID int // set by either the create or update branch below
 
 		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
