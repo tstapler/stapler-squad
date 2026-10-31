@@ -105,8 +105,8 @@ export interface PoolOptions {
   /** Creates the physical socket; tests inject a fake. */
   createSocket?: (url: string) => WebSocket;
   now?: () => number;
-  setInterval?: typeof setInterval;
-  clearInterval?: typeof clearInterval;
+  setInterval?: (fn: () => void, ms: number) => unknown;
+  clearInterval?: (handle: unknown) => void;
   /** Builds the plain per-stream socket used when the pool cannot serve a stream. */
   fallback?: (url: string) => PooledSocketLike;
   /** Mux endpoint URL for a stream URL; defaults to the stream URL's origin plus MUX_PATH. */
@@ -225,7 +225,7 @@ class MuxConn {
   private bytesEwma = 0;
   private ewmaAt: number;
   private lastRx: number;
-  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pingTimer: unknown = null;
 
   constructor(
     private pool: PoolImpl,
@@ -379,8 +379,8 @@ class PoolImpl implements TerminalSocketPool {
   private readonly policy: AssignmentPolicy;
   private readonly fallback: (url: string) => PooledSocketLike;
   private readonly muxUrl: (streamUrl: string) => string;
-  private readonly setIntervalRef: typeof setInterval;
-  private readonly clearIntervalRef: typeof clearInterval;
+  private readonly setIntervalRef: (fn: () => void, ms: number) => unknown;
+  private readonly clearIntervalRef: (handle: unknown) => void;
 
   constructor(opts: PoolOptions) {
     this.sizeOverridden = opts.size !== undefined;
@@ -390,12 +390,13 @@ class PoolImpl implements TerminalSocketPool {
     this.createSocket = opts.createSocket ?? ((u) => new WebSocket(u));
     this.fallback = opts.fallback ?? ((u) => new WebSocket(u));
     this.muxUrl = opts.muxUrl ?? defaultMuxUrl;
-    this.setIntervalRef = opts.setInterval ?? setInterval;
-    this.clearIntervalRef = opts.clearInterval ?? clearInterval;
+    // Wrapped so the browser's setInterval is never invoked with the pool as `this`.
+    this.setIntervalRef = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
+    this.clearIntervalRef = opts.clearInterval ?? ((h) => clearInterval(h as number));
   }
 
-  setIntervalFn = (fn: () => void, ms: number) => this.setIntervalRef(fn, ms);
-  clearIntervalFn = (h: ReturnType<typeof setInterval>) => this.clearIntervalRef(h);
+  setIntervalFn = (fn: () => void, ms: number): unknown => this.setIntervalRef(fn, ms);
+  clearIntervalFn = (h: unknown): void => this.clearIntervalRef(h);
 
   openStream(url: string): PooledSocketLike {
     if (this.size <= 0 || this.now() < this.breakerUntil) return this.fallback(url);

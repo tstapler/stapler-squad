@@ -72,11 +72,11 @@ function setup(opts: { size?: number; policy?: Parameters<typeof createTerminalS
       fallbacks.push(u);
       return {} as PooledSocketLike;
     },
-    setInterval: ((fn: () => void, ms: number) => {
+    setInterval: (fn, ms) => {
       intervals.push({ fn, ms });
-      return intervals.length as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval,
-    clearInterval: (() => undefined) as unknown as typeof clearInterval,
+      return intervals.length;
+    },
+    clearInterval: () => undefined,
   });
   return { pool, muxes, fallbacks, intervals, clock };
 }
