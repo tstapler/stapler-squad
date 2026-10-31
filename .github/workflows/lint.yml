@@ -49,7 +49,7 @@ on:
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Steps after codegen use `!cancelled()` so one failing linter does not hide the others.
