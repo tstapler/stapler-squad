@@ -60,9 +60,12 @@ var sharedPaneActivity = newPaneActivityCache(func() map[string]time.Time { retu
 // and parses the config file, and every driver asks on every tick.
 const driverPaneActivityGateFlagTTL = 5 * time.Second
 
-var driverGateFlag = &cachedFlag{read: func() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(FeatureFlagDriverPaneActivityGate, true)
-}, ttl: driverPaneActivityGateFlagTTL, now: time.Now}
+// DriverPaneActivityGateSetting reports the live (uncached) state of the driver pane-activity gate flag.
+func DriverPaneActivityGateSetting() bool {
+	return config.LoadConfig().GetFeatureFlagWithDefault(FeatureFlagDriverPaneActivityGate, config.DriverPaneActivityGateDefault)
+}
+
+var driverGateFlag = &cachedFlag{read: DriverPaneActivityGateSetting, ttl: driverPaneActivityGateFlagTTL, now: time.Now}
 
 func driverPaneActivityGateEnabled() bool { return driverGateFlag.get() }
 

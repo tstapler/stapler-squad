@@ -337,7 +337,7 @@ var knownFeatureFlags = []struct {
 	{
 		name:         session.FeatureFlagDriverPaneActivityGate,
 		description:  "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
-		defaultValue: true,
+		defaultValue: config.DriverPaneActivityGateDefault,
 	},
 	{
 		name:         "request_coalescing",

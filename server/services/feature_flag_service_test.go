@@ -894,6 +894,7 @@ func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
 		{config.DiagnoseNudgeFeatureFlag, config.DiagnoseNudgeDefault, config.EffectiveDiagnoseNudgeEnabled},
 		{config.AutonomousStallNudgeFeatureFlag, config.AutonomousStallNudgeDefault, config.EffectiveAutonomousStallNudgeEnabled},
 		{config.HiddenSessionGateFeatureFlag, config.HiddenSessionGateDefault, nil},
+		{session.FeatureFlagDriverPaneActivityGate, config.DriverPaneActivityGateDefault, func(*config.Config) bool { return session.DriverPaneActivityGateSetting() }},
 		{config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineShadowDefault, config.EffectiveWorkflowEngineShadow},
 		{config.WorkflowEngineEnforceFeatureFlag, config.WorkflowEngineEnforceDefault, config.EffectiveWorkflowEngineEnforce},
 		{config.WorkflowEngineEnforceAgentFeatureFlag, config.WorkflowEngineEnforceAgentDefault, config.EffectiveWorkflowEngineEnforceAgent},
