@@ -62,7 +62,7 @@ func TestCaptureTap_should_RecordUndeliveredDrop_When_SubscriberQueueIsFull(t *t
 	var buf bytes.Buffer
 	hub := NewStreamHub("s", nil, WithCaptureTap(steppedTap(&buf)), WithSlowSubscriberGrace(time.Hour))
 	full := newSubscriber(SubscriberID("full"), noopTransport{}, SubscriberCapability{}, 1) // no writer started, so the queue never drains
-	if !full.trySend([]byte("fills the queue")) {
+	if ok, _ := full.trySend([]byte("fills the queue")); !ok {
 		t.Fatal("first frame should fit the queue")
 	}
 
