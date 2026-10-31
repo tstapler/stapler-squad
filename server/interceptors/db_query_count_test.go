@@ -3,6 +3,7 @@ package interceptors
 import (
 	"context"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -25,4 +26,15 @@ func TestDBQueryCountInterceptor_should_PassThroughAndPropagateErrors(t *testing
 	_, err := next(context.Background(), connect.NewRequest(&emptypb.Empty{}))
 	require.ErrorIs(t, err, want)
 	assert.True(t, called)
+}
+
+func TestRequestFlowInterceptor_should_PassThroughAndPropagateErrors(t *testing.T) {
+	want := connect.NewError(connect.CodeInternal, assert.AnError)
+	ctx, cancel := context.WithCancel(WithArrival(context.Background(), time.Now()))
+	cancel() // a client that already went away: counts as an abort, must not change the error
+	next := NewRequestFlowInterceptor().WrapUnary(func(context.Context, connect.AnyRequest) (connect.AnyResponse, error) {
+		return nil, want
+	})
+	_, err := next(ctx, connect.NewRequest(&emptypb.Empty{}))
+	require.ErrorIs(t, err, want)
 }
