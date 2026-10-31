@@ -32,7 +32,7 @@ slow or bulky telemetry from interactive calls, and (4) an unload story.
 
 ## Decision
 
-Keep one wire protocol (the ADR-001 unary mux frames; additive fields only) and one dispatcher re-entry. Add **delivery classes**
+Keep one wire protocol (the unary mux frames of `project_plans/frontend-responsiveness/decisions/ADR-001-unary-over-websocket-wire-framing.md`; additive fields only) and one dispatcher re-entry. Add **delivery classes**
 that decide, per procedure, which transport rules apply. The class table lives on the server (authoritative) and is mirrored
 in the client fixture `ws-unary-allowlist.json`; a parity test fails when they differ (same pattern as #1300). A client can
 never upgrade its own class: the server ignores any client-claimed class.
@@ -104,7 +104,7 @@ where it replays a slow read. W after socket loss replays immediately with its k
   with `reason=retry_exhausted`. A closed or unavailable telemetry socket never reconnect-loops faster than the existing
   backoff, and while it is down events go to the HTTP path (today's `fetch`) at the existing cadence: at most one request per 20 s per tab, batched, with the same queue bounds, so the fallback cannot reintroduce connection pressure and telemetry is never silently black-holed by the flag. Owner decision 2026-10-30.
 * Backpressure: if `WebSocket.bufferedAmount` or the lane's unacked bytes exceed 128 KiB the lane stops handing out new
-  batches (events queue, then drop oldest). A refusal from the T class cap (bridge-side, so `not_executed`) or from the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`, which fire inside the dispatcher and carry no marker) makes the lane drop that batch (`dropped_budget`); class T never retries a refusal, to avoid amplifying the overload it signals.
+  batches (events queue, then drop oldest). A refusal from the telemetry lane's class cap (T, or W on the telemetry lane; bridge-side, so `not_executed`) or from the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`, which fire inside the dispatcher and carry no marker) makes the lane drop that batch (`dropped_budget`); the telemetry lane never retries a refusal, to avoid amplifying the overload it signals.
 * **Unload.** WebSockets cannot be flushed on `pagehide`. On `pagehide` and `visibilitychange: hidden` the lane moves every
   queued and every unacked batch to the existing `sendBeacon`/keepalive path (HTTP `/api/analytics`, `/api/client-logs`,
   `LogClientEvents` over the keepalive transport), **same batch ids**. A beacon cannot set headers, so the batch id also travels in the **body** (new additive `batch_id` field on the analytics JSON body, `IngestClientLogs`, and `LogClientEventsRequest`), and the two HTTP handlers dedupe on it themselves (the key store is not on the plain-HTTP path). Analytics dedupes per event id (#1307 `ON CONFLICT`); #1307's id is optional today, so the client now always sends one. `ClientLogEntry` has no id today: Step 2 adds `entry_id` and a unique index with `DoNothing`, otherwise log batches are at-least-once with duplicates, and the ADR does not claim otherwise. Where a WS frame had been received the beacon copy is deduped; where it had not, the beacon delivers it. The sum is at-least-once with dedupe, so the
