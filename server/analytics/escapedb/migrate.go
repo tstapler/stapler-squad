@@ -36,6 +36,13 @@ const (
 	escapeColumns = "id, session_id, project_path, stage, sequence_type, sequence_subtype, sequence_signature, " +
 		"byte_length, payload_hash, raw_bytes, mangled, mangle_type, wall_time, session_seq"
 
+	// escapeSelectColumns defaults the destination's NOT NULL columns: a legacy row
+	// with a NULL there (columns added by an older ALTER TABLE) would otherwise be
+	// rejected, and a copy that drops rows must not look finished.
+	escapeSelectColumns = "id, COALESCE(session_id, ''), project_path, COALESCE(stage, ''), COALESCE(sequence_type, ''), " +
+		"sequence_subtype, sequence_signature, COALESCE(byte_length, 0), payload_hash, raw_bytes, COALESCE(mangled, 0), " +
+		"mangle_type, COALESCE(wall_time, '1970-01-01 00:00:00+00:00'), COALESCE(session_seq, 0)"
+
 	ledgerDDL = `CREATE TABLE IF NOT EXISTS escape_events_migration (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		phase TEXT NOT NULL,
@@ -119,8 +126,14 @@ type migrator struct {
 
 func (m *migrator) run(ctx context.Context) (MigrationStatus, error) {
 	st, err := m.loadLedger(ctx)
-	if err != nil || st.Phase != phaseCopying {
+	if err != nil {
 		return st, err
+	}
+	if st.Phase == phaseFailed {
+		log.Warn("escape migration: ledger is failed; legacy escape_events left in analytics.db, reset escape_events_migration to retry", "scanned", st.Scanned, "pass", st.Pass)
+	}
+	if st.Phase != phaseCopying {
+		return st, nil
 	}
 	if _, err := os.Stat(m.srcPath); errors.Is(err, os.ErrNotExist) {
 		return m.finish(ctx, st, "no source database")
@@ -199,8 +212,8 @@ func (m *migrator) copyBatch(ctx context.Context, cursor string, limit int) (Mig
 	if n == 0 {
 		return MigrationStatus{}, 0, nil
 	}
-	res, err := conn.ExecContext(ctx, "INSERT OR IGNORE INTO main.escape_events ("+escapeColumns+") SELECT "+escapeColumns+
-		" FROM src.escape_events WHERE id > ? AND id <= ?", cursor, maxID)
+	res, err := conn.ExecContext(ctx, "INSERT INTO main.escape_events ("+escapeColumns+") SELECT "+escapeSelectColumns+
+		" FROM src.escape_events WHERE id > ? AND id <= ? ON CONFLICT(id) DO NOTHING", cursor, maxID)
 	if err != nil {
 		return MigrationStatus{}, 0, fmt.Errorf("escape migration: insert batch: %w", err)
 	}

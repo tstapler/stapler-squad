@@ -218,3 +218,30 @@ func TestEscapeInsert_should_NotQueueBehindAnalyticsWriter(t *testing.T) {
 	// Control: the same insert through the held analytics.db writer cannot proceed.
 	require.Error(t, insert(analyticsClient, 20*time.Millisecond), "analytics.db's single writer is pinned")
 }
+
+func TestMigrate_should_KeepLegacyRowsWithNullColumns_Not_DropThemSilently(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	legacy, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "analytics.db"))
+	require.NoError(t, err)
+	for _, q := range []string{
+		"CREATE TABLE escape_events (id text PRIMARY KEY, session_id text, project_path text, stage text, sequence_type text, sequence_subtype text, sequence_signature text, byte_length integer, payload_hash text, raw_bytes blob, mangled integer, mangle_type text, wall_time datetime, session_seq integer)",
+		"INSERT INTO escape_events (id, session_id, stage, sequence_type, byte_length, mangled, wall_time, session_seq) VALUES ('a','s','x','SGR',1,0,'2026-01-01 00:00:00+00:00',1)",
+		"INSERT INTO escape_events (id, session_id) VALUES ('b','s')",
+		"INSERT INTO escape_events (id) VALUES ('c')",
+	} {
+		_, err := legacy.Exec(q)
+		require.NoError(t, err)
+	}
+	require.NoError(t, legacy.Close())
+	_, dst := openDest(ctx, t, dir)
+
+	st, err := MigrateFromAnalyticsDB(ctx, dst.Writer(), filepath.Join(dir, "analytics.db"), MigrationConfig{Pause: noPause})
+	require.NoError(t, err)
+	assert.True(t, st.Done())
+	assert.EqualValues(t, 3, st.Scanned)
+	assert.EqualValues(t, 3, st.Inserted)
+	var n int
+	require.NoError(t, dst.Writer().QueryRow("SELECT COUNT(*) FROM escape_events").Scan(&n))
+	assert.Equal(t, 3, n)
+}
