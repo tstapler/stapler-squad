@@ -63,3 +63,6 @@ Open the "stapler-squad: pprof profiles (flamegraphs)" dashboard at
 `http://localhost:48300` (folder: stapler-squad) for CPU/heap/goroutine
 flamegraphs over any time range, instead of pulling a one-off
 `.prof` file with `curl` + `go tool pprof` for a live investigation.
+
+For lock contention specifically (mutex vs block, reading the flamegraph, the
+idle `selectgo` caveat) see `docs/how-to/find-lock-contention.md`.

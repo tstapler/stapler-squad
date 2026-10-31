@@ -45,6 +45,12 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
+// Tuning for --profile's lock profiles; see profiling.Config.
+var (
+	profileMutexFractionFlag int
+	profileBlockRateFlag     int
+)
+
 // version is normally overridden via -X main.version=... (see Makefile's
 // LDFLAGS / GoReleaser's .goreleaser.yaml). "dev" is a placeholder, not a
 // real fallback: resolveDevVersion() below replaces it at startup using
@@ -237,12 +243,14 @@ var (
 			// Start profiling if enabled
 			if profileFlag || traceFlag {
 				cleanup, err := profiling.StartProfiling(profiling.Config{
-					Enabled:      true,
-					HTTPPort:     profilePortFlag,
-					BlockProfile: true, // Enable block profiling for lock-up detection
-					MutexProfile: true, // Enable mutex profiling for lock contention
-					TraceEnabled: traceFlag,
-					TraceFile:    "", // Use default
+					Enabled:       true,
+					HTTPPort:      profilePortFlag,
+					BlockProfile:  true, // Enable block profiling for lock-up detection
+					MutexProfile:  true, // Enable mutex profiling for lock contention
+					MutexFraction: profileMutexFractionFlag,
+					BlockRateNs:   profileBlockRateFlag,
+					TraceEnabled:  traceFlag,
+					TraceFile:     "", // Use default
 				})
 				if err != nil {
 					return fmt.Errorf("failed to start profiling: %w", err)
@@ -879,6 +887,8 @@ func init() {
 	// Profiling flags
 	rootCmd.Flags().BoolVar(&profileFlag, "profile", false, "Enable runtime profiling (HTTP server + goroutine monitoring)")
 	rootCmd.Flags().IntVar(&profilePortFlag, "profile-port", 6060, "Port for pprof HTTP server (default: 6060)")
+	rootCmd.Flags().IntVar(&profileMutexFractionFlag, "profile-mutex-fraction", profiling.DefaultMutexFraction, "With --profile: sample 1/N contended mutex events (1 = every event, costly)")
+	rootCmd.Flags().IntVar(&profileBlockRateFlag, "profile-block-rate", profiling.DefaultBlockRateNs, "With --profile: block profile rate in ns (1 = every event, costly)")
 	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/stapler-squad-trace-<PID>.out")
 
 	// Remote access and passkey flags

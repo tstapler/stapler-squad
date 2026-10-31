@@ -12,6 +12,10 @@ import (
 	"time"
 
 	pyroscope "github.com/grafana/pyroscope-go"
+	// Registers /debug/pprof/delta_{heap,block,mutex} on http.DefaultServeMux:
+	// per-interval profiles, so a scraper that sums scrapes over a time window
+	// (Pyroscope) does not re-count lifetime totals on every scrape.
+	_ "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -23,9 +27,30 @@ type Config struct {
 	HTTPPort     int
 	BlockProfile bool
 	MutexProfile bool
+	// MutexFraction samples on average 1/N contended mutex events; 0 means
+	// DefaultMutexFraction. 1 records every event, which is measurably costly.
+	MutexFraction int
+	// BlockRateNs records every blocking event of at least this many ns and a
+	// proportional sample of shorter ones; 0 means DefaultBlockRateNs.
+	BlockRateNs  int
 	CPUProfile   bool
 	TraceEnabled bool
 	TraceFile    string
+}
+
+// Defaults chosen to keep lock profiling cheap enough to leave on in the
+// always-profiled service (see docs/how-to/find-lock-contention.md for the
+// measured overhead of rate 1 versus these).
+const (
+	DefaultMutexFraction = 10
+	DefaultBlockRateNs   = 1000
+)
+
+func orDefault(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // StartProfiling enables runtime profiling based on config
@@ -38,8 +63,9 @@ func StartProfiling(cfg Config) (func(), error) {
 
 	// Enable block profiling (shows where goroutines block)
 	if cfg.BlockProfile {
-		runtime.SetBlockProfileRate(1)
-		log.Info("Block profiling enabled")
+		rate := orDefault(cfg.BlockRateNs, DefaultBlockRateNs)
+		runtime.SetBlockProfileRate(rate)
+		log.Info("Block profiling enabled", "rate_ns", rate)
 		cleanupFuncs = append(cleanupFuncs, func() {
 			runtime.SetBlockProfileRate(0)
 		})
@@ -47,8 +73,9 @@ func StartProfiling(cfg Config) (func(), error) {
 
 	// Enable mutex profiling (shows lock contention)
 	if cfg.MutexProfile {
-		runtime.SetMutexProfileFraction(1)
-		log.Info("Mutex profiling enabled")
+		fraction := orDefault(cfg.MutexFraction, DefaultMutexFraction)
+		runtime.SetMutexProfileFraction(fraction)
+		log.Info("Mutex profiling enabled", "fraction", fraction)
 		cleanupFuncs = append(cleanupFuncs, func() {
 			runtime.SetMutexProfileFraction(0)
 		})
@@ -85,60 +112,7 @@ func StartProfiling(cfg Config) (func(), error) {
 	// Start HTTP profiling server
 	if cfg.HTTPPort > 0 {
 		addr := fmt.Sprintf("localhost:%d", cfg.HTTPPort)
-		mux := http.NewServeMux()
-		// pprof handlers are registered on http.DefaultServeMux by the blank import;
-		// forward all /debug/pprof/ requests there.
-		mux.Handle("/debug/pprof/", http.DefaultServeMux)
-
-		// Fork pressure metrics endpoint — no pprof dependency, zero-cost to query.
-		mux.HandleFunc("/debug/fork-pressure", func(w http.ResponseWriter, r *http.Request) {
-			s := tmux.ForkPressureSnapshot()
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"level":              s.Level.String(),
-				"window_seconds":     int(s.WindowDuration.Seconds()),
-				"spawns_in_window":   s.SpawnsInWindow,
-				"failures_in_window": s.FailuresInWindow,
-				"zombies_in_window":  s.ZombiesInWindow,
-				"total_spawns":       s.TotalSpawns,
-				"total_failures":     s.TotalFailures,
-				"total_zombies":      s.TotalZombies,
-				"last_alert_at":      s.LastAlertAt,
-				"thresholds": map[string]any{
-					"failure_alert": 5,
-					"spawn_warn":    60,
-					"zombie_alert":  3,
-				},
-			})
-		})
-
-		// Blob-cache effectiveness endpoint — see unfinished.BlobCacheStatsSnapshot.
-		// Registered before the scanner exists (this server starts early in
-		// main.go); safe because the reader lookup only happens per-request.
-		mux.HandleFunc("/debug/blob-cache", func(w http.ResponseWriter, r *http.Request) {
-			s := unfinished.BlobCacheStatsSnapshot()
-			total := s.Hits + s.Misses
-			var hitRate float64
-			if total > 0 {
-				hitRate = float64(s.Hits) / float64(total)
-			}
-			// repo_cache_* fields root-cause a low hit_rate: blobCache lives inside
-			// *cachedRepo, so if repo_cache_evictions tracks repo_cache_cold_opens
-			// closely, repo evictions (not a low same-blob-revisit workload) are
-			// wiping the blob cache before it can warm up. See RepoCacheStats' doc
-			// comment.
-			rc := unfinished.RepoCacheStatsSnapshot()
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"hits":                    s.Hits,
-				"misses":                  s.Misses,
-				"hit_rate":                hitRate,
-				"estimated_time_saved_ms": s.EstimatedTimeSaved.Milliseconds(),
-				"repo_cache_current_size": rc.CurrentSize,
-				"repo_cache_cold_opens":   rc.ColdOpens,
-				"repo_cache_evictions":    rc.Evictions,
-			})
-		})
+		mux := newProfilingMux()
 
 		srv := &http.Server{Addr: addr, Handler: mux}
 
@@ -171,6 +145,66 @@ func StartProfiling(cfg Config) (func(), error) {
 			cleanup()
 		}
 	}, nil
+}
+
+// newProfilingMux serves /debug/pprof/* (cumulative and delta_* variants,
+// registered on http.DefaultServeMux by the pprof blank imports) plus the
+// app's own debug endpoints.
+func newProfilingMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	// pprof handlers live on http.DefaultServeMux; forward /debug/pprof/ there.
+	mux.Handle("/debug/pprof/", http.DefaultServeMux)
+
+	// Fork pressure metrics endpoint — no pprof dependency, zero-cost to query.
+	mux.HandleFunc("/debug/fork-pressure", func(w http.ResponseWriter, r *http.Request) {
+		s := tmux.ForkPressureSnapshot()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"level":              s.Level.String(),
+			"window_seconds":     int(s.WindowDuration.Seconds()),
+			"spawns_in_window":   s.SpawnsInWindow,
+			"failures_in_window": s.FailuresInWindow,
+			"zombies_in_window":  s.ZombiesInWindow,
+			"total_spawns":       s.TotalSpawns,
+			"total_failures":     s.TotalFailures,
+			"total_zombies":      s.TotalZombies,
+			"last_alert_at":      s.LastAlertAt,
+			"thresholds": map[string]any{
+				"failure_alert": 5,
+				"spawn_warn":    60,
+				"zombie_alert":  3,
+			},
+		})
+	})
+
+	// Blob-cache effectiveness endpoint — see unfinished.BlobCacheStatsSnapshot.
+	// Registered before the scanner exists (this server starts early in
+	// main.go); safe because the reader lookup only happens per-request.
+	mux.HandleFunc("/debug/blob-cache", func(w http.ResponseWriter, r *http.Request) {
+		s := unfinished.BlobCacheStatsSnapshot()
+		total := s.Hits + s.Misses
+		var hitRate float64
+		if total > 0 {
+			hitRate = float64(s.Hits) / float64(total)
+		}
+		// repo_cache_* fields root-cause a low hit_rate: blobCache lives inside
+		// *cachedRepo, so if repo_cache_evictions tracks repo_cache_cold_opens
+		// closely, repo evictions (not a low same-blob-revisit workload) are
+		// wiping the blob cache before it can warm up. See RepoCacheStats' doc
+		// comment.
+		rc := unfinished.RepoCacheStatsSnapshot()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"hits":                    s.Hits,
+			"misses":                  s.Misses,
+			"hit_rate":                hitRate,
+			"estimated_time_saved_ms": s.EstimatedTimeSaved.Milliseconds(),
+			"repo_cache_current_size": rc.CurrentSize,
+			"repo_cache_cold_opens":   rc.ColdOpens,
+			"repo_cache_evictions":    rc.Evictions,
+		})
+	})
+	return mux
 }
 
 // StartContinuousProfiling starts Pyroscope continuous profiling if serverAddr is non-empty.
