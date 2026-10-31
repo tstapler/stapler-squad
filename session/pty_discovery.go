@@ -152,17 +152,15 @@ func listAllPanes(socket, format string) (output []byte, ok bool) {
 	return out, true
 }
 
-// batchPaneActivity returns the last-activity timestamp for each session (first pane wins)
-// by running a single `tmux list-panes -a` call. The tmux format #{pane_last_activity}
-// is a Unix timestamp updated whenever the pane produces output. Use it to detect whether
+// batchPaneActivity returns the newest window-activity timestamp for each session
+// by running a single `tmux list-panes -a` call. The tmux format #{window_activity}
+// is a Unix timestamp updated whenever the window produces output (#{pane_last_activity}
+// is not a tmux format variable and expands to empty). Use it to detect whether
 // a session has produced new output since the last capture, without spawning capture-pane.
+// Empty or non-numeric values are treated as unknown (session omitted).
 // Returns nil when tmux is unavailable.
-//
-// Caveat: tmux 3.7b has no #{pane_last_activity} format variable (it expands to empty, verified
-// with `tmux list-panes -a -F '#{pane_last_activity}'`), so on that version every line is skipped
-// and the map is empty. Use batchWindowActivity for a working signal.
 func batchPaneActivity(socket string) map[string]time.Time {
-	output, ok := listAllPanes(socket, "#{session_name} #{pane_last_activity}")
+	output, ok := listAllPanes(socket, "#{session_name} #{window_activity}")
 	if !ok {
 		return nil
 	}
@@ -183,14 +181,14 @@ func batchPaneActivity(socket string) map[string]time.Time {
 			continue
 		}
 		sessionName := string(line[:spaceIdx])
-		if _, exists := result[sessionName]; exists {
-			continue // keep first pane per session
-		}
 		ts, err := strconv.ParseInt(string(line[spaceIdx+1:]), 10, 64)
 		if err != nil {
 			continue
 		}
-		result[sessionName] = time.Unix(ts, 0)
+		// Newest window wins: a multi-window session's active window may not be listed first.
+		if t := time.Unix(ts, 0); t.After(result[sessionName]) {
+			result[sessionName] = t
+		}
 	}
 	return result
 }
