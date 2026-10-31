@@ -50,6 +50,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -263,3 +265,9 @@ jobs:
                 body,
               });
             }
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: ux-analysis

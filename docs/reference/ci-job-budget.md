@@ -39,3 +39,19 @@ No check is a required status check: `gh api repos/tstapler/stapler-squad/branch
 7. Re-run `tools/ci/count-pr-checks.py` and put the before/after in the PR description.
 
 The e2e shard count is a separate knob (`E2E_SHARD_TOTAL` in `build.yml` once #1317 lands) and is the largest remaining contributor.
+
+## Runner utilization
+
+Heavy jobs (`prepare`, `web-checks`, `e2e-binary-bun`, `e2e-bun-shard`, `test-affected`, `go-guards`, `lint`, `mcp-integration`, `ux-analysis`, and the `main-ci.yml` test jobs) run a background sampler (`.github/actions/runner-utilization`, `tools/ci/runner-utilization.py`) and a final `if: always()` report step. Each job's summary shows cores busy, iowait, steal, peak memory, and PSI stall share, and uploads a tiny `util-<label>` artifact (7 days). Both steps swallow their own errors and cannot fail a job.
+
+Aggregate across recent runs (needs `gh`; artifacts expire after 7 days):
+
+```bash
+python3 -I tools/ci/utilization-report.py --workflow Build --event pull_request --runs 20
+python3 -I tools/ci/utilization-report.py --workflow Lint --runs 20
+# owner's machine only, never CI:
+python3 -I tools/ci/utilization-report.py --workflow Build --prom-out /var/lib/node_exporter/textfile/ci.prom
+python3 -I tools/ci/utilization-report.py --workflow Build --push-vm http://localhost:8428
+```
+
+Verdicts: `under-used` (median CPU avg < 40%), `right-sized`, `saturated` (>= 90% CPU or >= 40% CPU PSI stall), `io-bound` (iowait > 20%). Add a new heavy job by placing the sampler step right after checkout and the report step last, with a unique `label` per matrix leg.

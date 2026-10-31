@@ -159,6 +159,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -297,6 +299,12 @@ jobs:
         if: ${{ !cancelled() && steps.ready.conclusion == 'success' }}
         working-directory: web-app
         run: bun run check:dependency-screen
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: web-checks
 
   # ─────────────────────────────────────────────────────────────────────────────
   # e2e-next: the full Playwright suite (every spec under tests/e2e/, every project) against
@@ -543,6 +551,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -607,6 +617,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: e2e-binary-bun
+
   e2e-bun-shard:
     name: e2e (Bun build) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
@@ -624,6 +640,8 @@ jobs:
         shard: ${{ fromJSON(needs.e2e-env.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Download Bun binary
         uses: actions/download-artifact@v4
@@ -693,6 +711,12 @@ jobs:
           path: tests/e2e/blob-report
           if-no-files-found: error
           retention-days: 1
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: e2e-bun-shard-${{ matrix.shard }}
 
   e2e-bun:
     name: e2e (Bun build)
@@ -806,6 +830,8 @@ jobs:
           # Blobless: full commit/tree history (merge-base and origin/main resolve)
           # without the ~16GB of historical blobs; blobs for diffed files fetch lazily.
           filter: blob:none
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -1071,6 +1097,12 @@ jobs:
               });
             }
 
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: test-affected
+
   # ─────────────────────────────────────────────────────────────────────────────
   # go-guards: the former test-delivery-guards, test-oracle, pty-race-regression and
   # install-check jobs as sequential steps of one job (four checks per PR became one). They are
@@ -1095,6 +1127,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -1163,3 +1197,9 @@ jobs:
           }
           export -f run_pty_race_regression
           timeout 14m bash -c run_pty_race_regression || { echo "::error::CI-BUDGET-EXCEEDED: 'pty-race-regression' exceeded its 14m budget"; echo "CI-BUDGET-EXCEEDED: 'pty-race-regression' exceeded its 14m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: go-guards

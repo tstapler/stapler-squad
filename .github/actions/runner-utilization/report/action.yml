@@ -1,0 +1,22 @@
+name: 'Runner utilization: report'
+description: >
+  Stops the sampler, appends a summary to the job summary and uploads a tiny JSON artifact
+  (util-<label>, 7 days). Use `if: always()`; never fails the job.
+inputs:
+  label:
+    description: 'Unique per job and matrix leg, e.g. "test-affected" or "e2e-bun-shard-3".'
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python3 -I "$GITHUB_WORKSPACE/tools/ci/runner-utilization.py" finish "$RUNNER_TEMP/runner-util" "$INPUT_LABEL" || true
+      env:
+        INPUT_LABEL: ${{ inputs.label }}
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      continue-on-error: true
+      with:
+        name: util-${{ inputs.label }}-a${{ github.run_attempt }}
+        path: ${{ runner.temp }}/runner-util/utilization.json
+        retention-days: 7
+        if-no-files-found: ignore
