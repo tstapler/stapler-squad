@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"runtime/metrics"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,12 @@ func TestRegisterRuntimeContentionMetrics_should_ExportMutexWaitSeconds(t *testi
 		}
 	}
 	require.True(t, found, "go.runtime.mutex_wait not exported")
+}
+
+func TestMutexWaitSample_should_BeFloat64Metric(t *testing.T) {
+	s := []metrics.Sample{{Name: mutexWaitSample}}
+	metrics.Read(s)
+	require.Equal(t, metrics.KindFloat64, s[0].Value.Kind(), "runtime no longer exports %s", mutexWaitSample)
 }
 
 func TestReadMutexWaitSeconds_should_BeMonotonic(t *testing.T) {
