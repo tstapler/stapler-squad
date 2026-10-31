@@ -13,8 +13,9 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const RESYNC_FLAG = 'terminal:resync-stagger';
 const RESYNC_FLAG_LABEL = 'Terminal resync: stagger bursts';
 
