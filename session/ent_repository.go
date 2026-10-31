@@ -51,10 +51,11 @@ var EntSchemaCreateMu sync.Mutex
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	client        *ent.Client
-	driver        dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
-	dbPath        string
-	migrationMode bool // When true, enables dual-write mode for migration
+	client          *ent.Client
+	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
+	dbPath          string
+	pendingGuidance pendingGuidanceCache
+	migrationMode   bool // When true, enables dual-write mode for migration
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
@@ -244,6 +245,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 
 	repo.client = client
 	repo.driver = drv
+	repo.watchGuidanceWrites(client)
 
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
@@ -274,7 +276,9 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 // Use this when you need to share an already-opened client across subsystems
 // (e.g. injecting a test client or reusing an existing connection).
 func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
-	return &EntRepository{client: client}
+	repo := &EntRepository{client: client}
+	repo.watchGuidanceWrites(client)
+	return repo
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
