@@ -240,13 +240,14 @@ Markers: `// +api: session:create` in Go handlers; `// +feature: session-list` i
 
 Tests in `tests/e2e/` use Playwright + Allure. **Do not manually start a server first** — `tests/e2e/global-setup.ts` does this automatically for every run, fully isolated from any already-running instance:
 
-- Spawns `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` with `PORT=<dynamically-assigned free port>` (`findFreePort()` in `tests/e2e/helpers/test-server.ts`) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
-- `--test-dir` (backed by `STAPLER_SQUAD_TEST_DIR`) points at a PID-scoped temp directory (`/tmp/stapler-squad-test-<pid>` by default, or `TEST_SERVER_DIR` to override) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service.
-- Playwright's `baseURL` is set dynamically to that port via `TEST_SERVER_URL` (see `playwright.config.ts`); the hardcoded `:8544` fallback there only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
-- Global teardown (`global-teardown.ts`) kills that isolated server and cleans up its temp dir when the run ends.
+- Spawns `E2E_WORKERS` (default 1) isolated `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` servers, one per Playwright worker slot, each with `PORT=<dynamically-assigned free port>` (ports are reserved together in `helpers/server-pool.ts`; `findFreePort()` in `helpers/test-server.ts` is the single-server path) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
+- Each server has its own `--test-dir` (`/tmp/stapler-squad-test-<pid>` at one worker, `...-w<slot>` otherwise; `TEST_SERVER_DIR` overrides the base) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service or with another slot — and its own private tmux socket (`ssq-e2e-<random>`).
+- A worker finds its server through `TEST_PARALLEL_INDEX` (Playwright sets it before loading config and specs): use `baseUrl()` / `testDir()` / `slotTmp(name)` from `tests/e2e/helpers/base-url.ts`, never `process.env.TEST_SERVER_URL` / `BASE_URL` / `TEST_SERVER_TESTDIR` (a jest guard fails on those). `playwright.config.ts`'s `baseURL` and storage state are per-slot too; at one worker the hardcoded `:8544` fallback only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
+- Global teardown (`global-teardown.ts`) kills the isolated servers and cleans up their temp dirs when the run ends.
 
 ```bash
 cd tests/e2e && bun run test                                # runs the full suite (isolated instance auto-managed)
+cd tests/e2e && E2E_WORKERS=4 bun run test                  # same suite, 4 workers each with its own server
 cd tests/e2e && npx playwright test session-lifecycle.spec.ts
 make e2e-report
 make e2e-lighthouse
