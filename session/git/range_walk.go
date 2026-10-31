@@ -77,72 +77,28 @@ func walkShippedRange(ctx context.Context, s storer.EncodedObjectStorer, head, b
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	paint := make(map[plumbing.Hash]uint8, 32)
-	var q paintQueue
-	seq := 0
-	notBase := 0 // queued items pushed without paintBase
-	mark := func(c *object.Commit, f uint8) {
-		old := paint[c.Hash]
-		if old|f == old {
-			return
-		}
-		paint[c.Hash] = old | f
-		heap.Push(&q, paintItem{commit: c, flags: old | f, seq: seq})
-		seq++
-		if (old|f)&paintBase == 0 {
-			notBase++
-		}
-	}
-	mark(head, paintHead)
-	mark(base, paintBase)
+	w := &rangeWalker{store: s, paint: make(map[plumbing.Hash]uint8, 32), slop: rangeWalkSlop}
+	w.mark(head, paintHead)
+	w.mark(base, paintBase)
 
-	var emitted []*object.Commit
-	var oldestEmitted time.Time
-	slop, pops := rangeWalkSlop, 0
-	for q.Len() > 0 && pops < rangeWalkMaxPops {
-		if notBase == 0 {
-			// Everything queued is base-reachable. Keep going while the queue still holds commits at
-			// least as new as the oldest candidate (base's paint may yet reach it, also on timestamp
-			// ties), then a few more for skew.
-			caughtUp := len(emitted) == 0 || q[0].commit.Committer.When.Before(oldestEmitted)
-			if caughtUp {
-				if slop == 0 {
-					break
-				}
-				slop--
-			}
-		} else {
-			slop = rangeWalkSlop
+	pops := 0
+	for w.q.Len() > 0 && pops < rangeWalkMaxPops {
+		if w.settled() {
+			break
 		}
 		if pops++; pops%rangeWalkCtxEvery == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, false, err
 			}
 		}
-		it := heap.Pop(&q).(paintItem)
-		if it.flags&paintBase == 0 {
-			notBase--
-		}
-		cur := paint[it.commit.Hash]
-		if cur == paintHead && it.flags == paintHead {
-			emitted = append(emitted, it.commit)
-			oldestEmitted = it.commit.Committer.When
-		}
-		for _, ph := range it.commit.ParentHashes {
-			if paint[ph]|cur == paint[ph] {
-				continue
-			}
-			p, err := object.GetCommit(s, ph)
-			if err != nil {
-				return nil, false, err
-			}
-			mark(p, cur)
+		if err := w.step(); err != nil {
+			return nil, false, err
 		}
 	}
-	walkLimited := pops >= rangeWalkMaxPops && q.Len() > 0
+	walkLimited := pops >= rangeWalkMaxPops && w.q.Len() > 0
 
-	for _, c := range emitted {
-		if paint[c.Hash]&paintBase == 0 {
+	for _, c := range w.emitted {
+		if w.paint[c.Hash]&paintBase == 0 {
 			shipped = append(shipped, c)
 		}
 	}
@@ -155,4 +111,73 @@ func walkShippedRange(ctx context.Context, s storer.EncodedObjectStorer, head, b
 		return nil, false, errRangeWalkLimit
 	}
 	return shipped, false, nil
+}
+
+// rangeWalker holds the mutable state of one walkShippedRange call.
+type rangeWalker struct {
+	store         storer.EncodedObjectStorer
+	paint         map[plumbing.Hash]uint8
+	q             paintQueue
+	seq           int
+	notBase       int // queued items pushed without paintBase
+	emitted       []*object.Commit
+	oldestEmitted time.Time
+	slop          int
+}
+
+func (w *rangeWalker) mark(c *object.Commit, f uint8) {
+	old := w.paint[c.Hash]
+	if old|f == old {
+		return
+	}
+	w.paint[c.Hash] = old | f
+	heap.Push(&w.q, paintItem{commit: c, flags: old | f, seq: w.seq})
+	w.seq++
+	if (old|f)&paintBase == 0 {
+		w.notBase++
+	}
+}
+
+// settled reports whether the walk can stop, and spends one unit of slop per call while the
+// queue is entirely base-reachable. Everything queued being base-reachable is not enough on its
+// own: keep going while the queue still holds commits at least as new as the oldest candidate
+// (base's paint may yet reach it, also on timestamp ties), then a few more for skew.
+func (w *rangeWalker) settled() bool {
+	if w.notBase != 0 {
+		w.slop = rangeWalkSlop
+		return false
+	}
+	caughtUp := len(w.emitted) == 0 || w.q[0].commit.Committer.When.Before(w.oldestEmitted)
+	if !caughtUp {
+		return false
+	}
+	if w.slop == 0 {
+		return true
+	}
+	w.slop--
+	return false
+}
+
+// step pops the newest queued commit, emits it if only head reaches it, and paints its parents.
+func (w *rangeWalker) step() error {
+	it := heap.Pop(&w.q).(paintItem)
+	if it.flags&paintBase == 0 {
+		w.notBase--
+	}
+	cur := w.paint[it.commit.Hash]
+	if cur == paintHead && it.flags == paintHead {
+		w.emitted = append(w.emitted, it.commit)
+		w.oldestEmitted = it.commit.Committer.When
+	}
+	for _, ph := range it.commit.ParentHashes {
+		if w.paint[ph]|cur == w.paint[ph] {
+			continue
+		}
+		p, err := object.GetCommit(w.store, ph)
+		if err != nil {
+			return err
+		}
+		w.mark(p, cur)
+	}
+	return nil
 }
