@@ -161,12 +161,9 @@ func TestFirstPaint_should_DiscardQueuedFramesAndOrderPaintBeforeLiveOutput(t *t
 	id := hub.AttachSubscriber(&orderedTransport{log}, streamhub.SubscriberCapability{ManualFirstPaint: true})
 	defer hub.DetachSubscriber(id)
 
+	// No writer runs before FirstPaint, so this frame can only reach the log ahead of "paint"
+	// if the hub queued it; the exact-order assertion below catches that.
 	hub.Broadcast([]byte("stale-before-capture"))
-	select {
-	case <-log.added:
-		t.Fatalf("a ManualFirstPaint subscriber must send nothing before FirstPaint, got %v", log.snapshot())
-	case <-time.After(200 * time.Millisecond): // a running writer would have sent it by now
-	}
 
 	err := hub.FirstPaint(id, func() error {
 		log.add("paint")
@@ -231,10 +228,11 @@ func TestFirstPaint_should_BlockResizeUntilPaintReturns(t *testing.T) {
 	resized := make(chan struct{})
 	go func() { hub.RequestResize(context.Background(), voter, mustSize(t, 100, 30)); close(resized) }()
 
+	require.Eventually(t, resizeParkedOnLock, 5*time.Second, time.Millisecond, "the resize never reached the lock")
 	select {
 	case <-resized:
 		t.Fatal("resize completed while a first paint was in flight")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	if got := c.setWindowSizeCalls.Load(); got != 0 {
 		t.Fatalf("SetWindowSize ran %d times during the first paint", got)
@@ -246,6 +244,20 @@ func TestFirstPaint_should_BlockResizeUntilPaintReturns(t *testing.T) {
 	if got := c.setWindowSizeCalls.Load(); got == 0 {
 		t.Fatal("resize never ran after the paint returned")
 	}
+}
+
+// resizeParkedOnLock reports whether a goroutine inside RequestResize is blocked acquiring a
+// mutex, which is how the test knows the resize is waiting on the in-flight paint.
+func resizeParkedOnLock() bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "(*StreamHub).RequestResize") && strings.Contains(g, "sync.(*Mutex).Lock") &&
+			(strings.Contains(g, "SemacquireMutex") || strings.Contains(g, "lockSlow")) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestApplyNegotiatedSize_should_SkipCapture_When_EverySubscriberAwaitsFirstPaint(t *testing.T) {
@@ -276,7 +288,8 @@ func TestApplyNegotiatedSize_should_SkipCapture_When_EverySubscriberAwaitsFirstP
 // on resizeApplyMu or a slow capture) must not trip the slow-subscriber eviction.
 func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrace(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
 	log := newOrderLog()
 	id := hub.AttachSubscriber(&orderedTransport{log}, streamhub.SubscriberCapability{ManualFirstPaint: true})
@@ -285,7 +298,7 @@ func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrac
 	for i := 0; i < 300; i++ { // more than the 100-deep queue
 		hub.Broadcast([]byte("burst"))
 	}
-	time.Sleep(200 * time.Millisecond) //nolint:notimesleeptest the hub's slow-subscriber grace is an internal wall-clock timer; the test proves it does not fire
+	clock.Advance(200 * time.Millisecond) // fires the slow-grace timer, which must spare an awaiting subscriber
 
 	ran := false
 	err := hub.FirstPaint(id, func() error { ran = true; log.add("paint"); return nil })
@@ -296,10 +309,12 @@ func TestFirstPaint_should_NotEvictAwaitingSubscriber_When_BurstOutlastsSlowGrac
 
 func TestFirstPaint_should_EvictSubscriber_When_NeverPaintedWithinMaxAwait(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(30*time.Millisecond))
 	tr := streamhub.NewMemoryTransport()
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	clock.Advance(30 * time.Millisecond)
 	require.Eventually(t, tr.IsClosed, 5*time.Second, time.Millisecond, "max-await eviction must close the transport")
 	require.ErrorIs(t, hub.FirstPaint(id, func() error { return nil }), streamhub.ErrUnknownSubscriber)
 }
@@ -349,7 +364,8 @@ func (s *seqTransport) snapshot() []string {
 // nothing may be evicted or lost, and every frame follows the paint in order.
 func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
 	tr := &seqTransport{}
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
@@ -360,7 +376,7 @@ func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace
 		for i := 0; i < n; i++ {
 			hub.Broadcast([]byte(fmt.Sprintf("f%03d", i)))
 		}
-		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the paint must outlast the hub's internal wall-clock slow-subscriber grace
+		clock.Advance(150 * time.Millisecond) // the paint outlasts the slow-subscriber grace
 		_ = tr.Send([]byte("paint"))
 		return nil
 	}))
@@ -375,14 +391,15 @@ func TestFirstPaint_should_HoldEveryFrameInOrder_When_LongPaintOutlastsSlowGrace
 
 func TestFirstPaint_should_NotEvict_When_MaxAwaitExpiresMidPaint(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	hub := streamhub.NewStreamHub("s", newFakeSessionController(),
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
 		streamhub.WithTeardownGrace(time.Hour), streamhub.WithFirstPaintMaxAwait(20*time.Millisecond))
 	tr := &seqTransport{}
 	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
 	defer hub.DetachSubscriber(id)
 
 	require.NoError(t, hub.FirstPaint(id, func() error {
-		time.Sleep(150 * time.Millisecond) //nolint:notimesleeptest the paint must outlast the hub's internal wall-clock max-await timer
+		clock.Advance(150 * time.Millisecond) // the paint outlasts the max-await window
 		return nil
 	}))
 	hub.Broadcast([]byte("live"))
@@ -492,4 +509,102 @@ func runFirstPaintRace(t *testing.T, it int) {
 	require.Eventually(t, func() bool { return len(missing()) == 0 }, 5*time.Second, time.Millisecond,
 		"iteration %d: frames after the capture (saw %d, last %d) were lost: missing %v, events %d, first %v", it, snapSeq, last, missing(), len(tr.snapshot()), tr.snapshot()[:min(6, len(tr.snapshot()))])
 	require.Equal(t, "paint", tr.snapshot()[0], "iteration %d", it)
+}
+
+// gatedTransport blocks each Send until the test releases it, announcing every Send on entered,
+// so a test steps a "slow but moving" or "stalled" client without sleeping.
+type gatedTransport struct {
+	entered chan struct{}
+	gate    chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func newGatedTransport() *gatedTransport {
+	return &gatedTransport{entered: make(chan struct{}, 4096), gate: make(chan struct{}, 4096), closed: make(chan struct{})}
+}
+
+func (g *gatedTransport) Send([]byte) error {
+	g.entered <- struct{}{}
+	select {
+	case <-g.gate:
+		return nil
+	case <-g.closed:
+		return errors.New("closed")
+	}
+}
+func (g *gatedTransport) Close() error { g.once.Do(func() { close(g.closed) }); return nil }
+
+// replayHub returns a hub whose subscriber has painted with `held` frames queued during the paint;
+// on return the writer is inside the first Send of that held batch (so the pending list is swapped
+// and drainLimit is one queue, 4 frames).
+func replayHub(t *testing.T, held int) (*streamhub.StreamHub, *streamhub.FakeClock, *gatedTransport, streamhub.SubscriberID) {
+	t.Helper()
+	clock := streamhub.NewFakeClock(time.Unix(0, 0))
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithClock(clock),
+		streamhub.WithTeardownGrace(time.Hour), streamhub.WithSubscriberBufferSize(4),
+		streamhub.WithSlowSubscriberGrace(20*time.Millisecond))
+	tr := newGatedTransport()
+	id := hub.AttachSubscriber(tr, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	require.NoError(t, hub.FirstPaint(id, func() error {
+		for i := 0; i < held; i++ {
+			hub.Broadcast([]byte("held"))
+		}
+		return nil
+	}))
+	<-tr.entered
+	return hub, clock, tr, id
+}
+
+// A socket that stalls right after the paint must still be evicted: frames held during the paint
+// and replayed by the writer may not bypass the slow-subscriber grace.
+func TestFirstPaint_should_EvictSubscriber_When_TransportStallsDuringReplay(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub, clock, _, _ := replayHub(t, 3)
+
+	for i := 0; i < 5; i++ { // past the 4-frame replay limit, so the grace timer arms
+		hub.Broadcast([]byte("live"))
+	}
+	clock.Advance(20 * time.Millisecond)
+
+	require.Zero(t, hub.SubscriberCount(), "a stalled replay must trip the slow-subscriber eviction")
+	require.Equal(t, int64(1), hub.SlowSubscriberDropsTotal())
+}
+
+// A client that is slow but moving through one long held batch is not stalled: pending only shrinks
+// at batch boundaries, so progress inside the batch must be what the stall check looks at.
+func TestFirstPaint_should_NotEvictSubscriber_When_ReplayIsSlowButProgressing(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub, clock, tr, _ := replayHub(t, 3)
+
+	for i := 0; i < 5; i++ {
+		hub.Broadcast([]byte("live"))
+	}
+	tr.gate <- struct{}{} // the first held frame goes out ...
+	<-tr.entered          // ... and the writer is on the second
+	clock.Advance(20 * time.Millisecond)
+	require.Equal(t, 1, hub.SubscriberCount(), "a replay that moved within the grace must not be evicted")
+	require.Zero(t, hub.SlowSubscriberDropsTotal())
+
+	hub.Broadcast([]byte("live")) // still over the limit: re-arms, and this time nothing moves
+	clock.Advance(20 * time.Millisecond)
+	require.Zero(t, hub.SubscriberCount(), "a replay that then stopped moving must be evicted")
+	require.Equal(t, int64(1), hub.SlowSubscriberDropsTotal())
+}
+
+// A bulk burst makes huge batch units; the held list is bounded by bytes as well as by count.
+func TestFirstPaint_should_Fail_When_PaintBacklogExceedsByteBound(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	hub := streamhub.NewStreamHub("s", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	id := hub.AttachSubscriber(&seqTransport{}, streamhub.SubscriberCapability{ManualFirstPaint: true})
+	defer hub.DetachSubscriber(id)
+
+	big := make([]byte, 1<<20) // shared, never copied by the hub
+	err := hub.FirstPaint(id, func() error {
+		for i := 0; i < 40; i++ { // 40 MiB, far fewer than the frame-count bound
+			hub.Broadcast(big)
+		}
+		return nil
+	})
+	require.Error(t, err, "bytes held past the bound must fail the paint, not grow without limit")
 }

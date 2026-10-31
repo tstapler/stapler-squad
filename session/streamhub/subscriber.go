@@ -29,11 +29,22 @@ type subscriber struct {
 	// frames then land in pending (they may post-date the capture, so none may be lost) instead
 	// of outbound, so the queue cannot fill while the paint and the replay are in flight.
 	// overflow records that pending hit maxPaintBacklog.
-	firstPaintTimer *time.Timer
+	firstPaintTimer Timer
 	painting        bool
 	expired         bool
 	pending         [][]byte
+	pendingBytes    int
 	overflow        bool
+	// replaySent counts frames the writer has sent from a held batch. The slow-subscriber timer
+	// compares it across the grace, so a client that is slow but moving through one long batch
+	// is not mistaken for a stalled one (pending only shrinks at batch boundaries).
+	replaySent atomic.Uint64
+	// paintDone is set when the paint returned. From then on, pending growing past drainLimit (one
+	// queue's worth beyond what the writer has yet to take) counts as the queue being full: frames
+	// are still held, none is lost, but the slow-subscriber grace starts, so a transport that
+	// stalls during replay is evicted instead of absorbing frames forever.
+	paintDone  bool
+	drainLimit int
 
 	// mu guards closed and slowSince. closed is checked and set under the
 	// same lock as every send attempt (trySend) so a send can never race
@@ -98,32 +109,37 @@ func (s *subscriber) startWriter(onSendError func(id SubscriberID, err error)) {
 // outbound queue. It reports delivered=false both when the queue is full and
 // when the subscriber has already been closed — the caller (StreamHub.deliver)
 // treats both identically: this frame is dropped for this subscriber.
-func (s *subscriber) trySend(data []byte) (delivered bool) {
+//
+// stalled is true when the frame was accepted into the replay backlog but the backlog is past
+// drainLimit, i.e. the writer is not keeping up; the caller then arms the slow-subscriber timer.
+func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return false
+		return false, false
 	}
 	// Before FirstPaint begins, its capture supersedes anything sent, and no writer drains
 	// outbound, so queueing would only fill it and trigger a slow-subscriber eviction.
 	if s.awaitingFirstPaint.Load() {
-		return true
+		return true, false
 	}
 	if s.painting {
-		if len(s.pending) >= maxPaintBacklog {
+		stalled = s.paintDone && len(s.pending) >= s.drainLimit
+		if len(s.pending) >= maxPaintBacklog || s.pendingBytes >= maxPaintBacklogBytes {
 			s.overflow = true
 		} else {
 			s.pending = append(s.pending, data)
+			s.pendingBytes += len(data)
 		}
-		return true
+		return true, stalled
 	}
 	select {
 	case s.outbound <- data:
 		s.slowSince = time.Time{}
-		return true
+		return true, false
 	default:
-		return false
+		return false, false
 	}
 }
 
@@ -131,12 +147,12 @@ func (s *subscriber) trySend(data []byte) (delivered bool) {
 // observed full. It reports true exactly once per stall — the caller arms a
 // single grace-period eviction timer on that signal, rather than one timer
 // per dropped frame while the stall continues.
-func (s *subscriber) markSlow() (firstObservation bool) {
+func (s *subscriber) markSlow(now time.Time) (firstObservation bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.slowSince.IsZero() {
-		s.slowSince = time.Now()
+		s.slowSince = now
 		return true
 	}
 	return false
@@ -161,6 +177,9 @@ func (s *subscriber) isStillFull() bool {
 	defer s.mu.Unlock()
 	if s.closed {
 		return false
+	}
+	if s.painting && s.paintDone {
+		return len(s.pending) >= s.drainLimit
 	}
 	return len(s.outbound) == cap(s.outbound)
 }
@@ -212,12 +231,18 @@ func (s *subscriber) currentResizeVote() (size TerminalSize, voted bool) {
 // fails visibly (errPaintBacklog) rather than silently leaving a gap.
 const maxPaintBacklog = 4096
 
+// maxPaintBacklogBytes bounds the same list by size: a batch unit is not capped (a flush
+// carries every byte read in the 20 ms window, so a bulk `cat` makes megabyte units), and 4096
+// of those would hold gigabytes per subscriber. Checked before appending, so one oversized
+// frame is still held and the next one overflows, failing the paint like the count bound does.
+const maxPaintBacklogBytes = 16 << 20
+
 // armFirstPaintTimeout evicts (via onExpire) a subscriber still awaiting its FirstPaint after d.
 // The check and beginFirstPaint share mu, so it can never evict a subscriber mid-paint.
-func (s *subscriber) armFirstPaintTimeout(d time.Duration, onExpire func()) {
+func (s *subscriber) armFirstPaintTimeout(clock Clock, d time.Duration, onExpire func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.firstPaintTimer = time.AfterFunc(d, func() {
+	s.firstPaintTimer = clock.AfterFunc(d, func() {
 		s.mu.Lock()
 		expire := s.awaitingFirstPaint.Load() && !s.closed
 		if expire {
@@ -247,11 +272,13 @@ func (s *subscriber) beginFirstPaint() bool {
 	return true
 }
 
-// endFirstPaint reports whether any frame was lost to maxPaintBacklog during the paint. Frames
-// keep going to pending until the writer's drainPending has caught up.
+// endFirstPaint reports whether any frame was lost to maxPaintBacklog during the paint, and
+// starts the replay stall bound. Frames keep going to pending until the writer's drainPending has caught up.
 func (s *subscriber) endFirstPaint() (overflowed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.paintDone = true
+	s.drainLimit = len(s.pending) + cap(s.outbound)
 	return s.overflow
 }
 
@@ -268,6 +295,8 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 		}
 		batch := s.pending
 		s.pending = nil
+		s.pendingBytes = 0
+		s.drainLimit = cap(s.outbound)
 		if len(batch) == 0 {
 			s.painting = false
 			s.mu.Unlock()
@@ -279,6 +308,7 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 				onSendError(s.id, err)
 				return false
 			}
+			s.replaySent.Add(1)
 		}
 	}
 }
