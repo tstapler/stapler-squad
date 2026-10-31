@@ -146,7 +146,7 @@ func TestHistoryLinker_Commit_should_Reselect_When_ChosenConversationWasClaimed(
 }
 
 // A session linked by a concurrent correlation while this one was still
-// detecting must keep the newer link rather than be overwritten by the stale result.
+// detecting must keep the newer link rather than be overwritten by a stale path guess.
 func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t *testing.T) {
 	t.Parallel()
 	f := newClaimFixture(t, "/repo/stale")
@@ -157,8 +157,23 @@ func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t
 	stale := &HistoryFileInfo{ConversationUUID: claimOwnStart}
 	a.SetHistoryInfo(claimOther, "/p/"+claimOther+".jsonl") // newer link landed first
 
-	assert.Nil(t, f.linker.commitLink(a, stale, false, false))
+	assert.Nil(t, f.linker.commitLink(a, stale, true, false))
 	assert.Equal(t, claimOther, a.GetClaudeSession().ConversationUUID)
+}
+
+// A pane-PID result is authoritative: it overwrites a path-derived link made
+// concurrently, as the old fully-serialised correlation did.
+func TestHistoryLinker_Commit_should_OverwriteWithPanePID_When_SessionLinkedMeanwhile(t *testing.T) {
+	t.Parallel()
+	f := newClaimFixture(t, "/repo/panepid")
+	a := &Instance{Title: "a", Path: "/repo/panepid", Status: Running}
+	f.linker.SetInstances([]*Instance{a})
+
+	a.SetHistoryInfo(claimOther, "/p/"+claimOther+".jsonl") // path guess landed first
+
+	committed := f.linker.commitLink(a, &HistoryFileInfo{ConversationUUID: claimOwnStart}, false, false)
+	require.NotNil(t, committed)
+	assert.Equal(t, claimOwnStart, a.GetClaudeSession().ConversationUUID)
 }
 
 // A session that ends up unlinked because a sibling owns the only candidate

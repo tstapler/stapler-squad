@@ -402,13 +402,14 @@ func (hl *HistoryLinker) detectLink(inst *Instance, alreadyLinked bool) (info *H
 // claimed-set read taken before the lock, so it is re-checked here: if a
 // sibling claimed that conversation in the meantime, the selection is redone
 // under the lock (rare; costs one directory scan). Pane-PID results are
-// authoritative and committed as-is, as before. A never-linked session that a
-// concurrent correlation linked while this one was detecting is left alone,
-// so a stale result cannot overwrite the newer link.
+// authoritative and committed as-is, as before, even over a link a concurrent
+// correlation just made (the old global lock made the later one overwrite it).
+// A path-derived guess for a never-linked session that was linked meanwhile is
+// dropped, so a stale guess cannot overwrite the newer link.
 func (hl *HistoryLinker) commitLink(inst *Instance, info *HistoryFileInfo, viaPath, alreadyLinked bool) *HistoryFileInfo {
 	hl.claimMu.Lock()
 	defer hl.claimMu.Unlock()
-	if !alreadyLinked && inst.HasClaudeSession() {
+	if viaPath && !alreadyLinked && inst.HasClaudeSession() {
 		return nil
 	}
 	if viaPath && hl.claimedByOther(inst, info.ConversationUUID) {
