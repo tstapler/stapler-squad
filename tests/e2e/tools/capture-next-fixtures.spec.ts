@@ -11,9 +11,10 @@ import { test, expect, type Page } from '@playwright/test';
 import { ROUTE_META } from '../../../web-app/src/app/route-meta';
 import { AppShellPage } from '../pages/AppShellPage';
 import { measureNotFound, measureScrollPolicy } from '../pages/BaselineProbes';
+import { baseUrl } from '../helpers/base-url';
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 const QUIET_MS = 1500;
 

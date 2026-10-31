@@ -14,8 +14,9 @@
 
 import { test, expect, APIRequestContext } from "@playwright/test";
 import { BacklogSourcesSettingsPage } from "./pages/BacklogSourcesSettingsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 // GetFeatureFlags is NOT a reliable readiness signal here: when a
 // FeatureController is wired for a flag (true for "backlog"), GetFeatureFlags

@@ -21,6 +21,15 @@ type fakePauseResumeProcessManager struct {
 	// ptyAttached mirrors TmuxSession: Start() leaves it false, only
 	// RestoreWithWorkDir() attaches the write PTY.
 	ptyAttached bool
+	pty         *os.File
+}
+
+func newFakePauseResumeProcessManager(t *testing.T) *fakePauseResumeProcessManager {
+	t.Helper()
+	pty, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pty.Close() })
+	return &fakePauseResumeProcessManager{pty: pty}
 }
 
 func (f *fakePauseResumeProcessManager) RestoreWithWorkDir(string) error {
@@ -32,7 +41,8 @@ func (f *fakePauseResumeProcessManager) GetPTY() (*os.File, error) {
 	if !f.ptyAttached {
 		return nil, errors.New("PTY not initialized - session may not be started")
 	}
-	return nil, nil
+	// Non-nil stand-in for the attached write PTY; callers only check attachment.
+	return f.pty, nil
 }
 
 func (f *fakePauseResumeProcessManager) SendKeys(string) (int, error) {
@@ -140,7 +150,7 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 		Permissions: GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
-	fakePM := &fakePauseResumeProcessManager{alive: false}
+	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM
 
 	err := inst.Resume()
@@ -163,7 +173,7 @@ func TestResume_should_AttachPTY_When_TmuxWasKilledOnPause(t *testing.T) {
 		Permissions: GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
-	fakePM := &fakePauseResumeProcessManager{alive: false}
+	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM
 
 	require.NoError(t, inst.Resume())
@@ -202,7 +212,7 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 		ConversationUUID: "does-not-exist",
 		Settings:         ClaudeSettings{AutoReattach: true},
 	}
-	fakePM := &fakePauseResumeProcessManager{alive: false}
+	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM
 
 	err := inst.Resume()

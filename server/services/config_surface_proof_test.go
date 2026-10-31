@@ -299,6 +299,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:escape_events_db_migrate": {
+		testName:   "TestConfigSurfaceProof_EscapeEventsDBMigrate_ChangesMigrationEnabled",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:hidden_session_gate": {
 		testName:   "TestConfigSurfaceProof_HiddenSessionGate_ChangesDeliveryGateCache",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",

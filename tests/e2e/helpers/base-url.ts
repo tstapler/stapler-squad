@@ -50,3 +50,12 @@ export function pinWorkerEnv(): void {
   const dir = testDir();
   if (dir) process.env.TEST_SERVER_TESTDIR = dir;
 }
+
+/**
+ * `/tmp/<name>` for slot 0 (unchanged single-worker path), `/tmp/<name>-w<slot>` for the others, so
+ * specs that create or reference a fixed directory never share it across concurrent servers.
+ */
+export function slotTmp(name: string): string {
+  const slot = serverSlot();
+  return slot === 0 ? `/tmp/${name}` : `/tmp/${name}-w${slot}`;
+}

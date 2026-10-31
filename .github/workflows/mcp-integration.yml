@@ -38,6 +38,8 @@ jobs:
     timeout-minutes: 60  # two suites with 25m soft caps each: the hard kill must not pre-empt the CI-BUDGET-EXCEEDED marker
     steps:
       - uses: actions/checkout@v4
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -74,3 +76,9 @@ jobs:
           PACKAGES: ./server/services/...
           RACE: ''
         run: bash .github/scripts/mcp-suite.sh
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: mcp-integration
