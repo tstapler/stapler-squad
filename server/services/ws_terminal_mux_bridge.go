@@ -404,3 +404,33 @@ func TerminalMuxPoolSizeFromEnv() int {
 func NewTerminalMuxBridgeForHandler(h *ConnectRPCWebSocketHandler, poolSize int, opts ...TerminalMuxOption) *TerminalMuxBridge {
 	return NewTerminalMuxBridge(h.serveTerminalStream, poolSize, opts...)
 }
+
+// TerminalMuxReport is the /actuator/terminal-mux payload.
+type TerminalMuxReport struct {
+	PoolSize int `json:"poolSize"`
+	Sockets  int `json:"sockets"`
+	Streams  int `json:"streams"`
+}
+
+// Report snapshots the advertised size and live socket/stream counts.
+func (b *TerminalMuxBridge) Report() TerminalMuxReport {
+	b.mu.Lock()
+	socks := make([]*muxSocket, 0, len(b.sockets))
+	for s := range b.sockets {
+		socks = append(socks, s)
+	}
+	b.mu.Unlock()
+	r := TerminalMuxReport{PoolSize: b.PoolSize(), Sockets: len(socks)}
+	for _, s := range socks {
+		s.mu.Lock()
+		r.Streams += len(s.streams)
+		s.mu.Unlock()
+	}
+	return r
+}
+
+// ParseTerminalMuxPoolSize validates a requested pool size (0..muxMaxSockets).
+func ParseTerminalMuxPoolSize(raw string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	return n, err == nil && n >= 0 && n <= muxMaxSockets
+}
