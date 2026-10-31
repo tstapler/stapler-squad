@@ -38,7 +38,12 @@ interface VcsFlight {
   /** Stops a superseded request (dequeues it, or aborts it on the wire). */
   cancel: () => void;
   /** The single refresh that starts when this flight lands, shared by every caller that needed newer data. */
-  trailing?: { promise: Promise<VcsCacheEntry>; focused: boolean };
+  trailing?: {
+    promise: Promise<VcsCacheEntry>;
+    focused: boolean;
+    settle: VcsFlight["settle"];
+    answered: boolean;
+  };
 }
 const vcsInflight = new Map<string, VcsFlight>();
 
@@ -49,6 +54,7 @@ const vcsInflight = new Map<string, VcsFlight>();
  */
 export const MAX_BACKGROUND_VCS_CALLS = 2;
 let backgroundRunning = 0;
+let slotEpoch = 0; // bumped by test reset so releases from before it cannot unbalance the counter
 const backgroundQueue: Array<() => void> = [];
 
 function acquireBackgroundSlot(): Promise<void> {
@@ -59,7 +65,8 @@ function acquireBackgroundSlot(): Promise<void> {
   return new Promise<void>((resolve) => backgroundQueue.push(resolve));
 }
 
-function releaseBackgroundSlot(): void {
+function releaseBackgroundSlot(epoch: number): void {
+  if (epoch !== slotEpoch) return;
   const next = backgroundQueue.shift();
   if (next) next(); // the slot passes straight to the next waiter
   else backgroundRunning--;
@@ -83,10 +90,11 @@ function startFlight(sessionId: string, focused: boolean, waitForFresh: boolean)
     if (vcsInflight.get(sessionId) === flight) vcsInflight.delete(sessionId);
   };
   const run = async (): Promise<VcsCacheEntry> => {
+    const epoch = slotEpoch;
     if (!focused) {
       await acquireBackgroundSlot();
       if (cancelled) {
-        releaseBackgroundSlot();
+        releaseBackgroundSlot(epoch);
         throw new ConnectError("superseded", Code.Canceled);
       }
     }
@@ -107,7 +115,7 @@ function startFlight(sessionId: string, focused: boolean, waitForFresh: boolean)
       if (vcsGeneration.get(sessionId) === generation) vcsCache.set(sessionId, entry);
       return entry;
     } finally {
-      if (!focused) releaseBackgroundSlot();
+      if (!focused) releaseBackgroundSlot(epoch);
     }
   };
   run().then(
@@ -129,6 +137,11 @@ function supersede(sessionId: string, old: VcsFlight, waitForFresh: boolean): Vc
   old.cancel();
   const next = startFlight(sessionId, true, waitForFresh);
   next.promise.then(old.settle.resolve, old.settle.reject);
+  // The replacement starts after whatever queued the old flight's trailing refresh, so it answers it too.
+  if (old.trailing && waitForFresh) {
+    old.trailing.answered = true;
+    next.promise.then(old.trailing.settle.resolve, old.trailing.settle.reject);
+  }
   return next;
 }
 
@@ -155,8 +168,15 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true, 
   if (!(force && waitForFresh)) return existing.promise;
   if (existing.trailing && (existing.trailing.focused || !focused)) return existing.trailing.promise;
   const settled = () => undefined;
-  const promise = existing.promise.then(settled, settled).then(() => fetchVcsEntry(sessionId, true, focused, true));
-  existing.trailing = { promise, focused };
+  let settle!: VcsFlight["settle"];
+  const promise = new Promise<VcsCacheEntry>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  const trailing = { promise, focused, settle, answered: false };
+  existing.trailing = trailing;
+  void existing.promise
+    .then(settled, settled)
+    .then(() => (trailing.answered ? undefined : fetchVcsEntry(sessionId, true, focused, true).then(settle.resolve, settle.reject)));
   return promise;
 }
 
@@ -172,6 +192,7 @@ export function resetVcsCacheForTests(): void {
   vcsGeneration.clear();
   backgroundRunning = 0;
   backgroundQueue.length = 0;
+  slotEpoch++;
 }
 
 /**

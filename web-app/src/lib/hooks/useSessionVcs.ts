@@ -99,6 +99,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // Fixed per hook instance: re-drawing it on every Redux update would make the slow backstop fire at random.
   const pollPhaseRef = useRef<number | null>(null);
   if (pollPhaseRef.current === null) pollPhaseRef.current = Math.random();
+  const pollStartedRef = useRef(false);
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -256,8 +257,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
         tick();
         if (!stoppedRef.current) fallback = setInterval(tick, pollMs);
       },
-      pollMode === "fast" ? pollMs : Math.floor((pollPhaseRef.current ?? 0) * pollMs),
+      // Only the hook's first poll start is jittered; a re-run (session update) restarts a full period as before.
+      pollMode === "fast" || pollStartedRef.current ? pollMs : Math.floor((pollPhaseRef.current ?? 0) * pollMs),
     );
+    pollStartedRef.current = true;
     return () => {
       clearTimeout(phase);
       clearInterval(fallback);

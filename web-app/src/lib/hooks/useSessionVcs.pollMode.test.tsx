@@ -58,6 +58,22 @@ describe("useSessionVcs pollMode", () => {
     expect(mockGetVCSStatus).toHaveBeenCalledTimes(4);
   });
 
+  it("useSessionVcs_should_NotAddExtraPolls_When_SessionUpdatesKeepArriving", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0.01); // a 6 s phase
+    const { rerender } = renderHook(({ n }: { n: number }) => { void n; return useSessionVcs("k1", "", "slow"); }, { initialProps: { n: 0 } });
+    await advance(1_000);
+    const afterMount = mockGetVCSStatus.mock.calls.length;
+    expect(afterMount).toBe(1);
+    await advance(10_000); // the one jittered first tick
+    const afterPhase = mockGetVCSStatus.mock.calls.length;
+    expect(afterPhase).toBe(2);
+    for (let i = 1; i <= 10; i++) {
+      rerender({ n: i });
+      await advance(30_000);
+    }
+    expect(mockGetVCSStatus.mock.calls.length).toBe(afterPhase); // full periods restart on re-run, as before
+  });
+
   it("useSessionVcs_should_PollFast_When_Focused", async () => {
     renderHook(() => useSessionVcs("f1", "", "fast"));
     await advance(120_000);

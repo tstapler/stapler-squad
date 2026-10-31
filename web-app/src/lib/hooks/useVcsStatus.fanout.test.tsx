@@ -136,4 +136,32 @@ describe("fetchVcsEntry fan-out", () => {
     await flush();
     expect(pending[3].args.waitForFresh).toBe(false);
   });
+
+  it("fetchVcsEntry_should_NotChainRedundantRefresh_When_SupersedeAnswersTrailing", async () => {
+    const pending = installPendingTransport();
+    void fetchVcsEntry("t1", true, false, false); // background poll
+    await flush();
+    const trailing = fetchVcsEntry("t1", true, false, true); // event queues a trailing refresh on it
+    await flush();
+    const focused = fetchVcsEntry("t1", true, true, true); // pane gains focus: supersedes
+    await flush();
+    pending[1].resolve("fresh");
+    await Promise.all([trailing, focused]);
+    await flush();
+    expect(mockGetVCSStatus).toHaveBeenCalledTimes(2); // no third request behind the replacement
+  });
+
+  it("resetVcsCacheForTests_should_IgnoreReleasesFromBeforeTheReset", async () => {
+    const pending = installPendingTransport();
+    void fetchVcsEntry("r1", true, false);
+    void fetchVcsEntry("r2", true, false);
+    await flush();
+    resetVcsCacheForTests();
+    pending.forEach((p) => p.resolve("x")); // late releases from the previous epoch
+    await flush();
+    const before = pending.length;
+    ["a", "b", "c", "d"].forEach((id) => void fetchVcsEntry(id, true, false));
+    await flush();
+    expect(pending.length - before).toBe(MAX_BACKGROUND_VCS_CALLS);
+  });
 });
