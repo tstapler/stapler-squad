@@ -152,3 +152,30 @@ func TestRetention_Noop(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 5, count)
 }
+
+// Multi-chunk eviction across sessions: over-cap sessions land exactly on the cap
+// with the newest rows, an under-cap session is untouched.
+func TestRetention_EscapeEventPerSessionCap_MultiChunkAndUnderCap(t *testing.T) {
+	ctx := context.Background()
+	client, err := OpenAnalyticsDB(ctx, t.TempDir())
+	require.NoError(t, err)
+	defer client.Close()
+
+	const cap = 40
+	w := NewEscapeEventBatchWriter(client, 0) // cap 0: insert without trimming
+	base := time.Now().Add(-time.Hour)
+	sizes := map[string]int{"big": 2*escapeEvictChunkRows + 100 + cap, "mid": cap + 3, "small": cap - 5}
+	for s, n := range sizes {
+		w.flushBatch(ctx, escapeBatch(s, base, 0, n))
+	}
+
+	runRetention(ctx, client, 0, 0, 0, cap)
+
+	for s, n := range sizes {
+		want := min(n, cap)
+		got, err := client.EscapeEvent.Query().Where(escapeevent.SessionID(s)).Order(escapeevent.ByWallTime()).All(ctx)
+		require.NoError(t, err)
+		require.Len(t, got, want, s)
+		assert.Equal(t, int64(n-want), got[0].SessionSeq, "%s keeps the newest rows", s)
+	}
+}

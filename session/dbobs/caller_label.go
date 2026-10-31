@@ -1,6 +1,7 @@
 package dbobs
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -41,4 +42,22 @@ func callerLabel(caller string) string {
 
 func callerAttr(caller string) attribute.KeyValue {
 	return attribute.String("db.caller", callerLabel(caller))
+}
+
+type callerKey struct{}
+
+// WithCaller names the call site for statements issued under ctx. Use it where
+// the stack cannot: ent's CreateBulk nests one frame per row, so a large batch
+// pushes the application frame past callerOf's scan window and the statement is
+// otherwise attributed to "unknown".
+func WithCaller(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, callerKey{}, name)
+}
+
+// callerFor returns the explicit WithCaller name, else the stack-derived one.
+func callerFor(ctx context.Context) string {
+	if name, ok := ctx.Value(callerKey{}).(string); ok && name != "" {
+		return name
+	}
+	return callerOf()
 }
