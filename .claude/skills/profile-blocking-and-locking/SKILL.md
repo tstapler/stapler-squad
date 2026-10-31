@@ -35,7 +35,7 @@ python3 -I .claude/skills/profile-blocking-and-locking/scripts/goroutine-states.
 | `database/sql` frames, `db_query_pool_wait_milliseconds` | **DB pool** | skill `profile-db-usage` |
 | Slow but no local wait signal | **External resource** (GitHub, git remote, tymuxd) | span/log timing, `vcs_status_compute_duration_*` |
 
-Several can be true at once. Rank by lost goroutine-seconds, not by how alarming a graph looks.
+Metric names in the table omit the `_bucket`/`_count`/`_sum` (and `_milliseconds`) suffixes VictoriaMetrics stores; reference.md has exact queries. Several can be true at once. Rank by lost goroutine-seconds, not by how alarming a graph looks.
 
 ### 1a. CPU starvation
 - `go_runtime_sched_latency_seconds` is time goroutines sat runnable before running. High p99 with low app CPU (`ps -o %cpu -p $(pgrep -x stapler-squad)`) means the host is the bottleneck: read `ps -Ao pcpu,comm -r | head` (VMs, EDR agents, other builds). Fix is outside the process: fewer concurrent agents/builds, lower `GOMAXPROCS`, or accept.
@@ -54,7 +54,7 @@ go tool pprof -peek '<holder frame from the top table>' -sample_index=delay b.pb
 ```
 
 Pitfalls (each hit in this repo):
-- `-ignore` drops every sample containing a matching frame, and every mutex stack contains `sync.(*Mutex).Unlock`, so `-ignore='^sync\.'` leaves only runtime-internal lock samples (`runtime.unlock`, `runtime._LostContendedRuntimeLock`, about 57% on the live profile): a plausible but wrong table. The inverse, `-ignore='^runtime\.'` (as in `docs/how-to/find-lock-contention.md`), is fine and keeps the `sync.(*Mutex).Unlock` holders. To keep the samples but hide frames use `-hide`, and `--match` in `pyro-top.py`. (`-ignore` is right for block: `-ignore='selectgo|chanrecv'`.)
+- `-ignore` drops every sample containing a matching frame, and every mutex stack contains `sync.(*Mutex).Unlock`, so `-ignore='^sync\.'` leaves only runtime-internal lock samples (`runtime.unlock`, `runtime._LostContendedRuntimeLock`, about 56% on the cumulative live profile): a plausible but wrong table. The inverse, `-ignore='^runtime\.'` (as in `docs/how-to/find-lock-contention.md`), is fine and keeps the `sync.(*Mutex).Unlock` holders. To keep the samples but hide frames use `-hide`, and `--match` in `pyro-top.py`. (`-ignore` is right for block: `-ignore='selectgo|chanrecv'`.)
 - Cumulative vs delta: `/mutex` is lifetime totals and Alloy scrapes the cumulative types, so Pyroscope mutex/block ranks are right but absolute values are inflated (`docs/observability/README.md`, "Per-interval lock profiles"). Use `-base` for absolute. Sampling: 1 in `--profile-mutex-fraction` events (default 10, scaled back up) and blocks shorter than `--profile-block-rate` ns (default 1000) are sampled proportionally, so values are estimates.
 - Block-profile stacks are the **waiting** call site (including `sync.Mutex.Lock` waits); mutex-profile stacks are the **holder**. Read both to pair a lock's waiter and holder.
 - Pyroscope CPU: the CPU profile lock may be held by Alloy, so `curl .../profile?seconds=N` can return empty. Use `scripts/pyro-top.py cpu` instead.
@@ -64,7 +64,7 @@ Pitfalls (each hit in this repo):
 - `goroutine-states.py` groups by state and by top app frame and lists lock/WaitGroup/chan-send waits over a minute. Idle parks (`select`, `chan receive`, `IO wait`) are normal; a group whose count grows between two dumps is a leak.
 - Block profile for real synchronization only:
   `go tool pprof -sample_index=delay -top -nodecount=15 -hide='^runtime\.' -ignore='selectgo|chanrecv' -base b_a.pb.gz b_b.pb.gz` (same two-curl pattern on `/block`).
-- Waiters on `ReactiveQueueManager.Wait` / `HistoryLinker.Wait` are shutdown joiners, not stalls.
+- Long-lived WaitGroup waiters such as `ReactiveQueueManager.Wait`, `HistoryLinker.Wait` and `WorktreeChangeDetector.Start.func1` are shutdown joiners, not stalls.
 
 ### 1d. Subprocess and IO blocking
 - tmux: exec-gate waits and in-flight per pool (queries in reference.md); callers via `tmux_exec_total` by `caller`/`subcommand`. The gate is bounded, so a slow tmux serializes everything behind it.
@@ -79,7 +79,7 @@ Pitfalls (each hit in this repo):
 ## Step 2. Hang / deadlock playbook
 
 0. If `:6060` does not answer, the service was not started with `--profile`: pprof steps need a manual instance (CLAUDE.md "Manual/interactive testing").
-1. Dump without killing: `curl -s localhost:6060/debug/pprof/goroutine?debug=2 -o /tmp/g.txt` (not SIGQUIT, which exits the live service). Take two dumps 30 s apart: goroutines with the same id and a growing `N minutes` are stuck, not busy.
+1. Dump without killing: `curl -s 'localhost:6060/debug/pprof/goroutine?debug=2' -o /tmp/g.txt` (not SIGQUIT, which exits the live service). Take two dumps 30 s apart: goroutines with the same id and a growing `N minutes` are stuck, not busy.
 2. `python3 -I scripts/goroutine-states.py /tmp/g.txt --find correlateSession`. In a pile-up one goroutine holds the lock and the rest sit in `sync.Mutex.Lock`/`semacquire`. The likely holder (a plain `sync.Mutex` dump cannot name it) is the goroutine whose stack contains the function but is **not** in a lock wait; read its top frames: that call (exec, SQL, channel send, callback) is what the lock is held across.
 3. Lock cycle (A waits on B, B on A): find each waiter's `created by` and the lock's call site with `grep -n 'mu\.\(R\)\?Lock' file.go`. `session/` uses `github.com/linkdata/deadlock` types, but they are plain `sync` unless built with `-tags deadlock` or `-race` (the Makefile builds with neither), so the deployed service reports nothing. In a test or manual instance built with the tag it reports waits over `Opts.DeadlockTimeout` (30 s), same-goroutine re-lock and lock-order inversions to `Opts.LogBuf` (stderr), and **panics** when `OnPotentialDeadlock` is unset: never enable it on `:8543`. `RWMutex`: a recursive `RLock` deadlocks when a writer is pending between the two reads, and a pending `Lock` blocks all new readers.
 4. Reproduce: `go test -race -count=20 -run TestX ./pkg` (finds data races, not deadlocks: deadlocks show as the `-timeout` goroutine dump or `-tags deadlock`); wrap with `timeout 60s`; for a deadlock the test-binary panic `all goroutines are asleep` or `-timeout 30s` dump gives the goroutine states for free.

@@ -47,7 +47,7 @@ terminal_mux_sockets_open   terminal_mux_streams_open   rate(terminal_mux_write_
 histogram_quantile(0.99, sum by (le)(rate(client_ws_send_queue_delay_milliseconds_bucket[15m])))
 histogram_quantile(0.99, sum by (le)(rate(client_rpc_network_queue_delay_milliseconds_bucket[1h])))
 sum(rate(client_rpc_coalesce_total[15m]))   rate(client_ws_unary_fallback_total[15m])
-rpc_server_inflight                          # by rpc_method; sort -k2 for the busiest
+topk(5, rpc_server_inflight)                 # busiest rpc_method (pq.py prints at most 12 rows)
 http_server_connections_open
 vcs_status_in_flight
 histogram_quantile(0.99, sum by (le)(rate(vcs_status_queue_wait_duration_milliseconds_bucket[15m])))
@@ -66,7 +66,7 @@ DB (owned by `profile-db-usage`): `rate(db_pool_wait_duration_ms[15m])` by `db_n
 | `localhost:6060/debug/pprof/delta_{mutex,block,heap}` | per-interval profile; do not call by hand (steals Alloy's interval) |
 | `localhost:6060/debug/fork-pressure`, `/debug/blob-cache` | spawn/zombie counters; blob cache hit rate |
 | `localhost:8543/actuator/health` | runtime goroutine status (`degraded` when over the goroutine threshold) |
-| `localhost:8543/actuator/ws-unary` | `ws_unary_inflight`, `ws_unary_zombies`, per-method call counts (JSON fields, not Prometheus series) |
+| `localhost:8543/actuator/ws-unary` | `ws_unary_inflight`, `ws_unary_zombies`, per-method call counts (also Prometheus series `ws_unary_inflight`, `ws_unary_zombies`) |
 | `localhost:8543/actuator/terminal-mux` | `poolSize`, `sockets`, `streams` |
 | `localhost:8543/actuator/metrics` | blob cache and DB pool stats with top statements and wait time |
 | `localhost:4040/querier.v1.QuerierService/{ProfileTypes,LabelValues,SelectMergeStacktraces}` | Pyroscope (Connect JSON POST) |
