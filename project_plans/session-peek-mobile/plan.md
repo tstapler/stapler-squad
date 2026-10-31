@@ -19,7 +19,7 @@ In the mobile bottom-sheet section (around line 371, after the "New full-screen 
   }}
 >
   {/* analytics-exempt */}
-  <span className={mobilePickerPaneLabel}>◻</span>
+  <span className={mobilePickerPaneLabel}><Maximize2 size={14} /></span>
   Temporary modal
 </button>
 ```
