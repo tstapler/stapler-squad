@@ -41,7 +41,7 @@ func migratedTemplateDBURI() (string, error) {
 		// NewEntRepository's pool recycles its connection after an hour
 		// (SetConnMaxLifetime). Pin a second connection with no lifetime limit so the
 		// template survives a long-running test process.
-		keeper, err := sql.Open("sqlite", dsn)
+		keeper, err := sql.Open("sqlite", dsn) //nolint:norawdb in-memory test fixture helper
 		if err != nil {
 			templateDBErr = err
 			return
@@ -148,7 +148,7 @@ func TestBackdateItemSessionCreatedAt(t *testing.T, storage *Storage, itemSessio
 		WithForeignKeysShort().
 		WithEntTimeCompat().
 		Build()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", dsn) //nolint:norawdb in-memory test fixture helper
 	if err != nil {
 		return fmt.Errorf("TestBackdateItemSessionCreatedAt: open: %w", err)
 	}
