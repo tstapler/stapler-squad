@@ -21,7 +21,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"golang.org/x/sys/unix"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -194,9 +193,8 @@ func registerOSSocketMetrics(m metric.Meter) error {
 		if n, ok := openFDCount(); ok {
 			o.ObserveInt64(fds, n)
 		}
-		var rl unix.Rlimit
-		if unix.Getrlimit(unix.RLIMIT_NOFILE, &rl) == nil {
-			o.ObserveInt64(limit, int64(min(rl.Cur, uint64(1)<<62))) // #nosec G115 -- clamped
+		if n, ok := openFDLimit(); ok {
+			o.ObserveInt64(limit, n)
 		}
 		if n, ok := somaxconn(); ok {
 			o.ObserveInt64(somax, n)
