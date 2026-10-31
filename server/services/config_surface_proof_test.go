@@ -333,7 +333,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on remote-access origins on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
 	"flag:terminal_ws_pool": {
-		exempt: "client-only: no Go reader; the web client gates the shared terminal socket pool on it (web-app/src/lib/transport/terminal-socket-pool.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the /api/ws/terminal-mux endpoint is always mounted (advertised size 0 makes it answer 404) and covered by ws_terminal_mux_test.go",
+		exempt: "client-only: no Go reader; the web client gates the shared terminal socket pool on it (web-app/src/lib/transport/terminal-socket.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the /api/ws/terminal-mux endpoint is always mounted (advertised size 0 makes it answer 404) and covered by ws_terminal_mux_test.go",
 	},
 	"flag:batch_unary": {
 		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
