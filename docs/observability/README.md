@@ -13,6 +13,7 @@ living in an unrelated repo.
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
 | `tymux-backend.json` | `ssq-tymux-backend` | tymux vs tmux operation latency (RED), attach stream health, backend mix, tymuxd supervision |
 | `client-network.json` | `ssq-client-network` | Browser RPC rate/latency/errors by method and transport, duplicates and coalescing, batch effectiveness, WebSocket lifecycle/RTT (client and `ws_unary_*` server side), web vitals, long tasks; see `docs/reference/client-network-telemetry.md` |
+| `vcs-status-stages.json` | `ssq-vcs-status-stages` | `GetVCSStatus` per-stage latency (`git_status`, `shipped_commits`, `diff_stat`), SHA-range cache hit ratio, budget overruns; metrics in `server/services/vcs_range_cache.go` |
 
 ## tymux backend metrics
 
@@ -68,7 +69,7 @@ the app's own OTel flag.
 
 ## Traces on the dashboards
 
-All six dashboards carry a "Traces in Tempo (Explore)" dashboard link (top bar) that opens Explore on the
+All seven dashboards carry a Tempo (Explore) dashboard link ("Traces in Tempo (Explore)"; "Slow VCS spans in Tempo (Explore)" on `vcs-status-stages`) (top bar) that opens Explore on the
 Tempo datasource with the dashboard's time range. `cgroup-memory` and `pprof-profiles` have only that
 link, because no spans correspond to memory or profile data. The other four also have the following. The overview link on `cgroup-memory` and `pprof-profiles` is pre-filtered to server spans slower than 500ms:
 

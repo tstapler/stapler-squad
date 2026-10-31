@@ -52,6 +52,10 @@ type vcsStatusMetrics struct {
 	compute  metric.Float64Histogram
 	lockWait metric.Float64Histogram
 	inFlight metric.Int64UpDownCounter
+	// stage is per-stage wall time inside one computation (git_status, shipped_commits, diff_stat).
+	stage metric.Float64Histogram
+	// rangeCache counts SHA-range cache lookups by stage and result (hit, miss, negative_hit).
+	rangeCache metric.Int64Counter
 }
 
 var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
@@ -77,6 +81,16 @@ var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
 	if m.inFlight, err = meter.Int64UpDownCounter("vcs.status.in_flight",
 		metric.WithDescription("Git status computations currently running or queued for a slot")); err != nil {
 		log.Error("services: register vcs.status.in_flight", "error", err)
+	}
+	if m.stage, err = meter.Float64Histogram("vcs.status.stage.duration",
+		metric.WithUnit("ms"),
+		metric.WithDescription("Wall time of one stage of a GetVCSStatus computation, labeled by stage (git_status, shipped_commits, diff_stat) and result (ok, error, canceled, timeout, budget_exceeded; the last only for shipped_commits/diff_stat)"),
+		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000)); err != nil {
+		log.Error("services: register vcs.status.stage.duration", "error", err)
+	}
+	if m.rangeCache, err = meter.Int64Counter("vcs.status.range_cache",
+		metric.WithDescription("Shipped-commit/diff-stat cache lookups keyed by (workdir, base SHA, head SHA), by stage and result: hit, miss, negative_hit (stage recently exceeded its budget)")); err != nil {
+		log.Error("services: register vcs.status.range_cache", "error", err)
 	}
 	return m
 })
