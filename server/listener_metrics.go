@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	stdlog "log"
 	"net"
 	"os"
@@ -125,6 +126,23 @@ type meteredConn struct {
 	listener *meteredListener
 	born     time.Time
 	closed   atomic.Bool
+}
+
+// ReadFrom forwards to the wrapped conn's io.ReaderFrom so net/http keeps its
+// sendfile/splice fast path for static files instead of a userspace copy loop.
+func (c *meteredConn) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := c.Conn.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(struct{ io.Writer }{c.Conn}, r)
+}
+
+// CloseWrite forwards the graceful half-close net/http performs before closing.
+func (c *meteredConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.ErrUnsupported
 }
 
 func (c *meteredConn) Close() error {
