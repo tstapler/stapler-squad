@@ -30,8 +30,9 @@ import {
   setFeatureFlag,
 } from './pages/NotificationPanel';
 import { ScheduledPromptsFake, ScheduledPromptsSection, type FakeTrigger } from './pages/ScheduledPromptsPage';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const STRUCTURED_FLAG = 'askuserquestion_structured';
 const HOOK = 'ask_user_question_hook';
 const UX_MD = path.resolve(__dirname, '../../project_plans/notification-actions-and-agent-messaging/design/ux.md');

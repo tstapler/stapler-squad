@@ -12,6 +12,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// readDeadlineTrusted is false on unix: SetReadDeadline can return nil yet not
+// bound the Read. creack/pty's Open/Setsize call File.Fd(), which flips the
+// master to blocking mode, after which Read ignores the deadline (reproduced on
+// Linux: Read blocked past a 200ms deadline) and Stop() hangs on a silent PTY.
+// The loop therefore always bounds the wait with waitReadable.
+const readDeadlineTrusted = false
+
 // fdSetSize is how many fd numbers a select(2) FdSet can hold.
 var fdSetSize = len(unix.FdSet{}.Bits) * int(unsafe.Sizeof(unix.FdSet{}.Bits[0])) * 8
 

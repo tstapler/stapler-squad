@@ -6,8 +6,9 @@ import fs from "fs";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { FilesTabView, seedFilesFixture } from "./pages/files-tab.page";
 import { FIXTURES, pad, writeNumberedLog } from "./helpers/largeFile";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 const FLAG = "files:range-read";
 const LINES = 1_000_000;
 const rpc = (name: string) => `${BASE_URL}/api/session.v1.SessionService/${name}`;

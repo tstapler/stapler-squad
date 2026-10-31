@@ -14,8 +14,9 @@ import AxeBuilder from '@axe-core/playwright';
 import { BackgroundSegment, NotificationTray, ToastDeck, clickWhenScrollIdle, openNotificationTray } from './pages/NotificationPanel';
 import { fakeHiddenSessions, hidden, seedFailureAt, type HiddenFixture } from './pages/HiddenSessionsFake';
 import { profiles } from './helpers/viewport-profiles';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
 
 /** Eleven stopped hidden sessions with no notification history; `outcome(i)` is what the server reports. */

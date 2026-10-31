@@ -4,6 +4,7 @@ import * as path from 'path';
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 import { SessionDetailPage } from './pages/SessionDetailPage';
+import { baseUrl, testDir } from './helpers/base-url';
 
 /**
  * ConnectionCountIndicator (Epic 4.2, Story 4.2.2) — Surface 1 of
@@ -33,10 +34,10 @@ import { SessionDetailPage } from './pages/SessionDetailPage';
  *   STAPLER_SQUAD_USE_STREAM_HUB=true npx playwright test connection-count-indicator.spec.ts
  */
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 const HUB_PATH_ENABLED = process.env.STAPLER_SQUAD_USE_STREAM_HUB === 'true';
 const ONBOARDED_KEY = 'stapler-squad:onboarded';
-const TEST_DIR = process.env.TEST_SERVER_TESTDIR;
+const TEST_DIR = testDir();
 
 /**
  * Even with STAPLER_SQUAD_USE_STREAM_HUB=true, config.ResolveGlobalStreamHubDefault
