@@ -96,6 +96,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // Whether Redux knew this session when the effect last ran; its first appearance is hydration, not a change.
   const sessionKnownRef = useRef(false);
   const mountFetchPendingRef = useRef(false);
+  // Fixed per hook instance: re-drawing it on every Redux update would make the slow backstop fire at random.
+  const pollPhaseRef = useRef<number | null>(null);
+  if (pollPhaseRef.current === null) pollPhaseRef.current = Math.random();
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -251,9 +254,9 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
     const phase = setTimeout(
       () => {
         tick();
-        fallback = setInterval(tick, pollMs);
+        if (!stoppedRef.current) fallback = setInterval(tick, pollMs);
       },
-      pollMode === "fast" ? pollMs : Math.floor(Math.random() * pollMs),
+      pollMode === "fast" ? pollMs : Math.floor((pollPhaseRef.current ?? 0) * pollMs),
     );
     return () => {
       clearTimeout(phase);

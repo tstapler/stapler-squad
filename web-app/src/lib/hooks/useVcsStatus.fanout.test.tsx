@@ -121,4 +121,19 @@ describe("fetchVcsEntry fan-out", () => {
     pending[0].resolve("x");
     await p;
   });
+
+  it("fetchVcsEntry_should_CarryWaitForFresh_When_SupersedingBackgroundFlight", async () => {
+    const pending = installPendingTransport();
+    void fetchVcsEntry("w1", true, false, true); // background event-driven refresh needs fresh data
+    await flush();
+    void fetchVcsEntry("w1", false, true, false); // focused cold-cache prefetch supersedes it
+    await flush();
+    expect(pending[1].args.waitForFresh).toBe(true);
+
+    void fetchVcsEntry("w2", true, false, false);
+    await flush();
+    void fetchVcsEntry("w2", true, true, false); // a focused interval poll must stay a plain poll
+    await flush();
+    expect(pending[3].args.waitForFresh).toBe(false);
+  });
 });
