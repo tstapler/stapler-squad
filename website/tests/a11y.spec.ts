@@ -83,6 +83,21 @@ test.describe('Accessibility (WCAG 2.1 AA) — stapler-squad-website', () => {
 		});
 	}
 
+	// The theme is dark only, but Starlight still sets data-theme from the OS
+	// preference, so a light-OS visitor must get the same dark palette: any
+	// variable the theme forgets to pin falls back to its light value.
+	test.describe('lightOsPreference', () => {
+		test.use({ colorScheme: 'light' });
+		for (const [label, path] of Object.entries(PAGES)) {
+			test(`themeContrast_should_PassWcagAA_When_OsPrefersLight (${label})`, async ({ page }) => {
+				await page.goto(path, { waitUntil: 'load' });
+				const results = await new AxeBuilder({ page }).withRules(['color-contrast']).analyze();
+				logViolations(`${path} (${label}, light OS)`, results.violations);
+				expect(results.violations).toHaveLength(0);
+			});
+		}
+	});
+
 	// design/ux.md §5 criterion 19: the combined CI gate -- Lighthouse
 	// accessibility/performance/best-practices >=0.90 (enforced separately
 	// by lighthouserc.json + lighthouserc.mobile.json via `bun run

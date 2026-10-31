@@ -139,3 +139,9 @@ benchmarks/
 # Runtime session-data artifacts leaked into the repo root by local dev runs
 /session/*/scrollback.jsonl.zst
 /server/services/backlog_item_public_id_backfill.lock
+
+# website demo-clip recorder output (scripts/record-website-demos.sh)
+tests/e2e/website-demo-output/
+
+# demo clips recorded during the deploy; never committed
+website/public/clips/

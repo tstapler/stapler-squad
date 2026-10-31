@@ -30,34 +30,51 @@ describe('FeatureCard', () => {
 		const container = await AstroContainer.create();
 		const html = await container.renderToString(FeatureCard, {
 			props: {
-				heading: 'Live Terminal Streaming',
+				heading: 'Dashboard',
 				description: 'Full xterm.js terminal per session with real-time output streaming.',
 				category: 'Visibility',
 			},
 		});
 
 		expect(html).not.toContain('<img');
-		expect(html).toContain('Live Terminal Streaming');
+		expect(html).toContain('Dashboard');
 	});
 
 	// Story 3.3.1's second AC: a screenshot-less card with a `demoClip` field
-	// renders a <video> whose src is releaseAssetUrl()'s output, never a
-	// hardcoded literal duplicated from that helper.
-	it('featureCard_should_RenderVideoViaReleaseAssetUrl_When_DemoClipFieldPresent', async () => {
+	// renders a <video> served from the site's own /clips/ path.
+	it('featureCard_should_RenderVideoFromSiteClipsPath_When_DemoClipFieldPresent', async () => {
 		const container = await AstroContainer.create();
 		const html = await container.renderToString(FeatureCard, {
 			props: {
-				heading: 'Live Terminal Streaming',
+				heading: 'Dashboard',
 				description: 'Full xterm.js terminal per session with real-time output streaming.',
 				category: 'Visibility',
-				demoClip: { tag: 'website-demo-gifs-latest', name: 'terminal-streaming', ext: 'webm' },
+				demoClip: { name: 'session-dashboard', ext: 'webm' },
 			},
 		});
 
 		expect(html).not.toContain('<img');
-		expect(html).toContain(
-			'src="https://github.com/tstapler/stapler-squad/releases/download/website-demo-gifs-latest/terminal-streaming.webm"',
-		);
+		expect(html).toMatch(/src="[^"]*\/clips\/session-dashboard\.webm"/);
 		expect(html).toContain('<video');
+	});
+
+	// A published clip replaces the screenshot, which stays as the video poster.
+	it('featureCard_should_PlayClipWithScreenshotAsPoster_When_BothScreenshotAndDemoClipPresent', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(FeatureCard, {
+			props: {
+				heading: 'Dashboard',
+				description: 'All agents at a glance.',
+				category: 'Visibility',
+				screenshot: '/features/01-dashboard.png',
+				alt: 'Dashboard',
+				demoClip: { name: 'session-dashboard', ext: 'webm' },
+			},
+		});
+
+		expect(html).toContain('<video');
+		expect(html).toContain('session-dashboard.webm');
+		expect(html).toMatch(/poster="[^"]*01-dashboard\.png"/);
+		expect(html).not.toContain('<img');
 	});
 });

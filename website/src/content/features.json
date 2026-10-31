@@ -66,10 +66,10 @@
 	},
 	{
 		"heading": "Auto-Approval Rules",
-		"description": "42 built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.",
+		"description": "100+ built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.",
 		"category": "Review & Approval",
 		"screenshot": "/features/06-rules.png",
-		"alt": "List of 42 built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
+		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
 	},
 	{
 		"heading": "Custom Rules",

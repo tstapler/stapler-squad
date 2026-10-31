@@ -205,7 +205,10 @@ async function injectClickHighlighter(page: import('@playwright/test').Page) {
   });
 }
 
-test('Demo Flow', { timeout: 120_000 }, async ({ page }) => {
+test('Demo Flow', async ({ page }) => {
+  // Playwright's TestDetails has no `timeout` key (only tag/annotation), so the old
+  // `{ timeout: 120_000 }` argument was silently ignored and the 30s default applied.
+  test.setTimeout(120_000);
 
   // Inject cursor + click-ripple visualiser before first navigation.
   await injectClickHighlighter(page);
