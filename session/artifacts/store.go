@@ -17,9 +17,6 @@ import (
 const (
 	maxScannerTokenSize = 10 * 1024 * 1024 // 10 MB, matches tokens/parser.go
 
-	// stateConsumer names this extractor's rows in the scan-state table.
-	stateConsumer = "artifacts"
-
 	flushInterval = 5 * time.Second
 	flushBatch    = 200
 )

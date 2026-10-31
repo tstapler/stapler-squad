@@ -16,9 +16,6 @@ import (
 const (
 	subChanSize = 64
 
-	// stateConsumer names this store's rows in the scan-state table.
-	stateConsumer = "tokens"
-
 	// flushInterval and flushBatch bound how fast parse checkpoints are written
 	// back: live files that change every second are written once per interval,
 	// and a cold backfill's thousands of checkpoints trickle out instead of
@@ -314,7 +311,7 @@ func (ts *TokenStore) restoreState(ctx context.Context) {
 // dropUnseenRestored removes restored entries whose files the walk did not find.
 func (ts *TokenStore) dropUnseenRestored(ctx context.Context) {
 	ts.mu.Lock()
-	var gone []string
+	gone := make([]string, 0, len(ts.restored))
 	for path := range ts.restored {
 		gone = append(gone, path)
 		if e := ts.cache[path]; e != nil && ts.byUUID[e.result.SessionUUID] == e.result {

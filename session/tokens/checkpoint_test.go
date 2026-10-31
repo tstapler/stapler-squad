@@ -26,10 +26,13 @@ func readFixture(t *testing.T, name string) []byte {
 	return b
 }
 
-// normalized drops the wall-clock field so results from separate parses compare equal.
+// normalized drops the wall-clock field so results from separate parses compare equal, and
+// pins FileModTime to UTC: a stat'd mtime carries time.Local while a decoded one does not, and
+// assert.Equal compares the *Location pointer (differs on a UTC host such as CI).
 func normalized(r *ParseResult) ParseResult {
 	c := *r
 	c.ParsedAt = zeroTime
+	c.FileModTime = c.FileModTime.UTC()
 	return c
 }
 
