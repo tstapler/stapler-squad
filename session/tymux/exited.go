@@ -17,6 +17,11 @@ import (
 // implies "the pane is alive".
 var ErrPaneExited = errors.New("tymux: pane exited")
 
+// ErrPaneNotRevivable matches (errors.Is) a restore that found the daemon session's pane in a
+// state tymuxd will not respawn on its own (FAILED, STOPPED). It needs an operator, so callers
+// must surface it rather than retry.
+var ErrPaneNotRevivable = errors.New("tymux: pane not revivable")
+
 // PaneExitedError is the typed form of ErrPaneExited. It keeps the pane's last
 // rendered grid so a caller that wants a finished session's final output can
 // still read it (see FinalScreen) while a liveness-sensitive loop fails fast.
@@ -84,17 +89,38 @@ func exitedPaneError(snap *v1.PaneSnapshot) *PaneExitedError {
 // capPaneLifecycle is the GetServerInfo capability for GetPaneStatus and the restart policy.
 const capPaneLifecycle = "pane.lifecycle"
 
-// restartPending asks the daemon whether a DEAD pane is between automatic restarts. Any
-// failure or an older daemon answers false, which is the plain "exited" behavior.
-func (s *tymuxGRPCSession) restartPending(ctx context.Context, paneID string) bool {
+// paneLifecycleState asks the daemon for a pane's lifecycle state. ok is false when it cannot
+// say (older daemon without pane.lifecycle, or the call failed), which callers must treat as
+// "unknown" rather than as any particular state.
+func (s *tymuxGRPCSession) paneLifecycleState(ctx context.Context, paneID string) (state v1.PaneState, ok bool) {
 	info, err := s.transport.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{}))
 	if err != nil || !slices.Contains(info.Msg.GetCapabilities(), capPaneLifecycle) {
-		return false
+		return v1.PaneState_PANE_STATE_UNSPECIFIED, false
 	}
 	resp, err := s.transport.GetPaneStatus(ctx, connect.NewRequest(&v1.GetPaneStatusRequest{PaneId: paneID}))
 	if err != nil {
-		return false
+		return v1.PaneState_PANE_STATE_UNSPECIFIED, false
 	}
-	state := resp.Msg.GetState()
+	return resp.Msg.GetState(), true
+}
+
+func isRestartPending(state v1.PaneState) bool {
 	return state == v1.PaneState_PANE_STATE_BACKOFF || state == v1.PaneState_PANE_STATE_RESTARTING
+}
+
+// isTerminalPaneState is true for states tymuxd leaves alone until an operator acts.
+func isTerminalPaneState(state v1.PaneState) bool {
+	return state == v1.PaneState_PANE_STATE_FAILED || state == v1.PaneState_PANE_STATE_STOPPED
+}
+
+// restartPending asks the daemon whether a DEAD pane is between automatic restarts. Any
+// failure or an older daemon answers false, which is the plain "exited" behavior.
+func (s *tymuxGRPCSession) restartPending(ctx context.Context, paneID string) bool {
+	state, ok := s.paneLifecycleState(ctx, paneID)
+	return ok && isRestartPending(state)
+}
+
+// notRevivableError wraps ErrPaneNotRevivable with the state that blocks revival.
+func notRevivableError(sessionID string, state v1.PaneState) error {
+	return fmt.Errorf("%w: session %q pane is %s", ErrPaneNotRevivable, sessionID, state)
 }
