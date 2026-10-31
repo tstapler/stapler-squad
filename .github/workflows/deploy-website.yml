@@ -44,7 +44,7 @@ jobs:
   # `notify` below still reports a failed deploy.
   record-clips:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -85,12 +85,14 @@ jobs:
       - name: Record, trim and brand the clips
         run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/website-demo-clips"
 
+      # Even after a partial failure (the script exits 3): ship the clips that worked.
       - name: Upload clips
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
         with:
           name: website-demo-clips
           path: ${{ runner.temp }}/website-demo-clips/*.webm
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 1
 
   build:
@@ -135,11 +137,20 @@ jobs:
       # public/clips/ and regenerate features.json so the cards play them. Neither
       # is committed. A missing artifact (failed recording) leaves the screenshots.
       - name: Download demo clips
+        id: clips
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
         with:
           name: website-demo-clips
           path: website/public/clips
+
+      # A download that fails after a successful recording would otherwise ship
+      # screenshot-only with no signal; fail loudly on the annotation at least.
+      - name: Warn when no clips were shipped
+        run: |
+          if ! ls website/public/clips/*.webm >/dev/null 2>&1; then
+            echo "::warning::no demo clips in this build (download outcome: ${{ steps.clips.outcome }}); the site ships screenshots only"
+          fi
 
       - name: Regenerate features.json with the clips
         working-directory: website
@@ -256,5 +267,8 @@ jobs:
               gh issue create --title "$title" --body "$body"
             fi
           }
-          track "Website deploy is failing" "$DEPLOYED" "Deploy Website failed (build or deploy job): $RUN_URL"
-          track "Website demo clips failed to record" "$RECORDED" "The record-clips job did not succeed, so the site shipped without (some) demo clips: $RUN_URL"
+          # Each call is independent: one gh failure must not skip the other issue.
+          failures=0
+          track "Website deploy is failing" "$DEPLOYED" "Deploy Website failed (build or deploy job): $RUN_URL" || failures=$((failures + 1))
+          track "Website demo clips failed to record" "$RECORDED" "The record-clips job did not succeed, so the site shipped without (some) demo clips: $RUN_URL" || failures=$((failures + 1))
+          exit "$failures"

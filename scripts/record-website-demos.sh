@@ -31,9 +31,10 @@ SERVER_PID=""
 DEMO_DIR=""
 TMUX_SOCKET="ssq-website-demos-$$"
 cleanup() {
-  [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
+  if [[ -n "$SERVER_PID" ]]; then kill "$SERVER_PID" 2>/dev/null || true; fi
   tmux -L "$TMUX_SOCKET" kill-server 2>/dev/null || true
-  [[ -n "$DEMO_DIR" ]] && rm -rf "$DEMO_DIR"
+  if [[ -n "$DEMO_DIR" ]]; then rm -rf "$DEMO_DIR"; fi
+  return 0 # a false `[[ ]] &&` as the last command would otherwise become the exit status (bash 3.2)
 }
 trap cleanup EXIT
 
@@ -69,15 +70,24 @@ shopt -s nullglob
 clips=("$OUT_DIR"/*.webm)
 [[ ${#clips[@]} -gt 0 ]] || { echo "❌  no clips were recorded" >&2; exit 1; }
 
-for clip in "${clips[@]}"; do
+process_clip() {
+  local clip="$1" name meta title fps trim_frames
   name="$(basename "$clip" .webm)"
   meta="$OUT_DIR/$name.meta.json"
   title="$(jq -r .title "$meta")"
-  fps="$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$clip")"
+  fps="$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$clip")"
   # Frame-count trim from the measured load time (never a sleep), per demo-post-process.sh.
   trim_frames="$(awk -v ms="$(jq -r .trimStartMs "$meta")" -v fps="$fps" 'BEGIN{split(fps,f,"/"); printf "%d", ms/1000*f[1]/(f[2]?f[2]:1)}')"
   "$REPO_ROOT/scripts/demo-post-process.sh" --no-gif --title-card "$title" \
     --trim-start-frames "$trim_frames" "$clip"
+}
+# One clip failing to post-process must not discard the others.
+for clip in "${clips[@]}"; do
+  if ! (process_clip "$clip"); then
+    echo "::warning::post-processing $(basename "$clip") failed; dropping it" >&2
+    rm -f "$clip"
+    record_status=1
+  fi
 done
 rm -f "$OUT_DIR"/*.meta.json
 
@@ -93,9 +103,12 @@ for clip in "$OUT_DIR"/*.webm; do
   fi
 done
 [[ ${#good[@]} -gt 0 ]] || { echo "❌  no playable clips" >&2; exit 1; }
-if [[ "$record_status" -ne 0 ]]; then
-  echo "::warning::some clips failed to record (playwright exit $record_status); shipping the ${#good[@]} that did" >&2
-fi
-
 echo "✅  Recorded ${#good[@]} clip(s) in $OUT_DIR:"
 (cd "$OUT_DIR" && shasum -a 256 -- *.webm)
+
+# Partial success: the clips above are still usable (the workflow uploads them
+# even when this fails), but exit non-zero so the failure is reported, not hidden.
+if [[ "$record_status" -ne 0 ]]; then
+  echo "::warning::some clips failed (exit $record_status); shipping the ${#good[@]} that worked" >&2
+  exit 3
+fi

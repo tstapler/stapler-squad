@@ -164,7 +164,7 @@ test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => 
 
   // Every deploy step before the Pages publishing steps must also run in the PR
   // gate, except the ones that consume the deploy's own recorded clips.
-  const DEPLOY_ONLY = ['Download demo clips', 'Regenerate features.json with the clips'];
+  const DEPLOY_ONLY = ['Download demo clips', 'Warn when no clips were shipped', 'Regenerate features.json with the clips'];
   const publishAt = deploy.jobs.build.steps.findIndex((step) => step.name === 'Configure Pages');
   assert.notEqual(publishAt, -1, 'deploy-website.yml must have a "Configure Pages" step');
   const deployChecks = deploy.jobs.build.steps

@@ -37,6 +37,8 @@ function webkitMobileProjects() {
 // Run by playwright.dev-mode.config.ts against a live dev server (HMR overlay edits real source files);
 // under this config's production-build server they can only fail.
 const DEV_SERVER_SPECS = '**/dev-mode-hmr.spec.ts';
+// Records marketing clips; run only via scripts/record-website-demos.sh (its own config).
+const WEBSITE_DEMO_SPECS = '**/website-demos.spec.ts';
 const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
 
@@ -190,7 +192,7 @@ export default defineConfig({
     },
     {
       name: 'chromium',
-      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS],
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -235,7 +237,7 @@ export default defineConfig({
       //   if (typeof WebGL2RenderingContext !== 'undefined')
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
-      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS],
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
