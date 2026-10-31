@@ -33,7 +33,12 @@ type subscriber struct {
 	painting        bool
 	expired         bool
 	pending         [][]byte
+	pendingBytes    int
 	overflow        bool
+	// replaySent counts frames the writer has sent from a held batch. The slow-subscriber timer
+	// compares it across the grace, so a client that is slow but moving through one long batch
+	// is not mistaken for a stalled one (pending only shrinks at batch boundaries).
+	replaySent atomic.Uint64
 	// paintDone is set when the paint returned. From then on, pending growing past drainLimit (one
 	// queue's worth beyond what the writer has yet to take) counts as the queue being full: frames
 	// are still held, none is lost, but the slow-subscriber grace starts, so a transport that
@@ -121,10 +126,11 @@ func (s *subscriber) trySend(data []byte) (delivered, stalled bool) {
 	}
 	if s.painting {
 		stalled = s.paintDone && len(s.pending) >= s.drainLimit
-		if len(s.pending) >= maxPaintBacklog {
+		if len(s.pending) >= maxPaintBacklog || s.pendingBytes >= maxPaintBacklogBytes {
 			s.overflow = true
 		} else {
 			s.pending = append(s.pending, data)
+			s.pendingBytes += len(data)
 		}
 		return true, stalled
 	}
@@ -225,6 +231,12 @@ func (s *subscriber) currentResizeVote() (size TerminalSize, voted bool) {
 // fails visibly (errPaintBacklog) rather than silently leaving a gap.
 const maxPaintBacklog = 4096
 
+// maxPaintBacklogBytes bounds the same list by size: a batch unit is not capped (a flush
+// carries every byte read in the 20 ms window, so a bulk `cat` makes megabyte units), and 4096
+// of those would hold gigabytes per subscriber. Checked before appending, so one oversized
+// frame is still held and the next one overflows, failing the paint like the count bound does.
+const maxPaintBacklogBytes = 16 << 20
+
 // armFirstPaintTimeout evicts (via onExpire) a subscriber still awaiting its FirstPaint after d.
 // The check and beginFirstPaint share mu, so it can never evict a subscriber mid-paint.
 func (s *subscriber) armFirstPaintTimeout(clock Clock, d time.Duration, onExpire func()) {
@@ -283,6 +295,7 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 		}
 		batch := s.pending
 		s.pending = nil
+		s.pendingBytes = 0
 		s.drainLimit = cap(s.outbound)
 		if len(batch) == 0 {
 			s.painting = false
@@ -295,6 +308,7 @@ func (s *subscriber) drainPending(onSendError func(id SubscriberID, err error)) 
 				onSendError(s.id, err)
 				return false
 			}
+			s.replaySent.Add(1)
 		}
 	}
 }

@@ -124,10 +124,16 @@ side, as ADR-003 does for the attach stream. That closes the remaining window on
 - **Frames during the paint are held, not queued.** From `beginFirstPaint` until the writer has replayed them, frames go to a
   bounded side list, not the 100-deep outbound queue, so a long capture or a stalled socket cannot trip the slow-subscriber
   eviction. The writer sends the list before the queue and switches over under the same lock, so no frame falls between the
-  two. More than `maxPaintBacklog` (4096) frames fail the connection rather than leaving a gap.
+  two. More than `maxPaintBacklog` (4096) frames, or `maxPaintBacklogBytes` (16 MiB) held, fail the connection rather than
+  leaving a gap. The byte bound exists because a batch unit is uncapped (a flush carries everything read in its 20 ms
+  window), so a bulk `cat` during a paint of up to ~9 s (1 s capture retry, 3 s capture, 5 s write) could otherwise hold
+  gigabytes per subscriber.
 - **Replay honours the slow-subscriber grace.** Once the paint returns, the held list may grow by only one queue's worth
   (`drainLimit`) beyond what it held; further frames are dropped and arm the usual 250 ms eviction, which fires if the list is
-  still at its limit. A socket that stalls during replay is therefore evicted, as one stalling on the live queue is.
+  still at its limit and the writer has sent nothing from the held batch since the stall was seen. A socket that stalls
+  during replay is therefore evicted, as one stalling on the live queue is, while a slow client still moving through one
+  long batch is not (the list only shrinks at batch boundaries, so progress is counted per `Send`;
+  `TestFirstPaint_should_NotEvictSubscriber_When_ReplayIsSlowButProgressing`).
 - **Residual duplicate window.** A frame broadcast after `FirstPaint` starts but while the capture RPC is in flight (up to
   `fullStateCaptureTimeout`, 3 s) is held and replayed after the paint, and may already be in the capture, so it can be
   applied twice. No clean cutoff exists: the hub cannot observe when, relative to the pump's frames, the daemon took its

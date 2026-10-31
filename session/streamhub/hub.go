@@ -15,7 +15,7 @@ import (
 // errSlowSubscriberEvicted is the eviction reason logged when a subscriber's
 // outbound queue stays full past slowSubscriberGrace (Task 1.2.1e), as
 // opposed to a Transport.Send error (Task 1.2.1g).
-var errPaintBacklog = errors.New("streamhub: more than maxPaintBacklog frames arrived during the first paint")
+var errPaintBacklog = errors.New("streamhub: more than maxPaintBacklog frames or maxPaintBacklogBytes bytes arrived during the first paint")
 
 var errFirstPaintTimeout = errors.New("streamhub: subscriber never ran FirstPaint")
 
@@ -653,8 +653,11 @@ func (h *StreamHub) deliver(sub *subscriber, data []byte, grace time.Duration) {
 		return
 	}
 
+	progress := sub.replaySent.Load()
 	h.clock.AfterFunc(grace, func() {
-		if sub.isStillFull() {
+		// A replaying writer that sent anything since the stall was seen is slow, not stalled;
+		// the next stalled frame re-arms the check.
+		if sub.isStillFull() && sub.replaySent.Load() == progress {
 			h.slowSubscriberDropsTotal.Add(1)
 			recordSlowSubscriberDrop()
 			h.removeSubscriber(sub.id, errSlowSubscriberEvicted)
