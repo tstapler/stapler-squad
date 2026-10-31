@@ -120,6 +120,8 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 	name, argv := "git", args
 	if t.remote {
 		name, argv = remoteGitArgv(args)
+	} else {
+		name = localGitName(args)
 	}
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
 		out, err = sr.RunStdout(ctx, t.dir, name, argv...)
