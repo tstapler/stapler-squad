@@ -276,9 +276,9 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 			// instead of skipping the read, which would spin forever without ever
 			// detecting the closed PTY.
 			//
-			// "file type does not support deadline" is a permanent property of the
-			// fd (see ptyDeadlineUnsupported), so it is probed once per stream and
-			// the rest of the loop bounds the wait with waitReadable instead.
+			// On unix the deadline is never trusted (see ptyDeadlineUnsupported), so
+			// waitReadable bounds the wait; the SetReadDeadline probe below only runs
+			// on platforms without poll(2).
 			if pty != lastPTY {
 				// A swapped-in PTY (UpdatePTY) may differ in poller support.
 				lastPTY, deadlineUnsupported.confirmed = pty, pollPTYBeforeRead

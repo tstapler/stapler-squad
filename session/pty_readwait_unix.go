@@ -22,9 +22,9 @@ var fdSetSize = len(unix.FdSet{}.Bits) * int(unsafe.Sizeof(unix.FdSet{}.Bits[0])
 // waitReadable blocks for at most timeout until f has data to read or has hung
 // up, and reports whether a Read would now return without blocking.
 //
-// It exists for PTY masters the Go runtime cannot poll (darwin: "file type does
-// not support deadline"), where Read cannot be interrupted. Waiting with a
-// short timeout lets the caller re-check cancellation between waits.
+// It exists because a PTY master Read cannot be interrupted: darwin rejects
+// SetReadDeadline and Linux accepts it but leaves the fd blocking. Waiting with
+// a short timeout lets the caller re-check cancellation between waits.
 //
 // The fd is reached through RawConn.Control, which (unlike File.Fd) leaves it
 // in blocking mode so concurrent Write calls keep their blocking semantics,

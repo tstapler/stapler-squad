@@ -42,9 +42,9 @@ func parkedStreamLoops() int {
 	count := 0
 	for _, g := range strings.Split(string(buf), "\n\n") {
 		header := strings.SplitN(g, "\n", 2)[0]
-		// "[syscall": darwin (unpollable master, select wait). "[IO wait":
-		// linux, where the netpoller serves the deadline-bounded read.
-		parked := strings.Contains(header, "[syscall") || strings.Contains(header, "[IO wait")
+		// "[syscall": the loop's select/poll wait (all unix; the Linux master is
+		// not served by the netpoller despite accepting SetReadDeadline).
+		parked := strings.Contains(header, "[syscall")
 		if parked && strings.Contains(g, "(*ResponseStream).streamLoop") {
 			count++
 		}
