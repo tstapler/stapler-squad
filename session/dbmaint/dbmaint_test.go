@@ -341,6 +341,7 @@ func TestRun_ShouldTickOnClockAndExitOnCancel(t *testing.T) {
 	go func() { m.Run(ctx); close(done) }()
 
 	clock.ticks <- time.Now() // received by Run, which then ticks
+	assert.GreaterOrEqual(t, clock.pauses.Load(), int64(1), "startup inspection is paced by the clock")
 	clock.ticks <- time.Now() // accepted only after the first tick finished
 	assert.Less(t, scalar(t, drv, "PRAGMA freelist_count"), int64(100))
 	assert.NotEmpty(t, Snapshot(), "registered while running")
@@ -364,14 +365,14 @@ func TestRun_ShouldDoNothing_When_Disabled(t *testing.T) {
 func TestConfigFromLookup(t *testing.T) {
 	env := map[string]string{
 		EnvInterval: "5m", EnvFreeRatio: "0.5", EnvMinFreePages: "7", EnvChunkPages: "9",
-		EnvChunkPause: "1s", EnvDisable: "true",
+		EnvChunkPause: "1s", EnvStartupDelay: "2s", EnvDisable: "true",
 	}
 	got := configFromLookup(func(k string) string { return env[k] })
-	assert.Equal(t, Config{Interval: 5 * time.Minute, FreeRatio: 0.5, MinFreePages: 7, ChunkPages: 9, ChunkPause: time.Second, Disabled: true}, got)
+	assert.Equal(t, Config{Interval: 5 * time.Minute, FreeRatio: 0.5, MinFreePages: 7, ChunkPages: 9, ChunkPause: time.Second, StartupDelay: 2 * time.Second, Disabled: true}, got)
 
 	def := configFromLookup(func(string) string { return "junk" })
 	assert.Equal(t, Config{Interval: DefaultInterval, FreeRatio: DefaultFreeRatio, MinFreePages: DefaultMinFreePages,
-		ChunkPages: DefaultChunkPages, ChunkPause: DefaultChunkPause}, def)
+		ChunkPages: DefaultChunkPages, ChunkPause: DefaultChunkPause, StartupDelay: DefaultStartupDelay}, def)
 }
 
 // noopVacuumQ swallows incremental_vacuum so the freelist never shrinks.
@@ -393,4 +394,20 @@ func fileSize(t *testing.T, path string) int64 {
 	fi, err := os.Stat(path)
 	require.NoError(t, err)
 	return fi.Size()
+}
+
+func TestSample_ShouldReadPageStatsInOneStatement(t *testing.T) {
+	drv, _ := openDB(t, "incremental")
+	fillAndDelete(t, drv)
+	rec := &recordingQ{ExecQuerier: drv}
+	m := New("t", rec, testConfig(), WithClock(newFakeClock()))
+
+	s, err := m.sample(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, rec.count("pragma_page_count"), "one pool acquisition for all four counters")
+	assert.Zero(t, rec.count("PRAGMA page_count"))
+	assert.Equal(t, scalar(t, drv, "PRAGMA page_count"), s.pages)
+	assert.Equal(t, scalar(t, drv, "PRAGMA freelist_count"), s.free)
+	assert.Equal(t, AutoVacuumIncremental, s.mode)
 }

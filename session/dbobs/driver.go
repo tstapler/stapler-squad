@@ -167,7 +167,7 @@ func (c *collector) observe(ctx context.Context, q string, fn func() error) erro
 	// WaitDuration is pool-wide, so under concurrency this over-attributes
 	// queue time from other callers to this query; it is a contention hint.
 	wait := c.db.Stats().WaitDuration - waitBefore
-	key := stmtKey{statement: NormalizeStatement(q), caller: callerOf()}
+	key := stmtKey{statement: NormalizeStatement(q), caller: callerFor(ctx)}
 	c.stmts.add(key, elapsed, wait)
 	c.record(key, elapsed, wait, err)
 	end(wait, err)
