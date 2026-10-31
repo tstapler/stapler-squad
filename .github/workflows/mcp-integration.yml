@@ -31,7 +31,7 @@ on:
 # harmless here since this workflow writes no shared state.
 concurrency:
   group: mcp-integration-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # PR-only relevance gate — see the pull_request trigger's comment above.

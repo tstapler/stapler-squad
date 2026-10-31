@@ -24,6 +24,10 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: backlog-scaffolding-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   guard:
     name: no-backlog-scaffolding-in-diff

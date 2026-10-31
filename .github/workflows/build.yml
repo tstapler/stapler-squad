@@ -50,6 +50,13 @@ concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Single knob for the e2e shard count: e2e-env turns it into the matrix, and every shard passes
+# it to `--shard=N/<total>`. Lowering it trades wall time for fewer runner jobs; measured per-shard
+# fixed overhead is ~1 min against ~22 min of tests, so total runner-minutes barely move, and the
+# slowest shards already run ~30 of their 40 min budget (project_plans/e2e-test-parallelization/decisions/).
+env:
+  E2E_SHARD_TOTAL: 10
+
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # detect-changes: PR-only relevance gate — see the pull_request trigger's
@@ -343,6 +350,7 @@ jobs:
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     outputs:
       playwright-version: ${{ steps.pw.outputs.version }}
+      shards: ${{ steps.shards.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -355,6 +363,12 @@ jobs:
           v=$(grep -oE '"@playwright/test@[0-9]+\.[0-9]+\.[0-9]+"' tests/e2e/bun.lock | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           [ -n "$v" ] || { echo "::error::could not read @playwright/test version from tests/e2e/bun.lock" >&2; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build shard matrix from E2E_SHARD_TOTAL
+        id: shards
+        run: |
+          case "$E2E_SHARD_TOTAL" in ''|*[!0-9]*|0) echo "::error::E2E_SHARD_TOTAL must be a positive integer, got '$E2E_SHARD_TOTAL'" >&2; exit 1;; esac
+          echo "matrix=$(jq -nc --argjson n "$E2E_SHARD_TOTAL" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
 
   # Builds the Next-mode e2e binary once; the 10 Next shards download it instead of each running
   # `go build` (prepare's artifact is already a Next-mode build, so a plain `go build` suffices).
@@ -392,7 +406,7 @@ jobs:
           retention-days: 1
 
   e2e-next-shard:
-    name: e2e (Next build) shard ${{ matrix.shard }}/10
+    name: e2e (Next build) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     needs: [detect-changes, e2e-env, e2e-binary-next]
     if: always() && github.event_name != 'pull_request'
@@ -405,7 +419,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: ${{ fromJSON(needs.e2e-env.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -451,13 +465,13 @@ jobs:
       # fires before the job's hard 50m.
       # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
       # nightly.yml's secondary-browser jobs — see its header for why.
-      - name: Run e2e shard ${{ matrix.shard }}/10 (Next build)
+      - name: Run e2e shard ${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} (Next build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           WEB_BUILD: next
         run: |
           cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob --shard=${{ matrix.shard }}/10 --project=chromium --project=chromium-dom --project=mobile-chromium || {
+          timeout 40m npx playwright test --reporter=list,blob --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -609,7 +623,7 @@ jobs:
           retention-days: 1
 
   e2e-bun-shard:
-    name: e2e (Bun build) shard ${{ matrix.shard }}/10
+    name: e2e (Bun build) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     needs: [detect-changes, e2e-env, e2e-binary-bun]
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
@@ -622,7 +636,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: ${{ fromJSON(needs.e2e-env.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -668,13 +682,13 @@ jobs:
       # fires before the job's hard 50m.
       # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
       # nightly.yml's secondary-browser jobs — see its header for why.
-      - name: Run e2e shard ${{ matrix.shard }}/10 (Bun build)
+      - name: Run e2e shard ${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} (Bun build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           WEB_BUILD: bun
         run: |
           cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob --shard=${{ matrix.shard }}/10 --project=chromium --project=chromium-dom --project=mobile-chromium || {
+          timeout 40m npx playwright test --reporter=list,blob --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }} exceeded its 40m budget"

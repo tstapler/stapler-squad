@@ -49,7 +49,7 @@ on:
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Generates protobuf/ent code once and stubs the web dist directory, then

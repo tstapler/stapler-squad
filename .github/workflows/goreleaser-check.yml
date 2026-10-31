@@ -29,6 +29,10 @@ on:
       - 'go.sum'
   workflow_dispatch:
 
+concurrency:
+  group: goreleaser-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   check:
     name: goreleaser check
