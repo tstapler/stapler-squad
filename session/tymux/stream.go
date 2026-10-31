@@ -503,6 +503,9 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 			}
 			stream, first, cancel, err = s.dialAttachInterruptible(paneID)
 		}
+		if err != nil && connect.CodeOf(err) == connect.CodeNotFound {
+			return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
+		}
 		if err != nil {
 			continue
 		}
@@ -543,5 +546,17 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
 	log.Warn("tymux: standing Attach stream reconnect exhausted, giving up", "session_id", sessionID, "pane_id", paneID, "cause", cause, "max_attempts", maxAttempts)
 	s.deliverExit(fmt.Sprintf("reconnect failed: tymuxd unreachable after %d attempts", maxAttempts))
+	return nil, nil, false, lifecycle.ReasonReconnectExhausted
+}
+
+// giveUpPaneGone ends ReconnectLoop at the first NotFound redial: the daemon has no such pane,
+// so further attempts only delay the SPA's not_found.
+func (s *tymuxGRPCSession) giveUpPaneGone(genCtx context.Context, sessionID, paneID string, err error) (attachStream, *v1.AttachEvent, bool, lifecycle.Reason) {
+	s.mu.Lock()
+	s.reconnecting = false
+	s.mu.Unlock()
+	lifecycle.RecordEnd(genCtx, "tymux_reconnect", lifecycle.ReasonReconnectExhausted)
+	log.Warn("tymux: standing Attach redial found no such pane, giving up", "session_id", sessionID, "pane_id", paneID, "err", err)
+	s.deliverExit("reconnect failed: pane no longer exists in tymuxd")
 	return nil, nil, false, lifecycle.ReasonReconnectExhausted
 }
