@@ -934,6 +934,9 @@ func (h *ConnectRPCWebSocketHandler) resolveSession(sessionID string) (*session.
 
 // HandleWebSocket upgrades HTTP connection to WebSocket and handles ConnectRPC protocol
 func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	creation := beginTerminalCreation()
+	defer creation.End(false)
+
 	// Upgrade to WebSocket
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -941,6 +944,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 		return
 	}
 	defer conn.Close()
+	creation.Mark(stageUpgrade)
 
 	log.Info("ConnectRPC WebSocket connection established")
 
@@ -948,6 +952,8 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	if !ok {
 		return
 	}
+	creation.Mark(stageHandshake)
+	stream.creation = creation
 
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
@@ -956,9 +962,15 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	err = h.streamTerminal(stream)
 	streamDone()
 	if err != nil {
+		recordTerminalClose(closeCauseError)
 		log.Error("StreamTerminal error", "err", err)
 		sendEndStreamError(stream, err)
 		return
+	}
+	if stream.serverClosing.Load() {
+		recordTerminalClose(closeCauseServerClosed)
+	} else {
+		recordTerminalClose(closeCauseClean)
 	}
 	sendEndStreamSuccess(stream)
 }
@@ -1042,6 +1054,8 @@ type connectWebSocketStream struct {
 	// serverClosing is set by WebSocketTransport.Close before it forces the read
 	// deadline, so the input loop can tell that interrupt from a real read failure.
 	serverClosing atomic.Bool
+	// creation times this stream's setup; nil for streams built outside HandleWebSocket.
+	creation *terminalCreation
 }
 
 // WriteMessage safely writes a message to the WebSocket with mutex protection
@@ -2268,6 +2282,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName)
 
 	instance.MarkViewed()
+	stream.creation.Mark(stageResolve)
 
 	currentPaneReq, err := parseControlModeHandshake(stream)
 	if err != nil {
@@ -2279,6 +2294,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		return err
 	}
 	h.ensureHubInstanceStarted(instance, sessionID, processAlive)
+	stream.creation.Mark(stageBackendReady)
 
 	// StartControlMode is refcounted (session/tmux/control_mode.go), so each
 	// concurrent connection to the same session incrementing/decrementing it
@@ -2292,10 +2308,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		}
 	}()
 
+	stream.creation.Mark(stageControlMode)
 	hub, done, err := h.resolveHubOrJoinLegacy(stream, instance, sessionID, tmuxSessionName)
 	if done {
 		return err
 	}
+	stream.creation.Mark(stageHubCreate)
 
 	writer := h.writerFor(instance)
 	noteOperatorOpen(instance)
@@ -2308,10 +2326,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 		currentPaneReq:  currentPaneReq,
 	})
 	defer hub.DetachSubscriber(subscriberID)
+	stream.creation.Mark(stageHubAttach)
 
 	if err := h.sendHubInitialSnapshot(stream, hub, subscriberID, instance, sessionID); err != nil {
 		return err
 	}
+	stream.creation.Mark(stageInitialSnapshot)
+	stream.creation.End(true)
 
 	doneChan := make(chan struct{})
 	errChan := make(chan error, 1)
