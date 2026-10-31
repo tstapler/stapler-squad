@@ -1763,11 +1763,14 @@ func (s *Server) Shutdown() error {
 	if !syncutil.WaitWithTimeout(&s.backgroundTasksWG, s.backgroundTasksJoinTimeout) {
 		log.Warn("[shutdown] background tasks (sweepers, pollers, watchers, subscribers, tmux tickers) did not all exit within timeout", "timeout", s.backgroundTasksJoinTimeout)
 	} else {
-		// Writers have drained and stopped: close (and checkpoint) their databases.
-		// Skipped on a join timeout, where a task may still be writing; WAL replays on next open.
-		for _, closeFn := range s.closeAfterJoin {
-			closeFn()
-		}
+		// Writers have drained and stopped; close (and checkpoint) their databases once
+		// in-flight RPC handlers are done too. Skipped on a join timeout, where a task
+		// may still be writing; WAL replays on next open.
+		defer func() {
+			for _, closeFn := range s.closeAfterJoin {
+				closeFn()
+			}
+		}()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

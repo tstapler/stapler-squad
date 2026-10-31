@@ -216,7 +216,8 @@ func TestEscapeInsert_should_NotQueueBehindAnalyticsWriter(t *testing.T) {
 	}
 	require.NoError(t, insert(escape, 5*time.Second), "escape insert has its own writer")
 	// Control: the same insert through the held analytics.db writer cannot proceed.
-	require.Error(t, insert(analyticsClient, 20*time.Millisecond), "analytics.db's single writer is pinned")
+	err = insert(analyticsClient, 20*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "analytics.db's single writer is pinned, so the insert waits out its deadline")
 }
 
 func TestMigrate_should_KeepLegacyRowsWithNullColumns_Not_DropThemSilently(t *testing.T) {
