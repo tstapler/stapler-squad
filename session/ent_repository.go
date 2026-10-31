@@ -168,7 +168,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// through — special-cases "UTC" to return that singleton directly).
 	// auto_vacuum=INCREMENTAL only takes effect on a database with no tables yet;
 	// session/dbmaint reclaims the freelist of such databases in the background.
-	dbPath := sqlitedsn.New(expandedPath).
+	dbPath := tuneEntDSN(sqlitedsn.New(expandedPath)).
 		WithPragma("auto_vacuum", "incremental").
 		WithWAL().
 		WithBusyTimeout(5000 * time.Millisecond).
