@@ -65,6 +65,9 @@ concurrency:
 # slowest shards already run ~30 of their 40 min budget (project_plans/e2e-test-parallelization/decisions/).
 env:
   E2E_SHARD_TOTAL: 10
+  # Playwright workers per shard. global-setup starts one isolated server per worker
+  # (tests/e2e/helpers/server-pool.ts), so this is also the per-shard server count.
+  E2E_WORKERS: 3
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
