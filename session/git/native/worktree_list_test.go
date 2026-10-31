@@ -255,3 +255,31 @@ func TestListWorktrees_should_ReportPrunable_When_GitdirlessAdminDirIsOlderThanG
 	require.NoError(t, PruneWorktrees(repoPath))
 	assert.NoDirExists(t, adminDir)
 }
+
+func TestListWorktrees_should_KeepFreshGitdirlessAdminDir_When_LockedMarkerIsPresent(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestRepo(t)
+	adminDir, err := AllocateAdminDirName(repoPath, "locked-in-flight")
+	require.NoError(t, err)
+	require.NoError(t, NewAdminFileWriter(adminDir).WriteFile("locked", []byte("initializing")))
+
+	entries, err := ListWorktrees(repoPath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.False(t, entries[0].Prunable)
+}
+
+// The grace applies only to the gitdir-less case: a dangling gitdir stays prunable however fresh.
+func TestListWorktrees_should_ReportPrunable_When_FreshAdminDirHasDanglingGitdir(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestRepo(t)
+	adminDir, err := AllocateAdminDirName(repoPath, "dangling")
+	require.NoError(t, err)
+	missing := filepath.Join(t.TempDir(), "gone", ".git")
+	require.NoError(t, NewAdminFileWriter(adminDir).WriteFile("gitdir", []byte(missing+"\n")))
+
+	entries, err := ListWorktrees(repoPath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Prunable)
+}
