@@ -41,6 +41,12 @@ func waitReadable(f *os.File, timeout time.Duration) (bool, error) {
 	}); err != nil {
 		return false, closedErr(err)
 	}
+	if errors.Is(waitErr, unix.EBADF) {
+		// The fd died under a still-open os.File; report it like a closed file so
+		// the caller's Read surfaces it through the EOF mapping (poll(2) already
+		// reaches the same outcome via POLLNVAL).
+		return false, closedErr(waitErr)
+	}
 	return ready, waitErr
 }
 

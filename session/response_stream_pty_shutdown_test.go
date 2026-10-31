@@ -28,13 +28,24 @@ func openSilentPTY(t *testing.T) (master, slave *os.File) {
 }
 
 // parkedStreamLoops counts streamLoop goroutines currently parked in a
-// syscall, i.e. inside the PTY read/wait.
+// syscall or the netpoller, i.e. inside the PTY read/wait.
 func parkedStreamLoops() int {
 	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf)) // truncated: retry with room
+	}
 	count := 0
-	for _, g := range strings.Split(string(buf[:n]), "\n\n") {
-		if strings.Contains(g, "(*ResponseStream).streamLoop") && strings.Contains(strings.SplitN(g, "\n", 2)[0], "[syscall") {
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header := strings.SplitN(g, "\n", 2)[0]
+		// "[syscall": darwin (unpollable master, select wait). "[IO wait":
+		// linux, where the netpoller serves the deadline-bounded read.
+		parked := strings.Contains(header, "[syscall") || strings.Contains(header, "[IO wait")
+		if parked && strings.Contains(g, "(*ResponseStream).streamLoop") {
 			count++
 		}
 	}
