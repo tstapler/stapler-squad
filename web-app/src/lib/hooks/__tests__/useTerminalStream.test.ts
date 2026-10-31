@@ -516,6 +516,42 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
     expect(callCount).toBe(callCountBeforeEnd);
   });
 
+  it('connect_should_surfaceError_When_serverEndsStreamCleanlyAndFlagAbsent', async () => {
+    // Without V2 the only reconnect trigger is the `error` TerminalOutput watches.
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, onError }));
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    await act(async () => { stream.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    expect(result.current.error?.message).toContain('closed by server');
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('disconnect_should_notSurfaceError_When_streamEndsAfterUserDisconnect', async () => {
+    delete process.env.NEXT_PUBLIC_RECONNECT_V2;
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+    const onError = jest.fn();
+
+    const { result } = renderHook(() => useTerminalStream({ ...RECONNECT_OPTIONS, onError }));
+    await act(async () => { result.current.connect(); });
+    await act(async () => { stream.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    await act(async () => { result.current.disconnect(); stream.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('connect_should_reconnectAfterJitteredDelay_When_streamClosesCleanlyAndShouldReconnectTrue', async () => {
     let callCount = 0;
     const streams: ReturnType<typeof makePushStream<object>>[] = [];

@@ -557,6 +557,15 @@ export function useTerminalStream({
               }
             }
           }
+          // The server ended the stream without an error (e.g. a hub eviction or teardown,
+          // sent as a clean EndStream). Surface it as a lost connection: with
+          // NEXT_PUBLIC_RECONNECT_V2 off, TerminalOutput's auto-reconnect is driven by `error`.
+          if (myGeneration === connectionGenerationRef.current
+              && shouldReconnectRef.current
+              && !isDisconnectingRef.current
+              && !connectTimeoutAbortedRef.current) {
+            handleError(new Error("terminal stream closed by server"));
+          }
         } catch (err) {
           // Task 2.2.3 — a superseded generation's error/teardown must not
           // stomp the newer generation's state (shared backoff/hard-fail
