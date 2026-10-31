@@ -214,6 +214,7 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	dropped := 0
+	toRecord := make([]analytics.Event, 0, len(req.Events))
 	for _, ev := range req.Events {
 		if strings.HasPrefix(ev.EventName, filesEventPrefix) && !filesLabelsValid(ev.Labels) {
 			dropped++
@@ -223,7 +224,7 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 		safeName := strings.ReplaceAll(ev.EventName, "\n", `\n`)
 		safeName = strings.ReplaceAll(safeName, "\r", `\r`)
 
-		aerr := h.provider.Record(ctx, analytics.Event{
+		toRecord = append(toRecord, analytics.Event{
 			ID:            ev.ID,
 			EventName:     safeName,
 			EventCategory: ev.EventCategory,
@@ -233,9 +234,11 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 			Component:     ev.Component,
 			Labels:        ev.Labels,
 		})
-		if aerr != nil {
-			log.Error("analytics record error (continuing)", "err", aerr)
-		}
+	}
+	// One transaction for the whole request when the provider supports it: a commit
+	// per event serialized up to 100 inserts on the single analytics connection.
+	if aerr := analytics.RecordAll(ctx, h.provider, toRecord); aerr != nil {
+		log.Error("analytics record error (continuing)", "err", aerr, "events", len(toRecord))
 	}
 
 	if dropped > 0 {
