@@ -127,10 +127,10 @@ I did not enumerate every read path for the `core`-stay row; its "no FK, single-
 
    All numbers are starting defaults; PR 1 benchmarks each against the live-copy workload before it stays. Every ent-backed profile
    includes `WithEntTimeCompat` so reads on any pool parse the `T`/offset and Go `time.String()` text forms already present.
-4. **WAL enforced.** The registry sets `journal_mode=WAL` on open for every file it opens, reads it back and fails the open if it is
+4. **WAL enforced.** Registry paths must be plain file paths without a query string, because `sqlitedsn.WithWAL()` is a no-op on a path that already has one (`internal/sqlitedsn/sqlitedsn.go:42-48`); the read-back below fails the open rather than trusting the DSN. The registry sets `journal_mode=WAL` on open for every file it opens, reads it back and fails the open if it is
    not `wal` (except `:memory:`/URI test DBs). It exports `db_journal_mode{db}` (1 = WAL) and `db_synchronous{db}`, also shown in
    `/actuator/db`.
-5. **Typed handles.** (`GetEntClient()` has 34 non-test call sites returning the raw client, e.g. `server/dependencies.go:407,1441`; PR 1 keeps `Core.Ent()` behind it unchanged and `nowrongdbentity` turns on per entity only in the PR that moves that entity, so PR 1 is not a 34-site rewrite.) One handle type per DB (`dbpool.Core`, `dbpool.Classification`, ...). Small DBs expose a facade holding an
+5. **Typed handles.** (`GetEntClient()` has 31 non-generated, non-test call sites returning the raw client, e.g. `server/dependencies.go:407,1441`; PR 1 keeps `Core.Ent()` behind it unchanged and `nowrongdbentity` turns on per entity only in the PR that moves that entity, so PR 1 is not a 34-site rewrite.) One handle type per DB (`dbpool.Core`, `dbpool.Classification`, ...). Small DBs expose a facade holding an
    unexported `*ent.Client` and only their entity clients; `Core` exposes `Ent()`. Repositories take the handle, not `*ent.Client`.
    This is a ratchet, not a proof: every handle wraps the same generated `*ent.Client`, so aliasing or passing a raw client defeats
    the types. The analyzer `tools/lint/nowrongdbentity` closes the gap by rejecting a selector for any entity outside the receiving
@@ -150,11 +150,11 @@ I did not enumerate every read path for the `core`-stay row; its "no FK, single-
 9. **Observability.** Existing pool names (`ent`, `ent-read`, `analytics`) and metrics stay; the registry adds `db.logical` and
    `db.class` attributes and per-DB slow-query thresholds. `/actuator/db` lists one row per DB (open/closed, file and WAL size, pool
    config, journal mode).
-10. **Maintenance and retention.** (Retention is off by default; see open decision 1.) Each DB registers with `session/dbmaint` (#1271). Retention is a table-keyed policy per DB:
+10. **Maintenance and retention.** (Retention is off by default; see open decision 1.) A retention cutoff exists only when `retention_days` is set; with it unset the copy has no time filter. Each DB registers with `session/dbmaint` (#1271). Retention is a table-keyed policy per DB:
     chunks of 2,000 walking `id` ascending until the first row newer than the cutoff, comparing `datetime(created_at)` (SQLite
     normalizes offsets) because stored `created_at` mixes `-07:00` and `+00:00` text (VERIFIED in the copy), so a plain text compare is
     wrong near the boundary. `classification_analytics` retention is off by default and `retention_days` is opt-in (suggested 90).
-11. **Tunables.** Defaults in profiles; override via `config.json` (`db.<name>.reader_conns`, `busy_timeout`, `retention_days`) and
+11. **Tunables.** (Runtime resize and idle close need the raw `*sql.DB`s, which `dbsplit` and `dbobs` do not expose, so `dbpool` keeps them. Idle close drops the driver; `dbpool` re-registers the reopened one with `dbobs` and a per-DB `dbmaint` maintainer whose goroutine it starts and stops with the open/close lifecycle, so neither holds a stale driver. `journal_mode` and `synchronous` gauges read the writer connection only; reader connections are opened with the same DSN.) Defaults in profiles; override via `config.json` (`db.<name>.reader_conns`, `busy_timeout`, `retention_days`) and
     env `STAPLER_SQUAD_DB_<NAME>_READ_CONNS` (`STAPLER_SQUAD_DB_READ_CONNS` stays the `core` alias). Runtime:
     `POST /actuator/db/pool {name, reader_conns}` on the local listener (pattern: `/actuator/terminal-mux`) using
     `SetMaxOpenConns`/`SetMaxIdleConns` on the reader pool. The writer stays 1 because dedup/CAS code relies on it.
@@ -193,6 +193,8 @@ tests make the rest checkable as each DB is carved out. #1272 was not examined.
 
 ## Data migration (restartable, online, never a long state hold)
 
+The Router covers both directions of data movement: `core`->new DB for classification and context history, and `analytics.db` (`escape`)->new DB for `analytics_events`, whose writer is the `server/analytics` provider and whose readers include `server/handlers/analytics_handler.go:287`; moving it re-points those and the state-client reader `ListAnalyticsBySessionID`.
+
 Applies per moved table: first `classification_analytics`, then `context_samples`+`compaction_events`, then `analytics_events` out
 of `analytics.db`, then later waves (Backlog, Workflow, Wake, Credentials, Errors). Flag `db_split_<usecase>`, default off.
 
@@ -201,25 +203,24 @@ and survives deleting any telemetry file.
 
 Copy first, then one atomic cutover, so there are **no union reads and no double counting**:
 
-0. **Per-table spec.** Each moved table declares its natural key and cursor; the protocol is not generic. `classification_analytics`: `id INTEGER PRIMARY KEY AUTOINCREMENT` (cursor `id`, the rowid alias, stable across VACUUM), natural key `analytics_id` (unique; 427,630 distinct of 427,630), copy every column except `id`. `context_samples`/`compaction_events`: integer `id`, natural keys `(session_uuid, turn_index)` / `(session_uuid, ordinal)`, copied without `id`. `analytics_events`: `id TEXT PRIMARY KEY` (not a rowid alias, so `rowid` is not stable across VACUUM and is never a cursor); cursor and natural key are `id`, copied as is, keyset `WHERE id > ? ORDER BY id`. A per-table test asserts the spec's columns exist and the key is unique.
+0. **Per-table spec.** Each moved table declares its natural key and cursor; the protocol is not generic. `classification_analytics`: `id INTEGER PRIMARY KEY AUTOINCREMENT` (cursor `id`, the rowid alias, stable across VACUUM), natural key `analytics_id` (unique; 427,630 distinct of 427,630), time column `created_at`, copy every column except `id`. `context_samples`/`compaction_events`: integer `id`, natural keys `(session_uuid, turn_index)` / `(session_uuid, ordinal)`, time columns `sampled_at` / `occurred_at` (neither has `created_at`), copied without `id`. `analytics_events`: `id TEXT PRIMARY KEY` (not a rowid alias, so `rowid` is not stable across VACUUM and is never a cursor); time column `created_at`, natural key `id`, copied as is. Its ids are random UUIDs, so a keyset cursor is **not monotonic**: rows inserted during the copy land anywhere in key order and some fall below the cursor. This table therefore gets a **full anti-join delta pass at cutover** (`NOT EXISTS` on `id`, cheap at ~100k rows) instead of a cursor-based delta; the cursor is used only to bound each bulk batch. A per-table test asserts the spec's columns exist and the key is unique.
 1. `copy`. A pinned `sql.Conn` from the **destination's writer pool** (the pattern at `database_service.go:259-276`; ATTACH is per
    physical connection and `SetConnMaxLifetime` can recycle it) runs per batch of 2,000: `ATTACH 'file:<src>?mode=ro' AS src;
-   INSERT OR IGNORE INTO dst(<every column except id>) SELECT <same> FROM src.t WHERE <cursor> > ? AND datetime(created_at) >= <cutoff>
-   ORDER BY <cursor> LIMIT 2000; DETACH`, then advance `cursor` in `core`. Idempotency and verification key on the natural unique key
+   INSERT OR IGNORE INTO dst(<every column except id>) SELECT <same> FROM src.t WHERE <cursor> > ? [AND datetime(<time column>) >= <cutoff> only when retention is set]
+   ORDER BY <cursor> LIMIT 2000; DETACH`, then advance `cursor` in `core` to the maximum key **scanned** in the batch, not the maximum copied, so a batch whose rows are all filtered out still makes progress. Idempotency and verification key on the natural unique key
    (`analytics_id`), never `id`: `id` is `AUTOINCREMENT` in both files, so copying it collides with destination ids (review finding).
    `dbpool` keeps each writer's underlying `*sql.DB` and exposes it only to the migrator (the `dbobs`/`dbsplit` wrappers do not expose `Conn`); a batch holds the destination writer for its duration, harmless because the destination is not routed until step 2. The source read is a short WAL read transaction and holds no writer; the destination writer is the new, nearly idle DB. Throttle:
    sleep between batches; back off while `dbobs` shows `core` writer wait p95 above a threshold. The source `-shm` exists because the
    process has the source open.
 2. `cutover`. The copier keeps tailing the source cursor until lag is under one batch. Then a `Router` flips: persist `phase=routed` in the ledger **first**, then swap an `atomic` target. At startup routing is derived from the ledger, never from memory, so a crash between the two steps is safe. Only the moved tables' repository methods (`ent_repository.go:1901-2140` for classification, about ten) read the router per call instead of the cached `r.client`; an in-flight batch finishes on the old target and is picked up by a final delta pass over source keys above the flip-time cursor (small, not a full anti-join), which is idempotent. The full anti-join is verification (step 3), not on the cutover path. Reads right after the flip can miss only rows in that delta; telemetry class tolerates that.
-3. `verify`. Per source chunk, a `NOT EXISTS` anti-join on the natural key returns 0; rows older than the retention cutoff are excluded
-   from both the copy and this check, so a 90-day policy never fights the copier; counts compare on the filtered set. `PRAGMA
+3. `verify`. Per source chunk, a `NOT EXISTS` anti-join on the natural key returns 0; when retention is set, rows older than the cutoff are excluded from the copy and this check, and `purge` deletes them from the source without copying (counted as `expired`), so the source can still empty; counts compare on the filtered set. `PRAGMA
    quick_check` on the destination runs in the background and is exposed as a gauge (inline `integrity_check` on 490 MB is too slow).
 4. `purge` (after a soak, default 7 days, only while the flag is on). **Copy-verified chunk delete:** for each chunk of 2,000 source
    cursor keys, confirm every `analytics_id` exists in the destination, then delete exactly those rows; a row never confirmed is never
    deleted. This replaces any "delete everything below `cursor`" step, which a flag flip or an old-binary run could turn into data
    loss (review finding: rows written to the source after a rollback sit above the cursor). Then `DROP TABLE` after an emptiness check;
    `dbmaint` returns pages (`sessions.db` is `auto_vacuum=2`, VERIFIED).
-5. The migration re-runs on every start until the source table is absent or empty (one `SELECT 1 LIMIT 1`); a ledger "complete"
+5. The migration re-runs on every start until the source table is absent or empty; `DROP TABLE` runs only once the table has left `CoreTables` (otherwise the next `Schema.Create` would recreate it), so during the one-release overlap the source stays present and empty (one `SELECT 1 LIMIT 1`); a ledger "complete"
    does not stop that. An old binary recreates the empty source table and may write rows there; the next upgrade copies them.
 
 Rollback: flag off reverts routing; rows written to the destination after cutover exist only there, so `dbpool-migrate --reverse`
@@ -260,7 +261,7 @@ updated in the same PR as the move, as must `database_service` backup/merge/insp
 
 ## Rollout
 
-1. PR 1: `session/dbpool` registry, handles, profiles, WAL enforcement + `db_journal_mode`, `norawdb` lint, subset schemas, per-DB
+1. PR 1: `session/dbpool` registry (lazy open and idle close ship as a tested `Lazy` wrapper; `core` and `escape` stay eagerly opened in PR 1 and the first moved DB is the first lazy user; `/actuator/db` gains a `databases` array from a package-level `dbpool.Snapshot()`, the POST resize endpoint is PR 3; `norawdb` and `nowrongdbentity` are registered in `tools/lint/cmd/linter/main.go` and the `Makefile` `lint-custom` list, the latter needing generated ent types so it runs after `make ent-gen` like `make lint`), handles, profiles, WAL enforcement + `db_journal_mode`, `norawdb` lint, subset schemas, per-DB
    hot-query plan tests, lazy open/idle close, pragma and fd benchmarks. No table moves; the two existing files are re-registered.
 2. PR 2: online migration + routing for `classification`, `contexthistory`, `analytics_events`; fixture, interrupted-resume and
    contention tests; before/after numbers on a `/tmp` copy.
