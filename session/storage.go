@@ -1492,6 +1492,11 @@ func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID str
 	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
 }
 
+// GetWorktreeDataBySessionUUIDs forwards to EntRepository.GetWorktreeDataBySessionUUIDs.
+func (s *Storage) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
+	return s.repo.GetWorktreeDataBySessionUUIDs(ctx, sessionUUIDs)
+}
+
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
 // the session is not found.

@@ -3219,6 +3219,36 @@ func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]
 	return results, nil
 }
 
+// GetWorktreeDataBySessionUUIDs is GetWorktreeDataBySessionUUID for many
+// sessions in one query per 500 UUIDs. UUIDs with no session or no worktree are
+// absent from the result.
+func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
+	out := make(map[string]GitWorktreeData, len(sessionUUIDs))
+	const chunkSize = 500
+	for start := 0; start < len(sessionUUIDs); start += chunkSize {
+		end := min(start+chunkSize, len(sessionUUIDs))
+		rows, err := r.client.Session.Query().
+			Where(entSession.UUIDIn(sessionUUIDs[start:end]...)).
+			WithWorktree().
+			All(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("GetWorktreeDataBySessionUUIDs: %w", err)
+		}
+		for _, sess := range rows {
+			if wt := sess.Edges.Worktree; wt != nil {
+				out[sess.UUID] = GitWorktreeData{
+					RepoPath:      wt.RepoPath,
+					WorktreePath:  wt.WorktreePath,
+					SessionName:   wt.SessionName,
+					BranchName:    wt.BranchName,
+					BaseCommitSHA: wt.BaseCommitSha,
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns an empty GitWorktreeData (no error) if the session does
 // not exist or is a directory-mode session without a dedicated worktree.
