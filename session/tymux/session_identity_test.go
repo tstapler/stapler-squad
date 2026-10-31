@@ -325,28 +325,6 @@ func TestRestoreWithWorkDir_StoredIDAbsent_FallsBackToLabel(t *testing.T) {
 	assert.Zero(t, starts)
 }
 
-func TestRestoreWithWorkDir_StoredIDClaimedByOther_DoesNotFallBack(t *testing.T) {
-	resetClaims(t)
-	dir := t.TempDir()
-	transport := &fakeTransport{
-		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
-			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{
-				namedSession("held", dir+" [t]", dir),
-			}}), nil
-		},
-		createSessionFn: func(_ context.Context, _ *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-			return connect.NewResponse(namedSession("fresh-held", dir+" [t]", dir)), nil
-		},
-	}
-	claimedSessions.Store("held", any(NewTymuxGRPCSession(transport)))
-	s := NewTymuxGRPCSession(transport)
-	s.SetSessionLabel("t")
-	s.SetStoredSessionID("held")
-	require.NoError(t, s.RestoreWithWorkDir(dir))
-	t.Cleanup(func() { _ = s.Close() })
-	assert.Equal(t, "fresh-held", s.GetSessionIdentifier())
-}
-
 func TestIsAlive_NotFoundButSessionListedLiveUnderNewPane_StaysAliveAndRecachesPane(t *testing.T) {
 	resetClaims(t)
 	dir := t.TempDir()
@@ -388,4 +366,137 @@ func TestPersistedSessionID_StoredBeforeRestore_ClearedOnClose(t *testing.T) {
 	assert.Equal(t, "p-1", s.PersistedSessionID())
 	require.NoError(t, s.Close())
 	assert.Empty(t, s.PersistedSessionID(), "a killed session must not be persisted")
+}
+
+func TestClose_UnrestoredSessionKillsItsStoredDaemonSession(t *testing.T) {
+	resetClaims(t)
+	var killed []string
+	transport := &fakeTransport{
+		killSessionFn: func(_ context.Context, r *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			killed = append(killed, r.Msg.GetSessionId())
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	sess.SetStoredSessionID("stored-u1")
+	require.NoError(t, sess.Close())
+	assert.Equal(t, []string{"stored-u1"}, killed)
+}
+
+// A second Instance object rebuilt from the same persisted record (a registry
+// throwaway, a liveness shadow) names the same stored id; it must attach to that
+// session, never spawn a duplicate agent next to it.
+func TestRestoreWithWorkDir_SameStoredRecordBorrowsInsteadOfSpawning(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	created := 0
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("rec-1", dir+" [x]", dir)}}), nil
+		},
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			created++
+			return connect.NewResponse(namedSession("dup", dir, dir)), nil
+		},
+	}
+	owner := NewTymuxGRPCSession(transport)
+	owner.SetSessionLabel("x")
+	owner.SetStoredSessionID("rec-1")
+	require.NoError(t, owner.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = owner.Close() })
+
+	view := NewTymuxGRPCSession(transport)
+	view.SetSessionLabel("x")
+	view.SetStoredSessionID("rec-1")
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.Zero(t, created, "a view of the same record must not spawn a second session")
+	assert.Equal(t, "rec-1", view.GetSessionIdentifier())
+}
+
+// Closing a stored-id view kills the record's session: the record owns it, so a
+// stopped/deleted shadow Instance cannot leave the real session running.
+func TestClose_StoredIDViewKillsTheRecordsSession(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	var killed []string
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("rec-2", dir, dir)}}), nil
+		},
+		killSessionFn: func(_ context.Context, r *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			killed = append(killed, r.Msg.GetSessionId())
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
+		},
+	}
+	owner := NewTymuxGRPCSession(transport)
+	owner.SetStoredSessionID("rec-2")
+	require.NoError(t, owner.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = owner.Close() })
+	view := NewTymuxGRPCSession(transport)
+	view.SetStoredSessionID("rec-2")
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	require.NoError(t, view.Close())
+
+	assert.Equal(t, []string{"rec-2"}, killed)
+}
+
+// A never-restored view can still answer "is the record's session live" from its
+// stored id, without claiming it.
+func TestStoredSessionLive(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	live := true
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			s := namedSession("rec-3", dir, dir)
+			if !live {
+				s.Liveness = v1.Liveness_LIVENESS_DEAD
+			}
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{s}}), nil
+		},
+	}
+	view := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	assert.False(t, view.StoredSessionLive(), "no stored id")
+	view.SetStoredSessionID("rec-3")
+	assert.True(t, view.StoredSessionLive())
+	_, claimed := claimedSessions.Load("rec-3")
+	assert.False(t, claimed, "a liveness probe must not claim")
+	live = false
+	assert.False(t, view.StoredSessionLive())
+	view.SetStoredSessionID("other")
+	live = true
+	assert.False(t, view.StoredSessionLive(), "unknown id")
+}
+
+// Startup restore of many Instances that share one directory: each adopts its own
+// stored id, none is spawned, none shares (run with -race).
+func TestRestoreWithWorkDir_ConcurrentStartupRestoreOfSharedDirRecords(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	const n = 24
+	daemon := newModelDaemon()
+	ids := make([]string, n)
+	for i := range ids {
+		resp, err := daemon.CreateSession(context.Background(), connect.NewRequest(&v1.CreateSessionRequest{Name: fmt.Sprintf("%s [t%d]", dir, i), Cwd: dir}))
+		require.NoError(t, err)
+		ids[i] = resp.Msg.GetId()
+	}
+	got := make([]string, n)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			m := NewTymuxGRPCSession(daemon)
+			m.SetSessionLabel(fmt.Sprintf("t%d", i))
+			m.SetStoredSessionID(ids[i])
+			assert.NoError(t, m.RestoreWithWorkDir(dir))
+			got[i] = m.GetSessionIdentifier()
+		}(i)
+	}
+	wg.Wait()
+	assert.Equal(t, ids, got)
+	assert.Len(t, daemon.ids(), n, "restore must not spawn extra sessions")
 }
