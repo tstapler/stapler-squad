@@ -131,27 +131,39 @@ func parseProcessState(state string) PTYStatus {
 	}
 }
 
+// listAllPanes runs one `tmux list-panes -a -F format` against socket for a background poller:
+// ok is false when no exec-gate slot is free right now (skip this tick) or tmux failed.
+func listAllPanes(socket, format string) (output []byte, ok bool) {
+	resolved := tmux.ResolveSocket(socket)
+	args := resolved.Args("list-panes", "-a", "-F", format)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	release, acquired := tmux.TryAcquireExecSlot(resolved.String())
+	if !acquired {
+		return nil, false
+	}
+	defer release()
+
+	out, err := safeexec.CommandContext(ctx, tmux.Binary(), args...).Output()
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
 // batchPaneActivity returns the last-activity timestamp for each session (first pane wins)
 // by running a single `tmux list-panes -a` call. The tmux format #{pane_last_activity}
 // is a Unix timestamp updated whenever the pane produces output. Use it to detect whether
 // a session has produced new output since the last capture, without spawning capture-pane.
 // Returns nil when tmux is unavailable.
+//
+// Caveat: tmux 3.7b has no #{pane_last_activity} format variable (it expands to empty, verified
+// with `tmux list-panes -a -F '#{pane_last_activity}'`), so on that version every line is skipped
+// and the map is empty. Use batchWindowActivity for a working signal.
 func batchPaneActivity(socket string) map[string]time.Time {
-	resolved := tmux.ResolveSocket(socket)
-	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Background poller: skip this tick rather than queue behind interactive traffic.
-	release, ok := tmux.TryAcquireExecSlot(resolved.String())
+	output, ok := listAllPanes(socket, "#{session_name} #{pane_last_activity}")
 	if !ok {
-		return nil
-	}
-	defer release()
-
-	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
-	output, err := cmd.Output()
-	if err != nil {
 		return nil
 	}
 	// Parse bytes directly: no string(output) copy, no strings.Split allocation.

@@ -343,6 +343,12 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
 
+	// Skips the per-tick capture-pane while the pane is provably unchanged (pane_activity_gate.go).
+	// Local tmux only: the snapshot is the local server's list-panes.
+	paneGate := newPaneActivityGate(func() map[string]time.Time {
+		return driverPaneSnapshot(inst.IsRemote())
+	}, time.Now, driverPaneActivityGateEnabled)
+
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
@@ -429,7 +435,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
-		output, previewErr := inst.PreviewContext(ctx)
+		output, previewErr := driverPreview(ctx, paneGate, inst)
 		hasOutput := previewErr == nil && output != ""
 		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
 		// buffer (not a tailed "current screen" snapshot, despite its doc comment),
