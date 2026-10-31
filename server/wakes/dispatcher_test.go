@@ -206,7 +206,9 @@ func TestDispatcher_should_NotRequeueHeldClaim_When_PeriodicReconcileRunsButDoRe
 	r := newDispatcherRig(t)
 	r.steerer.setReady("owner-1", false) // owner busy
 	r.start(r.d)
-	row := claimedRow(t, r.repo, t0, rowOpts{})
+	// Not yet due, so the running timer cannot claim it before this test's own claim.
+	later := t0.Add(time.Hour)
+	row := claimedRow(t, r.repo, t0, rowOpts{spec: domain.AtSpec{At: later}, nextFire: &later})
 	r.d.dispatchClaimed(context.Background(), row)
 	require.True(t, r.d.Delivery().Holds(row.ID))
 
