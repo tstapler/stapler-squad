@@ -51,6 +51,7 @@ interface Harness {
   muxes: FakeMux[];
   fallbacks: string[];
   intervals: { fn: () => void; ms: number }[];
+  timeouts: { fn: () => void; ms: number }[];
   clock: { t: number };
 }
 
@@ -58,6 +59,7 @@ function setup(opts: { size?: number; policy?: Parameters<typeof createTerminalS
   const muxes: FakeMux[] = [];
   const fallbacks: string[] = [];
   const intervals: { fn: () => void; ms: number }[] = [];
+  const timeouts: { fn: () => void; ms: number }[] = [];
   const clock = { t: 1_000_000 };
   const pool = createTerminalSocketPool({
     size: opts.size,
@@ -77,8 +79,13 @@ function setup(opts: { size?: number; policy?: Parameters<typeof createTerminalS
       return intervals.length;
     },
     clearInterval: () => undefined,
+    setTimeout: (fn, ms) => {
+      timeouts.push({ fn, ms });
+      return timeouts.length;
+    },
+    clearTimeout: () => undefined,
   });
-  return { pool, muxes, fallbacks, intervals, clock };
+  return { pool, muxes, fallbacks, intervals, timeouts, clock };
 }
 
 const flush = () => Promise.resolve();
@@ -164,7 +171,7 @@ describe("terminal socket pool", () => {
     h.muxes[0].open();
     await flush();
     h.muxes[0].feed(encodeClose(1, 1013, "full"));
-    expect(closes).toMatchObject([{ code: 1013, wasClean: false }]);
+    expect(closes).toMatchObject([{ code: 1013, wasClean: true }]);
     expect(s.readyState).toBe(3);
     expect(h.pool.stats().sockets[0].streams).toBe(0);
   });
@@ -205,7 +212,7 @@ describe("terminal socket pool", () => {
     expect(h.fallbacks).toEqual([URL]);
     h.clock.t += 61_000;
     h.pool.openStream(URL);
-    expect(h.muxes).toHaveLength(3);
+    expect(h.muxes).toHaveLength(2);
   });
 
   it("shrinks by draining: no new streams, socket closes when its last stream ends; grow is immediate", async () => {
@@ -244,7 +251,25 @@ describe("terminal socket pool", () => {
     expect(pinned.pool.stats().size).toBe(1);
   });
 
-  it("pings on an interval and drops a socket that has been silent too long", async () => {
+  it("pings on an interval and drops a socket whose ping went unanswered too long", async () => {
+    const h = setup({ size: 1 });
+    const s = h.pool.openStream(URL);
+    const closed: number[] = [];
+    s.addEventListener("close", (e) => closed.push((e as unknown as { code: number }).code));
+    h.muxes[0].open();
+    await flush();
+    h.intervals[0].fn(); // first ping
+    expect(h.muxes[0].frames("PING")).toHaveLength(1);
+    h.clock.t += 20_000;
+    h.intervals[0].fn(); // still within the allowance
+    expect(closed).toEqual([]);
+    h.clock.t += 30_000;
+    h.intervals[0].fn(); // >45s since the first unanswered ping
+    expect(closed).toEqual([1006]);
+    expect(h.muxes[0].closed).toBe(true);
+  });
+
+  it("does not drop a socket that answered since the last ping, even if the timer was throttled", async () => {
     const h = setup({ size: 1 });
     const s = h.pool.openStream(URL);
     const closed: number[] = [];
@@ -252,11 +277,31 @@ describe("terminal socket pool", () => {
     h.muxes[0].open();
     await flush();
     h.intervals[0].fn();
-    expect(h.muxes[0].frames("PING")).toHaveLength(1);
-    h.clock.t += 46_000;
+    h.clock.t += 120_000; // hidden-tab throttling
+    h.muxes[0].feed(encodeConfig("CONFIG", HELLO));
     h.intervals[0].fn();
+    expect(closed).toEqual([]);
+  });
+
+  it("abandons a mux socket whose handshake hangs so retries do not reuse it", () => {
+    const h = setup({ size: 1 });
+    const s = h.pool.openStream(URL);
+    const closed: number[] = [];
+    s.addEventListener("close", (e) => closed.push((e as unknown as { code: number }).code));
+    h.timeouts[0].fn();
     expect(closed).toEqual([1006]);
     expect(h.muxes[0].closed).toBe(true);
+    expect(h.pool.stats().sockets).toHaveLength(0);
+  });
+
+  it("send after close is dropped like a native WebSocket; send while connecting throws", async () => {
+    const h = setup({ size: 1 });
+    const s = h.pool.openStream(URL);
+    expect(() => s.send("x")).toThrow();
+    h.muxes[0].open();
+    await flush();
+    s.close();
+    expect(() => s.send("x")).not.toThrow();
   });
 
   it("hashByStream is deterministic and leastLoaded prefers the idle socket", () => {

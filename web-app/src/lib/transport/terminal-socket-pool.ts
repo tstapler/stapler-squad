@@ -26,6 +26,7 @@ const DEFAULT_WINDOW = 256 * 1024;
 const PING_INTERVAL_MS = 20_000;
 const DEAD_AFTER_MS = 45_000;
 const BREAKER_MS = 60_000;
+const CONNECT_TIMEOUT_MS = 5_000;
 const LOAD_HALF_LIFE_MS = 1_000;
 const NORMAL_CLOSE = 1000;
 const GOING_AWAY = 1001;
@@ -107,6 +108,8 @@ export interface PoolOptions {
   now?: () => number;
   setInterval?: (fn: () => void, ms: number) => unknown;
   clearInterval?: (handle: unknown) => void;
+  setTimeout?: (fn: () => void, ms: number) => unknown;
+  clearTimeout?: (handle: unknown) => void;
   /** Builds the plain per-stream socket used when the pool cannot serve a stream. */
   fallback?: (url: string) => PooledSocketLike;
   /** Mux endpoint URL for a stream URL; defaults to the stream URL's origin plus MUX_PATH. */
@@ -147,7 +150,8 @@ class PooledSocket extends EventTarget implements PooledSocketLike {
   }
 
   send(data: string | ArrayBufferLike | ArrayBufferView): void {
-    if (this.state !== READY_OPEN) throw new Error("terminal stream is not open");
+    if (this.state === READY_CONNECTING) throw new DOMException("terminal stream is still connecting", "InvalidStateError");
+    if (this.state !== READY_OPEN) return; // like a native WebSocket, sends after close are dropped
     const isText = typeof data === "string";
     const bytes = isText
       ? new TextEncoder().encode(data)
@@ -225,6 +229,8 @@ class MuxConn {
   private bytesEwma = 0;
   private ewmaAt: number;
   private lastRx: number;
+  private lastPingAt = 0;
+  private connectTimer: unknown = null;
   private pingTimer: unknown = null;
 
   constructor(
@@ -238,6 +244,12 @@ class MuxConn {
     this.ws.addEventListener("message", (ev) => this.onMessage(ev as MessageEvent));
     this.ws.addEventListener("close", () => this.onGone(ABNORMAL_CLOSE, "mux socket closed"));
     this.ws.addEventListener("error", () => undefined);
+    // A handshake that hangs must not keep attracting streams while the browser waits it out.
+    this.connectTimer = pool.setTimeoutFn(() => {
+      if (this.opened) return;
+      this.ws.close();
+      this.onGone(ABNORMAL_CLOSE, "mux connect timeout");
+    }, CONNECT_TIMEOUT_MS);
   }
 
   get load(): SocketLoad {
@@ -266,16 +278,22 @@ class MuxConn {
 
   private onOpen(): void {
     this.opened = true;
+    if (this.connectTimer !== null) this.pool.clearTimeoutFn(this.connectTimer);
+    this.connectTimer = null;
     this.pingTimer = this.pool.setIntervalFn(() => this.heartbeat(), PING_INTERVAL_MS);
     for (const s of [...this.streams.values()]) this.openStream(s);
   }
 
   private heartbeat(): void {
-    if (this.pool.now() - this.lastRx > DEAD_AFTER_MS) {
+    // Dead only if nothing arrived since the previous ping and that ping is old; a throttled
+    // timer (hidden tab) delays the tick but must not look like silence.
+    if (this.lastPingAt > 0 && this.lastRx <= this.lastPingAt && this.pool.now() - this.lastPingAt > DEAD_AFTER_MS) {
       this.ws.close();
       this.onGone(ABNORMAL_CLOSE, "mux heartbeat timeout");
       return;
     }
+    // Keep the oldest still-unanswered ping as the reference point.
+    if (this.lastPingAt === 0 || this.lastRx > this.lastPingAt) this.lastPingAt = this.pool.now();
     this.ws.send(encodePing());
   }
 
@@ -304,7 +322,7 @@ class MuxConn {
         break;
       }
       case "CLOSE":
-        this.streams.get(frame.id)?.finish(frame.code, frame.reason, frame.code === NORMAL_CLOSE || frame.code === GOING_AWAY);
+        this.streams.get(frame.id)?.finish(frame.code, frame.reason, true);
         break;
       default:
         break;
@@ -347,6 +365,8 @@ class MuxConn {
 
   private teardown(): void {
     this.closed = true;
+    if (this.connectTimer !== null) this.pool.clearTimeoutFn(this.connectTimer);
+    this.connectTimer = null;
     if (this.pingTimer !== null) this.pool.clearIntervalFn(this.pingTimer);
     this.pingTimer = null;
   }
@@ -381,6 +401,8 @@ class PoolImpl implements TerminalSocketPool {
   private readonly muxUrl: (streamUrl: string) => string;
   private readonly setIntervalRef: (fn: () => void, ms: number) => unknown;
   private readonly clearIntervalRef: (handle: unknown) => void;
+  private readonly setTimeoutRef: (fn: () => void, ms: number) => unknown;
+  private readonly clearTimeoutRef: (handle: unknown) => void;
 
   constructor(opts: PoolOptions) {
     this.sizeOverridden = opts.size !== undefined;
@@ -393,10 +415,14 @@ class PoolImpl implements TerminalSocketPool {
     // Wrapped so the browser's setInterval is never invoked with the pool as `this`.
     this.setIntervalRef = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
     this.clearIntervalRef = opts.clearInterval ?? ((h) => clearInterval(h as number));
+    this.setTimeoutRef = opts.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+    this.clearTimeoutRef = opts.clearTimeout ?? ((h) => clearTimeout(h as number));
   }
 
   setIntervalFn = (fn: () => void, ms: number): unknown => this.setIntervalRef(fn, ms);
   clearIntervalFn = (h: unknown): void => this.clearIntervalRef(h);
+  setTimeoutFn = (fn: () => void, ms: number): unknown => this.setTimeoutRef(fn, ms);
+  clearTimeoutFn = (h: unknown): void => this.clearTimeoutRef(h);
 
   openStream(url: string): PooledSocketLike {
     if (this.size <= 0 || this.now() < this.breakerUntil) return this.fallback(url);
