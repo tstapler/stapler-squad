@@ -2,11 +2,9 @@ package session
 
 import (
 	"database/sql"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -22,6 +20,14 @@ const ReadPoolEnv = "STAPLER_SQUAD_DB_READ_CONNS"
 
 const defaultReadPoolSize = 4
 
+// tuneEntDSN applies synchronous=NORMAL, which is safe with WAL (a power loss
+// may drop the last commits, never corrupts) and removes an fsync from every
+// commit; the modernc default is FULL. cache_size/mmap_size/temp_store showed no
+// measurable gain on this workload, so they are left at SQLite defaults.
+func tuneEntDSN(b *sqlitedsn.Builder) *sqlitedsn.Builder {
+	return b.WithSynchronousNormal()
+}
+
 func readPoolSize() int {
 	n, err := strconv.Atoi(os.Getenv(ReadPoolEnv))
 	if err != nil || n < 0 {
@@ -35,24 +41,6 @@ func readPoolSize() int {
 // reopened by a second pool.
 func isOnDiskDatabase(path string) bool {
 	return path != "" && path != ":memory:" && !strings.HasPrefix(path, "file:") && !strings.Contains(path, "mode=memory")
-}
-
-// openReadPool opens n query_only connections on the same WAL file as the writer.
-func openReadPool(path string, n int) (*sql.DB, error) {
-	dsn := sqlitedsn.New(path).
-		WithWAL().
-		WithBusyTimeout(5000 * time.Millisecond).
-		WithQueryOnly().
-		WithEntTimeCompat().
-		Build()
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open read pool: %w", err)
-	}
-	db.SetMaxOpenConns(n)
-	db.SetMaxIdleConns(n)
-	db.SetConnMaxLifetime(time.Hour)
-	return db, nil
 }
 
 // newInstrumentedEntClient builds the ent client over db with query timing,

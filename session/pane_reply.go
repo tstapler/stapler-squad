@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // QuestionDialog is what DialogMatch compares a live capture against: the
@@ -375,7 +377,12 @@ func (r *replyRun) execute(ctx context.Context) replyResult {
 func awaitDialogClosed(ctx context.Context, pane replyPane, o ReplyOptions) replyResult {
 	var elapsed time.Duration
 	for {
-		if capture, err := pane.CapturePaneContent(); err == nil && !DialogMatch(capture, o.Dialog) {
+		capture, err := pane.CapturePaneContent()
+		if tymux.IsFinalExit(err) {
+			// The byte went in, so whether the dialog took it is unknown.
+			return replyResult{StageWriteEntered, fmt.Errorf("pane exited after the reply byte: %w", err)}
+		}
+		if err == nil && !DialogMatch(capture, o.Dialog) {
 			return replyResult{StageDialogClosed, nil}
 		}
 		if elapsed >= o.ClosedWindow {

@@ -116,3 +116,8 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	require.NotNil(t, resp.Msg.Session)
 	assert.Equal(t, []string{msg, session.EnterKeySequence}, pm.writes())
 }
+
+// CapturePaneContent reports no capture so submit confirmation falls back to HasUpdated.
+func (r *steerRecordingPM) CapturePaneContent() (string, error) {
+	return "", errors.New("capture unsupported by fake")
+}

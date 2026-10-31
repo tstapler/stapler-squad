@@ -41,6 +41,7 @@ const (
 	maxClientDurationMs    = 10 * 60 * 1000
 	maxInflightObservation = 64
 	maxBatchObservation    = 64
+	maxFallbackCount       = 100000
 	otherLabel             = "other"
 	reasonKey              = "reason"
 	unknownLabel           = "unknown"
@@ -52,10 +53,13 @@ var (
 	wsKinds     = map[string]bool{"unary": true, "watch": true}
 	wsEvents    = map[string]bool{"open": true, "close": true, "error": true, "reconnect": true}
 	fallbacks   = map[string]bool{"breaker-open": true, "force-http": true, "ws-method-not-allowed": true, "ws-call-timeout": true,
-		"ws-resource-exhausted": true, "ws-unavailable": true, "ws-send-queue-full": true}
-	batchReason = map[string]bool{"request-failed": true, "server-declined": true}
-	vitalNames  = map[string]bool{"lcp": true, "inp": true, "cls": true, "fcp": true, "ttfb": true}
-	vitalRating = map[string]bool{"good": true, "needs-improvement": true, "poor": true}
+		"ws-resource-exhausted": true, "ws-unavailable": true, "ws-send-queue-full": true,
+		"not-eligible": true, "flag-off": true, "flags-not-loaded": true, "remote-flag-off": true, "session-parked": true}
+	// routineFallbacks are counted per HTTP call that never tried the socket, not true fallbacks.
+	routineFallbacks = map[string]bool{"not-eligible": true, "flag-off": true, "flags-not-loaded": true, "remote-flag-off": true, "session-parked": true}
+	batchReason      = map[string]bool{"request-failed": true, "server-declined": true}
+	vitalNames       = map[string]bool{"lcp": true, "inp": true, "cls": true, "fcp": true, "ttfb": true}
+	vitalRating      = map[string]bool{"good": true, "needs-improvement": true, "poor": true}
 	// connectCodes mirrors Connect's canonical code names; the client sends them
 	// snake_case ("deadline_exceeded") and anything else becomes "unknown".
 	connectCodes = map[string]bool{
@@ -218,7 +222,14 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 	case strings.HasPrefix(name, eventWebVitalPrefix):
 		c.observeWebVital(ctx, ev)
 	case name == eventWsUnaryFallback:
-		c.wsFallback.Add(ctx, 1, attrs(attribute.String("reason", enum(ev.Labels["reason"], fallbacks))))
+		reason := enum(ev.Labels["reason"], fallbacks)
+		n := boundedInt(ev.Labels["count"], maxFallbackCount)
+		if n == 0 {
+			n = 1
+		}
+		c.wsFallback.Add(ctx, n, attrs(attribute.String("reason", reason)))
+		// Routine HTTP routing is high volume and already aggregated into the metric.
+		consumed = consumed || routineFallbacks[reason]
 	case name == eventCoalesce:
 		c.rpcCoalesce.Add(ctx, 1, attrs(
 			attribute.String("method", boundMethod(ev.Labels["method"])),

@@ -112,3 +112,15 @@ func (x *Index) Lookup(pos token.Pos, linterName string) Result {
 	}
 	return result
 }
+
+// Lookup finds the //nolint:<linterName> directive covering pos in pass's files
+// (same line, or a standalone comment line above) and reports whether it gives a reason.
+func Lookup(pass *analysis.Pass, pos token.Pos, linterName string) Result {
+	file := pass.Fset.File(pos)
+	for _, f := range pass.Files {
+		if pass.Fset.File(f.Pos()) == file {
+			return NewIndex(pass.Fset, f).Lookup(pos, linterName)
+		}
+	}
+	return None
+}

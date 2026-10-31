@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 	"github.com/tstapler/stapler-squad/session/dbobs"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -42,6 +43,37 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
 	s.mux.HandleFunc("/actuator/inbox-pr-watch", handleActuatorInboxPRWatch)
 	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
+	s.mux.HandleFunc("/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load))
+}
+
+// handleActuatorTerminalMux reports the terminal socket pool (docs/reference/terminal-ws-pool.md).
+// POST ?poolSize=N changes the advertised size at runtime and pushes it to connected clients; it is
+// accepted only on the local (loopback) listener, never on remote access.
+func handleActuatorTerminalMux(bridge func() *services.TerminalMuxBridge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		b := bridge()
+		if b == nil {
+			http.Error(w, "terminal mux not running", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if rec, ok := services.RequestRecordFrom(r.Context()); !ok || rec.Listener != services.ListenerLocal {
+				http.Error(w, "local listener only", http.StatusForbidden)
+				return
+			}
+			n, valid := services.ParseTerminalMuxPoolSize(r.URL.Query().Get("poolSize"))
+			if !valid {
+				http.Error(w, "poolSize must be an integer 0-64", http.StatusBadRequest)
+				return
+			}
+			b.SetPoolSize(n)
+		} else if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(b.Report())
+	}
 }
 
 // handleActuatorInboxPRWatch serves the PR watch status snapshot (D14). JSON by default;
@@ -71,11 +103,13 @@ func handleActuatorInboxPRWatch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(st)
 }
 
-// handleActuatorDB serves per-pool sql.DBStats and query counters (session/dbobs).
+// handleActuatorDB serves per-pool sql.DBStats and query counters (session/dbobs),
+// maintenance state (session/dbmaint) and one row per open database (session/dbpool:
+// use case, class, journal mode, file and WAL size).
 // With the single-connection pool, wait_count/wait_duration_ms rising is DB queueing.
 func handleActuatorDB(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"pools": dbobs.Snapshot(), "maintenance": dbmaint.Snapshot()})
+	_ = json.NewEncoder(w).Encode(map[string]any{"pools": dbobs.Snapshot(), "maintenance": dbmaint.Snapshot(), "databases": dbpool.Snapshot()})
 }
 
 // handleActuatorNudgeOutcomes serves the durable nudge_outcome_total counters

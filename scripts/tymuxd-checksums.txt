@@ -54,3 +54,8 @@ v1.9.0 aarch64-apple-darwin 1015ba6a7cd1a1346911c307ffa92298ba8b8558682fb83a5b5a
 v1.9.0 x86_64-apple-darwin f1d67b16531bd0251002cbdc0676b782d30e7fb91439e3de5f436f3397572980
 v1.9.0 x86_64-unknown-linux-musl 861a9eeddc9ff898f7eaa656552924e895826a2343e929302703c114d7e15bb7
 v1.9.0 aarch64-unknown-linux-musl 52cd9ad0add0ce1c6bf9588be1cdd55bae89cb0a9b95c653bfa4b3c9422afb32
+# v1.12.0: vt100 resize reflow and wrap fixes, CapturePane on an exited pane returns the last grid with liveness DEAD, terminal-query replies, restart policy and lifecycle RPCs.
+v1.12.0 aarch64-apple-darwin 2f8250ddfae7b97584798113bd50aca12062544c7d974ab5b26a1459bbfa1c17
+v1.12.0 x86_64-apple-darwin 6d9e080a3d1fc857efe3ebf74c7c73df1b30042525a38e821707e543209a816b
+v1.12.0 x86_64-unknown-linux-musl fbc337e819dc951b296b91afff87e89ceeb148767f452eb1e7e508be65db0fd9
+v1.12.0 aarch64-unknown-linux-musl dddd29b23c3dc6c51919fe13d4bdc89aa2ad9c299b8b0acb50ab8322fc5eae85

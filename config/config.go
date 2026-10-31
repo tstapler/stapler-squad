@@ -561,6 +561,11 @@ const HiddenSessionGateFeatureFlag = "hidden_session_gate"
 // and the gate's FlagCache so flipping it cannot leave them disagreeing.
 const HiddenSessionGateDefault = true
 
+// DriverPaneActivityGateDefault is the registry default of the session driver's
+// pane-activity gate (session.FeatureFlagDriverPaneActivityGate), shared by the
+// flag service and the driver's reader so they cannot disagree.
+const DriverPaneActivityGateDefault = true
+
 // TriageGuidanceHaltFeatureFlag is the config.FeatureFlags key backing
 // EffectiveTriageGuidanceHaltEnabled — gates whether automated triage halts
 // and asks via a durable GuidanceRequest instead of guessing on a genuinely

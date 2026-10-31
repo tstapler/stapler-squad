@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // maxInlinePromptBytes bounds how large i.Prompt can be before it is embedded
@@ -1349,7 +1350,8 @@ func (i *Instance) CapturePaneContentPriority() (string, error) {
 		return p.CapturePaneContentPriority()
 	}
 	i.logFastLaneAssertionFailure("CapturePaneContentPriority")
-	return i.pm().CapturePaneContent()
+	// Scroll-forward and resync read an exited pane's final grid, so don't surface the exit.
+	return tymux.FinalScreen(i.pm().CapturePaneContent())
 }
 
 // CapturePaneContentRawPriority mirrors CapturePaneContentPriority but

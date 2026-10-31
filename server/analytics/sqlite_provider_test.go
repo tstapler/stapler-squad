@@ -2,7 +2,18 @@ package analytics
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/ent"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,4 +116,76 @@ func TestSQLiteAnalyticsProvider_Record_NilOptionals(t *testing.T) {
 	assert.Empty(t, row.SessionID)
 	assert.Empty(t, row.Page)
 	assert.Empty(t, row.Component)
+}
+
+// countedClient returns an ent client whose INSERT statements are counted.
+func countedClient(t *testing.T) (*ent.Client, *atomic.Int64) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "a.db")+"?_pragma=busy_timeout(5000)&_fk=1")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	var n atomic.Int64
+	var count atomic.Bool
+	drv := dialect.DebugWithContext(entsql.OpenDB(dialect.SQLite, db), func(_ context.Context, a ...any) {
+		if count.Load() && strings.Contains(fmt.Sprint(a...), "INSERT INTO") {
+			n.Add(1)
+		}
+	})
+	client := ent.NewClient(ent.Driver(drv))
+	session.EntSchemaCreateMu.Lock()
+	err = client.Schema.Create(context.Background())
+	session.EntSchemaCreateMu.Unlock()
+	require.NoError(t, err)
+	count.Store(true)
+	return client, &n
+}
+
+// POST /api/analytics batches up to 100 events; they must reach SQLite as one
+// INSERT (one commit on the single analytics connection), not one per event.
+func TestSQLiteAnalyticsProvider_RecordBatch_should_UseOneStatement(t *testing.T) {
+	client, inserts := countedClient(t)
+	p := NewSQLiteAnalyticsProvider(client)
+	events := make([]Event, 100)
+	for i := range events {
+		events[i] = Event{ID: fmt.Sprintf("e-%d", i), EventName: "x", EventCategory: "user_action"}
+	}
+	require.NoError(t, RecordAll(context.Background(), p, events))
+	assert.Equal(t, int64(1), inserts.Load())
+	n, err := client.AnalyticsEvent.Query().Count(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 100, n)
+
+	// A retried batch (same IDs) is idempotent rather than failing.
+	require.NoError(t, RecordAll(context.Background(), p, events))
+	n, _ = client.AnalyticsEvent.Query().Count(context.Background())
+	assert.Equal(t, 100, n)
+}
+
+type plainProvider struct{ got []Event }
+
+func (p *plainProvider) Record(_ context.Context, e Event) error {
+	p.got = append(p.got, e)
+	return nil
+}
+
+func TestRecordAll_should_FallBackToPerEventRecord_When_ProviderIsNotBatch(t *testing.T) {
+	p := &plainProvider{}
+	require.NoError(t, RecordAll(context.Background(), p, []Event{{EventName: "a"}, {EventName: "b"}}))
+	assert.Len(t, p.got, 2)
+}
+
+func TestQualityMetricsProvider_RecordBatch_should_DropMetricsOnlyEvents(t *testing.T) {
+	inner := &plainProvider{}
+	p := WithQualityMetrics(inner)
+	require.NoError(t, RecordAll(context.Background(), p, []Event{
+		{EventName: "stored", EventCategory: "user_action"},
+		{EventName: clientEventPrefix + "web_vital.lcp", EventCategory: "performance"}, // metrics-only, never stored
+		{EventName: "also.stored", EventCategory: "user_action"},
+	}))
+	names := []string{}
+	for _, e := range inner.got {
+		names = append(names, e.EventName)
+	}
+	assert.Equal(t, []string{"stored", "also.stored"}, names)
 }
