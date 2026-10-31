@@ -23,8 +23,9 @@ import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
 import { waitUntilSettled } from "./helpers/wait";
 import { SessionsPage } from "./pages/SessionsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 interface SessionFixture {
   hasCommitsAhead?: boolean;

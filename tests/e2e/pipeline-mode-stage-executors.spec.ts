@@ -20,8 +20,9 @@
 
 import { test, expect, APIRequestContext, Page } from "@playwright/test";
 import { PipelineModesSettingsPage, StageRole } from "./pages/PipelineModesSettingsPage";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 // Same rationale as backlog-pipeline-mode.spec.ts: BacklogService RPCs are
 // gated by an interceptor that re-reads config.LoadConfig() from disk, which

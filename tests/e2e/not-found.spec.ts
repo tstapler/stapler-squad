@@ -11,6 +11,7 @@ import { AppShellPage } from './pages/AppShellPage';
 import { measureNotFound } from './pages/BaselineProbes';
 import baseline from './fixtures/next-baseline.json';
 import { NOT_FOUND_META } from '../../web-app/src/app/route-meta';
+import { baseUrl } from './helpers/base-url';
 
 const MISSING_PATH = '/nonexistent';
 
@@ -40,7 +41,7 @@ test.describe('not found (Bun only, UX G3)', () => {
     const shell = new AppShellPage(page);
     await shell.skipOnboarding();
     await page.setViewportSize({ width: 1400, height: 900 });
-    const response = await page.goto(`${(process.env.TEST_SERVER_URL || 'http://localhost:8544')}${MISSING_PATH}`, {
+    const response = await page.goto(`${baseUrl()}${MISSING_PATH}`, {
       waitUntil: 'domcontentloaded',
     });
 
@@ -75,7 +76,7 @@ test.describe('not found (Bun only, UX G3)', () => {
     // A fresh context's history.length is still >1 (the initial about:blank entry counts), so stub
     // it to assert the single-entry case the AC describes.
     await page.addInitScript(() => Object.defineProperty(window.history, 'length', { get: () => 1 }));
-    await page.goto(`${(process.env.TEST_SERVER_URL || 'http://localhost:8544')}${MISSING_PATH}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${baseUrl()}${MISSING_PATH}`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('button', { name: /go back/i })).toHaveCount(0);
 
     await expect(shell.drawerNav).toBeVisible();

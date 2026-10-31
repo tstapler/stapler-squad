@@ -13,8 +13,9 @@
 
 import { test, expect, Page } from "@playwright/test";
 import { SessionClient } from "./helpers/session-client";
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 const DIFF = [
   "diff --git a/src/alpha.go b/src/alpha.go",

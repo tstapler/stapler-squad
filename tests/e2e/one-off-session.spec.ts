@@ -4,8 +4,9 @@ const _features = [
   FEATURE_CATALOG['session-create'],
 ] as const;
 import { test, expect } from '@playwright/test';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 test.describe('one-off session creation', () => {
   test('shows one-off option in creation panel', async ({ page }) => {
