@@ -163,11 +163,7 @@ func remoteCapturePaneContains(t *testing.T, srv *remoteSessionTestSSHServer, se
 	}
 	defer sess.Close()
 
-	cmd := "tmux capture-pane -p -t " + sessionName
-	if serverSocket != "" {
-		cmd = "tmux -L " + serverSocket + " capture-pane -p -t " + sessionName
-	}
-	out, err := sess.CombinedOutput(cmd)
+	out, err := sess.CombinedOutput(remoteTmuxCommand(serverSocket, "capture-pane", "-p", "-t", sessionName))
 	if err != nil {
 		return false
 	}
