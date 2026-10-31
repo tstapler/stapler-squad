@@ -115,7 +115,7 @@
     {
       "id": 7,
       "title": "Mutex delay (drag to select a range for the flamegraph below)",
-      "description": "Total time goroutines spent waiting to acquire a contended sync.Mutex/RWMutex. High and rising = lock contention. Sampled: only 1 in N contended events is recorded (--profile-mutex-fraction, default 10), so treat as relative weight. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape of the flamegraph is right, absolute numbers are not.",
+      "description": "Total time goroutines spent waiting to acquire a contended sync.Mutex/RWMutex. High and rising = lock contention. Collected by sampling (--profile-mutex-fraction, default 10); the runtime scales values back up, so they are estimates. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape is right, absolute numbers are not.",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 61 },
       "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
@@ -132,7 +132,7 @@
     {
       "id": 8,
       "title": "Mutex contentions (events)",
-      "description": "Number of contended lock acquisitions (sampled). Compare with delay: many contentions with tiny delay is cheap; few with huge delay is a long critical section. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape of the flamegraph is right, absolute numbers are not.",
+      "description": "Number of contended lock acquisitions (sampled). Compare with delay: many contentions with tiny delay is cheap; few with huge delay is a long critical section. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape is right, absolute numbers are not.",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 61 },
       "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
@@ -148,7 +148,7 @@
     },
     {
       "id": 9,
-      "title": "Mutex flamegraph (delay: who waited for a lock, and where)",
+      "title": "Mutex flamegraph (delay: which critical sections made others wait)",
       "description": "Frame width = time spent waiting for a lock. Go attributes the wait to the stack that RELEASED the lock (the holder), so the frames show which critical section made others wait, not who was waiting. Switch the view to Top Table (panel toolbar) for a flat ranking. CLI: go tool pprof -top -cum http://localhost:6060/debug/pprof/mutex.",
       "type": "flamegraph",
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 68 },
@@ -166,7 +166,7 @@
     {
       "id": 10,
       "title": "Block delay (drag to select a range for the flamegraph below)",
-      "description": "Total time goroutines spent blocked on channels, select, sync.Cond, WaitGroup and mutexes. Dominated by idle waiting (selectgo / chanrecv in event loops), which is normal; look for unexpected frames, not the biggest bar. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape of the flamegraph is right, absolute numbers are not.",
+      "description": "Total time goroutines spent blocked on channels, select, sync.Cond, WaitGroup and mutexes. Dominated by idle waiting (selectgo / chanrecv in event loops), which is normal; look for unexpected frames, not the biggest bar. Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape is right, absolute numbers are not.",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 81 },
       "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },
@@ -183,7 +183,7 @@
     {
       "id": 11,
       "title": "Block contentions (events)",
-      "description": "Number of blocking events (sampled at --profile-block-rate ns). Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape of the flamegraph is right, absolute numbers are not.",
+      "description": "Number of blocking events (sampled at --profile-block-rate ns). Until Alloy scrapes the delta_* endpoints (docs/observability/README.md, \"Per-interval lock profiles\"), the source is the cumulative-since-start /debug/pprof profile, so values are lifetime totals and a window shows inflated, slowly-changing numbers; the shape is right, absolute numbers are not.",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 81 },
       "datasource": { "type": "grafana-pyroscope-datasource", "uid": "pyroscope" },

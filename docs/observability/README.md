@@ -41,8 +41,8 @@ it. tymuxd does not export spans yet.
 
 `--profile` serves the standard cumulative `/debug/pprof/{mutex,block,heap}`
 profiles and, on the same port, per-interval variants from
-`github.com/grafana/pyroscope-go/godeltaprof` (Apache-2.0, already a module
-dependency via `pyroscope-go`; pure Go): `/debug/pprof/delta_mutex`,
+`github.com/grafana/pyroscope-go/godeltaprof` (Apache-2.0, pure Go, already in
+the module graph through `pyroscope-go`): `/debug/pprof/delta_mutex`,
 `/debug/pprof/delta_block`, `/debug/pprof/delta_heap`. Each request returns only
 what accumulated since the previous request to that endpoint.
 
@@ -89,7 +89,7 @@ memory/mutex/block go blank.
 `--profile` samples 1 in `--profile-mutex-fraction` mutex events (default 10) and
 blocking events of at least `--profile-block-rate` ns (default 1000). Passing `1`
 for either records every event. Microbenchmark on an 18-core Apple machine
-(`go test -bench`, 2 runs each, noisy; worst-case shapes, not the app):
+(`go test ./profiling -run xxx -bench LockProfile -count=2`, noisy; worst-case shapes, not the app):
 
 | Setting | Uncontended-ish mutex loop | Channel ping-pong (every op blocks) |
 |---|---|---|

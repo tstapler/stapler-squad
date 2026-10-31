@@ -25,6 +25,7 @@ go tool trace /tmp/stapler-squad-trace-<PID>.out
 ```bash
 ./stapler-squad --profile                      # Enable profiling HTTP server (port 6060)
 ./stapler-squad --profile --profile-port 8080  # Custom port
+./stapler-squad --profile --profile-mutex-fraction 1 --profile-block-rate 1  # Record every lock event (costly)
 ./stapler-squad --trace                        # Execution tracing only
 ```
 
@@ -59,8 +60,10 @@ If the local observability stack is running (`~/dotfiles/stapler-scripts/observa
 see the `observability-victoriametrics-tempo` skill), Grafana Alloy already
 scrapes this app's `:6060` pprof endpoint (CPU, heap, goroutine, mutex,
 block) into Pyroscope whenever `--profile` is on — no extra flags needed.
+Lock panels show lifetime totals until Alloy is switched to the `delta_*`
+endpoints (`docs/observability/README.md`, "Per-interval lock profiles").
 Open the "stapler-squad: pprof profiles (flamegraphs)" dashboard at
-`http://localhost:48300` (folder: stapler-squad) for CPU/heap/goroutine
+`http://localhost:48300` (folder: stapler-squad) for CPU/heap/goroutine/lock-contention
 flamegraphs over any time range, instead of pulling a one-off
 `.prof` file with `curl` + `go tool pprof` for a live investigation.
 

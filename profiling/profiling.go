@@ -39,8 +39,8 @@ type Config struct {
 }
 
 // Defaults chosen to keep lock profiling cheap enough to leave on in the
-// always-profiled service (see docs/how-to/find-lock-contention.md for the
-// measured overhead of rate 1 versus these).
+// always-profiled service (see docs/observability/README.md,
+// "Sampling cost", for the measured overhead of rate 1 versus these).
 const (
 	DefaultMutexFraction = 10
 	DefaultBlockRateNs   = 1000
