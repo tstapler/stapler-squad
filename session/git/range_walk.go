@@ -3,6 +3,7 @@ package git
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -16,15 +17,20 @@ const (
 	paintBase
 )
 
+// rangeWalkMaxPops bounds the walk of a pathological range (e.g. a base unrelated to head). A
+// variable so a test can lower it.
+var rangeWalkMaxPops = 20_000 //nolint:gochecknoglobals
+
+// errRangeWalkLimit means the walk hit rangeWalkMaxPops before finding maxCommits commits, so the
+// partial list can't be trusted (a long base-only stretch may hide head's commits).
+var errRangeWalkLimit = errors.New("range walk exceeded its commit budget")
+
 const (
 	// rangeWalkSlop is how many more commits to pop after every queued commit is
 	// base-reachable. A parent can carry an older timestamp than its child
 	// (clock skew), so base's own paint might still be on its way to a commit
 	// we've already seen; git's rev-list uses the same slack.
 	rangeWalkSlop = 5
-	// rangeWalkMaxPops bounds the walk of a pathological range (e.g. a base unrelated to head);
-	// hitting it reports the result as truncated.
-	rangeWalkMaxPops = 20_000
 	// rangeWalkCtxEvery is how many pops pass between ctx checks.
 	rangeWalkCtxEvery = 64
 )
@@ -145,5 +151,8 @@ func walkShippedRange(ctx context.Context, s storer.EncodedObjectStorer, head, b
 	if len(shipped) >= maxCommits {
 		return shipped[:maxCommits], true, nil
 	}
-	return shipped, walkLimited, nil
+	if walkLimited {
+		return nil, false, errRangeWalkLimit
+	}
+	return shipped, false, nil
 }

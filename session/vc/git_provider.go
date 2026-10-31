@@ -106,7 +106,6 @@ func (g *GitProvider) GetStatusContext(parent context.Context) (*VCSStatus, erro
 	var description string
 	var logWG sync.WaitGroup
 	logParent, stopLog := context.WithCancel(parent)
-	defer stopLog() // a failed `git status` must not wait out the log spawn
 	logWG.Add(1)
 	go func() {
 		defer logWG.Done()
@@ -116,7 +115,8 @@ func (g *GitProvider) GetStatusContext(parent context.Context) (*VCSStatus, erro
 			description = entries[0].Subject
 		}
 	}()
-	defer logWG.Wait()
+	// Cancel before waiting (defers run LIFO): a failed `git status` must not wait out the log spawn.
+	defer func() { stopLog(); logWG.Wait() }()
 
 	ctx, cancel := gitCtxFrom(parent)
 	defer cancel()

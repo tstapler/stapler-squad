@@ -298,3 +298,16 @@ func TestWalkShippedRange_should_DropSharedRoot_When_BaseChainTiesWithIt(t *test
 	require.NoError(t, err)
 	assert.Equal(t, []plumbing.Hash{h.Hash}, hashes(got))
 }
+
+func TestWalkShippedRange_should_ReportUnavailable_When_PopBudgetExhaustedBeforeHeadCommits(t *testing.T) {
+	old := rangeWalkMaxPops
+	rangeWalkMaxPops = 50
+	t.Cleanup(func() { rangeWalkMaxPops = old })
+	f := newFakeHistory(t)
+	root := f.commit(0)
+	head := f.chain(100, 3, root)
+	base := f.chain(1000, 200, root) // base-only commits all newer than head's
+
+	_, _, err := walkShippedRange(context.Background(), f.st, head, base, 100)
+	require.ErrorIs(t, err, errRangeWalkLimit)
+}
