@@ -713,8 +713,42 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 		return fmt.Errorf("failed to update session: %w", err)
 	}
 
+	if !skip.Worktree {
+		if err := r.updateWorktreeRow(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	if !skip.DiffStats {
+		if err := r.upsertDiffStatsRow(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	if !skip.Tags {
+		if err := r.replaceSessionTags(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	if data.ClaudeSession.ConversationUUID != "" && !skip.Claude {
+		if err := r.upsertClaudeSessionRow(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// updateWorktreeRow upserts the session's worktree row.
+func (r *EntRepository) updateWorktreeRow(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Update or create worktree
-	if data.Worktree.RepoPath != "" && !skip.Worktree {
+	if data.Worktree.RepoPath != "" {
 		existingWorktree, err := tx.Worktree.Query().Where(worktree.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
@@ -745,36 +779,40 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 			}
 		}
 	}
+	return nil
+}
 
+// upsertDiffStatsRow upserts the session's diff_stats row.
+func (r *EntRepository) upsertDiffStatsRow(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Upsert diff stats — single INSERT … ON CONFLICT DO UPDATE, no prior SELECT needed.
-	if !skip.DiffStats {
-		diffCreate := tx.DiffStats.Create().
-			SetSessionID(sess.ID).
-			SetAdded(data.DiffStats.Added).
-			SetRemoved(data.DiffStats.Removed)
-		if data.DiffStats.Content != "" {
-			diffCreate = diffCreate.SetContent(data.DiffStats.Content)
-		}
-		upsertDiff := diffCreate.
-			OnConflictColumns(diffstats.SessionColumn).
-			UpdateAdded().
-			UpdateRemoved()
-		if data.DiffStats.Content != "" {
-			upsertDiff = upsertDiff.UpdateContent()
-		}
-		if err := upsertDiff.Exec(ctx); err != nil {
-			return fmt.Errorf("failed to upsert diff stats: %w", err)
-		}
+	diffCreate := tx.DiffStats.Create().
+		SetSessionID(sess.ID).
+		SetAdded(data.DiffStats.Added).
+		SetRemoved(data.DiffStats.Removed)
+	if data.DiffStats.Content != "" {
+		diffCreate = diffCreate.SetContent(data.DiffStats.Content)
 	}
+	upsertDiff := diffCreate.
+		OnConflictColumns(diffstats.SessionColumn).
+		UpdateAdded().
+		UpdateRemoved()
+	if data.DiffStats.Content != "" {
+		upsertDiff = upsertDiff.UpdateContent()
+	}
+	if err := upsertDiff.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to upsert diff stats: %w", err)
+	}
+	return nil
+}
 
+// replaceSessionTags replaces the session's tag associations with data.Tags.
+func (r *EntRepository) replaceSessionTags(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Update tags - clear existing and add new ones
-	if !skip.Tags {
-		if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
-			return fmt.Errorf("failed to clear tags: %w", err)
-		}
+	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
+		return fmt.Errorf("failed to clear tags: %w", err)
 	}
 
-	if len(data.Tags) > 0 && !skip.Tags {
+	if len(data.Tags) > 0 {
 		tagIDs := make([]int, 0, len(data.Tags))
 		for _, tagName := range data.Tags {
 			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
@@ -794,9 +832,13 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 			return fmt.Errorf("failed to associate tags: %w", err)
 		}
 	}
+	return nil
+}
 
+// upsertClaudeSessionRow creates or updates the Claude session row and its metadata.
+func (r *EntRepository) upsertClaudeSessionRow(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Update Claude session if present
-	if data.ClaudeSession.ConversationUUID != "" && !skip.Claude {
+	if data.ClaudeSession.ConversationUUID != "" {
 		var claudeSessionID int // set by either the create or update branch below
 
 		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
@@ -877,12 +919,6 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 			}
 		}
 	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
 	return nil
 }
 
