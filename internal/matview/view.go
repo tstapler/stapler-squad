@@ -8,6 +8,7 @@ package matview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -96,6 +97,7 @@ type Config[K comparable, V any] struct {
 	GetDeadline    time.Duration // default 10s
 	ComputeTimeout time.Duration // default 30s
 	RetryDelay     time.Duration // re-check when the limiter is saturated; default 50ms
+	ErrorRetry     time.Duration // retry of a pinned key whose first compute failed; default 5s
 
 	MaxConcurrent  int           // used when Limiter is nil; default 4
 	UnpinnedCap    int           // default 256
@@ -117,6 +119,7 @@ func (c *Config[K, V]) defaults() {
 	setDur(&c.GetDeadline, 10*time.Second)
 	setDur(&c.ComputeTimeout, 30*time.Second)
 	setDur(&c.RetryDelay, 50*time.Millisecond)
+	setDur(&c.ErrorRetry, 5*time.Second)
 	setDur(&c.IdleEvictAfter, 10*time.Minute)
 	setInt := func(p *int, n int) {
 		if *p == 0 {
@@ -169,6 +172,7 @@ type entry[K comparable, V any] struct {
 	running    bool
 	startSeq   uint64
 	rerun      bool
+	rerunNow   bool // an immediate-reason event arrived during the running compute
 	waiters    []*waiter[V]
 	subs       map[*subscriber[K, V]]struct{}
 }
@@ -300,6 +304,9 @@ func (v *View[K, V]) abandon(e *entry[K, V], w *waiter[V], cause error) (Version
 			break
 		}
 	}
+	if len(e.waiters) == 0 && e.firstDirty.IsZero() {
+		e.rerun = false // it was only set on this waiter's behalf
+	}
 	if e.has && errors.Is(cause, ErrTimeout) {
 		cur := e.cur
 		cur.Stale = true
@@ -342,9 +349,9 @@ func (v *View[K, V]) entryLocked(k K) *entry[K, V] {
 	if e, ok := v.entries[k]; ok {
 		return e
 	}
+	v.evictOverCapLocked(1) // make room first so the new entry can never evict itself
 	e := &entry[K, V]{key: k, subs: map[*subscriber[K, V]]struct{}{}, lastRead: v.cfg.Clock.Now()}
 	v.entries[k] = e
-	v.evictOverCapLocked()
 	return e
 }
 
@@ -355,6 +362,7 @@ func (v *View[K, V]) markDirtyLocked(e *entry[K, V], immediate bool) {
 	}
 	if e.running {
 		e.rerun = true
+		e.rerunNow = e.rerunNow || immediate
 		v.stats.EventsCoalesced++
 		return
 	}
@@ -385,6 +393,10 @@ func (v *View[K, V]) armDebounceLocked(e *entry[K, V], now time.Time) {
 	if delay < 0 {
 		delay = 0
 	}
+	v.armTimerLocked(e, delay)
+}
+
+func (v *View[K, V]) armTimerLocked(e *entry[K, V], delay time.Duration) {
 	v.stopTimerLocked(e)
 	gen := e.gen
 	e.timer = v.cfg.Clock.AfterFunc(delay, func() { v.fire(e, gen) })
@@ -480,7 +492,7 @@ func (v *View[K, V]) run(e *entry[K, V], startSeq uint64) {
 		case <-ctx.Done():
 		}
 	}()
-	val, err := v.cfg.Compute(ctx, e.key)
+	val, err := v.safeCompute(ctx, e.key)
 	cancel()
 	etag := ""
 	if err == nil {
@@ -503,15 +515,28 @@ func (v *View[K, V]) run(e *entry[K, V], startSeq uint64) {
 		v.publishLocked(e, val, etag)
 		v.finishWaitersLocked(e, startSeq, e.cur, nil)
 	}
-	rerun := e.rerun
-	e.rerun = false
+	rerun, rerunNow := e.rerun, e.rerunNow
+	e.rerun, e.rerunNow = false, false
 	switch {
-	case len(e.waiters) > 0:
+	case len(e.waiters) > 0 || rerunNow:
 		v.enqueueLocked(e)
 	case rerun:
 		v.armDebounceLocked(e, v.cfg.Clock.Now())
+	case err != nil && !e.has && e.pins > 0:
+		v.armTimerLocked(e, v.cfg.ErrorRetry)
 	}
 	v.pumpLocked()
+}
+
+// safeCompute turns a panicking Compute into an error so the limiter slot and
+// the entry's running flag are always released.
+func (v *View[K, V]) safeCompute(ctx context.Context, k K) (val V, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("matview: compute panicked: %v", r)
+		}
+	}()
+	return v.cfg.Compute(ctx, k)
 }
 
 func (v *View[K, V]) staleCopy(e *entry[K, V]) Versioned[V] {

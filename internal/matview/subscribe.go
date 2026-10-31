@@ -145,7 +145,7 @@ func (v *View[K, V]) Sweep() {
 			v.evictLocked(e)
 		}
 	}
-	v.evictOverCapLocked()
+	v.evictOverCapLocked(0)
 }
 
 func (v *View[K, V]) evictableLocked(e *entry[K, V]) bool {
@@ -157,14 +157,16 @@ func (v *View[K, V]) evictLocked(e *entry[K, V]) {
 	v.dropLocked(e, ErrRemoved)
 }
 
-func (v *View[K, V]) evictOverCapLocked() {
+// evictOverCapLocked trims unpinned entries so that, after reserve more are
+// added, the count is within UnpinnedCap.
+func (v *View[K, V]) evictOverCapLocked(reserve int) {
 	var cand []*entry[K, V]
 	for _, e := range v.entries {
 		if v.evictableLocked(e) {
 			cand = append(cand, e)
 		}
 	}
-	over := len(cand) - v.cfg.UnpinnedCap
+	over := len(cand) + reserve - v.cfg.UnpinnedCap
 	if over <= 0 {
 		return
 	}

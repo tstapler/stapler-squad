@@ -201,7 +201,7 @@ func TestGetDeadlineWithNoValueTimesOutAndStillNeverComputesInline(t *testing.T)
 	fc.gate = fcGate
 	res := getAsync(v, "a", GetOpts{Deadline: time.Second})
 	recv(t, fc.started)
-	awaitTimers(clk, 2) // idle sweeper + the Get deadline
+	awaitTimers(t, clk, 2) // idle sweeper + the Get deadline
 	clk.Advance(time.Second)
 	r := recv(t, res)
 	assert.ErrorIs(t, r.err, ErrTimeout)
@@ -217,9 +217,9 @@ func TestGetDeadlineWithValueReturnsStaleCopy(t *testing.T) {
 	require.NoError(t, (<-getAsync(v, "a", GetOpts{})).err)
 
 	res := getAsync(v, "a", GetOpts{WaitFresh: true, Deadline: time.Second})
-	recv(t, fc.started) // second compute, blocked on the gate
-	recv(t, fc.started) // (first compute's start marker)
-	awaitTimers(clk, 2) // idle sweeper + the Get deadline
+	recv(t, fc.started)    // second compute, blocked on the gate
+	recv(t, fc.started)    // (first compute's start marker)
+	awaitTimers(t, clk, 2) // idle sweeper + the Get deadline
 	clk.Advance(time.Second)
 	r := recv(t, res)
 	require.NoError(t, r.err)
@@ -238,9 +238,7 @@ func TestWaitFreshRequiresAComputeStartedAfterTheCall(t *testing.T) {
 	fc.set("a", "after")
 	second := getAsync(v, "a", GetOpts{WaitFresh: true})
 	// Wait until the second Get has registered, then release compute #1.
-	for len(v.waitersFor("a")) < 2 {
-		runtime.Gosched()
-	}
+	spinUntil(t, func() bool { return len(v.waitersFor("a")) >= 2 })
 	gate <- struct{}{}
 	r1 := recv(t, first)
 	require.NoError(t, r1.err)
@@ -326,9 +324,7 @@ func TestUnwatchedEntryFollowsFreshStaleMissTiers(t *testing.T) {
 	assert.Equal(t, "v0", r.Value, "stale tier serves the old value immediately")
 	recv(t, fc.started)
 	recv(t, fc.started)
-	for v.Stats().Recomputes < 2 {
-		runtime.Gosched()
-	}
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 2 })
 
 	clk.Advance(2 * time.Minute) // beyond StaleTTL: a miss that waits
 	fc.set("a", "newer")
@@ -389,9 +385,7 @@ func TestPriorityWaiterBeforePinnedBeforeOther(t *testing.T) {
 	pin(t, v, "pinned")
 	clk.Advance(time.Millisecond)
 	res := getAsync(v, "waited", GetOpts{})
-	for len(v.waitersFor("waited")) == 0 {
-		runtime.Gosched()
-	}
+	spinUntil(t, func() bool { return len(v.waitersFor("waited")) > 0 })
 
 	order := make([]string, 0, 3)
 	for range 3 {
@@ -580,8 +574,90 @@ func TestEventDuringComputeTriggersExactlyOneFollowUp(t *testing.T) {
 
 // awaitTimers spins until n timers are armed, i.e. a Get running on its own
 // goroutine has registered its deadline.
-func awaitTimers(c *FakeClock, n int) {
-	for c.Pending() < n {
+func awaitTimers(t *testing.T, c *FakeClock, n int) {
+	t.Helper()
+	spinUntil(t, func() bool { return c.Pending() >= n })
+}
+
+// spinUntil yields until cond holds, failing fast instead of hanging the run.
+func spinUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition never became true")
+		}
 		runtime.Gosched()
 	}
+}
+
+func TestNewEntryNeverEvictsItselfOnClockTie(t *testing.T) {
+	t.Parallel()
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.UnpinnedCap = 2
+		c.IdleEvictAfter = -1
+	})
+	for _, k := range []string{"a", "b", "c", "d"} { // no clock advance: lastRead ties
+		_, err := v.Get(context.Background(), k, GetOpts{})
+		require.NoError(t, err, k)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, rej := v.Subscribe(ctx, []string{"e"})
+	require.Empty(t, rej)
+	recv(t, ch)
+	assert.Equal(t, 1, v.Stats().Pinned)
+	cancel()
+	for range ch {
+	}
+	assert.Zero(t, v.Stats().Pinned, "pin count must not leak")
+}
+
+func TestImmediateReasonDuringComputeSkipsDebounce(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{}, 4)
+	v, _, fc := newTestView(t, nil)
+	fc.gate = gate
+	ch := pin(t, v, "a")
+	recv(t, fc.started)
+	v.Invalidate("a", ReasonAppWrite) // lands mid-compute; no clock advance follows
+	gate <- struct{}{}
+	recv(t, ch)
+	fc.set("a", "after-write")
+	recv(t, fc.started) // follow-up began without any debounce wait
+	gate <- struct{}{}
+	assert.Equal(t, "after-write", recv(t, ch).Value)
+}
+
+func TestPanickingComputeIsContainedAndReleasesSlot(t *testing.T) {
+	t.Parallel()
+	var boom atomic.Bool
+	boom.Store(true)
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.Compute = func(context.Context, string) (string, error) {
+			if boom.Load() {
+				panic("kaboom")
+			}
+			return "ok", nil
+		}
+		c.MaxConcurrent = 1
+	})
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.ErrorContains(t, err, "panicked")
+	boom.Store(false)
+	r, err := v.Get(context.Background(), "a", GetOpts{WaitFresh: true})
+	require.NoError(t, err, "the single slot was released")
+	assert.Equal(t, "ok", r.Value)
+}
+
+func TestPinnedKeyRetriesFailedFirstCompute(t *testing.T) {
+	t.Parallel()
+	v, clk, fc := newTestView(t, nil)
+	fc.setErr(errors.New("transient"))
+	ch := pin(t, v, "a")
+	recv(t, fc.started)
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 1 })
+	fc.setErr(nil)
+	clk.Advance(5 * time.Second)
+	assert.Equal(t, "v0", recv(t, ch).Value)
 }
