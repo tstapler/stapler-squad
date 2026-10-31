@@ -84,6 +84,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -142,6 +144,12 @@ jobs:
           path: coverage.tmux.out
           retention-days: 1
 
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: main-test-tmux
+
   # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
   # (PR #697): the retry-on-any-failure fallback below re-runs the entire
   # -race suite a second time in verbose mode, so a single flaky test hit
@@ -164,6 +172,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -224,6 +234,12 @@ jobs:
           path: coverage.rest.out
           retention-days: 1
 
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: main-test-rest
+
   # ─────────────────────────────────────────────────────────────────────────────
   # test: merges test-tmux/test-rest's coverage profiles and runs the global
   # coverage gate. Main-only (push-to-main/workflow_dispatch): PRs are no
@@ -246,6 +262,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -288,6 +306,12 @@ jobs:
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran
       # BenchmarkNavigation (a non-existent benchmark) for 15 min per PR.
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: main-test
 
   # ─────────────────────────────────────────────────────────────────────────────
   # build: cross-compiles for all supported platforms in parallel.
@@ -381,6 +405,8 @@ jobs:
         with:
           submodules: true
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -447,3 +473,9 @@ jobs:
         with:
           path: benchmarks/go/benchmark-gate-baseline.txt
           key: bench-gate-${{ github.run_id }}
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: main-benchmark-gate

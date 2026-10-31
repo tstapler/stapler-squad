@@ -28,6 +28,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Runner utilization sampler
+        uses: ./.github/actions/runner-utilization
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
@@ -42,3 +44,9 @@ jobs:
             server/web/dist/
             session/ent/
           retention-days: 1
+
+      - name: Runner utilization report
+        if: always()
+        uses: ./.github/actions/runner-utilization/report
+        with:
+          label: prepare
