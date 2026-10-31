@@ -38,7 +38,7 @@ async function openFixtureSession(page: Page, poolFlag: '1' | '0'): Promise<void
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
   await page.waitForSelector('[data-testid="session-card"], [data-testid="session-row"]', { timeout: 15000 });
   await new ShellTabsPage(page).openSessionByTitle(FIXTURE_SESSION_TITLE);
-  await expect(page.getByLabel("Terminal input").first()).toBeAttached({ timeout: 10000 });
+  await expect(page.getByRole('textbox', { name: 'Terminal input' }).first()).toBeAttached({ timeout: 10000 });
 }
 
 test.beforeAll(async () => {
@@ -64,6 +64,13 @@ test.describe('terminal-ws-pool', () => {
     const sockets = trackSockets(page);
     await openFixtureSession(page, '1');
     await expect.poll(() => sockets.muxFrames(), { timeout: 15000 }).toBeGreaterThan(0);
+    // The first DATA frame is only the Connect response header; keystroke echo proves output flows through the pool.
+    await expect.poll(() => sockets.muxFrames(), { timeout: 15000 }).toBeGreaterThan(2);
+    const beforeTyping = sockets.muxFrames();
+    const terminalInput = page.getByRole('textbox', { name: 'Terminal input' }).first();
+    await terminalInput.focus();
+    await page.keyboard.type('echo pool-e2e-marker\n');
+    await expect.poll(() => sockets.muxFrames(), { timeout: 15000 }).toBeGreaterThan(beforeTyping);
     expect(sockets.perStream()).toBe(0);
   });
 

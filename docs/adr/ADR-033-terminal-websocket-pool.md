@@ -53,7 +53,7 @@ Option b, with option a as `N=1`, behind the `terminal_ws_pool` feature flag (de
 5. **Admission.** Same gates as `/api/ws/unary`: a known listener, `AuthModeRequired` on the remote listener, and a per-listener origin policy (strict origin match on remote, loopback on local). Stream ids are client-chosen; the server refuses id 0 and duplicates, and a late `forget` by an old handler never evicts a reused id. Reassembly is capped at the inbound byte bound, `CREDIT` is clamped to the window, the control queue is capped, and a stream with queued output and no credit for 30 s is closed with 1013.
 6. **Zombie/slot/deadline lessons from #1265.** The socket writer has a per-frame write deadline (a client that stops
    reading kills the socket, not a goroutine pile); each socket has a stream cap (`maxStreams`, close 1013 beyond it);
-   `PING`/`PONG` plus a read deadline reap dead peers; closing a stream flushes its queue before `CLOSE` with a bounded
+   `PING`/`PONG` plus a read deadline reap dead peers (both sides ping: the server every 20 s because a hidden tab's timers are throttled to about once a minute); closing a stream flushes its queue before `CLOSE` with a bounded
    wait; socket close drops every stream with a close error so handlers exit. The socket's request context parents the socket and stream spans; handlers do not receive it (they end when the stream or socket ends).
 7. **Assignment.** `AssignmentPolicy` (client) picks the socket for a new stream: `leastLoaded` (fewest in-flight
    unacknowledged output bytes, then stream count) is the default, `hashBySession` the baseline. Assignment is sticky for
@@ -72,6 +72,19 @@ Option b, with option a as `N=1`, behind the `terminal_ws_pool` feature flag (de
     `terminal_mux_frames_total{dir,type}`, `terminal_mux_queue_bytes` (per-stream unsent bytes, a histogram sampled at each enqueue), `terminal_mux_hol_wait`
     (ms from enqueue to first frame written), `terminal_mux_credit_stalls_total`, `terminal_mux_socket_closed_total{reason}`.
     Each socket and each stream gets a Tempo span (`terminal_mux.socket`, `terminal_mux.stream`).
+
+## Measured latency: pool vs per-stream
+
+Headless Chromium 141, throwaway instance on loopback, 13 `bash` sessions, host load average 100-148 (noisy; each config run three times, interleaved, median shown with the min-max range). Harness: `bench.ts` (bundled client pool, one browser per row). Time to first output (TTFO) is the slowest of the 13 streams from the first open. Echo is one keystroke on stream 0 until it is echoed back (30 samples); "loaded" repeats it while three other terminals flood output with `yes | head -c 10000000`.
+
+| Config | Sockets | TTFO max (ms) | Echo idle p95 (ms) | Echo loaded p95 (ms) |
+|---|---|---|---|---|
+| per-stream (flag off) | 13 | 458 (423-602) | 1 (1-4) | 4 (3-19) |
+| pool N=1 | 1 | 6 (5-7) | 1 (1-2) | 4 (3-21) |
+| pool N=2 | 2 | 18 (17-18) | 1 (1-3) | 6 (5-18) |
+| pool N=4 | 4 | 41 (41-60) | 2 (1-3) | 8 (4-11) |
+
+Reading it: TTFO falls from ~0.45 s to under 50 ms because 13 serialized handshakes become 1-4. Idle echo is unchanged. Loaded echo p95 is within run-to-run noise of per-stream (the spread across rounds, 3-21 ms, is larger than the gap between configs), and the flood volume per run varied from 0.9 to 7.7 MB, so the loaded column is indicative, not a throughput comparison. No tuning of chunk size, credit window or writer scheduling was needed. Not measured: a congested or high-RTT network, where one slow TCP stream carries all terminals on its socket (N>1 bounds that).
 
 ## Consequences
 

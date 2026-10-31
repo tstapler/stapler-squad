@@ -60,6 +60,10 @@ export function encodePing(): Uint8Array {
   return header(MUX_FRAME.PING, 0, 0).buf;
 }
 
+export function encodePong(): Uint8Array {
+  return header(MUX_FRAME.PONG, 0, 0).buf;
+}
+
 export function encodeData(id: number, kind: number, fin: boolean, payload: Uint8Array): Uint8Array {
   const { buf } = header(MUX_FRAME.DATA, id, 2 + payload.length);
   buf[HEADER_LEN] = kind;

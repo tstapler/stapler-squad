@@ -24,6 +24,8 @@ const (
 	muxWriteWait = 10 * time.Second
 	// muxReadIdle reaps a silent peer; the client pings well inside it.
 	muxReadIdle = 60 * time.Second
+	// muxServerPing is how often the server pings; the client answers with PONG.
+	muxServerPing = 20 * time.Second
 	// muxMaxSockets bounds mux sockets per bridge.
 	muxMaxSockets = 64
 	// muxControlQueueLimit bounds queued priority frames (PONG, refused OPEN, CONFIG).
@@ -211,6 +213,9 @@ func (s *muxSocket) run(ctx context.Context) {
 	s.sendControl(encodeMuxConfig(muxFrameHello, s.bridge.config()))
 	s.wg.Add(1)
 	go s.writeLoop()
+	go s.pingLoop()
+	stopOnShutdown := context.AfterFunc(ctx, func() { _ = s.conn.Close() })
+	defer stopOnShutdown()
 	reason = s.readLoop(ctx)
 	close(s.done)
 	_ = s.conn.Close()
@@ -228,6 +233,21 @@ func (s *muxSocket) killStreams() {
 	s.mu.Unlock()
 	for _, st := range streams {
 		st.endWith(&websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "mux socket closed"})
+	}
+}
+
+// pingLoop keeps an idle socket alive from the server side: browsers throttle timers in
+// hidden tabs, so the client's own heartbeat alone can miss muxReadIdle.
+func (s *muxSocket) pingLoop() {
+	t := time.NewTicker(muxServerPing)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			s.sendControl(encodeMuxEmpty(muxFramePing, 0))
+		case <-s.done:
+			return
+		}
 	}
 }
 
@@ -320,9 +340,13 @@ func (s *muxSocket) openStream(ctx context.Context, id uint32) {
 func (s *muxSocket) runStream(ctx context.Context, st *muxStreamConn) {
 	_, span := telemetry.GetTracer().Start(ctx, "terminal_mux.stream")
 	defer span.End()
-	defer s.forget(st.id, st)
 	s.bridge.serve(st, "/api/session.v1.SessionService/StreamTerminal")
 	_ = st.Close()
+	// A closing stream keeps its slot until the writer sends CLOSE, so late CREDIT still
+	// reaches it and its queued tail (including the Connect EndStream) can flush.
+	if st.isEnded() {
+		s.forget(st.id, st)
+	}
 }
 
 // writeLoop is the socket's only writer. Control frames go first; streams are served
