@@ -9,40 +9,61 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/scanqueue"
+	"github.com/tstapler/stapler-squad/session/scanstate"
 )
 
 const (
-	workerPoolSize = 4
-	parseQueueSize = 256
-	subChanSize    = 64
+	subChanSize = 64
+
+	// stateConsumer names this store's rows in the scan-state table.
+	stateConsumer = "tokens"
+
+	// flushInterval and flushBatch bound how fast parse checkpoints are written
+	// back: live files that change every second are written once per interval,
+	// and a cold backfill's thousands of checkpoints trickle out instead of
+	// bursting gzip+SQLite work on top of the parsing.
+	flushInterval = 5 * time.Second
+	flushBatch    = 100
 )
 
-// cachedEntry is one entry in the TokenStore cache.
+// StateStore persists parse checkpoints across restarts. *scanstate.Scoped implements it.
+type StateStore interface {
+	Load(ctx context.Context) (map[string]scanstate.Record, error)
+	Save(ctx context.Context, recs []scanstate.Record) error
+	Delete(ctx context.Context, paths []string) error
+}
+
+// cachedEntry is one entry in the TokenStore cache. result is immutable once
+// cached; cp is the resumable parser position that produced it.
 type cachedEntry struct {
-	result  *ParseResult
-	modTime time.Time
+	result *ParseResult
+	cp     *Checkpoint
 }
 
 // TokenStore caches parsed JSONL results keyed by file path.
-// It pre-parses all JSONL files in a directory on startup and keeps the cache
-// fresh via fsnotify callbacks.
+// It parses all JSONL files in a directory on startup and keeps the cache
+// fresh via fsnotify callbacks. With a StateStore, parse checkpoints survive
+// restarts and growing transcripts are parsed incrementally from the last
+// checkpoint instead of from byte 0.
 type TokenStore struct {
 	mu     sync.RWMutex
 	cache  map[string]*cachedEntry
 	byUUID map[string]*ParseResult // secondary index: SessionUUID → result
+	// restored holds paths loaded from the StateStore that the startup walk has
+	// not yet confirmed exist on disk.
+	restored map[string]struct{}
 
 	parser       *Parser
 	historyDir   string
-	isLoadingVal int32 // atomic: 1 while background walk is running
+	isLoadingVal int32 // 1 while background restore+walk is running
 
-	// parseQueue is the work queue for the worker pool.
-	parseQueue chan string
+	// queue coalesces by path and paces startup backfill; nothing is dropped.
+	queue *scanqueue.Queue
 
-	// inflight tracks files currently being parsed to prevent duplicate work.
-	inflight sync.Map // key: filePath, value: struct{}
-
-	// droppedCount tracks total queue-full drops for rate-limited logging.
-	droppedCount log.DropCounter
+	states     StateStore
+	writer     *scanstate.Writer[*cachedEntry] // checkpoints awaiting write-back
+	flushEvery time.Duration
 
 	// subscribers receive notifications when the store is updated.
 	subsMu sync.RWMutex
@@ -51,30 +72,53 @@ type TokenStore struct {
 	cancelFunc context.CancelFunc
 }
 
-// NewTokenStore creates a TokenStore that will pre-parse all JSONL files in
-// historyDir on startup.
-func NewTokenStore(historyDir string) *TokenStore {
-	return &TokenStore{
-		cache:      make(map[string]*cachedEntry),
-		byUUID:     make(map[string]*ParseResult),
-		parser:     NewParser(),
-		historyDir: historyDir,
-		parseQueue: make(chan string, parseQueueSize),
-	}
+// Option configures a TokenStore.
+type Option func(*TokenStore, *scanqueue.Config)
+
+// WithStateStore persists parse checkpoints in s.
+func WithStateStore(s StateStore) Option {
+	return func(ts *TokenStore, _ *scanqueue.Config) { ts.states = s }
 }
 
-// Start launches background workers and the initial directory walker.
+// WithQueueConfig sets worker count, startup delay and backfill throttle.
+func WithQueueConfig(c scanqueue.Config) Option {
+	return func(_ *TokenStore, qc *scanqueue.Config) { *qc = c }
+}
+
+// NewTokenStore creates a TokenStore that will parse all JSONL files in
+// historyDir on startup.
+func NewTokenStore(historyDir string, opts ...Option) *TokenStore {
+	ts := &TokenStore{
+		cache:      make(map[string]*cachedEntry),
+		byUUID:     make(map[string]*ParseResult),
+		restored:   make(map[string]struct{}),
+		parser:     NewParser(),
+		historyDir: historyDir,
+		flushEvery: flushInterval,
+	}
+	var qc scanqueue.Config
+	for _, o := range opts {
+		o(ts, &qc)
+	}
+	ts.queue = scanqueue.New(qc, ts.parseAndCache)
+	if ts.states != nil {
+		ts.writer = scanstate.NewWriter(ts.states, encodeEntry)
+	}
+	return ts
+}
+
+// Start launches background workers and the initial restore+walk.
 // It stops when ctx is cancelled. Call this once after creating the store.
 func (ts *TokenStore) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	ts.cancelFunc = cancel
 
-	// Start worker pool.
-	for i := 0; i < workerPoolSize; i++ {
-		go ts.worker(ctx)
+	ts.queue.Start(ctx)
+	if ts.writer != nil {
+		go ts.writer.Run(ctx, ts.flushEvery, flushBatch, func(err error) {
+			log.Warn("[TokenStore] checkpoint flush failed", "err", err)
+		})
 	}
-
-	// Start the initial walk in the background.
 	go ts.walkAndEnqueue(ctx)
 }
 
@@ -165,39 +209,15 @@ func (ts *TokenStore) notify(result *ParseResult) {
 	}
 }
 
-// enqueue adds a file to the parse queue if it's not already in-flight.
-func (ts *TokenStore) enqueue(filePath string) {
-	if _, loaded := ts.inflight.LoadOrStore(filePath, struct{}{}); loaded {
-		return // already in flight
-	}
-	select {
-	case ts.parseQueue <- filePath:
-	default:
-		// Queue full — remove from inflight so it can be retried later.
-		ts.inflight.Delete(filePath)
-		if n, shouldLog := ts.droppedCount.Hit(); shouldLog {
-			log.Warn("[TokenStore] parse queue full, dropping", "path", filePath, "total_dropped", n)
-		}
-	}
-}
+// enqueue schedules a live re-parse of filePath, coalescing with any pending one.
+func (ts *TokenStore) enqueue(filePath string) { ts.queue.Enqueue(filePath) }
 
-// worker is a pool worker that reads from parseQueue and parses files.
-func (ts *TokenStore) worker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case filePath := <-ts.parseQueue:
-			ts.parseAndCache(filePath)
-		}
-	}
-}
+// QueueStats reports parse-queue activity (enqueued, coalesced, processed).
+func (ts *TokenStore) QueueStats() scanqueue.Stats { return ts.queue.Stats() }
 
-// parseAndCache parses a JSONL file and updates the cache.
+// parseAndCache brings the cache entry for filePath up to date, parsing only
+// what was appended since the entry's checkpoint.
 func (ts *TokenStore) parseAndCache(filePath string) {
-	defer ts.inflight.Delete(filePath)
-
-	// Check if file has changed since last parse.
 	stat, err := os.Stat(filePath)
 	if err != nil {
 		return
@@ -207,30 +227,112 @@ func (ts *TokenStore) parseAndCache(filePath string) {
 	existing := ts.cache[filePath]
 	ts.mu.RUnlock()
 
-	if existing != nil && !stat.ModTime().After(existing.modTime) {
-		return // cache is still valid
+	var prev *Checkpoint
+	if existing != nil && existing.cp != nil {
+		if existing.cp.Pos.Unchanged(stat) {
+			return // cache is still valid
+		}
+		prev = existing.cp
 	}
 
-	result, err := ts.parser.ParseFile(filePath)
+	result, cp, err := ts.parser.ParseFileFrom(filePath, prev)
 	if err != nil {
 		log.Warn("[TokenStore] parse failed", "path", filePath, "err", err)
 		return
 	}
 
+	entry := &cachedEntry{result: result, cp: cp}
 	ts.mu.Lock()
-	ts.cache[filePath] = &cachedEntry{
-		result:  result,
-		modTime: stat.ModTime(),
-	}
+	ts.cache[filePath] = entry
+	delete(ts.restored, filePath)
 	if result.SessionUUID != "" {
 		ts.byUUID[result.SessionUUID] = result
 	}
 	ts.mu.Unlock()
 
+	ts.markDirty(filePath, entry)
 	ts.notify(result)
 }
 
-// walkAndEnqueue walks historyDir recursively and enqueues all .jsonl files.
+func (ts *TokenStore) markDirty(filePath string, e *cachedEntry) {
+	if ts.writer != nil {
+		ts.writer.Mark(filePath, e)
+	}
+}
+
+func encodeEntry(_ string, e *cachedEntry) (scanstate.Record, error) {
+	blob, err := e.cp.Encode()
+	if err != nil {
+		return scanstate.Record{}, err
+	}
+	return scanstate.Record{Position: e.cp.Pos, State: blob}, nil
+}
+
+// FlushState writes every pending checkpoint to the StateStore.
+func (ts *TokenStore) FlushState(ctx context.Context) error {
+	if ts.writer == nil {
+		return nil
+	}
+	return ts.writer.Flush(ctx, 0)
+}
+
+// restoreState loads persisted checkpoints into the cache so unchanged files
+// need no parsing. A record that no longer decodes is ignored (its file is
+// simply parsed from byte 0).
+func (ts *TokenStore) restoreState(ctx context.Context) {
+	if ts.states == nil {
+		return
+	}
+	recs, err := ts.states.Load(ctx)
+	if err != nil {
+		log.Warn("[TokenStore] load checkpoints failed; parsing from scratch", "err", err)
+		return
+	}
+	for path, rec := range recs {
+		if ctx.Err() != nil {
+			return
+		}
+		cp, err := DecodeCheckpoint(rec.State, rec.Position)
+		if err != nil {
+			continue
+		}
+		result := cp.Result()
+		ts.mu.Lock()
+		if _, live := ts.cache[path]; live {
+			ts.mu.Unlock() // a live change already parsed this file; it is newer than the checkpoint
+			continue
+		}
+		ts.cache[path] = &cachedEntry{result: result, cp: cp}
+		ts.restored[path] = struct{}{}
+		if result.SessionUUID != "" {
+			ts.byUUID[result.SessionUUID] = result
+		}
+		ts.mu.Unlock()
+	}
+}
+
+// dropUnseenRestored removes restored entries whose files the walk did not find.
+func (ts *TokenStore) dropUnseenRestored(ctx context.Context) {
+	ts.mu.Lock()
+	var gone []string
+	for path := range ts.restored {
+		gone = append(gone, path)
+		if e := ts.cache[path]; e != nil && ts.byUUID[e.result.SessionUUID] == e.result {
+			delete(ts.byUUID, e.result.SessionUUID)
+		}
+		delete(ts.cache, path)
+	}
+	ts.restored = make(map[string]struct{})
+	ts.mu.Unlock()
+	if len(gone) > 0 && ts.states != nil {
+		if err := ts.states.Delete(ctx, gone); err != nil {
+			log.Warn("[TokenStore] delete stale checkpoints failed", "count", len(gone), "err", err)
+		}
+	}
+}
+
+// walkAndEnqueue restores persisted checkpoints, then walks historyDir
+// recursively and queues all .jsonl files as paced backfill.
 func (ts *TokenStore) walkAndEnqueue(ctx context.Context) {
 	ts.mu.Lock()
 	ts.isLoadingVal = 1
@@ -242,6 +344,8 @@ func (ts *TokenStore) walkAndEnqueue(ctx context.Context) {
 		ts.mu.Unlock()
 		ts.notify(nil)
 	}()
+
+	ts.restoreState(ctx)
 
 	if ts.historyDir == "" {
 		return
@@ -258,7 +362,15 @@ func (ts *TokenStore) walkAndEnqueue(ctx context.Context) {
 		if strings.HasPrefix(base, "agent-") {
 			return nil
 		}
-		ts.enqueue(path)
+		ts.mu.Lock()
+		// Confirmed on disk: keep the restored entry, but leave it in the
+		// cache until the queue decides whether the file changed.
+		delete(ts.restored, path)
+		ts.mu.Unlock()
+		ts.queue.EnqueueBackfill(path)
 		return nil
 	})
+	if ctx.Err() == nil {
+		ts.dropUnseenRestored(ctx)
+	}
 }

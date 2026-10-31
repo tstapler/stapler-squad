@@ -10,27 +10,40 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/scanqueue"
+	"github.com/tstapler/stapler-squad/session/scanstate"
 )
 
 const (
-	artifactWorkerPoolSize = 4
-	artifactQueueSize      = 256
-	maxScannerTokenSize    = 10 * 1024 * 1024 // 10 MB, matches tokens/parser.go
+	maxScannerTokenSize = 10 * 1024 * 1024 // 10 MB, matches tokens/parser.go
+
+	// stateConsumer names this extractor's rows in the scan-state table.
+	stateConsumer = "artifacts"
+
+	flushInterval = 5 * time.Second
+	flushBatch    = 200
 )
+
+// StateStore persists scan positions across restarts. *scanstate.Scoped implements it.
+type StateStore interface {
+	Load(ctx context.Context) (map[string]scanstate.Record, error)
+	Save(ctx context.Context, recs []scanstate.Record) error
+}
 
 // ArtifactExtractor reads Claude Code JSONL files and extracts structured
 // artifacts (PR URLs, commit SHAs, external URLs) using an incremental
 // byte-offset scan. Mirrors the TokenStore worker pool pattern.
 type ArtifactExtractor struct {
-	queue    chan string
-	inflight sync.Map // key: filePath, value: struct{}
+	// queue coalesces by path and paces startup backfill; nothing is dropped.
+	queue *scanqueue.Queue
 
-	// droppedCount tracks total queue-full drops for rate-limited logging.
-	droppedCount log.DropCounter
+	// positions tracks where each file was last scanned to.
+	posMu     sync.Mutex
+	positions map[string]scanstate.Position
 
-	// offsets tracks the last scanned byte offset per file.
-	offsetsMu sync.Mutex
-	offsets   map[string]int64
+	states     StateStore
+	writer     *scanstate.Writer[scanstate.Position]
+	flushEvery time.Duration
 
 	// titleMu serializes mergeAndPersist calls for the same session title,
 	// preventing lost-update races when multiple JSONL files belong to the same session.
@@ -58,15 +71,90 @@ func NewArtifactExtractor(
 	storeFn func(title, blob string) error,
 	readFn func(title string) (string, error),
 	lookupTitle func(filePath string) (string, bool),
+	opts ...Option,
 ) *ArtifactExtractor {
-	return &ArtifactExtractor{
-		queue:          make(chan string, artifactQueueSize),
-		offsets:        make(map[string]int64),
+	ae := &ArtifactExtractor{
+		positions:      make(map[string]scanstate.Position),
+		flushEvery:     flushInterval,
 		storeFn:        storeFn,
 		readFn:         readFn,
 		lookupTitle:    lookupTitle,
 		OnScanComplete: func(_ string, _ *SessionArtifactsBlob) {}, // no-op default
 	}
+	var qc scanqueue.Config
+	for _, o := range opts {
+		o(ae, &qc)
+	}
+	ae.queue = scanqueue.New(qc, ae.scanFile)
+	if ae.states != nil {
+		ae.writer = scanstate.NewWriter(ae.states, func(_ string, p scanstate.Position) (scanstate.Record, error) {
+			return scanstate.Record{Position: p}, nil
+		})
+	}
+	return ae
+}
+
+// Option configures an ArtifactExtractor.
+type Option func(*ArtifactExtractor, *scanqueue.Config)
+
+// WithStateStore persists scan positions in s so a restart resumes at the
+// appended bytes.
+func WithStateStore(s StateStore) Option {
+	return func(ae *ArtifactExtractor, _ *scanqueue.Config) { ae.states = s }
+}
+
+// WithQueueConfig sets worker count, startup delay and backfill throttle.
+func WithQueueConfig(c scanqueue.Config) Option {
+	return func(_ *ArtifactExtractor, qc *scanqueue.Config) { *qc = c }
+}
+
+// QueueStats reports scan-queue activity (enqueued, coalesced, processed).
+func (ae *ArtifactExtractor) QueueStats() scanqueue.Stats { return ae.queue.Stats() }
+
+// FlushState writes every pending scan position to the StateStore.
+func (ae *ArtifactExtractor) FlushState(ctx context.Context) error {
+	if ae.writer == nil {
+		return nil
+	}
+	return ae.writer.Flush(ctx, 0)
+}
+
+func (ae *ArtifactExtractor) position(filePath string) (scanstate.Position, bool) {
+	ae.posMu.Lock()
+	defer ae.posMu.Unlock()
+	p, ok := ae.positions[filePath]
+	return p, ok
+}
+
+func (ae *ArtifactExtractor) setPosition(filePath string, p scanstate.Position) {
+	ae.posMu.Lock()
+	ae.positions[filePath] = p
+	ae.posMu.Unlock()
+	if ae.writer != nil {
+		ae.writer.Mark(filePath, p)
+	}
+}
+
+// restoreState loads persisted positions; they supersede SeedOffsets' coarser ones.
+func (ae *ArtifactExtractor) restoreState(ctx context.Context) {
+	if ae.states == nil {
+		return
+	}
+	recs, err := ae.states.Load(ctx)
+	if err != nil {
+		log.Warn("[ArtifactExtractor] load scan state failed; scanning from scratch", "err", err)
+		return
+	}
+	ae.posMu.Lock()
+	for path, rec := range recs {
+		// A live scan already recorded a real position (Size > 0), newer than the
+		// persisted one; a SeedOffsets entry (no Size) is the coarser one to replace.
+		if cur, ok := ae.positions[path]; ok && cur.Size != 0 {
+			continue
+		}
+		ae.positions[path] = rec.Position
+	}
+	ae.posMu.Unlock()
 }
 
 // Start launches worker goroutines and the startup backfill walk.
@@ -74,10 +162,16 @@ func (ae *ArtifactExtractor) Start(ctx context.Context, historyDir string) {
 	ctx, cancel := context.WithCancel(ctx)
 	ae.cancelFunc = cancel
 
-	for i := 0; i < artifactWorkerPoolSize; i++ {
-		go ae.worker(ctx)
+	ae.queue.Start(ctx)
+	if ae.writer != nil {
+		go ae.writer.Run(ctx, ae.flushEvery, flushBatch, func(err error) {
+			log.Warn("[ArtifactExtractor] scan-state flush failed", "err", err)
+		})
 	}
-	go ae.walkAndEnqueue(ctx, historyDir)
+	go func() {
+		ae.restoreState(ctx)
+		ae.walkAndEnqueue(ctx, historyDir)
+	}()
 }
 
 // OnHistoryFileChanged is the HistoryLinker callback — filters and enqueues.
@@ -91,30 +185,8 @@ func (ae *ArtifactExtractor) OnHistoryFileChanged(filePath string) {
 	ae.enqueue(filePath)
 }
 
-func (ae *ArtifactExtractor) enqueue(filePath string) {
-	if _, loaded := ae.inflight.LoadOrStore(filePath, struct{}{}); loaded {
-		return
-	}
-	select {
-	case ae.queue <- filePath:
-	default:
-		ae.inflight.Delete(filePath)
-		if n, shouldLog := ae.droppedCount.Hit(); shouldLog {
-			log.Warn("[ArtifactExtractor] queue full, dropping", "path", filePath, "total_dropped", n)
-		}
-	}
-}
-
-func (ae *ArtifactExtractor) worker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case filePath := <-ae.queue:
-			ae.scanFile(filePath)
-		}
-	}
-}
+// enqueue schedules a live scan of filePath, coalescing with any pending one.
+func (ae *ArtifactExtractor) enqueue(filePath string) { ae.queue.Enqueue(filePath) }
 
 // InstanceInfo provides the minimal session data ArtifactExtractor needs.
 // Defined here to avoid a circular import with the session package.
@@ -128,8 +200,8 @@ type InstanceInfo struct {
 // Call before Start(). Build InstanceInfo slices in dependencies.go from
 // historyLinker.Instances() to avoid a circular import.
 func (ae *ArtifactExtractor) SeedOffsets(instances []InstanceInfo) {
-	ae.offsetsMu.Lock()
-	defer ae.offsetsMu.Unlock()
+	ae.posMu.Lock()
+	defer ae.posMu.Unlock()
 	for _, inst := range instances {
 		if inst.HistoryFilePath == "" {
 			continue
@@ -140,7 +212,7 @@ func (ae *ArtifactExtractor) SeedOffsets(instances []InstanceInfo) {
 		}
 		var blob SessionArtifactsBlob
 		if err := json.Unmarshal([]byte(raw), &blob); err == nil && blob.ScanOffsetBytes > 0 {
-			ae.offsets[inst.HistoryFilePath] = blob.ScanOffsetBytes
+			ae.positions[inst.HistoryFilePath] = scanstate.Position{Offset: blob.ScanOffsetBytes}
 		}
 	}
 }
@@ -197,7 +269,7 @@ func (ae *ArtifactExtractor) walkAndEnqueue(ctx context.Context, historyDir stri
 			return nil
 		}
 		if strings.HasSuffix(path, ".jsonl") && !strings.HasPrefix(d.Name(), "agent-") {
-			ae.enqueue(path)
+			ae.queue.EnqueueBackfill(path)
 		}
 		select {
 		case <-ctx.Done():
