@@ -13,6 +13,7 @@ living in an unrelated repo.
 | `tmux-control-mode.json` | `ssq-tmux-control-mode` | RED-method tmux control-mode command latency/throughput |
 | `tymux-backend.json` | `ssq-tymux-backend` | tymux vs tmux operation latency (RED), attach stream health, backend mix, tymuxd supervision |
 | `client-network.json` | `ssq-client-network` | Browser RPC rate/latency/errors by method and transport, duplicates and coalescing, batch effectiveness, WebSocket lifecycle/RTT (client and `ws_unary_*` server side), web vitals, long tasks; see `docs/reference/client-network-telemetry.md` |
+| `terminal-streams.json` | `ssq-terminal-streams` | StreamTerminal creation latency by stage (`terminal_stream.stage_duration`: upgrade, handshake, hub_attach, initial_snapshot, total), creations in flight, close causes (`terminal_stream.closes`: clean, server_closed, error), hub create/teardown by reason and subscriber attach/detach/evict (`streamhub_hub_events_total`, `streamhub_subscriber_events_total`); `terminal_stream.create` spans carry a per-stage event |
 
 ## tymux backend metrics
 
