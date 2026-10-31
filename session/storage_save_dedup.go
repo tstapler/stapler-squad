@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 
@@ -19,7 +20,63 @@ import (
 // per-event saves re-persisted idle sessions byte for byte.
 type savedFingerprints struct {
 	mu sync.Mutex
-	m  map[string][sha256.Size]byte
+	m  map[string]savedEntry
+}
+
+// savedEntry is the whole-row fingerprint plus one per child-table section, so
+// a save where only session columns changed (timestamps, output signature)
+// skips the tag delete/re-insert, worktree, diff_stats and claude_sessions
+// statements instead of rewriting them byte for byte.
+type savedEntry struct {
+	whole [sha256.Size]byte
+	secs  sectionSums
+}
+
+type sectionSums struct {
+	diff, tags, worktree, claude [sha256.Size]byte
+}
+
+// updateSkip names the child-table sections Update must leave alone because the
+// row already holds exactly this data.
+type updateSkip struct {
+	DiffStats, Tags, Worktree, Claude bool
+}
+
+func hashJSON(parts ...any) (sum [sha256.Size]byte) {
+	h := sha256.New()
+	for _, p := range parts {
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return sum // zero sum never equals a recorded one (see sectionsOf)
+		}
+		_, _ = h.Write(raw)
+	}
+	copy(sum[:], h.Sum(nil))
+	return sum
+}
+
+// sectionsOf hashes the child-table sections of data. DiffStats.Content is
+// json:"-" but Update persists it, so it is hashed explicitly.
+func sectionsOf(data InstanceData) sectionSums {
+	tags := slices.Clone(data.Tags)
+	slices.Sort(tags)
+	return sectionSums{
+		diff:     hashJSON(data.DiffStats, data.DiffStats.Content),
+		tags:     hashJSON(tags),
+		worktree: hashJSON(data.Worktree),
+		claude:   hashJSON(data.ClaudeSession),
+	}
+}
+
+func (s sectionSums) skipAgainst(prev sectionSums) updateSkip {
+	var zero [sha256.Size]byte
+	same := func(a, b [sha256.Size]byte) bool { return a == b && a != zero }
+	return updateSkip{
+		DiffStats: same(s.diff, prev.diff),
+		Tags:      same(s.tags, prev.tags),
+		Worktree:  same(s.worktree, prev.worktree),
+		Claude:    same(s.claude, prev.claude),
+	}
 }
 
 // fingerprintInstanceData hashes everything persisted except UpdatedAt, which
@@ -45,22 +102,30 @@ func fingerprintInstanceData(data InstanceData) (sum [sha256.Size]byte, ok bool)
 // last row written; without it, two racing saves could leave a stale
 // fingerprint that makes a later save of newer data look unchanged. Writes
 // already serialize on the single writer connection, so this adds no waiting.
-func (f *savedFingerprints) persist(data InstanceData, write func() bool) {
+func (f *savedFingerprints) persist(data InstanceData, write func(skip updateSkip) bool) {
 	sum, hashed := fingerprintInstanceData(data)
+	secs := sectionsOf(data)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if hashed {
-		if prev, seen := f.m[data.Title]; seen && prev == sum {
+	var skip updateSkip
+	if prev, seen := f.m[data.Title]; seen {
+		if hashed && prev.whole == sum {
 			return
 		}
+		skip = secs.skipAgainst(prev.secs)
 	}
-	if !write() || !hashed {
+	ok := write(skip)
+	if !hashed {
+		delete(f.m, data.Title) // row changed but nothing to compare next time
+		return
+	}
+	if !ok {
 		return
 	}
 	if f.m == nil {
-		f.m = make(map[string][sha256.Size]byte)
+		f.m = make(map[string]savedEntry)
 	}
-	f.m[data.Title] = sum
+	f.m[data.Title] = savedEntry{whole: sum, secs: secs}
 }
 
 // forget must be called whenever a row is deleted or renamed away so a
