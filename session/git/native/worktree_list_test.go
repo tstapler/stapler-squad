@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -177,6 +178,7 @@ func TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntr
 	require.NoError(t, os.MkdirAll(brokenAdminDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(brokenAdminDir, "locked"), []byte("initializing"), 0o644))
 	// Deliberately no "gitdir" file — this is the crash-partial state under test.
+	ageAdminDir(t, brokenAdminDir)
 
 	entries, err := ListWorktrees(repoPath)
 	require.NoError(t, err, "one crash-partial admin dir must not abort the whole repo's listing")
@@ -206,4 +208,50 @@ func TestNativeListWorktrees_CrashPartialAdminDir_IsPrunableAlongsideHealthyEntr
 
 	_, statErr = os.Stat(filepath.Join(repoPath, ".git", "worktrees", branchName))
 	assert.NoError(t, statErr, "the healthy worktree's admin dir must survive prune")
+}
+
+// ageAdminDir backdates dir's mtime past freshAdminDirGrace so it reads as crash debris, not an Add in flight.
+func ageAdminDir(t *testing.T, dir string) {
+	t.Helper()
+	old := time.Now().Add(-2 * freshAdminDirGrace)
+	require.NoError(t, os.Chtimes(dir, old, old))
+}
+
+// Regression: an unlocked prune landing between AllocateAdminDirName's Mkdir and the first
+// admin-file rename used to RemoveAll the new dir, failing the Add with ENOENT on rename
+// (CI flake in TestPickFanoutWinner_ConflictReturnsAbortedAndArchivesNothing).
+func TestPruneWorktrees_should_KeepFreshAdminDir_When_AddIsInFlight(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestRepo(t)
+	adminDir, err := AllocateAdminDirName(repoPath, "in-flight")
+	require.NoError(t, err)
+	w := NewAdminFileWriter(adminDir)
+	tmpPath, err := w.writeTemp("locked", []byte("initializing"))
+	require.NoError(t, err)
+
+	require.NoError(t, PruneWorktrees(repoPath)) // the racing prune
+
+	require.NoError(t, w.renameAndSyncDir(tmpPath, "locked"), "prune must not delete an Add's admin dir")
+	assert.DirExists(t, adminDir)
+}
+
+func TestListWorktrees_should_ReportPrunable_When_GitdirlessAdminDirIsOlderThanGrace(t *testing.T) {
+	t.Parallel()
+	repoPath := setupTestRepo(t)
+	adminDir, err := AllocateAdminDirName(repoPath, "orphan")
+	require.NoError(t, err)
+
+	entries, err := ListWorktrees(repoPath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.False(t, entries[0].Prunable, "fresh gitdir-less admin dir is an Add in flight")
+
+	ageAdminDir(t, adminDir)
+	entries, err = ListWorktrees(repoPath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Prunable, "stale gitdir-less admin dir is crash debris")
+
+	require.NoError(t, PruneWorktrees(repoPath))
+	assert.NoDirExists(t, adminDir)
 }
