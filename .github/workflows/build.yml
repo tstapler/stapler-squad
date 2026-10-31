@@ -349,13 +349,19 @@ jobs:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
       - name: Build binary (Next build, from prepare's shared artifact)
-        run: go build -o stapler-squad .
+        run: |
+          go build -o stapler-squad .
+          go build -o seed-demo ./tests/demo/seed
+          go build -o seed-hidden ./tests/e2e/seed-hidden
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: e2e-binary-next
-          path: stapler-squad
+          path: |
+            stapler-squad
+            seed-demo
+            seed-hidden
           if-no-files-found: error
           retention-days: 1
 
@@ -383,7 +389,7 @@ jobs:
           name: e2e-binary-next
 
       - name: Make binary executable
-        run: chmod +x stapler-squad
+        run: chmod +x stapler-squad seed-demo seed-hidden
 
       # setup-bun unzips its download, the server and some specs shell out to tmux; install only
       # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
@@ -422,6 +428,8 @@ jobs:
       - name: Run e2e shard ${{ matrix.shard }}/10 (Next build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
+          TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           WEB_BUILD: next
         run: |
           cd tests/e2e
@@ -568,11 +576,19 @@ jobs:
           WEB_BUILD: bun
         run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
 
+      - name: Build e2e seed tools
+        run: |
+          go build -o seed-demo ./tests/demo/seed
+          go build -o seed-hidden ./tests/e2e/seed-hidden
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: e2e-binary-bun
-          path: stapler-squad
+          path: |
+            stapler-squad
+            seed-demo
+            seed-hidden
           if-no-files-found: error
           retention-days: 1
 
@@ -600,7 +616,7 @@ jobs:
           name: e2e-binary-bun
 
       - name: Make binary executable
-        run: chmod +x stapler-squad
+        run: chmod +x stapler-squad seed-demo seed-hidden
 
       # setup-bun unzips its download, the server and some specs shell out to tmux; install only
       # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
@@ -639,6 +655,8 @@ jobs:
       - name: Run e2e shard ${{ matrix.shard }}/10 (Bun build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
+          TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           WEB_BUILD: bun
         run: |
           cd tests/e2e
