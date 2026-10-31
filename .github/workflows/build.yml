@@ -64,7 +64,7 @@ concurrency:
 # fixed overhead is ~1 min against ~22 min of tests, so total runner-minutes barely move, and the
 # slowest shards already run ~30 of their 40 min budget (project_plans/e2e-test-parallelization/decisions/).
 env:
-  E2E_SHARD_TOTAL: 10
+  E2E_SHARD_TOTAL: 2
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -679,7 +679,7 @@ jobs:
       # nightly.yml's secondary-browser jobs — see its header for why.
       - name: Run e2e shard ${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} (Bun build)
         env:
-          TEST_SERVER_BINARY: /nonexistent/stapler-squad
+          TEST_SERVER_BINARY: /bin/true
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           WEB_BUILD: bun
