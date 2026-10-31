@@ -11,7 +11,7 @@ describe("e2e server isolation", () => {
 
   it("picks an OS-assigned free port and passes it to the server through PORT", () => {
     expect(testServer).toMatch(/srv\.listen\(0,/);
-    expect(testServer).toMatch(/this\.config\.port = await \(this\.config\.allocatePort \?\? findFreePort\)\(\)/);
+    expect(testServer).toMatch(/this\.config\.port = await \(attempt === 1 \? this\.config\.allocatePort \?\? findFreePort : findFreePort\)\(\)/);
     expect(testServer).toMatch(/PORT: this\.config\.port\.toString\(\)/);
   });
 
