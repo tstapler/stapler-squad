@@ -12,6 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// pollPTYBeforeRead makes the stream loop wait with waitReadable before every
+// Read rather than trusting SetReadDeadline (see ptyDeadlineUnsupported).
+const pollPTYBeforeRead = true
+
 // fdSetSize is how many fd numbers a select(2) FdSet can hold.
 var fdSetSize = len(unix.FdSet{}.Bits) * int(unsafe.Sizeof(unix.FdSet{}.Bits[0])) * 8
 

@@ -52,12 +52,13 @@ type ResponseStream struct {
 // before re-checking for cancellation.
 const ptyReadPollInterval = 100 * time.Millisecond
 
-// ptyDeadlineUnsupported tracks, per underlying PTY, whether SetReadDeadline
-// has already failed with "file type does not support deadline" -- a
-// permanent, platform-level property of the fd (verified on Darwin: a PTY
-// master opened via github.com/creack/pty is never registered with the
-// runtime's netpoller, so os.File.SetReadDeadline always fails for it and a
-// plain Read cannot be interrupted; on Linux it typically succeeds).
+// ptyDeadlineUnsupported tracks, per underlying PTY, whether the loop must
+// bound its wait with waitReadable instead of SetReadDeadline. On unix it
+// starts true: SetReadDeadline cannot be trusted there. Darwin rejects it
+// outright ("file type does not support deadline": the creack/pty master is
+// never registered with the netpoller). Linux accepts it but does not honour
+// it: creack/pty's ioctl calls File.Fd(), which puts the registered fd back
+// into blocking mode, so Read parks in read(2) past the deadline.
 // streamLoop is the only goroutine that reads this stream's PTY, so a plain
 // bool (no lock) is safe -- it is only ever read and written from that single
 // goroutine.
@@ -238,7 +239,7 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 
 	// See ptyDeadlineUnsupported's doc comment: scoped to this loop's single
 	// goroutine, so a plain struct (no lock, no atomic) is safe.
-	deadlineUnsupported := &ptyDeadlineUnsupported{}
+	deadlineUnsupported := &ptyDeadlineUnsupported{confirmed: pollPTYBeforeRead}
 	var lastPTY *os.File
 	waitErrLogged := false
 
@@ -280,7 +281,7 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 			// the rest of the loop bounds the wait with waitReadable instead.
 			if pty != lastPTY {
 				// A swapped-in PTY (UpdatePTY) may differ in poller support.
-				lastPTY, deadlineUnsupported.confirmed = pty, false
+				lastPTY, deadlineUnsupported.confirmed = pty, pollPTYBeforeRead
 			}
 			if !deadlineUnsupported.confirmed {
 				if err := pty.SetReadDeadline(time.Now().Add(ptyReadPollInterval)); err != nil {
