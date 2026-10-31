@@ -78,6 +78,24 @@ regression early instead of requiring another round of manual Tempo queries:
 | `http.server.connections_hijacked_total` | Observable counter | — | Same file. Cumulative count of connections hijacked off net/http's tracking — in this server, exclusively WebSocket upgrades (`StateHijacked` is `net/http`'s terminal state for a hijacked connection, so this is the only place to count them). |
 | `rpc.server_streams.open` | Observable gauge | `method` (`WatchSessions`, `WatchReviewQueue`, `WatchBacklogItems`, `WatchInsights`, `WatchUnfinishedWork`, `StreamTerminal`) | `server/services/watch_stream_metrics.go`'s `TrackOpenStream`, called at the top of each Watch* handler's body and around the terminal stream's `HandleWebSocket` call, with a `defer`/paired call decrementing on stream close. |
 
+### Listener, descriptor and request-flow metrics
+
+Added to see saturation before and around the HTTP layer (dashboard `ssq-http-rpc-connections`, row "Listener and OS saturation").
+
+| Metric | Labels | Meaning and threshold |
+|---|---|---|
+| `http.server.accepted_total` | `listener` (`main`, `remote`) | Connections accepted (`server/listener_metrics.go`). A rate spike with flat request rate means connections are not being reused. |
+| `http.server.accept_errors_total` | `listener`, `kind` (`closed`, `timeout`, `fd_exhausted`, `other`) | Any `fd_exhausted` is saturation: page on it. `closed` is normal at shutdown. |
+| `http.server.tls_handshake_errors_total` | `listener` | Parsed from net/http's `ErrorLog`. On `remote`, a steady rate means a client that does not trust the certificate. |
+| `process.open_fds`, `process.fd_limit` | none | Warn above 80% of the soft limit. macOS counts by probing up to 32768 descriptors; Linux reads `/proc/self/fd`. |
+| `os.tcp.somaxconn` | none | Kernel cap on a listen backlog (macOS `kern.ipc.somaxconn`, 128 by default). |
+| `os.tcp.listen_overflows_total`, `os.tcp.listen_drops_total` | none | Linux only (`/proc/net/netstat` `ListenOverflows`/`ListenDrops`). Any sustained increase means the accept loop falls behind the backlog. On macOS the counters are in the unstable binary `net.inet.tcp.stats` struct, so they are not exported: use `netstat -s -p tcp \| grep -i listen`. |
+| `rpc.server.stream_age_seconds` | `method` | Histogram of how long a stream or terminal WebSocket stayed open, observed at close. Many closes under 15s is a reconnect storm. Open count is `rpc.server_streams.open`. |
+| `rpc.server.pre_handler_seconds` | `class` (`unary`, `stream`) | Request reaching the process to RPC handler start. Healthy is under 1ms; seconds means it waited in-process before any handler ran. Time the request spent in the kernel backlog or in a browser queue is not included. |
+| `rpc.server.client_aborted_total` | `rpc.method` | Unary calls whose context was canceled and that returned an error: the server view of client timeouts and navigations. |
+
+Not exported, with reasons: ReadTimeout/IdleTimeout closes (net/http reports neither). A WebSocket does not hit `ReadTimeout`: `TestWebSocketSurvivesServerReadTimeout` (`server/ws_readtimeout_test.go`) upgrades under a 150ms `ReadTimeout` and the socket outlives it, because gorilla clears the connection deadlines on `Upgrade`. So StreamTerminal sockets closing at about 15s are not explained by the server's 15s `ReadTimeout`; look at the stream-age histogram and the client for the closer. Per-VNC/CDP endpoint gauges are not added: those paths do not go through `TrackOpenStream`.
+
 Graph `rpc.server_streams.open` summed by `method` to answer "how many
 long-lived streams does one browser tab hold open right now" directly. A
 sustained `http.server.connections_open` at or near 6 alongside high

@@ -140,6 +140,7 @@ func newServerBase(addr string) (*Server, context.Context) {
 			// — see that file's doc comment for why this is the natural place
 			// to maintain the count.
 			ConnState: trackHTTPConnState,
+			ErrorLog:  serverErrorLog(listenerMain),
 		},
 	}
 	srv.addr.Store(&addr)
@@ -1627,7 +1628,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
-	s.httpServer.Handler = handler
+	s.httpServer.Handler = stampArrival(handler)
 
 	scheme := "http"
 	if s.tlsConfig != nil {
@@ -1643,7 +1644,12 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", s.GetAddr())
 			log.Info("Web UI", "url", scheme+"://"+s.GetAddr())
 			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
-			err = s.httpServer.ListenAndServeTLS("", "")
+			ln, lerr := net.Listen("tcp", s.GetAddr())
+			if lerr != nil {
+				errCh <- lerr
+				return
+			}
+			err = s.httpServer.ServeTLS(meterListener(listenerMain, ln), "", "")
 		} else {
 			ln, lerr := listenLoopbackAware(s.GetAddr())
 			if lerr != nil {
@@ -1657,7 +1663,7 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
 			log.Info("Web UI", "url", scheme+"://"+resolvedAddr)
 			log.Info("Health check", "url", scheme+"://"+resolvedAddr+"/health")
-			err = s.httpServer.Serve(ln)
+			err = s.httpServer.Serve(meterListener(listenerMain, ln))
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -2026,8 +2032,9 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 
 	remoteSrv := &http.Server{
 		Addr:         remoteAddr,
-		Handler:      handler,
+		Handler:      stampArrival(handler),
 		TLSConfig:    tlsCfg,
+		ErrorLog:     serverErrorLog(listenerRemote),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
@@ -2053,7 +2060,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 			}
 		}()
 
-		if serveErr := remoteSrv.ServeTLS(ln, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := remoteSrv.ServeTLS(meterListener(listenerRemote, ln), "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("Remote HTTPS server error", "err", serveErr)
 		}
 	}()
