@@ -22,6 +22,8 @@ on:
       - '.bun-version'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
+      - '.github/actions/prepare-stub/**'
+      - '.github/workflows/_prepare.yml'
       - '.gitmodules'
       - 'third_party/tmux/**'
       - 'tests/e2e/**'
@@ -94,7 +96,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -127,6 +129,10 @@ jobs:
     # gotcha (e.g. actions/runner#2205).
     if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
     uses: ./.github/workflows/_prepare.yml
+    with:
+      # PRs skip the Next web build (~130 s on the critical path): nothing downstream reads it
+      # (e2e-binary-bun rebuilds for Bun; e2e-binary-next is main-only and keeps the real build).
+      build-web-ui: ${{ github.event_name != 'pull_request' }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # web-checks: the former web-build-smoke-next, web-build-smoke-bun, built-assets-guard,
@@ -610,6 +616,13 @@ jobs:
         env:
           WEB_BUILD: bun
         run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
+
+      - name: Verify the real web UI was embedded (not prepare's stub)
+        run: |
+          if [ ! -s server/web/dist/index.html ] || grep -q '<body></body>' server/web/dist/index.html; then
+            echo "::error::server/web/dist is missing or still the prepare stub: the Bun build did not replace it"
+            exit 1
+          fi
 
       - name: Build e2e seed tools
         run: |
