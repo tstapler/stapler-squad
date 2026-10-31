@@ -134,8 +134,7 @@ I did not enumerate every read path for the `core`-stay row; its "no FK, single-
    unexported `*ent.Client` and only their entity clients; `Core` exposes `Ent()`. Repositories take the handle, not `*ent.Client`.
    This is a ratchet, not a proof: every handle wraps the same generated `*ent.Client`, so aliasing or passing a raw client defeats
    the types. The analyzer `tools/lint/nowrongdbentity` closes the gap by rejecting a selector for any entity outside the receiving
-   DB's table set on a `*ent.Client` outside `dbpool` (both directions, including moved entities reached through `Core`); a unit test
-   asserts the analyzer's table lists equal the registry's.
+   DB's table set on a `*ent.Client` or `*ent.Tx` (both directions, including moved entities reached through `Core`). In PR 1 the check is package-scoped (`session/**` must not select analytics.db entities; `server/analytics` may select only those) and the entity list is hand-maintained in the analyzer; wiring it to the registry's table sets, with a unit test that they are equal, arrives with per-DB table subsets in PR 2, and wider package coverage (`server/services`, `server/handlers`) with each entity move.
 6. **No raw opens.** New analyzer `tools/lint/norawdb` (modelled on `norawexec`) fails any `sql.Open("sqlite", ...)` or ent/entsql
    open outside `session/dbpool`, `internal/sqlitedsn`, tests and `scripts/`. Foreign tools' files (opencode, agy, capacity monitor,
    `database_service` backup/merge) use `dbpool.OpenForeignReadOnly`, which never changes the file's journal mode and sets `query_only`.
@@ -154,7 +153,7 @@ I did not enumerate every read path for the `core`-stay row; its "no FK, single-
     chunks of 2,000 walking `id` ascending until the first row newer than the cutoff, comparing `datetime(created_at)` (SQLite
     normalizes offsets) because stored `created_at` mixes `-07:00` and `+00:00` text (VERIFIED in the copy), so a plain text compare is
     wrong near the boundary. `classification_analytics` keeps 180 days and purges older rows; it is still config-gated through `classification_retention_days` (0 disables), implemented in the migration PR (PR 2), not PR 1.
-11. **Tunables.** (Runtime resize and idle close need the raw `*sql.DB`s, which `dbsplit` and `dbobs` do not expose, so `dbpool` keeps them. Idle close drops the driver; `dbpool` re-registers the reopened one with `dbobs` and a per-DB `dbmaint` maintainer whose goroutine it starts and stops with the open/close lifecycle, so neither holds a stale driver. `journal_mode` and `synchronous` gauges read the writer connection only; reader connections are opened with the same DSN.) Defaults in profiles; override via `config.json` (`db.<name>.reader_conns`, `busy_timeout`, `retention_days`) and
+11. **Tunables.** (Runtime resize and idle close need the raw `*sql.DB`s, which `dbsplit` and `dbobs` do not expose, so `dbpool` keeps them. Idle close drops the driver; `dbpool` re-registers the reopened one with `dbobs` and a per-DB `dbmaint` maintainer whose goroutine it starts and stops with the open/close lifecycle, so neither holds a stale driver. `journal_mode` and `synchronous` gauges read the writer connection only; reader connections are `query_only` with the busy timeout, WAL and `synchronous=NORMAL` for the `state` class, and no foreign-key or `journal_size_limit` pragma, as the pre-`dbpool` read pool was.) Defaults in profiles; override via `config.json` (`db.<name>.reader_conns`, `busy_timeout`, `retention_days`) and
     env `STAPLER_SQUAD_DB_<NAME>_READ_CONNS` (`STAPLER_SQUAD_DB_READ_CONNS` stays the `core` alias). Runtime:
     `POST /actuator/db/pool {name, reader_conns}` on the local listener (pattern: `/actuator/terminal-mux`) using
     `SetMaxOpenConns`/`SetMaxIdleConns` on the reader pool. The writer stays 1 because dedup/CAS code relies on it.
@@ -164,8 +163,7 @@ I did not enumerate every read path for the `core`-stay row; its "no FK, single-
     brief, not re-measured). Lazy open runs the small per-DB `Schema.Create` under `EntSchemaCreateMu`; subset schemas keep that hold
     short, and writes arriving before it finishes block on the `Once` rather than fail.
 13. **Shutdown.** Stop producers, drain `AnalyticsStore` and the escape batch writer, stop migrators and retention, then per open DB in
-    reverse open order: `PRAGMA optimize`, best-effort `wal_checkpoint(TRUNCATE)` bounded by the busy timeout, close readers, close
-    writer. A checkpoint that cannot finish is logged; WAL replays on next open.
+    reverse open order: close readers (a TRUNCATE checkpoint cannot finish while a reader holds a read mark), best-effort `wal_checkpoint(TRUNCATE)` with a fixed 250 ms busy timeout inside a 2 s budget, close writer. `PRAGMA optimize` is not run in PR 1 because it writes `sqlite_stat1` and would change query plans on the existing files; it is a decision for the PR that adds plan tests with statistics. A checkpoint that cannot finish is logged; WAL replays on next open.
 
 ## Index audit
 
