@@ -820,7 +820,7 @@ test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged
 	@$(MAKE) --no-print-directory test-delivery-guards-run
 
 # The run half has no tool/codegen prerequisites so CI can call it directly
-# after downloading the generated-code artifact (build.yml, test-delivery-guards).
+# after downloading the generated-code artifact (build.yml, go-guards).
 test-delivery-guards-run: $(GOTESTSUM_BIN)
 	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
 		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \

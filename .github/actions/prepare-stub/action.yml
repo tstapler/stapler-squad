@@ -8,7 +8,7 @@ inputs:
       only Go/ConnectRPC output via remote plugins — no node dependency,
       correct for callers (mcp-integration.yml, goreleaser-check.yml) that
       skip bun/node install entirely. Callers that DO install web-app Bun
-      deps first (e.g. lint.yml's lint-prepare, which needs the TS/ES stubs
+      deps first (e.g. lint.yml (prepare step), which needs the TS/ES stubs
       for Jest's `@/gen/...` module resolution — even mocked imports need
       the file to exist) must pass buf.gen.yaml (the default template,
       needs web-app/node_modules/.bin/protoc-gen-es) instead.

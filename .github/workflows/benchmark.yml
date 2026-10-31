@@ -12,16 +12,10 @@ on:
       - 'web-app/package.json'
       - 'web-app/bun.lock'
       - '.github/workflows/benchmark.yml'
+  # Opt-in on PRs: add the `run-benchmarks` label. Per-PR runs were 6 checks each and advisory
+  # (continue-on-error + sticky comment); push to main still runs and saves the baselines.
   pull_request:
-    branches: [ main ]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'web-app/src/**'
-      - 'web-app/package.json'
-      - 'web-app/bun.lock'
-      - '.github/workflows/benchmark.yml'
+    types: [labeled]
 
 # Cancel in-progress runs on PRs when a new commit is pushed.
 # On main, never cancel — baseline-save steps must be allowed to complete.
@@ -37,7 +31,7 @@ on:
 concurrency:
   # Shared with build.yml benchmark-gate so runs are serialized (avoids
   # redundant concurrent benchmark runs contending for runner resources).
-  group: baseline-push-${{ github.ref }}
+  group: baseline-push-${{ github.ref }}-${{ github.event.label.name }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -53,6 +47,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   go-tier1:
     name: Go Benchmarks (Tier 1)
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-benchmarks'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -187,6 +182,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   frontend-bundle:
     name: Frontend Bundle Size
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-benchmarks'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -742,3 +738,29 @@ jobs:
         with:
           path: benchmarks/e2e/perf-baseline.json
           key: bench-e2e-perf-${{ github.run_id }}
+
+  # PRs no longer run these by default (see the pull_request trigger), so a regression first
+  # shows up here, post-merge. Open one tracking issue per failing main run so it is not missed.
+  alert-on-main-failure:
+    name: Alert on main benchmark failure
+    runs-on: ubuntu-latest
+    needs: [go-tier1, go-tier2, frontend-bundle, frontend-throughput, e2e-latency, e2e-perf]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the benchmark-regression issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          title="Benchmarks failing on main"
+          body="A benchmark job failed on main at ${SHA}: ${RUN_URL}. Benchmarks run only on main (or a PR labelled run-benchmarks) to keep per-PR check counts low."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
