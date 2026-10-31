@@ -296,7 +296,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 		return err
 	}
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build()) //nolint:norawdb writes to the agy-owned database
 	if err != nil {
 		return err
 	}

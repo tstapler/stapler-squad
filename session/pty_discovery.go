@@ -131,27 +131,37 @@ func parseProcessState(state string) PTYStatus {
 	}
 }
 
-// batchPaneActivity returns the last-activity timestamp for each session (first pane wins)
-// by running a single `tmux list-panes -a` call. The tmux format #{pane_last_activity}
-// is a Unix timestamp updated whenever the pane produces output. Use it to detect whether
-// a session has produced new output since the last capture, without spawning capture-pane.
-// Returns nil when tmux is unavailable.
-func batchPaneActivity(socket string) map[string]time.Time {
+// listAllPanes runs one `tmux list-panes -a -F format` against socket for a background poller:
+// ok is false when no exec-gate slot is free right now (skip this tick) or tmux failed.
+func listAllPanes(socket, format string) (output []byte, ok bool) {
 	resolved := tmux.ResolveSocket(socket)
-	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}")
+	args := resolved.Args("list-panes", "-a", "-F", format)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Background poller: skip this tick rather than queue behind interactive traffic.
-	release, ok := tmux.TryAcquireExecSlot(resolved.String())
-	if !ok {
-		return nil
+	release, acquired := tmux.TryAcquireExecSlot(resolved.String())
+	if !acquired {
+		return nil, false
 	}
 	defer release()
 
-	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
-	output, err := cmd.Output()
+	out, err := safeexec.CommandContext(ctx, tmux.Binary(), args...).Output()
 	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// batchPaneActivity returns the newest window-activity timestamp for each session
+// by running a single `tmux list-panes -a` call. The tmux format #{window_activity}
+// is a Unix timestamp updated whenever the window produces output (#{pane_last_activity}
+// is not a tmux format variable and expands to empty). Use it to detect whether
+// a session has produced new output since the last capture, without spawning capture-pane.
+// Empty or non-numeric values are treated as unknown (session omitted).
+// Returns nil when tmux is unavailable.
+func batchPaneActivity(socket string) map[string]time.Time {
+	output, ok := listAllPanes(socket, "#{session_name} #{window_activity}")
+	if !ok {
 		return nil
 	}
 	// Parse bytes directly: no string(output) copy, no strings.Split allocation.
@@ -171,14 +181,14 @@ func batchPaneActivity(socket string) map[string]time.Time {
 			continue
 		}
 		sessionName := string(line[:spaceIdx])
-		if _, exists := result[sessionName]; exists {
-			continue // keep first pane per session
-		}
 		ts, err := strconv.ParseInt(string(line[spaceIdx+1:]), 10, 64)
 		if err != nil {
 			continue
 		}
-		result[sessionName] = time.Unix(ts, 0)
+		// Newest window wins: a multi-window session's active window may not be listed first.
+		if t := time.Unix(ts, 0); t.After(result[sessionName]) {
+			result[sessionName] = t
+		}
 	}
 	return result
 }

@@ -86,6 +86,7 @@ func (t *WebSocketTransport) Close() error {
 	}
 	// Best effort: Close historically returned nil, and a closed connection is
 	// already in the desired state if setting its read deadline fails.
+	t.stream.serverClosing.Store(true)
 	_ = t.stream.conn.SetReadDeadline(time.Now())
 	t.mu.Lock()
 	hub, id, bound := t.hub, t.subscriberID, t.bound

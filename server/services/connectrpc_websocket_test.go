@@ -1286,6 +1286,34 @@ func TestEnsureHubBackendAlive(t *testing.T) {
 	})
 }
 
+// A session that is not Creating can never publish a Started event, so
+// ensureHubInstanceStarted must not wait startupWaitTimeout for one. A nil
+// SessionService proves it: the wait path dereferences it for the event bus.
+func TestEnsureHubInstanceStarted_should_NotWait_When_InstanceIsNotCreating(t *testing.T) {
+	missingDir := filepath.Join(t.TempDir(), "never-created")
+	inst, _ := newTestTmuxInstance(t, "ensure-hub-nowait-"+t.Name(), missingDir, alwaysAbsentExecutor{}, tmux.MakePtyFactory())
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	// SetTmuxSession flips started true; reset it the way the self-heal test does,
+	// then park the instance in PermanentlyFailed with tmux still attached.
+	inst.Status = session.Stopped
+	inst.RecoverFromStopped()
+	_ = handleTmuxRestoreFailure(inst, fmt.Errorf("restore: %w", tmux.ErrWorkDirMissing))
+	require.Equal(t, session.PermanentlyFailed, inst.GetLifecycleStatus())
+	require.False(t, inst.Started())
+
+	done := make(chan struct{})
+	go func() {
+		h.ensureHubInstanceStarted(inst, "sess", true)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(startupWaitTimeout / 2):
+		t.Fatal("ensureHubInstanceStarted waited on a non-Creating instance")
+	}
+	require.False(t, inst.Started(), "a PermanentlyFailed instance must not be self-healed to started")
+}
+
 // TestEnsureControlModeStarted covers ensureControlModeStarted's
 // restore-decision branches using pumpTestController (already defined below)
 // as a SessionStreamer fake, and the same real-instance/fake-tmux-backend

@@ -253,3 +253,39 @@ func TestWithCommandRunner_InjectedRunnerIsActuallyUsed(t *testing.T) {
 		t.Errorf("spy.Run call = %+v, want {name: \"kill\", args: [\"-WINCH\", \"54321\"]}", call)
 	}
 }
+
+// TestRefreshClient_NeverIssuesRefreshClientCommand pins that RefreshClient and
+// RefreshClientPriority do not run "refresh-client -t <session>": tmux's -t
+// takes a client, so a session name always fails ("can't find client", probed
+// on 3.7b; cmd_find_client is identical in 3.4/3.7b/3.8).
+func TestRefreshClient_NeverIssuesRefreshClientCommand(t *testing.T) {
+	var seen [][]string
+	record := func(c *exec.Cmd) { seen = append(seen, c.Args) }
+	spy := &spyCommandRunner{}
+	fake := MockCmdExec{
+		RunFunc:    func(c *exec.Cmd) error { record(c); return nil },
+		OutputFunc: func(c *exec.Cmd) ([]byte, error) { record(c); return []byte("4242\n"), nil },
+	}
+	sess := NewTmuxSessionWithDeps("refresh-test-session", ProgramClaude, nil, fake, WithCommandRunner(spy))
+
+	if err := sess.RefreshClientPriority(context.Background()); err != nil {
+		t.Fatalf("RefreshClientPriority: %v", err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("RefreshClientPriority spawned %v, want no tmux spawn", seen)
+	}
+
+	if err := sess.RefreshClient(); err != nil {
+		t.Fatalf("RefreshClient: %v", err)
+	}
+	for _, args := range seen {
+		for _, a := range args {
+			if a == "refresh-client" {
+				t.Fatalf("RefreshClient ran refresh-client: %v", args)
+			}
+		}
+	}
+	if len(seen) != 1 || len(spy.runCalls) != 1 || spy.runCalls[0].args[1] != "4242" {
+		t.Fatalf("want one display-message and one kill -WINCH 4242, got spawns=%v kills=%v", seen, spy.runCalls)
+	}
+}

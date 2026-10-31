@@ -682,10 +682,21 @@ func rowsToPlainText(rows []*v1.Row) string {
 // CapturePaneContent renders the live screen with ANSI/SGR attributes
 // preserved (Task 2.2.2d). CellsToSGR's body lands in Epic 2.6; wiring the
 // call site here just makes the package compile end-to-end in the meantime.
+//
+// Fails with *PaneExitedError when the pane's process has exited, so callers
+// polling for a dialog stop instead of reading the final grid as current;
+// CapturePaneContentRaw and CapturePaneContentWithOptions keep returning it.
 func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 	snap, err := s.capturePane(context.Background(), 0)
 	if err != nil {
 		return "", err
+	}
+	if exited := exitedPaneError(snap); exited != nil {
+		s.mu.RLock()
+		paneID := s.paneID
+		s.mu.RUnlock()
+		exited.RestartPending = s.restartPending(context.Background(), paneID)
+		return "", exited
 	}
 	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }

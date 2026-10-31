@@ -986,7 +986,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if !inst.Started() {
+			if !inst.Started() && !deferToReconcile(inst) {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
 				}
@@ -1531,6 +1531,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
+	backlogSvc.SetRepoSettingsNonBlockingLookup(githubpkg.RepoSettingsNonBlocking)
 	backlogSvc.SetWorkflowEngineStatusSource(workflowEngine.Status)
 	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
@@ -2105,4 +2106,16 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 		})
 	}
 	return items
+}
+
+// deferToReconcile reports whether Step 6 must leave inst for Step 6b.
+// Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
+// cleanup kills the session's live tmux/tymux session before 6b can adopt it.
+func deferToReconcile(inst *session.Instance) bool {
+	switch inst.GetLifecycleStatus() {
+	case session.PermanentlyFailed, session.Failed:
+		return true
+	default:
+		return false
+	}
 }

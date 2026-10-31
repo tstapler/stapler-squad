@@ -154,6 +154,7 @@ func (s *NotificationHistoryStore) PruneByPredicate(classify PruneClassifier, op
 	s.records = remaining
 	if err := s.saveToDisk(); err != nil {
 		s.records = previous
+		s.publishLocked() // saveToDisk published the pruned rows; the revert must be visible to readers too
 		return plan, err
 	}
 	plan.Remove = filterPlanRows(plan.Remove, drop)
