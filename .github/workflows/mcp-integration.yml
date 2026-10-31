@@ -34,7 +34,7 @@ jobs:
   mcp-integration:
     name: MCP Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60  # two suites with 25m soft caps each: the hard kill must not pre-empt the CI-BUDGET-EXCEEDED marker
     steps:
       - uses: actions/checkout@v4
 

@@ -59,8 +59,8 @@ jobs:
   lint:
     name: Lint (Go, web, shell, proto)
     runs-on: ubuntu-latest
-    # 45m: Go and web lint plus codegen/buf breaking/ShellCheck in one job (golangci-lint step capped at 16m, ESLint at 16m).
-    timeout-minutes: 45
+    # 60m: Go and web lint plus codegen/buf breaking/ShellCheck in one job (golangci-lint step capped at 16m, ESLint at 16m).
+    timeout-minutes: 60
     steps:
       # fetch-depth: 0 (full history, all branches) is required so `origin/main` is
       # resolvable locally for the complexity gate's --new-from-rev=origin/main below —
@@ -110,10 +110,17 @@ jobs:
       # separate runner and a separate check.
       # No separate fetch: this job's fetch-depth: 0 checkout already has origin/main, and a
       # `git fetch --depth=1` here would truncate it and break the complexity gate's merge-base.
-      # buf 1.41.0 is already on PATH from prepare-stub above.
+      # buf 1.41.0 is already on PATH from prepare-stub above. Compare against a separate shallow
+      # clone of main, not '.git#branch=origin/main': this job's checkout is blobless, and buf's
+      # internal `git clone file://.git` cannot lazy-fetch main's proto blobs from the promisor remote.
       - name: buf breaking against origin/main
         if: ${{ !cancelled() }}
-        run: buf breaking proto --against '.git#branch=origin/main,subdir=proto'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          git clone --quiet --depth=1 --branch main "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" /tmp/main-proto
+          buf breaking proto --against '/tmp/main-proto/.git#subdir=proto'
 
       # ubuntu-latest ships shellcheck; `make lint-shell` is the single source of truth for which
       # scripts are checked (also runnable locally).
@@ -136,7 +143,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: tools/ci/check-tymux-pin_test.sh
 
-      # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
+      # Soft-timeout wrapper (16m, below this job's hard timeout-minutes ceiling):
       # golangci-lint-action is a `uses:` step, so it can't be wrapped with the shell
       # `timeout` utility directly — instead this uses GHA's native step-level
       # timeout-minutes (which only kills this one step's process, not the whole job;
@@ -260,7 +267,7 @@ jobs:
         working-directory: web-app
         run: bun run lint:duplicates
 
-      # Soft-timeout wrapper (16m, below this job's 20m hard timeout-minutes ceiling):
+      # Soft-timeout wrapper (16m, below this job's hard timeout-minutes ceiling):
       # this is this job's longest-running step. The whole original step body is wrapped
       # unchanged in a function so `timeout` can bound it as a single command.
       # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go

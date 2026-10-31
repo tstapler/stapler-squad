@@ -4,6 +4,7 @@
 Usage: uv run --with pyyaml python tools/ci/count-pr-checks.py [workflows-dir]
 
 A job skipped by `if:` still shows up as a check, so every job of a triggered workflow counts.
+Label-only workflows count 0, but any label added to a PR fires them and yields skipped checks.
 A workflow-level `paths:` / `paths-ignore:` filter that does not match creates no checks at all.
 Matrices expand statically; a matrix built with fromJSON() counts as 1. Jobs that skip on a PR
 count as one skipped check (heuristic on `if:`; jobs whose skip comes from needs/detect-changes
