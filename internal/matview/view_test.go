@@ -661,3 +661,132 @@ func TestPinnedKeyRetriesFailedFirstCompute(t *testing.T) {
 	clk.Advance(5 * time.Second)
 	assert.Equal(t, "v0", recv(t, ch).Value)
 }
+
+func TestLastWaiterLeavingCancelsUnpinnedCompute(t *testing.T) {
+	t.Parallel()
+	cancelled := make(chan struct{})
+	started := make(chan struct{})
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.Compute = func(ctx context.Context, _ string) (string, error) {
+			close(started)
+			<-ctx.Done()
+			close(cancelled)
+			return "", ctx.Err()
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := v.Get(ctx, "a", GetOpts{}); done <- err }()
+	recv(t, started)
+	cancel()
+	assert.ErrorIs(t, recv(t, done), context.Canceled)
+	recv(t, cancelled) // compute observed cancellation
+}
+
+func TestPinnedComputeSurvivesWaiterLeaving(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	v, _, fc := newTestView(t, nil)
+	fc.gate = gate
+	ch := pin(t, v, "a")
+	recv(t, fc.started)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := v.Get(ctx, "a", GetOpts{WaitFresh: true}); done <- err }()
+	spinUntil(t, func() bool { return len(v.waitersFor("a")) == 1 })
+	cancel()
+	recv(t, done)
+	gate <- struct{}{}
+	assert.Equal(t, "v0", recv(t, ch).Value, "a pinned key's compute is not cancelled")
+}
+
+func TestColdGetDuringFirstComputeDoesNotComputeTwice(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	v, _, fc := newTestView(t, nil)
+	fc.gate = gate
+	first := getAsync(v, "a", GetOpts{})
+	recv(t, fc.started)
+	second := getAsync(v, "a", GetOpts{})
+	spinUntil(t, func() bool { return len(v.waitersFor("a")) == 2 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, _ = v.Subscribe(ctx, []string{"a"}) // Subscribe during Get must not rerun either
+	gate <- struct{}{}
+	require.NoError(t, recv(t, first).err)
+	require.NoError(t, recv(t, second).err)
+	assert.True(t, idle(v))
+	assert.EqualValues(t, 1, fc.calls.Load())
+}
+
+func TestMaxPinnedCountsEntriesSoOverlappingStreamsFit(t *testing.T) {
+	t.Parallel()
+	v, _, _ := newTestView(t, func(c *Config[string, string]) { c.MaxPinned = 4 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	keys := []string{"a", "b", "c"}
+	_, rej := v.Subscribe(ctx, keys)
+	require.Empty(t, rej)
+	_, rej = v.Subscribe(ctx, keys) // subscribe-new-then-release-old overlap
+	assert.Empty(t, rej)
+	assert.Equal(t, 3, v.Stats().Pinned)
+}
+
+func TestEventsDoNotRecomputeUnpinnedUnreadEntries(t *testing.T) {
+	t.Parallel()
+	v, clk, fc := newTestView(t, nil)
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	for range 5 {
+		v.Invalidate("a", ReasonFS)
+		clk.Advance(time.Second)
+	}
+	assert.True(t, idle(v))
+	assert.EqualValues(t, 1, fc.calls.Load(), "no git work while nobody reads")
+
+	fc.set("a", "new")
+	r, err := v.Get(context.Background(), "a", GetOpts{}) // dirty: served now, refreshed behind
+	require.NoError(t, err)
+	assert.Equal(t, "v0", r.Value)
+	recv(t, fc.started)
+	recv(t, fc.started)
+	spinUntil(t, func() bool { return v.Stats().Recomputes >= 2 })
+	r, err = v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "new", r.Value)
+}
+
+func TestSubscribeToDirtyEntryRefreshesIt(t *testing.T) {
+	t.Parallel()
+	v, _, fc := newTestView(t, nil)
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.NoError(t, err)
+	v.Invalidate("a", ReasonFS)
+	fc.set("a", "new")
+	ch := pin(t, v, "a")
+	got := recv(t, ch) // the old value may be conflated away by the refresh
+	if got.Value != "new" {
+		got = recv(t, ch)
+	}
+	assert.Equal(t, "new", got.Value, "dirty value is not pushed as current forever")
+}
+
+func TestETagPanicIsContained(t *testing.T) {
+	t.Parallel()
+	var boom atomic.Bool
+	boom.Store(true)
+	v, _, _ := newTestView(t, func(c *Config[string, string]) {
+		c.ETag = func(s string) string {
+			if boom.Load() {
+				panic("etag")
+			}
+			return s
+		}
+		c.MaxConcurrent = 1
+	})
+	_, err := v.Get(context.Background(), "a", GetOpts{})
+	require.ErrorContains(t, err, "panicked")
+	boom.Store(false)
+	_, err = v.Get(context.Background(), "a", GetOpts{WaitFresh: true})
+	require.NoError(t, err, "limiter slot released")
+}

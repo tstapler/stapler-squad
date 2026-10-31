@@ -172,6 +172,8 @@ type entry[K comparable, V any] struct {
 	running    bool
 	startSeq   uint64
 	rerun      bool
+	dirty      bool // an event arrived for an entry nobody watches or waits on; refresh on next read
+	cancel     context.CancelFunc
 	rerunNow   bool // an immediate-reason event arrived during the running compute
 	waiters    []*waiter[V]
 	subs       map[*subscriber[K, V]]struct{}
@@ -262,10 +264,15 @@ func (v *View[K, V]) Get(ctx context.Context, k K, opt GetOpts) (Versioned[V], e
 			return cur, nil
 		}
 	}
-	v.seq++
-	w := &waiter[V]{since: v.seq, done: make(chan waitResult[V], 1)}
+	// A plain miss is satisfied by any compute, even one already running; only
+	// WaitFresh needs one that starts after this call.
+	w := &waiter[V]{done: make(chan waitResult[V], 1)}
+	if opt.WaitFresh {
+		v.seq++
+		w.since = v.seq
+	}
 	e.waiters = append(e.waiters, w)
-	v.requestLocked(e)
+	v.requestLocked(e, opt.WaitFresh)
 	v.mu.Unlock()
 
 	deadline := opt.Deadline
@@ -307,6 +314,9 @@ func (v *View[K, V]) abandon(e *entry[K, V], w *waiter[V], cause error) (Version
 	if len(e.waiters) == 0 && e.firstDirty.IsZero() {
 		e.rerun = false // it was only set on this waiter's behalf
 	}
+	if len(e.waiters) == 0 && e.pins == 0 && e.running && e.cancel != nil {
+		e.cancel() // nobody wants this result any more (#1264)
+	}
 	if e.has && errors.Is(cause, ErrTimeout) {
 		cur := e.cur
 		cur.Stale = true
@@ -324,7 +334,7 @@ func (v *View[K, V]) serveLocked(e *entry[K, V], now time.Time) (Versioned[V], b
 	}
 	age := now.Sub(e.cur.ComputedAt)
 	switch {
-	case age <= v.cfg.FreshTTL:
+	case age <= v.cfg.FreshTTL && !e.dirty:
 		return e.cur, true
 	case age <= v.cfg.StaleTTL:
 		v.enqueueLocked(e)
@@ -336,9 +346,9 @@ func (v *View[K, V]) serveLocked(e *entry[K, V], now time.Time) (Versioned[V], b
 
 // requestLocked starts a compute a waiter can trust: one that begins after the
 // waiter registered.
-func (v *View[K, V]) requestLocked(e *entry[K, V]) {
+func (v *View[K, V]) requestLocked(e *entry[K, V], needsNewer bool) {
 	if e.running {
-		e.rerun = true
+		e.rerun = e.rerun || needsNewer
 		return
 	}
 	v.enqueueLocked(e)
@@ -356,6 +366,10 @@ func (v *View[K, V]) entryLocked(k K) *entry[K, V] {
 }
 
 func (v *View[K, V]) markDirtyLocked(e *entry[K, V], immediate bool) {
+	if e.pins == 0 && len(e.waiters) == 0 {
+		e.dirty = true // nobody is reading: recompute lazily on the next read
+		return
+	}
 	now := v.cfg.Clock.Now()
 	if e.firstDirty.IsZero() {
 		e.firstDirty = now
@@ -426,8 +440,7 @@ func (v *View[K, V]) enqueueLocked(e *entry[K, V]) {
 		return
 	}
 	if e.running {
-		e.rerun = true
-		return
+		return // the running compute refreshes the entry; rerun is set only by events and WaitFresh
 	}
 	v.stopTimerLocked(e)
 	e.queued = true
@@ -463,9 +476,12 @@ func (v *View[K, V]) pumpLocked() {
 		best.queued = false
 		best.running = true
 		best.firstDirty = time.Time{}
+		best.dirty = false
 		v.seq++
 		best.startSeq = v.seq
-		go v.run(best, best.startSeq)
+		ctx, cancel := context.WithTimeout(context.Background(), v.cfg.ComputeTimeout)
+		best.cancel = cancel
+		go v.run(ctx, best, best.startSeq)
 	}
 }
 
@@ -483,21 +499,9 @@ func (v *View[K, V]) armRetryLocked() {
 	})
 }
 
-func (v *View[K, V]) run(e *entry[K, V], startSeq uint64) {
-	ctx, cancel := context.WithTimeout(context.Background(), v.cfg.ComputeTimeout)
-	go func() {
-		select {
-		case <-v.done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	val, err := v.safeCompute(ctx, e.key)
-	cancel()
-	etag := ""
-	if err == nil {
-		etag = v.cfg.ETag(val)
-	}
+func (v *View[K, V]) run(ctx context.Context, e *entry[K, V], startSeq uint64) {
+	val, etag, err := v.safeCompute(ctx, e.key)
+	e.cancel() // release the timeout; e.cancel is only replaced after running clears
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -530,13 +534,17 @@ func (v *View[K, V]) run(e *entry[K, V], startSeq uint64) {
 
 // safeCompute turns a panicking Compute into an error so the limiter slot and
 // the entry's running flag are always released.
-func (v *View[K, V]) safeCompute(ctx context.Context, k K) (val V, err error) {
+func (v *View[K, V]) safeCompute(ctx context.Context, k K) (val V, etag string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("matview: compute panicked: %v", r)
 		}
 	}()
-	return v.cfg.Compute(ctx, k)
+	val, err = v.cfg.Compute(ctx, k)
+	if err == nil {
+		etag = v.cfg.ETag(val)
+	}
+	return val, etag, err
 }
 
 func (v *View[K, V]) staleCopy(e *entry[K, V]) Versioned[V] {
@@ -604,8 +612,13 @@ func (v *View[K, V]) dropLocked(e *entry[K, V], cause error) {
 		w.done <- waitResult[V]{err: cause}
 	}
 	e.waiters = nil
-	v.pinned -= e.pins
+	if e.pins > 0 {
+		v.pinned--
+	}
 	e.pins = 0
+	if e.running && e.cancel != nil {
+		e.cancel()
+	}
 	delete(v.entries, e.key)
 }
 
@@ -650,6 +663,9 @@ func (v *View[K, V]) Close() {
 	v.stops = nil
 	for _, e := range v.entries {
 		v.stopTimerLocked(e)
+		if e.running && e.cancel != nil {
+			e.cancel()
+		}
 		for _, w := range e.waiters {
 			w.done <- waitResult[V]{err: ErrClosed}
 		}

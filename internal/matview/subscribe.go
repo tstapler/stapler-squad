@@ -56,19 +56,26 @@ func (v *View[K, V]) Subscribe(ctx context.Context, keys []K) (<-chan Update[K, 
 			continue
 		}
 		seen[k] = true
-		if len(s.keys) >= v.cfg.MaxKeysPerSub || v.pinned >= v.cfg.MaxPinned {
+		// The process cap counts pinned entries, so a key another stream already
+		// pins is free: reopening a stream (new before old) must not be rejected.
+		existing, alreadyPinned := v.entries[k]
+		alreadyPinned = alreadyPinned && existing.pins > 0
+		if len(s.keys) >= v.cfg.MaxKeysPerSub || (!alreadyPinned && v.pinned >= v.cfg.MaxPinned) {
 			v.stats.PinRejected++
 			rejected = append(rejected, k)
 			continue
 		}
 		e := v.entryLocked(k)
 		e.pins++
-		v.pinned++
+		if e.pins == 1 {
+			v.pinned++
+		}
 		e.subs[s] = struct{}{}
 		s.keys = append(s.keys, k)
 		if e.has {
 			s.put(Update[K, V]{Key: k, Versioned: e.cur})
-		} else {
+		}
+		if !e.has || e.dirty {
 			v.enqueueLocked(e)
 		}
 	}
@@ -114,7 +121,9 @@ func (v *View[K, V]) unpin(s *subscriber[K, V]) {
 		if _, mine := e.subs[s]; mine {
 			delete(e.subs, s)
 			e.pins--
-			v.pinned--
+			if e.pins == 0 {
+				v.pinned--
+			}
 			e.lastRead = v.cfg.Clock.Now()
 		}
 	}
