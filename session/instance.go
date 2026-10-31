@@ -2656,13 +2656,31 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 // that backend instead of respawning in place: there's no live hand-off
 // between daemons, so this kills, rebuilds under the new backend, and
 // resumes -- same mechanism as an in-place restart.
-func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) error {
-	if !i.started.Load() {
-		return ErrCannotRestart
-	}
-
+func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) (retErr error) {
 	if err := validateBackendOverride(backendOverride); err != nil {
 		return err
+	}
+
+	// A PermanentlyFailed/Failed session that never started this process (boot Start
+	// rejected the transition) is still an explicit-user restart target; reset it the
+	// way RetryNow does. Stopped (deliberate) and Active/Paused with started=false
+	// stay rejected.
+	recovered := false
+	if !i.started.Load() {
+		prev := i.GetLifecycleStatus()
+		if prev != PermanentlyFailed && prev != Failed {
+			return ErrCannotRestart
+		}
+		i.RecoverFromStopped()
+		recovered = true
+		defer func() {
+			if retErr != nil {
+				i.restoreTerminalStatus(prev)
+			}
+		}()
+		if err := i.recreateWorktreeIfMissing(); err != nil {
+			return err
+		}
 	}
 
 	migrating := backendOverride != "" && backendOverride != i.Backend
@@ -2758,9 +2776,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	// For paused sessions, transition to Active now that the new tmux session is live.
 	// For already-active sessions, preserve the existing status.
 	i.mu.Lock()
-	if waspaused {
+	if waspaused || recovered {
 		if err := i.transitionTo(context.Background(), Active); err != nil {
-			log.Warn("restart: failed to transition from paused to active", "session", i.Title, "err", err)
+			log.Warn("restart: failed to transition to active", "session", i.Title, "err", err)
 			i.setStatus(Active)
 		}
 		i.started.Store(true)
@@ -2770,5 +2788,38 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	i.mu.Unlock()
 
 	log.Info("successfully restarted session", "session", i.Title)
+	return nil
+}
+
+// restoreTerminalStatus undoes RecoverFromStopped after a failed restart so the
+// session stays a restart/retry candidate instead of stranding in Creating.
+func (i *Instance) restoreTerminalStatus(prev Status) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.Status != Creating || i.started.Load() {
+		return // a concurrent restart/retry already moved it on; don't clobber
+	}
+	i.loadStatus(prev)
+	i.snapshot.Store(buildSnapshot(i))
+}
+
+// recreateWorktreeIfMissing re-creates the session's worktree when its directory
+// vanished from disk (see tmux.ErrWorkDirMissing); Start/Restart never do this on
+// their own, so a retry would otherwise fail identically forever.
+func (i *Instance) recreateWorktreeIfMissing() error {
+	if !i.gitManager.HasWorktree() {
+		return nil
+	}
+	workDir := i.GetEffectiveRootDir()
+	if workDir == "" {
+		return nil
+	}
+	if _, statErr := os.Stat(workDir); !errors.Is(statErr, os.ErrNotExist) {
+		return nil
+	}
+	if err := i.gitManager.Setup(); err != nil {
+		return err
+	}
+	log.Info("recreated missing worktree", "session", i.Title, "path", workDir)
 	return nil
 }
