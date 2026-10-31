@@ -17,11 +17,15 @@ const concurrencyTestGuard = 10 * time.Second // failure guard only; never reach
 type blockingPanePM struct {
 	ProcessManager
 	enter   *sync.Once
+	calls   *atomic.Int64
 	entered chan struct{}
 	release chan struct{}
 }
 
 func (p blockingPanePM) GetPanePID() (int32, error) {
+	if p.calls != nil {
+		p.calls.Add(1)
+	}
 	p.enter.Do(func() { close(p.entered) })
 	<-p.release
 	return 0, assert.AnError
@@ -240,7 +244,8 @@ func TestHistoryLinker_ScanAll_should_CoalesceConcurrentCalls(t *testing.T) {
 	t.Parallel()
 	f := newClaimFixture(t, "/repo/coalesce")
 	inst := &Instance{Title: "slow", Path: t.TempDir(), Status: Running}
-	pm := blockingPanePM{enter: new(sync.Once), entered: make(chan struct{}), release: make(chan struct{})}
+	scans := new(atomic.Int64)
+	pm := blockingPanePM{enter: new(sync.Once), calls: scans, entered: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
 	t.Cleanup(releasePane)
@@ -260,8 +265,8 @@ func TestHistoryLinker_ScanAll_should_CoalesceConcurrentCalls(t *testing.T) {
 	awaitJoined(t, &f.linker.scanFlight, callers)
 	releasePane()
 	wg.Wait()
-	// All joiners were released by one trailing scan; reaching here without
-	// callers+1 serialized blocked scans (pane stays released) is the property.
+
+	assert.Equal(t, int64(2), scans.Load(), "%d concurrent ScanAll calls must share one trailing scan", callers)
 }
 
 func TestScanCoalescer_should_ReleaseWaiters_When_RunPanics(t *testing.T) {
