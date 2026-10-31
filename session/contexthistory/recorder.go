@@ -159,6 +159,11 @@ func (r *Recorder) sweep(ctx context.Context, src tokens.TokenStoreReader) {
 }
 
 func (r *Recorder) prune(ctx context.Context) {
+	// Prune can delete rows the cache believes are stored (e.g. zero-timestamp
+	// events); dropping it makes the next Record re-upsert, and bounds its size.
+	r.mu.Lock()
+	r.lastCompactions = nil
+	r.mu.Unlock()
 	if n, err := r.store.Prune(ctx, r.now().Add(-r.retention)); err != nil {
 		log.Warn("[ContextHistory] prune failed", "err", err)
 	} else if n > 0 {

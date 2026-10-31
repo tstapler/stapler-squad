@@ -309,3 +309,22 @@ func TestRecord_SkipsCompactionUpsertWhenEventsUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, evs, 2)
 }
+
+func TestPrune_Should_ForceCompactionReupsert(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, filepath.Join(t.TempDir(), "s.db"))
+	writes := countCompactionWrites(s)
+	rec := newRecorder(s)
+	res := result("a", turn(0, 1000))
+	res.CompactEvents = []tokens.CompactEvent{{Trigger: "auto", TokensBefore: 90_000, TokensAfter: 8_000}} // zero timestamp: pruned as year 1
+
+	require.NoError(t, rec.Record(ctx, res))
+	rec.prune(ctx)
+	evs, err := s.Compactions(ctx, "a")
+	require.NoError(t, err)
+	require.Empty(t, evs, "prune removes the zero-timestamp event")
+
+	require.NoError(t, rec.Record(ctx, res))
+	assert.Equal(t, int64(3), writes.Load(), "create + prune delete + re-upsert; without the cache reset the third write is skipped")
+}
