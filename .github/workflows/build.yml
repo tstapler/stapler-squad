@@ -22,6 +22,8 @@ on:
       - '.bun-version'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
+      - '.github/actions/prepare-stub/**'
+      - '.github/workflows/_prepare.yml'
       - '.gitmodules'
       - 'third_party/tmux/**'
       - 'tests/e2e/**'
@@ -94,7 +96,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -617,8 +619,8 @@ jobs:
 
       - name: Verify the real web UI was embedded (not prepare's stub)
         run: |
-          if grep -q '<body></body>' server/web/dist/index.html; then
-            echo "::error::server/web/dist is still the prepare stub: the Bun build did not replace it"
+          if [ ! -s server/web/dist/index.html ] || grep -q '<body></body>' server/web/dist/index.html; then
+            echo "::error::server/web/dist is missing or still the prepare stub: the Bun build did not replace it"
             exit 1
           fi
 
