@@ -122,7 +122,10 @@ function recordFallback(reason: FallbackReason): void {
     return;
   }
   routineCounts.set(reason, (routineCounts.get(reason) ?? 0) + 1);
-  routineTimer ??= setTimeout(flushRoutine, ROUTINE_FLUSH_MS);
+  if (routineTimer === undefined) {
+    routineTimer = setTimeout(flushRoutine, ROUTINE_FLUSH_MS);
+    (routineTimer as { unref?: () => void }).unref?.(); // never hold a Node/Jest process open
+  }
 }
 
 function recordQueueMs(ms: number): void {
