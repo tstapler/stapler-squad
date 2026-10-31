@@ -782,3 +782,41 @@ func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *tes
 		t.Error("Started() = true, want false")
 	}
 }
+
+// A continuation goroutine spawned by restartForRetry must clear driverRunning
+// when it exits, else StartSessionDriver is a permanent no-op for the instance.
+func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		processManager: &fakeLivenessProcessManager{alive: true},
+	}
+	inst.RetryAttempt = 3
+	inst.RetryMaxAttempts = 3
+	require.NoError(t, inst.RetryNow("/tmp"))
+
+	StopSessionDriver(inst)
+	JoinSessionDriver(inst)
+
+	require.False(t, SessionDriverRunningForTest(inst),
+		"driverRunning stays true after the retry continuation exited, blocking every later StartSessionDriver")
+}
+
+// A driver that hands off to a continuation exits first; driverRunning must stay set until the
+// continuation exits too, or a second driver could start alongside it.
+func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRuns(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	inst.driverMu.Lock()
+	inst.driverRunning.Store(true)
+	inst.driverGoroutines = 1
+	inst.driverMu.Unlock()
+
+	inst.driverGoroutineStarted() // restartForRetry spawns the continuation
+	inst.driverGoroutineExited()  // the original driver returns
+	require.True(t, SessionDriverRunningForTest(inst), "cleared while the continuation still runs")
+
+	inst.driverGoroutineExited() // continuation returns
+	require.False(t, SessionDriverRunningForTest(inst))
+}

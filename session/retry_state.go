@@ -359,10 +359,10 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 		return restartErr
 	}
 
-	// Set driverRunning = true before spawning to close the race window
-	// between an exiting goroutine's own driverRunning bookkeeping and the new
-	// one starting (mirrors handleDriverFailure's existing D3 mitigation).
-	inst.driverRunning.Store(true)
+	// Register before spawning to close the race window between an exiting
+	// goroutine's driverRunning bookkeeping and the new one starting
+	// (mirrors handleDriverFailure's existing D3 mitigation).
+	inst.driverGoroutineStarted()
 
 	driverStop := stop
 	if driverStop == nil {
@@ -378,6 +378,7 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	inst.driverWG.Add(1)
 	go func() {
 		defer inst.driverWG.Done()
+		defer inst.driverGoroutineExited()
 		runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, policy, driverStop)
 	}()
 	return nil

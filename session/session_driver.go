@@ -217,6 +217,7 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
+	inst.driverGoroutines++
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}
 	// Add(1) must happen before driverStopper is published (and before driverMu is
 	// released): StopSessionDriver reads driverStopper under driverMu and, if
@@ -234,9 +235,31 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	}
 	go func() {
 		defer inst.driverWG.Done()
-		defer inst.driverRunning.Store(false)
+		defer inst.driverGoroutineExited()
 		runSessionDriver(inst, allowedPath, stopper.stop)
 	}()
+}
+
+// driverGoroutineStarted registers a continuation driver goroutine spawned by
+// restartForRetry; it pairs with driverGoroutineExited.
+func (i *Instance) driverGoroutineStarted() {
+	i.driverMu.Lock()
+	i.driverGoroutines++
+	i.driverRunning.Store(true)
+	i.driverMu.Unlock()
+}
+
+// driverGoroutineExited clears driverRunning only when the last driver
+// goroutine exits: a driver that handed off to a continuation must not mark the
+// instance driverless while the continuation still runs.
+func (i *Instance) driverGoroutineExited() {
+	i.driverMu.Lock()
+	i.driverGoroutines--
+	if i.driverGoroutines <= 0 {
+		i.driverGoroutines = 0
+		i.driverRunning.Store(false)
+	}
+	i.driverMu.Unlock()
 }
 
 // StopSessionDriver signals a running SessionDriver goroutine (started by

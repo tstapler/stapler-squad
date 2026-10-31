@@ -757,6 +757,10 @@ type Instance struct {
 	// StartSessionDriver call may spawn a new driver goroutine for it, no
 	// matter how late that call arrives relative to Destroy().
 	driverDestroyed bool
+	// driverGoroutines counts live driver goroutines (the initial one plus any
+	// restartForRetry continuation) so driverRunning clears only when the last
+	// one exits. Guarded by driverMu, like driverRunning's transitions.
+	driverGoroutines int
 	// driverWG tracks the SessionDriver goroutine (runSessionDriver or its
 	// handleDriverFailure-spawned restart) so tests can join it before
 	// t.TempDir() cleanup runs via JoinSessionDriver. StopSessionDriver
