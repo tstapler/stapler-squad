@@ -476,6 +476,7 @@ type Config struct {
 	// Default: 1.0.
 	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
 	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
+	// A session may briefly hold up to 10% more between trims; each trim returns it to this cap.
 	// Default: 10000.
 	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
 	// EscapeAnalyticsDisableOSCRedaction disables OSC payload redaction when true.
