@@ -30,6 +30,8 @@ import {
   requestHeader,
 } from "@connectrpc/connect/protocol-connect";
 import { connect } from "it-ws/client";
+import duplex from "it-ws/duplex";
+import { openTerminalSocket, terminalPoolEnabled } from "./terminal-socket-pool";
 
 /**
  * Check if debug logging is enabled via localStorage
@@ -306,8 +308,11 @@ export function createWebsocketBasedTransport(
           // Convert HTTP URL to WebSocket URL
           const wsUrl = req.url.replace(/^http/, "ws");
 
-          // Connect to WebSocket using it-ws
-          const stream = connect(wsUrl);
+          // Connect to WebSocket using it-ws; with terminal_ws_pool the socket is a virtual
+          // stream on a shared mux socket (ADR-033), otherwise one WebSocket per stream.
+          const stream = terminalPoolEnabled()
+            ? duplex(openTerminalSocket(wsUrl) as unknown as Parameters<typeof duplex>[0])
+            : connect(wsUrl);
 
           // Capture the WebSocket close code so we can propagate it to the hook
           // via a ConnectError metadata field. The it-ws source generator calls
