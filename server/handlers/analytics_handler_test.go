@@ -325,8 +325,7 @@ func TestAnalyticsHandler_ShouldRecordRequestAsOneBatch_When_ProviderSupportsBat
 		map[string]any{"name": "b", "category": "user_action"},
 		map[string]any{"name": "c", "category": "navigation"},
 	}})
-	require.Equal(t, http.StatusNoContent, w.Code)
-	require.Len(t, p.batches, 1)
-	require.Len(t, p.batches[0], 3)
-	require.Zero(t, p.singles)
+	if w.Code != http.StatusNoContent || len(p.batches) != 1 || len(p.batches[0]) != 3 || p.singles != 0 {
+		t.Fatalf("code=%d batches=%d singles=%d; want 204, one batch of 3 events, no per-event calls", w.Code, len(p.batches), p.singles)
+	}
 }
