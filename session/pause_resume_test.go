@@ -32,7 +32,8 @@ func (f *fakePauseResumeProcessManager) GetPTY() (*os.File, error) {
 	if !f.ptyAttached {
 		return nil, errors.New("PTY not initialized - session may not be started")
 	}
-	return nil, nil
+	// Non-nil stand-in for the attached write PTY; callers only check attachment.
+	return os.Stdin, nil
 }
 
 func (f *fakePauseResumeProcessManager) SendKeys(string) (int, error) {
