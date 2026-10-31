@@ -64,11 +64,10 @@ that calls twice.
 * Entry: `(listener, principal-or-"anon", procedure, key) -> {bodyHash, state in_flight|done, status, response bytes}`.
   Same key and same body hash while `in_flight` joins the original (singleflight, waits on the joiner's own deadline); while
   `done` returns the stored response byte for byte. Same key with a different body hash is `failed_precondition` marker
-  `idempotency_key_reuse`. Principal comes from the auth layer; on the unauthenticated local listener it is the constant
-  `anon` (the listener already trusts any local caller) so keys are scoped per listener, not shared across listeners.
+  `idempotency_key_reuse`. Principal comes from the auth layer. On the unauthenticated local listener every local caller is `anon`, so the key must carry a client-generated per-window random prefix (`<windowId>.<uuid>`, window id generated once per page life) to avoid cross-tab collisions; the bridge validates the key pattern at the REQUEST, not only the middleware.
 * Bounds: TTL 10 min, LRU, total retained bytes capped at 8 MiB, one stored response at most 64 KiB (a larger response is
   stored as `done` with no body; a replay then gets `unavailable` marker `result_not_retained` and the caller must reconcile).
-  Eviction of an `in_flight` entry never happens. Counters: hits, joins, conflicts, evictions, bytes.
+  Only a terminal 2xx or a deterministic 4xx (`invalid_argument`, `failed_precondition`, `not_found`) becomes `done`; a 5xx, `unavailable`, `deadline_exceeded`, `canceled` or a handler panic deletes the entry so a retry re-executes. A keyed handler runs on a context detached from the first caller's CANCEL (it keeps the 5 min clamp and server shutdown), so one caller aborting does not fail joiners; if every waiter has gone, the handler is cancelled. `in_flight` entries are never evicted; when the byte cap is full of them, a new keyed call is refused `resource_exhausted` with `not_executed` (checked before dispatch). Counters: hits, joins, conflicts, evictions, bytes.
 * Not durable. A restart forgets keys. This is acceptable for W (handler is idempotent anyway) and is stated as a limit for M.
 
 ### Class M (at-most-once)
@@ -78,8 +77,8 @@ Ambiguity is defined by the client socket state machine, not by timing:
 | Situation | Client action |
 |---|---|
 | Frame never handed to `WebSocket.send` (queued while connecting, queue full, socket unusable) | Safe to send over HTTP once; the frame never left. |
-| Server answers with ERROR carrying details marker `not_executed` (admission refusals: `resource_exhausted` for caps, `permission_denied` method-not-allowed, `invalid_argument` header/timeout, dispatcher not ready) | Safe to send over HTTP once. The bridge adds this marker only on pre-dispatch refusals. A handler-returned `unavailable` has no marker and is **not** replayable. |
-| Frame sent, then socket close, ping timeout, call deadline, or client abort, with no RESPONSE/ERROR | Ambiguous. Reject with `unavailable` and marker `outcome_unknown`. No auto-replay. |
+| Server answers with ERROR carrying `not_executed` | Safe to send over HTTP once. The bridge stamps `not_executed` **only** at its own pre-dispatch `replyError` sites in `handleRequest` (method not allowed, disallowed header, bad timeout, dispatcher not ready, duplicate id, in-flight/class cap) and strips any `marker`/`not_executed` key from handler or dispatcher `details` before forwarding, so a handler cannot forge it. Post-dispatch errors never carry it: recorder overflow (`resource_exhausted` at `ws_unary_bridge.go:774`), a 429/502/503 mapped to `unavailable` by `connectCodeForStatus`, and rate-budget refusals from inside the dispatcher are all ambiguous-or-executed. A test asserts a handler-returned `resource_exhausted` or marker never counts as `not_executed`. |
+| Frame sent, then socket close, ping timeout, call deadline, or client abort, with no RESPONSE/ERROR | Ambiguous. Reject with `unavailable` and marker `outcome_unknown`; `outcome_unknown` is synthesized by the client, never sent by the server, and also replaces a server `deadline_exceeded` for M (the server keeps running an abandoned handler, `abandon()`). No auto-replay. |
 
 The caller (UI) decides: it may reconcile by reading state, or the user retries. A retry **reuses the call's idempotency key**
 (the client generates one per user intent and keeps it on the pending-action object, the pattern `ReplyToPendingQuestion.reply_id` already uses, `session.proto:1958`), so within the store's TTL and process life the server returns the original result instead of
@@ -93,7 +92,7 @@ where it replays a slow read. W after socket loss replays immediately with its k
 
 * Own **socket** (second `/api/ws/unary` connection, same endpoint and admission) so a telemetry frame, a stuck write queue or a
   slow ack cannot delay interactive reads in the client send queue or in TCP. The server also gives each class its own in-flight
-  cap inside a socket (R 48, W/M 8, T 8 of the existing 64; `STAPLER_SQUAD_WS_UNARY_MAX_INFLIGHT` still scales the total) and
+  cap inside a socket (R 48, W/M 8, T 8 of the default 64; at other totals R gets the remainder after fixed W/M 8 and T 8, floor 16; enforced before the `inflight` insert so a refusal is `not_executed`. The 32-zombie cap stays per socket, so a telemetry or write zombie flood closes only the telemetry/interactive socket it is on, which is another reason telemetry has its own socket) and
   the writer already puts small frames ahead of CHUNKs, so even a single-socket fallback (see tuning) cannot let telemetry
   starve reads of slots.
 * Client `TelemetryLane`: queue bounded by events (200) and bytes (256 KiB); on overflow **drop oldest** and count
@@ -104,13 +103,10 @@ where it replays a slow read. W after socket loss replays immediately with its k
   backoff, and while it is down events go to the HTTP path (today's `fetch`), with the same bounds, so telemetry is never
   silently black-holed by the flag.
 * Backpressure: if `WebSocket.bufferedAmount` or the lane's unacked bytes exceed 128 KiB the lane stops handing out new
-  batches (events queue, then drop oldest). The server returns `resource_exhausted` marker `not_executed` when the T cap or
-  the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`) refuse; the lane drops that batch (class T does
-  not retry a budget refusal, to avoid amplifying the overload it signals).
+  batches (events queue, then drop oldest). A refusal from the T class cap (bridge-side, so `not_executed`) or from the existing rate budgets (`analytics_rate_budget.go`, `maxClientLogBatch`, which fire inside the dispatcher and carry no marker) makes the lane drop that batch (`dropped_budget`); class T never retries a refusal, to avoid amplifying the overload it signals.
 * **Unload.** WebSockets cannot be flushed on `pagehide`. On `pagehide` and `visibilitychange: hidden` the lane moves every
   queued and every unacked batch to the existing `sendBeacon`/keepalive path (HTTP `/api/analytics`, `/api/client-logs`,
-  `LogClientEvents` over the keepalive transport), **same batch ids**. Where a WS frame had actually been received the
-  server dedupes the beacon copy; where it had not, the beacon delivers it. The sum is at-least-once with dedupe, so the
+  `LogClientEvents` over the keepalive transport), **same batch ids**. A beacon cannot set headers, so the batch id also travels in the **body** (new additive `batch_id` field on the analytics JSON body, `IngestClientLogs`, and `LogClientEventsRequest`), and the two HTTP handlers dedupe on it themselves (the key store is not on the plain-HTTP path). Analytics dedupes per event id (#1307 `ON CONFLICT`); #1307's id is optional today, so the client now always sends one. `ClientLogEntry` has no id today: Step 2 adds `entry_id` and a unique index with `DoNothing`, otherwise log batches are at-least-once with duplicates, and the ADR does not claim otherwise. Where a WS frame had been received the beacon copy is deduped; where it had not, the beacon delivers it. The sum is at-least-once with dedupe, so the
   lane never loses more than today and usually loses less (today a non-keepalive chunk in flight at navigation is aborted
   with no retry). The 60 KB aggregate beacon budget still bounds what a very large backlog can send; the excess is counted
   `reason=unload_budget`.
@@ -138,6 +134,10 @@ additions, both testable:
 Request-size limits (`BodyLimit` wrappers, `maxClientLogBatch`) run in the dispatcher chain, but the frame cap (256 KiB,
 `unaryMaxFrameBytes`) is stricter than the WriteFile body limit, so large writes stay on HTTP by size (existing
 `frame.length > MAX_FRAME_BYTES => HTTP`). Rate limits and the Backlog feature-flag interceptor live in the same chain and need no copy.
+
+**Auth lifetime.** The bridge copies the upgrade request's Cookie/Authorization onto every call, so a logout or rotated session is caught only if the server-side session check runs per call against current state. Step 2 verifies this with a test (expire the session mid-socket, assert a W/M call returns `unauthenticated`) and fixes the gap if it exists. A write that gets `unauthenticated` is never replayed over HTTP; it parks the WS and surfaces the error.
+
+**Rate budgets.** `analytics_rate_budget.go` budgets are global (loopback RemoteAddr), so WS and HTTP callers spend the same budget; this is intended. The T class cap per socket is added on top. The per-window id is a metrics/diagnostic label only, not a security boundary.
 
 ### Deadlines, cancellation, ordering, flow control
 
@@ -207,6 +207,14 @@ and HTTP/1.1 connection usage from the HAR-equivalent resource timing. Numbers g
 | Put RPCs on the terminal mux | Couples terminal output latency to RPC traffic and terminal caps to RPC caps (ADR-033 option c). |
 | Special-case `/api/analytics` URLs in the bridge | Two dispatch paths to keep in parity; a Connect twin over a shared core keeps one. |
 | HTTP/2 or HTTP/3 instead | Removes the 6-connection cap without any of this, but depends on the deployment (local plain HTTP/1.1, remote proxies) and does not give per-class isolation or unload semantics. Worth measuring separately; not a substitute. |
+
+## Definitions
+
+*Lane*: one client socket plus its send queue (`interactive`, `telemetry`). *T cap*: per-socket in-flight limit for class T. `RpcSocketProvider`: client interface returning the lane transport for a class. Call deadline: client default 30 s (`DEFAULT_TIMEOUT_MS`), server clamp 5 min.
+
+## Review round 1
+
+A fresh reviewer found an unsound `not_executed` rule, beacon dedupe without ids, undefined key-store cancel/error semantics, `anon` key collisions, auth lifetime on long sockets and unenforced class caps; all are folded into the sections above. HAR figures and ADR-033's numbers are cited from the brief and that ADR, not re-derived.
 
 ## Open questions for the owner
 
