@@ -563,38 +563,16 @@ func (t *TmuxSession) readControlModeOutput(doneCh chan struct{}, stdout io.Read
 	// StopControlMode used to close it -- close it here too so the sender
 	// goroutine doesn't leak.
 	//
-	// Close the doneCh captured locally above (this goroutine's own
-	// generation), not necessarily whatever t.controlModeDone currently
-	// holds: a fresh StartControlMode() racing this unilateral exit (see
-	// ARCH-1 above) can already have reassigned the field to a NEW
-	// generation's channel by the time we get here. Closing the live field
-	// unconditionally would close the wrong (newer) generation's doneCh
-	// instead of unblocking this (older) generation's runCMSender.
-	//
-	//   - doneCh == nil: this generation's own controlModeDone was already
-	//     nil at capture time (StopControlMode raced StartControlMode's
-	//     goroutine spawn and closed-and-nilled it before this goroutine's
-	//     RLock capture ran) -- there is nothing to close; falling through
-	//     to the equality check below would compare nil == nil and
-	//     wrongly close(nil), panicking.
-	//   - t.controlModeDone == doneCh: nothing has replaced or closed it
-	//     yet. Close-and-nil under the lock, same as StopControlMode's own
-	//     guard -- whichever of the two gets here first wins; the other
-	//     sees nil and skips, so this shared-field case can't double-close.
-	//   - t.controlModeDone == nil (and doneCh != nil): StopControlMode
-	//     already closed and nilled it (same generation) -- already
-	//     handled, skip.
-	//   - t.controlModeDone is some other non-nil channel: a newer
-	//     generation already replaced the field. Our doneCh is now
-	//     orphaned from it entirely -- this is the only goroutine that
-	//     ever holds this specific reference (monitorControlModeErrors
-	//     never closes doneCh), so it's safe to close directly.
+	// Close this generation's own captured doneCh, not whatever t.controlModeDone
+	// holds now: a fresh StartControlMode() may already have replaced the field
+	// with a newer generation's channel. StopControlMode may also have closed
+	// doneCh already (Stop -> Start -> this reader's EOF), so close only if still
+	// open. Both closers hold controlModeSubMu, making check-then-close atomic.
+	// doneCh is nil when StopControlMode raced the goroutine spawn; nothing to close.
 	if doneCh != nil {
+		closeDoneChLocked(doneCh)
 		if t.controlModeDone == doneCh {
-			close(doneCh)
 			t.controlModeDone = nil
-		} else if t.controlModeDone != nil {
-			close(doneCh)
 		}
 	}
 	// Reset so that the next StartControlMode() call sees a clean slate.
@@ -1394,4 +1372,15 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	}
 	_, err := t.enqueueCMCommand(ctx, ch, args...)
 	return err
+}
+
+// closeDoneChLocked closes doneCh unless it is already closed. Callers must hold
+// controlModeSubMu, the lock every doneCh closer takes, so no other goroutine can
+// close it between the check and the close.
+func closeDoneChLocked(doneCh chan struct{}) {
+	select {
+	case <-doneCh:
+	default:
+		close(doneCh)
+	}
 }
