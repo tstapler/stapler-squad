@@ -121,3 +121,14 @@ func TestRangeCache_should_EvictLeastRecentlyUsed(t *testing.T) {
 	_, r = c.lookup(k("a"))
 	assert.Equal(t, rangeCacheHit, r)
 }
+
+func TestRangeCache_should_KeepCachedSuccess_When_SlowerComputationFailsLater(t *testing.T) {
+	t.Parallel()
+	clock := newRangeTestClock()
+	c := newRangeCache[int](4, clock.now)
+	c.store(testRange, 7, time.Time{})
+	c.store(testRange, 0, clock.now().Add(time.Minute)) // a budget failure from an earlier-started run
+	v, r := c.lookup(testRange)
+	assert.Equal(t, rangeCacheHit, r)
+	assert.Equal(t, 7, v)
+}

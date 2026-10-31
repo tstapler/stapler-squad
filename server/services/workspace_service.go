@@ -423,9 +423,9 @@ func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *ses
 		log.Debug("GetVCSStatus: failed to list shipped commits", "workDir", workDir, "err", listErr)
 		status.CommitsUnavailable = true
 	}
-	_, diffSpan := telemetry.GetTracer().Start(ctx, "vcs.status.diff_stat")
+	diffCtx, diffSpan := telemetry.GetTracer().Start(ctx, "vcs.status.diff_stat")
 	defer diffSpan.End()
-	if diffStat, diffErr := ws.rangeStages.aggregateDiffStat(ctx, key); diffErr == nil {
+	if diffStat, diffErr := ws.rangeStages.aggregateDiffStat(diffCtx, key); diffErr == nil {
 		status.AggregateDiffStat = &diffStat
 	} else {
 		diffSpan.RecordError(diffErr)

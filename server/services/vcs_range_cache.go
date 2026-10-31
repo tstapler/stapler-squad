@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -35,13 +36,13 @@ const (
 const (
 	vcsRangeCacheSize = 256
 	// vcsRangeFailureTTL is how long a stage that blew its budget is not retried for the same range.
-	vcsRangeFailureTTL = time.Minute
+	vcsRangeFailureTTL = 30 * time.Second
 )
 
 // Per-stage budgets inside the 30s shared computation; variables so tests can shrink them.
 var (
 	vcsShippedCommitsBudget = 10 * time.Second //nolint:gochecknoglobals
-	vcsDiffStatBudget       = 10 * time.Second //nolint:gochecknoglobals
+	vcsDiffStatBudget       = 15 * time.Second //nolint:gochecknoglobals
 )
 
 var errVCSStageBudget = errors.New("vcs status stage exceeded its time budget")
@@ -92,6 +93,10 @@ func (c *rangeCache[V]) store(k vcsRangeKey, val V, failedUntil time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.m[k]; ok {
+		// A late-finishing slow computation must not erase a result another one already cached.
+		if e := el.Value.(*rangeCacheEntry[V]); !failedUntil.IsZero() && e.failedUntil.IsZero() {
+			return
+		}
 		*el.Value.(*rangeCacheEntry[V]) = rangeCacheEntry[V]{key: k, val: val, failedUntil: failedUntil}
 		c.ll.MoveToFront(el)
 		return
@@ -104,6 +109,7 @@ func (c *rangeCache[V]) store(k vcsRangeKey, val V, failedUntil time.Time) {
 	}
 }
 
+// shippedCommitsResult is shared by every response served from the cache: treat commits as immutable.
 type shippedCommitsResult struct {
 	commits   []git.ShippedCommit
 	truncated bool
@@ -184,6 +190,7 @@ func runRangeStage[V any](ctx context.Context, s *vcsRangeStages, stage string, 
 		outcome = vcsOutcomeCanceled
 	case stageCtx.Err() != nil:
 		outcome = "budget_exceeded"
+		log.Warn("GetVCSStatus: stage exceeded its budget", "stage", stage, "workDir", k.workDir, "budget", budget)
 		cache.store(k, val, s.now().Add(vcsRangeFailureTTL))
 		err = errVCSStageBudget
 	default:
@@ -205,7 +212,7 @@ func stageResult(err error) string {
 	case errors.Is(err, context.Canceled):
 		return vcsOutcomeCanceled
 	case errors.Is(err, context.DeadlineExceeded):
-		return "budget_exceeded"
+		return "timeout"
 	}
 	return vcsOutcomeError
 }

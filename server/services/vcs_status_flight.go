@@ -84,7 +84,7 @@ var vcsMetrics = sync.OnceValue(func() *vcsStatusMetrics {
 	}
 	if m.stage, err = meter.Float64Histogram("vcs.status.stage.duration",
 		metric.WithUnit("ms"),
-		metric.WithDescription("Wall time of one stage of a GetVCSStatus computation, labeled by stage (git_status, shipped_commits, diff_stat) and result (ok, error, canceled, budget_exceeded)"),
+		metric.WithDescription("Wall time of one stage of a GetVCSStatus computation, labeled by stage (git_status, shipped_commits, diff_stat) and result (ok, error, canceled, timeout, budget_exceeded; the last only for shipped_commits/diff_stat)"),
 		metric.WithExplicitBucketBoundaries(5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000)); err != nil {
 		log.Error("services: register vcs.status.stage.duration", "error", err)
 	}

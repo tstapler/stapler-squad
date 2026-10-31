@@ -335,7 +335,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(vcs_status_stage_duration_milliseconds_count{result=~\"budget_exceeded|error\"}[$__rate_interval])) by (stage, result)",
+          "expr": "sum(rate(vcs_status_stage_duration_milliseconds_count{result=~\"budget_exceeded|timeout|error\"}[$__rate_interval])) by (stage, result)",
           "legendFormat": "{{stage}} {{result}}",
           "refId": "A",
           "datasource": {

@@ -105,10 +105,12 @@ func (g *GitProvider) GetStatusContext(parent context.Context) (*VCSStatus, erro
 	// queueing on a loaded host.
 	var description string
 	var logWG sync.WaitGroup
+	logParent, stopLog := context.WithCancel(parent)
+	defer stopLog() // a failed `git status` must not wait out the log spawn
 	logWG.Add(1)
 	go func() {
 		defer logWG.Done()
-		logCtx, logCancel := gitCtxFrom(parent)
+		logCtx, logCancel := gitCtxFrom(logParent)
 		defer logCancel()
 		if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
 			description = entries[0].Subject
