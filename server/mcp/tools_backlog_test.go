@@ -2983,6 +2983,25 @@ func TestDecideOverridePolicy(t *testing.T) {
 
 // --- report_pr_created fallback/override path (Story 3/4) ---
 
+// lockedLogBuffer lets a test read captured log output while background
+// goroutines from other tests still write to the process-global slog default.
+type lockedLogBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOverrideReason
 // is the confirmed real repro shape (AC1/AC2): a work session's PR was opened
 // from a clean fallback branch because the tracked branch was polluted by
@@ -2993,7 +3012,7 @@ func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOve
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
-	var buf strings.Builder
+	var buf lockedLogBuffer
 	origLogger := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(origLogger) })
 
