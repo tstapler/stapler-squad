@@ -1,7 +1,7 @@
 import { FullConfig } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { startServerPool } from './helpers/server-pool';
+import { startServerPool, stopServerPool } from './helpers/server-pool';
 import { themeFixturePath, THEME_FIXTURES } from './helpers/theme-fixtures';
 
 /**
@@ -60,6 +60,8 @@ async function globalSetup(config: FullConfig) {
     });
   } catch (error) {
     console.error('Failed to start test server:', error);
+    // Playwright skips globalTeardown when globalSetup throws.
+    await stopServerPool().catch(() => undefined);
     throw error;
   }
 }

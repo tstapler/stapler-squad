@@ -145,7 +145,15 @@ export class TestServer {
         return;
       } catch (err) {
         await this.killProcess();
-        if (!(err instanceof ServerExitedEarly) || !autoPort || attempt >= MAX_START_ATTEMPTS) throw err;
+        if (!(err instanceof ServerExitedEarly) || !autoPort || attempt >= MAX_START_ATTEMPTS) {
+          // stop() is not called after a failed start; don't leak the assets this server built for itself.
+          if (this.ownedAssets) {
+            await cleanupSharedAssets(this.ownedAssets);
+            this.ownedAssets = null;
+            this.config.assets = undefined;
+          }
+          throw err;
+        }
         console.warn(`Server lost its port or exited before becoming healthy on port ${this.config.port} (attempt ${attempt}); retrying on a new port`);
       }
     }
