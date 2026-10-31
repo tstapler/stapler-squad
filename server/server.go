@@ -485,6 +485,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
 	log.Info("Registered ConnectRPC WebSocket handler", "path", wsPath)
 
+	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
+	muxPool := services.TerminalMuxPoolSizeFromEnv()
+	srv.mux.Handle(services.TerminalMuxPath, services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool))
+	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)
+
 	// Register VNC browser-passthrough WebSocket proxy.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
 	vncProxy := services.NewVNCProxyHandler(deps.ReviewQueuePoller)

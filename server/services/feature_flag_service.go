@@ -348,6 +348,10 @@ var knownFeatureFlags = []struct {
 		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
 	},
 	{
+		name:        "terminal_ws_pool",
+		description: "Carry terminal streams over a small shared pool of multiplexed WebSockets (/api/ws/terminal-mux) instead of one WebSocket per terminal, so a page with many terminals opens a few sockets instead of one each. Kill switch: turn off to restore one WebSocket per terminal. Pool size: server STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE (default 2) or per-browser localStorage ssq:terminal-pool-size. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		name:        "batch_unary",
 		description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
 	},
