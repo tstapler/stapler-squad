@@ -2,20 +2,15 @@ package analytics
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"entgo.io/ent/dialect"
-	entsql "entgo.io/ent/dialect/sql"
-	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/dbobs"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
-	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
 // OpenAnalyticsDB opens (or creates) the dedicated analytics.db SQLite database
@@ -36,33 +31,14 @@ func OpenAnalyticsDBWithDriver(ctx context.Context, dataDir string) (*ent.Client
 		return nil, nil, fmt.Errorf("analytics db: create data dir: %w", err)
 	}
 
-	dbPath := filepath.Join(dataDir, "analytics.db")
-	// _timeout must be set explicitly: unlike the previous mattn/go-sqlite3 driver
-	// (which defaulted busy_timeout to 5000ms even when the DSN omitted it),
-	// modernc.org/sqlite only issues `PRAGMA busy_timeout` when the DSN sets
-	// _timeout/_busy_timeout, otherwise leaving SQLite's own default of 0 (immediate
-	// SQLITE_BUSY on lock contention) in effect.
-	dsn := sqlitedsn.New("file:"+dbPath).
-		WithWAL().
-		WithSynchronousNormal().
-		WithForeignKeys().
-		WithBusyTimeout(5000*time.Millisecond).
-		WithPragma("wal_autocheckpoint", "1000").
-		WithPragma("auto_vacuum", "incremental").
-		Build()
-
-	db, err := sql.Open("sqlite", dsn)
+	// session/dbpool builds the DSN (WAL, NORMAL, FK, busy_timeout 5 s,
+	// wal_autocheckpoint, incremental auto_vacuum), keeps the single writer
+	// connection and enforces journal_mode=WAL.
+	escape, err := dbpool.OpenEscape(filepath.Join(dataDir, "analytics.db"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("analytics db: open sqlite: %w", err)
 	}
-
-	// SQLite supports only one writer at a time; serialise all access through a
-	// single connection to eliminate "database is locked" contention.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
-
-	drv := dbobs.Wrap(entsql.OpenDB(dialect.SQLite, db), db, dbobs.ConfigFromEnv("analytics"))
+	db, drv := escape.Writer(), escape.Driver()
 	client := ent.NewClient(ent.Driver(drv))
 
 	// Auto-migrate the AnalyticsEvent table (and any future schema additions).
