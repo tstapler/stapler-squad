@@ -623,6 +623,12 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, s
 // setOptionalSessionFields applies the session columns Update only sets when
 // data carries a value (plus the few that are cleared when empty).
 func setOptionalSessionFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
+	setSessionTextFields(sessionUpdate, data)
+	setSessionTimeFields(sessionUpdate, data)
+	setSessionLifecycleFields(sessionUpdate, data)
+}
+
+func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	// Update optional fields
 	if data.WorkingDir != "" {
 		sessionUpdate.SetWorkingDir(data.WorkingDir)
@@ -665,6 +671,9 @@ func setOptionalSessionFields(sessionUpdate *ent.SessionUpdateOne, data Instance
 	if data.Backend != "" {
 		sessionUpdate.SetBackend(string(data.Backend))
 	}
+}
+
+func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -706,6 +715,9 @@ func setOptionalSessionFields(sessionUpdate *ent.SessionUpdateOne, data Instance
 	if !data.InitialPromptSentAt.IsZero() {
 		sessionUpdate.SetInitialPromptSentAt(data.InitialPromptSentAt)
 	}
+}
+
+func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
 	} else {
