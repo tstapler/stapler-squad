@@ -33,34 +33,82 @@ type instanceState struct {
 // check a send to an already-stopped actor can enqueue and report success.
 func (li *LiveInstance) actorStopped() error { return li.ctx.Err() }
 
-// sendSyncErr enqueues fn on the actor mailbox and blocks until it executes.
-// If liveInstance is nil (e.g. before NewLiveInstance, or in tests), fn runs
-// directly on the calling goroutine without locking.
-func (i *Instance) sendSyncErr(fn func(*instanceState) error) error {
+// actorReply carries a command's result from the actor goroutine back to the
+// waiting caller. It travels through a buffered channel, so the caller never
+// aliases memory the still-running command writes.
+type actorReply[T any] struct {
+	val T
+	err error
+}
+
+// callActor runs fn on the actor goroutine and returns its result. If liveInstance
+// is nil (before NewLiveInstance, or in tests), fn runs directly on the calling
+// goroutine without locking.
+//
+// Cancellation contract: when li.ctx or callerCtx is done before the reply
+// arrives, callActor returns the zero value and that ctx's error immediately.
+// If the command was already enqueued it may still run (or run to completion)
+// afterwards, so a ctx error means "outcome unknown", not "not applied". A caller
+// that wants fn's results must take them from the return value: assigning to a
+// variable captured by fn and reading it after an early return races with the
+// actor goroutine's write. callerCtx may be context.Background().
+func callActor[T any](callerCtx context.Context, i *Instance, fn func(*instanceState) (T, error)) (T, error) {
+	var zero T
 	li := i.liveInstance.Load()
 	if li == nil {
 		return fn(&instanceState{inst: i})
 	}
 	if err := li.actorStopped(); err != nil {
-		return err
+		return zero, err
 	}
-	var cmdErr error
-	reply := make(chan struct{}, 1)
+	if err := callerCtx.Err(); err != nil {
+		return zero, err
+	}
+	reply := make(chan actorReply[T], 1)
 	cmd := func(inst *Instance) {
-		cmdErr = fn(&instanceState{inst: inst})
-		close(reply)
+		v, err := fn(&instanceState{inst: inst})
+		reply <- actorReply[T]{val: v, err: err}
 	}
 	select {
 	case <-li.ctx.Done():
-		return li.ctx.Err()
+		return zero, li.ctx.Err()
+	case <-callerCtx.Done():
+		return zero, callerCtx.Err()
 	case li.mailbox <- cmd:
 	}
 	select {
 	case <-li.ctx.Done():
-		return li.ctx.Err()
-	case <-reply:
-		return cmdErr
+		return zero, li.ctx.Err()
+	case <-callerCtx.Done():
+		return zero, callerCtx.Err()
+	case r := <-reply:
+		return r.val, r.err
 	}
+}
+
+// sendSyncValue is callActor with no caller deadline: it blocks until the actor
+// executes fn or the actor stops. Prefer it over sendSyncErr plus a captured
+// variable whenever the command produces a result.
+func sendSyncValue[T any](i *Instance, fn func(*instanceState) (T, error)) (T, error) {
+	return callActor(context.Background(), i, fn)
+}
+
+// sendCtxValue is callActor bounded by ctx.
+func sendCtxValue[T any](ctx context.Context, i *Instance, fn func(*instanceState) (T, error)) (T, error) {
+	return callActor(ctx, i, fn)
+}
+
+// sendSyncErr enqueues fn on the actor mailbox and blocks until it executes.
+// If liveInstance is nil (e.g. before NewLiveInstance, or in tests), fn runs
+// directly on the calling goroutine without locking. fn must not write caller
+// variables that the caller reads after sendSyncErr returns: on actor shutdown
+// the call returns early while fn may still be running. Use sendSyncValue to
+// return a result.
+func (i *Instance) sendSyncErr(fn func(*instanceState) error) error {
+	_, err := sendSyncValue(i, func(s *instanceState) (struct{}, error) {
+		return struct{}{}, fn(s)
+	})
+	return err
 }
 
 // send enqueues fn on the actor mailbox in a fire-and-forget goroutine.
@@ -82,33 +130,14 @@ func (i *Instance) send(fn func(*instanceState)) {
 }
 
 // sendCtx enqueues fn on the actor mailbox and blocks with caller-supplied timeout.
-// If liveInstance is nil, fn runs directly and returns nil.
+// If liveInstance is nil, fn runs directly and returns nil. The same
+// early-return rule as sendSyncErr applies: use sendCtxValue to return a result.
 func (i *Instance) sendCtx(ctx context.Context, fn func(*instanceState)) error {
-	li := i.liveInstance.Load()
-	if li == nil {
-		fn(&instanceState{inst: i})
-		return nil
-	}
-	if err := li.actorStopped(); err != nil {
-		return err
-	}
-	reply := make(chan struct{}, 1)
-	cmd := func(inst *Instance) { fn(&instanceState{inst: inst}); close(reply) }
-	select {
-	case <-li.ctx.Done():
-		return li.ctx.Err()
-	case <-ctx.Done():
-		return ctx.Err()
-	case li.mailbox <- cmd:
-	}
-	select {
-	case <-li.ctx.Done():
-		return li.ctx.Err()
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-reply:
-		return nil
-	}
+	_, err := sendCtxValue(ctx, i, func(s *instanceState) (struct{}, error) {
+		fn(s)
+		return struct{}{}, nil
+	})
+	return err
 }
 
 // runActor is the main actor goroutine for a LiveInstance.  It processes commands
@@ -172,6 +201,8 @@ func finishLiveInstanceConstruction(li *LiveInstance) {
 // sendSync enqueues cmd on li's mailbox and blocks until the actor executes it.
 // Returns li.ctx.Err() if the actor has already stopped or stops while waiting.
 // Used by tests (Story 3.2) and will be used by Epic 4+ command wrappers.
+// cmd must not write variables the caller reads after an early ctx return; see
+// callActor.
 func (li *LiveInstance) sendSync(cmd command) error {
 	if err := li.actorStopped(); err != nil {
 		return err
