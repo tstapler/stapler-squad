@@ -1,0 +1,400 @@
+{
+  "title": "stapler-squad: tmux subprocess spawns",
+  "description": "Who spawns tmux client processes and what the exec gate costs. Answers: which subcommand and which caller drive spawn volume, and is the gate saturated?",
+  "uid": "ssq-tmux-spawns",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "green",
+        "name": "Deploys",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [
+            "deploy",
+            "stapler-squad"
+          ],
+          "type": "tags"
+        },
+        "type": "tags"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Exec-gate traces in Tempo (Explore)",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.exec_gate%5C%22%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+      "tooltip": "Open Grafana Explore on Tempo with this dashboard's time range"
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Spawn attribution",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100
+    },
+    {
+      "id": 1,
+      "title": "tmux spawns per minute by subcommand",
+      "description": "Local tmux client processes started through safeexec.CommandContext (tmux_exec_total). Excludes long-lived control-mode attach clients.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Exec-gate spans in Tempo (Explore)",
+              "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.exec_gate%5C%22%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+              "targetBlank": true
+            }
+          ],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (subcommand)(rate(tmux_exec_total[5m])) * 60",
+          "legendFormat": "{{subcommand}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "tmux spawns per minute by caller (goroutine root)",
+      "description": "caller = the entry function of the goroutine that built the command: the logical owner (poller loop, driver, RPC handler). Capped at 64 distinct values; the rest are 'other'.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (caller)(rate(tmux_exec_total[5m])) * 60",
+          "legendFormat": "{{caller}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "tmux spawns per minute by site",
+      "description": "site = the function that built the command (tmux_exec_site_total), e.g. CapturePaneContentContext vs batchPaneActivity.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (site)(rate(tmux_exec_site_total[5m])) * 60",
+          "legendFormat": "{{site}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Subcommand x caller (top 10)",
+      "description": "Top spawn sources across the two labels.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (subcommand, caller)(rate(tmux_exec_total[5m])) * 60)",
+          "legendFormat": "{{subcommand}} / {{caller}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Exec gate",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 101
+    },
+    {
+      "id": 5,
+      "title": "Gate wait p50 / p95 by pool",
+      "description": "Time spent waiting for an exec-gate slot (tmux_exec_gate_wait_duration_ms).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Slow gate waits in Tempo (Explore)",
+              "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.exec_gate%5C%22%20%26%26%20span.wait_ms%20%3E%20500%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+              "targetBlank": true
+            }
+          ],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(tmux_exec_gate_wait_duration_ms_milliseconds_bucket[5m])) by (le, pool))",
+          "legendFormat": "p50 {{pool}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tmux_exec_gate_wait_duration_ms_milliseconds_bucket[5m])) by (le, pool))",
+          "legendFormat": "p95 {{pool}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Subprocess run p50 / p95 by pool",
+      "description": "Wall time of the guarded call once a slot is held (tmux_exec_gate_exec_duration_ms).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Slow exec spans in Tempo (Explore)",
+              "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.exec_gate%5C%22%20%26%26%20span.exec_ms%20%3E%20500%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+              "targetBlank": true
+            }
+          ],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(tmux_exec_gate_exec_duration_ms_milliseconds_bucket[5m])) by (le, pool))",
+          "legendFormat": "p50 {{pool}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tmux_exec_gate_exec_duration_ms_milliseconds_bucket[5m])) by (le, pool))",
+          "legendFormat": "p95 {{pool}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Gate in-flight by pool",
+      "description": "Calls currently holding a slot (tmux_exec_gate_in_flight).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (pool)(tmux_exec_gate_in_flight)",
+          "legendFormat": "{{pool}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Gate timeouts per minute by pool",
+      "description": "Acquires that gave up waiting (\"exec gate: context deadline exceeded\").",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Timed-out gate spans in Tempo (Explore)",
+              "url": "/explore?schemaVersion=1&orgId=1&panes={%22a%22%3A{%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B{%22refId%22%3A%22A%22%2C%22datasource%22%3A{%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22}%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22{%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D%20%5C%22tmux.exec_gate%5C%22%20%26%26%20span.timed_out%20%3D%20true%20}%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20}%5D%2C%22range%22%3A{%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22}}}",
+              "targetBlank": true
+            }
+          ],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (pool)(rate(tmux_exec_gate_timeouts_total[5m])) * 60",
+          "legendFormat": "{{pool}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Traces (Tempo)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 201
+    },
+    {
+      "id": 202,
+      "title": "Slow tmux.exec_gate spans (> 500ms)",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && name = \"tmux.exec_gate\" && duration > 500ms }"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

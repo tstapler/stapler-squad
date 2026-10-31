@@ -450,3 +450,30 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 		waitLeaseFree(t, inst)
 	})
 }
+
+// stolenUpdateFake never reports HasUpdated (a concurrent poller consumed the
+// diff) but its pane content changes once Enter is sent.
+type stolenUpdateFake struct {
+	*fakePaneSubmitter
+}
+
+func (f *stolenUpdateFake) HasUpdated() (bool, bool) { return false, false }
+
+func (f *stolenUpdateFake) CapturePaneContent() (string, error) {
+	if len(f.sendCalls) >= 2 {
+		return "prompt cleared, agent working", nil
+	}
+	return "prompt with typed text", nil
+}
+
+// TestSubmitDriverContent_ConfirmsViaOwnSnapshot_WhenHasUpdatedStolen: a
+// delivered message must not be reported ErrSubmitNotConfirmed just because a
+// shared HasUpdated consumer ate the change.
+func TestSubmitDriverContent_ConfirmsViaOwnSnapshot_WhenHasUpdatedStolen(t *testing.T) {
+	t.Parallel()
+	inst := &stolenUpdateFake{fakePaneSubmitter: newFakePaneSubmitter()}
+
+	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
+	require.NoError(t, err)
+	require.Len(t, inst.sendCalls, 2, "no retry Enter once the pane visibly changed")
+}

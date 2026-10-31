@@ -7,6 +7,7 @@ import {
   encodeData,
   encodeOpen,
   encodePing,
+  encodePong,
   MUX_KIND_BINARY,
   MUX_KIND_TEXT,
   MUX_PATH,
@@ -132,6 +133,7 @@ class PooledSocket extends EventTarget implements PooledSocketLike {
   binaryType = "arraybuffer";
   readonly bufferedAmount = 0;
   private state = READY_CONNECTING;
+  private opened = false;
   private partial: Uint8Array[] = [];
   private partialKind = MUX_KIND_BINARY;
   private consumed = 0;
@@ -163,15 +165,19 @@ class PooledSocket extends EventTarget implements PooledSocketLike {
 
   close(code: number = NORMAL_CLOSE, reason = ""): void {
     if (this.state >= READY_CLOSING) return;
+    const wasConnecting = this.state === READY_CONNECTING;
     this.state = READY_CLOSING;
     this.conn.sendClose(this.id, code, reason);
-    this.finish(code, reason, true);
+    // A native WebSocket closed while connecting fires error then close(1006); it-ws waits on one of them.
+    if (wasConnecting) this.finish(ABNORMAL_CLOSE, reason, false);
+    else this.finish(code, reason, true);
   }
 
   /** @internal called by MuxConn once the physical socket is open and OPEN was sent. */
   markOpen(): void {
     if (this.state !== READY_CONNECTING) return;
     this.state = READY_OPEN;
+    this.opened = true;
     this.dispatchEvent(makeEvent("open"));
   }
 
@@ -195,7 +201,7 @@ class PooledSocket extends EventTarget implements PooledSocketLike {
   /** @internal: server CLOSE or socket loss. */
   finish(code: number, reason: string, wasClean: boolean): void {
     if (this.state === READY_CLOSED) return;
-    const wasOpen = this.state !== READY_CONNECTING;
+    const wasOpen = this.opened;
     this.state = READY_CLOSED;
     if (!wasOpen && !wasClean) this.dispatchEvent(makeEvent("error", { error: new Error("terminal mux unavailable") }));
     this.dispatchEvent(makeEvent("close", { code, reason, wasClean }));
@@ -323,6 +329,10 @@ class MuxConn {
       }
       case "CLOSE":
         this.streams.get(frame.id)?.finish(frame.code, frame.reason, true);
+        break;
+      case "PING":
+        // The server pings so a hidden tab's throttled timers cannot look like a dead peer.
+        this.ws.send(encodePong());
         break;
       default:
         break;

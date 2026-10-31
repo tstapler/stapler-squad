@@ -96,6 +96,10 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
   // Whether Redux knew this session when the effect last ran; its first appearance is hydration, not a change.
   const sessionKnownRef = useRef(false);
   const mountFetchPendingRef = useRef(false);
+  // Fixed per hook instance: re-drawing it on every Redux update would make the slow backstop fire at random.
+  const pollPhaseRef = useRef<number | null>(null);
+  if (pollPhaseRef.current === null) pollPhaseRef.current = Math.random();
+  const pollStartedRef = useRef(false);
 
   // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
@@ -238,14 +242,29 @@ export function useSessionVcs(sessionId: string, baseUrl: string, pollMode: Poll
         mountFetchPendingRef.current = false;
       });
     }
-    const fallback = setInterval(() => {
+    let fallback: ReturnType<typeof setInterval> | undefined;
+    const tick = () => {
       if (stoppedRef.current) {
         clearInterval(fallback);
         return;
       }
       if (!document.hidden) fetchStatus();
-    }, pollMs);
-    return () => clearInterval(fallback);
+    };
+    // Panes mounted together would otherwise poll in lockstep forever (a 10-minute burst of every
+    // unfocused session at once); a random phase spreads them. The focused pane keeps its own cadence.
+    const phase = setTimeout(
+      () => {
+        tick();
+        if (!stoppedRef.current) fallback = setInterval(tick, pollMs);
+      },
+      // Only the hook's first poll start is jittered; a re-run (session update) restarts a full period as before.
+      pollMode === "fast" || pollStartedRef.current ? pollMs : Math.floor((pollPhaseRef.current ?? 0) * pollMs),
+    );
+    pollStartedRef.current = true;
+    return () => {
+      clearTimeout(phase);
+      clearInterval(fallback);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadStatus, fetchStatus, sessionStatus, sessionUpdatedAt, pollMode]);
 

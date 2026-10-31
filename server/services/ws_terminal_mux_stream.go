@@ -184,6 +184,12 @@ func (s *muxStreamConn) Close() error {
 	return nil
 }
 
+func (s *muxStreamConn) isEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
+}
+
 // abort drops unsent output and ends the stream, sending CLOSE(code) at once.
 func (s *muxStreamConn) abort(code uint16) {
 	s.mu.Lock()

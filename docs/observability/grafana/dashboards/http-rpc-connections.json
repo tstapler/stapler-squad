@@ -1,84 +1,247 @@
 {
   "title": "stapler-squad: HTTP/RPC connections",
-  "description": "Connection saturation for stapler-squad's plain-HTTP/1.1 server — catches the browser's 6-connections-per-origin exhaustion bug class (see docs/how-to/enable-opentelemetry.md, 'Connection concurrency metrics').",
+  "description": "Connection saturation for stapler-squad's plain-HTTP/1.1 server \u2014 catches the browser's 6-connections-per-origin exhaustion bug class (see docs/how-to/enable-opentelemetry.md, 'Connection concurrency metrics').",
   "uid": "ssq-http-rpc-connections",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "refresh": "30s",
   "annotations": {
     "list": [
-      { "builtIn": 1, "datasource": { "type": "grafana", "uid": "-- Grafana --" }, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard" },
-      { "datasource": { "type": "grafana", "uid": "-- Grafana --" }, "enable": true, "iconColor": "green", "name": "Deploys", "target": { "limit": 100, "matchAny": false, "tags": ["deploy", "stapler-squad"], "type": "tags" }, "type": "tags" }
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "green",
+        "name": "Deploys",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [
+            "deploy",
+            "stapler-squad"
+          ],
+          "type": "tags"
+        },
+        "type": "tags"
+      }
     ]
   },
-  "links": [{"title": "Traces in Tempo (Explore)", "type": "link", "icon": "external link", "targetBlank": true, "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20name%20%21~%20%5C%22.%2AWatch.%2A%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "tooltip": "Open Grafana Explore on Tempo with this dashboard's time range"}],
+  "links": [
+    {
+      "title": "Traces in Tempo (Explore)",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20name%20%21~%20%5C%22.%2AWatch.%2A%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D",
+      "tooltip": "Open Grafana Explore on Tempo with this dashboard's time range"
+    }
+  ],
   "panels": [
-    { "type": "row", "title": "Golden signals", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 100 },
+    {
+      "type": "row",
+      "title": "Golden signals",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100
+    },
     {
       "id": 1,
       "title": "HTTP/1.1 connections open",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "orange", "value": 5 },
-            { "color": "red", "value": 6 }
-          ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 6
+              }
+            ]
+          }
         },
         "overrides": []
       },
-      "targets": [{ "expr": "http_server_connections_open", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "http_server_connections_open",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 2,
       "title": "WebSocket upgrades (rate, 5m)",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
-      "targets": [{ "expr": "sum(rate(http_server_connections_hijacked_total[5m]))", "refId": "A" }]
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_connections_hijacked_total[5m]))",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 3,
       "title": "Open long-lived RPC streams (total)",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "targets": [{ "expr": "sum(rpc_server_streams_open)", "refId": "A" }]
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rpc_server_streams_open)",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 4,
       "title": "HTTP/1.1 connections open (trend)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "orange", "value": 5 },
-            { "color": "red", "value": 6 }
-          ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 6
+              }
+            ]
+          }
         },
         "overrides": []
       },
-      "targets": [{ "expr": "http_server_connections_open", "legendFormat": "connections open", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "http_server_connections_open",
+          "legendFormat": "connections open",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 5,
       "title": "RPC streams open by method (Breakdown)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "fieldConfig": { "defaults": { "links": [{"title": "Traces for this RPC method in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D%20%5C%22${__field.labels.method}%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}], "unit": "short", "custom": { "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Traces for this RPC method in Tempo (Explore)",
+              "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.rpc.system%20%3D%20%5C%22connect_rpc%5C%22%20%26%26%20kind%20%3D%20server%20%26%26%20span.rpc.method%20%3D%20%5C%22${__field.labels.method}%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D",
+              "targetBlank": true
+            }
+          ],
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "expr": "sum(rpc_server_streams_open) by (method)",
@@ -87,24 +250,56 @@
         }
       ]
     },
-    { "type": "row", "title": "Context", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }, "id": 101 },
+    {
+      "type": "row",
+      "title": "Context",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 101
+    },
     {
       "id": 6,
       "title": "SIGKILL escalations (1h)",
       "type": "stat",
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "red", "value": 1 }
-          ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
         },
         "overrides": []
       },
-      "targets": [{ "expr": "increase(safeexec_sigkill_escalations_total[1h])", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "increase(safeexec_sigkill_escalations_total[1h])",
+          "refId": "A"
+        }
+      ]
     },
     {
       "type": "row",
@@ -184,6 +379,336 @@
         "overrides": []
       },
       "options": {}
+    },
+    {
+      "type": "row",
+      "title": "Listener and OS saturation",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 204
+    },
+    {
+      "id": 205,
+      "title": "Accepts per second by listener",
+      "description": "Connections accepted. A burst with flat request rate means the browser is opening connections instead of reusing them.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (listener)(rate(http_server_accepted_total[5m]))",
+          "legendFormat": "{{listener}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 206,
+      "title": "Accept and TLS handshake errors",
+      "description": "Any fd_exhausted is a hard saturation signal: the process is at its descriptor limit. TLS handshake errors on remote are usually untrusted-cert clients.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (listener, kind)(rate(http_server_accept_errors_total[5m]))",
+          "legendFormat": "accept {{listener}} {{kind}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (listener)(rate(http_server_tls_handshake_errors_total[5m]))",
+          "legendFormat": "tls handshake {{listener}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 207,
+      "title": "File descriptors vs limit",
+      "description": "Open descriptors against the soft RLIMIT_NOFILE. Alert above 80% of limit. macOS counts by probing up to 32768.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "process_open_fds",
+          "legendFormat": "open",
+          "refId": "A"
+        },
+        {
+          "expr": "process_fd_limit",
+          "legendFormat": "limit",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 208,
+      "title": "Kernel listen-queue pressure (Linux)",
+      "description": "Nonzero overflow/drops means the accept loop could not keep up with the backlog. Absent on macOS: check `netstat -s -p tcp | grep -i listen` by hand; the somaxconn series still shows the cap.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(os_tcp_listen_overflows_total[5m])",
+          "legendFormat": "listen overflows/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(os_tcp_listen_drops_total[5m])",
+          "legendFormat": "listen drops/s",
+          "refId": "B"
+        },
+        {
+          "expr": "os_tcp_somaxconn",
+          "legendFormat": "somaxconn",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 209,
+      "title": "Stream age at close (p50 / p95 by method)",
+      "description": "Streams that close within seconds of opening are a reconnect storm; each one briefly holds one of the browser's 6 connections. Open count is rpc_server_streams_open.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, method)(rate(rpc_server_stream_age_seconds_bucket[15m])))",
+          "legendFormat": "p50 {{method}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, method)(rate(rpc_server_stream_age_seconds_bucket[15m])))",
+          "legendFormat": "p95 {{method}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 210,
+      "title": "Time before the handler starts (p95 by class)",
+      "description": "Request reaching the process to RPC handler start: middleware, guards, auth. Healthy is under 1ms; seconds means the request waited inside the process before any handler ran.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, class)(rate(rpc_server_pre_handler_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{class}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 211,
+      "title": "Client-aborted calls by method",
+      "description": "Calls whose browser gave up (context canceled) before the handler finished: the server-side view of client timeouts and navigations. GetVCSStatus dominated the owner's HAR (15 of 18 aborts).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(8, sum by (rpc_method)(rate(rpc_server_client_aborted_total[5m])))",
+          "legendFormat": "{{rpc_method}}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

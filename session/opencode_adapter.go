@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -55,7 +56,7 @@ func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (st
 
 	if uuidStr == "" {
 		if f, err := os.Stat(dbPath); err == nil && !f.IsDir() {
-			db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
+			db, err := dbpool.OpenForeignReadOnly(dbPath, 0)
 			if err == nil {
 				var foundID string
 				query := `SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC LIMIT 1;`
@@ -141,7 +142,7 @@ func (a *OpencodeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonic
 		return nil, fmt.Errorf("opencode database not found at %s", dbPath)
 	}
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
+	db, err := dbpool.OpenForeignReadOnly(dbPath, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open opencode database: %w", err)
 	}
@@ -359,7 +360,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []CanonicalTurn, ins
 		return fmt.Errorf("failed to create directory for opencode database: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build()) //nolint:norawdb writes to the opencode-owned database
 	if err != nil {
 		return fmt.Errorf("failed to open opencode database: %w", err)
 	}

@@ -127,10 +127,13 @@ side, as ADR-003 does for the attach stream. That closes the remaining window on
   two. More than `maxPaintBacklog` (4096) frames, or `maxPaintBacklogBytes` (16 MiB) held, fail the connection rather than
   leaving a gap. The byte bound exists because a batch unit is uncapped (a flush carries everything read in its 20 ms
   window), so a bulk `cat` during a paint of up to ~9 s (1 s capture retry, 3 s capture, 5 s write) could otherwise hold
-  gigabytes per subscriber.
+  gigabytes per subscriber. The bound is per list, not per subscriber: `drainPending` takes the whole list as the batch
+  being sent and resets the byte count, so the in-flight batch (up to 16 MiB plus one frame, since the check runs before
+  appending) and the fresh list that fills behind it (same cap) are separate, and one subscriber can hold about 32 MiB.
 - **Replay honours the slow-subscriber grace.** Once the paint returns, the held list may grow by only one queue's worth
-  (`drainLimit`) beyond what it held; further frames are dropped and arm the usual 250 ms eviction, which fires if the list is
-  still at its limit and the writer has sent nothing from the held batch since the stall was seen. A socket that stalls
+  (`drainLimit`) beyond what it held; frames past that are still held (up to the count and byte caps above, which fail the
+  connection) but arm the usual 250 ms eviction, which fires if the list is still at its limit and the writer has sent
+  nothing from the held batch since the stall was seen. A socket that stalls
   during replay is therefore evicted, as one stalling on the live queue is, while a slow client still moving through one
   long batch is not (the list only shrinks at batch boundaries, so progress is counted per `Send`;
   `TestFirstPaint_should_NotEvictSubscriber_When_ReplayIsSlowButProgressing`).

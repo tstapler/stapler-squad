@@ -62,6 +62,9 @@ func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 		if walkErr != nil || !d.IsDir() || path == w.watchDir {
 			return nil
 		}
+		if skipHistoryDir(path) {
+			return filepath.SkipDir
+		}
 		_ = watcher.Add(path)
 		return nil
 	})
@@ -141,6 +144,9 @@ func (w *HistoryFileWatcher) handleEvent(event fsnotify.Event) {
 // arrive non-empty if Claude Code writes its transcript before this handler
 // gets to process the CREATE event for the directory itself.
 func (w *HistoryFileWatcher) watchNewDir(dir string) {
+	if skipHistoryDir(dir) {
+		return
+	}
 	if err := w.watcher.Add(dir); err != nil {
 		log.Warn("history file watcher: failed to watch new directory", "path", dir, "err", err)
 		return
@@ -162,6 +168,14 @@ func (w *HistoryFileWatcher) watchNewDir(dir string) {
 			w.callback(filepath.Join(dir, name))
 		}
 	}
+}
+
+// skipHistoryDir reports whether dir holds only files this watcher ignores. Claude Code
+// writes subagent transcripts (agent-*.jsonl, *.meta.json) under <session>/subagents/;
+// handleEvent drops them, but fsnotify's kqueue backend opens one fd per file in every
+// watched directory, so watching them cost ~8,000 fds on a long-lived instance.
+func skipHistoryDir(dir string) bool {
+	return filepath.Base(dir) == "subagents"
 }
 
 // Stop closes the watcher.

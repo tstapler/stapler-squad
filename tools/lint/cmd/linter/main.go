@@ -48,6 +48,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/nolegacylog"
 	"github.com/tstapler/stapler-squad/tools/lint/noliveinstanceraw"
+	"github.com/tstapler/stapler-squad/tools/lint/norawdb"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
 	"github.com/tstapler/stapler-squad/tools/lint/norawghrequest"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitcli"
@@ -55,6 +56,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/nosessiondrivertest"
 	"github.com/tstapler/stapler-squad/tools/lint/notimesleeptest"
 	"github.com/tstapler/stapler-squad/tools/lint/novartestseam"
+	"github.com/tstapler/stapler-squad/tools/lint/nowrongdbentity"
 	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
@@ -68,10 +70,12 @@ func main() {
 		nolegacylog.Analyzer,
 		noliveinstanceraw.Analyzer,
 		nosessiondrivertest.Analyzer,
+		norawdb.Analyzer,
 		norawexec.Analyzer,
 		norawghrequest.Analyzer,
 		norawgitcli.Analyzer,
 		norawgitopen.Analyzer,
+		nowrongdbentity.Analyzer,
 		notimesleeptest.Analyzer,
 		novartestseam.Analyzer,
 		silenttransition.Analyzer,

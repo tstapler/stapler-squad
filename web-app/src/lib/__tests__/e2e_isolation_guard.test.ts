@@ -11,7 +11,7 @@ describe("e2e server isolation", () => {
 
   it("picks an OS-assigned free port and passes it to the server through PORT", () => {
     expect(testServer).toMatch(/srv\.listen\(0,/);
-    expect(testServer).toMatch(/this\.config\.port = await findFreePort\(\)/);
+    expect(testServer).toMatch(/this\.config\.port = await \(attempt === 1 \? this\.config\.allocatePort \?\? findFreePort : findFreePort\)\(\)/);
     expect(testServer).toMatch(/PORT: this\.config\.port\.toString\(\)/);
   });
 
@@ -29,7 +29,9 @@ describe("e2e server isolation", () => {
 
   it("exports the dynamic URL and data dir to workers from global setup", () => {
     const setup = read("global-setup.ts");
-    expect(setup).toMatch(/process\.env\.TEST_SERVER_URL = getGlobalTestServer\(\)\.getBaseUrl\(\)/);
-    expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIR = getGlobalTestServer\(\)\.getTestDir\(\)/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_URLS = JSON\.stringify\(urls\)/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIRS = JSON\.stringify\(dirs\)/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_URL = urls\[0\]/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIR = dirs\[0\]/);
   });
 });

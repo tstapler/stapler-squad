@@ -26,6 +26,13 @@ export const IDEMPOTENT_METHODS = {
     "ListAliases",
     "ListSessions",
     "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems",
   ],
   /** Safe to re-send after a transport failure. */
   replayable: [
@@ -39,6 +46,14 @@ export const IDEMPOTENT_METHODS = {
     "GetFileTransportCapabilities",
     "ListShells",
     "ListWorkflows",
+    "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems",
   ],
   /** May be sent over the unary WebSocket; must equal ws-unary-allowlist.json's wsUnaryAllowed. */
   wsEligible: [
@@ -51,6 +66,14 @@ export const IDEMPOTENT_METHODS = {
     "ListShells",
     "ListWorkflows",
     "ListProgramsConfig",
+    "ListPendingApprovals",
+    "GetNotificationHistory",
+    "GetTmuxVersionStatus",
+    "GetSessionDefaults",
+    "ListProjects",
+    "GetReviewQueue",
+    "GetSession",
+    "ListStuckBacklogItems",
   ],
   /**
    * May join an HTTP request batch: cheap reads only, equal to the server's batchAllowed.
