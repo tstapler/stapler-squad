@@ -1657,7 +1657,7 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
 			log.Info("Web UI", "url", scheme+"://"+resolvedAddr)
 			log.Info("Health check", "url", scheme+"://"+resolvedAddr+"/health")
-			err = s.httpServer.Serve(ln)
+			err = s.httpServer.Serve(withListenerMetrics("main", ln))
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -2031,6 +2031,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
+		ErrorLog:     newTLSHandshakeErrorLog("remote"),
 	}
 
 	// Bind eagerly so the caller gets a port-in-use error immediately.
@@ -2053,7 +2054,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 			}
 		}()
 
-		if serveErr := remoteSrv.ServeTLS(ln, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := remoteSrv.ServeTLS(withListenerMetrics("remote", ln), "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("Remote HTTPS server error", "err", serveErr)
 		}
 	}()
@@ -2221,6 +2222,7 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 
 	return []connect.HandlerOption{
 		connect.WithInterceptors(
+			interceptors.NewRPCSaturationInterceptor(),
 			interceptors.NewErrorRecorderInterceptor(registry),
 			otelInterceptor,
 		),

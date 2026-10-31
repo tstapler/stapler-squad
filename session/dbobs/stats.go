@@ -87,9 +87,10 @@ func Snapshot() []Stats {
 
 func nameAttr(name string) attribute.KeyValue { return attribute.String("db.name", name) }
 
-func recordHistogram(name string, d time.Duration) {
+func recordHistogram(name, caller string, d time.Duration) {
 	if histogram != nil {
-		histogram.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(nameAttr(name)))
+		histogram.Record(context.Background(), float64(d)/float64(time.Millisecond),
+			metric.WithAttributes(nameAttr(name), callerAttr(caller)))
 	}
 }
 
@@ -97,9 +98,10 @@ func recordHistogram(name string, d time.Duration) {
 // to wait (zero waits are skipped). It is a diff of the pool-wide WaitDuration,
 // so concurrent queries over-attribute each other's wait. Kept next to the
 // cumulative db.pool.wait_* gauges because only a histogram gives p99 per query.
-func recordPoolWait(name string, d time.Duration) {
+func recordPoolWait(name, caller string, d time.Duration) {
 	if waitHist != nil && d > 0 {
-		waitHist.Record(context.Background(), float64(d)/float64(time.Millisecond), metric.WithAttributes(nameAttr(name)))
+		waitHist.Record(context.Background(), float64(d)/float64(time.Millisecond),
+			metric.WithAttributes(nameAttr(name), callerAttr(caller)))
 	}
 }
 
