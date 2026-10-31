@@ -27,13 +27,9 @@ import (
 // Thread-safe: routed through the actor mailbox.
 // Returns an error if the instance is not started.
 func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkpoint, error) {
-	var result *Checkpoint
-	err := i.sendSyncErr(func(s *instanceState) error {
-		var e error
-		result, e = createCheckpointLocked(s, label, scrollbackSeq)
-		return e
+	return sendSyncValue(i, func(s *instanceState) (*Checkpoint, error) {
+		return createCheckpointLocked(s, label, scrollbackSeq)
 	})
-	return result, err
 }
 
 // createCheckpointLocked is the actor-safe body of CreateCheckpoint.

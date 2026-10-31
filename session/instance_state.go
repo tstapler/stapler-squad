@@ -180,12 +180,10 @@ func (i *Instance) GetLifecycleStatus() Status {
 // Read-only: there is no public setter (see failureReason's doc comment in
 // instance.go for why).
 func (i *Instance) FailureReason() string {
-	var reason string
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	reason, _ := sendSyncValue(i, func(s *instanceState) (string, error) {
 		s.inst.mu.Lock()
-		reason = s.inst.failureReason
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.failureReason, nil
 	})
 	return reason
 }
@@ -200,26 +198,26 @@ func (i *Instance) FailureReason() string {
 // it). Used by AwaitCreationTerminal (server/services/session_creation_await.go)
 // to build its CreationOutcome snapshot atomically.
 func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	type statusAndReason struct {
+		status Status
+		reason string
+	}
+	pair, _ := sendSyncValue(i, func(s *instanceState) (statusAndReason, error) {
 		s.inst.mu.Lock()
-		status = s.inst.Status
-		failureReason = s.inst.failureReason
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return statusAndReason{s.inst.Status, s.inst.failureReason}, nil
 	})
-	return status, failureReason
+	return pair.status, pair.reason
 }
 
 // CreationProgressUpdatedAt returns when CreationProgress was last set. Used by
 // the Stale-Creation Sweeper (Epic 4.1) to judge a Creating instance's actual
 // progress rather than only its Creating-onset time.
 func (i *Instance) CreationProgressUpdatedAt() time.Time {
-	var t time.Time
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	t, _ := sendSyncValue(i, func(s *instanceState) (time.Time, error) {
 		s.inst.mu.Lock()
-		t = s.inst.creationProgressUpdatedAt
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.creationProgressUpdatedAt, nil
 	})
 	return t
 }
