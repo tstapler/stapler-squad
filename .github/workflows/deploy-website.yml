@@ -6,9 +6,10 @@ name: Deploy Website
 # content-manifest.json), so a change there without a `website/**` change
 # must still trigger a rebuild+resync, not silently drift.
 
-# `schedule` + `workflow_dispatch` redeploy without a content change, so a
-# release asset or external link that rots is caught within a week instead of
-# at the next unrelated website edit. PRs are gated by website-ci.yml, which
+# `schedule` + `workflow_dispatch` redeploy without a content change, so the
+# clips are re-recorded against the current app and a rotted link or a demo
+# selector that no longer matches is caught within a week instead of at the
+# next unrelated website edit. PRs are gated by website-ci.yml, which
 # must keep running the same checks (website/tests/unit/workflow-yaml.test.ts).
 on:
   push:

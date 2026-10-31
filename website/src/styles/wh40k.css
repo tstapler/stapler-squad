@@ -49,6 +49,14 @@
 	--sl-color-purple-low: #1a0808;
 	--sl-color-purple: #6b3d8b;
 	--sl-color-purple-high: #b088c9;
+	/* Starlight's blue family also has light-mode values; without these, notes render cream text on lavender for light-OS visitors. */
+	--sl-color-blue-low: #0a1018; /* statusBadge input bg */
+	--sl-color-blue: #1a4a8b; /* logInfo */
+	--sl-color-blue-high: #9bb8e0;
+	--sl-color-backdrop-overlay: rgba(0, 0, 0, 0.85); /* overlayBackground */
+	--sl-shadow-sm: 0 1px 2px 0 rgba(192, 160, 32, 0.1);
+	--sl-shadow-md: 0 4px 6px -1px rgba(192, 160, 32, 0.15);
+	--sl-shadow-lg: 0 10px 15px -3px rgba(192, 160, 32, 0.2);
 
 	--sl-font-system-mono: 'JetBrains Mono', ui-monospace, 'Monaco', monospace;
 	--sl-font-display: 'Cinzel', 'Trajan Pro', Georgia, serif;

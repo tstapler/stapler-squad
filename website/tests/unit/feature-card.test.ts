@@ -30,14 +30,14 @@ describe('FeatureCard', () => {
 		const container = await AstroContainer.create();
 		const html = await container.renderToString(FeatureCard, {
 			props: {
-				heading: 'Live Terminal Streaming',
+				heading: 'Dashboard',
 				description: 'Full xterm.js terminal per session with real-time output streaming.',
 				category: 'Visibility',
 			},
 		});
 
 		expect(html).not.toContain('<img');
-		expect(html).toContain('Live Terminal Streaming');
+		expect(html).toContain('Dashboard');
 	});
 
 	// Story 3.3.1's second AC: a screenshot-less card with a `demoClip` field
@@ -46,15 +46,15 @@ describe('FeatureCard', () => {
 		const container = await AstroContainer.create();
 		const html = await container.renderToString(FeatureCard, {
 			props: {
-				heading: 'Live Terminal Streaming',
+				heading: 'Dashboard',
 				description: 'Full xterm.js terminal per session with real-time output streaming.',
 				category: 'Visibility',
-				demoClip: { name: 'terminal-streaming', ext: 'webm' },
+				demoClip: { name: 'session-dashboard', ext: 'webm' },
 			},
 		});
 
 		expect(html).not.toContain('<img');
-		expect(html).toMatch(/src="[^"]*\/clips\/terminal-streaming\.webm"/);
+		expect(html).toMatch(/src="[^"]*\/clips\/session-dashboard\.webm"/);
 		expect(html).toContain('<video');
 	});
 

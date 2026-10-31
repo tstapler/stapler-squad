@@ -71,10 +71,8 @@ test.describe('Landing page — UX acceptance', () => {
 
 	// Criterion 10: broken hero media degrades to its poster fallback, never
 	// a blank box. Per the task brief, this is tested against the real,
-	// committed hero video (assets/demo.webm) via route interception, not
-	// the unpublished "terminal-streaming" DemoClip (website-demo-gifs-latest
-	// release asset genuinely 404s today -- documented, not this test's job
-	// to fix).
+	// committed hero video (public/demo.webm) via route interception; feature-card
+	// clips only exist in the deploy build (recorded there), not in the PR gate.
 	test('heroVideoAndFeatureImage_should_ShowPosterOrAltTextFallback_When_SourceIntercept404s', async ({
 		page,
 	}) => {
@@ -107,10 +105,8 @@ test.describe('Landing page — UX acceptance', () => {
 
 	// Criterion 18: every <video> has a poster and is adjacent to its own
 	// heading/description, never an unlabeled floating video. Scoped to the
-	// hero video only -- see this file's header comment on the deferred
-	// terminal-streaming DemoClip, whose feature-card <video> has no `poster`
-	// prop support at all today (a real, separate gap; tracked, not fixed
-	// here per the task's explicit scoping instruction).
+	// hero video only: feature-card clips (which do carry a poster, see
+	// tests/unit/feature-card.test.ts) exist only in the deploy build.
 	test('videoEmbed_should_HavePosterAttributeAndAccompanyingCardText_When_Rendered', async ({ page }) => {
 		const landing = new LandingPage(page);
 		await landing.goto();

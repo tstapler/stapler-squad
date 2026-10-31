@@ -8,7 +8,9 @@ const WEBSITE_ROOT = join(import.meta.dirname, '..', '..');
 const read = (...parts: string[]) => readFileSync(join(WEBSITE_ROOT, ...parts), 'utf8');
 
 const appTheme = read('..', 'web-app', 'src', 'styles', 'theme.css.ts');
-const wh40kBlock = appTheme.slice(appTheme.indexOf('export const wh40kTheme'));
+const wh40kStart = appTheme.indexOf('export const wh40kTheme');
+// Bounded to this theme: an unbounded slice would silently match the next theme's tokens.
+const wh40kBlock = appTheme.slice(wh40kStart, appTheme.indexOf('export const', wh40kStart + 1));
 const appColor = (token: string) => wh40kBlock.match(new RegExp(`\\b${token}: "(#[0-9a-fA-F]{6})"`))?.[1];
 const siteCss = read('src', 'styles', 'wh40k.css');
 
@@ -20,6 +22,10 @@ describe('website WH40K theme', () => {
 		['--sl-color-gray-7', 'modalBackground'],
 		['--sl-color-gray-5', 'borderColor'],
 		['--sl-color-gray-1', 'textPrimary'],
+		['--sl-color-bg-inline-code', 'hoverBackground'],
+		['--sl-color-hairline', 'borderColor'],
+		['--sl-color-green-high', 'successText'],
+		['--sl-color-red-high', 'errorText'],
 		['--sl-color-gray-3', 'textSecondary'],
 		['--sl-color-gray-4', 'textMuted'],
 		['--sl-color-accent', 'primary'],

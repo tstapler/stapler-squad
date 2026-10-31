@@ -33,6 +33,7 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 			<video
 				src={clipSrc}
 				poster={screenshotSrc}
+				aria-label={`${heading} demo`}
 				controls
 				muted
 				loop
@@ -74,6 +75,12 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 		aspect-ratio: 16 / 10; /* reserved up front: no layout shift when the clip loads */
 		object-fit: cover;
 		border-radius: 0.5rem;
+	}
+
+	/* Matches the recorded clip (1280x760 with its browser frame) so `cover` crops nothing,
+	   including the left-aligned burned-in captions. */
+	.feature-card video {
+		aspect-ratio: 1280 / 760;
 	}
 
 	.feature-card h4 {
