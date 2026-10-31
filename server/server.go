@@ -57,29 +57,30 @@ type Server struct {
 	addr                       atomic.Pointer[string]
 	httpServer                 *http.Server
 	mux                        *http.ServeMux
-	wsUnaryBridge              atomic.Pointer[services.UnaryWsBridge] // serves /actuator/ws-unary; set when the bridge is built
-	unfinishedScanner          *unfinished.Scanner                    // serves /actuator/unfinished-scanner; nil without deps
-	tlsConfig                  *tls.Config                            // non-nil when TLS is enabled
-	authMiddleware             func(http.Handler) http.Handler        // nil when auth is disabled
-	requiresAuth               bool                                   // explicit: a real validator is wired
-	dispatchersMu              sync.RWMutex                           // guards dispatchers
-	dispatchers                map[string]http.Handler                // listener name -> dispatcher the unary WS bridge re-enters
-	httpsURL                   atomic.Pointer[string]                 // set when remote access is enabled
-	hostnames                  atomic.Pointer[[]string]               // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
-	verifiedHostnames          atomic.Pointer[[]string]               // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
-	origins                    []string                               // allowed CORS origins
-	shutdownHooks              []func()                               // called before HTTP server stops
-	connCtxCancel              context.CancelFunc                     // cancels BaseContext → closes active streams on shutdown
-	availablePrograms          []string                               // cached once at startup; programs change only on system changes
-	startedAt                  time.Time                              // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
-	approvalHandler            *services.ApprovalHandler              // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
-	slackInteractiveDisabled   bool                                   // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
-	finalStatsFlush            func()                                 // delivery-gate stats flush; deferred at the top of Shutdown
-	backgroundTasksWG          sync.WaitGroup                         // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
-	backgroundTasksJoinTimeout time.Duration                          // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
-	selfAuthMu                 sync.RWMutex                           // guards selfAuthPaths
-	selfAuthPaths              []func(path string) bool               // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
-	hookIPC                    *hookIPCState                          // resident instance-scoped PreToolUse classifier; started with the HTTP server
+	wsUnaryBridge              atomic.Pointer[services.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
+	terminalMuxBridge          atomic.Pointer[services.TerminalMuxBridge] // serves /actuator/terminal-mux
+	unfinishedScanner          *unfinished.Scanner                        // serves /actuator/unfinished-scanner; nil without deps
+	tlsConfig                  *tls.Config                                // non-nil when TLS is enabled
+	authMiddleware             func(http.Handler) http.Handler            // nil when auth is disabled
+	requiresAuth               bool                                       // explicit: a real validator is wired
+	dispatchersMu              sync.RWMutex                               // guards dispatchers
+	dispatchers                map[string]http.Handler                    // listener name -> dispatcher the unary WS bridge re-enters
+	httpsURL                   atomic.Pointer[string]                     // set when remote access is enabled
+	hostnames                  atomic.Pointer[[]string]                   // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	verifiedHostnames          atomic.Pointer[[]string]                   // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
+	origins                    []string                                   // allowed CORS origins
+	shutdownHooks              []func()                                   // called before HTTP server stops
+	connCtxCancel              context.CancelFunc                         // cancels BaseContext → closes active streams on shutdown
+	availablePrograms          []string                                   // cached once at startup; programs change only on system changes
+	startedAt                  time.Time                                  // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	approvalHandler            *services.ApprovalHandler                  // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	slackInteractiveDisabled   bool                                       // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	finalStatsFlush            func()                                     // delivery-gate stats flush; deferred at the top of Shutdown
+	backgroundTasksWG          sync.WaitGroup                             // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
+	backgroundTasksJoinTimeout time.Duration                              // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	selfAuthMu                 sync.RWMutex                               // guards selfAuthPaths
+	selfAuthPaths              []func(path string) bool                   // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
+	hookIPC                    *hookIPCState                              // resident instance-scoped PreToolUse classifier; started with the HTTP server
 
 	// workflowEngineSoak is what /actuator/workflow-engine reads; set via SetWorkflowEngineSoakSource.
 	workflowEngineSoak atomic.Pointer[WorkflowEngineSoakSource]
@@ -140,6 +141,7 @@ func newServerBase(addr string) (*Server, context.Context) {
 			// — see that file's doc comment for why this is the natural place
 			// to maintain the count.
 			ConnState: trackHTTPConnState,
+			ErrorLog:  serverErrorLog(listenerMain),
 		},
 	}
 	srv.addr.Store(&addr)
@@ -484,6 +486,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	wsPath := "/api" + sessionv1connect.SessionServiceStreamTerminalProcedure
 	srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
 	log.Info("Registered ConnectRPC WebSocket handler", "path", wsPath)
+
+	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
+	muxPool := services.TerminalMuxPoolSizeFromEnv()
+	muxBridge := services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
+		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+	srv.terminalMuxBridge.Store(muxBridge)
+	srv.mux.Handle(services.TerminalMuxPath, muxBridge)
+	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)
 
 	// Register VNC browser-passthrough WebSocket proxy.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
@@ -1627,7 +1637,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
-	s.httpServer.Handler = handler
+	s.httpServer.Handler = stampArrival(handler)
 
 	scheme := "http"
 	if s.tlsConfig != nil {
@@ -1643,7 +1653,12 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", s.GetAddr())
 			log.Info("Web UI", "url", scheme+"://"+s.GetAddr())
 			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
-			err = s.httpServer.ListenAndServeTLS("", "")
+			ln, lerr := net.Listen("tcp", s.GetAddr())
+			if lerr != nil {
+				errCh <- lerr
+				return
+			}
+			err = s.httpServer.ServeTLS(meterListener(listenerMain, ln), "", "")
 		} else {
 			ln, lerr := listenLoopbackAware(s.GetAddr())
 			if lerr != nil {
@@ -1657,7 +1672,7 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
 			log.Info("Web UI", "url", scheme+"://"+resolvedAddr)
 			log.Info("Health check", "url", scheme+"://"+resolvedAddr+"/health")
-			err = s.httpServer.Serve(ln)
+			err = s.httpServer.Serve(meterListener(listenerMain, ln))
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -2026,8 +2041,9 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 
 	remoteSrv := &http.Server{
 		Addr:         remoteAddr,
-		Handler:      handler,
+		Handler:      stampArrival(handler),
 		TLSConfig:    tlsCfg,
+		ErrorLog:     serverErrorLog(listenerRemote),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
@@ -2053,7 +2069,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 			}
 		}()
 
-		if serveErr := remoteSrv.ServeTLS(ln, "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := remoteSrv.ServeTLS(meterListener(listenerRemote, ln), "", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Error("Remote HTTPS server error", "err", serveErr)
 		}
 	}()
@@ -2223,6 +2239,8 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 		connect.WithInterceptors(
 			interceptors.NewErrorRecorderInterceptor(registry),
 			otelInterceptor,
+			interceptors.NewDBQueryCountInterceptor(),
+			interceptors.NewRequestFlowInterceptor(),
 		),
 	}
 }

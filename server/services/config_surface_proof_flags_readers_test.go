@@ -155,3 +155,11 @@ func TestConfigSurfaceProof_WorktreeChangeDetection_ChangesWorktreeSetup(t *test
 		return session.WorktreeChangeDetectionEnabled()
 	}, false, true)
 }
+
+func TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting(t *testing.T) {
+	set := bkfFlagWriter(t)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		set(session.FeatureFlagDriverPaneActivityGate, setting.(bool))
+		return session.DriverPaneActivityGateSetting()
+	}, false, true)
+}

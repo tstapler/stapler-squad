@@ -295,6 +295,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:handoff-summary": {
 		exempt: "read-only mirror: HandoffSummaryFeatureController.Enable and Disable refuse (feature_flag_service.go), so UpdateFeatureFlag cannot flip it; the real setting is config.json handoff_summary.enabled, read via HandoffSummaryConfig.EnabledOrDefault, which is not a feature_flags surface",
 	},
+	"flag:driver_pane_activity_gate": {
+		testName:   "TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:hidden_session_gate": {
 		testName:   "TestConfigSurfaceProof_HiddenSessionGate_ChangesDeliveryGateCache",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -331,6 +335,9 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	},
 	"flag:unary_over_ws_remote": {
 		exempt: "client-only: no Go reader; the web client gates unary RPCs over WebSocket on remote-access origins on it (client reader lands with the unary-over-WS transport story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:terminal_ws_pool": {
+		exempt: "client-only: no Go reader; the web client gates the shared terminal socket pool on it (web-app/src/lib/transport/terminal-socket.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the /api/ws/terminal-mux endpoint is always mounted (advertised size 0 makes it answer 404) and covered by ws_terminal_mux_test.go",
 	},
 	"flag:batch_unary": {
 		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",

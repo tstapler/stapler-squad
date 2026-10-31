@@ -189,6 +189,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		// instead of paying for them. See commit 13a90ec31 for the incident
 		// this fixes.
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
+		sdkmetric.WithView(longTailLatencyViews()...),
 	)
 	otel.SetMeterProvider(mp)
 

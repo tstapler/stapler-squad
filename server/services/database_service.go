@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -233,7 +234,7 @@ func (ds *DatabaseService) MergeDatabase(
 // mergeSessions copies sessions from sourceDB into destDB.
 // Returns (imported, skipped, error).
 func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, error) {
-	db, err := sql.Open("sqlite", sqlitedsn.New(destDB).WithBusyTimeout(5000*time.Millisecond).Build())
+	db, err := sql.Open("sqlite", sqlitedsn.New(destDB).WithBusyTimeout(5000*time.Millisecond).Build()) //nolint:norawdb merge/restore destination is a user-supplied file
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to open destination database: %w", err)
 	}
@@ -248,7 +249,7 @@ func mergeSessions(ctx context.Context, destDB, sourceDB string) (int, int, erro
 	// Count sessions in source
 	var sourceTotal int
 	{
-		src, err := sql.Open("sqlite", sqlitedsn.New(sourceDB).WithQueryOnly().WithBusyTimeout(5000*time.Millisecond).Build())
+		src, err := dbpool.OpenForeignReadOnly(sourceDB, 5*time.Second)
 		if err != nil {
 			return 0, 0, fmt.Errorf("failed to open source database: %w", err)
 		}
@@ -359,7 +360,7 @@ func countSessionsInDB(configDir string) int {
 		return 0
 	}
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithQueryOnly().WithWAL().WithBusyTimeout(5000*time.Millisecond).Build())
+	db, err := dbpool.OpenForeignReadOnly(dbPath, 5*time.Second)
 	if err != nil {
 		return 0
 	}

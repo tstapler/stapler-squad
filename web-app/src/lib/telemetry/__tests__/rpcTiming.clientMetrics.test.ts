@@ -89,7 +89,7 @@ describe("client RPC metrics labels", () => {
     const track = jest.fn();
     const { pending, next } = deferredNext();
     const handler = createRpcTimingInterceptor({ track }, { detectDuplicates: true })(next as never) as Handler;
-    const read = () => ({ ...req(), method: SessionService.method.getSessionDefaults }) as unknown as UnaryRequest;
+    const read = () => ({ ...req(), method: SessionService.method.listDatabases }) as unknown as UnaryRequest;
     const both = Promise.all([handler(read()), handler(read())]);
     pending[0].resolve();
     pending[1].resolve();
