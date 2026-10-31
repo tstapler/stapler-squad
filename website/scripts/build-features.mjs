@@ -13,7 +13,7 @@ const WEBSITE_ROOT = join(SCRIPT_DIR, '..');
 const REPO_ROOT = join(WEBSITE_ROOT, '..');
 const DEFAULT_README_PATH = join(REPO_ROOT, 'README.md');
 const DEFAULT_FEATURES_MD_PATH = join(REPO_ROOT, 'docs', 'features.md');
-const DEFAULT_MANIFEST_PATH = join(SCRIPT_DIR, 'asset-health-manifest.json');
+const DEFAULT_CLIPS_DIR = join(WEBSITE_ROOT, 'public', 'clips');
 const DEFAULT_OUTPUT_PATH = join(WEBSITE_ROOT, 'src', 'content', 'features.json');
 const PUBLIC_FEATURES_DIR = join(WEBSITE_ROOT, 'public', 'features');
 const ENCODING = 'utf8';
@@ -82,7 +82,7 @@ const ALT_TEXT_BY_HEADING = {
 	'Review Queue':
 		'Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase',
 	'Auto-Approval Rules':
-		'List of 42 built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks',
+		'List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks',
 	'Custom Rules':
 		'Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again',
 	'Isolated Git Workspaces':
@@ -90,27 +90,23 @@ const ALT_TEXT_BY_HEADING = {
 };
 
 /**
- * Headings whose card plays a demo clip (recorded by
- * tests/e2e/website-demos/clips.ts, published by website-demo-publish.yml). A
- * clip is attached only once its hash is in asset-health-manifest.json, i.e.
- * once it is actually published: `check-asset-health.mjs` blocks the Pages
- * deploy on any referenced asset that 404s, so an unpublished clip must never
- * reach features.json. The card's screenshot, if any, becomes the video poster.
+ * Headings whose card plays a demo clip. Clips are recorded during the deploy
+ * (tests/e2e/website-demos/clips.ts via scripts/record-website-demos.sh) into
+ * website/public/clips/ and ship inside the Pages artifact, so nothing is
+ * committed. A card gets its clip only when the file is present at build time,
+ * so a failed recording just leaves the card on its screenshot. The screenshot,
+ * if any, becomes the video poster.
  *
- * @type {Record<string, {tag: string, name: string, ext: string}>}
+ * @type {Record<string, string>} heading -> clip name (<name>.webm)
  */
 const DEMO_CLIP_BY_HEADING = {
-	Dashboard: { tag: 'website-demo-gifs-latest', name: 'session-dashboard', ext: 'webm' },
-	'Auto-Approval Rules': { tag: 'website-demo-gifs-latest', name: 'auto-approval-rules', ext: 'webm' },
+	Dashboard: 'session-dashboard',
+	'Auto-Approval Rules': 'auto-approval-rules',
 };
-
-/** @param {string} manifestPath @returns {Set<string>} `<name>.<ext>` of every published, hashed asset */
-function loadPublishedAssets(manifestPath) {
-	return new Set(Object.keys(JSON.parse(readFileSync(manifestPath, 'utf8'))));
-}
+const CLIP_EXT = 'webm';
 
 /**
- * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {tag: string, name: string, ext: string}}} FeatureCard
+ * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {name: string, ext: string}}} FeatureCard
  */
 
 /**
@@ -244,13 +240,13 @@ export function extractReadmeCategoryNames(readmeMarkdown) {
  * Builds the full FeatureCard[] data set, reconciling README.md's category
  * names with docs/features.md's sections.
  *
- * @param {{readmePath?: string, featuresMdPath?: string, manifestPath?: string}} [options]
+ * @param {{readmePath?: string, featuresMdPath?: string, clipsDir?: string}} [options]
  * @returns {FeatureCard[]}
  */
 export function buildFeaturesJson(options = {}) {
 	const readmePath = options.readmePath ?? DEFAULT_README_PATH;
 	const featuresMdPath = options.featuresMdPath ?? DEFAULT_FEATURES_MD_PATH;
-	const publishedAssets = loadPublishedAssets(options.manifestPath ?? DEFAULT_MANIFEST_PATH);
+	const clipsDir = options.clipsDir ?? DEFAULT_CLIPS_DIR;
 
 	const readmeMarkdown = readFileSync(readmePath, ENCODING);
 	const featuresMarkdown = readFileSync(featuresMdPath, ENCODING);
@@ -285,9 +281,9 @@ export function buildFeaturesJson(options = {}) {
 				throw new Error(`"${heading}" has a screenshot but no ALT_TEXT_BY_HEADING entry`);
 			}
 		}
-		const demoClip = DEMO_CLIP_BY_HEADING[heading];
-		if (demoClip && publishedAssets.has(`${demoClip.name}.${demoClip.ext}`)) {
-			card.demoClip = demoClip;
+		const clipName = DEMO_CLIP_BY_HEADING[heading];
+		if (clipName && existsSync(join(clipsDir, `${clipName}.${CLIP_EXT}`))) {
+			card.demoClip = { name: clipName, ext: CLIP_EXT };
 		}
 		return card;
 	});

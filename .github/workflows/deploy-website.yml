@@ -33,7 +33,66 @@ permissions:
   id-token: write
 
 jobs:
+  # Records the demo clips against the current app so they never go stale and
+  # nothing is committed: they ship inside the Pages artifact. The build job
+  # tolerates this job failing (the site then keeps its screenshots), and
+  # `notify` below still reports a failed deploy.
+  record-clips:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+        with:
+          lfs: true
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate protos and build web UI
+        uses: ./.github/actions/prepare
+
+      - name: Build binary
+        run: go build -o stapler-squad .
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
+
+      - name: Install Playwright, ffmpeg and librsvg
+        run: |
+          cd tests/e2e
+          bun install --frozen-lockfile
+          npx playwright install chromium --with-deps
+          sudo apt-get install -y ffmpeg librsvg2-bin jq
+
+      - name: Record, trim and brand the clips
+        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/website-demo-clips"
+
+      - name: Upload clips
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
+        with:
+          name: website-demo-clips
+          path: ${{ runner.temp }}/website-demo-clips/*.webm
+          if-no-files-found: error
+          retention-days: 1
+
   build:
+    needs: record-clips
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
@@ -68,6 +127,20 @@ jobs:
       - name: Verify features.json is current
         working-directory: website
         run: node scripts/build-features.mjs && git diff --exit-code -- src/content/features.json
+
+      # Deploy-only (website-ci.yml has no recording): put this run's clips under
+      # public/clips/ and regenerate features.json so the cards play them. Neither
+      # is committed. A missing artifact (failed recording) leaves the screenshots.
+      - name: Download demo clips
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: website-demo-clips
+          path: website/public/clips
+
+      - name: Regenerate features.json with the clips
+        working-directory: website
+        run: node scripts/build-features.mjs
 
       - name: Build site
         working-directory: website

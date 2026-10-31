@@ -1,7 +1,7 @@
-// The website's demo clips, in publish order. `name` is the published file
-// name (<name>.webm) and the DemoClip reference in website/scripts/build-features.mjs;
-// `title` is the title-card text. Add a clip here and it is recorded, branded,
-// and published by .github/workflows/website-demo-publish.yml with no other change.
+// The website's demo clips. `name` is the file name (<name>.webm) and is mapped to a
+// feature card in website/scripts/build-features.mjs (DEMO_CLIP_BY_HEADING); `title`
+// is the title-card text. Add a clip here and the deploy
+// (.github/workflows/deploy-website.yml) records and ships it in the Pages artifact.
 import { expect } from '@playwright/test';
 import { caption, typeSlowly, type ClipSpec } from './recorder';
 

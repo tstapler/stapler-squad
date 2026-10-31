@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # record-website-demos.sh — record the website's demo clips (tests/e2e/website-demos/clips.ts)
 # against a seeded, isolated server, trim the page-load time, add the title card, and write
-# <out>/<name>.webm. Used by .github/workflows/website-demo-publish.yml and runnable locally.
+# <out>/<name>.webm. Used by .github/workflows/deploy-website.yml and runnable locally.
 #
 # Usage: scripts/record-website-demos.sh [--out DIR]
 #   Needs a built ./stapler-squad (SSQ_BIN overrides), ffmpeg, rsvg-convert, and

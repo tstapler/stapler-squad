@@ -18,6 +18,8 @@ describe('buildFeaturesJson against real on-disk content', () => {
 		const cards = buildFeaturesJson({
 			readmePath: join(REPO_ROOT, 'README.md'),
 			featuresMdPath: join(REPO_ROOT, 'docs', 'features.md'),
+			// committed features.json never has clips; they exist only in the deploy build
+			clipsDir: join(WEBSITE_DIR, 'no-clips-committed'),
 		});
 
 		// features.json is committed generated output; fail on any drift from its sources.

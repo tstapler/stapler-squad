@@ -14,7 +14,6 @@ import yaml from 'js-yaml';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 
-const WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-demo-publish.yml');
 const DEPLOY_WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/deploy-website.yml');
 const UTF8 = 'utf8';
 
@@ -42,27 +41,26 @@ function extractOnTriggerKeys(yamlText: string): string[] {
     .map((line) => line.trim().replace(/:.*$/, ''));
 }
 
-test('websiteDemoWorkflow_should_HaveWorkflowDispatchOnlyTrigger_When_YamlParsed', () => {
-  const yamlText = readFileSync(WEBSITE_WORKFLOW_PATH, UTF8);
-  const triggers = extractOnTriggerKeys(yamlText);
+// Clips are recorded inside the deploy and ship in the Pages artifact, so the
+// build must fetch them (tolerating a failed recording) and regenerate
+// features.json before building; nothing may be committed back by CI.
+test('deployWorkflow_should_RecordAndShipClipsWithoutCommitting_When_YamlParsed', () => {
+  const text = readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8);
+  const doc = yaml.load(text) as CiWorkflow & { jobs: Record<string, { needs?: unknown; steps: WorkflowStep[] }> };
 
-  assert.deepEqual(triggers, ['workflow_dispatch']);
-  for (const forbidden of ['push', 'pull_request', 'schedule', 'cron']) {
-    assert.ok(!triggers.includes(forbidden), `on: block must not include "${forbidden}"`);
-  }
-});
+  assert.ok(doc.jobs['record-clips'], 'deploy must have a record-clips job');
+  assert.ok(doc.jobs['record-clips'].steps.some((step) => step.run?.includes('scripts/record-website-demos.sh')));
+  assert.equal(doc.jobs.build.needs, 'record-clips');
 
-// The clip publisher must never touch demo-publish.yml's release (it feeds the
-// README), must record through the shared script, and must start the deploy:
-// its manifest push is made with GITHUB_TOKEN, which does not trigger workflows.
-test('websiteDemoWorkflow_should_PublishOnlyToItsOwnReleaseAndDeploy_When_TextInspected', () => {
-  const text = readFileSync(WEBSITE_WORKFLOW_PATH, UTF8);
+  const steps = doc.jobs.build.steps;
+  const download = steps.findIndex((step) => step.name === 'Download demo clips');
+  const regenerate = steps.findIndex((step) => step.name === 'Regenerate features.json with the clips');
+  const build = steps.findIndex((step) => step.name === 'Build site');
+  assert.ok(download !== -1 && download < regenerate && regenerate < build, 'download -> regenerate -> build order');
+  assert.equal((steps[download] as { 'continue-on-error'?: boolean })['continue-on-error'], true, 'a failed recording must not block the deploy');
 
-  assert.ok(text.includes('scripts/record-website-demos.sh'), 'must record via scripts/record-website-demos.sh');
-  assert.ok(text.includes('website-demo-gifs-latest'));
-  assert.ok(!/gh release \w+ demo-gifs-latest/.test(text), 'must not run gh release against demo-publish.yml\'s release');
-  assert.ok(text.includes('gh workflow run deploy-website.yml'), 'must dispatch the deploy after publishing');
-  assert.ok(text.includes('website/src/content/features.json'), 'must commit regenerated features.json with the manifest');
+  assert.ok(!/git (commit|push)/.test(text), 'deploy must not commit anything back');
+  assert.ok(!/gh release (upload|create)/.test(text), 'clips ship in the Pages artifact, not a release');
 });
 
 // Phase 6, Story 6.3.1: deploy-website.yml's build job must run its
@@ -166,10 +164,14 @@ test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => 
 
   assert.deepEqual(Object.keys(ci.on), ['pull_request'], 'website-ci.yml must trigger only on pull_request');
 
-  // Every deploy step before the Pages publishing steps must also run in the PR gate.
+  // Every deploy step before the Pages publishing steps must also run in the PR
+  // gate, except the ones that consume the deploy's own recorded clips.
+  const DEPLOY_ONLY = ['Download demo clips', 'Regenerate features.json with the clips'];
   const publishAt = deploy.jobs.build.steps.findIndex((step) => step.name === 'Configure Pages');
   assert.notEqual(publishAt, -1, 'deploy-website.yml must have a "Configure Pages" step');
-  const deployChecks = deploy.jobs.build.steps.slice(0, publishAt);
+  const deployChecks = deploy.jobs.build.steps
+    .slice(0, publishAt)
+    .filter((step) => !DEPLOY_ONLY.includes(step.name ?? ''));
   assert.ok(deployChecks.some((step) => step.name === 'Stop preview server'));
   assert.deepEqual(ci.jobs.checks.steps, deployChecks);
 });

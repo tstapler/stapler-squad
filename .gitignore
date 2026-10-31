@@ -142,3 +142,6 @@ benchmarks/
 
 # website demo-clip recorder output (scripts/record-website-demos.sh)
 tests/e2e/website-demo-output/
+
+# demo clips recorded during the deploy; never committed
+website/public/clips/

@@ -41,23 +41,20 @@ describe('FeatureCard', () => {
 	});
 
 	// Story 3.3.1's second AC: a screenshot-less card with a `demoClip` field
-	// renders a <video> whose src is releaseAssetUrl()'s output, never a
-	// hardcoded literal duplicated from that helper.
-	it('featureCard_should_RenderVideoViaReleaseAssetUrl_When_DemoClipFieldPresent', async () => {
+	// renders a <video> served from the site's own /clips/ path.
+	it('featureCard_should_RenderVideoFromSiteClipsPath_When_DemoClipFieldPresent', async () => {
 		const container = await AstroContainer.create();
 		const html = await container.renderToString(FeatureCard, {
 			props: {
 				heading: 'Live Terminal Streaming',
 				description: 'Full xterm.js terminal per session with real-time output streaming.',
 				category: 'Visibility',
-				demoClip: { tag: 'website-demo-gifs-latest', name: 'terminal-streaming', ext: 'webm' },
+				demoClip: { name: 'terminal-streaming', ext: 'webm' },
 			},
 		});
 
 		expect(html).not.toContain('<img');
-		expect(html).toContain(
-			'src="https://github.com/tstapler/stapler-squad/releases/download/website-demo-gifs-latest/terminal-streaming.webm"',
-		);
+		expect(html).toMatch(/src="[^"]*\/clips\/terminal-streaming\.webm"/);
 		expect(html).toContain('<video');
 	});
 
@@ -71,7 +68,7 @@ describe('FeatureCard', () => {
 				category: 'Visibility',
 				screenshot: '/features/01-dashboard.png',
 				alt: 'Dashboard',
-				demoClip: { tag: 'website-demo-gifs-latest', name: 'session-dashboard', ext: 'webm' },
+				demoClip: { name: 'session-dashboard', ext: 'webm' },
 			},
 		});
 
