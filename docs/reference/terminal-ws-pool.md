@@ -9,7 +9,7 @@ Carries `StreamTerminal` over a few shared WebSockets (`/api/ws/terminal-mux`) i
 | `terminal_ws_pool` | Feature flag (Settings -> Features), read by the web client | Off: one WebSocket per terminal (unchanged). On: pooled. Evaluated per new stream; follows the 30 s flag refresh, so already-open terminals keep their socket until they reconnect. |
 | `STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE` | Server env, read at startup (default `2`, max `64`) | Socket count advertised to clients in `HELLO`. `0` makes `/api/ws/terminal-mux` answer 404; the first streams fail once, then clients use one WebSocket per terminal. |
 | `localStorage["ssq:terminal-pool-size"]` | Per browser | Overrides the advertised size. `0` disables the pool for this browser. |
-| `TerminalMuxBridge.SetPoolSize(n)` | Go seam | Pushes a `CONFIG` frame to live sockets; clients that have not pinned a size resize without a reload. |
+| `POST /actuator/terminal-mux?poolSize=N` | Runtime, local listener only (403 on remote access) | Changes the advertised size and pushes `CONFIG` to live sockets; clients that have not pinned a size resize without a reload. Not persisted: a restart returns to the env value. `GET /actuator/terminal-mux` reports `{poolSize, sockets, streams}`. |
 
 Client size is clamped to 1-16. Growing takes effect on the next stream; shrinking marks the emptiest sockets draining (no new streams, closed when their last stream ends). Live streams are never moved or dropped.
 
