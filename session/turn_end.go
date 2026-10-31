@@ -52,16 +52,14 @@ func (i *Instance) collaborators() (TurnEndSink, SessionEventRecorder) {
 // releasing it, persists via the sink and records the event once each.
 func (i *Instance) RecordTurnEnd(text string, source TurnEndSource) {
 	turn := TurnEnded{Excerpt: text, Source: source, At: time.Now()}
-	var title string
-	err := i.sendSyncErr(func(s *instanceState) error {
+	title, err := sendSyncValue(i, func(s *instanceState) (string, error) {
 		s.inst.mu.Lock()
 		s.inst.TurnEnded = turn
 		s.inst.touchLocked(SessionEventTurnEnded, turn.At)
 		snap := buildSnapshot(s.inst)
 		s.inst.mu.Unlock()
 		s.inst.snapshot.Store(snap)
-		title = snap.Title
-		return nil
+		return snap.Title, nil
 	})
 	if err != nil {
 		// Actor stopped: the in-memory fact was not stored, so don't persist or record under an empty title.

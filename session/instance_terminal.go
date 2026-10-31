@@ -429,8 +429,8 @@ type PRStatusUpdate struct {
 // Called by PRStatusPoller on each successful fetch.
 // Returns prUpdateResult indicating whether the priority changed.
 func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
-	var result prUpdateResult
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	result, _ := sendSyncValue(i, func(s *instanceState) (prUpdateResult, error) {
+		var result prUpdateResult
 		inst := s.inst
 		// i.mu guards the writes + buildSnapshot together: legacy setters
 		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
@@ -452,7 +452,7 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()
 		inst.snapshot.Store(snap)
-		return nil
+		return result, nil
 	})
 	return result
 }

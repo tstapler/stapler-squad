@@ -20,6 +20,14 @@ var wsUnaryAllowed = map[string]struct{}{
 	sessionv1connect.SessionServiceListShellsProcedure:                   {},
 	sessionv1connect.SessionServiceListWorkflowsProcedure:                {},
 	sessionv1connect.SessionServiceListProgramsConfigProcedure:           {},
+	sessionv1connect.SessionServiceListPendingApprovalsProcedure:         {},
+	sessionv1connect.SessionServiceGetNotificationHistoryProcedure:       {},
+	sessionv1connect.SessionServiceGetTmuxVersionStatusProcedure:         {},
+	sessionv1connect.SessionServiceGetSessionDefaultsProcedure:           {},
+	sessionv1connect.SessionServiceListProjectsProcedure:                 {},
+	sessionv1connect.SessionServiceGetReviewQueueProcedure:               {},
+	sessionv1connect.SessionServiceGetSessionProcedure:                   {},
+	sessionv1connect.BacklogServiceListStuckBacklogItemsProcedure:        {},
 }
 
 // wsUnaryClientHeaders is the REQUEST meta.headers allowlist (ADR-001); any other
