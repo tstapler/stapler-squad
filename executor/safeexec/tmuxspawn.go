@@ -68,6 +68,7 @@ func (s *labelSet) admit(v string) string {
 	return v
 }
 
+// isTmux matches by base name, so a TMUX_BIN wrapper not named tmux* is not counted.
 func isTmux(name string) bool { return strings.HasPrefix(filepath.Base(name), "tmux") }
 
 // recordTmuxSpawn counts one tmux client process. Like recordGitSpawn it runs when the command
@@ -84,14 +85,20 @@ func recordTmuxSpawn(ctx context.Context, name string, args []string) {
 		attribute.String("subcommand", sub), attribute.String("site", siteLabels.admit(site))))
 }
 
-var closureSuffix = regexp.MustCompile(`(\.func\d+)+(\.\d+)*$|\.gowrap\d+$`)
+var closureSuffix = regexp.MustCompile(`(\.func\d+|\.gowrap\d+|\.deferwrap\d+|-fm)(\.\d+)*$`)
 
 const modulePrefix = "github.com/tstapler/stapler-squad/"
 
 // shortFunc turns a runtime function name into "pkg.(*T).Method", closure suffixes removed.
 func shortFunc(fn string) string {
 	fn = strings.TrimPrefix(fn, modulePrefix)
-	fn = closureSuffix.ReplaceAllString(fn, "")
+	for {
+		trimmed := closureSuffix.ReplaceAllString(fn, "")
+		if trimmed == fn {
+			break
+		}
+		fn = trimmed
+	}
 	if i := strings.Index(fn, "["); i >= 0 {
 		fn = fn[:i]
 	}

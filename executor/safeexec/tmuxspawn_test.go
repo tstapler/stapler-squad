@@ -43,4 +43,6 @@ func TestShortFuncStripsClosures(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "session.(*ReviewQueuePoller).Start", shortFunc("github.com/tstapler/stapler-squad/session.(*ReviewQueuePoller).Start.func1.2"))
 	assert.Equal(t, "session.StartSessionDriver", shortFunc("github.com/tstapler/stapler-squad/session.StartSessionDriver.gowrap1"))
+	assert.Equal(t, "session.run", shortFunc("github.com/tstapler/stapler-squad/session.run.func1.gowrap1"))
+	assert.Equal(t, "session.(*T).M", shortFunc("github.com/tstapler/stapler-squad/session.(*T).M-fm"))
 }

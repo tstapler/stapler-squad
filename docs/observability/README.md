@@ -24,7 +24,7 @@ Names as written in code (VictoriaMetrics appends `_milliseconds_bucket` etc.). 
 | `tmux_exec_total` | counter | `subcommand`, `caller` | `executor/safeexec/tmuxspawn.go`; every tmux process built through `safeexec.CommandContext`; `caller` is the goroutine's entry function (the logical owner) |
 | `tmux_exec_site_total` | counter | `subcommand`, `site` | same; `site` is the function that built the command |
 | `tmux_exec_gate_wait_duration_ms` / `_exec_duration_ms` | histogram | `pool` | `session/tmux/exec_gate_observability.go` |
-| `tmux_exec_gate_in_flight` | up-down counter | `pool` | same; calls currently holding a slot |
+| `tmux_exec_gate_in_flight` | up-down counter | `pool` | same; calls running through `runGatedWith` while holding a slot (background pollers that take a slot directly with `TryAcquireExecSlot` are not counted) |
 
 Long-lived control-mode attach clients are started with `exec.CommandContext` and are not counted. The counter fires when the command is built, as `git_cli_spawn_backstop_total` does.
 
