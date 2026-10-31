@@ -107,9 +107,10 @@ func buildNativeWorktreeEntry(name, adminDir string) (WorktreeEntry, error) {
 }
 
 // freshAdminDirGrace is how long an admin dir with no readable gitdir is presumed to be a
-// SetupNewWorktree still in flight rather than crash debris. Real git applies the same idea
-// via gc.worktreePruneExpire (3 months); this is short because the in-flight window is
-// milliseconds and a crashed Add should still be reclaimed soon.
+// SetupNewWorktree still in flight rather than crash debris. Real git prunes a gitdir-less
+// dir immediately and has no such grace (its gc.worktreePruneExpire applies to a gitdir that
+// points nowhere), so this is a stricter, project-specific policy; a crashed Add, including
+// a locked-only one, is reclaimed once it is older than this.
 const freshAdminDirGrace = 5 * time.Minute
 
 // adminDirIsFresh reports whether adminDir was modified within freshAdminDirGrace. AllocateAdminDirName
@@ -121,7 +122,8 @@ func adminDirIsFresh(adminDir string) bool {
 	if err != nil {
 		return false
 	}
-	return time.Since(info.ModTime()) < freshAdminDirGrace
+	age := time.Since(info.ModTime())
+	return age >= 0 && age < freshAdminDirGrace // a future mtime (clock skew) is not "fresh"
 }
 
 // readWorktreePathFromGitdirFile reads adminDir's GitdirFile — an absolute path to the
