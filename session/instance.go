@@ -2796,8 +2796,10 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 func (i *Instance) restoreTerminalStatus(prev Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.Status != Creating || i.started.Load() {
+		return // a concurrent restart/retry already moved it on; don't clobber
+	}
 	i.loadStatus(prev)
-	i.started.Store(false)
 	i.snapshot.Store(buildSnapshot(i))
 }
 
@@ -2816,8 +2818,8 @@ func (i *Instance) recreateWorktreeIfMissing() error {
 		return nil
 	}
 	if err := i.gitManager.Setup(); err != nil {
-		return fmt.Errorf("failed to recreate missing worktree: %w", err)
+		return err
 	}
-	log.Info("recreated missing worktree before restart", "session", i.Title, "path", workDir)
+	log.Info("recreated missing worktree", "session", i.Title, "path", workDir)
 	return nil
 }
