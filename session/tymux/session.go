@@ -56,6 +56,10 @@ type tymuxGRPCSession struct {
 	// storedID is the daemon session id persisted with the Instance record;
 	// when set, RestoreWithWorkDir adopts that session regardless of its Name.
 	storedID string
+	// recordOwned marks a session adopted through storedID: the record owns it,
+	// so Close kills it even when another view of the same record holds the
+	// claim. Name-matched adoption stays claim-exclusive.
+	recordOwned bool
 
 	// extraEnv is launch env added via AppendEnv; merged into the create
 	// request at Start() (see launchEnv for precedence).
@@ -364,6 +368,9 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	if err != nil {
 		return classifyRPCError("Start", err)
 	}
+	s.mu.Lock()
+	s.recordOwned = false
+	s.mu.Unlock()
 	return s.cacheFromSession(resp.Msg)
 }
 
@@ -508,19 +515,18 @@ func (s *tymuxGRPCSession) tryClaim(sessionID string) bool {
 // reach here with no stored id). Same-title twins resolve deterministically by
 // daemon list order, first unclaimed wins; the stored id removes the ambiguity
 // for any record saved after this change.
-func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Session) *v1.Session {
+func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Session) (found *v1.Session, viaStoredID bool) {
 	s.mu.RLock()
 	storedID := s.storedID
 	s.mu.RUnlock()
 	if storedID != "" {
 		for _, sess := range sessions {
-			if sess.GetId() != storedID {
-				continue
+			if sess.GetId() == storedID {
+				// Another view of this same record may already hold the claim; the
+				// record's own id is never a twin, so attach instead of spawning.
+				s.tryClaim(storedID)
+				return sess, true
 			}
-			if s.tryClaim(storedID) {
-				return sess
-			}
-			return nil // present but another owner holds it: never share, never guess by name
 		}
 		// Absent from the daemon (it lost the session): fall through to label/legacy.
 	}
@@ -528,11 +534,11 @@ func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Sessio
 	for _, name := range []string{labeled, workDir} {
 		for _, sess := range sessions {
 			if sess.GetName() == name && s.tryClaim(sess.GetId()) {
-				return sess
+				return sess, false
 			}
 		}
 	}
-	return nil
+	return nil, false
 }
 
 // RestoreWithWorkDir reconciles this session against tymuxd after a
@@ -552,7 +558,7 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 	if err != nil {
 		return classifyRPCError("RestoreWithWorkDir", err)
 	}
-	found := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
+	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
 		return s.Start(workDir)
 	}
@@ -564,6 +570,9 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 		}
 		found = revived
 	}
+	s.mu.Lock()
+	s.recordOwned = viaStoredID
+	s.mu.Unlock()
 	return s.cacheFromSession(found)
 }
 
@@ -610,6 +619,7 @@ func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Sessi
 func (s *tymuxGRPCSession) Close() error {
 	s.mu.RLock()
 	sessionID := s.sessionID
+	recordOwned := s.recordOwned
 	s.mu.RUnlock()
 	log.Info("tymux: session closing", logKeySessionID, sessionID)
 	// Task 2.5.1a: mark this generation as deliberately ending BEFORE
@@ -628,11 +638,19 @@ func (s *tymuxGRPCSession) Close() error {
 		pty.close()
 	}
 	if sessionID == "" {
-		return nil
+		// Never restored/started in this process: a stored id still names the
+		// daemon session this record owns.
+		s.mu.RLock()
+		sessionID = s.storedID
+		s.mu.RUnlock()
+		if sessionID == "" {
+			return nil
+		}
+		recordOwned = true
 	}
 	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
 	// take down a session another Instance adopted.
-	owned := claimedSessions.CompareAndDelete(sessionID, any(s))
+	owned := claimedSessions.CompareAndDelete(sessionID, any(s)) || recordOwned
 	var err error
 	if owned {
 		_, err = s.transport.KillSession(context.Background(), connect.NewRequest(&v1.KillSessionRequest{
@@ -644,6 +662,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	s.storedID = ""
+	s.recordOwned = false // a repeat Close must not kill again
 	s.liveness = v1.Liveness_LIVENESS_DEAD
 	s.restartIsPending = false
 	s.mu.Unlock()
@@ -1185,3 +1204,25 @@ func (s *tymuxGRPCSession) BackendRestarted() (restarted bool, since time.Time) 
 
 // compile-time check that *tymuxGRPCSession satisfies TymuxManager.
 var _ TymuxManager = (*tymuxGRPCSession)(nil)
+
+// StoredSessionLive reports whether the daemon lists this record's stored
+// session as live, without restoring or claiming it. It lets a never-started
+// view (a liveness shadow) answer the same question a restored Instance would.
+func (s *tymuxGRPCSession) StoredSessionLive() bool {
+	s.mu.RLock()
+	storedID := s.storedID
+	s.mu.RUnlock()
+	if storedID == "" {
+		return false
+	}
+	resp, err := s.transport.ListSessions(context.Background(), connect.NewRequest(&v1.ListSessionsRequest{}))
+	if err != nil {
+		return false
+	}
+	for _, sess := range resp.Msg.GetSessions() {
+		if sess.GetId() == storedID {
+			return sess.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+		}
+	}
+	return false
+}
