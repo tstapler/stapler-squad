@@ -39,10 +39,10 @@ type ArtifactExtractor struct {
 
 	// positions tracks where each file was last scanned to.
 	posMu     sync.Mutex
-	positions map[string]scanstate.Position
+	positions map[string]trackedPos
 
 	states     StateStore
-	writer     *scanstate.Writer[scanstate.Position]
+	writer     *scanstate.Writer[trackedPos]
 	flushEvery time.Duration
 
 	// titleMu serializes mergeAndPersist calls for the same session title,
@@ -74,7 +74,7 @@ func NewArtifactExtractor(
 	opts ...Option,
 ) *ArtifactExtractor {
 	ae := &ArtifactExtractor{
-		positions:      make(map[string]scanstate.Position),
+		positions:      make(map[string]trackedPos),
 		flushEvery:     flushInterval,
 		storeFn:        storeFn,
 		readFn:         readFn,
@@ -87,8 +87,8 @@ func NewArtifactExtractor(
 	}
 	ae.queue = scanqueue.New(qc, ae.scanFile)
 	if ae.states != nil {
-		ae.writer = scanstate.NewWriter(ae.states, func(_ string, p scanstate.Position) (scanstate.Record, error) {
-			return scanstate.Record{Position: p}, nil
+		ae.writer = scanstate.NewWriter(ae.states, func(_ string, t trackedPos) (scanstate.Record, error) {
+			return scanstate.Record{Position: t.Position, State: []byte(t.owner)}, nil
 		})
 	}
 	return ae
@@ -119,19 +119,34 @@ func (ae *ArtifactExtractor) FlushState(ctx context.Context) error {
 	return ae.writer.Flush(ctx, 0)
 }
 
-func (ae *ArtifactExtractor) position(filePath string) (scanstate.Position, bool) {
-	ae.posMu.Lock()
-	defer ae.posMu.Unlock()
-	p, ok := ae.positions[filePath]
-	return p, ok
+// trackedPos is a scan position plus the session title it was scanned for. The
+// owner is persisted so a position is never trusted for a different session:
+// that session's artifacts would be skipped, not rescanned. Empty owner means
+// unknown (a SeedOffsets seed), which is trusted as before.
+type trackedPos struct {
+	scanstate.Position
+	owner string
 }
 
-func (ae *ArtifactExtractor) setPosition(filePath string, p scanstate.Position) {
+func (ae *ArtifactExtractor) position(filePath string) (scanstate.Position, bool) {
+	t, ok := ae.tracked(filePath)
+	return t.Position, ok
+}
+
+func (ae *ArtifactExtractor) tracked(filePath string) (trackedPos, bool) {
 	ae.posMu.Lock()
-	ae.positions[filePath] = p
+	defer ae.posMu.Unlock()
+	t, ok := ae.positions[filePath]
+	return t, ok
+}
+
+func (ae *ArtifactExtractor) setPosition(filePath, owner string, p scanstate.Position) {
+	t := trackedPos{Position: p, owner: owner}
+	ae.posMu.Lock()
+	ae.positions[filePath] = t
 	ae.posMu.Unlock()
 	if ae.writer != nil {
-		ae.writer.Mark(filePath, p)
+		ae.writer.Mark(filePath, t)
 	}
 }
 
@@ -152,7 +167,7 @@ func (ae *ArtifactExtractor) restoreState(ctx context.Context) {
 		if cur, ok := ae.positions[path]; ok && cur.Size != 0 {
 			continue
 		}
-		ae.positions[path] = rec.Position
+		ae.positions[path] = trackedPos{Position: rec.Position, owner: string(rec.State)}
 	}
 	ae.posMu.Unlock()
 }
@@ -212,7 +227,7 @@ func (ae *ArtifactExtractor) SeedOffsets(instances []InstanceInfo) {
 		}
 		var blob SessionArtifactsBlob
 		if err := json.Unmarshal([]byte(raw), &blob); err == nil && blob.ScanOffsetBytes > 0 {
-			ae.positions[inst.HistoryFilePath] = scanstate.Position{Offset: blob.ScanOffsetBytes}
+			ae.positions[inst.HistoryFilePath] = trackedPos{Position: scanstate.Position{Offset: blob.ScanOffsetBytes}}
 		}
 	}
 }

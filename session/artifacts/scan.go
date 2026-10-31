@@ -19,13 +19,17 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 	if err != nil {
 		return // file may have been deleted
 	}
-	pos, known := ae.position(filePath)
-	if known && pos.Unchanged(fi) {
+	prev, known := ae.tracked(filePath)
+	if known && prev.Unchanged(fi) {
 		return
 	}
 	title, ok := ae.lookupTitle(filePath)
 	if !ok {
 		return
+	}
+	pos := prev.Position
+	if known && prev.owner != "" && prev.owner != title {
+		pos = scanstate.Position{} // a different session now owns the file: scan it all
 	}
 
 	f, err := os.Open(filePath) // #nosec G304 -- filePath comes from HistoryLinker's filesystem watch of ~/.claude/projects, an enumerated existing conversation file path, not external request input
@@ -58,7 +62,7 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 
 	if found.empty() {
 		// New bytes held no artifacts — advance so they are not re-scanned.
-		ae.setPosition(filePath, newPos)
+		ae.setPosition(filePath, title, newPos)
 		return
 	}
 
@@ -74,7 +78,7 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 		log.Warn("[ArtifactExtractor] persist failed", "session", title, "err", err)
 		return
 	}
-	ae.setPosition(filePath, newPos)
+	ae.setPosition(filePath, title, newPos)
 	ae.OnScanComplete(title, blob)
 }
 

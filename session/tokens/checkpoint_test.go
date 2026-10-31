@@ -341,3 +341,23 @@ func encodeWithVersion(t *testing.T, st *parseState, v int) []byte {
 	require.NoError(t, zw.Close())
 	return buf.Bytes()
 }
+
+func TestTokenStore_MissingHistoryDirDoesNotWipeCheckpoints(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sess.jsonl")
+	writeFile(t, path, readFixture(t, "valid_session"))
+	states := newMemStates()
+	ctx := context.Background()
+
+	first := NewTokenStore(dir, WithStateStore(states))
+	first.parseAndCache(path)
+	require.NoError(t, first.FlushState(ctx))
+	require.NoError(t, os.RemoveAll(dir)) // e.g. the projects volume is not mounted yet
+
+	second := NewTokenStore(dir, WithStateStore(states))
+	second.walkAndEnqueue(ctx)
+
+	assert.Empty(t, states.deleted, "an unreadable history dir proves nothing about deleted transcripts")
+	assert.Len(t, states.recs, 1)
+}

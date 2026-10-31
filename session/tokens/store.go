@@ -351,8 +351,13 @@ func (ts *TokenStore) walkAndEnqueue(ctx context.Context) {
 		return
 	}
 
-	_ = filepath.WalkDir(ts.historyDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() || ctx.Err() != nil {
+	walkClean := true
+	err := filepath.WalkDir(ts.historyDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			walkClean = false // part of the tree is unreadable: absence proves nothing
+			return nil
+		}
+		if d.IsDir() || ctx.Err() != nil {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".jsonl") {
@@ -370,7 +375,9 @@ func (ts *TokenStore) walkAndEnqueue(ctx context.Context) {
 		ts.queue.EnqueueBackfill(path)
 		return nil
 	})
-	if ctx.Err() == nil {
+	// Only a complete walk can prove a transcript is gone; an unmounted or
+	// unreadable history dir must not wipe the persisted checkpoints.
+	if err == nil && walkClean && ctx.Err() == nil {
 		ts.dropUnseenRestored(ctx)
 	}
 }

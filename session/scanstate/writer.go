@@ -19,8 +19,9 @@ type Writer[T any] struct {
 	saver Saver
 	build func(path string, v T) (Record, error)
 
-	mu    sync.Mutex
-	dirty map[string]T
+	flushMu sync.Mutex // serializes Flush so an older batch never saves over a newer one
+	mu      sync.Mutex
+	dirty   map[string]T
 }
 
 // NewWriter builds a Writer. build turns a pending value into a Record at flush
@@ -47,6 +48,8 @@ func (w *Writer[T]) Pending() int {
 // fails to build is dropped until its next Mark; a failed Save re-queues the
 // batch unless newer values arrived.
 func (w *Writer[T]) Flush(ctx context.Context, limit int) error {
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
 	batch := w.take(limit)
 	if len(batch) == 0 {
 		return nil

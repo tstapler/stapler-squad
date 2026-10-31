@@ -190,3 +190,25 @@ func TestScanFile_PartialLastLineWaitsForItsNewline(t *testing.T) {
 		t.Fatalf("completed line not picked up exactly once: %v", got)
 	}
 }
+
+func TestScanFile_NewOwnerRescansFileFromTheTop(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	appendLines(t, path, "PR https://github.com/o/r/pull/1")
+	owner := "A"
+	var blobs = map[string]string{}
+	ae := NewArtifactExtractor(
+		func(title, blob string) error { blobs[title] = blob; return nil },
+		func(title string) (string, error) { return blobs[title], nil },
+		func(string) (string, bool) { return owner, true },
+	)
+	ae.scanFile(path)
+
+	owner = "B" // another session takes over the same transcript
+	appendLines(t, path, "no artifact")
+	ae.scanFile(path)
+
+	if got := prURLs(t, blobs["B"]); len(got) != 1 || got[0] != "https://github.com/o/r/pull/1" {
+		t.Fatalf("new owner missed artifacts from before it owned the file: %v", got)
+	}
+}
