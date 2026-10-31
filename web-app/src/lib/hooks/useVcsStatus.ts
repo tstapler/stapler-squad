@@ -32,6 +32,7 @@ const vcsGeneration = new Map<string, number>();
 interface VcsFlight {
   promise: Promise<VcsCacheEntry>;
   focused: boolean;
+  waitForFresh: boolean;
   /** Settles `promise`; lets a replacement flight answer the callers of one it supersedes. */
   settle: { resolve: (e: VcsCacheEntry) => void; reject: (err: unknown) => void };
   /** Stops a superseded request (dequeues it, or aborts it on the wire). */
@@ -70,7 +71,7 @@ function startFlight(sessionId: string, focused: boolean, waitForFresh: boolean)
   const client = createClient(SessionService, getConnectTransport());
   const controller = new AbortController();
   let cancelled = false;
-  const flight = { focused } as VcsFlight;
+  const flight = { focused, waitForFresh } as VcsFlight;
   flight.promise = new Promise<VcsCacheEntry>((resolve, reject) => {
     flight.settle = { resolve, reject };
   });
@@ -150,7 +151,7 @@ export function fetchVcsEntry(sessionId: string, force = false, focused = true, 
   }
   const existing = vcsInflight.get(sessionId);
   if (!existing) return startFlight(sessionId, focused, waitForFresh).promise;
-  if (focused && !existing.focused) return supersede(sessionId, existing, waitForFresh || force).promise;
+  if (focused && !existing.focused) return supersede(sessionId, existing, waitForFresh || existing.waitForFresh).promise;
   if (!(force && waitForFresh)) return existing.promise;
   if (existing.trailing && (existing.trailing.focused || !focused)) return existing.trailing.promise;
   const settled = () => undefined;
@@ -177,10 +178,10 @@ export function resetVcsCacheForTests(): void {
  * Warm the VCS cache for a session without rendering anything.
  * Call from SessionDetail when a session is selected.
  */
-export async function prefetchVcsStatus(sessionId: string, baseUrl: string): Promise<void> {
+export async function prefetchVcsStatus(sessionId: string, baseUrl: string, focused = true): Promise<void> {
   void baseUrl;
   try {
-    await fetchVcsEntry(sessionId);
+    await fetchVcsEntry(sessionId, false, focused);
   } catch {
     // Prefetch failures are silent – the hook will retry on mount.
   }

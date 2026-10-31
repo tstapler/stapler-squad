@@ -10,7 +10,7 @@ jest.mock("@connectrpc/connect", () => ({
 }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
 
-import { fetchVcsEntry, MAX_BACKGROUND_VCS_CALLS, resetVcsCacheForTests } from "@/lib/hooks/useVcsStatus";
+import { fetchVcsEntry, MAX_BACKGROUND_VCS_CALLS, prefetchVcsStatus, resetVcsCacheForTests } from "@/lib/hooks/useVcsStatus";
 
 interface Pending {
   args: { id: string; waitForFresh: boolean };
@@ -51,6 +51,7 @@ describe("fetchVcsEntry fan-out", () => {
 
     expect(pending).toHaveLength(2);
     expect(pending[0].opts?.signal?.aborted).toBe(true); // the background request is withdrawn, not left running
+    expect(pending[1].args.waitForFresh).toBe(false); // superseding must not turn a plain poll into a fresh-only request
     pending[1].resolve("main");
     await expect(focused).resolves.toMatchObject({ data: { branch: "main" } });
     await expect(background).resolves.toMatchObject({ data: { branch: "main" } }); // its callers get the focused answer
@@ -110,5 +111,14 @@ describe("fetchVcsEntry fan-out", () => {
     pending.forEach((p) => p.resolve("x"));
     await Promise.all([...all, focused]);
     expect(mockGetVCSStatus).toHaveBeenCalledTimes(sessions.length + 1);
+  });
+
+  it("prefetchVcsStatus_should_RunAsBackground_When_PaneNotFocused", async () => {
+    const pending = installPendingTransport();
+    const p = prefetchVcsStatus("s9", "", false);
+    await flush();
+    expect(pending[0].opts?.signal).toBeDefined(); // background calls carry the supersede signal; focused ones do not
+    pending[0].resolve("x");
+    await p;
   });
 });
