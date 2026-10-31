@@ -60,6 +60,8 @@ func shellToProto(sh *session.Shell) *sessionv1.Shell {
 // session_id may be a Title or a UUID; we scan instance data to find the canonical title.
 // Returns (title, nil) on success or (_, connect.Error) on failure.
 func (s *SessionService) resolveSessionTitle(sessionID string) (string, error) {
+	// A session deleted from storage but still polled resolves until the poller
+	// drops it; that is acceptable for these shell RPCs.
 	// Live instances are authoritative and in memory; skipping the full-table
 	// ListInstanceData read keeps polled shell RPCs off the single SQLite writer
 	// queue (ListShells p50 was ~750ms from DB contention, not handler work).

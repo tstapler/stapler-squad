@@ -14,6 +14,9 @@ import (
 // hundreds of back-to-back SELECTs per stream during a rescan.
 const watchSessionMetaTTL = 5 * time.Second
 
+// watchSessionMetaLoadTimeout bounds one shared load.
+const watchSessionMetaLoadTimeout = 30 * time.Second
+
 // sessionMetaCache is a short-TTL cache plus singleflight over
 // sessionMetaForSessions. The zero value is ready to use.
 type sessionMetaCache struct {
@@ -44,7 +47,19 @@ func (c *sessionMetaCache) get(ctx context.Context, load func(context.Context) m
 	c.mu.Unlock()
 
 	v, _, _ := c.flight.Do("meta", func() (any, error) {
-		m := load(ctx)
+		// Re-check: a flight that finished after our miss has already filled the cache.
+		c.mu.Lock()
+		if c.meta != nil && c.clock().Before(c.expires) {
+			m := c.meta
+			c.mu.Unlock()
+			return m, nil
+		}
+		c.mu.Unlock()
+		// The load is shared with every waiter, so it must not die with the
+		// first caller's stream; the timeout bounds it instead.
+		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), watchSessionMetaLoadTimeout)
+		defer cancel()
+		m := load(lctx)
 		if m != nil {
 			c.mu.Lock()
 			c.meta, c.expires = m, c.clock().Add(watchSessionMetaTTL)

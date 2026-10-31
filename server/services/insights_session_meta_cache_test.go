@@ -62,3 +62,17 @@ func TestWatchInsights_should_ScanBacklogOncePerBurst(t *testing.T) {
 	assert.Equal(t, 1, reader.calls, "backlog scans for %d events", events)
 	requireCleanReturn(t, cancel, done)
 }
+
+func TestSessionMetaCache_should_NotFailWaiters_When_FirstCallerCancels(t *testing.T) {
+	t.Parallel()
+	c := &sessionMetaCache{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	load := func(lctx context.Context) map[string]SessionMeta {
+		if lctx.Err() != nil {
+			return nil
+		}
+		return map[string]SessionMeta{"a": {}}
+	}
+	assert.Contains(t, c.get(ctx, load), "a", "a cancelled caller's ctx must not abort the shared load")
+}

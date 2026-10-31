@@ -677,6 +677,7 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 				if s.associator != nil {
 					snapshot = s.associator.Snapshot()
 				}
+				// Up to watchSessionMetaTTL stale: a refetch via GetInsightsSummary reads fresh meta.
 				sessionMeta := s.watchMeta.get(ctx, func(ctx context.Context) map[string]SessionMeta {
 					return s.sessionMetaForSessions(ctx).meta
 				})
