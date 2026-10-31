@@ -462,3 +462,18 @@ func TestMuxBridge_should_RefuseUpgrade_When_RemoteListenerLacksAuthOrOriginMatc
 	assert.Equal(t, http.StatusSwitchingProtocols, dial(ListenerRemote, true, "https://ok.example"))
 	assert.Equal(t, http.StatusForbidden, dial(ListenerLocal, false, "https://evil.example"), "local non-loopback origin")
 }
+
+func TestMuxBridge_should_ReportCounts_And_ValidateRequestedSize(t *testing.T) {
+	t.Parallel()
+	c, bridge := newMuxTestClient(t, echoServe, 2)
+	c.next(muxFrameHello)
+	c.send(encodeMuxEmpty(muxFrameOpen, 1))
+	c.send(encodeMuxEmpty(muxFrameOpen, 2))
+	require.Eventually(t, func() bool { return bridge.Report().Streams == 2 }, muxTestWait, 5*time.Millisecond)
+	assert.Equal(t, TerminalMuxReport{PoolSize: 2, Sockets: 1, Streams: 2}, bridge.Report())
+
+	for raw, want := range map[string]bool{"0": true, "64": true, " 3 ": true, "65": false, "-1": false, "x": false, "": false} {
+		_, ok := ParseTerminalMuxPoolSize(raw)
+		assert.Equal(t, want, ok, raw)
+	}
+}
