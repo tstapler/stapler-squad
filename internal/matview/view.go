@@ -1,0 +1,643 @@
+// Package matview keeps a materialized, event-fed cache of values computed
+// from an expensive function (ADR-034). Change sources invalidate keys; a
+// per-key debounce and a bounded, prioritised scheduler recompute them off the
+// request path; readers get the cached value and subscribers get conflated
+// updates. Get never runs the compute function on the caller's goroutine.
+package matview
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+)
+
+// Reason says why a key was invalidated.
+type Reason string
+
+// Invalidation reasons. AppWrite, Overflow and Lifecycle skip the debounce:
+// the app knows the change just happened, or events were lost.
+const (
+	ReasonFS        Reason = "fs"
+	ReasonAppWrite  Reason = "app_write"
+	ReasonLifecycle Reason = "lifecycle"
+	ReasonPR        Reason = "pr"
+	ReasonBackstop  Reason = "backstop"
+	ReasonOverflow  Reason = "overflow"
+	ReasonResume    Reason = "resume"
+)
+
+func (r Reason) immediate() bool {
+	return r == ReasonAppWrite || r == ReasonOverflow || r == ReasonLifecycle
+}
+
+var (
+	// ErrTimeout means a Get deadline passed with no value to fall back on.
+	ErrTimeout = errors.New("matview: timed out waiting for compute")
+	// ErrClosed means the view was closed.
+	ErrClosed = errors.New("matview: closed")
+	// ErrRemoved means the key was removed while a Get was waiting.
+	ErrRemoved = errors.New("matview: key removed")
+)
+
+// Versioned is a computed value with its identity.
+type Versioned[V any] struct {
+	Value V
+	// Rev is a per-view counter that bumps only when the value's ETag changes.
+	Rev        uint64
+	ETag       string
+	ComputedAt time.Time
+	// Stale marks a value returned after a failed or timed-out refresh. It is
+	// set on the returned copy only, never stored.
+	Stale bool
+}
+
+// Update is delivered to subscribers.
+type Update[K comparable, V any] struct {
+	Key K
+	Versioned[V]
+	Removed bool
+}
+
+// GetOpts tunes a Get.
+type GetOpts struct {
+	// WaitFresh waits for a compute that started after this call.
+	WaitFresh bool
+	// Deadline overrides Config.GetDeadline when non-zero.
+	Deadline time.Duration
+}
+
+// Limiter bounds concurrent computes and may be shared with other users of the
+// same resource (the VCS request-path flights). TryAcquire must not block.
+type Limiter interface {
+	TryAcquire() bool
+	Release()
+}
+
+// ChangeSource reports changed keys. Subscribe returns a stop function.
+type ChangeSource[K comparable] interface {
+	Subscribe(fn func(K, Reason)) (stop func())
+}
+
+// Config configures a View. Compute and ETag are required.
+type Config[K comparable, V any] struct {
+	Compute func(ctx context.Context, k K) (V, error)
+	ETag    func(V) string
+
+	Clock   Clock
+	Limiter Limiter
+
+	Quiet   time.Duration // trailing debounce; default 300ms
+	MaxWait time.Duration // forced compute under continuous events; default 2s
+
+	FreshTTL time.Duration // unwatched entry served as-is; default 15s
+	StaleTTL time.Duration // unwatched entry served while refreshing; default 60s
+
+	GetDeadline    time.Duration // default 10s
+	ComputeTimeout time.Duration // default 30s
+	RetryDelay     time.Duration // re-check when the limiter is saturated; default 50ms
+
+	MaxConcurrent  int           // used when Limiter is nil; default 4
+	UnpinnedCap    int           // default 256
+	MaxPinned      int           // default 512
+	MaxKeysPerSub  int           // default 64
+	IdleEvictAfter time.Duration // default 10m; <0 disables the idle sweep
+}
+
+func (c *Config[K, V]) defaults() {
+	setDur := func(p *time.Duration, d time.Duration) {
+		if *p == 0 {
+			*p = d
+		}
+	}
+	setDur(&c.Quiet, 300*time.Millisecond)
+	setDur(&c.MaxWait, 2*time.Second)
+	setDur(&c.FreshTTL, 15*time.Second)
+	setDur(&c.StaleTTL, 60*time.Second)
+	setDur(&c.GetDeadline, 10*time.Second)
+	setDur(&c.ComputeTimeout, 30*time.Second)
+	setDur(&c.RetryDelay, 50*time.Millisecond)
+	setDur(&c.IdleEvictAfter, 10*time.Minute)
+	setInt := func(p *int, n int) {
+		if *p == 0 {
+			*p = n
+		}
+	}
+	setInt(&c.MaxConcurrent, 4)
+	setInt(&c.UnpinnedCap, 256)
+	setInt(&c.MaxPinned, 512)
+	setInt(&c.MaxKeysPerSub, 64)
+	if c.Clock == nil {
+		c.Clock = RealClock{}
+	}
+	if c.Limiter == nil {
+		c.Limiter = newSemaphore(c.MaxConcurrent)
+	}
+}
+
+// Stats is a point-in-time copy of the view's counters, for metrics.
+type Stats struct {
+	Entries, Pinned, Queued, Running, Degraded, Subscribers int
+	EventsReceived, EventsCoalesced, EventsIgnored          uint64
+	Recomputes, RecomputeErrors, Evictions                  uint64
+	PinRejected                                             uint64
+}
+
+type waiter[V any] struct {
+	since uint64
+	done  chan waitResult[V]
+}
+
+type waitResult[V any] struct {
+	v   Versioned[V]
+	err error
+}
+
+type entry[K comparable, V any] struct {
+	key      K
+	cur      Versioned[V]
+	has      bool
+	pins     int
+	degraded bool
+	lastRead time.Time
+
+	timer      Timer
+	gen        uint64
+	firstDirty time.Time
+	queued     bool
+	queuedAt   time.Time
+	running    bool
+	startSeq   uint64
+	rerun      bool
+	waiters    []*waiter[V]
+	subs       map[*subscriber[K, V]]struct{}
+}
+
+// watched means events keep the entry current, so its age says nothing.
+func (e *entry[K, V]) watched() bool { return e.pins > 0 && !e.degraded }
+
+// View is the materialized view. The zero value is not usable; call New.
+type View[K comparable, V any] struct {
+	cfg Config[K, V]
+
+	mu      sync.Mutex
+	entries map[K]*entry[K, V]
+	queued  map[*entry[K, V]]struct{}
+	retry   Timer
+	sweeper Timer
+	stops   []func()
+	seq     uint64
+	rev     uint64
+	pinned  int
+	closed  bool
+	done    chan struct{}
+	stats   Stats
+}
+
+// New builds a View. It panics if Compute or ETag is nil.
+func New[K comparable, V any](cfg Config[K, V]) *View[K, V] {
+	if cfg.Compute == nil || cfg.ETag == nil {
+		panic("matview: Compute and ETag are required")
+	}
+	cfg.defaults()
+	v := &View[K, V]{
+		cfg:     cfg,
+		entries: map[K]*entry[K, V]{},
+		queued:  map[*entry[K, V]]struct{}{},
+		done:    make(chan struct{}),
+	}
+	if cfg.IdleEvictAfter > 0 {
+		v.armSweepLocked()
+	}
+	return v
+}
+
+// Attach wires a change source to Invalidate. It is detached on Close.
+func (v *View[K, V]) Attach(src ChangeSource[K]) {
+	stop := src.Subscribe(v.Invalidate)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed {
+		stop()
+		return
+	}
+	v.stops = append(v.stops, stop)
+}
+
+// Invalidate marks a known key dirty. Unknown keys are ignored: entries are
+// created lazily by Get and Subscribe, never by events.
+func (v *View[K, V]) Invalidate(k K, why Reason) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed {
+		return
+	}
+	e, ok := v.entries[k]
+	if !ok {
+		v.stats.EventsIgnored++
+		return
+	}
+	v.stats.EventsReceived++
+	v.markDirtyLocked(e, why.immediate())
+}
+
+// Get returns the cached value for k, registering the key on first use. A
+// miss, or WaitFresh, queues a compute at top priority and waits for it.
+func (v *View[K, V]) Get(ctx context.Context, k K, opt GetOpts) (Versioned[V], error) {
+	v.mu.Lock()
+	if v.closed {
+		v.mu.Unlock()
+		return Versioned[V]{}, ErrClosed
+	}
+	e := v.entryLocked(k)
+	now := v.cfg.Clock.Now()
+	e.lastRead = now
+	if !opt.WaitFresh && e.has {
+		if cur, ok := v.serveLocked(e, now); ok {
+			v.mu.Unlock()
+			return cur, nil
+		}
+	}
+	v.seq++
+	w := &waiter[V]{since: v.seq, done: make(chan waitResult[V], 1)}
+	e.waiters = append(e.waiters, w)
+	v.requestLocked(e)
+	v.mu.Unlock()
+
+	deadline := opt.Deadline
+	if deadline == 0 {
+		deadline = v.cfg.GetDeadline
+	}
+	expired := make(chan struct{})
+	t := v.cfg.Clock.AfterFunc(deadline, func() { close(expired) })
+	defer t.Stop()
+
+	select {
+	case r := <-w.done:
+		return r.v, r.err
+	case <-expired:
+		return v.abandon(e, w, ErrTimeout)
+	case <-ctx.Done():
+		return v.abandon(e, w, ctx.Err())
+	case <-v.done:
+		return Versioned[V]{}, ErrClosed
+	}
+}
+
+// abandon drops a waiter that gave up. The current value, if any, is returned
+// marked Stale; otherwise the cause is the error.
+func (v *View[K, V]) abandon(e *entry[K, V], w *waiter[V], cause error) (Versioned[V], error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	select {
+	case r := <-w.done: // completed concurrently
+		return r.v, r.err
+	default:
+	}
+	for i, x := range e.waiters {
+		if x == w {
+			e.waiters = append(e.waiters[:i], e.waiters[i+1:]...)
+			break
+		}
+	}
+	if e.has && errors.Is(cause, ErrTimeout) {
+		cur := e.cur
+		cur.Stale = true
+		return cur, nil
+	}
+	return Versioned[V]{}, cause
+}
+
+// serveLocked applies the freshness tiers. Watched entries are always served;
+// unwatched ones are fresh up to FreshTTL, served while refreshing up to
+// StaleTTL, and a miss beyond that.
+func (v *View[K, V]) serveLocked(e *entry[K, V], now time.Time) (Versioned[V], bool) {
+	if e.watched() {
+		return e.cur, true
+	}
+	age := now.Sub(e.cur.ComputedAt)
+	switch {
+	case age <= v.cfg.FreshTTL:
+		return e.cur, true
+	case age <= v.cfg.StaleTTL:
+		v.enqueueLocked(e)
+		v.pumpLocked()
+		return e.cur, true
+	}
+	return Versioned[V]{}, false
+}
+
+// requestLocked starts a compute a waiter can trust: one that begins after the
+// waiter registered.
+func (v *View[K, V]) requestLocked(e *entry[K, V]) {
+	if e.running {
+		e.rerun = true
+		return
+	}
+	v.enqueueLocked(e)
+	v.pumpLocked()
+}
+
+func (v *View[K, V]) entryLocked(k K) *entry[K, V] {
+	if e, ok := v.entries[k]; ok {
+		return e
+	}
+	e := &entry[K, V]{key: k, subs: map[*subscriber[K, V]]struct{}{}, lastRead: v.cfg.Clock.Now()}
+	v.entries[k] = e
+	v.evictOverCapLocked()
+	return e
+}
+
+func (v *View[K, V]) markDirtyLocked(e *entry[K, V], immediate bool) {
+	now := v.cfg.Clock.Now()
+	if e.firstDirty.IsZero() {
+		e.firstDirty = now
+	}
+	if e.running {
+		e.rerun = true
+		v.stats.EventsCoalesced++
+		return
+	}
+	if e.queued {
+		v.stats.EventsCoalesced++
+		return
+	}
+	if immediate {
+		v.stopTimerLocked(e)
+		v.enqueueLocked(e)
+		v.pumpLocked()
+		return
+	}
+	if e.timer != nil {
+		v.stats.EventsCoalesced++
+	}
+	v.armDebounceLocked(e, now)
+}
+
+func (v *View[K, V]) armDebounceLocked(e *entry[K, V], now time.Time) {
+	if e.firstDirty.IsZero() {
+		e.firstDirty = now
+	}
+	delay := v.cfg.Quiet
+	if remain := e.firstDirty.Add(v.cfg.MaxWait).Sub(now); remain < delay {
+		delay = remain
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	v.stopTimerLocked(e)
+	gen := e.gen
+	e.timer = v.cfg.Clock.AfterFunc(delay, func() { v.fire(e, gen) })
+}
+
+func (v *View[K, V]) stopTimerLocked(e *entry[K, V]) {
+	if e.timer != nil {
+		e.timer.Stop()
+		e.timer = nil
+	}
+	e.gen++
+}
+
+func (v *View[K, V]) fire(e *entry[K, V], gen uint64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed || e.gen != gen || e.timer == nil {
+		return
+	}
+	e.timer = nil
+	v.enqueueLocked(e)
+	v.pumpLocked()
+}
+
+func (v *View[K, V]) enqueueLocked(e *entry[K, V]) {
+	if e.queued {
+		return
+	}
+	if e.running {
+		e.rerun = true
+		return
+	}
+	v.stopTimerLocked(e)
+	e.queued = true
+	e.queuedAt = v.cfg.Clock.Now()
+	v.queued[e] = struct{}{}
+}
+
+// better reports whether a should run before b: waiters first, then pinned
+// entries, then the longest-queued.
+func better[K comparable, V any](a, b *entry[K, V]) bool {
+	if (len(a.waiters) > 0) != (len(b.waiters) > 0) {
+		return len(a.waiters) > 0
+	}
+	if (a.pins > 0) != (b.pins > 0) {
+		return a.pins > 0
+	}
+	return a.queuedAt.Before(b.queuedAt)
+}
+
+func (v *View[K, V]) pumpLocked() {
+	for len(v.queued) > 0 {
+		var best *entry[K, V]
+		for e := range v.queued {
+			if best == nil || better(e, best) {
+				best = e
+			}
+		}
+		if !v.cfg.Limiter.TryAcquire() {
+			v.armRetryLocked()
+			return
+		}
+		delete(v.queued, best)
+		best.queued = false
+		best.running = true
+		best.firstDirty = time.Time{}
+		v.seq++
+		best.startSeq = v.seq
+		go v.run(best, best.startSeq)
+	}
+}
+
+func (v *View[K, V]) armRetryLocked() {
+	if v.retry != nil || v.closed {
+		return
+	}
+	v.retry = v.cfg.Clock.AfterFunc(v.cfg.RetryDelay, func() {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		v.retry = nil
+		if !v.closed {
+			v.pumpLocked()
+		}
+	})
+}
+
+func (v *View[K, V]) run(e *entry[K, V], startSeq uint64) {
+	ctx, cancel := context.WithTimeout(context.Background(), v.cfg.ComputeTimeout)
+	go func() {
+		select {
+		case <-v.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	val, err := v.cfg.Compute(ctx, e.key)
+	cancel()
+	etag := ""
+	if err == nil {
+		etag = v.cfg.ETag(val)
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cfg.Limiter.Release()
+	e.running = false
+	v.stats.Recomputes++
+	if v.entries[e.key] != e || v.closed {
+		v.finishWaitersLocked(e, startSeq, Versioned[V]{}, ErrRemoved)
+		return
+	}
+	if err != nil {
+		v.stats.RecomputeErrors++
+		v.finishWaitersLocked(e, startSeq, v.staleCopy(e), failureOrNil(e, err))
+	} else {
+		v.publishLocked(e, val, etag)
+		v.finishWaitersLocked(e, startSeq, e.cur, nil)
+	}
+	rerun := e.rerun
+	e.rerun = false
+	switch {
+	case len(e.waiters) > 0:
+		v.enqueueLocked(e)
+	case rerun:
+		v.armDebounceLocked(e, v.cfg.Clock.Now())
+	}
+	v.pumpLocked()
+}
+
+func (v *View[K, V]) staleCopy(e *entry[K, V]) Versioned[V] {
+	cur := e.cur
+	cur.Stale = true
+	return cur
+}
+
+// failureOrNil hides a compute error behind a previous value: readers keep the
+// last good status, marked Stale, rather than an error.
+func failureOrNil[K comparable, V any](e *entry[K, V], err error) error {
+	if e.has {
+		return nil
+	}
+	return err
+}
+
+func (v *View[K, V]) publishLocked(e *entry[K, V], val V, etag string) {
+	now := v.cfg.Clock.Now()
+	changed := !e.has || e.cur.ETag != etag
+	if changed {
+		v.rev++
+		e.cur = Versioned[V]{Value: val, Rev: v.rev, ETag: etag, ComputedAt: now}
+	} else {
+		e.cur.ComputedAt = now
+	}
+	e.has = true
+	if changed {
+		for s := range e.subs {
+			s.put(Update[K, V]{Key: e.key, Versioned: e.cur})
+		}
+	}
+}
+
+func (v *View[K, V]) finishWaitersLocked(e *entry[K, V], startSeq uint64, cur Versioned[V], err error) {
+	kept := e.waiters[:0]
+	for _, w := range e.waiters {
+		if w.since < startSeq {
+			w.done <- waitResult[V]{v: cur, err: err}
+			continue
+		}
+		kept = append(kept, w)
+	}
+	e.waiters = kept
+}
+
+// Remove drops a key. Subscribers get a terminal Removed update; waiters get
+// ErrRemoved.
+func (v *View[K, V]) Remove(k K) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if e, ok := v.entries[k]; ok {
+		for s := range e.subs {
+			s.put(Update[K, V]{Key: k, Removed: true})
+		}
+		v.dropLocked(e, ErrRemoved)
+	}
+}
+
+func (v *View[K, V]) dropLocked(e *entry[K, V], cause error) {
+	v.stopTimerLocked(e)
+	delete(v.queued, e)
+	e.queued = false
+	for _, w := range e.waiters {
+		w.done <- waitResult[V]{err: cause}
+	}
+	e.waiters = nil
+	v.pinned -= e.pins
+	e.pins = 0
+	delete(v.entries, e.key)
+}
+
+// SetDegraded marks a key whose change source is unavailable: its entry is
+// treated as unwatched, so it falls back to the TTL tiers.
+func (v *View[K, V]) SetDegraded(k K, degraded bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if e, ok := v.entries[k]; ok {
+		e.degraded = degraded
+	}
+}
+
+// Stats returns a copy of the counters.
+func (v *View[K, V]) Stats() Stats {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	s := v.stats
+	s.Entries, s.Pinned, s.Queued = len(v.entries), v.pinned, len(v.queued)
+	for _, e := range v.entries {
+		if e.running {
+			s.Running++
+		}
+		if e.degraded {
+			s.Degraded++
+		}
+		s.Subscribers += len(e.subs)
+	}
+	return s
+}
+
+// Close stops timers and sources and fails pending Gets. It is idempotent.
+func (v *View[K, V]) Close() {
+	v.mu.Lock()
+	if v.closed {
+		v.mu.Unlock()
+		return
+	}
+	v.closed = true
+	close(v.done)
+	stops := v.stops
+	v.stops = nil
+	for _, e := range v.entries {
+		v.stopTimerLocked(e)
+		for _, w := range e.waiters {
+			w.done <- waitResult[V]{err: ErrClosed}
+		}
+		e.waiters = nil
+	}
+	if v.retry != nil {
+		v.retry.Stop()
+	}
+	if v.sweeper != nil {
+		v.sweeper.Stop()
+	}
+	v.mu.Unlock()
+	for _, stop := range stops {
+		stop()
+	}
+}
