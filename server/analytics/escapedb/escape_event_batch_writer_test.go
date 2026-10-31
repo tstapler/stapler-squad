@@ -1,10 +1,9 @@
-package analytics
+package escapedb
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,11 +22,10 @@ import (
 func TestDeleteOldestRows_QueryPlanAvoidsSort(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	client, err := OpenAnalyticsDB(ctx, dir)
-	require.NoError(t, err)
+	client := openForTest(ctx, t, dir)
 	defer client.Close()
 
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "analytics.db")+"?mode=ro")
+	db, err := sql.Open("sqlite", "file:"+Path(dir)+"?mode=ro")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -51,8 +49,7 @@ func TestDeleteOldestRows_QueryPlanAvoidsSort(t *testing.T) {
 // must not change: over the cap, the oldest rows by wall_time go and the newest stay.
 func TestFlushBatch_EnforcesPerSessionCap_DeletingOldestFirst(t *testing.T) {
 	ctx := context.Background()
-	client, err := OpenAnalyticsDB(ctx, t.TempDir())
-	require.NoError(t, err)
+	client := openForTest(ctx, t, t.TempDir())
 	defer client.Close()
 
 	const cap = 5
@@ -104,8 +101,7 @@ func dbCount(t *testing.T, ctx context.Context, w *EscapeEventBatchWriter, sessi
 // writer's cached count must equal a brute-force COUNT after every flush.
 func TestFlushBatch_SlackBoundsOvershootAndTrimsToCap_KeepingNewest(t *testing.T) {
 	ctx := context.Background()
-	client, err := OpenAnalyticsDB(ctx, t.TempDir())
-	require.NoError(t, err)
+	client := openForTest(ctx, t, t.TempDir())
 	defer client.Close()
 
 	const cap = 100
@@ -147,8 +143,7 @@ func TestFlushBatch_SlackBoundsOvershootAndTrimsToCap_KeepingNewest(t *testing.T
 // Steady state at the cap must not cost a delete round trip per flush.
 func TestFlushBatch_AtCap_IssuesFewStatementsPerFlush(t *testing.T) {
 	ctx := context.Background()
-	client, _, err := OpenAnalyticsDBWithDriver(ctx, t.TempDir())
-	require.NoError(t, err)
+	client := openForTest(ctx, t, t.TempDir())
 	defer client.Close()
 
 	const cap, flushes = 100, 300
@@ -167,8 +162,7 @@ func TestFlushBatch_AtCap_IssuesFewStatementsPerFlush(t *testing.T) {
 // Eviction yields while a full batch is queued, and finishes on a later flush.
 func TestFlushBatch_EvictionYieldsToQueuedBatch_ThenResumes(t *testing.T) {
 	ctx := context.Background()
-	client, err := OpenAnalyticsDB(ctx, t.TempDir())
-	require.NoError(t, err)
+	client := openForTest(ctx, t, t.TempDir())
 	defer client.Close()
 
 	const cap = 300
@@ -191,8 +185,7 @@ func TestFlushBatch_EvictionYieldsToQueuedBatch_ThenResumes(t *testing.T) {
 // Statements issued for a large bulk insert carry the writer's name, not "unknown".
 func TestFlushBatch_BulkInsertIsAttributedToWriter(t *testing.T) {
 	ctx := context.Background()
-	client, _, err := OpenAnalyticsDBWithDriver(ctx, t.TempDir())
-	require.NoError(t, err)
+	client := openForTest(ctx, t, t.TempDir())
 	defer client.Close()
 
 	w := NewEscapeEventBatchWriter(client, 0)
@@ -212,8 +205,7 @@ func TestFlushBatch_BulkInsertIsAttributedToWriter(t *testing.T) {
 // Events queued at shutdown are persisted, not lost to the cancelled context.
 func TestStart_ShutdownDrainPersistsQueuedEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	client, err := OpenAnalyticsDB(context.Background(), t.TempDir())
-	require.NoError(t, err)
+	client := openForTest(context.Background(), t, t.TempDir())
 	defer client.Close()
 
 	w := NewEscapeEventBatchWriter(client, 100)
