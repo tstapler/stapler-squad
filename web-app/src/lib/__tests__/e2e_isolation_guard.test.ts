@@ -45,6 +45,7 @@ describe("e2e server isolation", () => {
       "worker-server-isolation.spec.ts",
       ".dev-mode.spec.ts",
       "helpers/session-client.ts", // doc comment only
+      "website-demos.spec.ts", // run by scripts/record-website-demos.sh against its own single server, outside global-setup slots
     ];
     const offenders: string[] = [];
     const walk = (dir: string) => {
