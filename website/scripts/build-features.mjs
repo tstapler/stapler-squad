@@ -13,6 +13,7 @@ const WEBSITE_ROOT = join(SCRIPT_DIR, '..');
 const REPO_ROOT = join(WEBSITE_ROOT, '..');
 const DEFAULT_README_PATH = join(REPO_ROOT, 'README.md');
 const DEFAULT_FEATURES_MD_PATH = join(REPO_ROOT, 'docs', 'features.md');
+const DEFAULT_MANIFEST_PATH = join(SCRIPT_DIR, 'asset-health-manifest.json');
 const DEFAULT_OUTPUT_PATH = join(WEBSITE_ROOT, 'src', 'content', 'features.json');
 const PUBLIC_FEATURES_DIR = join(WEBSITE_ROOT, 'public', 'features');
 const ENCODING = 'utf8';
@@ -89,15 +90,24 @@ const ALT_TEXT_BY_HEADING = {
 };
 
 /**
- * Headings that get a `DemoClip` video embed (via `ReleaseAssetRef`); the
- * rest stay text-only. Empty on purpose: only add an entry once its clip is
- * published to the release, because `check-asset-health.mjs` blocks the Pages
- * deploy on any referenced asset that 404s. The embed wiring itself is covered
- * by tests/unit/feature-card.test.ts.
+ * Headings whose card plays a demo clip (recorded by
+ * tests/e2e/website-demos/clips.ts, published by website-demo-publish.yml). A
+ * clip is attached only once its hash is in asset-health-manifest.json, i.e.
+ * once it is actually published: `check-asset-health.mjs` blocks the Pages
+ * deploy on any referenced asset that 404s, so an unpublished clip must never
+ * reach features.json. The card's screenshot, if any, becomes the video poster.
  *
  * @type {Record<string, {tag: string, name: string, ext: string}>}
  */
-const DEMO_CLIP_BY_HEADING = {};
+const DEMO_CLIP_BY_HEADING = {
+	Dashboard: { tag: 'website-demo-gifs-latest', name: 'session-dashboard', ext: 'webm' },
+	'Auto-Approval Rules': { tag: 'website-demo-gifs-latest', name: 'auto-approval-rules', ext: 'webm' },
+};
+
+/** @param {string} manifestPath @returns {Set<string>} `<name>.<ext>` of every published, hashed asset */
+function loadPublishedAssets(manifestPath) {
+	return new Set(Object.keys(JSON.parse(readFileSync(manifestPath, 'utf8'))));
+}
 
 /**
  * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {tag: string, name: string, ext: string}}} FeatureCard
@@ -234,12 +244,13 @@ export function extractReadmeCategoryNames(readmeMarkdown) {
  * Builds the full FeatureCard[] data set, reconciling README.md's category
  * names with docs/features.md's sections.
  *
- * @param {{readmePath?: string, featuresMdPath?: string}} [options]
+ * @param {{readmePath?: string, featuresMdPath?: string, manifestPath?: string}} [options]
  * @returns {FeatureCard[]}
  */
 export function buildFeaturesJson(options = {}) {
 	const readmePath = options.readmePath ?? DEFAULT_README_PATH;
 	const featuresMdPath = options.featuresMdPath ?? DEFAULT_FEATURES_MD_PATH;
+	const publishedAssets = loadPublishedAssets(options.manifestPath ?? DEFAULT_MANIFEST_PATH);
 
 	const readmeMarkdown = readFileSync(readmePath, ENCODING);
 	const featuresMarkdown = readFileSync(featuresMdPath, ENCODING);
@@ -273,11 +284,10 @@ export function buildFeaturesJson(options = {}) {
 			if (!card.alt) {
 				throw new Error(`"${heading}" has a screenshot but no ALT_TEXT_BY_HEADING entry`);
 			}
-		} else {
-			const demoClip = DEMO_CLIP_BY_HEADING[heading];
-			if (demoClip) {
-				card.demoClip = demoClip;
-			}
+		}
+		const demoClip = DEMO_CLIP_BY_HEADING[heading];
+		if (demoClip && publishedAssets.has(`${demoClip.name}.${demoClip.ext}`)) {
+			card.demoClip = demoClip;
 		}
 		return card;
 	});

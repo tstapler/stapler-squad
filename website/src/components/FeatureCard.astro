@@ -1,7 +1,7 @@
 ---
-// A single feature-grid tile. `screenshot`/`demoClip` are omitted for
-// sections with no existing capture (text-only until a real asset exists);
-// `alt` is required whenever `screenshot` is set.
+// A single feature-grid tile. A `demoClip` plays in place of the screenshot
+// (which becomes its poster); with neither, the tile is text-only. `alt` is
+// required whenever `screenshot` is set.
 import { releaseAssetUrl, type ReleaseAssetRef } from '../lib/release-asset.ts';
 
 export interface Props {
@@ -29,24 +29,26 @@ const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
 
 <article class="feature-card" data-testid="feature-card">
 	{
-		screenshot ? (
-			<img
-				src={screenshotSrc}
-				alt={alt}
-				loading="lazy"
-				width="320"
-				height="200"
-				data-testid="feature-card-image"
+		demoClip ? (
+			<video
+				src={releaseAssetUrl(demoClip)}
+				poster={screenshotSrc}
+				controls
+				muted
+				loop
+				playsinline
+				preload="none"
+				data-testid="feature-card-video"
 			/>
 		) : (
-			demoClip && (
-				<video
-					src={releaseAssetUrl(demoClip)}
-					controls
-					muted
-					loop
-					playsinline
-					data-testid="feature-card-video"
+			screenshot && (
+				<img
+					src={screenshotSrc}
+					alt={alt}
+					loading="lazy"
+					width="320"
+					height="200"
+					data-testid="feature-card-image"
 				/>
 			)
 		)
