@@ -336,3 +336,16 @@ func TestSaveInstances_Should_PersistChangedSections_When_OthersSkipped(t *testi
 	assert.Equal(t, "/tmp/changed", loaded[0].Path)
 	assert.ElementsMatch(t, []string{"one", "two"}, loaded[0].Tags)
 }
+
+func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
+	t.Parallel()
+	var f savedFingerprints
+	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	recordSkip(&f, base, true)
+
+	bad := base
+	bad.CreatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) // json.Marshal fails: year out of range
+	f.persist(bad, func(updateSkip) bool { return true })
+
+	assert.Equal(t, updateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
+}

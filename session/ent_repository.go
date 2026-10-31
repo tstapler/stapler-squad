@@ -276,8 +276,10 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 // Use this when you need to share an already-opened client across subsystems
 // (e.g. injecting a test client or reusing an existing connection).
 func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
+	// Not hooked: the client is shared and may already be serving writes, and
+	// appending to its hook slice then would race them. Reads stay uncached.
 	repo := &EntRepository{client: client}
-	repo.watchGuidanceWrites(client)
+	repo.pendingGuidance.disabled = true
 	return repo
 }
 

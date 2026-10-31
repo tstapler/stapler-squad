@@ -98,3 +98,16 @@ func sessionGuidanceInput(question string) CreateGuidanceRequestInput {
 		QuestionType: domain.QuestionTypeYesNo,
 	}
 }
+
+func TestListAllPendingGuidanceRequests_Should_NotCache_When_RepoBuiltOverSharedClient(t *testing.T) {
+	t.Parallel()
+	owner := NewTestEntRepository(t)
+	repo := NewEntRepositoryFromClient(owner.GetEntClient())
+	ctx := context.Background()
+	queries := countGuidanceQueries(repo)
+	for range 2 {
+		_, err := repo.ListAllPendingGuidanceRequests(ctx)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int64(2), queries.Load(), "no hook feeds this repo's generation, so it must always read through")
+}

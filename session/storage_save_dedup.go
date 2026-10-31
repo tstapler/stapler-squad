@@ -114,7 +114,12 @@ func (f *savedFingerprints) persist(data InstanceData, write func(skip updateSki
 		}
 		skip = secs.skipAgainst(prev.secs)
 	}
-	if !write(skip) || !hashed {
+	ok := write(skip)
+	if !hashed {
+		delete(f.m, data.Title) // row changed but nothing to compare next time
+		return
+	}
+	if !ok {
 		return
 	}
 	if f.m == nil {

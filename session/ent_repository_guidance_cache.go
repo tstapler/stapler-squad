@@ -24,6 +24,8 @@ const pendingGuidanceTTL = 5 * time.Second
 type pendingGuidanceCache struct {
 	gen atomic.Uint64
 	now func() time.Time // injected by tests; nil means time.Now
+	// disabled is set when no mutation hook feeds gen (repo built over a shared client).
+	disabled bool
 
 	mu    sync.Mutex
 	rows  []*GuidanceRequestData
@@ -42,6 +44,9 @@ func (c *pendingGuidanceCache) clock() time.Time {
 func (c *pendingGuidanceCache) invalidate() { c.gen.Add(1) }
 
 func (c *pendingGuidanceCache) get() ([]*GuidanceRequestData, bool) {
+	if c.disabled {
+		return nil, false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.full || c.atGen != c.gen.Load() || c.clock().Sub(c.gotAt) >= pendingGuidanceTTL {
@@ -51,6 +56,9 @@ func (c *pendingGuidanceCache) get() ([]*GuidanceRequestData, bool) {
 }
 
 func (c *pendingGuidanceCache) put(readGen uint64, rows []*GuidanceRequestData) {
+	if c.disabled {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if readGen != c.gen.Load() {
@@ -65,6 +73,19 @@ func copyGuidanceRows(rows []*GuidanceRequestData) []*GuidanceRequestData {
 	out := make([]*GuidanceRequestData, len(rows))
 	for i, r := range rows {
 		cp := *r
+		if r.ItemID != nil {
+			v := *r.ItemID
+			cp.ItemID = &v
+		}
+		for _, t := range []struct{ src, dst **time.Time }{
+			{&r.NotifiedAt, &cp.NotifiedAt}, {&r.AnsweredAt, &cp.AnsweredAt},
+			{&r.CancelledAt, &cp.CancelledAt}, {&r.ExpiresAt, &cp.ExpiresAt},
+		} {
+			if *t.src != nil {
+				v := **t.src
+				*t.dst = &v
+			}
+		}
 		out[i] = &cp
 	}
 	return out

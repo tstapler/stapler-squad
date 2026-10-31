@@ -1625,6 +1625,8 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 
 // DeleteBacklogItem permanently removes an item and all its child records.
 func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error {
+	// The item_id FK nulls out via ON DELETE SET NULL, which bypasses ent hooks.
+	defer r.pendingGuidance.invalidate()
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
