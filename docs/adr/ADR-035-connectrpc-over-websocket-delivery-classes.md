@@ -215,6 +215,40 @@ and HTTP/1.1 connection usage from the HAR-equivalent resource timing. Numbers g
 
 A fresh reviewer found an unsound `not_executed` rule, beacon dedupe without ids, undefined key-store cancel/error semantics, `anon` key collisions, auth lifetime on long sockets and unenforced class caps; all are folded into the sections above. HAR figures and ADR-033's numbers are cited from the brief and that ADR, not re-derived.
 
+## Round 2 amendments (these supersede earlier text where they conflict)
+
+Three fresh reviewers (delivery, security, concurrency) found the following; each is a decision.
+
+**Key store semantics**
+* While a handler goroutine is alive its entry stays `in_flight` regardless of the caller's deadline or CANCEL (`abandon()` replies `deadline_exceeded` and the handler keeps running). A later call with the same key joins it; it never starts a second run. A joiner's own timeout returns `deadline_exceeded` and leaves the entry.
+* When the handler returns: terminal 2xx or deterministic 4xx becomes `done`. For W, any other outcome (5xx, `unavailable`, panic) deletes the entry so a retry re-executes (safe because W is naturally idempotent). For M, those outcomes become `done(unknown)` and a replay returns `outcome_unknown`; M is "at-most-once within TTL and process life".
+* The key is enforced (`invalid_argument` on missing) only for calls stamped `transport=ws` by the bridge; on HTTP it is optional so old clients, beacons and keyless callers keep working. Body-`batch_id`/event-id dedupe on the plain HTTP handlers is a separate mechanism and is a precondition of flag-on: the `entry_id` unique index for logs must land first, otherwise logs are at-least-once with duplicates and the flag stays off.
+* The hash is over the canonical decoded request message, not the wire bytes, so a WS-to-HTTP replay (proto vs JSON) matches. Test the replay path across codecs.
+* Stored response bodies for W/T are reduced to status plus an `ok` marker (their responses carry no data), 4 KiB max otherwise; compare hash constant-time; add an entry-count cap (10 000) and a per-socket quota of live keys; the refusal path does not allocate. Principal: the auth session id, never the raw token (rotation must not fork the namespace). On the unauthenticated local listener the principal is `anon`, so another local process that learns a key can replay it; this is accepted (the listener already trusts any local process) and noted in the threat model.
+* A keyed handler continuing after its caller abandoned is not counted as a zombie; it is bounded by the keyed in-flight quota. Joiners wait without taking a class slot, capped at 8 joiners per key.
+* Upgrade-time `Idempotency-Key` headers never reach a handler (test); the bridge validates the key pattern at REQUEST.
+
+**Caps and lanes**
+* Add `class` to `inflightCall` and a per-class counter checked under `s.mu` with the `dup`/`full` checks, released where `releaseCall` and `detachLocked` delete the entry. State: slots bound *accepted* calls, not running handlers; running-but-abandoned handlers are bounded only by the per-socket 32 zombie cap and the process 128 cap.
+* Class caps (R/W+M/T) apply only when the write flags are on; flags off keeps today's single 64. Split: W+M 8, T 8, R the remainder, only for totals >= 32; below that, one shared cap.
+* The table carries `class` and a separate `lane` (`interactive` or `telemetry`), so analytics is class W on lane telemetry. `LogClientEvents` is listed once: W, telemetry lane.
+* One `UnaryWsBreaker` per lane; telemetry failures never open the interactive breaker. Auth parking is per page, not a breaker failure, and parks both lanes. Reconnect backoff has jitter, and the telemetry socket opens lazily on first telemetry flush (not at page load) to avoid handshake contention (ADR-033 serialized opens).
+* `count=1` keeps logical per-lane queues in the client with pump priority R, then W/M, then T, even on one transport. Writer priority orders bytes, not slots; slot protection comes only from the caps.
+* Socket math: sockets per tab = 2 + terminal pool N; the process unary cap (64) is raised to 128 with a test, since two sockets per tab halves tab capacity otherwise. The server config value for `rpc-socket-count` rides in the first `PONG` (additive field); until then the client uses the default.
+* Mixed versions: an old server answers the new meta header with `invalid_argument` (`firstDisallowedHeader`); the client treats that for a keyed call as HTTP-safe (it fails before dispatch) and sets a per-page denylist. Where class flags are read: at call time via `readWsFlag`, as for the master flag.
+* Metrics: the per-window id is logs/spans only, never a label. `not_executed` also stamps the oversize-frame reply (`ws_unary_bridge.go:419`). For M, server `internal` (panic) also maps to `outcome_unknown`.
+
+**Guards and auth**
+* Every method in the class table must be in `guardedProcedures` (Rebinding profile) or carry an explicit reviewed-unguarded entry; the hostile-input matrix (foreign Origin, rebinding Host, oversize body, unauthenticated on :8444) runs over the whole table, and compares three paths: plain HTTP handler, twin over HTTP, twin over WS. The twins join the body-limit wrappers.
+* Auth runs per call via `validator.ValidateAuthSession(cookie)` on the copied upgrade Cookie, so a logout is visible only if that validator reads live state. Step 2 tests: after logout the same socket returns `unauthenticated`; a stored `done` entry never bypasses auth (the store sits after auth). Over WS the Authorization header is frozen at upgrade, unlike HTTP; the server closes the socket on logout/rotation if the validator cannot tell. The local upgrade accepts a missing Origin and relies on HostGuard; non-browser local processes are in the threat model.
+* Rate budgets key on loopback RemoteAddr; a test confirms WS and HTTP callers share them before calling that intended.
+
+**Client policy and unload**
+* Event ids are assigned at `track()` time and batch composition is frozen for same-key retries.
+* W gets its own branch in `onWsError`: replay over HTTP with the same key on `unavailable`, `resource_exhausted`, socket close and timeout, without `ac.abort()` (no CANCEL).
+* Unload: the over-budget excess stays queued for a tab that returns; it is dropped (`unload_budget`) only on `pagehide` with `persisted=false`. One terminal outcome per event id (`acked`, `beaconed`, `dropped_*`); a batch beaconed and later acked counts as `acked`. Unacked bytes count toward the 256 KiB bound and an in-flight batch is never evicted by drop-oldest. After a `visible` return the lane resumes.
+* "Never loses more than today" is restated: no more than today for events that reach `pagehide`, with the log-dedupe precondition above.
+
 ## Owner decisions (2026-10-30)
 
 1. Class M stays empty at launch; no pilot.
