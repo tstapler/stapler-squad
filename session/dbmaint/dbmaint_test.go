@@ -25,6 +25,7 @@ import (
 type fakeClock struct {
 	ticks   chan time.Time
 	pauses  atomic.Int64
+	first   atomic.Int64 // duration (ns) of the first Pause call
 	onPause func(ctx context.Context) error
 }
 
@@ -32,8 +33,10 @@ func newFakeClock() *fakeClock { return &fakeClock{ticks: make(chan time.Time)} 
 
 func (c *fakeClock) NewTicker(time.Duration) (<-chan time.Time, func()) { return c.ticks, func() {} }
 
-func (c *fakeClock) Pause(ctx context.Context, _ time.Duration) error {
-	c.pauses.Add(1)
+func (c *fakeClock) Pause(ctx context.Context, d time.Duration) error {
+	if c.pauses.Add(1) == 1 {
+		c.first.Store(int64(d))
+	}
 	if c.onPause != nil {
 		return c.onPause(ctx)
 	}
@@ -341,7 +344,7 @@ func TestRun_ShouldTickOnClockAndExitOnCancel(t *testing.T) {
 	go func() { m.Run(ctx); close(done) }()
 
 	clock.ticks <- time.Now() // received by Run, which then ticks
-	assert.GreaterOrEqual(t, clock.pauses.Load(), int64(1), "startup inspection is paced by the clock")
+	assert.Equal(t, int64(DefaultStartupDelay), clock.first.Load(), "first inspection waits StartupDelay")
 	clock.ticks <- time.Now() // accepted only after the first tick finished
 	assert.Less(t, scalar(t, drv, "PRAGMA freelist_count"), int64(100))
 	assert.NotEmpty(t, Snapshot(), "registered while running")
