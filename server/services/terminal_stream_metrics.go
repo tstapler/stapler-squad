@@ -100,7 +100,7 @@ func beginTerminalCreationAt(now func() time.Time) *terminalCreation {
 
 // Mark records stage as the elapsed time since the previous Mark (or the start).
 func (c *terminalCreation) Mark(stage string) time.Duration {
-	if c == nil {
+	if c == nil || c.done.Load() {
 		return 0
 	}
 	t := c.now()
