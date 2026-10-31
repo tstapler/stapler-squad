@@ -19,6 +19,10 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: generated-proto-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   guard:
     name: no-checked-in-generated-protos
