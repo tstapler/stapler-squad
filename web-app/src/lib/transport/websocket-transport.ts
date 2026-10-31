@@ -16,11 +16,12 @@ import type {
 } from "@connectrpc/connect";
 import { Code, ConnectError, createContextValues } from "@connectrpc/connect";
 import type { ConnectTransportOptions } from "@connectrpc/connect-web";
+import type {
+  EnvelopedMessage} from "@connectrpc/connect/protocol";
 import {
   compressedFlag,
   createClientMethodSerializers,
   createMethodUrl,
-  EnvelopedMessage,
   runStreamingCall,
   runUnaryCall,
 } from "@connectrpc/connect/protocol";
@@ -31,7 +32,7 @@ import {
 } from "@connectrpc/connect/protocol-connect";
 import { connect } from "it-ws/client";
 import duplex from "it-ws/duplex";
-import { openTerminalSocket, terminalPoolEnabled } from "./terminal-socket-pool";
+import { openTerminalSocket, terminalPoolEnabled } from "./terminal-socket";
 
 /**
  * Check if debug logging is enabled via localStorage

@@ -1,0 +1,72 @@
+// @feature terminal-render, session-stream-terminal
+/**
+ * ADR-033: with the terminal_ws_pool flag on, StreamTerminal runs over the shared
+ * /api/ws/terminal-mux socket instead of one WebSocket per terminal; with it off the
+ * per-stream socket is unchanged.
+ */
+import { test, expect, type Page, type WebSocket } from '@playwright/test';
+import { setFlag } from './helpers/feature-flag';
+import { SessionClient } from './helpers/session-client';
+import { ShellTabsPage } from './pages/ShellTabsPage';
+
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const FIXTURE_SESSION_TITLE = 'terminal-ws-pool-e2e-fixture';
+const MUX_FRAME_DATA = 3;
+
+function trackSockets(page: Page): { muxFrames: () => number; perStream: () => number } {
+  let muxDataFrames = 0;
+  let perStream = 0;
+  page.on('websocket', (ws: WebSocket) => {
+    if (ws.url().endsWith('/api/ws/terminal-mux')) {
+      ws.on('framereceived', (f) => {
+        const payload = f.payload;
+        if (typeof payload !== 'string' && payload.length > 0 && payload[0] === MUX_FRAME_DATA) muxDataFrames++;
+      });
+    } else if (ws.url().endsWith('/SessionService/StreamTerminal')) {
+      perStream++;
+    }
+  });
+  return { muxFrames: () => muxDataFrames, perStream: () => perStream };
+}
+
+async function openFixtureSession(page: Page, poolFlag: '1' | '0'): Promise<void> {
+  await page.addInitScript((flag) => {
+    localStorage.setItem('stapler-squad:onboarded', 'true');
+    // The persisted pre-load value arms the pool for the first stream, before GetFeatureFlags returns.
+    localStorage.setItem('ssq:flag:terminal_ws_pool', flag);
+  }, poolFlag);
+  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForSelector('[data-testid="session-card"], [data-testid="session-row"]', { timeout: 15000 });
+  await new ShellTabsPage(page).openSessionByTitle(FIXTURE_SESSION_TITLE);
+  await expect(page.getByLabel("Terminal input").first()).toBeAttached({ timeout: 10000 });
+}
+
+test.beforeAll(async () => {
+  const client = new SessionClient(BASE_URL);
+  const sessions = await client.listSessions();
+  if (!sessions.some((s) => s.title === FIXTURE_SESSION_TITLE)) {
+    await client.createSession({ title: FIXTURE_SESSION_TITLE, path: '/tmp', program: 'bash' });
+  }
+});
+
+test.describe('terminal-ws-pool', () => {
+  test.afterAll(async ({ request }) => {
+    await setFlag(request, 'terminal_ws_pool', false);
+  });
+
+  test('terminalStream_should_UseSharedMuxSocket_When_PoolFlagIsOn', async ({ page, request }) => {
+    await setFlag(request, 'terminal_ws_pool', true);
+    const sockets = trackSockets(page);
+    await openFixtureSession(page, '1');
+    await expect.poll(() => sockets.muxFrames(), { timeout: 15000 }).toBeGreaterThan(0);
+    expect(sockets.perStream()).toBe(0);
+  });
+
+  test('terminalStream_should_UsePerStreamSocket_When_PoolFlagIsOff', async ({ page, request }) => {
+    await setFlag(request, 'terminal_ws_pool', false);
+    const sockets = trackSockets(page);
+    await openFixtureSession(page, '0');
+    await expect.poll(() => sockets.perStream(), { timeout: 15000 }).toBeGreaterThan(0);
+    expect(sockets.muxFrames()).toBe(0);
+  });
+});
