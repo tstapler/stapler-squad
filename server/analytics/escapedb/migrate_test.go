@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
 var errSimulatedCrash = errors.New("simulated crash before commit")
@@ -248,7 +249,7 @@ func TestMigrate_should_KeepLegacyRowsWithNullColumns_Not_DropThemSilently(t *te
 
 	// ent must be able to read the defaulted rows back.
 	client := openForTest(ctx, t, dir)
-	got, err := client.EscapeEvent.Query().Order(ent.Asc("id")).All(ctx)
+	got, err := client.EscapeEvent.Query().Where(escapeevent.IDIn("a", "b", "c")).Order(ent.Asc("id")).All(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 	assert.Equal(t, "", got[2].SessionID)

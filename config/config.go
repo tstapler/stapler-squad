@@ -560,6 +560,11 @@ const EscapeEventsDBMigrateFeatureFlag = "escape_events_db_migrate"
 // EscapeEventsDBMigrateDefault is the registry default for the flag above.
 const EscapeEventsDBMigrateDefault = true
 
+// EscapeEventsDBMigrateEnabled reports whether the escape_events copy should run.
+func (c *Config) EscapeEventsDBMigrateEnabled() bool {
+	return c.GetFeatureFlagWithDefault(EscapeEventsDBMigrateFeatureFlag, EscapeEventsDBMigrateDefault)
+}
+
 // HiddenSessionGateFeatureFlag is the config.FeatureFlags key backing the
 // hidden-session delivery gate (server/deliverygate). On by default; setting it
 // false (globally or per hidden-session kind) is the live rollback: hidden

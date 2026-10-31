@@ -21,7 +21,7 @@ func (s *Server) startEscapeEventsMigration(ctx context.Context, deps *ServerDep
 	if deps.EscapeEventsDB == nil {
 		return
 	}
-	if !cfg.GetFeatureFlagWithDefault(config.EscapeEventsDBMigrateFeatureFlag, config.EscapeEventsDBMigrateDefault) {
+	if !cfg.EscapeEventsDBMigrateEnabled() {
 		log.Info("escape events migration disabled", "flag", config.EscapeEventsDBMigrateFeatureFlag)
 		return
 	}

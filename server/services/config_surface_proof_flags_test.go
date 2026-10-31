@@ -28,6 +28,14 @@ func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 	}
 }
 
+func TestConfigSurfaceProof_EscapeEventsDBMigrate_ChangesMigrationEnabled(t *testing.T) {
+	set := bkfFlagWriter(t)
+	assertConfigChangesBehavior(t, func(setting any) any {
+		set(config.EscapeEventsDBMigrateFeatureFlag, setting.(bool))
+		return config.LoadConfig().EscapeEventsDBMigrateEnabled()
+	}, false, true)
+}
+
 func TestConfigSurfaceProof_FilesFlags_ChangeServerSideGates(t *testing.T) {
 	set := bkfFlagWriter(t)
 	for name, reader := range map[string]func(context.Context) bool{
