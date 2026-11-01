@@ -234,7 +234,7 @@ test.describe('unfinished-work', () => {
     // stays pinned alongside it so later tests are unaffected.
     const noSessionRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-nosession-'));
     const noSessionSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-nosession-'));
-    execSync(`git init --bare "${noSessionRepoDir}"`);
+    execSync(`git init --bare --initial-branch=main "${noSessionRepoDir}"`);
     execSync(`git clone "${noSessionRepoDir}" "${noSessionSeedDir}"`);
     execSync('git config user.email "test@example.com"', { cwd: noSessionSeedDir });
     execSync('git config user.name "Test"', { cwd: noSessionSeedDir });
