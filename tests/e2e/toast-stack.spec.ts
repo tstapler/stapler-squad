@@ -184,9 +184,20 @@ test.describe('toast stack over a terminal (desktop)', () => {
       const deck = await seedDeck(page, request, `deck-cursor-${Date.now()}`, 2);
       await expect(deck.deck).toHaveAttribute('data-placement', 'desktopTopRight');
 
-      const deckBox = (await deck.deck.boundingBox())!;
+      // The deck settles into its placement after an entry transition: wait for two consecutive identical
+      // bounding boxes (a single sample is mid-transition under CPU contention), then assert on the settled box.
       const cursor = (await textarea.boundingBox())!;
       const cell = { x: cursor.x, y: cursor.y, width: Math.max(cursor.width, 8), height: Math.max(cursor.height, 16) };
+      let previous = '';
+      await expect
+        .poll(async () => {
+          const current = JSON.stringify(await deck.deck.boundingBox());
+          const settled = current === previous;
+          previous = current;
+          return settled;
+        })
+        .toBe(true);
+      const deckBox = (await deck.deck.boundingBox())!;
       const overlapsCursor =
         deckBox.x < cell.x + cell.width && deckBox.x + deckBox.width > cell.x && deckBox.y < cell.y + cell.height && deckBox.y + deckBox.height > cell.y;
       expect(overlapsCursor).toBe(false);

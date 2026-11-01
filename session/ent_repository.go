@@ -368,6 +368,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Backend != "" {
 		sessionCreate.SetBackend(string(data.Backend))
 	}
+	if data.TymuxSessionID != "" {
+		sessionCreate.SetTymuxSessionID(data.TymuxSessionID)
+	}
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -671,6 +674,10 @@ func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData
 	if data.Backend != "" {
 		sessionUpdate.SetBackend(string(data.Backend))
 	}
+	// Unlike Backend, this is cleared when empty: a tmux switch or a killed
+	// session must not leave a stale id behind. ToInstanceData keeps a loaded,
+	// not-yet-restored id (PersistedSessionID), so an unstarted load never clears it.
+	sessionUpdate.SetTymuxSessionID(data.TymuxSessionID)
 }
 
 func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
@@ -1506,6 +1513,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
 		Backend:             ProcessManagerBackend(sess.Backend),
+		TymuxSessionID:      sess.TymuxSessionID,
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
 		OneShot:             sess.OneShot,

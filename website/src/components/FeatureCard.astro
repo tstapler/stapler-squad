@@ -32,7 +32,7 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 		demoClip ? (
 			<video
 				src={clipSrc}
-				poster={screenshotSrc}
+				data-poster={screenshotSrc}
 				aria-label={alt ? `${heading} demo: ${alt}` : `${heading} demo`}
 				controls
 				muted
@@ -94,3 +94,27 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 		font-size: var(--sl-text-sm, 0.875rem);
 	}
 </style>
+
+<script>
+	// A <video poster> is fetched eagerly (it has no loading="lazy"), and a grid of them starved the
+	// landing page's LCP on the Lighthouse mobile run, so each poster is set only near the viewport.
+	const videos = document.querySelectorAll<HTMLVideoElement>('video[data-poster]');
+	const setPoster = (v: HTMLVideoElement) => {
+		v.poster = v.dataset.poster ?? '';
+	};
+	if ('IntersectionObserver' in window) {
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const e of entries) {
+					if (!e.isIntersecting) continue;
+					setPoster(e.target as HTMLVideoElement);
+					io.unobserve(e.target);
+				}
+			},
+			{ rootMargin: '300px' },
+		);
+		videos.forEach((v) => io.observe(v));
+	} else {
+		videos.forEach(setPoster);
+	}
+</script>

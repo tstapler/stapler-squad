@@ -220,7 +220,9 @@ test.describe('Claude notification via tmux (OQ-2 characterization)', () => {
       });
 
       await expect.poll(async () => (await historyFor(request, session.id)).length, { timeout: 10_000 }).toBe(1);
-      await expect(deck.toasts).toHaveCount(0);
+      // Other specs' notifications on this server may be toasting; only this notification's toast is excluded.
+      const mineToast = deck.toasts.filter({ hasText: 'Claude is waiting for your input' });
+      await expect(mineToast).toHaveCount(0);
 
       await tray.handle.click();
       await tray.expectOpen();
@@ -231,7 +233,7 @@ test.describe('Claude notification via tmux (OQ-2 characterization)', () => {
       const mine = tray.rows.filter({ hasText: 'Claude is waiting for your input' });
       // A retried attempt leaves its own row behind on the shared server, so assert presence, not count.
       await expect(mine.first()).toBeVisible();
-      await expect(deck.toasts).toHaveCount(0);
+      await expect(mineToast).toHaveCount(0);
     } finally {
       await client.deleteSession(session.id, true);
     }

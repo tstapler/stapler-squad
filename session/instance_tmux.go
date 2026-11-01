@@ -334,7 +334,7 @@ func (i *Instance) pm() ProcessManager {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
 		if err != nil {
 			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
 			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})

@@ -74,7 +74,9 @@ describe('FeatureCard', () => {
 
 		expect(html).toContain('<video');
 		expect(html).toContain('session-dashboard.webm');
-		expect(html).toMatch(/poster="[^"]*01-dashboard\.png"/);
+		// Lazy: an eager poster= on every card starved the landing page's LCP (see FeatureCard.astro).
+		expect(html).toMatch(/data-poster="[^"]*01-dashboard\.png"/);
+		expect(html).not.toMatch(/\sposter=/);
 		expect(html).not.toContain('<img');
 	});
 });
