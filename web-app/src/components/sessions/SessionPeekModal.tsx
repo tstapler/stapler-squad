@@ -56,6 +56,7 @@ export function SessionPeekModal({ session, onClose }: SessionPeekModalProps) {
             onClick={onClose}
             aria-label="Close peek modal"
           >
+            {/* analytics-exempt */}
             ✕
           </button>
         </div>
