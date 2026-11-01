@@ -228,7 +228,7 @@ func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *session.
 	if err != nil {
 		return nil
 	}
-	if !shadow.IsBackendProcessAlive() {
+	if !shadow.IsLiveOrStoredSessionLive() {
 		return nil
 	}
 	log.Warn("findConfirmedLiveInstance: session missing from live poller map but tmux/process truth check confirms it is still alive", "uuid", sessionUUID)
@@ -289,7 +289,7 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		return "", false
 	}
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
-		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
+		if inst == nil || inst.UUID == excludeUUID || !inst.IsLiveOrStoredSessionLive() {
 			continue
 		}
 		cwd, cwdErr := inst.GetCurrentWorkingDirectory()
@@ -337,7 +337,7 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(q conversationOwner
 		return "", false
 	}
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
-		if inst == nil || inst.UUID == q.selfUUID || !inst.IsBackendProcessAlive() {
+		if inst == nil || inst.UUID == q.selfUUID || !inst.IsLiveOrStoredSessionLive() {
 			continue
 		}
 		if inst.GetClaudeConversationUUID() != q.conversationUUID {

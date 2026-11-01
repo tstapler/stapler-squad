@@ -1110,10 +1110,6 @@ func (i *Instance) TmuxAlive() bool {
 // once a pane PID has actually been cached.
 func (i *Instance) IsBackendProcessAlive() bool {
 	if !i.pm().HasSession() {
-		// A never-started view still knows its record's daemon session by id.
-		if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
-			return p.StoredSessionLive()
-		}
 		return false
 	}
 	if i.pm().HasLiveSessionNoCache() {
@@ -1121,6 +1117,24 @@ func (i *Instance) IsBackendProcessAlive() bool {
 	}
 	if p, ok := capabilityOf[OrphanProber](i.processManager); ok {
 		return p.PanePIDStillAlive()
+	}
+	return false
+}
+
+// IsLiveOrStoredSessionLive is IsBackendProcessAlive plus, for a view with no
+// pane (a liveness shadow or a not-yet-restored record), the record's persisted
+// daemon session. Only for "is some session still running" lookups: stream
+// paths must keep using IsBackendProcessAlive, since a true answer there means
+// a pane is attached and skips RestoreProcess.
+func (i *Instance) IsLiveOrStoredSessionLive() bool {
+	if i.IsBackendProcessAlive() {
+		return true
+	}
+	if i.pm().HasSession() {
+		return false
+	}
+	if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
+		return p.StoredSessionLive()
 	}
 	return false
 }

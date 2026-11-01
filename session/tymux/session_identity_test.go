@@ -264,6 +264,7 @@ func resetClaims(t *testing.T) {
 	t.Helper()
 	wipe := func() {
 		claimedSessions.Range(func(k, _ any) bool { claimedSessions.Delete(k); return true })
+		storedIDHolders.Range(func(k, _ any) bool { storedIDHolders.Delete(k); return true })
 	}
 	wipe()
 	t.Cleanup(wipe)
@@ -303,7 +304,7 @@ func TestStart_DoesNotKillStaleSessionReadoptedByAnotherOwner(t *testing.T) {
 	assert.NotContains(t, killed, oldID)
 }
 
-func TestRestoreWithWorkDir_StoredIDAbsent_SpawnsInsteadOfAdoptingByLabel(t *testing.T) {
+func TestRestoreWithWorkDir_StoredIDAbsent_FallsBackToLabel(t *testing.T) {
 	resetClaims(t)
 	dir := t.TempDir()
 	starts := 0
@@ -321,8 +322,94 @@ func TestRestoreWithWorkDir_StoredIDAbsent_SpawnsInsteadOfAdoptingByLabel(t *tes
 	s.SetStoredSessionID("gone-id")
 	require.NoError(t, s.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = s.Close() })
-	assert.Equal(t, "new-one", s.GetSessionIdentifier(), "a lost stored id must not steal a label-matched session another record may own")
+	assert.Equal(t, "by-label", s.GetSessionIdentifier(), "a stale id must re-adopt the record's own label session, not spawn a duplicate agent")
+	assert.Zero(t, starts)
+}
+
+// The label session another record stores as its id is not this record's to
+// adopt, even when this record's own stored id has gone stale.
+func TestRestoreWithWorkDir_StoredIDAbsent_DoesNotAdoptLabelSessionStoredByAnotherRecord(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	starts := 0
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("theirs", dir+" [t]", dir)}}), nil
+		},
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			starts++
+			return connect.NewResponse(namedSession("new-one", dir, dir)), nil
+		},
+	}
+	other := NewTymuxGRPCSession(transport) // record that stores "theirs", not restored yet
+	other.SetSessionLabel("t")
+	other.SetStoredSessionID("theirs")
+	s := NewTymuxGRPCSession(transport)
+	s.SetSessionLabel("t")
+	s.SetStoredSessionID("gone-id")
+	require.NoError(t, s.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = s.Close() })
+	assert.Equal(t, "new-one", s.GetSessionIdentifier())
 	assert.Equal(t, 1, starts)
+}
+
+// A legacy record (no id) restoring before a record that stores its label
+// session's id must not take that session: two holders would let the second
+// Close kill the first's session.
+func TestRestoreWithWorkDir_LegacyRecordDoesNotDoubleHoldAnotherRecordsStoredID(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	var killed []string
+	transport := &fakeTransport{
+		listSessionsFn: func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("held", dir+" [t]", dir)}}), nil
+		},
+		createSessionFn: func(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
+			return connect.NewResponse(namedSession("legacy-fresh", dir, dir)), nil
+		},
+		killSessionFn: func(_ context.Context, r *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			killed = append(killed, r.Msg.GetSessionId())
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
+		},
+	}
+	stored := NewTymuxGRPCSession(transport)
+	stored.SetSessionLabel("t")
+	stored.SetStoredSessionID("held")
+	legacy := NewTymuxGRPCSession(transport)
+	legacy.SetSessionLabel("t")
+	require.NoError(t, legacy.RestoreWithWorkDir(dir)) // restores first
+	require.NoError(t, stored.RestoreWithWorkDir(dir))
+	assert.Equal(t, "held", stored.GetSessionIdentifier())
+	assert.NotEqual(t, "held", legacy.GetSessionIdentifier(), "two records must never hold one daemon session")
+	require.NoError(t, legacy.Close())
+	assert.NotContains(t, killed, "held", "closing the legacy record must not kill the other record's session")
+	t.Cleanup(func() { _ = stored.Close() })
+}
+
+// With tymuxd unreachable the kill fails; the record must keep its id so the
+// session is not orphaned and a retry can still kill it.
+func TestClose_UnrestoredSessionKeepsStoredIDWhenKillFails(t *testing.T) {
+	resetClaims(t)
+	failing := true
+	var killed []string
+	transport := &fakeTransport{
+		killSessionFn: func(_ context.Context, r *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+			if failing {
+				return nil, connect.NewError(connect.CodeUnavailable, errors.New("tymuxd unreachable"))
+			}
+			killed = append(killed, r.Msg.GetSessionId())
+			return connect.NewResponse(&v1.KillSessionResponse{}), nil
+		},
+	}
+	sess := NewTymuxGRPCSession(transport)
+	sess.SetStoredSessionID("keep-1")
+	require.Error(t, sess.Close())
+	assert.Equal(t, "keep-1", sess.PersistedSessionID(), "a failed kill must not drop the persisted id")
+
+	failing = false
+	require.NoError(t, sess.Close())
+	assert.Equal(t, []string{"keep-1"}, killed)
+	assert.Empty(t, sess.PersistedSessionID())
 }
 
 func TestIsAlive_NotFoundButSessionListedLiveUnderNewPane_StaysAliveAndRecachesPane(t *testing.T) {
