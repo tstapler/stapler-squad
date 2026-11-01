@@ -62,6 +62,12 @@ type CachedScreenCapturer interface {
 	CapturesAreCached()
 }
 
+// DaemonSessionIDReporter exposes the daemon-side session id a backend owns, so
+// it can be persisted and adopted again after a restart (tymux only).
+type DaemonSessionIDReporter interface {
+	DaemonSessionID() string
+}
+
 // PaneCwdReporter reports the pane's live working directory (not a cached start dir).
 type PaneCwdReporter interface {
 	PaneCurrentPath() (string, error)

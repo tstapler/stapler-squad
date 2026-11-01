@@ -69,6 +69,10 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default("").
 			Comment("Per-session ProcessManager backend pin (e.g. \"tymux\"); empty means no pin, falls through to the process-wide default."),
+		field.String("tymux_session_id").
+			Optional().
+			Default("").
+			Comment("tymuxd session id owned by this Instance; restore adopts it before any name match. Empty for old records."),
 		field.Time("last_terminal_update").
 			Optional().
 			Nillable(),

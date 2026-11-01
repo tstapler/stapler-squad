@@ -1,4 +1,5 @@
 import { ConnectError, Code } from "@connectrpc/connect";
+import { endStreamFromJson } from "@connectrpc/connect/protocol-connect";
 import {
   jitteredDelay,
   BackoffState,
@@ -165,6 +166,16 @@ describe("isNonRetriableConnectError", () => {
     // Native-transport equivalent of ws-close-code 4004 (session not found).
     const err = new ConnectError("session not found", Code.NotFound);
     expect(getWsCloseCode(err)).toBeNull();
+    expect(isNonRetriableConnectError(err)).toBe(true);
+  });
+
+  it("isNonRetriableConnectError_should_returnTrue_When_serverEndStreamFrameIsNotFound", () => {
+    // Pins the server contract: endStreamErrorCode emits "not_found" for a pane the daemon no longer has.
+    const frame = new TextEncoder().encode(
+      JSON.stringify({ error: { code: "not_found", message: "session ended" } })
+    );
+    const err = endStreamFromJson(frame).error;
+    expect(err?.code).toBe(Code.NotFound);
     expect(isNonRetriableConnectError(err)).toBe(true);
   });
 
