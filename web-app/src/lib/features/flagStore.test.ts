@@ -94,6 +94,23 @@ describe("flagStore", () => {
     expect(localStorage.getItem("ssq:flag:window_keep_alive")).toBe("1");
   });
 
+  it("flagStore_should_RevertGhosttyRendererToOff_When_FlagDisabledOrOmitted_WithoutRebuild", async () => {
+    expect(preloadFlagValue("ghostty_renderer")).toBe(false);
+
+    let t = 0;
+    const now = () => t;
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("ghostty_renderer", true)] });
+    await loadFlags(now);
+    expect(localStorage.getItem("ssq:flag:ghostty_renderer")).toBe("1");
+    expect(preloadFlagValue("ghostty_renderer")).toBe(true);
+
+    t += 30_001;
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag("ghostty_renderer", false)] });
+    await loadFlags(now);
+    expect(localStorage.getItem("ssq:flag:ghostty_renderer")).toBeNull();
+    expect(preloadFlagValue("ghostty_renderer")).toBe(false);
+  });
+
   it("flagStore_should_UseFixedOnConstantForRequestCoalescing_And_UndefinedForUnlistedFlags", () => {
     expect(preloadFlagValue("request_coalescing")).toBe(true);
     expect(localStorage.getItem("ssq:flag:request_coalescing")).toBeNull();

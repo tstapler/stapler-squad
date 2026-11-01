@@ -74,11 +74,19 @@ import type {
   XtermTerminalProps,
 } from "@/components/sessions/XtermTerminal";
 import type { ScrollMode } from "@/lib/terminal/scrollRouting";
+import { GHOSTTY_RENDERER_FLAG, preloadFlagValue } from "@/lib/features/flagStore";
 import * as styles from "./TerminalPool.css";
+
+type TerminalRenderer = React.ForwardRefExoticComponent<XtermTerminalProps & React.RefAttributes<XtermTerminalHandle>>;
 
 const XtermTerminal = lazy(() =>
   import("@/components/sessions/XtermTerminal").then((m) => ({ default: m.XtermTerminal }))
-) as React.ForwardRefExoticComponent<XtermTerminalProps & React.RefAttributes<XtermTerminalHandle>>;
+) as TerminalRenderer;
+
+// A separate lazy chunk: ghostty-web's JS+WASM is only fetched when the `ghostty_renderer` flag is on.
+const GhosttyTerminal = lazy(() =>
+  import("@/components/sessions/GhosttyTerminal").then((m) => ({ default: m.GhosttyTerminal }))
+) as TerminalRenderer;
 
 export const DEFAULT_TERMINAL_POOL_MAX_SIZE = 8;
 
@@ -345,17 +353,25 @@ export function TerminalPoolProvider({ children, maxSize = DEFAULT_TERMINAL_POOL
   const graveyardRef = useRef<HTMLDivElement | null>(null);
   const { entriesRef, entryVersion, contextValue, dockedIds } = usePoolManager(maxSize, graveyardRef);
 
-  // Preload xterm.js eagerly (mirrors TerminalOutput.tsx's prior per-mount
+  // Renderer is fixed for the page's lifetime (flag flips apply on the next load, not mid-session,
+  // since swapping would discard every pooled terminal's scrollback).
+  const [Renderer] = useState<TerminalRenderer>(() =>
+    preloadFlagValue(GHOSTTY_RENDERER_FLAG) ? GhosttyTerminal : XtermTerminal,
+  );
+
+  // Preload the chosen renderer eagerly (mirrors TerminalOutput.tsx's prior per-mount
   // preload, now hoisted to the pool since it's the sole mount point).
   useEffect(() => {
-    void import("@/components/sessions/XtermTerminal");
-  }, []);
+    void (Renderer === GhosttyTerminal
+      ? import("@/components/sessions/GhosttyTerminal")
+      : import("@/components/sessions/XtermTerminal"));
+  }, [Renderer]);
 
   const portals = useMemo(() => {
     return Array.from(entriesRef.current.values()).map((entry) =>
       createPortal(
         <Suspense fallback={null} key={entry.sessionId}>
-          <XtermTerminal
+          <Renderer
             ref={entry.handleRef}
             onData={entry.stableOnData}
             onResize={entry.stableOnResize}

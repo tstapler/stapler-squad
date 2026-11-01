@@ -346,6 +346,9 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:batch_unary": {
 		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
 	},
+	"flag:ghostty_renderer": {
+		exempt: "client-only: no Go reader; the web client picks the terminal renderer (xterm.js vs ghostty-web) on it (web-app/src/lib/terminal/TerminalPool.tsx via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
 	"flag:window_keep_alive": {
 		exempt: "client-only: no Go reader; the web client gates window keep-alive on it (client reader lands with the window keep-alive story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},

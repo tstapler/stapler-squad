@@ -1,0 +1,139 @@
+{
+  "cols": 20,
+  "rows": 6,
+  "vectors": [
+    {
+      "name": "sgr-colon-truecolor",
+      "description": "Colon-separated SGR truecolor (ITU T.416) must not leak parameters as text.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "cursor-movement",
+      "description": "CUP, CUU, CUD, CUF, CUB place text at exact cells.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "erase-line",
+      "description": "EL 0 and EL 1 erase right of and left of the cursor.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "rep-repeat-char",
+      "description": "REP (CSI Ps b) repeats the preceding graphic character. Known xterm.js gap.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "decaln-alignment",
+      "description": "DECALN (ESC # 8) fills the screen with E. Known xterm.js gap.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "sync-output-2026",
+      "description": "Synchronized Output (DEC private mode 2026): bracketed output still renders in full.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "sync-output-decrqm",
+      "description": "DECRQM for mode 2026 reports recognised-and-reset (2), the signal TUIs use to detect Synchronized Output support.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": true
+    },
+    {
+      "name": "kitty-keyboard-query",
+      "description": "Kitty keyboard protocol query (CSI ? u) answers with the current flags (0). Known xterm.js gap.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": true
+    },
+    {
+      "name": "wide-chars",
+      "description": "CJK and emoji occupy two cells and do not shift following text.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "combining-mark",
+      "description": "A combining acute accent shares the base character's cell.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "scroll-region",
+      "description": "DECSTBM confines LF and RI scrolling to rows 2-4.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "alt-screen",
+      "description": "Mode 1049 swaps to a clean alternate screen and restores the main screen and cursor.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "tab-stops",
+      "description": "Default tab stops every 8 columns.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "insert-delete",
+      "description": "ICH, DCH, IL edit in place without losing neighbours.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "osc-title-hyperlink",
+      "description": "OSC 0/2 titles and OSC 8 hyperlinks (BEL and ST terminated) print nothing extra.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "autowrap",
+      "description": "DECAWM on wraps at the margin; off overwrites the last column.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "cursor-position-report",
+      "description": "DSR 6 answers CSI row;col R for the current cursor.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": true
+    },
+    {
+      "name": "backspace-cr",
+      "description": "BS moves left without erasing and CR returns to column 1.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    },
+    {
+      "name": "full-reset",
+      "description": "RIS (ESC c) clears the screen and homes the cursor.",
+      "cols": 20,
+      "rows": 6,
+      "checksResponse": false
+    }
+  ]
+}

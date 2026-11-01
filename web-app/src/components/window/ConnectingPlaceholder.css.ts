@@ -1,4 +1,5 @@
 import { style } from "@vanilla-extract/css";
+import { vars } from "@/styles/theme.css";
 
 // Covers the window panel without affecting layout; clicks pass through except on the failed item.
 export const placeholderRoot = style({
@@ -18,7 +19,7 @@ export const placeholderItem = style({
   justifyContent: "center",
   gap: 8,
   minHeight: 0,
-  background: "var(--bg-primary, #0d1117)",
-  color: "var(--text-secondary, #8b949e)",
+  background: vars.color.background,
+  color: vars.color.textSecondary,
   fontSize: 13,
 });

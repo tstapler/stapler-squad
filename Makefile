@@ -61,7 +61,7 @@ $(GOTESTSUM_BIN):
 	@echo "Installing gotestsum..."
 	@go install gotest.tools/gotestsum@v1.13.0
 
-.PHONY: ensure-tools
+.PHONY: ready-vt-conformance-gate ensure-tools
 # ensure-tools runs asdf install only when .tool-versions changes
 ensure-tools: $(ASDF_STAMP) ## Automatically install missing system tools (go, buf, node) via asdf or Homebrew
 
@@ -1102,7 +1102,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
@@ -1143,6 +1143,9 @@ lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a
 
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
+
+ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty-web vs tests/terminal-conformance/ (docs/how-to/vt-conformance-runbook.md)
+	cd web-app && bunx jest --no-coverage src/lib/terminal/__tests__/conformance src/lib/terminal/__tests__/ghosttyAdapter.test.ts
 
 # --- files-viewer-revamp gates (project_plans/files-viewer-revamp, Story 0.2.4) ---
 # Package elapsed (go test -json, compile excluded) of `go test -race -short ./server/services` on origin/main at the
