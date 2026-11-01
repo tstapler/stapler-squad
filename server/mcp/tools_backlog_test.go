@@ -2989,11 +2989,30 @@ func TestDecideOverridePolicy(t *testing.T) {
 // another session sharing the worktree. With a matching self-authored PR and
 // a non-empty override_reason, the item must still transition to pr_pending,
 // and the override use must be audited via a structured log.Warn line.
+// lockedLogBuffer is a slog sink safe against writes from goroutines that outlive the test that
+// started them (e.g. an async TriggerTriage), which a bare strings.Builder races with under -race.
+type lockedLogBuffer struct {
+	mu sync.Mutex
+	sb strings.Builder
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sb.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sb.String()
+}
+
 func TestReportPRCreated_should_TransitionToPRPending_When_FallbackBranchWithOverrideReason(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 
-	var buf strings.Builder
+	var buf lockedLogBuffer
 	origLogger := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { ssqlog.SetSlogDefaultForTest(origLogger) })
 
