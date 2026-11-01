@@ -78,6 +78,13 @@ type tymuxGRPCSession struct {
 	// Epic 2.3.
 	liveness v1.Liveness
 
+	// restartIsPending is IsAlive's last verdict that a DEAD pane is between tymuxd's automatic
+	// restarts, so a failed follow-up capture falls back to "alive" instead of the cached DEAD.
+	restartIsPending bool
+
+	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
+	lifecycleCap atomic.Int32
+
 	// closed is set once Close() has issued KillSession, short-circuiting
 	// IsAlive() without a further RPC against a session we already killed.
 	closed bool
@@ -576,23 +583,21 @@ func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Sessi
 	reviveResp, err := s.transport.ReviveSession(ctx, connect.NewRequest(&v1.ReviveSessionRequest{
 		SessionId: found.GetId(),
 	}))
+	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		// tymuxd refuses when every pane is STOPPED/FAILED; this is the same verdict as the
+		// pre-check above for daemons that cannot report pane state or on a state race.
+		return nil, fmt.Errorf("%w: session %q: %w", ErrPaneNotRevivable, found.GetId(), err)
+	}
 	if err != nil {
 		return nil, classifyRPCError("RestoreWithWorkDir", err)
 	}
 	// ReviveSessionRequest carries only the session id, so launchEnv's forced
 	// TERM/COLORTERM are not re-sent here; a revived pane gets whatever env
 	// tymuxd persisted in the session record at CreateSession time.
-	revived := reviveResp.Msg.GetSession()
-	if revived == nil {
-		return found, nil
+	if revived := reviveResp.Msg.GetSession(); revived != nil {
+		return revived, nil
 	}
-	// A daemon that skipped the pane (FAILED/STOPPED) answers success with nothing respawned
-	// and the session still dead; already_live covers a pane that came back by itself.
-	if !reviveResp.Msg.GetAlreadyLive() && reviveResp.Msg.GetPaneCount() == 0 &&
-		revived.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
-		return nil, notRevivableError(found.GetId(), v1.PaneState_PANE_STATE_UNSPECIFIED)
-	}
-	return revived, nil
+	return found, nil
 }
 
 // Close kills the tymux session via KillSession. A Close before any Start
@@ -673,6 +678,7 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 	paneID := s.paneID
 	closed := s.closed
 	cachedLiveness := s.liveness
+	cachedPending := s.restartIsPending
 	sessionID := s.sessionID
 	s.mu.RUnlock()
 	if paneID == "" || closed {
@@ -692,17 +698,16 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 		} else {
 			log.Warn("tymux: IsAlive: CapturePane failed, falling back to cached liveness", logKeySessionID, sessionID, logKeyErr, err)
 		}
-		return cachedLiveness == v1.Liveness_LIVENESS_LIVE
+		return cachedLiveness == v1.Liveness_LIVENESS_LIVE || cachedPending
 	}
+	// BACKOFF/RESTARTING: tymuxd is bringing the pane back, so reporting it dead would send
+	// health checks and reconnecting browsers to revive it underneath the daemon's backoff.
+	pending := snap.GetLiveness() == v1.Liveness_LIVENESS_DEAD && s.restartPending(context.Background(), paneID)
 	s.mu.Lock()
 	s.liveness = snap.GetLiveness()
+	s.restartIsPending = pending
 	s.mu.Unlock()
-	if snap.GetLiveness() == v1.Liveness_LIVENESS_DEAD && s.restartPending(context.Background(), paneID) {
-		// BACKOFF/RESTARTING: tymuxd is bringing the pane back, so reporting it dead would send
-		// health checks and reconnecting browsers to revive it underneath the daemon's backoff.
-		return true
-	}
-	return snap.GetLiveness() == v1.Liveness_LIVENESS_LIVE
+	return pending || snap.GetLiveness() == v1.Liveness_LIVENESS_LIVE
 }
 
 // daemonConfirmsPaneGone double-checks a CapturePane NotFound with a

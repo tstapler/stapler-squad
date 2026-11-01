@@ -100,6 +100,8 @@ func TestIntegration_Lifecycle_BackoffPaneIsAdoptedNotRevived(t *testing.T) {
 }
 
 // A pane an operator stopped is not revivable: restore must say so instead of reporting success.
+// (tymuxd's ReviveSession would also refuse with FAILED_PRECONDITION; the pre-check only skips
+// that RPC and yields the typed ErrPaneNotRevivable.)
 func TestIntegration_Lifecycle_StoppedPaneIsNotRevived(t *testing.T) {
 	resetClaims(t)
 	addr, raw := lifecycleDaemon(t)

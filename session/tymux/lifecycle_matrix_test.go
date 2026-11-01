@@ -87,12 +87,13 @@ func matrixTransport(dir string, p paneState, calls *matrixCalls) *fakeTransport
 		},
 		reviveSessionFn: func(context.Context, *connect.Request[v1.ReviveSessionRequest]) (*connect.Response[v1.ReviveSessionResponse], error) {
 			calls.revive.Add(1)
-			// tymuxd v1.12: revive respawns EXITED panes and skips STOPPED/FAILED.
-			if p.state == v1.PaneState_PANE_STATE_EXITED || !p.lifecycle {
-				s := fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)
-				return connect.NewResponse(&v1.ReviveSessionResponse{PaneCount: 1, Session: s}), nil
+			// tymuxd v1.12 (engine.rs revive_session): FAILED_PRECONDITION when every pane is
+			// STOPPED/FAILED, otherwise the dead panes are respawned.
+			if p.terminal() {
+				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no revivable panes"))
 			}
-			return connect.NewResponse(&v1.ReviveSessionResponse{Session: listed()}), nil
+			s := fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE)
+			return connect.NewResponse(&v1.ReviveSessionResponse{PaneCount: 1, Session: s}), nil
 		},
 		capturePaneFn: func(_ context.Context, req *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
 			return connect.NewResponse(p.snapshot(req.Msg.GetPaneId())), nil
@@ -186,9 +187,9 @@ func TestLifecycleMatrix_Restore(t *testing.T) {
 	}
 }
 
-// A daemon without pane.lifecycle cannot be asked for the pane state; a revive that leaves the
-// session dead is the only signal that the pane was skipped.
-func TestLifecycleMatrix_Restore_ReviveLeavesSessionDead(t *testing.T) {
+// A daemon without pane.lifecycle cannot be asked for the pane state; the daemon's own
+// FAILED_PRECONDITION refusal is then the only signal that the pane is not revivable.
+func TestLifecycleMatrix_Restore_ReviveFailedPrecondition(t *testing.T) {
 	resetClaims(t)
 	dir := t.TempDir()
 	calls := &matrixCalls{}
@@ -332,6 +333,16 @@ func TestLifecycleMatrix_IsAlive_DaemonFaults(t *testing.T) {
 		}
 		assert.True(t, sess.IsAlive())
 	})
+	t.Run("restart pending survives a failed follow-up capture", func(t *testing.T) {
+		dir := t.TempDir()
+		ft := matrixTransport(dir, matrixStates[3], &matrixCalls{}) // BACKOFF
+		sess := startedMatrixSession(t, dir, ft)
+		require.True(t, sess.IsAlive())
+		ft.capturePaneFn = func(context.Context, *connect.Request[v1.CapturePaneRequest]) (*connect.Response[v1.PaneSnapshot], error) {
+			return nil, unavailable
+		}
+		assert.True(t, sess.IsAlive(), "a blip must not turn a BACKOFF pane into dead")
+	})
 	t.Run("pane status call failing on a dead pane means plain exit", func(t *testing.T) {
 		dir := t.TempDir()
 		p := matrixStates[3] // BACKOFF
@@ -342,6 +353,29 @@ func TestLifecycleMatrix_IsAlive_DaemonFaults(t *testing.T) {
 		sess := startedMatrixSession(t, dir, ft)
 		assert.False(t, sess.IsAlive(), "an unanswerable state query must not be read as restart pending")
 	})
+}
+
+// The pane.lifecycle capability answer is cached, so repeated IsAlive calls on a dead pane cost
+// one GetServerInfo, not one per call.
+func TestLifecycleMatrix_IsAlive_CachesLifecycleCapability(t *testing.T) {
+	for name, p := range map[string]paneState{
+		"supported":   matrixStates[3],
+		"unsupported": matrixStates[7],
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			ft := matrixTransport(dir, p, &matrixCalls{})
+			if !p.lifecycle {
+				ft.capabilities = nil
+			}
+			sess := startedMatrixSession(t, dir, ft)
+			before := atomic.LoadInt32(&ft.serverInfoCalls)
+			for range 3 {
+				sess.IsAlive()
+			}
+			assert.LessOrEqual(t, atomic.LoadInt32(&ft.serverInfoCalls)-before, int32(1))
+		})
+	}
 }
 
 func TestLifecycleMatrix_Close(t *testing.T) {
