@@ -7,7 +7,7 @@
 # assert-e2e-report.mjs on both JSON reports.
 #   usage: run-ci-shard.sh <shard> <total>
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 shard=$1 total=$2
 projects=(--project=chromium --project=chromium-dom --project=mobile-chromium)
 
