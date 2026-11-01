@@ -23,7 +23,7 @@ The script is an upper bound for jobs whose skip comes from `needs:` or a `detec
 | PR touching web build paths | `ux-analysis.yml` | Axe + Lighthouse |
 | PR labelled `run-benchmarks` | `benchmark.yml` | also runs on every push to main; a failing main run opens an issue |
 | PR labelled `record-video` | `e2e-video.yml` | non-gating feature videos |
-| Push to main only | `main-ci.yml` | full-suite coverage gate (`test-tmux`, `test-rest`, `test`), 5-platform build matrix, `benchmark-gate` |
+| Push to main only | `main-ci.yml` | full-suite coverage gate (`test-tmux`, `test-rest`, `test`), 5-platform build matrix |
 | Nightly / manual | `nightly.yml`, `css-differential.yml`, release and demo workflows | |
 
 No check is a required status check: `gh api repos/tstapler/stapler-squad/branches/main` reports `protected: false` with empty `required_status_checks`, and `gh api repos/tstapler/stapler-squad/rulesets` returns `[]`. Re-verify before relying on that.
@@ -78,8 +78,10 @@ Measured on 2026-10-31 (`gh run list --limit 400`, job data for 102 runs; runner
 | Trigger | Concurrent jobs | Critical path (median wall) |
 |---|---|---|
 | One PR (all workflows) | about 18 (Build 13 max, 11 median, plus Lint, MCP, GoReleaser, UX, Diff Guards at 1 each) | Build 17.8 min, Lint 15.3 min |
-| One push to main | about 37 (Build 21, Main CI 8, Benchmarks 5, Lint 1, others) | Main CI 47.8 min (`Test (server/session/config)` 1848 s) |
+| One push to main | about 36 after retiring `Benchmark Gate` (was about 37: Build 21, Main CI 8 then 7, Benchmarks 5, Lint 1, others) | Main CI was 47.8 min, the 45-min timeout of `Benchmark Gate (main only)`; without it the longest job is `Test (server/session/config)` at an estimated 14 min on a green run (the first of two passes in one sampled log took 816 s; the 1848 s figure included a failure rerun) |
 
 Queue wait over 819 jobs: median 2 s, p90 57 s, p99 212 s; 17.8% waited over 30 s. That is runner starvation at the cap.
 
 **Rule: a PR run must stay at or under 20 concurrent jobs, and so must a push to main** (so two PRs plus a main push fit under 40, and one run fits under a Free 20). PRs meet it today; a push to main does not and is the target for the main-CI work. Re-count with `tools/ci/count-pr-checks.py` and measure peaks from the Actions API (`started_at`/`completed_at` per job).
+
+`Benchmark Gate (main only)` in `main-ci.yml` was retired: it ran `go test -bench=. -count=5 ./...`, hit its 45-minute timeout and was cancelled on every one of the 7 Main CI runs checked on 2026-10-31, so it never saved a baseline and never compared anything. What remains on push to main is `benchmark.yml`: it runs the Go Tier 1/Tier 2, E2E perf, RPC latency and terminal throughput jobs and saves their baselines, and `alert-on-main-failure` opens an issue when a main run fails outright. Regression comparison (`benchdiff`, `fail-on-regression: 20`) runs only on `run-benchmarks`-labelled PRs, so a main-vs-previous-main Go benchmark regression is not gated anywhere today; adding a main-time compare step to `benchmark.yml` is a separate change.

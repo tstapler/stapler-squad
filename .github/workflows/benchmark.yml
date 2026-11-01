@@ -29,8 +29,8 @@ on:
 # behavior without touching git history. See individual job comments for the
 # cache key used by that job's baseline file.
 concurrency:
-  # Shared with build.yml benchmark-gate so runs are serialized (avoids
-  # redundant concurrent benchmark runs contending for runner resources).
+  # Per-ref group serializes main-branch runs so concurrent benchmark runs
+  # do not contend for runner resources.
   group: baseline-push-${{ github.ref }}-${{ github.event.label.name }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
