@@ -384,6 +384,7 @@ jobs:
           go build -o stapler-squad .
           go build -o seed-demo ./tests/demo/seed
           go build -o seed-hidden ./tests/e2e/seed-hidden
+          go build -o e2e-sshd ./tests/e2e/sshd
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -393,6 +394,7 @@ jobs:
             stapler-squad
             seed-demo
             seed-hidden
+            e2e-sshd
           if-no-files-found: error
           retention-days: 1
 
@@ -420,7 +422,7 @@ jobs:
           name: e2e-binary-next
 
       - name: Make binary executable
-        run: chmod +x stapler-squad seed-demo seed-hidden
+        run: chmod +x stapler-squad seed-demo seed-hidden e2e-sshd
 
       # setup-bun unzips its download, the server and some specs shell out to tmux; install only
       # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
@@ -461,11 +463,11 @@ jobs:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
+          TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
           WEB_BUILD: next
-          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/shard-report.json
         run: |
           cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob,json --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
+          timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ env.E2E_SHARD_TOTAL }} || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-next' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -478,7 +480,9 @@ jobs:
       # The run step above tolerates raw test failures (report-only). A server that never started or a
       # global-setup error leaves a blob report with zero executed tests and used to pass the shard.
       - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Next build)
-        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-next shard ${{ matrix.shard }}"
+        run: |
+          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-next shard ${{ matrix.shard }}"
+          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report-stress.json --label "e2e-next shard ${{ matrix.shard }} (stress pass)"
 
       - name: Upload blob report
         if: always()
@@ -631,6 +635,7 @@ jobs:
         run: |
           go build -o seed-demo ./tests/demo/seed
           go build -o seed-hidden ./tests/e2e/seed-hidden
+          go build -o e2e-sshd ./tests/e2e/sshd
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -640,6 +645,7 @@ jobs:
             stapler-squad
             seed-demo
             seed-hidden
+            e2e-sshd
           if-no-files-found: error
           retention-days: 1
 
@@ -675,7 +681,7 @@ jobs:
           name: e2e-binary-bun
 
       - name: Make binary executable
-        run: chmod +x stapler-squad seed-demo seed-hidden
+        run: chmod +x stapler-squad seed-demo seed-hidden e2e-sshd
 
       # setup-bun unzips its download, the server and some specs shell out to tmux; install only
       # what the image lacks. apt gets its own timeouts: killing a wrapper with `timeout` would
@@ -716,11 +722,11 @@ jobs:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
+          TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
           WEB_BUILD: bun
-          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/tests/e2e/shard-report.json
         run: |
           cd tests/e2e
-          timeout 40m npx playwright test --reporter=list,blob,json --shard=${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} --project=chromium --project=chromium-dom --project=mobile-chromium || {
+          timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ env.E2E_SHARD_TOTAL }} || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -733,7 +739,9 @@ jobs:
       # The run step above tolerates raw test failures (report-only). A server that never started or a
       # global-setup error leaves a blob report with zero executed tests and used to pass the shard.
       - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Bun build)
-        run: node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"
+        run: |
+          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"
+          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report-stress.json --label "e2e-bun shard ${{ matrix.shard }} (stress pass)"
 
       - name: Upload blob report
         if: always()

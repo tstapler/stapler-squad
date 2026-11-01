@@ -97,7 +97,8 @@ test.beforeAll(async () => {
   testRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-'));
   testWorktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-wt-'));
 
-  execSync(`git init --bare "${testRepoDir}"`);
+  // Pin the branch: the clone's default comes from init.defaultBranch, which is `master` on the CI image.
+  execSync(`git init --bare --initial-branch=main "${testRepoDir}"`);
 
   testSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-'));
   execSync(`git clone "${testRepoDir}" "${testSeedDir}"`);

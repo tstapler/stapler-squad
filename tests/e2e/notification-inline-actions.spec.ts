@@ -83,7 +83,8 @@ for (const key of ['V1', 'V2'] as const) {
       await row.press(row.deny);
       await row.row.getByTestId('deny-reason').fill('not now');
       await row.press(row.sendDenial);
-      await expect(row.row).toContainText(/Denied/);
+      // Denial commits through the same hold window as approval, so it gets the same budget.
+      await expect(row.row).toContainText(/Denied/, { timeout: HOLD_TIMEOUT });
       await expect(row.deny).toHaveCount(0);
       expect(await approval.decision).toMatchObject({ behavior: 'deny' });
     });
