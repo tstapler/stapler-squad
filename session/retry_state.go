@@ -362,20 +362,13 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	// Register before spawning to close the race window between an exiting
 	// goroutine's driverRunning bookkeeping and the new one starting
 	// (mirrors handleDriverFailure's existing D3 mitigation).
-	inst.driverGoroutineStarted()
-
-	driverStop := stop
-	if driverStop == nil {
-		if existing := inst.driverStopper.Load(); existing != nil {
-			driverStop = existing.stop
-		} else {
-			stopper := &sessionDriverStopper{stop: make(chan struct{})}
-			inst.driverStopper.Store(stopper)
-			driverStop = stopper.stop
-		}
+	driverStop, ok := inst.registerContinuation(stop)
+	if !ok {
+		// Destroy already ran: no goroutine may outlive it. The restart above is torn down with
+		// the instance.
+		log.Info("SessionDriver: instance destroyed, not spawning retry continuation", "session", inst.Title)
+		return nil
 	}
-
-	inst.driverWG.Add(1)
 	go func() {
 		defer inst.driverWG.Done()
 		defer inst.driverGoroutineExited()

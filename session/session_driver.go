@@ -240,13 +240,31 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	}()
 }
 
-// driverGoroutineStarted registers a continuation driver goroutine spawned by
-// restartForRetry; it pairs with driverGoroutineExited.
-func (i *Instance) driverGoroutineStarted() {
+// registerContinuation registers a continuation driver goroutine spawned by
+// restartForRetry and returns the stop channel it must run with; it pairs with
+// driverGoroutineExited. It refuses (ok=false) once StopSessionDriver has run,
+// and does driverWG.Add(1) under driverMu so it cannot race StopSessionDriver's
+// Wait — the same ordering StartSessionDriver relies on.
+func (i *Instance) registerContinuation(stop <-chan struct{}) (driverStop <-chan struct{}, ok bool) {
 	i.driverMu.Lock()
+	defer i.driverMu.Unlock()
+	if i.driverDestroyed {
+		return nil, false
+	}
+	driverStop = stop
+	if driverStop == nil {
+		if existing := i.driverStopper.Load(); existing != nil {
+			driverStop = existing.stop
+		} else {
+			stopper := &sessionDriverStopper{stop: make(chan struct{})}
+			i.driverStopper.Store(stopper)
+			driverStop = stopper.stop
+		}
+	}
 	i.driverGoroutines++
 	i.driverRunning.Store(true)
-	i.driverMu.Unlock()
+	i.driverWG.Add(1)
+	return driverStop, true
 }
 
 // driverGoroutineExited clears driverRunning only when the last driver
