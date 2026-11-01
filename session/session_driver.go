@@ -217,6 +217,7 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 		)
 		return
 	}
+	inst.driverGoroutines++
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}
 	// Add(1) must happen before driverStopper is published (and before driverMu is
 	// released): StopSessionDriver reads driverStopper under driverMu and, if
@@ -234,9 +235,49 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	}
 	go func() {
 		defer inst.driverWG.Done()
-		defer inst.driverRunning.Store(false)
+		defer inst.driverGoroutineExited()
 		runSessionDriver(inst, allowedPath, stopper.stop)
 	}()
+}
+
+// registerContinuation registers a continuation driver goroutine spawned by
+// restartForRetry and returns the stop channel it must run with; it pairs with
+// driverGoroutineExited. It refuses (ok=false) once StopSessionDriver has run,
+// and does driverWG.Add(1) under driverMu so it cannot race StopSessionDriver's
+// Wait — the same ordering StartSessionDriver relies on.
+func (i *Instance) registerContinuation(stop <-chan struct{}) (driverStop <-chan struct{}, ok bool) {
+	i.driverMu.Lock()
+	defer i.driverMu.Unlock()
+	if i.driverDestroyed {
+		return nil, false
+	}
+	driverStop = stop
+	if driverStop == nil {
+		if existing := i.driverStopper.Load(); existing != nil {
+			driverStop = existing.stop
+		} else {
+			stopper := &sessionDriverStopper{stop: make(chan struct{})}
+			i.driverStopper.Store(stopper)
+			driverStop = stopper.stop
+		}
+	}
+	i.driverGoroutines++
+	i.driverRunning.Store(true)
+	i.driverWG.Add(1)
+	return driverStop, true
+}
+
+// driverGoroutineExited clears driverRunning only when the last driver
+// goroutine exits: a driver that handed off to a continuation must not mark the
+// instance driverless while the continuation still runs.
+func (i *Instance) driverGoroutineExited() {
+	i.driverMu.Lock()
+	i.driverGoroutines--
+	if i.driverGoroutines <= 0 {
+		i.driverGoroutines = 0
+		i.driverRunning.Store(false)
+	}
+	i.driverMu.Unlock()
 }
 
 // StopSessionDriver signals a running SessionDriver goroutine (started by

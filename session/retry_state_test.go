@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,8 @@ type fakeLivenessProcessManager struct {
 	stuckDialogProcessManager
 	alive          bool
 	restoreRelease chan struct{}
+	// onRestore runs inside RestoreWithWorkDir, i.e. mid-restartForRetry.
+	onRestore func()
 }
 
 func (m *fakeLivenessProcessManager) IsAlive() bool               { return m.alive }
@@ -32,6 +35,9 @@ func (m *fakeLivenessProcessManager) HasLiveSessionNoCache() bool { return m.ali
 func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
 	if m.restoreRelease != nil {
 		<-m.restoreRelease
+	}
+	if m.onRestore != nil {
+		m.onRestore()
 	}
 	return m.stuckDialogProcessManager.RestoreWithWorkDir(dir)
 }
@@ -781,4 +787,87 @@ func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *tes
 	if inst.Started() {
 		t.Error("Started() = true, want false")
 	}
+}
+
+// A continuation goroutine spawned by restartForRetry must clear driverRunning when it exits,
+// else StartSessionDriver is a permanent no-op for the instance.
+func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		processManager: &fakeLivenessProcessManager{alive: true},
+	}
+	inst.RetryAttempt = 3
+	inst.RetryMaxAttempts = 3
+	require.NoError(t, inst.RetryNow("/tmp"))
+
+	StopSessionDriver(inst)
+	JoinSessionDriver(inst)
+
+	require.False(t, SessionDriverRunningForTest(inst),
+		"driverRunning stays true after the retry continuation exited, blocking every later StartSessionDriver")
+}
+
+// The in-loop handoff: a real driver fires its scheduled retry, hands off to a continuation and
+// exits; once the continuation exits too, a later StartSessionDriver must start a driver.
+func TestRunSessionDriver_should_AllowRestart_When_RetryContinuationExited(t *testing.T) {
+	inst := &Instance{Title: "handoff", Status: Stopped}
+	inst.NextRetryAt = time.Now().Add(-time.Minute)
+	inst.RetryAttempt = 1
+	// Mid-restart, mark the instance destroyed (without StopSessionDriver, which would set
+	// driverDestroyed): both the original driver and the continuation then exit at their next
+	// tick gate, so Join below observes a fully quiescent instance without any sleeping.
+	inst.processManager = &fakeLivenessProcessManager{alive: true, onRestore: func() { inst.destroyed.Store(true) }}
+	shrinkDriverTiming(t)
+
+	StartSessionDriver(inst, "/tmp")
+	JoinSessionDriver(inst)
+
+	require.False(t, inst.IsRetryPending(), "the driver never fired the scheduled retry; the handoff did not happen")
+	require.False(t, SessionDriverRunningForTest(inst), "driverRunning left set after every driver goroutine exited")
+
+	inst.destroyed.Store(false)
+	var started atomic.Int32
+	SetSessionDriverStartHookForTest(func(*Instance) { started.Add(1) })
+	t.Cleanup(func() { SetSessionDriverStartHookForTest(nil) })
+	StartSessionDriver(inst, "/tmp")
+	t.Cleanup(func() { StopSessionDriver(inst); JoinSessionDriver(inst) })
+	require.Equal(t, int32(1), started.Load(), "a later StartSessionDriver was refused after the continuation exited")
+}
+
+// restartForRetry after Destroy must not spawn a continuation that nothing will stop.
+func TestRestartForRetry_should_NotSpawnContinuation_When_DriverDestroyed(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:          "t",
+		Status:         PermanentlyFailed,
+		processManager: &fakeLivenessProcessManager{alive: true},
+	}
+	StopSessionDriver(inst) // what Destroy does
+	require.NoError(t, inst.RetryNow("/tmp"))
+
+	require.False(t, SessionDriverRunningForTest(inst))
+	require.Zero(t, inst.driverGoroutines)
+	JoinSessionDriver(inst)
+}
+
+// A driver that hands off to a continuation exits first; driverRunning must stay set until the
+// continuation exits too, or a second driver could start alongside it.
+func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRuns(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{Title: "t"}
+	inst.driverMu.Lock()
+	inst.driverRunning.Store(true)
+	inst.driverGoroutines = 1
+	inst.driverMu.Unlock()
+
+	_, ok := inst.registerContinuation(nil) // restartForRetry spawns the continuation
+	require.True(t, ok)
+	inst.driverGoroutineExited() // the original driver returns
+	require.True(t, SessionDriverRunningForTest(inst), "cleared while the continuation still runs")
+
+	inst.driverGoroutineExited() // continuation returns
+	inst.driverWG.Done()
+	require.False(t, SessionDriverRunningForTest(inst))
 }
