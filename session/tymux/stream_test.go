@@ -1010,3 +1010,31 @@ func TestClampResizeDim(t *testing.T) {
 		})
 	}
 }
+
+// A pane the daemon has never heard of (NotFound) cannot come back by retrying: the loop must
+// stop at the first redial and say so, not burn its whole budget and blame an unreachable daemon.
+func TestReconnectLoop_StopsAtFirstNotFound_WithDistinctExitReason(t *testing.T) {
+	sess, stream, transport := startedSessionWithStream(t)
+	setReconnectBackoff(sess, time.Millisecond, 2*time.Millisecond, 5)
+	transport.attachFn = func(ctx context.Context) attachStream {
+		s := newFakeAttachStream(ctx)
+		s.recvErr = connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
+		return s
+	}
+	reasons := make(chan string, 1)
+	sess.SetOnExitCallback(func(reason string) { reasons <- reason })
+	done, err := sess.Attach()
+	require.NoError(t, err)
+
+	close(stream.events) // drop
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Attach's channel never closed")
+	}
+	assert.EqualValues(t, 2, atomic.LoadInt32(&transport.attachCalls), "initial attach plus exactly one redial")
+	reason := <-reasons
+	assert.Contains(t, reason, "pane no longer exists")
+	assert.NotContains(t, reason, "unreachable")
+}

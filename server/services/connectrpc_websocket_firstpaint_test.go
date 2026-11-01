@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/gorilla/websocket"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/stretchr/testify/assert"
@@ -36,11 +37,13 @@ type paneFake struct {
 	redrawErr    error
 	text         string
 	textErr      error
+	dead         bool
 	redrawCalls  atomic.Int32
 	textCaptures atomic.Int32
 }
 
 func (p *paneFake) HasSession() bool                     { return true }
+func (p *paneFake) IsAlive() bool                        { return !p.dead }
 func (p *paneFake) FilterBanners(c string) (string, int) { return c, 0 }
 func (p *paneFake) HasMeaningfulContent(string) bool     { return true }
 func (p *paneFake) GetCursorPosition() (int, int, error) { return 0, 0, nil }
@@ -462,4 +465,41 @@ func TestSendInitialScrollbackUnlessFullState_should_SendNothing_When_FullStateP
 	var ne net.Error
 	require.ErrorAs(t, err, &ne)
 	require.True(t, ne.Timeout(), "scrollback replay would clear the full-state paint: %v", err)
+}
+
+// Every first-paint capture failure against a tymux pane: only a NotFound the backend agrees is
+// final ends the stream (as not_found); everything else paints blank and keeps streaming.
+func TestWriteHubInitialSnapshot_should_EndOnlyWhenBackendConfirmsGone(t *testing.T) {
+	old := hubCaptureRetryWindow
+	hubCaptureRetryWindow = time.Millisecond
+	t.Cleanup(func() { hubCaptureRetryWindow = old })
+	notFound := connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
+	for _, tc := range []struct {
+		name     string
+		err      error
+		dead     bool
+		wantGone bool
+	}{
+		{"pane not_found, backend dead", notFound, true, true},
+		{"pane not_found, backend alive (transient)", notFound, false, false},
+		{"daemon unavailable, backend alive", connect.NewError(connect.CodeUnavailable, errors.New("restarting")), false, false},
+		{"daemon unavailable, backend dead", connect.NewError(connect.CodeUnavailable, errors.New("restarting")), true, false},
+		{"plain error", errors.New("boom"), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream, conn, cleanup := createTestWebSocketPair(t)
+			defer cleanup()
+			inst := firstPaintInstance(t, &paneFake{redrawOK: true, redrawErr: tc.err, textErr: tc.err, dead: tc.dead})
+
+			err := newFirstPaintHandler().writeHubInitialSnapshot(stream, inst, "s")
+
+			if tc.wantGone {
+				require.ErrorIs(t, err, errSessionGone)
+				assert.Equal(t, "not_found", endStreamErrorCode(err))
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, strings.HasPrefix(string(readOutput(t, conn).Data), ansiSnapshotPrefix), "blank paint clears the spinner")
+		})
+	}
 }
