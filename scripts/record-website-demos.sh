@@ -31,9 +31,10 @@ SERVER_PID=""
 DEMO_DIR=""
 TMUX_SOCKET="ssq-website-demos-$$"
 cleanup() {
-  if [[ -n "$SERVER_PID" ]]; then kill "$SERVER_PID" 2>/dev/null || true; fi
+  # Reap the server before rm: it may still write into DEMO_DIR, and under set -e a failed rm flips a successful run to exit 1.
+  if [[ -n "$SERVER_PID" ]]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi
   tmux -L "$TMUX_SOCKET" kill-server 2>/dev/null || true
-  if [[ -n "$DEMO_DIR" ]]; then rm -rf "$DEMO_DIR"; fi
+  if [[ -n "$DEMO_DIR" ]]; then rm -rf "$DEMO_DIR" 2>/dev/null || rm -rf "$DEMO_DIR" 2>/dev/null || true; fi
   return 0 # a false `[[ ]] &&` as the last command would otherwise become the exit status (bash 3.2)
 }
 trap cleanup EXIT
