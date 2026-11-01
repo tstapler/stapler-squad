@@ -79,6 +79,8 @@ Manual / browser results, measured 2026-10-30 against a separate instance (`PORT
 | htop | not run | not run |
 | Claude Code TUI | not run | not run |
 
+Re-measured 2026-11-01 with `web-app/scripts/measure-lcp.mjs` (unminified `make build` output, isolated instance on `PORT=62873`, cache disabled, flag seeded via localStorage with `GetFeatureFlags` blocked): xterm.js 492, 472, 476, 472, 468 (median 472 ms); ghostty-web 472, 476, 476, 472, 464 (median 472 ms); delta 0 ms against the 200 ms budget. Reproduce with `cd web-app && CHROMIUM_PATH=<chrome-headless-shell> node scripts/measure-lcp.mjs http://localhost:62873 5`.
+
 LCP is measured on `/`, where the pool preloads the chosen renderer; the ghostty-web chunk is only requested when the flag is on. The LCP delta (ghostty on minus off) is -32 ms at the median, inside the 200 ms budget. vim, htop and the Claude Code TUI still need a person at a terminal.
 
 ## Known ghostty-web limitations in this integration
