@@ -30,6 +30,7 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 <article class="feature-card" data-testid="feature-card">
 	{
 		demoClip ? (
+			<>
 			<video
 				src={clipSrc}
 				data-poster={screenshotSrc}
@@ -41,6 +42,13 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 				preload="none"
 				data-testid="feature-card-video"
 			/>
+			{/* data-poster is set by script, so without JS the video would be an empty box. */}
+			{screenshotSrc && (
+				<noscript>
+					<img src={screenshotSrc} alt={alt ?? `${heading} screenshot`} width="320" height="200" />
+				</noscript>
+			)}
+			</>
 		) : (
 			screenshot && (
 				<img
