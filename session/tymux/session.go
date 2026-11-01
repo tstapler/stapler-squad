@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"weak"
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
@@ -299,7 +300,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 		claimedSessions.CompareAndDelete(s.sessionID, any(s))
 	}
 	if !s.tryClaim(sess.GetId()) {
-		log.Warn("tymux: session already claimed by another owner; this owner will not kill it on Close", logKeySessionID, sess.GetId())
+		log.Warn("tymux: session already claimed by another owner; Close will kill it only if this record stores its id", logKeySessionID, sess.GetId())
 	}
 	s.sessionID = sess.GetId()
 	s.paneID = pane.GetId()
@@ -475,6 +476,59 @@ func (s *tymuxGRPCSession) SetStoredSessionID(id string) {
 	s.mu.Lock()
 	s.storedID = id
 	s.mu.Unlock()
+	if id != "" {
+		registerStoredIDHolder(id, s)
+	}
+}
+
+// storedIDHolders maps a daemon session id -> the views whose record stores it,
+// so a label adoption can skip a session some other record owns by id. Weak
+// pointers keep throwaway liveness shadows from accumulating.
+var storedIDHolders sync.Map // string -> *storedIDHolderSet
+
+type storedIDHolderSet struct {
+	mu    sync.Mutex
+	views []weak.Pointer[tymuxGRPCSession]
+}
+
+func registerStoredIDHolder(id string, s *tymuxGRPCSession) {
+	v, _ := storedIDHolders.LoadOrStore(id, &storedIDHolderSet{})
+	set := v.(*storedIDHolderSet)
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	live := set.views[:0]
+	for _, w := range set.views {
+		if p := w.Value(); p != nil && p != s {
+			live = append(live, w)
+		}
+	}
+	set.views = append(live, weak.Make(s))
+}
+
+// storedByOtherRecord reports whether a view other than s still stores id.
+func (s *tymuxGRPCSession) storedByOtherRecord(id string) bool {
+	v, ok := storedIDHolders.Load(id)
+	if !ok {
+		return false
+	}
+	set := v.(*storedIDHolderSet)
+	set.mu.Lock()
+	views := make([]*tymuxGRPCSession, 0, len(set.views))
+	for _, w := range set.views {
+		if p := w.Value(); p != nil && p != s {
+			views = append(views, p)
+		}
+	}
+	set.mu.Unlock()
+	for _, p := range views {
+		p.mu.RLock()
+		holds := p.storedID == id && !p.closed
+		p.mu.RUnlock()
+		if holds {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionName is dir alone for an unlabeled session (legacy records), else
@@ -506,7 +560,8 @@ func (s *tymuxGRPCSession) tryClaim(sessionID string) bool {
 // label-named session, then a legacy Name == workDir record (old records only
 // reach here with no stored id). Same-title twins resolve deterministically by
 // daemon list order, first unclaimed wins; the stored id removes the ambiguity
-// for any record saved after this change.
+// for any record saved after this change. A stored id absent from the daemon
+// falls back to the label path; a session stored by another record is skipped.
 func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Session) (found *v1.Session, viaStoredID bool) {
 	s.mu.RLock()
 	storedID := s.storedID
@@ -520,12 +575,15 @@ func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Sessio
 				return sess, true
 			}
 		}
-		return nil, false
+		// Absent from the daemon (e.g. recovery replaced it and the new id was
+		// not saved yet): fall through to the label so the still-running agent
+		// is re-adopted instead of duplicated.
 	}
 	labeled := s.sessionName(workDir)
 	for _, name := range []string{labeled, workDir} {
 		for _, sess := range sessions {
-			if sess.GetName() == name && s.tryClaim(sess.GetId()) {
+			// A session some other record stores by id is never adopted by name.
+			if sess.GetName() == name && !s.storedByOtherRecord(sess.GetId()) && s.tryClaim(sess.GetId()) {
 				return sess, false
 			}
 		}
@@ -599,6 +657,7 @@ func (s *tymuxGRPCSession) Close() error {
 	if pty != nil {
 		pty.close()
 	}
+	unrestored := false
 	if sessionID == "" {
 		// Never restored/started in this process: a stored id still names the
 		// daemon session this record owns.
@@ -609,6 +668,7 @@ func (s *tymuxGRPCSession) Close() error {
 			return nil
 		}
 		recordOwned = true
+		unrestored = true
 	}
 	// Only the claim holder may kill: a non-owner (or a repeat Close) must never
 	// take down a session another Instance adopted.
@@ -621,12 +681,17 @@ func (s *tymuxGRPCSession) Close() error {
 	} else {
 		log.Info("tymux: Close skipping kill, claim not held", logKeySessionID, sessionID)
 	}
-	s.mu.Lock()
-	s.closed = true
-	s.storedID = ""
-	s.recordOwned = false // a repeat Close must not kill again
-	s.liveness = v1.Liveness_LIVENESS_DEAD
-	s.mu.Unlock()
+	// An unrestored view whose kill failed keeps its id (and is not marked
+	// closed, which would hide the id from PersistedSessionID), so the session
+	// is not orphaned and a retry can still kill it.
+	if !(unrestored && err != nil && connect.CodeOf(err) != connect.CodeNotFound) {
+		s.mu.Lock()
+		s.closed = true
+		s.storedID = ""
+		s.recordOwned = false // a repeat Close must not kill again
+		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.mu.Unlock()
+	}
 	if connect.CodeOf(err) == connect.CodeNotFound {
 		// Already gone daemon-side: the goal of Close is met.
 		log.Info("tymux: session already gone at Close", logKeySessionID, sessionID)
@@ -1153,6 +1218,10 @@ func (s *tymuxGRPCSession) BackendRestarted() (restarted bool, since time.Time) 
 // compile-time check that *tymuxGRPCSession satisfies TymuxManager.
 var _ TymuxManager = (*tymuxGRPCSession)(nil)
 
+// storedSessionProbeTimeout bounds the liveness probe so an unreachable daemon
+// cannot stall a caller that sweeps many sessions.
+const storedSessionProbeTimeout = 3 * time.Second
+
 // StoredSessionLive reports whether the daemon lists this record's stored
 // session as live, without restoring or claiming it. It lets a never-started
 // view (a liveness shadow) answer the same question a restored Instance would.
@@ -1163,7 +1232,9 @@ func (s *tymuxGRPCSession) StoredSessionLive() bool {
 	if storedID == "" {
 		return false
 	}
-	resp, err := s.transport.ListSessions(context.Background(), connect.NewRequest(&v1.ListSessionsRequest{}))
+	ctx, cancel := context.WithTimeout(context.Background(), storedSessionProbeTimeout)
+	defer cancel()
+	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return false
 	}

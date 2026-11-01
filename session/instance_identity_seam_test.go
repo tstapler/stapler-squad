@@ -177,7 +177,26 @@ func TestSeam_ShadowLivenessUsesStoredDaemonSession(t *testing.T) {
 	shadow, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
-	assert.True(t, shadow.IsBackendProcessAlive())
+	assert.True(t, shadow.IsLiveOrStoredSessionLive())
 	probe.live = false
-	assert.False(t, shadow.IsBackendProcessAlive())
+	assert.False(t, shadow.IsLiveOrStoredSessionLive())
+}
+
+// The stored-session probe is for shadow liveness lookups only; the stream
+// paths ask IsBackendProcessAlive whether a pane is attached and must get false
+// for a not-yet-restored view so they restore it.
+func TestSeam_IsBackendProcessAliveIgnoresStoredSessionOfUnrestoredView(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	probe := &seamProbeTymux{live: true}
+	orig := newTymuxSessionFn
+	newTymuxSessionFn = func() tymux.TymuxManager { return probe }
+	t.Cleanup(func() { newTymuxSessionFn = orig })
+	data := restoredPausedData(t, "unrestored-stream")
+	data.Backend = BackendTymux
+	data.TymuxSessionID = "d-91"
+	view, err := FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+
+	assert.False(t, view.IsBackendProcessAlive())
+	assert.True(t, view.IsLiveOrStoredSessionLive())
 }

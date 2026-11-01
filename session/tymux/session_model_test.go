@@ -183,6 +183,7 @@ func (m *identityModel) pick() *modelInstance {
 func (m *identityModel) restartProcess() {
 	// A fresh process: no claims survive, every manager is rebuilt from its record.
 	claimedSessions.Range(func(k, _ any) bool { claimedSessions.Delete(k); return true })
+	storedIDHolders.Range(func(k, _ any) bool { storedIDHolders.Delete(k); return true })
 	m.shadows = nil // views of the dead process are gone with it
 	live := m.live()
 	for _, in := range live {
@@ -190,15 +191,11 @@ func (m *identityModel) restartProcess() {
 		in.mgr.SetSessionLabel(in.label)
 		in.mgr.SetStoredSessionID(in.stored)
 	}
-	var wg sync.WaitGroup
-	for _, in := range live {
-		wg.Add(1)
-		go func(in *modelInstance) {
-			defer wg.Done()
-			_ = in.mgr.RestoreWithWorkDir(in.dir)
-		}(in)
+	// Production restores run concurrently in unspecified order; the model picks
+	// one seeded order per restart so every seed replays identically.
+	for _, i := range m.rng.Perm(len(live)) {
+		_ = live[i].mgr.RestoreWithWorkDir(live[i].dir)
 	}
-	wg.Wait()
 	for _, in := range live {
 		// Titles are unique in production, so (c) is only asserted for unique labels.
 		if in.stored != "" && m.d.ids()[in.stored] && m.labelCount(in.label) == 1 {
@@ -208,15 +205,28 @@ func (m *identityModel) restartProcess() {
 		}
 	}
 	for _, in := range live {
-		// The save loop persists a restored/recovered id before the next restart. The
-		// window before it is a known limit: a stale id never falls back to the label,
-		// because adopting by name could steal a renamed Instance's session.
 		in.stored = in.mgr.GetSessionIdentifier()
 	}
 }
 
+// shadowClose closes view and checks the record's session (id) is gone from the
+// daemon and that nothing else was killed.
+func (m *identityModel) shadowClose(view TymuxManager, id, kind string) {
+	existed := m.d.ids()[id]
+	before := len(m.d.kills)
+	_ = view.Close()
+	for _, k := range m.d.kills[before:] {
+		if k != id {
+			m.t.Fatalf("invariant (b): %s close of %s killed %s\ntrace:\n%s", kind, id, k, strings.Join(m.trace, "\n"))
+		}
+	}
+	if existed && m.d.ids()[id] {
+		m.t.Fatalf("%s close of %s left the record's session running\ntrace:\n%s", kind, id, strings.Join(m.trace, "\n"))
+	}
+}
+
 func (m *identityModel) step() {
-	op := m.rng.Intn(13)
+	op := m.rng.Intn(16)
 	switch op {
 	case 0, 1: // create + start (twins arise: dirs and labels come from tiny pools)
 		in := m.fresh(m.labels[m.rng.Intn(len(m.labels))], m.dirs[m.rng.Intn(len(m.dirs))])
@@ -298,8 +308,33 @@ func (m *identityModel) step() {
 			view := m.shadows[0]
 			m.shadows = m.shadows[1:]
 			id := view.GetSessionIdentifier()
-			_ = view.Close()
+			m.shadowClose(view, id, "restored shadow")
 			m.log("shadow close %s", id)
+		}
+	case 13: // recovery replaced a lost session but the new id is not saved yet
+		if in := m.pick(); in != nil && in.stored != "" {
+			lost := in.mgr.GetSessionIdentifier()
+			m.d.mu.Lock()
+			delete(m.d.sessions, lost)
+			m.d.mu.Unlock()
+			if err := in.mgr.Start(in.dir); err != nil {
+				m.t.Fatalf("unsaved recovery start: %v", err)
+			}
+			m.log("recover %s -> %s without persisting (record still stores %s)", lost, in.mgr.GetSessionIdentifier(), in.stored)
+		}
+	case 14: // legacy record (no id) that shares a label with a record storing an id
+		if src := m.pick(); src != nil && src.stored != "" {
+			leg := m.fresh(src.label, src.dir)
+			m.insts = append(m.insts, leg) // restored at the next process restart
+			m.log("legacy record label=%q next to %s", src.label, src.stored)
+		}
+	case 15: // an unrestored view of a record is closed (stopped/deleted before restore)
+		if in := m.pick(); in != nil && in.stored != "" {
+			view := NewTymuxGRPCSession(m.d)
+			view.SetSessionLabel(in.label)
+			view.SetStoredSessionID(in.stored)
+			m.shadowClose(view, in.stored, "unrestored shadow")
+			m.log("unrestored shadow close %s", in.stored)
 		}
 	case 10: // duplicate: same dir and label as another, fresh record
 		if src := m.pick(); src != nil {
