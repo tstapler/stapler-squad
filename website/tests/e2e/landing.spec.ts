@@ -99,6 +99,7 @@ test.describe('Landing page — UX acceptance', () => {
 		const alt =
 			'Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance';
 		const card = landing.featureCards().filter({ has: page.getByRole('heading', { name: 'Dashboard', exact: true }) });
+		await expect(card).toHaveCount(1);
 		const clip = card.getByTestId('feature-card-video');
 		const media = (await clip.count()) > 0 ? clip : card.getByAltText(alt);
 		await media.scrollIntoViewIfNeeded();
