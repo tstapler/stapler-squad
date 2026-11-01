@@ -804,6 +804,15 @@ jobs:
           echo "::error::a Bun e2e shard failed or blew its budget (result: ${{ needs.e2e-bun-shard.result }})"
           exit 1
 
+      - name: Upload Playwright JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-bun-report
+          path: tests/e2e/playwright-report/report.json
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Download e2e-next's Playwright JSON report
         if: always() && github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
