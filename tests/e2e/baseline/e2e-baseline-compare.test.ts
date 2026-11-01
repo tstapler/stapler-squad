@@ -5,6 +5,7 @@
 // framing ("a comparator that always exits 0 therefore fails seven of these cases").
 import { execFileSync } from "child_process";
 import * as path from "path";
+import { compare, Baseline, PwReport } from "../../../scripts/e2e-baseline-compare";
 
 const REPO_ROOT = path.join(__dirname, "../../..");
 const SCRIPT = path.join(REPO_ROOT, "scripts/e2e-baseline-compare.ts");
@@ -55,7 +56,7 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     expect(r.exitCode).not.toBe(0);
   });
 
-  test("F1b: a retry (even if it then passes) counts as a Bun-side failure for a baseline-pass spec", () => {
+  test("F1b: a hard failure in the other Bun runs still fails the gate even when one run only needed a retry", () => {
     const r = run({ baseline: "f1-baseline.json", expectedDiff: "f1-expected-diff.json", nextReport: "f1-next-report.json", bunReports: ["extra-retry-bun-report-1.json", "f1-bun-report-2.json", "f1-bun-report-3.json"] });
     expect(r.exitCode).not.toBe(0);
   });
@@ -124,6 +125,61 @@ describe("scripts/e2e-baseline-compare.ts", () => {
   test("F8: a baseline-pass spec that skips on Bun outside the deliberate-skip allowlist is a failure, not a clean pass", () => {
     const r = run({ baseline: "f8-baseline.json", expectedDiff: "f8-expected-diff.json", nextReport: "f8-next-report.json", bunReports: ["f8-bun-report-1.json"] });
     expect(r.exitCode).not.toBe(0);
+  });
+
+  describe("hard failures only; serial cascades count once", () => {
+    type Att = { retry: number; status: string }[];
+    const PASS: Att = [{ retry: 0, status: "passed" }];
+    const FLAKY: Att = [{ retry: 0, status: "failed" }, { retry: 1, status: "passed" }];
+    const HARD: Att = [{ retry: 0, status: "failed" }, { retry: 1, status: "failed" }];
+    const SKIP: Att = [{ retry: 0, status: "skipped" }, { retry: 1, status: "skipped" }];
+    const rep = (m: Record<string, Att>, file = "a.spec.ts"): PwReport => ({
+      suites: [{ specs: Object.entries(m).map(([title, results]) => ({ file, title, tests: [{ projectName: "chromium", results }] })) }],
+    });
+    const base = (titles: string[], file = "a.spec.ts"): Baseline => ({ specs: titles.map((title) => ({ spec: file, project: "chromium", title, class: "pass" as const })) });
+    const gate = (bun: Record<string, Att>, next: Record<string, Att>) =>
+      compare({ baseline: base(Object.keys(bun)), expectedDiff: { entries: [] }, nextReport: rep(next), bunReports: [rep(bun)] });
+    const fails = (r: ReturnType<typeof compare>) => r.findings.filter((f) => f.severity === "fail");
+    const cleanNext = (m: Record<string, Att>) => Object.fromEntries(Object.keys(m).map((k) => [k, PASS]));
+
+    test("R1: a retry that passes is a warning, not a gate failure", () => {
+      const bun = { t1: FLAKY, t2: PASS };
+      const r = gate(bun, cleanNext(bun));
+      expect(r.exitCode).toBe(0);
+      expect(r.findings.some((f) => f.severity === "warn" && f.title === "t1")).toBe(true);
+    });
+
+    test("R2: one failure plus four serial-skipped siblings is one gate failure, not five", () => {
+      const bun = { t1: PASS, t2: HARD, t3: SKIP, t4: SKIP, t5: SKIP, t6: SKIP };
+      const r = gate(bun, cleanNext(bun));
+      expect(r.exitCode).toBe(1);
+      expect(fails(r).map((f) => f.title)).toEqual(["t2"]);
+    });
+
+    test("R3: a skip with no failing sibling is still an unintended gap and fails", () => {
+      const bun = { t1: PASS, t2: SKIP };
+      expect(fails(gate(bun, cleanNext(bun))).map((f) => f.title)).toEqual(["t2"]);
+    });
+
+    test("R4: one real hard Bun-only failure still fails amid many retry-then-pass flakes", () => {
+      const bun: Record<string, Att> = { real: HARD };
+      for (let i = 0; i < 20; i++) bun[`flake${i}`] = FLAKY;
+      const r = gate(bun, cleanNext(bun));
+      expect(r.exitCode).toBe(1);
+      expect(fails(r).map((f) => f.title)).toEqual(["real"]);
+    });
+
+    test("R6: login-static-assets' Next-baseline block deliberately skips on Bun (Story 7.13b) -- not a failure", () => {
+      const bun = { "every static asset /login needs loads 2xx": [{ retry: 0, status: "skipped" }] };
+      const r = compare({ baseline: base(Object.keys(bun), "login-static-assets.spec.ts"), expectedDiff: { entries: [] }, nextReport: rep(cleanNext(bun), "login-static-assets.spec.ts"), bunReports: [rep(bun, "login-static-assets.spec.ts")] });
+      expect(r.exitCode).toBe(0);
+    });
+
+    test("R5: a cascade whose root failure also fails on Next is not a Bun-only failure", () => {
+      const bun = { t1: HARD, t2: SKIP };
+      const r = gate(bun, { t1: HARD, t2: SKIP });
+      expect(r.exitCode).toBe(0);
+    });
   });
 
   test("a comparator stub that always exits 0 would fail F1-F7 (adversarial framing, documented not executed)", () => {

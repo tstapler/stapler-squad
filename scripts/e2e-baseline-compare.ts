@@ -91,7 +91,7 @@ export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; a
 }
 
 /** Specs whose Next-baseline tests deliberately `test.skip(isBunBuild())`; a Bun-only block there asserts the decided difference. */
-export const BUN_SKIP_ALLOWED_SPECS: ReadonlySet<string> = new Set(["not-found.spec.ts", "theme-fouc.spec.ts"]);
+export const BUN_SKIP_ALLOWED_SPECS: ReadonlySet<string> = new Set(["not-found.spec.ts", "theme-fouc.spec.ts", "login-static-assets.spec.ts"]);
 
 /**
  * True when this run's result for the spec is NOT a clean attempt-0 pass (a failure, or a retry that then passed).
@@ -106,6 +106,25 @@ export function failedOrRetried(attempts: Attempt[], spec = ""): boolean {
 }
 
 const specOfKey = (ks: string): string => ks.split(" :: ")[0];
+
+/** Every attempt failed (Playwright's own definition of a failing test; a retry that passed is a flake, not a failure). */
+export function hardFailed(attempts: Attempt[]): boolean {
+  return attempts.length > 0 && attempts.every((a) => FAILED_STATUSES.has(a.status));
+}
+
+type RunOutcome = "clean" | "flaky" | "hard" | "cascade";
+
+/** `groupHasHardFailure`: this run hard-failed some other test of the same spec file and project. */
+export function classifyRun(attempts: Attempt[], spec: string, groupHasHardFailure: boolean): RunOutcome {
+  if (!failedOrRetried(attempts, spec)) return "clean";
+  if (hardFailed(attempts)) return "hard";
+  const skippedOnly = attempts.length > 0 && attempts.every((a) => a.status === "skipped");
+  // A `test.describe.configure({ mode: "serial" })` spec skips its remaining tests after one failure; the
+  // failing test carries the finding, so its skipped siblings are not separate failures.
+  if (skippedOnly && groupHasHardFailure) return "cascade";
+  if (attempts.length > 1 && attempts[attempts.length - 1].status === "passed") return "flaky";
+  return "hard"; // unintended skip or a test that never reported
+}
 
 export function finalStatus(attempts: Attempt[]): string {
   if (attempts.length === 0) return "missing";
@@ -196,6 +215,8 @@ function validateExpectedDiffEntries(entries: ExpectedDiffEntry[]): Finding[] {
 
 interface GateContext {
   bunAttemptsFor: (key: string) => Attempt[][];
+  /** Per Bun run: "spec :: project" groups containing at least one hard-failed test. */
+  bunHardFailedGroups: Set<string>[];
   nextAttempts: Map<string, { key: SpecKey; attempts: Attempt[] }>;
   expectedDiffKeys: Map<string, ExpectedDiffEntry>;
   expectedDiffSeen: Set<string>;
@@ -205,8 +226,13 @@ function evaluateBaselinePassSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
   const ks = keyString({ spec: b.spec, project: b.project, title: b.title });
   const runs = ctx.bunAttemptsFor(ks);
   const n = runs.length;
-  const failCount = runs.filter((a) => failedOrRetried(a, specOfKey(ks))).length;
-  if (failCount === 0) return null; // still clean on Bun
+  const outcomes = runs.map((a, i) => classifyRun(a, b.spec, ctx.bunHardFailedGroups[i]?.has(`${b.spec} :: ${b.project}`) ?? false));
+  const failCount = outcomes.filter((o) => o === "hard").length;
+  const flakyCount = outcomes.filter((o) => o === "flaky").length;
+  if (failCount === 0) {
+    if (flakyCount === 0) return null; // clean on Bun, or only a serial-cascade skip of another test's failure
+    return { severity: "warn", spec: b.spec, title: b.title, message: `baseline class 'pass' needed a retry on Bun in ${flakyCount}/${n} runs (passed on retry): warning, not a gate failure.` };
+  }
 
   const diffEntry = ctx.expectedDiffKeys.get(`${b.spec} :: ${b.title}`);
   if (diffEntry) ctx.expectedDiffSeen.add(`${b.spec} :: ${b.title}`);
@@ -219,7 +245,7 @@ function evaluateBaselinePassSpec(b: BaselineSpecEntry, ctx: GateContext): Findi
   if (diffEntry) {
     return { severity: "report", spec: b.spec, title: b.title, message: `Listed in bun-expected-diff.json (${diffEntry.issue}) and still fails (${failCount}/${n} Bun runs).` };
   }
-  return { severity: "fail", spec: b.spec, title: b.title, message: `New Bun-only failure: baseline class 'pass', failed/retried in ${failCount}/${n} Bun runs, e2e-next clean, not listed in bun-expected-diff.json.` };
+  return { severity: "fail", spec: b.spec, title: b.title, message: `New Bun-only failure: baseline class 'pass', hard-failed (every attempt) in ${failCount}/${n} Bun runs, e2e-next clean, not listed in bun-expected-diff.json.` };
 }
 
 function evaluateBaselineFlakySpec(b: BaselineSpecEntry, ctx: GateContext): Finding | null {
@@ -334,6 +360,9 @@ export function compare(input: CompareInput): CompareResult {
 
   const ctx: GateContext = {
     bunAttemptsFor: (key: string) => bunPerRun.map((m) => m.get(key)?.attempts ?? []),
+    bunHardFailedGroups: bunPerRun.map(
+      (m) => new Set([...m.values()].filter((e) => hardFailed(e.attempts)).map((e) => `${e.key.spec} :: ${e.key.project}`)),
+    ),
     nextAttempts: input.nextReport ? collectAttempts(input.nextReport) : new Map(),
     expectedDiffKeys: new Map(input.expectedDiff.entries.map((e) => [expectedDiffKey(e), e])),
     expectedDiffSeen: new Set<string>(),
