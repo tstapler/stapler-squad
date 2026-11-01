@@ -3,8 +3,10 @@
 // Seeds the persisted flag and blocks GetFeatureFlags so the server cannot overwrite it.
 import { chromium } from "@playwright/test";
 
+const DEFAULT_RUNS = 5;
+const CLICK_PX = 5;
 const base = process.argv[2] ?? "http://localhost:62873";
-const runs = Number(process.argv[3] ?? 5);
+const runs = Number(process.argv[3] ?? DEFAULT_RUNS);
 
 async function lcpOnce(browser, ghostty) {
   const ctx = await browser.newContext();
@@ -24,7 +26,7 @@ async function lcpOnce(browser, ghostty) {
   });
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForTimeout(2500);
-  await page.mouse.click(5, 5); // finalizes LCP
+  await page.mouse.click(CLICK_PX, CLICK_PX); // finalizes LCP
   const lcp = await page.evaluate(() => window.__lcp);
   await ctx.close();
   return Math.round(lcp);
