@@ -1255,6 +1255,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
+	instance.pinResolvedBackend()
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()

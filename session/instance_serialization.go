@@ -431,6 +431,11 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
 		}
 	}
+	if instance.Backend == "" && data.TymuxSessionID != "" {
+		// A daemon id proves the record ran on tymux; don't let a changed
+		// process-wide default drop it onto another backend.
+		instance.Backend = BackendTymux
+	}
 	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)

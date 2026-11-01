@@ -43,3 +43,22 @@ func ResolveSessionBackend(cfg *config.Config, sessionName string, requestOverri
 func ResolveSessionBackendForTitle(cfg *config.Config, title string, requestOverride ProcessManagerBackend) ProcessManagerBackend {
 	return ResolveSessionBackend(cfg, tmux.NewSessionName(title, tmux.TmuxPrefix).String(), requestOverride)
 }
+
+// pinResolvedBackend records the backend the process manager actually resolved
+// when no per-session pin exists, so a later change of the process-wide default
+// cannot silently move this Instance to another backend. Used for new Instances
+// only: restored unpinned records keep following the live default. Call before
+// the Instance is shared.
+func (i *Instance) pinResolvedBackend() {
+	if i.Backend != "" {
+		return
+	}
+	switch processManagerBackendLabel(i.processManager) {
+	case backendLabelTmux:
+		i.Backend = BackendTmux
+	case backendLabelTymux:
+		i.Backend = BackendTymux
+	case backendLabelNative:
+		i.Backend = BackendNative
+	}
+}

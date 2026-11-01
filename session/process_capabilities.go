@@ -68,6 +68,13 @@ type DaemonSessionIDReporter interface {
 	DaemonSessionID() string
 }
 
+// StoredSessionProber answers "is the record's persisted daemon session live"
+// for a view that was never started in this process (a liveness shadow), where
+// HasSession is false by construction.
+type StoredSessionProber interface {
+	StoredSessionLive() bool
+}
+
 // PaneCwdReporter reports the pane's live working directory (not a cached start dir).
 type PaneCwdReporter interface {
 	PaneCurrentPath() (string, error)
