@@ -2,7 +2,7 @@ name: Main CI
 
 # Push-to-main / manual-only checks, split out of build.yml so a pull_request run never lists them
 # as SKIPPED checks (each skipped job still counts as a check). Contents: the full-suite coverage
-# gate (test-tmux + test-rest -> test), the 5-platform cross-compile matrix, and the benchmark gate.
+# gate (test-tmux + test-rest -> test), and the 5-platform cross-compile matrix (benchmarks run in benchmark.yml).
 # PRs are gated by build.yml's test-affected + go-guards + web-checks instead.
 # Nothing here is a required status check: main has no branch protection (verified via
 # `gh api repos/tstapler/stapler-squad/branches/main`: protected=false, no required_status_checks).
@@ -37,7 +37,7 @@ permissions:
   contents: read
   pull-requests: read
 
-# Main-branch runs are never cancelled (benchmark-gate's cache/save must not be cut mid-write).
+# Main-branch runs are never cancelled, so every push gets its full-suite coverage verdict.
 concurrency:
   group: main-ci-${{ github.ref }}
   cancel-in-progress: false
@@ -371,111 +371,3 @@ jobs:
           name: stapler-squad-${{ matrix.goos }}-${{ matrix.goarch }}
           path: build/${{ matrix.goos }}_${{ matrix.goarch }}/*
           retention-days: 7
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # benchmark-gate: runs on main-merge only. Fails if any benchmark regresses
-  # more than 20%. PRs get advisory comments only via benchmark.yml (never blocked).
-  # 20% threshold is deliberate — tmux-touching benchmarks have 15-25% natural
-  # variance on shared runners. count=5 + utest for statistical significance.
-  #
-  # Baseline persisted via GitHub Actions cache (key "bench-gate-<run_id>",
-  # restored by "bench-gate-" prefix match) — not committed to git; a prior
-  # version of this job committed the baseline to `benchmarks/` on every
-  # push to main, which flooded the commit history for very little value.
-  # Uses same concurrency group as benchmark.yml to prevent 5 concurrent
-  # runs colliding.
-  # ─────────────────────────────────────────────────────────────────────────────
-  benchmark-gate:
-    name: Benchmark Gate (main only)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    # Only depends on `prepare`'s generated-files artifact (downloaded below) --
-    # never consumes anything `test` produces, so it runs in parallel with `test`
-    # instead of waiting on it.
-    needs: prepare
-    permissions:
-      contents: read
-      pull-requests: read
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    concurrency:
-      group: baseline-push-main
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Runner utilization sampler
-        uses: ./.github/actions/runner-utilization
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-
-      - name: Download generated files
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact-name }}
-
-      - name: Build pinned tmux 3.8
-        uses: ./.github/actions/build-tmux
-
-      - name: Run benchmarks (count=5 for significance)
-        env:
-          # production default is 10s; CI runners are slower/noisier, and the
-          # benchmark job's module cache is cold on first run (never populated
-          # by a prior success), so tmux session creation needs more headroom
-          STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
-        run: |
-          # -run='^$'  benchmarks only (no tests)
-          # -short     skip integration benchmarks that spawn real processes
-          # -count=5   statistically meaningful for ≥20% regression detection
-          # -timeout=10m per package (search/unfinished are legitimately slow)
-          # | tee      keeps step output visible live instead of buffered
-          #            until completion, so a stall shows its last line
-          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=5 \
-            -run='^$' -short ./... -timeout=10m | tee bench-current.txt
-
-      - name: Install benchstat (pinned)
-        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
-
-      - name: Restore benchmark baseline
-        uses: actions/cache/restore@v4
-        with:
-          path: benchmarks/go/benchmark-gate-baseline.txt
-          key: bench-gate-
-          restore-keys: |
-            bench-gate-
-
-      - name: Compare against baseline (20% threshold)
-        run: |
-          BASELINE=benchmarks/go/benchmark-gate-baseline.txt
-          if [ ! -f "$BASELINE" ]; then
-            echo "No baseline found — will be established on this run (no regression check)"
-            exit 0
-          fi
-          benchstat -delta-test=utest "$BASELINE" bench-current.txt | tee bench-diff.txt
-          # Catch regressions ≥20%: match +20.x through +9999.x (two+ digits, first two ≥ 20)
-          if grep -E '\+([2-9][0-9]|[1-9][0-9]{2,})\.' bench-diff.txt | grep -v '±'; then
-            echo "Benchmark regression ≥20% detected — see bench-diff.txt above"
-            exit 1
-          fi
-
-      - name: Save benchmark baseline on success
-        run: |
-          mkdir -p benchmarks/go
-          cp bench-current.txt benchmarks/go/benchmark-gate-baseline.txt
-
-      - name: Persist baseline to cache on success
-        uses: actions/cache/save@v4
-        with:
-          path: benchmarks/go/benchmark-gate-baseline.txt
-          key: bench-gate-${{ github.run_id }}
-
-      - name: Runner utilization report
-        if: always()
-        uses: ./.github/actions/runner-utilization/report
-        with:
-          label: main-benchmark-gate
