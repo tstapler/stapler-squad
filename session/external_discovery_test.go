@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/mux"
 )
 
 // TestRetryWithDelay_SuccessFirstAttempt verifies that the function returns nil
@@ -105,4 +107,24 @@ func TestIsConnectionRefused(t *testing.T) {
 			assert.Equal(t, tc.want, isConnectionRefused(tc.err))
 		})
 	}
+}
+
+// An external session wraps a tmux session, so the global tymux flag must not give it a TymuxBackend.
+func TestHandleNewSession_GlobalTymux_ExternalSessionStaysTmux(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	on := true
+	require.NoError(t, config.LoadConfig().SetTymuxGlobalOverride(&on))
+	e := NewExternalSessionDiscovery()
+	var got *Instance
+	e.OnSessionAdded(func(i *Instance) { got = i })
+
+	e.handleNewSession(&mux.DiscoveredSession{
+		SocketPath: "/tmp/ssq-ext-test.sock",
+		Metadata:   &mux.SessionMetadata{Command: "claude", Cwd: t.TempDir(), PID: 4242, TmuxSession: "ssq-ext-does-not-exist"},
+	})
+
+	require.NotNil(t, got)
+	assert.Equal(t, BackendTmux, got.Backend)
+	_, isTmux := got.processManager.(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must be a TmuxBackend, got %T", got.processManager)
 }
