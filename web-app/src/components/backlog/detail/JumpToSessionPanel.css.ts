@@ -95,6 +95,20 @@ export const roleMenuItemDate = style({
   color: vars.color.textMuted,
 });
 
+// Loading/error state shown while the mobile modal's session is still being fetched.
+export const modalStatus = style({
+  position: "fixed",
+  inset: 0,
+  zIndex: zIndex.modal,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: vars.space["3"],
+  background: vars.color.background,
+  color: vars.color.textPrimary,
+});
+
 export const panel = style({
   display: "flex",
   flexDirection: "column",

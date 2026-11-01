@@ -47,7 +47,7 @@ func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "third_party", "gen":
+			case ".git", ".claude", "node_modules", "third_party", "gen": // .claude holds gitignored agent worktree checkouts
 				return filepath.SkipDir
 			}
 			return nil
