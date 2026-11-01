@@ -288,6 +288,11 @@ function evaluateBaselineFlakySpec(b: BaselineSpecEntry, ctx: GateContext): Find
   if (diffEntry) ctx.expectedDiffSeen.add(`${b.spec} :: ${b.title}`);
 
   if (ratio >= FLAKY_CLASS_FAIL_THRESHOLD) {
+    // Same shared-failure rule as baseline 'pass' specs: a test that also finally fails on the same-run Next report is not Bun-specific.
+    const nextEntry = ctx.nextAttempts.get(ks);
+    if (nextEntry && FAILED_STATUSES.has(finalStatus(nextEntry.attempts))) {
+      return { severity: "report", spec: b.spec, title: b.title, message: `Shared failure: baseline 'flaky' also fails on e2e-next this run (${finalFailCount}/${n} Bun runs).` };
+    }
     if (diffEntry) {
       return { severity: "report", spec: b.spec, title: b.title, message: `Listed in bun-expected-diff.json (${diffEntry.issue}); baseline 'flaky' now fails ${finalFailCount}/${n} on Bun.` };
     }
