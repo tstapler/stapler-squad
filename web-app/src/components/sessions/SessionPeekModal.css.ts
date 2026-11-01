@@ -35,7 +35,8 @@ export const modal = style({
   overflow: "hidden",
   animation: `${scaleIn} 140ms ease`,
   "@media": {
-    [`screen and (not (min-width: ${breakpoints.fold}))`]: {
+    // Just under the fold breakpoint, matching ViewportProvider's isMobile (w < 600); fractional so 599.5px still matches.
+    [`screen and (max-width: ${parseFloat(breakpoints.fold) - 0.02}px)`]: {
       inset: 0,
       borderRadius: 0,
     },
