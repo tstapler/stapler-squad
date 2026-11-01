@@ -980,7 +980,11 @@ func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, m
 	streamDone()
 	if err != nil {
 		recordTerminalClose(closeCauseError)
-		log.Error("StreamTerminal error", "err", err)
+		if errors.Is(err, errSessionGone) {
+			log.Debug("StreamTerminal ended: session gone", "err", err) // already logged, throttled, at the capture site
+		} else {
+			log.Error("StreamTerminal error", "err", err)
+		}
 		sendEndStreamError(stream, err)
 		return
 	}
@@ -2270,6 +2274,11 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 	// during the paint are still replayed after it; only frames dropped before it are lost.
 	content, captureErr := pollWhileResuming(instanceStatus(instance), time.Now().Add(hubCaptureRetryWindow),
 		capturePollEvery, instance.CapturePaneContentRaw)
+	if definitivelyGone(captureErr, instance.IsBackendProcessAlive) {
+		// A browser receiving not_found stops reconnecting (isNonRetriableConnectError).
+		logSessionGone("[streamViaHub] initial capture", sessionID, captureErr)
+		return wrapSessionGone(captureErr)
+	}
 	if captureErr != nil {
 		log.Warn("[streamViaHub] initial capture failed, painting blank and streaming live output",
 			"session", sessionID, "err", captureErr)
@@ -3270,6 +3279,10 @@ func handleCurrentPaneRequestFrame(
 	output, err := onCurrentPaneRequest(ctx, paneReq)
 	if err != nil {
 		span.RecordError(err)
+		if isSessionGone(err) {
+			logSessionGone("[streamViaControlMode] mid-stream current pane request", sessionID, err)
+			return
+		}
 		log.Error("[streamViaControlMode] failed to handle mid-stream current pane request", "session", sessionID, "resync_id", paneReq.GetResyncId(), "err", err)
 		return
 	}
@@ -4039,6 +4052,9 @@ func sendEndStreamSuccess(stream *connectWebSocketStream) {
 func endStreamErrorCode(err error) string {
 	if errors.Is(err, tmux.ErrWorkDirMissing) {
 		return connect.CodeFailedPrecondition.String()
+	}
+	if errors.Is(err, errSessionGone) {
+		return connect.CodeNotFound.String()
 	}
 	return connect.CodeInternal.String()
 }

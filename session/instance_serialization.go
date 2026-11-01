@@ -71,6 +71,18 @@ func worktreeMissingLevel(alreadyLogged bool) slog.Level {
 // Do not call from within a sendSyncErr/send/sendCtx closure — see actor.go.
 // LaunchCommand is not in the snapshot (set once during Start) and is read directly.
 // gitManager and claudeSession sub-objects have their own synchronisation.
+// tymuxSessionID returns the daemon session id to persist, or "" for a
+// non-tymux backend or a not-yet-started session.
+func (i *Instance) tymuxSessionID() string {
+	i.pmMu.Lock()
+	pm := i.processManager
+	i.pmMu.Unlock()
+	if r, ok := capabilityOf[DaemonSessionIDReporter](pm); ok {
+		return r.DaemonSessionID()
+	}
+	return ""
+}
+
 func (i *Instance) ToInstanceData() InstanceData {
 	snap, err := sendSyncValue(i, func(s *instanceState) (*InstanceSnapshot, error) {
 		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
@@ -117,6 +129,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		SessionType:        snap.SessionType,
 		TmuxPrefix:         snap.TmuxPrefix,
 		TmuxServerSocket:   snap.TmuxServerSocket,
+		TymuxSessionID:     i.tymuxSessionID(),
 		// Backend — see InstanceSnapshot.Backend.
 		Backend:                   snap.Backend,
 		LastTerminalUpdate:        snap.LastTerminalUpdate,
@@ -418,7 +431,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
 		}
 	}
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}

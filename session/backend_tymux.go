@@ -109,6 +109,9 @@ func (b *TymuxBackend) HasLiveSessionNoCache() bool { return b.mgr.IsAlive() }
 
 func (b *TymuxBackend) HasSession() bool { return b.mgr.HasSession() }
 
+// DaemonSessionID implements DaemonSessionIDReporter.
+func (b *TymuxBackend) DaemonSessionID() string { return b.mgr.PersistedSessionID() }
+
 // GetSessionIdentifier implements ProcessManager by delegating to the underlying
 // TymuxManager's own identifier.
 func (b *TymuxBackend) GetSessionIdentifier() string { return b.mgr.GetSessionIdentifier() }
