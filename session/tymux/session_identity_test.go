@@ -303,7 +303,7 @@ func TestStart_DoesNotKillStaleSessionReadoptedByAnotherOwner(t *testing.T) {
 	assert.NotContains(t, killed, oldID)
 }
 
-func TestRestoreWithWorkDir_StoredIDAbsent_FallsBackToLabel(t *testing.T) {
+func TestRestoreWithWorkDir_StoredIDAbsent_SpawnsInsteadOfAdoptingByLabel(t *testing.T) {
 	resetClaims(t)
 	dir := t.TempDir()
 	starts := 0
@@ -321,8 +321,8 @@ func TestRestoreWithWorkDir_StoredIDAbsent_FallsBackToLabel(t *testing.T) {
 	s.SetStoredSessionID("gone-id")
 	require.NoError(t, s.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = s.Close() })
-	assert.Equal(t, "by-label", s.GetSessionIdentifier())
-	assert.Zero(t, starts)
+	assert.Equal(t, "new-one", s.GetSessionIdentifier(), "a lost stored id must not steal a label-matched session another record may own")
+	assert.Equal(t, 1, starts)
 }
 
 func TestIsAlive_NotFoundButSessionListedLiveUnderNewPane_StaysAliveAndRecachesPane(t *testing.T) {

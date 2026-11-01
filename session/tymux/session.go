@@ -520,7 +520,7 @@ func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Sessio
 				return sess, true
 			}
 		}
-		// Absent from the daemon (it lost the session): fall through to label/legacy.
+		return nil, false
 	}
 	labeled := s.sessionName(workDir)
 	for _, name := range []string{labeled, workDir} {
