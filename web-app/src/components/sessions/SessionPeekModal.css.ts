@@ -1,5 +1,5 @@
 import { style, keyframes } from "@vanilla-extract/css";
-import { vars, zIndex } from "@/styles/theme-contract.css";
+import { vars, zIndex, breakpoints } from "@/styles/theme-contract.css";
 
 const fadeIn = keyframes({
   from: { opacity: 0 },
@@ -35,7 +35,7 @@ export const modal = style({
   overflow: "hidden",
   animation: `${scaleIn} 140ms ease`,
   "@media": {
-    "screen and (max-width: 599px)": {
+    [`screen and (not (min-width: ${breakpoints.fold}))`]: {
       inset: 0,
       borderRadius: 0,
     },

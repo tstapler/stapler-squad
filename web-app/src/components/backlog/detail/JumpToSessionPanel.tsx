@@ -71,6 +71,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
   useEffect(() => {
     if (!isOpen || !target) return;
     const seq = ++fetchSeqRef.current;
+    setSession(null); // never show the previous open/role's session while loading
     setLoading(true);
     setError(null);
     // View-only fetch to populate the inline terminal, not a user-initiated
@@ -95,6 +96,12 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
         if (seq === fetchSeqRef.current) setLoading(false);
       });
   }, [isOpen, target, getSession]);
+
+  // Crossing the 600px breakpoint while open would leave expanded/modalOpen out of sync.
+  useEffect(() => {
+    setExpanded(false);
+    setModalOpen(false);
+  }, [isMobile]);
 
   const closeModal = useCallback(() => {
     setModalOpen(false);
@@ -134,10 +141,10 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
           aria-controls={isMobile ? undefined : PANEL_ID}
           data-testid="jump-to-session-button"
           onClick={() => {
-            const next = isMobile ? true : !expanded;
+            const opening = isMobile || !expanded;
             if (isMobile) setModalOpen(true);
-            else setExpanded(next);
-            if (next) {
+            else setExpanded(opening);
+            if (opening) {
               track({
                 name: "backlog_jump_to_session",
                 category: "user_action",
@@ -213,11 +220,10 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
         <SessionPeekModal session={session} onClose={closeModal} />
       )}
       {modalOpen && (loading || error) && createPortal(
-        <div className={styles.panel} role="status" data-testid="jump-to-session-modal-status">
+        <div className={styles.modalStatus} role="status" data-testid="jump-to-session-modal-status">
           {loading ? "Loading terminal…" : error}
-          {error && (
-            <button type="button" onClick={closeModal}>Close</button>
-          )}
+          {/* Dismiss-only control, not a tracked action. analytics-exempt */}
+          <button type="button" className={styles.jumpButton} onClick={closeModal}>Close</button>
         </div>,
         document.body
       )}
