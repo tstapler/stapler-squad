@@ -127,7 +127,7 @@ docs/registry/coverage-gaps.json
 uploads/
 
 # Benchmark baselines — persisted via GitHub Actions cache (see
-# .github/workflows/benchmark.yml / build.yml's benchmark-gate job), not
+# .github/workflows/benchmark.yml), not
 # committed. A prior version committed these on every push to main, which
 # flooded the commit history for very little value.
 benchmarks/
@@ -139,3 +139,9 @@ benchmarks/
 # Runtime session-data artifacts leaked into the repo root by local dev runs
 /session/*/scrollback.jsonl.zst
 /server/services/backlog_item_public_id_backfill.lock
+
+# website demo-clip recorder output (scripts/record-website-demos.sh)
+tests/e2e/website-demo-output/
+
+# demo clips recorded during the deploy; never committed
+website/public/clips/

@@ -51,12 +51,7 @@ permissions:
   contents: read
   pull-requests: write
 
-# PR runs cancel a superseded commit's in-flight jobs; main-branch runs never
-# do, so benchmark-gate's actions/cache/save step is never cancelled mid-write.
-# benchmark-gate's own job-level `concurrency: {group: baseline-push-main, ...}`
-# (below) is a separate group from this workflow-level one and still applies
-# on top of it — a job's own concurrency block doesn't get overridden by the
-# workflow-level block, per GitHub's documented precedence.
+# PR runs cancel a superseded commit's in-flight jobs; main-branch runs never do.
 concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -66,7 +61,10 @@ concurrency:
 # fixed overhead is ~1 min against ~22 min of tests, so total runner-minutes barely move, and the
 # slowest shards already run ~30 of their 40 min budget (project_plans/e2e-test-parallelization/decisions/).
 env:
-  E2E_SHARD_TOTAL: 10
+  E2E_SHARD_TOTAL: 5
+  # Playwright workers per shard. global-setup starts one isolated server per worker
+  # (tests/e2e/helpers/server-pool.ts), so this is also the per-shard server count.
+  E2E_WORKERS: 3
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────

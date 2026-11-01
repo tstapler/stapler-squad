@@ -2,7 +2,7 @@
 // grouping with docs/features.md's flat per-section detail. These tests run
 // against small fixture files (mkdtemp'd), not the real repo content -- see
 // tests/integration/features-json.integration.test.ts for the real-file run.
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -103,6 +103,24 @@ describe('buildFeaturesJson', () => {
 		expect(liveTerminal).not.toHaveProperty('screenshot');
 
 		const dashboard = cards.find((card) => card.heading === 'Dashboard');
+		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
+	});
+
+	// Clips are recorded during the deploy into public/clips/; a card gets one
+	// only if the file exists, so a failed recording leaves the screenshot card.
+	it.each([
+		['present', true],
+		['missing', false],
+	])('buildFeaturesJson_should_AttachDemoClipOnlyWhenFileExists_When_%s', async (_label, present) => {
+		const clipsDir = join(dir, 'clips');
+		await mkdir(clipsDir);
+		if (present) await writeFile(join(clipsDir, 'session-dashboard.webm'), 'x');
+
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, clipsDir });
+
+		const dashboard = cards.find((card) => card.heading === 'Dashboard');
+		expect(dashboard?.demoClip).toEqual(present ? { name: 'session-dashboard', ext: 'webm' } : undefined);
+		// The screenshot is kept either way: it is the clip's poster.
 		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
 	});
 });

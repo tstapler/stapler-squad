@@ -466,6 +466,27 @@ func TestStream_ShouldStreamOutputToClient_WhenHiddenPaneProducesOutput(t *testi
 	}
 }
 
+// Registry-reused hubs re-attach after teardown; each teardown must decrement
+// streamhub_active_hubs only for a hub the gauge currently counts.
+func TestStreamHub_should_KeepActiveHubsBalanced_When_ReattachedAfterTeardown(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	base := streamhub.ActiveHubs()
+
+	hub := streamhub.NewStreamHub("balanced-gauge", newFakeSessionController(), streamhub.WithTeardownGrace(time.Hour))
+	defer hub.ForceTeardown()
+	require.Equal(t, base+1, streamhub.ActiveHubs())
+
+	require.NoError(t, hub.ForceTeardown())
+	require.NoError(t, hub.ForceTeardown()) // repeat teardown must not decrement again
+	require.Equal(t, base, streamhub.ActiveHubs())
+
+	hub.AttachSubscriber(newMemoryTransport(), streamhub.SubscriberCapability{CanResize: true})
+	require.Equal(t, base+1, streamhub.ActiveHubs(), "re-attach must re-enter the count")
+
+	require.NoError(t, hub.ForceTeardown())
+	require.Equal(t, base, streamhub.ActiveHubs())
+}
+
 // deadlineOnceCaptureController fails the first armed capture with a wrapped
 // context.DeadlineExceeded (an exec-gate timeout), then behaves normally.
 type deadlineOnceCaptureController struct {

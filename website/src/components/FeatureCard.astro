@@ -1,16 +1,14 @@
 ---
-// A single feature-grid tile. `screenshot`/`demoClip` are omitted for
-// sections with no existing capture (text-only until a real asset exists);
-// `alt` is required whenever `screenshot` is set.
-import { releaseAssetUrl, type ReleaseAssetRef } from '../lib/release-asset.ts';
-
+// A single feature-grid tile. A `demoClip` plays in place of the screenshot
+// (which becomes its poster); with neither, the tile is text-only. `alt` is
+// required whenever `screenshot` is set.
 export interface Props {
 	heading: string;
 	description: string;
 	category: string;
 	screenshot?: string;
 	alt?: string;
-	demoClip?: ReleaseAssetRef;
+	demoClip?: { name: string; ext: string };
 }
 
 const { heading, description, screenshot, alt, demoClip } = Astro.props;
@@ -25,28 +23,33 @@ const { heading, description, screenshot, alt, demoClip } = Astro.props;
 // would otherwise double up with screenshot's own leading slash.
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
+// Recorded during the deploy into public/clips/ (see scripts/build-features.mjs).
+const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` : undefined;
 ---
 
 <article class="feature-card" data-testid="feature-card">
 	{
-		screenshot ? (
-			<img
-				src={screenshotSrc}
-				alt={alt}
-				loading="lazy"
-				width="320"
-				height="200"
-				data-testid="feature-card-image"
+		demoClip ? (
+			<video
+				src={clipSrc}
+				poster={screenshotSrc}
+				aria-label={alt ? `${heading} demo: ${alt}` : `${heading} demo`}
+				controls
+				muted
+				loop
+				playsinline
+				preload="none"
+				data-testid="feature-card-video"
 			/>
 		) : (
-			demoClip && (
-				<video
-					src={releaseAssetUrl(demoClip)}
-					controls
-					muted
-					loop
-					playsinline
-					data-testid="feature-card-video"
+			screenshot && (
+				<img
+					src={screenshotSrc}
+					alt={alt}
+					loading="lazy"
+					width="320"
+					height="200"
+					data-testid="feature-card-image"
 				/>
 			)
 		)
@@ -69,9 +72,15 @@ const screenshotSrc = screenshot ? `${basePath}${screenshot}` : undefined;
 	.feature-card video {
 		width: 100%;
 		height: auto;
-		aspect-ratio: 16 / 10;
+		aspect-ratio: 16 / 10; /* reserved up front: no layout shift when the clip loads */
 		object-fit: cover;
 		border-radius: 0.5rem;
+	}
+
+	/* Matches the recorded clip (1280x760 with its browser frame) so `cover` crops nothing,
+	   including the left-aligned burned-in captions. */
+	.feature-card video {
+		aspect-ratio: 1280 / 760;
 	}
 
 	.feature-card h4 {

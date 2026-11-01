@@ -146,6 +146,9 @@ type StreamHub struct {
 	// twice.
 	state            HubLifecycleState
 	teardownInFlight bool
+	// counted tracks whether this hub is currently included in streamhub_active_hubs;
+	// registry-reused hubs re-enter the count when a subscriber re-attaches after teardown.
+	counted bool
 	// reactivatedDuringTeardown is set by AttachSubscriber when it observes
 	// teardownInFlight, so ForceTeardown's final write can tell "genuinely
 	// idle throughout" apart from "attached and detached again mid-
@@ -278,6 +281,8 @@ func NewStreamHub(sessionName string, controller SessionController, opts ...HubO
 	h.batchWindow = NewBatchWindow(h.onBatchFlush, WithMaxBatchWindow(h.batchMaxWindow), withBatchClock(h.clock))
 
 	incActiveHubs()
+	recordHubCreated()
+	h.counted = true
 	log.Info("streamhub hub created", "session", sessionName, "resolved_path", "hub_owned")
 	return h
 }
@@ -399,6 +404,7 @@ func (h *StreamHub) AttachSubscriber(transport Transport, capability SubscriberC
 		"transport_type", fmt.Sprintf("%T", transport),
 		"can_resize", capability.CanResize, "can_write", capability.CanWrite)
 	recordSubscribersPerHub(count)
+	recordSubscriberAttached()
 	return id
 }
 
@@ -418,6 +424,10 @@ func (h *StreamHub) registerSubscriberLocked(id SubscriberID, sub *subscriber) (
 		// this subscriber detaches again before that call returns (see
 		// ForceTeardown's doc comment).
 		h.reactivatedDuringTeardown = true
+	}
+	if !h.counted {
+		h.counted = true
+		incActiveHubs()
 	}
 	switch h.state {
 	case HubStarting, HubActive, HubDraining, HubTornDown:
@@ -611,6 +621,7 @@ func (h *StreamHub) removeSubscriber(id SubscriberID, reason error) {
 	h.mu.Unlock()
 
 	sub.close()
+	recordSubscriberRemoved(reason != nil)
 
 	if reason != nil {
 		log.Warn("streamhub subscriber evicted",
@@ -710,7 +721,7 @@ func (h *StreamHub) onTeardownGraceExpired() {
 	if !stillDraining {
 		return
 	}
-	_ = h.ForceTeardown()
+	_ = h.forceTeardown(TeardownLastSubscriber)
 }
 
 // ForceTeardown tears the hub down unconditionally: every remaining
@@ -724,7 +735,9 @@ func (h *StreamHub) onTeardownGraceExpired() {
 // flag-flip-to-legacy case. Safe to call concurrently or more than once:
 // teardownInFlight, not h.state, rejects a second caller, since h.state
 // can't serve as that guard until the transition completes.
-func (h *StreamHub) ForceTeardown() error {
+func (h *StreamHub) ForceTeardown() error { return h.forceTeardown(TeardownForced) }
+
+func (h *StreamHub) forceTeardown(reason TeardownReason) error {
 	h.mu.Lock()
 	if h.state == HubTornDown || h.teardownInFlight {
 		h.mu.Unlock()
@@ -745,12 +758,18 @@ func (h *StreamHub) ForceTeardown() error {
 	// subscriber is attached" invariant (types.go) visibly false for the
 	// entire StopControlMode call below would be its own bug.
 	h.state = HubDraining
+	wasCounted := h.counted
+	h.counted = false
 	h.mu.Unlock()
 
-	decActiveHubs()
+	if wasCounted {
+		decActiveHubs()
+	}
+	recordHubTeardown(reason)
 
 	for _, sub := range subs {
 		sub.close()
+		recordSubscriberRemoved(false)
 	}
 
 	var stopErr error
@@ -972,5 +991,5 @@ func (h *StreamHub) handleControllerError(err error) {
 	// subscriber immediately, not wait behind a pending batch that a
 	// now-dead controller will never help flush cleanly anyway.
 	h.batchWindow.Bypass(streamEndedSentinel)
-	_ = h.ForceTeardown()
+	_ = h.forceTeardown(TeardownControllerError)
 }

@@ -85,7 +85,7 @@ Structured triage for every pending agent action. Review diffs and approve or re
 
 ## Auto-Approval Rules
 
-42 built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.
+100+ built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.
 
 ![Auto-Approval Rules](../assets/demo-recording/06-rules.png)
 
