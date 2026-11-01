@@ -6,7 +6,6 @@
 import { execFileSync } from "child_process";
 import * as path from "path";
 import { compare, PwReport, Baseline } from "../../../scripts/e2e-baseline-compare";
-import { compare, Baseline, PwReport } from "../../../scripts/e2e-baseline-compare";
 
 const REPO_ROOT = path.join(__dirname, "../../..");
 const SCRIPT = path.join(REPO_ROOT, "scripts/e2e-baseline-compare.ts");
