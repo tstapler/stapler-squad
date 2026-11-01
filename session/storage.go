@@ -92,6 +92,10 @@ type InstanceData struct {
 	TmuxPrefix string `json:"tmux_prefix,omitempty"`
 	// Tmux server socket name for isolation (used with tmux -L flag)
 	TmuxServerSocket string `json:"tmux_server_socket,omitempty"`
+	// TymuxSessionID is the tymuxd session id this Instance owns. Restore adopts
+	// it first so a rename (title -> session label) cannot orphan the live session.
+	// Empty on records saved before it existed.
+	TymuxSessionID string `json:"tymux_session_id,omitempty"`
 	// Backend is the per-session ProcessManager backend pin (e.g. BackendTymux),
 	// persisted so a process restart doesn't silently drop it — see
 	// Instance.Backend's doc comment for precedence. Empty means "no pin,

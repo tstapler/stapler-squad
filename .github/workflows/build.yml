@@ -51,12 +51,7 @@ permissions:
   contents: read
   pull-requests: write
 
-# PR runs cancel a superseded commit's in-flight jobs; main-branch runs never
-# do, so benchmark-gate's actions/cache/save step is never cancelled mid-write.
-# benchmark-gate's own job-level `concurrency: {group: baseline-push-main, ...}`
-# (below) is a separate group from this workflow-level one and still applies
-# on top of it — a job's own concurrency block doesn't get overridden by the
-# workflow-level block, per GitHub's documented precedence.
+# PR runs cancel a superseded commit's in-flight jobs; main-branch runs never do.
 concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -811,6 +806,15 @@ jobs:
         run: |
           echo "::error::a Bun e2e shard failed or blew its budget (result: ${{ needs.e2e-bun-shard.result }})"
           exit 1
+
+      - name: Upload Playwright JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-bun-report
+          path: tests/e2e/playwright-report/report.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Download e2e-next's Playwright JSON report
         if: always() && github.event_name != 'pull_request'

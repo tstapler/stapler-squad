@@ -2,7 +2,7 @@
 
 // Regression thresholds for benchmark.yml's 3 PR-comment jobs.
 // go-tier1 is repeated-trial + significance-tested (benchstat, count=8), so it
-// reuses build.yml's benchmark-gate 20% figure. frontend-throughput/e2e-latency
+// reuses the 20% figure of the retired main-ci.yml benchmark-gate. frontend-throughput/e2e-latency
 // are single-sample Playwright measurements with no significance test, so they
 // use a much coarser "2x swing" threshold instead — see ADR-002 (amended).
 const GO_TIER1_THRESHOLD_PCT = 20;

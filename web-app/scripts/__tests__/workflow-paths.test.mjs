@@ -81,10 +81,12 @@ test("web-checks in build.yml still runs the storybook build and the dependency 
 test("main-only jobs live in main-ci.yml, not build.yml, so PR runs list no skipped checks for them", () => {
   const build = read(".github/workflows/build.yml");
   const main = read(".github/workflows/main-ci.yml");
-  for (const job of ["test-tmux", "test-rest", "benchmark-gate"]) {
+  for (const job of ["test-tmux", "test-rest"]) {
     assert.doesNotMatch(build, new RegExp(`^ {2}${job}:`, "m"), `${job} should not be in build.yml`);
     assert.match(main, new RegExp(`^ {2}${job}:`, "m"), `${job} missing from main-ci.yml`);
   }
+  assert.doesNotMatch(build, /^ {2}benchmark-gate:/m, "benchmark-gate was retired; benchmark.yml covers benchmarks");
+  assert.doesNotMatch(main, /^ {2}benchmark-gate:/m, "benchmark-gate was retired; benchmark.yml covers benchmarks");
   assert.doesNotMatch(main, /^\s*pull_request\s*:/m);
   for (const m of main.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
     if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);

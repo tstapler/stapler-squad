@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -99,6 +100,24 @@ func (g *GitProvider) GetStatusContext(parent context.Context) (*VCSStatus, erro
 		Type: VCSGit,
 	}
 
+	// The HEAD subject doesn't depend on status output, so spawn it alongside
+	// `git status` instead of after: sequential spawns each pay fork/exec
+	// queueing on a loaded host.
+	var description string
+	var logWG sync.WaitGroup
+	logParent, stopLog := context.WithCancel(parent)
+	logWG.Add(1)
+	go func() {
+		defer logWG.Done()
+		logCtx, logCancel := gitCtxFrom(logParent)
+		defer logCancel()
+		if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
+			description = entries[0].Subject
+		}
+	}()
+	// Cancel before waiting (defers run LIFO): a failed `git status` must not wait out the log spawn.
+	defer func() { stopLog(); logWG.Wait() }()
+
 	ctx, cancel := gitCtxFrom(parent)
 	defer cancel()
 	res, err := gitprovider.Backend().Status(ctx, g.loc(), backend.IntentDisplay)
@@ -117,15 +136,12 @@ func (g *GitProvider) GetStatusContext(parent context.Context) (*VCSStatus, erro
 		g.applyBranchHeader(status, res)
 	}
 
-	logCtx, logCancel := gitCtxFrom(parent)
-	defer logCancel()
-	if entries, logErr := gitprovider.Backend().Log(logCtx, g.loc(), backend.LogRequest{Limit: 1}); logErr == nil && len(entries) > 0 {
-		status.Description = entries[0].Subject
-	}
-
 	// Changed files come from the status result already fetched above --
 	// avoids a second `git status` spawn.
 	files := g.changedFilesFromStatus(parent, res)
+
+	logWG.Wait()
+	status.Description = description
 
 	// Categorize files
 	for _, f := range files {
@@ -222,12 +238,18 @@ func (g *GitProvider) changedFilesFromStatus(parent context.Context, res backend
 	// Best-effort per-file insertion/deletion counts. A numstat failure (e.g. no
 	// commits yet) should not prevent the file list itself from being returned.
 	var unstagedStats, stagedStats map[string]numstatEntry
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // the two numstat spawns are independent
+		defer wg.Done()
+		if stats, statErr := g.getNumstat(parent, true); statErr == nil {
+			stagedStats = stats
+		}
+	}()
 	if stats, statErr := g.getNumstat(parent, false); statErr == nil {
 		unstagedStats = stats
 	}
-	if stats, statErr := g.getNumstat(parent, true); statErr == nil {
-		stagedStats = stats
-	}
+	wg.Wait()
 
 	return mergeNumstat(files, unstagedStats, stagedStats)
 }
