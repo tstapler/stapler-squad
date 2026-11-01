@@ -191,6 +191,7 @@ describe("JumpToSessionPanel", () => {
 
       expect(screen.queryByTestId("session-peek-modal")).not.toBeInTheDocument();
       expect(screen.getByTestId("jump-to-session-button")).toHaveTextContent("Jump to Work session");
+      await waitFor(() => expect(screen.getByTestId("jump-to-session-button")).toHaveFocus());
     });
 
     it("JumpToSessionPanel_should_OpenModalForChosenRole_When_MobileAndRoleChosenFromMenu", async () => {

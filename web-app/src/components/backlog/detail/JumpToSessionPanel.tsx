@@ -56,6 +56,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
@@ -95,6 +96,12 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       });
   }, [isOpen, target, getSession]);
 
+  const closeModal = useCallback(() => {
+    setModalOpen(false);
+    // Return focus to the control that opened the modal (the portal unmount drops it to <body>).
+    requestAnimationFrame(() => jumpButtonRef.current?.focus());
+  }, []);
+
   const closeMenu = useCallback(() => setMenuOpen(false), []);
 
   const openMenu = useCallback(() => {
@@ -121,6 +128,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       <div className={styles.controls}>
         <button
           type="button"
+          ref={jumpButtonRef}
           className={styles.jumpButton}
           aria-expanded={isMobile ? modalOpen : expanded}
           aria-controls={isMobile ? undefined : PANEL_ID}
@@ -202,13 +210,13 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
           document.body
         )}
       {modalOpen && !loading && !error && session && (
-        <SessionPeekModal session={session} onClose={() => setModalOpen(false)} />
+        <SessionPeekModal session={session} onClose={closeModal} />
       )}
       {modalOpen && (loading || error) && createPortal(
         <div className={styles.panel} role="status" data-testid="jump-to-session-modal-status">
           {loading ? "Loading terminal…" : error}
           {error && (
-            <button type="button" onClick={() => setModalOpen(false)}>Close</button>
+            <button type="button" onClick={closeModal}>Close</button>
           )}
         </div>,
         document.body
