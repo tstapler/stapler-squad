@@ -127,7 +127,7 @@ docs/registry/coverage-gaps.json
 uploads/
 
 # Benchmark baselines — persisted via GitHub Actions cache (see
-# .github/workflows/benchmark.yml / build.yml's benchmark-gate job), not
+# .github/workflows/benchmark.yml), not
 # committed. A prior version committed these on every push to main, which
 # flooded the commit history for very little value.
 benchmarks/
