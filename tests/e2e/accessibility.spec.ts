@@ -254,7 +254,9 @@ test.describe('Accessibility — backlog live updates (WCAG 4.1.3 AA)', () => {
     await expect(gateVerdictBox).toHaveAttribute('aria-atomic', 'true');
   });
 
-  test('the backlog list and board item collections are never wrapped in one giant aria-live region (UX AC #31)', async ({ page }) => {
+  test('the backlog list and board item collections are never wrapped in one giant aria-live region (UX AC #31)', async ({ page, request }) => {
+    // The list table only renders once a row exists; seed one instead of relying on earlier tests in the file.
+    await createBacklogItemDirect(request, { title: `e2e-axe-collections-${Date.now()}`, status: 'review' });
     const backlogPage = new BacklogPage(page);
 
     await backlogPage.goto();
