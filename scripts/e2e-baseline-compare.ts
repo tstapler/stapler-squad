@@ -105,6 +105,9 @@ export function failedOrRetried(attempts: Attempt[], spec = ""): boolean {
   return !(status === "passed" || (status === "skipped" && BUN_SKIP_ALLOWED_SPECS.has(spec)));
 }
 
+// One Bun run cannot tell a persistent flake from a one-off, so retry-then-pass escalates only with >= 2 runs (local 3-run procedures).
+const MIN_RUNS_FOR_FLAKY_ESCALATION = 2;
+
 const specOfKey = (ks: string): string => ks.split(" :: ")[0];
 
 /** Every attempt failed (Playwright's own definition of a failing test; a retry that passed is a flake, not a failure). */
@@ -114,14 +117,17 @@ export function hardFailed(attempts: Attempt[]): boolean {
 
 type RunOutcome = "clean" | "flaky" | "hard" | "cascade";
 
-/** `groupHasHardFailure`: this run hard-failed some other test of the same spec file and project. */
-export function classifyRun(attempts: Attempt[], spec: string, groupHasHardFailure: boolean): RunOutcome {
+/**
+ * `groupHasCountedRoot`: this run hard-failed another test of the same spec file AND project, and the gate itself counts that
+ * failure (not excluded as a baseline-fail, shared-with-Next, or expected-diff failure).
+ */
+export function classifyRun(attempts: Attempt[], spec: string, groupHasCountedRoot: boolean): RunOutcome {
   if (!failedOrRetried(attempts, spec)) return "clean";
   if (hardFailed(attempts)) return "hard";
   const skippedOnly = attempts.length > 0 && attempts.every((a) => a.status === "skipped");
-  // A `test.describe.configure({ mode: "serial" })` spec skips its remaining tests after one failure; the
-  // failing test carries the finding, so its skipped siblings are not separate failures.
-  if (skippedOnly && groupHasHardFailure) return "cascade";
+  // The Playwright JSON report does not record `mode: "serial"`, so a skip is attributed to a sibling failure only
+  // when that sibling's failure is itself a gate finding. A skip whose root is excluded from the gate stays a failure.
+  if (skippedOnly && groupHasCountedRoot) return "cascade";
   if (attempts.length > 1 && attempts[attempts.length - 1].status === "passed") return "flaky";
   return "hard"; // unintended skip or a test that never reported
 }
@@ -215,22 +221,45 @@ function validateExpectedDiffEntries(entries: ExpectedDiffEntry[]): Finding[] {
 
 interface GateContext {
   bunAttemptsFor: (key: string) => Attempt[][];
-  /** Per Bun run: "spec :: project" groups containing at least one hard-failed test. */
-  bunHardFailedGroups: Set<string>[];
+  /** Per Bun run: "spec :: project" groups containing a hard-failed test that the gate counts as a failure. */
+  bunCountedRootGroups: Set<string>[];
   nextAttempts: Map<string, { key: SpecKey; attempts: Attempt[] }>;
   expectedDiffKeys: Map<string, ExpectedDiffEntry>;
   expectedDiffSeen: Set<string>;
+}
+
+/**
+ * "spec :: project" groups where run `runIdx` hard-failed a baseline 'pass'/'flaky' test that the gate counts: Next clean and no
+ * expected-diff entry. Baseline-'fail' tests, shared failures and listed diffs are excluded, so their skipped siblings stay failures.
+ */
+function countedRootGroups(specs: BaselineSpecEntry[], ctx: GateContext, runIdx: number): Set<string> {
+  const groups = new Set<string>();
+  for (const b of specs) {
+    if (b.class !== "pass" && b.class !== "flaky") continue;
+    const ks = keyString({ spec: b.spec, project: b.project, title: b.title });
+    if (!hardFailed(ctx.bunAttemptsFor(ks)[runIdx] ?? [])) continue;
+    const next = ctx.nextAttempts.get(ks);
+    if (next === undefined || failedOrRetried(next.attempts, b.spec)) continue;
+    if (ctx.expectedDiffKeys.has(`${b.spec} :: ${b.title}`)) continue;
+    groups.add(`${b.spec} :: ${b.project}`);
+  }
+  return groups;
 }
 
 function evaluateBaselinePassSpec(b: BaselineSpecEntry, ctx: GateContext): Finding | null {
   const ks = keyString({ spec: b.spec, project: b.project, title: b.title });
   const runs = ctx.bunAttemptsFor(ks);
   const n = runs.length;
-  const outcomes = runs.map((a, i) => classifyRun(a, b.spec, ctx.bunHardFailedGroups[i]?.has(`${b.spec} :: ${b.project}`) ?? false));
+  const outcomes = runs.map((a, i) => classifyRun(a, b.spec, ctx.bunCountedRootGroups[i]?.has(`${b.spec} :: ${b.project}`) ?? false));
   const failCount = outcomes.filter((o) => o === "hard").length;
   const flakyCount = outcomes.filter((o) => o === "flaky").length;
   if (failCount === 0) {
-    if (flakyCount === 0) return null; // clean on Bun, or only a serial-cascade skip of another test's failure
+    if (flakyCount === 0) return null; // clean on Bun, or only a cascade skip of another test's counted failure
+    const nextEntry = ctx.nextAttempts.get(ks);
+    const nextClean = nextEntry !== undefined && !failedOrRetried(nextEntry.attempts, specOfKey(ks));
+    if (nextClean && n >= MIN_RUNS_FOR_FLAKY_ESCALATION && flakyCount === n) {
+      return { severity: "fail", spec: b.spec, title: b.title, message: `Persistent Bun-only flake: baseline class 'pass' needed a retry in all ${n} Bun runs, e2e-next clean.` };
+    }
     return { severity: "warn", spec: b.spec, title: b.title, message: `baseline class 'pass' needed a retry on Bun in ${flakyCount}/${n} runs (passed on retry): warning, not a gate failure.` };
   }
 
@@ -295,6 +324,9 @@ function evaluateBaselineSpecs(specs: BaselineSpecEntry[], ctx: GateContext): Fi
   return findings;
 }
 
+// Consistency note: only baseline-'pass' specs use the hard-failure/cascade rule above. Baseline-'flaky' specs already gate on the
+// final status; baseline-'fail' specs are excluded; specs absent from the baseline and expected-diff reproduction stay strict
+// (failedOrRetried) because they have no recorded flake history to justify tolerating a retry.
 function evaluateSpecsMissingFromBaseline(bunKeys: Set<string>, baselineKeys: Set<string>, ctx: GateContext): Finding[] {
   const findings: Finding[] = [];
   for (const ks of bunKeys) {
@@ -360,9 +392,7 @@ export function compare(input: CompareInput): CompareResult {
 
   const ctx: GateContext = {
     bunAttemptsFor: (key: string) => bunPerRun.map((m) => m.get(key)?.attempts ?? []),
-    bunHardFailedGroups: bunPerRun.map(
-      (m) => new Set([...m.values()].filter((e) => hardFailed(e.attempts)).map((e) => `${e.key.spec} :: ${e.key.project}`)),
-    ),
+    bunCountedRootGroups: [],
     nextAttempts: input.nextReport ? collectAttempts(input.nextReport) : new Map(),
     expectedDiffKeys: new Map(input.expectedDiff.entries.map((e) => [expectedDiffKey(e), e])),
     expectedDiffSeen: new Set<string>(),
@@ -370,6 +400,7 @@ export function compare(input: CompareInput): CompareResult {
 
   const baselineKeys = new Set(input.baseline.specs.map((b) => keyString({ spec: b.spec, project: b.project, title: b.title })));
 
+  ctx.bunCountedRootGroups = bunPerRun.map((_, i) => countedRootGroups(input.baseline.specs, ctx, i));
   findings.push(...evaluateBaselineSpecs(input.baseline.specs, ctx));
   findings.push(...evaluateSpecsMissingFromBaseline(bunKeys, baselineKeys, ctx));
   findings.push(...evaluateExpectedDiffShrink(input.expectedDiff.entries, bunKeys, ctx));
