@@ -25,8 +25,14 @@ func (f *seamFakeTymux) SetStoredSessionID(id string)       { f.gotStoredID = id
 func (f *seamFakeTymux) SetSessionLabel(string)             {}
 func (f *seamFakeTymux) SetCommand(launchcmd.LaunchCommand) {}
 func (f *seamFakeTymux) GetSessionIdentifier() string       { return f.id }
-func (f *seamFakeTymux) HasSession() bool                   { return false }
-func (f *seamFakeTymux) Close() error                       { f.closeCalls++; return nil }
+func (f *seamFakeTymux) PersistedSessionID() string {
+	if f.id != "" {
+		return f.id
+	}
+	return f.gotStoredID
+}
+func (f *seamFakeTymux) HasSession() bool { return false }
+func (f *seamFakeTymux) Close() error     { f.closeCalls++; return nil }
 
 // useSeamFake routes every new tymux manager to fake for the test.
 func useSeamFake(t *testing.T) *seamFakeTymux {
