@@ -73,7 +73,8 @@ Manual / browser results, measured 2026-10-30 against a separate instance (`PORT
 
 | Check | xterm.js | ghostty-web |
 |---|---|---|
-| Cold-load LCP on `/`, 5 runs (ms) | 340, 320, 252, 276, 268 (median 276) | 260, 240, 248, 236, 244 (median 244) |
+| Cold-load LCP on `/`, minified build, 5 runs (ms), 2026-10-30 | 340, 320, 252, 276, 268 (median 276) | 260, 240, 248, 236, 244 (median 244) |
+| Cold-load LCP on `/`, unminified build, 5 runs (ms), 2026-11-01 (`measure-lcp.mjs`) | 492, 472, 476, 472, 468 (median 472) | 472, 476, 476, 472, 464 (median 472) |
 | Keep-alive pane switch A→B→A | not run | PASS: same canvas element survives, 0 console errors, 0 `ghostty`/`.wasm` requests during the switch, canvas non-blank (3247 lit px before, 2584 after; the drop is the cursor/typed line, not a blank pane) |
 | vim | not run | not run |
 | htop | not run | not run |
@@ -81,7 +82,7 @@ Manual / browser results, measured 2026-10-30 against a separate instance (`PORT
 
 Re-measured 2026-11-01 with `web-app/scripts/measure-lcp.mjs` (unminified `make build` output, isolated instance on `PORT=62873`, cache disabled, flag seeded via localStorage with `GetFeatureFlags` blocked): xterm.js 492, 472, 476, 472, 468 (median 472 ms); ghostty-web 472, 476, 476, 472, 464 (median 472 ms); delta 0 ms against the 200 ms budget. Reproduce with `cd web-app && CHROMIUM_PATH=<chrome-headless-shell> node scripts/measure-lcp.mjs http://localhost:62873 5`.
 
-LCP is measured on `/`, where the pool preloads the chosen renderer; the ghostty-web chunk is only requested when the flag is on. The LCP delta (ghostty on minus off) is -32 ms at the median, inside the 200 ms budget. vim, htop and the Claude Code TUI still need a person at a terminal.
+LCP is measured on `/`, where the pool preloads the chosen renderer; the ghostty-web chunk is only requested when the flag is on. The two LCP rows use different builds, methods and days, so compare within a row only: the delta (ghostty on minus off) is -32 ms in the first and 0 ms in the second. Both are inside the 200 ms budget and indicate no regression; the difference between them is within run-to-run noise. vim, htop and the Claude Code TUI still need a person at a terminal.
 
 ## Known ghostty-web limitations in this integration
 
