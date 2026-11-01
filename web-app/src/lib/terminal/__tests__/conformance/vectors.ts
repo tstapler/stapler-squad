@@ -38,7 +38,8 @@ export function loadVectors(): Vector[] {
     description: v.description,
     cols: v.cols,
     rows: v.rows,
-    input: read(`${v.name}.ans`),
+    // Vectors are authored with bare LF; a terminal needs CR+LF to return to column 0.
+    input: read(`${v.name}.ans`).replace(/\r?\n/g, "\r\n"),
     expectedScreen: read(`${v.name}.expected.txt`),
     expectedResponse: v.checksResponse ? read(`${v.name}.response.txt`) : undefined,
   }));
