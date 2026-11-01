@@ -7,6 +7,8 @@ import { ChevronDown } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LinkedSession } from "@/lib/hooks/useBacklogService";
 import { SessionDetail } from "@/components/sessions/SessionDetail";
+import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
+import { useViewport } from "@/components/providers/ViewportProvider";
 import { useAnalytics } from "@/lib/analytics";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -33,17 +35,20 @@ const PANEL_ID = "jump-to-session-panel";
 /**
  * A single button that opens a real, interactive terminal for the backlog
  * item's most recently active jumpable session (work/review — see
- * jumpToSession.ts), expanded in place in the page's own layout rather than
- * navigating away or opening a modal. A secondary caret menu lets the
+ * jumpToSession.ts), expanded in place in the page's own layout on desktop, or in a
+ * full-screen SessionPeekModal on mobile (<600px). A secondary caret menu lets the
  * operator pick a different role's most recent session when more than one
  * is available.
  */
 export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }: JumpToSessionPanelProps) {
   const { track } = useAnalytics();
+  const { isMobile } = useViewport();
   const defaultTarget = getMostRecentJumpableSession(linkedSessions);
   const roleOptions = listJumpableRoleOptions(linkedSessions);
 
   const [expanded, setExpanded] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const isOpen = expanded || modalOpen;
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
@@ -63,7 +68,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
     : defaultTarget;
 
   useEffect(() => {
-    if (!expanded || !target) return;
+    if (!isOpen || !target) return;
     const seq = ++fetchSeqRef.current;
     setLoading(true);
     setError(null);
@@ -88,7 +93,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
       .finally(() => {
         if (seq === fetchSeqRef.current) setLoading(false);
       });
-  }, [expanded, target, getSession]);
+  }, [isOpen, target, getSession]);
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
 
@@ -117,12 +122,13 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
         <button
           type="button"
           className={styles.jumpButton}
-          aria-expanded={expanded}
-          aria-controls={PANEL_ID}
+          aria-expanded={isMobile ? modalOpen : expanded}
+          aria-controls={isMobile ? undefined : PANEL_ID}
           data-testid="jump-to-session-button"
           onClick={() => {
-            const next = !expanded;
-            setExpanded(next);
+            const next = isMobile ? true : !expanded;
+            if (isMobile) setModalOpen(true);
+            else setExpanded(next);
             if (next) {
               track({
                 name: "backlog_jump_to_session",
@@ -133,7 +139,7 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
             }
           }}
         >
-          {expanded ? "Hide" : "Jump to"} {roleLabel(target.role)} session
+          {!isMobile && expanded ? "Hide" : "Jump to"} {roleLabel(target.role)} session
         </button>
         {roleOptions.length > 1 && (
           <button
@@ -177,7 +183,8 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
                 data-testid={`jump-to-session-role-item-${s.role}`}
                 onClick={() => {
                   setSelectedRole(s.role);
-                  setExpanded(true);
+                  if (isMobile) setModalOpen(true);
+                  else setExpanded(true);
                   closeMenu();
                   track({
                     name: "backlog_jump_to_session",
@@ -194,7 +201,19 @@ export function JumpToSessionPanel({ linkedSessions, backlogItemId, getSession }
           </div>,
           document.body
         )}
-      {expanded && (
+      {modalOpen && !loading && !error && session && (
+        <SessionPeekModal session={session} onClose={() => setModalOpen(false)} />
+      )}
+      {modalOpen && (loading || error) && createPortal(
+        <div className={styles.panel} role="status" data-testid="jump-to-session-modal-status">
+          {loading ? "Loading terminal…" : error}
+          {error && (
+            <button type="button" onClick={() => setModalOpen(false)}>Close</button>
+          )}
+        </div>,
+        document.body
+      )}
+      {!isMobile && expanded && (
         <div id={PANEL_ID} className={styles.panel} data-testid={PANEL_ID}>
           {loading && <div className={styles.panelLoading}>Loading terminal…</div>}
           {!loading && error && <div className={styles.panelError}>{error}</div>}

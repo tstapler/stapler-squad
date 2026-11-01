@@ -34,6 +34,12 @@ export const modal = style({
   boxShadow: vars.shadow.lg,
   overflow: "hidden",
   animation: `${scaleIn} 140ms ease`,
+  "@media": {
+    "screen and (max-width: 599px)": {
+      inset: 0,
+      borderRadius: 0,
+    },
+  },
 });
 
 export const modalHeader = style({

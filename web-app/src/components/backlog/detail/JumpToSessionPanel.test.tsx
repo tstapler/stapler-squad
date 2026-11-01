@@ -10,9 +10,28 @@ jest.mock("@/components/sessions/SessionDetail", () => ({
     <div data-testid="session-detail">{session.id}</div>
   ),
 }));
+const mockTrack = jest.fn();
 jest.mock("@/lib/analytics", () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
+  useAnalytics: () => ({ track: mockTrack }),
 }));
+let mockIsMobile = false;
+jest.mock("@/components/providers/ViewportProvider", () => ({
+  useViewport: () => ({ isMobile: mockIsMobile }),
+}));
+jest.mock("@/components/sessions/SessionPeekModal", () => ({
+  SessionPeekModal: ({ session, onClose }: { session: { id: string }; onClose: () => void }) => (
+    <div data-testid="session-peek-modal">
+      {session.id}
+      {/* eslint-disable-next-line analytics/require-on-click -- test mock, not production UI */}
+      <button onClick={onClose}>close-modal</button>
+    </div>
+  ),
+}));
+
+beforeEach(() => {
+  mockIsMobile = false;
+  mockTrack.mockClear();
+});
 
 function makeLinkedSession(overrides: Partial<LinkedSession> & { sessionId: string; role: string }): LinkedSession {
   return {
@@ -128,5 +147,87 @@ describe("JumpToSessionPanel", () => {
     await user.click(screen.getByTestId("jump-to-session-role-item-review"));
 
     await waitFor(() => expect(getSession).toHaveBeenCalledWith("r1"));
+  });
+
+  describe("on mobile", () => {
+    beforeEach(() => {
+      mockIsMobile = true;
+    });
+
+    it("JumpToSessionPanel_should_OpenModal_When_MobileAndButtonClicked", async () => {
+      const user = userEvent.setup();
+      const getSession = jest.fn().mockResolvedValue(makeFullSession("w1"));
+      render(
+        <JumpToSessionPanel
+          linkedSessions={[makeLinkedSession({ sessionId: "w1", role: "work" })]}
+          backlogItemId="item1"
+          getSession={getSession}
+        />
+      );
+
+      await user.click(screen.getByTestId("jump-to-session-button"));
+
+      await waitFor(() => expect(screen.getByTestId("session-peek-modal")).toHaveTextContent("w1"));
+      expect(screen.queryByTestId("jump-to-session-panel")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledTimes(1);
+      expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name: "backlog_jump_to_session" }));
+    });
+
+    it("JumpToSessionPanel_should_CloseModal_When_MobileAndModalClosed", async () => {
+      const user = userEvent.setup();
+      const getSession = jest.fn().mockResolvedValue(makeFullSession("w1"));
+      render(
+        <JumpToSessionPanel
+          linkedSessions={[makeLinkedSession({ sessionId: "w1", role: "work" })]}
+          backlogItemId="item1"
+          getSession={getSession}
+        />
+      );
+      await user.click(screen.getByTestId("jump-to-session-button"));
+      await waitFor(() => expect(screen.getByTestId("session-peek-modal")).toBeInTheDocument());
+
+      await user.click(screen.getByText("close-modal"));
+
+      expect(screen.queryByTestId("session-peek-modal")).not.toBeInTheDocument();
+      expect(screen.getByTestId("jump-to-session-button")).toHaveTextContent("Jump to Work session");
+    });
+
+    it("JumpToSessionPanel_should_OpenModalForChosenRole_When_MobileAndRoleChosenFromMenu", async () => {
+      const user = userEvent.setup();
+      const getSession = jest.fn().mockImplementation((id: string) => Promise.resolve(makeFullSession(id)));
+      render(
+        <JumpToSessionPanel
+          linkedSessions={[
+            makeLinkedSession({ sessionId: "r1", role: "review" }),
+            makeLinkedSession({ sessionId: "w1", role: "work" }),
+          ]}
+          backlogItemId="item1"
+          getSession={getSession}
+        />
+      );
+
+      await user.click(screen.getByTestId("jump-to-session-role-menu-trigger"));
+      await user.click(screen.getByTestId("jump-to-session-role-item-review"));
+
+      await waitFor(() => expect(screen.getByTestId("session-peek-modal")).toHaveTextContent("r1"));
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("jump-to-session-panel")).not.toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("JumpToSessionPanel_should_KeepInlineExpandAndNoModal_When_Desktop", async () => {
+    const user = userEvent.setup();
+    render(
+      <JumpToSessionPanel
+        linkedSessions={[makeLinkedSession({ sessionId: "w1", role: "work" })]}
+        backlogItemId="item1"
+        getSession={jest.fn().mockResolvedValue(makeFullSession("w1"))}
+      />
+    );
+    await user.click(screen.getByTestId("jump-to-session-button"));
+    await waitFor(() => expect(screen.getByTestId("jump-to-session-panel")).toBeInTheDocument());
+    expect(screen.queryByTestId("session-peek-modal")).not.toBeInTheDocument();
   });
 });
