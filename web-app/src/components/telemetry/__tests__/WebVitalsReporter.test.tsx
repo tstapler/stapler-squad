@@ -56,6 +56,7 @@ describe("WebVitalsReporter", () => {
       category: "performance",
       durationMs: 1200,
       sessionId: "sess-1",
+      page: "home",
       labels: { rating: "good", id: "v1" },
     });
   });

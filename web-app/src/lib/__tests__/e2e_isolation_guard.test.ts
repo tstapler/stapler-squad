@@ -11,7 +11,7 @@ describe("e2e server isolation", () => {
 
   it("picks an OS-assigned free port and passes it to the server through PORT", () => {
     expect(testServer).toMatch(/srv\.listen\(0,/);
-    expect(testServer).toMatch(/this\.config\.port = await findFreePort\(\)/);
+    expect(testServer).toMatch(/this\.config\.port = await \(attempt === 1 \? this\.config\.allocatePort \?\? findFreePort : findFreePort\)\(\)/);
     expect(testServer).toMatch(/PORT: this\.config\.port\.toString\(\)/);
   });
 
@@ -29,7 +29,36 @@ describe("e2e server isolation", () => {
 
   it("exports the dynamic URL and data dir to workers from global setup", () => {
     const setup = read("global-setup.ts");
-    expect(setup).toMatch(/process\.env\.TEST_SERVER_URL = getGlobalTestServer\(\)\.getBaseUrl\(\)/);
-    expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIR = getGlobalTestServer\(\)\.getTestDir\(\)/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_URLS = JSON\.stringify\(urls\)/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIRS = JSON\.stringify\(dirs\)/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_URL = urls\[0\]/);
+    expect(setup).toMatch(/process\.env\.TEST_SERVER_TESTDIR = dirs\[0\]/);
+  });
+
+  it("keeps specs off the raw single-server env vars (they would all hit worker slot 0)", () => {
+    const allowed = [
+      "helpers/base-url.ts",
+      "helpers/test-server.ts",
+      "global-setup",
+      "playwright.config.ts",
+      "playwright.dev-mode.config.ts",
+      "worker-server-isolation.spec.ts",
+      ".dev-mode.spec.ts",
+      "helpers/session-client.ts", // doc comment only
+      "website-demos.spec.ts", // run by scripts/record-website-demos.sh against its own single server, outside global-setup slots
+    ];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = path.relative(E2E, path.join(dir, entry.name));
+        if (entry.isDirectory()) {
+          if (!["node_modules", "allure-results", "perf", "baseline", "scripts"].includes(entry.name)) walk(path.join(dir, entry.name));
+        } else if (entry.name.endsWith(".ts") && !allowed.some((a) => rel.includes(a))) {
+          if (/process\.env\.(TEST_SERVER_URL|BASE_URL|TEST_SERVER_TESTDIR)\b/.test(read(rel))) offenders.push(rel);
+        }
+      }
+    };
+    walk(E2E);
+    expect(offenders).toEqual([]);
   });
 });

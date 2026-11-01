@@ -158,6 +158,7 @@ func (t *txWrapper) Query(ctx context.Context, q string, args, v any) error {
 
 // observe runs fn and records duration, approximate pool wait, a span and a slow-query WARN.
 func (c *collector) observe(ctx context.Context, q string, fn func() error) error {
+	countQuery(ctx)
 	end := c.startSpan(ctx, q)
 	waitBefore := c.db.Stats().WaitDuration
 	start := time.Now()
@@ -166,7 +167,7 @@ func (c *collector) observe(ctx context.Context, q string, fn func() error) erro
 	// WaitDuration is pool-wide, so under concurrency this over-attributes
 	// queue time from other callers to this query; it is a contention hint.
 	wait := c.db.Stats().WaitDuration - waitBefore
-	key := stmtKey{statement: NormalizeStatement(q), caller: callerOf()}
+	key := stmtKey{statement: NormalizeStatement(q), caller: callerFor(ctx)}
 	c.stmts.add(key, elapsed, wait)
 	c.record(key, elapsed, wait, err)
 	end(wait, err)
@@ -185,8 +186,8 @@ func (c *collector) record(k stmtKey, elapsed, wait time.Duration, err error) {
 			recordBusy(c.cfg.Name)
 		}
 	}
-	recordHistogram(c.cfg.Name, elapsed)
-	recordPoolWait(c.cfg.Name, wait)
+	recordHistogram(c.cfg.Name, k.caller, elapsed)
+	recordPoolWait(c.cfg.Name, k.caller, wait)
 	if c.cfg.SlowThreshold > 0 && elapsed >= c.cfg.SlowThreshold {
 		s.slow.Add(1)
 		c.cfg.Warn("slow database query",

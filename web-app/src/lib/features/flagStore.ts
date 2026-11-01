@@ -15,7 +15,7 @@ export const REQUEST_COALESCING_PRELOAD = true;
 export const WINDOW_KEEP_ALIVE_DEFAULT = false;
 
 const PERSIST_PREFIX = "ssq:flag:";
-const PERSISTED_WS_FLAGS = ["unary_over_ws", "unary_over_ws_remote"] as const;
+const PERSISTED_WS_FLAGS = ["unary_over_ws", "unary_over_ws_remote", "terminal_ws_pool"] as const;
 const KEEP_ALIVE_FLAG = "window_keep_alive";
 /** Renderer choice is read synchronously at terminal mount, so it needs a persisted pre-load value. */
 export const GHOSTTY_RENDERER_FLAG = "ghostty_renderer";

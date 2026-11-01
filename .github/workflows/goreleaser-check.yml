@@ -29,14 +29,20 @@ on:
       - 'go.sum'
   workflow_dispatch:
 
+concurrency:
+  group: goreleaser-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   check:
-    name: goreleaser check
+    name: goreleaser check + build smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -70,33 +76,17 @@ jobs:
           fi
           echo "goreleaser check passed (deprecation warnings, if any, are pre-existing and tracked separately)"
 
-  build-smoke-test:
-    name: build + smoke test (CGO_ENABLED=0, matches release build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # `goreleaser check` above only validates the config schema — it never
-    # compiles anything. .goreleaser.yaml pins CGO_ENABLED=0 for every
-    # release build, so a cgo-only dependency (e.g. mattn/go-sqlite3) can
-    # compile fine locally (cgo enabled by default) and in `go test`, yet
-    # still produce a released binary whose DB-backed commands panic or
-    # error at runtime. This job builds exactly one target the same way
-    # goreleaser does and exercises the two entry points that open the
-    # session database, so that regression is caught in CI instead of in a
-    # user's `brew install` after a tag is pushed.
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
+      # `goreleaser check` above only validates the config schema -- it never
+      # compiles anything. .goreleaser.yaml pins CGO_ENABLED=0 for every
+      # release build, so a cgo-only dependency (e.g. mattn/go-sqlite3) can
+      # compile fine locally and in `go test`, yet still produce a released
+      # binary whose DB-backed commands panic at runtime. These steps build
+      # one target the way goreleaser does and exercise the two entry points
+      # that open the session database. Merged into the `check` job (one
+      # check on a PR instead of two); the steps below run after the
+      # schema check, so a broken config still fails first.
       - name: Generate protos and stub web UI
         uses: ./.github/actions/prepare-stub
-
-      - name: Install GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: latest
-          install-only: true
 
       - name: Build release binary (single target, CGO_ENABLED=0)
         run: goreleaser build --snapshot --clean --single-target --id stapler-squad

@@ -335,6 +335,11 @@ var knownFeatureFlags = []struct {
 		description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
+		name:         session.FeatureFlagDriverPaneActivityGate,
+		description:  "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
+		defaultValue: config.DriverPaneActivityGateDefault,
+	},
+	{
 		name:         "request_coalescing",
 		description:  "Web client request coalescing: merge duplicate in-flight unary RPCs and batch polling reads into fewer requests. Kill switch: turn off to restore one request per call. Read by the web client; applies on next page load. Default: on.",
 		defaultValue: true,
@@ -346,6 +351,10 @@ var knownFeatureFlags = []struct {
 	{
 		name:        "unary_over_ws_remote",
 		description: "also use WebSocket unary on remote-access (https) origins; requires unary_over_ws",
+	},
+	{
+		name:        "terminal_ws_pool",
+		description: "Carry terminal streams over a small shared pool of multiplexed WebSockets (/api/ws/terminal-mux) instead of one WebSocket per terminal, so a page with many terminals opens a few sockets instead of one each. Kill switch: turn off to restore one WebSocket per terminal. Pool size: server STAPLER_SQUAD_TERMINAL_WS_POOL_SIZE (default 2) or per-browser localStorage ssq:terminal-pool-size. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
 		name:        "batch_unary",
@@ -373,6 +382,11 @@ var knownFeatureFlags = []struct {
 		name:         config.AutonomousStallNudgeFeatureFlag,
 		defaultValue: config.AutonomousStallNudgeDefault,
 		description:  "Autonomous stall nudge: when an autonomous work session stops while its pane sits idle at a prompt, type one fixed reminder into the pane and resume supervision instead of respawning it. Also requires Diagnose & Nudge to be on (that flag is the kill switch for every autonomous pane write). Read fresh at each stop. Default: off — every stall respawns as before.",
+	},
+	{
+		name:         config.EscapeEventsDBMigrateFeatureFlag,
+		defaultValue: config.EscapeEventsDBMigrateDefault,
+		description:  "Copy existing escape_events rows from analytics.db into the dedicated db/escape_events.db in small background batches after startup (resumable; the old table is left in place). Turn off to skip the copy: the new database then starts empty. Read once at startup. Default: on.",
 	},
 	{
 		name:         config.HiddenSessionGateFeatureFlag,

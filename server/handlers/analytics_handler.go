@@ -101,6 +101,8 @@ type analyticsSummaryResponse struct {
 type AnalyticsHandler struct {
 	provider analytics.AnalyticsProvider
 	limiter  *rateLimiter
+	events   *minuteBudget
+	cmEvents *minuteBudget
 	client   *ent.Client // may be nil when only LogAnalyticsProvider is available
 }
 
@@ -114,7 +116,19 @@ func NewAnalyticsHandler(provider analytics.AnalyticsProvider) *AnalyticsHandler
 		limiter: &rateLimiter{
 			resetAt: time.Now().Add(time.Minute),
 		},
+		events:   &minuteBudget{limit: analyticsEventsPerMinute},
+		cmEvents: &minuteBudget{limit: metricEventsPerMinute},
 	}
+}
+
+func countMetricEvents(events []analyticsEventRequest) int {
+	n := 0
+	for _, ev := range events {
+		if strings.HasPrefix(ev.EventName, "cm.") {
+			n++
+		}
+	}
+	return n
 }
 
 // NewAnalyticsHandlerWithClient creates a new AnalyticsHandler that can also serve
@@ -150,6 +164,7 @@ func (h *AnalyticsHandler) allow() bool {
 // HandlePost handles POST /api/analytics.
 func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 	if !h.allow() {
+		noteRateLimited(scopeGlobalRequests)
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
@@ -185,8 +200,21 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Charged only after validation, so a malformed batch consumes no event budget.
+	if !h.events.take(len(req.Events)) {
+		noteRateLimited(scopeGlobalEvents)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
+	}
+	if !h.cmEvents.take(countMetricEvents(req.Events)) {
+		noteRateLimited(scopeMetricBudget)
+		http.Error(w, "Too many events", http.StatusTooManyRequests)
+		return
+	}
+
 	ctx := r.Context()
 	dropped := 0
+	toRecord := make([]analytics.Event, 0, len(req.Events))
 	for _, ev := range req.Events {
 		if strings.HasPrefix(ev.EventName, filesEventPrefix) && !filesLabelsValid(ev.Labels) {
 			dropped++
@@ -196,7 +224,7 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 		safeName := strings.ReplaceAll(ev.EventName, "\n", `\n`)
 		safeName = strings.ReplaceAll(safeName, "\r", `\r`)
 
-		aerr := h.provider.Record(ctx, analytics.Event{
+		toRecord = append(toRecord, analytics.Event{
 			ID:            ev.ID,
 			EventName:     safeName,
 			EventCategory: ev.EventCategory,
@@ -206,9 +234,11 @@ func (h *AnalyticsHandler) HandlePost(w http.ResponseWriter, r *http.Request) {
 			Component:     ev.Component,
 			Labels:        ev.Labels,
 		})
-		if aerr != nil {
-			log.Error("analytics record error (continuing)", "err", aerr)
-		}
+	}
+	// One transaction for the whole request when the provider supports it: a commit
+	// per event serialized up to 100 inserts on the single analytics connection.
+	if aerr := analytics.RecordAll(ctx, h.provider, toRecord); aerr != nil {
+		log.Error("analytics record error (continuing)", "err", aerr, "events", len(toRecord))
 	}
 
 	if dropped > 0 {

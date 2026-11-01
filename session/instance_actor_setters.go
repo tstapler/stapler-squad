@@ -373,10 +373,8 @@ func archiveAtIfNilLocked(s *instanceState, t time.Time) bool {
 // Blocks indefinitely on a busy actor — callers on a request goroutine should
 // use SetArchivedAtIfNilCtx instead.
 func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
-	var set bool
-	_ = i.sendSyncErr(func(s *instanceState) error {
-		set = archiveAtIfNilLocked(s, t)
-		return nil
+	set, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
+		return archiveAtIfNilLocked(s, t), nil
 	})
 	return set
 }
@@ -387,11 +385,9 @@ func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
 // before the actor ran the command. A command already on the mailbox still runs
 // afterwards; that is harmless because the write is an idempotent CAS.
 func (i *Instance) SetArchivedAtIfNilCtx(ctx context.Context, t time.Time) (bool, error) {
-	var set bool
-	err := i.sendCtx(ctx, func(s *instanceState) {
-		set = archiveAtIfNilLocked(s, t)
+	return sendCtxValue(ctx, i, func(s *instanceState) (bool, error) {
+		return archiveAtIfNilLocked(s, t), nil
 	})
-	return set, err
 }
 
 // stopIfNotStoppedLocked transitions the instance to Stopped from within an
@@ -422,13 +418,11 @@ func (i *Instance) ArchiveWithStop(t time.Time) error {
 // Returns true if ArchivedAt was set by this call (i.e. it was previously nil).
 // No-ops the status transition if already Stopped.
 func (i *Instance) SetArchivedAtIfNilAndStop(t time.Time) bool {
-	var set bool
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	set, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
 		if !archiveAtIfNilLocked(s, t) {
-			return nil
+			return false, nil
 		}
-		set = true
-		return stopIfNotStoppedLocked(s, context.Background())
+		return true, stopIfNotStoppedLocked(s, context.Background())
 	})
 	return set
 }
@@ -750,10 +744,8 @@ func bumpCreationEpochLocked(s *instanceState) uint64 {
 // new value. Exercised directly by tests; production callers are the cancel and
 // retry code paths added in Phase 3.
 func (i *Instance) bumpCreationEpoch() uint64 {
-	var newEpoch uint64
-	_ = i.sendSyncErr(func(s *instanceState) error {
-		newEpoch = bumpCreationEpochLocked(s)
-		return nil
+	newEpoch, _ := sendSyncValue(i, func(s *instanceState) (uint64, error) {
+		return bumpCreationEpochLocked(s), nil
 	})
 	return newEpoch
 }
@@ -770,12 +762,10 @@ func (i *Instance) BumpCreationEpoch() uint64 {
 
 // CreationEpoch returns the current fencing epoch for the async creation pipeline.
 func (i *Instance) CreationEpoch() uint64 {
-	var epoch uint64
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	epoch, _ := sendSyncValue(i, func(s *instanceState) (uint64, error) {
 		s.inst.mu.Lock()
-		epoch = s.inst.creationEpoch
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.creationEpoch, nil
 	})
 	return epoch
 }
@@ -824,8 +814,7 @@ func (i *Instance) CreationEpoch() uint64 {
 // *its own* target, so the exactly-one-winner property for two DIFFERENT
 // target statuses is unaffected.
 func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, failureReason string) bool {
-	var applied bool
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	applied, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
 		// creationEpoch and Status are both read/written under i.mu here (not
 		// just actor confinement): RecoverFromStopped/RetryNow mutate Status
 		// directly under i.mu from outside the actor mailbox, and a
@@ -836,11 +825,11 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 		s.inst.mu.Lock()
 		if s.inst.creationEpoch != capturedEpoch {
 			s.inst.mu.Unlock()
-			return nil
+			return false, nil
 		}
 		if s.inst.Status != Creating && s.inst.Status != status {
 			s.inst.mu.Unlock()
-			return nil
+			return false, nil
 		}
 		setFailureReasonLocked(s, failureReason)
 		s.inst.loadStatus(status)
@@ -848,8 +837,7 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 		snap := buildSnapshot(s.inst)
 		s.inst.mu.Unlock()
 		s.inst.snapshot.Store(snap)
-		applied = true
-		return nil
+		return true, nil
 	})
 	return applied
 }
@@ -870,11 +858,15 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 // Sweeper (Epic 4.1) would then immediately re-flip the retried session to
 // Failed/Stale on its next tick, before the new pipeline has a chance to run.
 func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	type retry struct {
+		epoch   uint64
+		started bool
+	}
+	r, _ := sendSyncValue(i, func(s *instanceState) (retry, error) {
 		if s.inst.Status != Failed {
-			return nil
+			return retry{}, nil
 		}
-		newEpoch = bumpCreationEpochLocked(s)
+		newEpoch := bumpCreationEpochLocked(s)
 		s.inst.mu.Lock()
 		s.inst.loadStatus(Creating)
 		s.inst.touchUpdatedAt()
@@ -882,13 +874,9 @@ func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
 		s.inst.mu.Unlock()
 		s.inst.snapshot.Store(snap)
 		setCreationProgressLocked(s, "")
-		started = true
-		return nil
+		return retry{newEpoch, true}, nil
 	})
-	if !started {
-		return 0, false
-	}
-	return newEpoch, true
+	return r.epoch, r.started
 }
 
 // ---- Background Resolution cancelFunc (Epic 2.2, Story 2.2.1) -------------------
@@ -917,12 +905,10 @@ func (i *Instance) SetCreationCancelFunc(cancel context.CancelFunc) {
 // without a live pipeline goroutine ever spawned here (Task 2.2.1a's
 // documented nil case; Epic 3.2's Cancel RPC must guard against it).
 func (i *Instance) CreationCancelFunc() context.CancelFunc {
-	var cancel context.CancelFunc
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	cancel, _ := sendSyncValue(i, func(s *instanceState) (context.CancelFunc, error) {
 		s.inst.mu.Lock()
-		cancel = s.inst.creationCancelFunc
-		s.inst.mu.Unlock()
-		return nil
+		defer s.inst.mu.Unlock()
+		return s.inst.creationCancelFunc, nil
 	})
 	return cancel
 }

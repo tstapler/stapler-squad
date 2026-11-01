@@ -117,9 +117,12 @@ func (t target) exec(ctx context.Context, op backend.OperationName, strip bool, 
 	)
 	// The one sanctioned git spawn site: every Run of git is counted here, once.
 	t.spawns.Count(ctx, op, t.remote)
-	name, argv := "git", args
+	var name string
+	argv := args
 	if t.remote {
 		name, argv = remoteGitArgv(args)
+	} else {
+		name = localGitName(args)
 	}
 	if sr, ok := t.runner.(backend.StdoutRunner); ok {
 		out, err = sr.RunStdout(ctx, t.dir, name, argv...)

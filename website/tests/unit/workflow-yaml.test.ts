@@ -1,9 +1,6 @@
-// Structural assertions on .github/workflows/website-demo-publish.yml for
-// plan.md Story 5.1.1 / validation.md rows 54-55. No YAML-parsing dependency
-// is wired into website/ yet, so this inspects the raw text with the same
-// "near-mechanical diff against demo-publish.yml" approach research/pitfalls.md
-// §4 calls for -- sufficient for a flat, 2-space-indented GitHub Actions file,
-// not a general-purpose YAML parser.
+// Structural assertions on .github/workflows/deploy-website.yml and
+// website-ci.yml: the PR gate must run the same checks as the deploy, and the
+// deploy must record clips without committing anything. Parsed with js-yaml.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -14,8 +11,6 @@ import yaml from 'js-yaml';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 
-const WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-demo-publish.yml');
-const DEMO_PUBLISH_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/demo-publish.yml');
 const DEPLOY_WEBSITE_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/deploy-website.yml');
 const UTF8 = 'utf8';
 
@@ -43,54 +38,27 @@ function extractOnTriggerKeys(yamlText: string): string[] {
     .map((line) => line.trim().replace(/:.*$/, ''));
 }
 
-function extractFeatureSpecs(yamlText: string): string[] {
-  const envBody = extractTopLevelBlock(yamlText, 'env');
-  const specsLineIndex = envBody.findIndex((line) => line.trim().startsWith('FEATURE_SPECS:'));
-  if (specsLineIndex === -1) {
-    throw new Error('No FEATURE_SPECS entry found in env: block');
-  }
-  const specLines: string[] = [];
-  for (let i = specsLineIndex + 1; i < envBody.length; i++) {
-    const line = envBody[i];
-    if (!/^\s{4}\S/.test(line)) break; // FEATURE_SPECS's own nested indent level
-    specLines.push(line.trim());
-  }
-  return specLines.filter(Boolean);
-}
+// Clips are recorded inside the deploy and ship in the Pages artifact, so the
+// build must fetch them (tolerating a failed recording) and regenerate
+// features.json before building; nothing may be committed back by CI.
+test('deployWorkflow_should_RecordAndShipClipsWithoutCommitting_When_YamlParsed', () => {
+  const text = readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8);
+  const doc = yaml.load(text) as CiWorkflow & { jobs: Record<string, { needs?: unknown; steps: WorkflowStep[] }> };
 
-function specsMatch(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const sortedA = [...a].sort();
-  const sortedB = [...b].sort();
-  return sortedA.every((spec, i) => spec === sortedB[i]);
-}
+  assert.ok(doc.jobs['record-clips'], 'deploy must have a record-clips job');
+  assert.ok(doc.jobs['record-clips'].steps.some((step) => step.run?.includes('scripts/record-website-demos.sh')));
+  assert.equal(doc.jobs.build.needs, 'record-clips');
+  assert.ok((doc.jobs.notify.needs as string[]).includes('record-clips'), 'a failed recording must reach notify');
 
-test('websiteDemoWorkflow_should_HaveWorkflowDispatchOnlyTrigger_When_YamlParsed', () => {
-  const yamlText = readFileSync(WEBSITE_WORKFLOW_PATH, UTF8);
-  const triggers = extractOnTriggerKeys(yamlText);
+  const steps = doc.jobs.build.steps;
+  const download = steps.findIndex((step) => step.name === 'Download demo clips');
+  const regenerate = steps.findIndex((step) => step.name === 'Regenerate features.json with the clips');
+  const build = steps.findIndex((step) => step.name === 'Build site');
+  assert.ok(download !== -1 && download < regenerate && regenerate < build, 'download -> regenerate -> build order');
+  assert.equal((steps[download] as { 'continue-on-error'?: boolean })['continue-on-error'], true, 'a failed recording must not block the deploy');
 
-  assert.deepEqual(triggers, ['workflow_dispatch']);
-  for (const forbidden of ['push', 'pull_request', 'schedule', 'cron']) {
-    assert.ok(!triggers.includes(forbidden), `on: block must not include "${forbidden}"`);
-  }
-});
-
-test('websiteDemoWorkflow_should_RejectUnvettedSpec_When_FeatureSpecsListDiffersFromDemoPublishYml', () => {
-  const websiteSpecs = extractFeatureSpecs(readFileSync(WEBSITE_WORKFLOW_PATH, UTF8));
-  const demoPublishSpecs = extractFeatureSpecs(readFileSync(DEMO_PUBLISH_WORKFLOW_PATH, UTF8));
-
-  // Happy-path baseline: today's two files carry the exact same five specs.
-  assert.ok(
-    specsMatch(websiteSpecs, demoPublishSpecs),
-    'website-demo-publish.yml FEATURE_SPECS must exactly match demo-publish.yml',
-  );
-
-  // Error path: a 6th, unvetted spec must be caught by the same diff.
-  const tampered = [...websiteSpecs, 'unvetted-new.spec.ts'];
-  assert.ok(
-    !specsMatch(tampered, demoPublishSpecs),
-    'a 6th, unvetted spec added to FEATURE_SPECS must be detected as a mismatch',
-  );
+  assert.ok(!/git (commit|push)/.test(text), 'deploy must not commit anything back');
+  assert.ok(!/gh release (upload|create)/.test(text), 'clips ship in the Pages artifact, not a release');
 });
 
 // Phase 6, Story 6.3.1: deploy-website.yml's build job must run its
@@ -162,20 +130,48 @@ test('deployWorkflow_should_FlagMissingStep_When_AssetHealthCheckStepRemoved', (
   );
 });
 
-// Story 1.1.2: deploy-website.yml must trigger only on push to main --
-// repo's existing `github-pages` environment branch policy rejects anything
-// else, so a stray pull_request trigger would just fail at deploy time
-// instead of being caught here. Uses js-yaml like the two tests above
-// (not the raw-text extractOnTriggerKeys() helper website-demo-publish.yml's
-// tests use), since js-yaml parses this file's unquoted `on:` key as the
-// string "on", not a YAML-1.1 boolean -- confirmed directly against this file.
-test('deployWorkflow_should_TriggerOnlyOnPushToMain_When_YamlParsed', () => {
+// Story 1.1.2: deploy-website.yml must never trigger on pull_request -- the
+// repo's `github-pages` environment branch policy rejects anything but main,
+// so a stray PR trigger would only fail at deploy time. push-to-main is the
+// content trigger; schedule/workflow_dispatch redeploy without a content
+// change (website-ci.yml gates PRs instead). Uses js-yaml (not the raw-text
+// extractOnTriggerKeys() helper) since it parses this file's unquoted `on:`
+// key as the string "on", not a YAML-1.1 boolean.
+test('deployWorkflow_should_NeverTriggerOnPullRequest_When_YamlParsed', () => {
   const doc = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as {
     on: Record<string, unknown>;
   };
 
-  assert.deepEqual(Object.keys(doc.on), ['push'], 'on: block must declare only a push trigger');
+  assert.deepEqual(Object.keys(doc.on).sort(), ['push', 'schedule', 'workflow_dispatch']);
   assert.deepEqual((doc.on.push as { branches: string[] }).branches, ['main']);
+});
+
+type CiWorkflow = {
+  on: Record<string, unknown>;
+  jobs: Record<string, { steps: (WorkflowStep & { with?: unknown; 'working-directory'?: string })[] }>;
+};
+
+const WEBSITE_CI_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-ci.yml');
+
+// The PR gate must run every check the deploy runs, byte-for-byte, or a PR can
+// go green and still break the Pages deploy after merge (which is how the site
+// went 25 deploys without publishing). Only the Pages publishing steps are deploy-only.
+test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => {
+  const deploy = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as CiWorkflow;
+  const ci = yaml.load(readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8)) as CiWorkflow;
+
+  assert.deepEqual(Object.keys(ci.on), ['pull_request'], 'website-ci.yml must trigger only on pull_request');
+
+  // Every deploy step before the Pages publishing steps must also run in the PR
+  // gate, except the ones that consume the deploy's own recorded clips.
+  const DEPLOY_ONLY = ['Download demo clips', 'Warn when no clips were shipped', 'Regenerate features.json with the clips'];
+  const publishAt = deploy.jobs.build.steps.findIndex((step) => step.name === 'Configure Pages');
+  assert.notEqual(publishAt, -1, 'deploy-website.yml must have a "Configure Pages" step');
+  const deployChecks = deploy.jobs.build.steps
+    .slice(0, publishAt)
+    .filter((step) => !DEPLOY_ONLY.includes(step.name ?? ''));
+  assert.ok(deployChecks.some((step) => step.name === 'Stop preview server'));
+  assert.deepEqual(ci.jobs.checks.steps, deployChecks);
 });
 
 // Story 1.1.2: the deploy job needs id-token: write to mint the OIDC token

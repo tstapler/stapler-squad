@@ -405,7 +405,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.9.0
+TYMUX_VERSION ?= v1.12.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -820,7 +820,7 @@ test-delivery-guards: ensure-tools proto-gen ent-gen ## Run the sinkguard-tagged
 	@$(MAKE) --no-print-directory test-delivery-guards-run
 
 # The run half has no tool/codegen prerequisites so CI can call it directly
-# after downloading the generated-code artifact (build.yml, test-delivery-guards).
+# after downloading the generated-code artifact (build.yml, go-guards).
 test-delivery-guards-run: $(GOTESTSUM_BIN)
 	@set -e; for d in $$(grep -rl --include='*_test.go' '^//go:build sinkguard' server session cmd pkg 2>/dev/null | xargs -r -n1 dirname | sort -u); do \
 		names=$$(grep -h -oE '^func (Test[A-Za-z0-9_]+)' $$(grep -l '^//go:build sinkguard' $$d/*_test.go) | sed 's/^func //' | paste -sd'|' -); \
@@ -945,7 +945,7 @@ LINTER_BIN := $(CURDIR)/bin/linter
 # running a stale binary that predates the change forever.
 LINTER_SRC := $(shell find $(CURDIR)/tools/lint -name '*.go' -not -path '*/testdata/*')
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawexec, norawghrequest, norawgitcli, norawgitopen, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (entfullscan, hotpolllog, noarchivedrevival, nocommandpattern, nolegacylog, noliveinstanceraw, norawdb, norawexec, norawghrequest, norawgitcli, norawgitopen, nosessiondrivertest, nowrongdbentity, notimesleeptest, novartestseam, silenttransition, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) ./...
 	@go -C tools/lint test -count=1 ./norawgitcli/...

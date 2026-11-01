@@ -45,6 +45,7 @@
       }
     ]
   },
+  "links": [{"title": "Traces in Tempo (Explore)", "type": "link", "icon": "external link", "targetBlank": true, "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20%28name%20%3D~%20%5C%22session.backend.%2A%5C%22%20%7C%7C%20name%20%3D~%20%5C%22tymux.v1.%2A%5C%22%29%20%26%26%20name%20%21%3D%20%5C%22tymux.v1.TymuxService%2FAttach%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "tooltip": "Open Grafana Explore on Tempo with this dashboard's time range"}],
   "panels": [
     {
       "type": "row",
@@ -72,7 +73,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Backend lifecycle spans for this backend in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.backend%20%3D%20%5C%22${__field.labels.backend}%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ms"
         },
         "overrides": []
@@ -101,7 +102,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Slow (> 500ms) backend spans for this backend in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.backend%20%3D%20%5C%22${__field.labels.backend}%5C%22%20%26%26%20duration%20%3E%20500ms%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ms"
         },
         "overrides": []
@@ -129,7 +130,7 @@
         "uid": "victoriametrics"
       },
       "fieldConfig": {
-        "defaults": {
+        "defaults": { "links": [{"title": "Backend lifecycle spans for this backend in Tempo (Explore)", "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20span.backend%20%3D%20%5C%22${__field.labels.backend}%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D", "targetBlank": true}],
           "unit": "ops"
         },
         "overrides": []
@@ -370,6 +371,85 @@
         }
       ],
       "description": "1 when the running tymuxd differs from the binary stapler-squad would spawn."
+    },
+    {
+      "type": "row",
+      "title": "Traces (Tempo)",
+      "id": 201,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      }
+    },
+    {
+      "id": 202,
+      "title": "Slow backend and tymuxd spans (> 500ms)",
+      "type": "table",
+      "description": "session.backend.* lifecycle spans and tymux.v1.* client spans slower than 500ms (the long-lived Attach stream is excluded). Hot-path send_keys/write_stdin/capture_pane/resize are metric-only and will not appear here.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && (name =~ \"session.backend.*\" || name =~ \"tymux.v1.*\") && name != \"tymux.v1.TymuxService/Attach\" && duration > 500ms }"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 203,
+      "title": "Errored backend and tymuxd spans",
+      "type": "table",
+      "description": "session.backend.* and tymux.v1.* spans with status=error.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 52
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 30,
+          "tableType": "traces",
+          "query": "{ resource.service.name = \"stapler-squad\" && (name =~ \"session.backend.*\" || name =~ \"tymux.v1.*\") && name != \"tymux.v1.TymuxService/Attach\" && status = error }"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
     }
   ]
 }

@@ -144,6 +144,15 @@ describe("isNonRetriableConnectError", () => {
     expect(isNonRetriableConnectError(err)).toBe(false);
   });
 
+  it("isNonRetriableConnectError_should_returnFalse_When_muxRefusesStreamWith1013", () => {
+    // The terminal mux answers a refused OPEN (stream cap, stall reap) with close 1013
+    // "try again later": it must follow the normal backoff retry, not hard-fail.
+    for (const code of ["1013", "1006"]) {
+      const err = new ConnectError("WebSocket closed", Code.Unavailable, new Headers({ "ws-close-code": code }));
+      expect(isNonRetriableConnectError(err)).toBe(false);
+    }
+  });
+
   it("isNonRetriableConnectError_should_returnTrue_When_nativeTransportErrorCodeIsUnauthenticated", () => {
     // createConnectTransport never sets a ws-close-code header — this is the
     // native-transport equivalent of ws-close-code 4001 (auth failure).

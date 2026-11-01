@@ -240,13 +240,14 @@ Markers: `// +api: session:create` in Go handlers; `// +feature: session-list` i
 
 Tests in `tests/e2e/` use Playwright + Allure. **Do not manually start a server first** — `tests/e2e/global-setup.ts` does this automatically for every run, fully isolated from any already-running instance:
 
-- Spawns `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` with `PORT=<dynamically-assigned free port>` (`findFreePort()` in `tests/e2e/helpers/test-server.ts`) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
-- `--test-dir` (backed by `STAPLER_SQUAD_TEST_DIR`) points at a PID-scoped temp directory (`/tmp/stapler-squad-test-<pid>` by default, or `TEST_SERVER_DIR` to override) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service.
-- Playwright's `baseURL` is set dynamically to that port via `TEST_SERVER_URL` (see `playwright.config.ts`); the hardcoded `:8544` fallback there only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
-- Global teardown (`global-teardown.ts`) kills that isolated server and cleans up its temp dir when the run ends.
+- Spawns `E2E_WORKERS` (default 1) isolated `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` servers, one per Playwright worker slot, each with `PORT=<dynamically-assigned free port>` (ports are reserved together in `helpers/server-pool.ts`; `findFreePort()` in `helpers/test-server.ts` is the single-server path) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
+- Each server has its own `--test-dir` (`/tmp/stapler-squad-test-<pid>` at one worker, `...-w<slot>` otherwise; `TEST_SERVER_DIR` overrides the base) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service or with another slot — and its own private tmux socket (`ssq-e2e-<random>`).
+- A worker finds its server through `TEST_PARALLEL_INDEX` (Playwright sets it before loading config and specs): use `baseUrl()` / `testDir()` / `slotTmp(name)` from `tests/e2e/helpers/base-url.ts`, never `process.env.TEST_SERVER_URL` / `BASE_URL` / `TEST_SERVER_TESTDIR` (a jest guard fails on those). `playwright.config.ts`'s `baseURL` and storage state are per-slot too; at one worker the hardcoded `:8544` fallback only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
+- Global teardown (`global-teardown.ts`) kills the isolated servers and cleans up their temp dirs when the run ends.
 
 ```bash
 cd tests/e2e && bun run test                                # runs the full suite (isolated instance auto-managed)
+cd tests/e2e && E2E_WORKERS=4 bun run test                  # same suite, 4 workers each with its own server
 cd tests/e2e && npx playwright test session-lifecycle.spec.ts
 make e2e-report
 make e2e-lighthouse
@@ -327,6 +328,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Topic | File |
 |---|---|
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
+| Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
 | Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
@@ -338,6 +340,8 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Backlog completion gate (AC-completeness check) + synchronous terminal-transition cleanup | `docs/reference/backlog-completion-gate-and-cleanup.md` |
 | Backlog dependencies: RPCs, MCP tools, `/api` prefix for direct Connect calls | `docs/reference/backlog-dependencies.md` |
 | Benchmark reference | `docs/reference/benchmarks.md` |
+| CI job budget: checks per PR run, where each check runs, how to add a job without growing it | `docs/reference/ci-job-budget.md` |
+| Terminal WebSocket pool (`terminal_ws_pool`: flag, size knobs, wire format, limits, metrics) | `docs/reference/terminal-ws-pool.md`, `docs/how-to/tune-terminal-ws-pool.md`, `docs/adr/ADR-033-terminal-websocket-pool.md` |
 | Unary request batching (`batch_unary` flag, `POST /api/batch/unary`, allow-list, fallback) | `docs/reference/unary-request-batching.md` |
 | Hidden-session delivery gate (policy, counters, latency, guards) | `docs/reference/notification-delivery-gate.md` |
 | Nil safety & static analysis tools | `docs/how-to/run-nil-safety-analysis.md` |
@@ -359,12 +363,14 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | macOS restart can leave orphaned processes racing over tmux/session state | `docs/explanation/service-restart-orphan-process.md` |
 | A terminal one-shot session (triage/review) can be revived and respawned forever | `docs/explanation/oneshot-session-respawn-loop.md` |
 | Why autonomous-mode sessions stop early: every driver exit path, cited, with verdicts | `docs/explanation/autonomous-stall-causes.md` |
+| Profile DB usage from Grafana/VictoriaMetrics (pool wait, SQLite contention, slow queries, ent-read sizing, decision tree, verified PromQL) | `profile-db-usage` skill |
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
 | Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
 | Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
+| SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
@@ -376,6 +382,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
+| Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
 | Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
 | Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
 | Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |

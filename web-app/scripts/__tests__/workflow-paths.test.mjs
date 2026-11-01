@@ -72,9 +72,23 @@ test("no workflow uses pull_request_target, and every setup-bun is pinned by SHA
   }
 });
 
-test("storybook-build and web-supply-chain exist in build.yml", () => {
+test("web-checks in build.yml still runs the storybook build and the dependency screen", () => {
   const build = read(".github/workflows/build.yml");
-  for (const job of ["storybook-build", "web-supply-chain"]) assert.match(build, new RegExp(`^  ${job}:`, "m"));
+  assert.match(build, /^ {2}web-checks:/m);
+  for (const step of ["bun run build-storybook", "bun run check:dependency-screen", "TestBuiltAssets"]) assert.ok(build.includes(step), step);
+});
+
+test("main-only jobs live in main-ci.yml, not build.yml, so PR runs list no skipped checks for them", () => {
+  const build = read(".github/workflows/build.yml");
+  const main = read(".github/workflows/main-ci.yml");
+  for (const job of ["test-tmux", "test-rest", "benchmark-gate"]) {
+    assert.doesNotMatch(build, new RegExp(`^ {2}${job}:`, "m"), `${job} should not be in build.yml`);
+    assert.match(main, new RegExp(`^ {2}${job}:`, "m"), `${job} missing from main-ci.yml`);
+  }
+  assert.doesNotMatch(main, /^\s*pull_request\s*:/m);
+  for (const m of main.matchAll(/\n( +)strategy:\n([\s\S]*?)(?=\n\1\S|\n {0,4}\S)/g)) {
+    if (m[2].includes("matrix:")) assert.match(m[2], /fail-fast: false/);
+  }
 });
 
 test("build.yml: every matrix sets fail-fast: false", () => {
@@ -97,7 +111,7 @@ test("build.yml detect-changes regex and push paths treat e2e-only edits as rele
   for (const p of ["tests/e2e/**", "web-app/tests/e2e/**"]) assert.ok(pushPaths.includes(`- '${p}'`), `push paths is missing ${p}`);
 });
 
-test("web-lint and go-lint pin checkout to the PR head, not the stale default merge ref", () => {
+test("the merged lint job pins checkout to the PR head, not the stale default merge ref", () => {
   // actions/checkout defaults to GitHub's synthetic refs/pull/N/merge for pull_request
   // events, which tracks main's CURRENT tip independently of base.sha (captured once, at
   // the PR's last push). Once main advances past base.sha, each job's `git diff
@@ -105,7 +119,7 @@ test("web-lint and go-lint pin checkout to the PR head, not the stale default me
   // in between — surfaced 2026-10-22 as unrelated pre-existing warnings failing an
   // unrelated PR (#1144). Each job's checkout step must pin `ref:` to the actual head SHA.
   const lines = read(".github/workflows/lint.yml").split("\n");
-  for (const job of ["web-lint", "go-lint"]) {
+  for (const job of ["lint"]) {
     const start = lines.findIndex((l) => l === `  ${job}:`);
     assert.ok(start !== -1, job);
     const rest = lines.slice(start + 1);

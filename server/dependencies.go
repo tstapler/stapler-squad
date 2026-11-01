@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"time"
 
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -23,13 +26,24 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/scanqueue"
+	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
+)
+
+// Delays before the startup transcript backfill begins (live file changes are
+// never delayed). Tokens go first because QuotaGate reads token usage at boot;
+// a warm restart restores persisted checkpoints immediately regardless.
+const (
+	tokenBackfillDelay    = 15 * time.Second
+	artifactBackfillDelay = 30 * time.Second
 )
 
 // ServerDependencies holds all wired service components for the HTTP server.
@@ -110,6 +124,16 @@ type ServerDependencies struct {
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
+	// AnalyticsDriver is the instrumented driver behind AnalyticsEntClient, used
+	// by background SQLite maintenance. Nil whenever AnalyticsEntClient is nil.
+	AnalyticsDriver dialect.ExecQuerier
+
+	// Escape-event storage: db/escape_events.db, its own SQLite file and single
+	// writer so escape inserts and retention deletes never queue analytics_events.
+	// All three are nil when the database failed to open (escape capture is then off).
+	EscapeEventsClient *ent.Client
+	EscapeEventsDriver dialect.ExecQuerier
+	EscapeEventsDB     *dbpool.Database
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	// Available=false means the Browser tab will be hidden on all sessions.
@@ -214,6 +238,10 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		WorkflowEngine:                 rt.WorkflowEngine,
 		BacklogEnabledCheck:            rt.BacklogEnabledCheck,
 		AnalyticsEntClient:             rt.AnalyticsEntClient,
+		AnalyticsDriver:                rt.AnalyticsDriver,
+		EscapeEventsClient:             rt.EscapeEventsClient,
+		EscapeEventsDriver:             rt.EscapeEventsDriver,
+		EscapeEventsDB:                 rt.EscapeEventsDB,
 		VNCDeps:                        rt.VNCDeps,
 		CDPDeps:                        rt.CDPDeps,
 		HeadlessPool:                   rt.HeadlessPool,
@@ -538,6 +566,12 @@ type RuntimeDeps struct {
 
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
+	AnalyticsDriver    dialect.ExecQuerier
+
+	// Escape-event storage (see ServerDependencies).
+	EscapeEventsClient *ent.Client
+	EscapeEventsDriver dialect.ExecQuerier
+	EscapeEventsDB     *dbpool.Database
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	VNCDeps vnc.DepsResult
@@ -979,7 +1013,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if !inst.Started() {
+			if !inst.Started() && !deferToReconcile(inst) {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
 				}
@@ -1342,12 +1376,23 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
 	var analyticsClient *ent.Client
+	var analyticsDriver dialect.ExecQuerier
+	var escapeEventsClient *ent.Client
+	var escapeEventsDriver dialect.ExecQuerier
+	var escapeEventsDB *dbpool.Database
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
 		ctx := context.Background()
-		if ac, acErr := analytics.OpenAnalyticsDB(ctx, configDir); acErr != nil {
+		if ec, edb, ecErr := escapedb.Open(ctx, configDir); ecErr != nil {
+			log.Warn("could not open escape events DB (escape capture disabled)", "err", ecErr)
+		} else {
+			escapeEventsClient, escapeEventsDriver, escapeEventsDB = ec, edb.Driver(), edb
+			log.Info("escape events DB opened", "path", escapedb.Path(configDir))
+		}
+		if ac, drv, acErr := analytics.OpenAnalyticsDBWithDriver(ctx, configDir); acErr != nil {
 			log.Warn("could not open analytics DB (will use log-only fallback)", "err", acErr)
 		} else {
 			analyticsClient = ac
+			analyticsDriver = drv
 			log.Info("analytics DB opened", "path", configDir+"/analytics.db")
 		}
 	} else {
@@ -1413,7 +1458,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		historyDir, homeDirErr = config.ResolveClaudeHistoryDir(homeDir, config.IsIsolatedInstance())
 	}
 	if homeDirErr == nil {
-		tokenStore = tokens.NewTokenStore(historyDir)
+		tokenOpts := []tokens.Option{tokens.WithQueueConfig(scanqueue.BackfillConfig(tokenBackfillDelay))}
+		if entClient := storage.GetEntClient(); entClient != nil {
+			tokenOpts = append(tokenOpts, tokens.WithStateStore(scanstate.NewStore(entClient).Consumer("tokens")))
+		}
+		tokenStore = tokens.NewTokenStore(historyDir, tokenOpts...)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		go publishContextHealth(context.Background(), tokenStore,
 			historyLinker.Instances,
@@ -1522,6 +1571,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 	backlogSvc.SetLivenessRepository(livenessRepo)
 	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
+	backlogSvc.SetRepoSettingsNonBlockingLookup(githubpkg.RepoSettingsNonBlocking)
 	backlogSvc.SetWorkflowEngineStatusSource(workflowEngine.Status)
 	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
@@ -1773,6 +1823,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Wire ArtifactExtractor to extract PR links, commits, and URLs from JSONL history.
 		// Uses historyLinker.Instances() for live instance snapshots so sessions created
 		// after startup are included in lookupTitle and OnScanComplete.
+		artifactOpts := []artifacts.Option{artifacts.WithQueueConfig(scanqueue.BackfillConfig(artifactBackfillDelay))}
+		if entClient := storage.GetEntClient(); entClient != nil {
+			artifactOpts = append(artifactOpts, artifacts.WithStateStore(scanstate.NewStore(entClient).Consumer("artifacts")))
+		}
 		artifactExtractor := artifacts.NewArtifactExtractor(
 			func(title, blob string) error {
 				return storage.UpdateInstanceArtifacts(title, blob)
@@ -1783,6 +1837,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			func(filePath string) (string, bool) {
 				return session.FindInstanceByHistoryPath(historyLinker.Instances(), filePath)
 			},
+			artifactOpts...,
 		)
 		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
 			// Take a snapshot to avoid a data race with concurrent AddInstance calls (M-5 fix).
@@ -2009,6 +2064,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		BacklogEnabledCheck:            backlogCtrl.IsEnabled,
 		Config:                         cfg,
 		AnalyticsEntClient:             analyticsClient,
+		AnalyticsDriver:                analyticsDriver,
+		EscapeEventsClient:             escapeEventsClient,
+		EscapeEventsDriver:             escapeEventsDriver,
+		EscapeEventsDB:                 escapeEventsDB,
 		VNCDeps:                        vncDeps,
 		CDPDeps:                        cdpDeps,
 		WorkflowRepo:                   workflowRepo,
@@ -2095,4 +2154,16 @@ func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
 		})
 	}
 	return items
+}
+
+// deferToReconcile reports whether Step 6 must leave inst for Step 6b.
+// Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
+// cleanup kills the session's live tmux/tymux session before 6b can adopt it.
+func deferToReconcile(inst *session.Instance) bool {
+	switch inst.GetLifecycleStatus() {
+	case session.PermanentlyFailed, session.Failed:
+		return true
+	default:
+		return false
+	}
 }

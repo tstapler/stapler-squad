@@ -43,7 +43,32 @@ func WithQualityMetrics(p AnalyticsProvider) AnalyticsProvider {
 	return qualityMetricsProvider{p}
 }
 
+// RecordBatch applies the per-event metric side effects, then stores the events
+// that are not metrics-only in one batch.
+func (q qualityMetricsProvider) RecordBatch(ctx context.Context, events []Event) error {
+	stored := make([]Event, 0, len(events))
+	for _, ev := range events {
+		if q.observeOnly(ctx, ev) {
+			continue
+		}
+		stored = append(stored, ev)
+	}
+	return RecordAll(ctx, q.AnalyticsProvider, stored)
+}
+
 func (q qualityMetricsProvider) Record(ctx context.Context, ev Event) error {
+	if q.observeOnly(ctx, ev) {
+		return nil
+	}
+	return q.AnalyticsProvider.Record(ctx, ev)
+}
+
+// observeOnly counts ev into its metric and reports whether ev is metrics-only
+// (a browser event that is not stored).
+func (q qualityMetricsProvider) observeOnly(ctx context.Context, ev Event) bool {
+	if defaultClientMetrics().observe(ctx, ev) {
+		return true
+	}
 	if ev.EventName == EventInlineActionUndo {
 		if c := undoCounter(); c != nil {
 			kind := strings.ToLower(ev.Labels["kind"])
@@ -53,5 +78,5 @@ func (q qualityMetricsProvider) Record(ctx context.Context, ev Event) error {
 			c.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", kind)))
 		}
 	}
-	return q.AnalyticsProvider.Record(ctx, ev)
+	return false
 }

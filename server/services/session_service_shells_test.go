@@ -321,3 +321,21 @@ func TestDeleteShell_Success(t *testing.T) {
 	require.NoError(t, listErr)
 	assert.Empty(t, listResp.Msg.Shells, "shell must be removed from memory after DeleteShell")
 }
+
+// TestResolveSessionTitle_LiveInstanceSkipsStorage proves a live session resolves
+// without touching storage: the fixture's storage holds no row for it, so any DB
+// fallback would return NotFound.
+func TestResolveSessionTitle_LiveInstanceSkipsStorage(t *testing.T) {
+	t.Parallel()
+	fix := setupShellsFixture(t)
+	inst := fix.addLiveSession(t, "live-only")
+	require.NoError(t, fix.storage.DeleteInstance("live-only"))
+
+	title, err := fix.svc.resolveSessionTitle("live-only")
+	require.NoError(t, err)
+	assert.Equal(t, "live-only", title)
+
+	byUUID, err := fix.svc.resolveSessionTitle(inst.Snapshot().UUID)
+	require.NoError(t, err)
+	assert.Equal(t, "live-only", byUUID)
+}

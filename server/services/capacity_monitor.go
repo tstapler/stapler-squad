@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,11 +11,11 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -767,7 +766,7 @@ func (m *CapacityMonitor) queryGeminiUsageFromDB(uuid string) (input, output int
 		return 0, 0, 0, nil
 	}
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build())
+	db, err := dbpool.OpenForeignReadOnly(dbPath, 0)
 	if err != nil {
 		return 0, 0, 0, err
 	}

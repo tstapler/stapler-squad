@@ -11,6 +11,9 @@
 #                              to the input file's name, capitalized (e.g. review-queue ->
 #                              "Review Queue") — see Epic 5.2 Story 5.2.1b in
 #                              project_plans/stapler-squad-website/implementation/plan.md.
+#   --no-gif                  Skip the GIF preview. The GIF is written to demo.gif next to
+#                              the input, so processing several clips in one directory
+#                              would overwrite it each time.
 #   --trim-start-frames <N>    Drop the first N frames of captured footage before the
 #                              browser-chrome stage. Frame-count-relative (never a
 #                              wall-clock/sleep trigger), so output is deterministic
@@ -26,6 +29,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TITLE_CARD_REQUESTED=0
 TITLE_CARD_TEXT=""
 TRIM_START_FRAMES=0
+NO_GIF=0
 INPUT_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -38,6 +42,10 @@ while [[ $# -gt 0 ]]; do
       TITLE_CARD_REQUESTED=1
       TITLE_CARD_TEXT="$2"
       shift 2
+      ;;
+    --no-gif)
+      NO_GIF=1
+      shift
       ;;
     --trim-start-frames)
       if [[ $# -lt 2 ]]; then
@@ -296,6 +304,11 @@ fi
 
 mv "$TMP" "$INPUT"
 echo "    ✅  Re-encoded: $INPUT"
+
+if [[ "$NO_GIF" -eq 1 ]]; then
+  echo "🎉  Done (GIF skipped)."
+  exit 0
+fi
 
 # ── Export animated GIF (first 12 s, 960 px wide, 10 fps) ─────────────────
 echo "    Generating GIF preview …"

@@ -6,10 +6,10 @@
 // pulling the logic out keeps it testable against a jsdom element directly,
 // without depending on Astro's script-bundling pipeline.
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import HeroVideo from '../../src/components/HeroVideo.astro';
-import { applyAutoplayUnlessReducedMotion } from '../../src/lib/reduced-motion-video.ts';
+import { applyAutoplayUnlessReducedMotion, whenLoadedAndIdle } from '../../src/lib/reduced-motion-video.ts';
 
 const PROPS = { src: '/stapler-squad/demo.webm', poster: '/stapler-squad/screenshot.png' };
 // Boolean attributes HeroVideo.astro always sets server-side, named once so
@@ -68,5 +68,51 @@ describe('HeroVideo component markup', () => {
 		const video = createVideoElement(true);
 		expect(video.hasAttribute('autoplay')).toBe(false);
 		expect(video.getAttribute('poster')).toBe(PROPS.poster);
+	});
+});
+
+describe('whenLoadedAndIdle', () => {
+	function fakeWindow(readyState: string, withIdle: boolean) {
+		const listeners: Record<string, () => void> = {};
+		const idle = vi.fn((cb: () => void) => cb());
+		const win = {
+			document: { readyState },
+			addEventListener: (type: string, cb: () => void) => {
+				listeners[type] = cb;
+			},
+			setTimeout: vi.fn((cb: () => void) => cb()),
+			...(withIdle ? { requestIdleCallback: idle } : {}),
+		};
+		return { win: win as unknown as Window, listeners, idle };
+	}
+
+	it('whenLoadedAndIdle_should_WaitForLoadEvent_When_DocumentStillLoading', () => {
+		const { win, listeners } = fakeWindow('interactive', true);
+		const start = vi.fn();
+		whenLoadedAndIdle(start, win);
+		expect(start).not.toHaveBeenCalled();
+		listeners.load();
+		expect(start).toHaveBeenCalledTimes(1);
+	});
+
+	it('whenLoadedAndIdle_should_StartWithoutLoadEvent_When_DocumentAlreadyComplete', () => {
+		const { win, listeners } = fakeWindow('complete', true);
+		const start = vi.fn();
+		whenLoadedAndIdle(start, win);
+		expect(start).toHaveBeenCalledTimes(1);
+		expect(listeners.load).toBeUndefined();
+	});
+
+	it('whenLoadedAndIdle_should_PassIdleTimeout_When_RequestIdleCallbackAvailable', () => {
+		const { win, idle } = fakeWindow('complete', true);
+		whenLoadedAndIdle(vi.fn(), win);
+		expect(idle).toHaveBeenCalledWith(expect.any(Function), { timeout: 2000 });
+	});
+
+	it('whenLoadedAndIdle_should_FallBackToSetTimeout_When_RequestIdleCallbackMissing', () => {
+		const { win } = fakeWindow('complete', false);
+		const start = vi.fn();
+		whenLoadedAndIdle(start, win);
+		expect(start).toHaveBeenCalledTimes(1);
 	});
 });

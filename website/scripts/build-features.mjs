@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Reconciles README.md's 5-category "Highlights" grouping with
-// docs/features.md's flat 17-section detail into website/src/content/features.json
+// docs/features.md's flat section detail into website/src/content/features.json
 // -- see project_plans/stapler-squad-website/research/features.md §4.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -13,6 +13,7 @@ const WEBSITE_ROOT = join(SCRIPT_DIR, '..');
 const REPO_ROOT = join(WEBSITE_ROOT, '..');
 const DEFAULT_README_PATH = join(REPO_ROOT, 'README.md');
 const DEFAULT_FEATURES_MD_PATH = join(REPO_ROOT, 'docs', 'features.md');
+const DEFAULT_CLIPS_DIR = join(WEBSITE_ROOT, 'public', 'clips');
 const DEFAULT_OUTPUT_PATH = join(WEBSITE_ROOT, 'src', 'content', 'features.json');
 const PUBLIC_FEATURES_DIR = join(WEBSITE_ROOT, 'public', 'features');
 const ENCODING = 'utf8';
@@ -33,7 +34,7 @@ const CATEGORY = {
 export const CATEGORY_ORDER = Object.values(CATEGORY);
 
 /**
- * Maps docs/features.md's 17 section headings to README's 5 Highlights
+ * Maps docs/features.md's section headings to README's 5 Highlights
  * categories. "Status Filtering" and "Custom Rules" have no direct README
  * bullet, so their mapping is a judgment call -- see
  * project_plans/stapler-squad-website/research/features.md §4.
@@ -43,6 +44,7 @@ export const CATEGORY_ORDER = Object.values(CATEGORY);
 const CATEGORY_BY_HEADING = {
 	Dashboard: CATEGORY.VISIBILITY,
 	'Live Terminal Streaming': CATEGORY.VISIBILITY,
+	'Browser Element Inspector': CATEGORY.VISIBILITY,
 	'Diff Viewer': CATEGORY.VISIBILITY,
 	Notifications: CATEGORY.VISIBILITY,
 	'Instant Search': CATEGORY.ORGANISATION,
@@ -52,6 +54,7 @@ const CATEGORY_BY_HEADING = {
 	'Bulk Actions': CATEGORY.ORGANISATION,
 	'Custom Rules': CATEGORY.ORGANISATION,
 	'Review Queue': CATEGORY.REVIEW_APPROVAL,
+	'Parallel Fan-Out': CATEGORY.REVIEW_APPROVAL,
 	'Auto-Approval Rules': CATEGORY.REVIEW_APPROVAL,
 	'Approval Analytics': CATEGORY.REVIEW_APPROVAL,
 	'History Search': CATEGORY.HISTORY_DEBUGGING,
@@ -79,7 +82,7 @@ const ALT_TEXT_BY_HEADING = {
 	'Review Queue':
 		'Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase',
 	'Auto-Approval Rules':
-		'List of 42 built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks',
+		'List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks',
 	'Custom Rules':
 		'Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again',
 	'Isolated Git Workspaces':
@@ -87,22 +90,23 @@ const ALT_TEXT_BY_HEADING = {
 };
 
 /**
- * Story 3.3.1's second AC: exactly one of the 9 screenshot-less sections gets
- * a `DemoClip` video embed (via `ReleaseAssetRef`), proving the embed wiring
- * exists and is exercised -- the other 8 stay text-only per
- * research/features.md §4. "Live Terminal Streaming" is the plan's own
- * example. The clip itself (`terminal-streaming.webm`) isn't published yet
- * (Phase 5 is deferred), so `check-asset-health.mjs` is expected to fail on
- * it until then.
+ * Headings whose card plays a demo clip. Clips are recorded during the deploy
+ * (tests/e2e/website-demos/clips.ts via scripts/record-website-demos.sh) into
+ * website/public/clips/ and ship inside the Pages artifact, so nothing is
+ * committed. A card gets its clip only when the file is present at build time,
+ * so a failed recording just leaves the card on its screenshot. The screenshot,
+ * if any, becomes the video poster.
  *
- * @type {Record<string, {tag: string, name: string, ext: string}>}
+ * @type {Record<string, string>} heading -> clip name (<name>.webm)
  */
 const DEMO_CLIP_BY_HEADING = {
-	'Live Terminal Streaming': { tag: 'website-demo-gifs-latest', name: 'terminal-streaming', ext: 'webm' },
+	Dashboard: 'session-dashboard',
+	'Auto-Approval Rules': 'auto-approval-rules',
 };
+const CLIP_EXT = 'webm';
 
 /**
- * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {tag: string, name: string, ext: string}}} FeatureCard
+ * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {name: string, ext: string}}} FeatureCard
  */
 
 /**
@@ -140,20 +144,46 @@ export function parseFeaturesMdSections(markdown) {
 }
 
 /**
- * Extracts a section's prose description: its body with the Markdown image
- * reference and the `---` separator stripped, collapsed to a single
- * trimmed line.
+ * Extracts a section's card description: its first paragraph only, with the
+ * Markdown image reference and `---` separator stripped. Later paragraphs and
+ * bullet lists are reference detail that stays in docs/features.md; the card
+ * renders plain text, so they would show up as raw Markdown.
  *
  * @param {string} body
  * @returns {string}
  */
 export function extractSectionDescription(body) {
-	return body
-		.split('\n')
-		.map((line) => line.trim())
-		.filter((line) => line !== '' && line !== '---' && !line.startsWith('!['))
-		.join(' ')
-		.trim();
+	const paragraph = [];
+	for (const raw of body.split('\n')) {
+		const line = raw.trim();
+		if (line === '---' || line.startsWith('![')) continue;
+		if (line === '') {
+			if (paragraph.length > 0) break;
+			continue;
+		}
+		paragraph.push(line);
+	}
+	return truncateAtSentence(stripInlineMarkdown(paragraph.join(' ')));
+}
+
+const MAX_DESCRIPTION_CHARS = 200;
+
+// The card renders plain text, so `**bold**` and `code` markers would show literally.
+function stripInlineMarkdown(text) {
+	return text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1');
+}
+
+// Keeps whole sentences up to the cap (always at least the first), so one
+// verbose section can't stretch its card far beyond the rest of the grid.
+function truncateAtSentence(text) {
+	if (text.length <= MAX_DESCRIPTION_CHARS) return text;
+	const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [text];
+	let result = '';
+	for (const sentence of sentences) {
+		if (result && (result + sentence).length > MAX_DESCRIPTION_CHARS) break;
+		result += sentence;
+	}
+	return result.trim();
 }
 
 /**
@@ -208,14 +238,15 @@ export function extractReadmeCategoryNames(readmeMarkdown) {
 
 /**
  * Builds the full FeatureCard[] data set, reconciling README.md's category
- * names with docs/features.md's 17 sections.
+ * names with docs/features.md's sections.
  *
- * @param {{readmePath?: string, featuresMdPath?: string}} [options]
+ * @param {{readmePath?: string, featuresMdPath?: string, clipsDir?: string}} [options]
  * @returns {FeatureCard[]}
  */
 export function buildFeaturesJson(options = {}) {
 	const readmePath = options.readmePath ?? DEFAULT_README_PATH;
 	const featuresMdPath = options.featuresMdPath ?? DEFAULT_FEATURES_MD_PATH;
+	const clipsDir = options.clipsDir ?? DEFAULT_CLIPS_DIR;
 
 	const readmeMarkdown = readFileSync(readmePath, ENCODING);
 	const featuresMarkdown = readFileSync(featuresMdPath, ENCODING);
@@ -249,11 +280,10 @@ export function buildFeaturesJson(options = {}) {
 			if (!card.alt) {
 				throw new Error(`"${heading}" has a screenshot but no ALT_TEXT_BY_HEADING entry`);
 			}
-		} else {
-			const demoClip = DEMO_CLIP_BY_HEADING[heading];
-			if (demoClip) {
-				card.demoClip = demoClip;
-			}
+		}
+		const clipName = DEMO_CLIP_BY_HEADING[heading];
+		if (clipName && existsSync(join(clipsDir, `${clipName}.${CLIP_EXT}`))) {
+			card.demoClip = { name: clipName, ext: CLIP_EXT };
 		}
 		return card;
 	});

@@ -1,0 +1,67 @@
+[
+ {
+  "name": "open",
+  "hex": "020000000a",
+  "frame": {
+   "type": "OPEN",
+   "id": 10
+  }
+ },
+ {
+  "name": "data-text-fin",
+  "hex": "030000000701016869",
+  "frame": {
+   "type": "DATA",
+   "id": 7,
+   "kind": 1,
+   "fin": true,
+   "payloadHex": "6869"
+  }
+ },
+ {
+  "name": "data-binary-nofin",
+  "hex": "0300000007020000ff",
+  "frame": {
+   "type": "DATA",
+   "id": 7,
+   "kind": 2,
+   "fin": false,
+   "payloadHex": "00ff"
+  }
+ },
+ {
+  "name": "credit",
+  "hex": "040000000700001000",
+  "frame": {
+   "type": "CREDIT",
+   "id": 7,
+   "credit": 4096
+  }
+ },
+ {
+  "name": "close",
+  "hex": "050000000703f566756c6c",
+  "frame": {
+   "type": "CLOSE",
+   "id": 7,
+   "code": 1013,
+   "reason": "full"
+  }
+ },
+ {
+  "name": "ping",
+  "hex": "0600000000",
+  "frame": {
+   "type": "PING",
+   "id": 0
+  }
+ },
+ {
+  "name": "pong",
+  "hex": "0700000000",
+  "frame": {
+   "type": "PONG",
+   "id": 0
+  }
+ }
+]

@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
@@ -310,6 +312,12 @@ func (s *Storage) GetEntClient() *ent.Client {
 	return s.repo.GetEntClient()
 }
 
+// MaintenanceDriver returns the instrumented driver behind the sessions database
+// for session/dbmaint, or nil when the repository has none.
+func (s *Storage) MaintenanceDriver() dialect.ExecQuerier {
+	return s.repo.MaintenanceDriver()
+}
+
 // SetItemChangePublisher wires p into the underlying repository.
 func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
 	s.repo.SetItemChangePublisher(p)
@@ -379,8 +387,8 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		log.Debug("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-		s.saved.persist(data, func() bool {
-			if err := s.repo.Update(ctx, data); err != nil {
+		s.saved.persist(data, func(skip updateSkip) bool {
+			if err := s.repo.updateSkipping(ctx, data, skip); err != nil {
 				// Not found → create it
 				if createErr := s.repo.Create(ctx, data); createErr != nil {
 					log.Error("SaveInstances: failed to upsert instance",
@@ -558,6 +566,12 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 		return false, fmt.Errorf("update session %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// ArchivedSessionUUIDs returns the subset of uuids whose session row is
+// archived, in one query per 500 uuids. Unknown uuids are absent.
+func (s *Storage) ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map[string]bool, error) {
+	return s.repo.ArchivedSessionUUIDs(ctx, uuids)
 }
 
 // FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
@@ -1484,6 +1498,11 @@ func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID str
 	return s.repo.ClaimDiagnoseNudgeAttempt(ctx, sessionUUID)
 }
 
+// GetWorktreeDataBySessionUUIDs forwards to EntRepository.GetWorktreeDataBySessionUUIDs.
+func (s *Storage) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
+	return s.repo.GetWorktreeDataBySessionUUIDs(ctx, sessionUUIDs)
+}
+
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
 // the session is not found.
@@ -1681,6 +1700,11 @@ func (s *Storage) CreateItemSessionWithVerdict(ctx context.Context, isData ItemS
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
 func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error) {
 	return s.repo.ListItemSessions(ctx, itemID)
+}
+
+// ListItemSessionsForItems batches ListItemSessions across UUID-shaped item IDs.
+func (s *Storage) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]ItemSessionSummary, error) {
+	return s.repo.ListItemSessionsForItems(ctx, itemIDs)
 }
 
 // UpdateItemSessionSessionUUID updates the session_uuid on an existing ItemSession record.

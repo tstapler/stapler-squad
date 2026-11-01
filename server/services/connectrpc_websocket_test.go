@@ -817,6 +817,8 @@ type listSessionsFakeExecutor struct {
 	mu         sync.Mutex
 	calls      int
 	existsName string
+	// captureOutput, when set, is returned by Output (capture-pane) so a first paint can succeed.
+	captureOutput []byte
 }
 
 // CombinedOutput reports existsName as present on the first call (so
@@ -841,6 +843,9 @@ func (e *listSessionsFakeExecutor) Run(_ *exec.Cmd) error {
 }
 
 func (e *listSessionsFakeExecutor) Output(_ *exec.Cmd) ([]byte, error) {
+	if e.captureOutput != nil {
+		return e.captureOutput, nil
+	}
 	return nil, fmt.Errorf("listSessionsFakeExecutor: Output is unsupported, only list-sessions (CombinedOutput) is expected on this path")
 }
 
@@ -1012,7 +1017,7 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	// (streamViaHub's own tmux-alive check), which is all this test needs —
 	// it never reaches a second call.
 	_ = inst.GetTmuxSessionName()
-	fakeExec := &listSessionsFakeExecutor{existsName: tmuxSessionName}
+	fakeExec := &listSessionsFakeExecutor{existsName: tmuxSessionName, captureOutput: []byte("hello\n")}
 	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(snap.Title, "true", tmux.MakePtyFactory(), fakeExec))
 
 	// SetTmuxSession's own side effect (session/instance_tmux.go, "for
@@ -1081,17 +1086,9 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	require.True(t, inst.Started(), "self-heal must flip Started() to true before streaming proceeds")
 	require.Equal(t, session.Active, inst.Snapshot().Status)
 
-	// The regression this test guards: before the self-heal branch existed,
-	// Started() stayed false forever, so every capture/resize call returned
-	// streamhub.ErrSessionNotStarted on every single attempt (see
-	// MarkStartedIfTmuxAlive's doc comment). It's not ErrSessionNotStarted
-	// any more — the fake executor's Output/Run methods are otherwise
-	// unimplemented (listSessionsFakeExecutor's doc comment), so this
-	// specific error is expected in this fixture, but it proves the call was
-	// actually attempted rather than short-circuited by the stale started
-	// flag.
+	// The regression this test guards: before the self-heal branch existed, Started() stayed
+	// false forever, so every capture call returned streamhub.ErrSessionNotStarted.
 	_, captureErr := inst.CapturePaneContentRaw()
-	require.Error(t, captureErr, "expected the fake executor's Output to fail (not a real tmux server), just not with ErrSessionNotStarted")
 	require.NotErrorIs(t, captureErr, streamhub.ErrSessionNotStarted,
 		"capture must no longer report ErrSessionNotStarted once self-heal has run")
 
@@ -1287,6 +1284,34 @@ func TestEnsureHubBackendAlive(t *testing.T) {
 		require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
 			"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
 	})
+}
+
+// A session that is not Creating can never publish a Started event, so
+// ensureHubInstanceStarted must not wait startupWaitTimeout for one. A nil
+// SessionService proves it: the wait path dereferences it for the event bus.
+func TestEnsureHubInstanceStarted_should_NotWait_When_InstanceIsNotCreating(t *testing.T) {
+	missingDir := filepath.Join(t.TempDir(), "never-created")
+	inst, _ := newTestTmuxInstance(t, "ensure-hub-nowait-"+t.Name(), missingDir, alwaysAbsentExecutor{}, tmux.MakePtyFactory())
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	// SetTmuxSession flips started true; reset it the way the self-heal test does,
+	// then park the instance in PermanentlyFailed with tmux still attached.
+	inst.Status = session.Stopped
+	inst.RecoverFromStopped()
+	_ = handleTmuxRestoreFailure(inst, fmt.Errorf("restore: %w", tmux.ErrWorkDirMissing))
+	require.Equal(t, session.PermanentlyFailed, inst.GetLifecycleStatus())
+	require.False(t, inst.Started())
+
+	done := make(chan struct{})
+	go func() {
+		h.ensureHubInstanceStarted(inst, "sess", true)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(startupWaitTimeout / 2):
+		t.Fatal("ensureHubInstanceStarted waited on a non-Creating instance")
+	}
+	require.False(t, inst.Started(), "a PermanentlyFailed instance must not be self-healed to started")
 }
 
 // TestEnsureControlModeStarted covers ensureControlModeStarted's

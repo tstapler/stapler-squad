@@ -4,8 +4,9 @@ const _features = [FEATURE_CATALOG['session-create']] as const;
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 import { SessionClient } from './helpers/session-client';
+import { baseUrl } from './helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const BASE_URL = baseUrl();
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });

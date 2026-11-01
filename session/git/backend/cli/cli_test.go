@@ -574,3 +574,19 @@ func TestDiffKeepsIndentedWarningContextLine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, diff, got)
 }
+
+// Local non-network ops use the resolved direct binary; network ops stay on PATH's git.
+// Not parallel: pins the process-wide resolver.
+func TestLocalRunsUseDirectGitBinary_NetworkOpsKeepPathGit(t *testing.T) {
+	restore := cli.SetDirectGitForTest("/real/bin/git")
+	defer restore()
+	ctx := context.Background()
+	rec := &rawRecorder{}
+	b := cli.New(rec)
+
+	_, _ = b.CurrentBranch(ctx, backend.Local{Root: "/r"})
+	assert.Equal(t, "/real/bin/git", rec.name)
+
+	_ = b.Fetch(ctx, backend.Local{Root: "/r"}, backend.FetchRequest{Remote: "origin"})
+	assert.Equal(t, "git", rec.name, "fetch is a wrapper network op")
+}

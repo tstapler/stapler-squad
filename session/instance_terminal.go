@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // GetCreatedAt returns the time this instance was created. The field is immutable after creation.
@@ -192,12 +193,19 @@ func (i *Instance) Preview() (string, error) {
 	// No controller at all (e.g. external/attached sessions): try capture-pane
 	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
 	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
-	content, err := i.pm().CapturePaneContent()
+	content, err := tymux.FinalScreen(i.pm().CapturePaneContent())
 	if err != nil {
 		return "", nil
 	}
 
 	return content, nil
+}
+
+// CapturePaneContentFinal is CapturePaneContent for readers that want what an
+// exited pane last showed (previews, debug dumps) rather than a fail-fast
+// ErrPaneExited. Liveness-sensitive loops keep calling CapturePaneContent.
+func (i *Instance) CapturePaneContentFinal() (string, error) {
+	return tymux.FinalScreen(i.CapturePaneContent())
 }
 
 // PreviewContext is Preview with an external context threaded onto the
@@ -421,8 +429,8 @@ type PRStatusUpdate struct {
 // Called by PRStatusPoller on each successful fetch.
 // Returns prUpdateResult indicating whether the priority changed.
 func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
-	var result prUpdateResult
-	_ = i.sendSyncErr(func(s *instanceState) error {
+	result, _ := sendSyncValue(i, func(s *instanceState) (prUpdateResult, error) {
+		var result prUpdateResult
 		inst := s.inst
 		// i.mu guards the writes + buildSnapshot together: legacy setters
 		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
@@ -444,7 +452,7 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		snap := buildSnapshot(inst)
 		inst.mu.Unlock()
 		inst.snapshot.Store(snap)
-		return nil
+		return result, nil
 	})
 	return result
 }

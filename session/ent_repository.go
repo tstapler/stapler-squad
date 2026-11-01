@@ -13,8 +13,11 @@ import (
 
 	"encoding/json"
 
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
@@ -48,9 +51,11 @@ var EntSchemaCreateMu sync.Mutex
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	client        *ent.Client
-	dbPath        string
-	migrationMode bool // When true, enables dual-write mode for migration
+	client          *ent.Client
+	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
+	dbPath          string
+	pendingGuidance pendingGuidanceCache
+	migrationMode   bool // When true, enables dual-write mode for migration
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
@@ -163,36 +168,42 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// driver's applyTimezone(t) -> t.In(time.UTC), which sets the Location to
 	// the exact singleton (time.LoadLocation("UTC") — what _timezone resolves
 	// through — special-cases "UTC" to return that singleton directly).
-	dbPath := sqlitedsn.New(expandedPath).
-		WithWAL().
-		WithBusyTimeout(5000 * time.Millisecond).
-		WithForeignKeysShort().
-		WithEntTimeCompat().
-		Build()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	// SQLite supports only one writer at a time; serialise all writes (and
-	// every transaction) through a single connection to eliminate "database is
-	// locked" contention and keep the Go-side dedup/CAS transactions atomic.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
-
+	// auto_vacuum=INCREMENTAL only takes effect on a database with no tables yet;
+	// session/dbmaint reclaims the freelist of such databases in the background.
 	// Plain SELECTs run on a separate query_only pool: WAL lets them proceed
-	// while the writer connection is busy. Seeded and URI (in-memory) databases
-	// stay single-pool.
-	var readDB *sql.DB
+	// while the writer connection is busy. On-disk databases open through
+	// session/dbpool (ADR-036), which builds the same DSN, enforces WAL and owns
+	// the pools. Seeded and URI (in-memory) databases stay single-pool and are
+	// opened directly because dbpool accepts only plain file paths.
+	var (
+		db   *sql.DB
+		core *dbpool.CoreDB
+	)
 	if repo.seedURI == "" && isOnDiskDatabase(expandedPath) {
-		if n := readPoolSize(); n > 0 {
-			readDB, err = openReadPool(expandedPath, n)
-			if err != nil {
-				_ = db.Close()
-				return nil, err
-			}
+		opened, err := dbpool.OpenCore(expandedPath, readPoolSize())
+		if err != nil {
+			return nil, fmt.Errorf("failed to open database: %w", err)
 		}
+		core, db = &opened, opened.Writer()
+	} else {
+		dbPath := tuneEntDSN(sqlitedsn.New(expandedPath)).
+			WithPragma("auto_vacuum", "incremental").
+			WithWAL().
+			WithBusyTimeout(5000 * time.Millisecond).
+			WithForeignKeysShort().
+			WithEntTimeCompat().
+			Build()
+		var err error
+		db, err = sql.Open("sqlite", dbPath) //nolint:norawdb in-memory/URI/seeded test databases are not files dbpool can own
+		if err != nil {
+			return nil, fmt.Errorf("failed to open database: %w", err)
+		}
+		// SQLite supports only one writer at a time; serialise all writes (and
+		// every transaction) through a single connection to eliminate "database is
+		// locked" contention and keep the Go-side dedup/CAS transactions atomic.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(time.Hour)
 	}
 
 	if repo.seedURI != "" {
@@ -206,7 +217,16 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	workflowEnabledColumnAlreadyExisted := workflowEnabledColumnPreexisted(db)
 
 	// Create Ent client with the existing database connection
-	client := newInstrumentedEntClient(db, readDB)
+	var (
+		client *ent.Client
+		drv    dialect.Driver
+	)
+	if core != nil {
+		drv = core.Driver()
+		client = ent.NewClient(ent.Driver(drv))
+	} else {
+		client, drv = newInstrumentedEntClient(db, nil)
+	}
 
 	// Run automatic schema migration. entSchemaCreateMu serializes this call
 	// process-wide: even though each caller opens its own isolated SQLite
@@ -215,7 +235,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// NewEntRepository calls run schema creation concurrently.
 	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
 	EntSchemaCreateMu.Lock()
-	err = client.Schema.Create(context.Background())
+	err := client.Schema.Create(context.Background())
 	EntSchemaCreateMu.Unlock()
 	stopSlowWatch()
 	if err != nil {
@@ -224,6 +244,8 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	repo.client = client
+	repo.driver = drv
+	repo.watchGuidanceWrites(client)
 
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
@@ -254,13 +276,26 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 // Use this when you need to share an already-opened client across subsystems
 // (e.g. injecting a test client or reusing an existing connection).
 func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
-	return &EntRepository{client: client}
+	// Not hooked: the client is shared and may already be serving writes, and
+	// appending to its hook slice then would race them. Reads stay uncached.
+	repo := &EntRepository{client: client}
+	repo.pendingGuidance.disabled = true
+	return repo
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
 // can operate on entities not managed by the Repository interface.
 func (r *EntRepository) GetEntClient() *ent.Client {
 	return r.client
+}
+
+// MaintenanceDriver returns the instrumented driver behind the ent client, for
+// session/dbmaint. It is nil when the repository was built from a bare client.
+func (r *EntRepository) MaintenanceDriver() dialect.ExecQuerier {
+	if r.driver == nil {
+		return nil
+	}
+	return r.driver
 }
 
 // Create inserts a new session into the database
@@ -505,6 +540,12 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 
 // Update modifies an existing session in the database
 func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
+	return r.updateSkipping(ctx, data, updateSkip{})
+}
+
+// updateSkipping is Update minus the child-table sections the caller knows are
+// already persisted unchanged (see savedFingerprints).
+func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, skip updateSkip) error {
 	// Start transaction
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
@@ -531,6 +572,63 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetIsExpanded(data.IsExpanded).
 		SetPinned(data.Pinned)
 
+	setOptionalSessionFields(sessionUpdate, data)
+
+	// Update project link (look up by name or clear if empty)
+	if data.ProjectID != "" {
+		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
+		if err == nil {
+			sessionUpdate.SetProjectID(proj.ID)
+		}
+	} else {
+		sessionUpdate.ClearProject()
+	}
+
+	if err := sessionUpdate.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to update session: %w", err)
+	}
+
+	if !skip.Worktree {
+		if err := r.updateWorktreeRow(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	if !skip.DiffStats {
+		if err := r.upsertDiffStatsRow(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	if !skip.Tags {
+		if err := r.replaceSessionTags(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	if data.ClaudeSession.ConversationUUID != "" && !skip.Claude {
+		if err := r.upsertClaudeSessionRow(ctx, tx, sess, data); err != nil {
+			return err
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// setOptionalSessionFields applies the session columns Update only sets when
+// data carries a value (plus the few that are cleared when empty).
+func setOptionalSessionFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
+	setSessionTextFields(sessionUpdate, data)
+	setSessionTimeFields(sessionUpdate, data)
+	setSessionLifecycleFields(sessionUpdate, data)
+}
+
+func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	// Update optional fields
 	if data.WorkingDir != "" {
 		sessionUpdate.SetWorkingDir(data.WorkingDir)
@@ -573,6 +671,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.Backend != "" {
 		sessionUpdate.SetBackend(string(data.Backend))
 	}
+}
+
+func setSessionTimeFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if !data.LastTerminalUpdate.IsZero() {
 		sessionUpdate.SetLastTerminalUpdate(data.LastTerminalUpdate)
 	}
@@ -614,6 +715,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if !data.InitialPromptSentAt.IsZero() {
 		sessionUpdate.SetInitialPromptSentAt(data.InitialPromptSentAt)
 	}
+}
+
+func setSessionLifecycleFields(sessionUpdate *ent.SessionUpdateOne, data InstanceData) {
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
 	} else {
@@ -657,21 +761,10 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.GitHubHost != "" {
 		sessionUpdate.SetGithubHost(data.GitHubHost)
 	}
+}
 
-	// Update project link (look up by name or clear if empty)
-	if data.ProjectID != "" {
-		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
-		if err == nil {
-			sessionUpdate.SetProjectID(proj.ID)
-		}
-	} else {
-		sessionUpdate.ClearProject()
-	}
-
-	if err := sessionUpdate.Exec(ctx); err != nil {
-		return fmt.Errorf("failed to update session: %w", err)
-	}
-
+// updateWorktreeRow upserts the session's worktree row.
+func (r *EntRepository) updateWorktreeRow(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Update or create worktree
 	if data.Worktree.RepoPath != "" {
 		existingWorktree, err := tx.Worktree.Query().Where(worktree.HasSessionWith(session.ID(sess.ID))).Only(ctx)
@@ -704,7 +797,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 			}
 		}
 	}
+	return nil
+}
 
+// upsertDiffStatsRow upserts the session's diff_stats row.
+func (r *EntRepository) upsertDiffStatsRow(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Upsert diff stats — single INSERT … ON CONFLICT DO UPDATE, no prior SELECT needed.
 	diffCreate := tx.DiffStats.Create().
 		SetSessionID(sess.ID).
@@ -723,7 +820,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if err := upsertDiff.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to upsert diff stats: %w", err)
 	}
+	return nil
+}
 
+// replaceSessionTags replaces the session's tag associations with data.Tags.
+func (r *EntRepository) replaceSessionTags(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
 	// Update tags - clear existing and add new ones
 	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
 		return fmt.Errorf("failed to clear tags: %w", err)
@@ -749,95 +850,100 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 			return fmt.Errorf("failed to associate tags: %w", err)
 		}
 	}
+	return nil
+}
 
-	// Update Claude session if present
-	if data.ClaudeSession.ConversationUUID != "" {
-		var claudeSessionID int // set by either the create or update branch below
-
-		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
+// upsertClaudeSessionRow creates or updates the Claude session row and its metadata.
+func (r *EntRepository) upsertClaudeSessionRow(ctx context.Context, tx *ent.Tx, sess *ent.Session, data InstanceData) error {
+	if data.ClaudeSession.ConversationUUID == "" {
+		return nil
+	}
+	var claudeSessionID int
+	existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
+	switch {
+	case err == nil:
+		if err := updateClaudeSessionRow(ctx, tx, existingClaude, data); err != nil {
+			return err
+		}
+		claudeSessionID = existingClaude.ID
+	case ent.IsNotFound(err):
+		created, err := createClaudeSessionRow(ctx, tx, sess.ID, data)
 		if err != nil {
-			if ent.IsNotFound(err) {
-				// Create new Claude session
-				claudeCreate := tx.ClaudeSession.Create().
-					SetSessionID(sess.ID).
-					SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
-					SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
-					SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
-					SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
-					SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
-
-				if data.ClaudeSession.SquadSessionID != "" {
-					claudeCreate.SetConversationID(data.ClaudeSession.SquadSessionID)
-				}
-				if data.ClaudeSession.ProjectName != "" {
-					claudeCreate.SetProjectName(data.ClaudeSession.ProjectName)
-				}
-				if !data.ClaudeSession.LastAttached.IsZero() {
-					claudeCreate.SetLastAttached(data.ClaudeSession.LastAttached)
-				}
-				if data.ClaudeSession.Settings.PreferredSessionName != "" {
-					claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
-				}
-
-				newClaude, err := claudeCreate.Save(ctx)
-				if err != nil {
-					return fmt.Errorf("failed to create claude session: %w", err)
-				}
-				claudeSessionID = newClaude.ID
-			} else {
-				return fmt.Errorf("failed to query claude session: %w", err)
-			}
-		} else {
-			// Update existing Claude session
-			claudeUpdate := tx.ClaudeSession.UpdateOne(existingClaude).
-				SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
-				SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
-				SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
-				SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
-				SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
-
-			if data.ClaudeSession.SquadSessionID != "" {
-				claudeUpdate.SetConversationID(data.ClaudeSession.SquadSessionID)
-			}
-			if data.ClaudeSession.ProjectName != "" {
-				claudeUpdate.SetProjectName(data.ClaudeSession.ProjectName)
-			}
-			if !data.ClaudeSession.LastAttached.IsZero() {
-				claudeUpdate.SetLastAttached(data.ClaudeSession.LastAttached)
-			}
-			if data.ClaudeSession.Settings.PreferredSessionName != "" {
-				claudeUpdate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
-			}
-
-			if err := claudeUpdate.Exec(ctx); err != nil {
-				return fmt.Errorf("failed to update claude session: %w", err)
-			}
-
-			// Update Claude metadata - clear existing and add new ones
-			if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.ID(existingClaude.ID))).Exec(ctx); err != nil {
-				return fmt.Errorf("failed to clear claude metadata: %w", err)
-			}
-			claudeSessionID = existingClaude.ID
+			return err
 		}
-
-		// Add metadata entries using the already-known Claude session ID.
-		// (pre-fix: this loop re-queried the same ClaudeSession row N times)
-		for key, value := range data.ClaudeSession.Metadata {
-			if _, err := tx.ClaudeMetadata.Create().
-				SetClaudeSessionID(claudeSessionID).
-				SetKey(key).
-				SetValue(value).
-				Save(ctx); err != nil {
-				return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
-			}
-		}
+		claudeSessionID = created.ID
+	default:
+		return fmt.Errorf("failed to query claude session: %w", err)
 	}
 
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+	// Add metadata entries using the already-known Claude session ID.
+	// (pre-fix: this loop re-queried the same ClaudeSession row N times)
+	for key, value := range data.ClaudeSession.Metadata {
+		if _, err := tx.ClaudeMetadata.Create().
+			SetClaudeSessionID(claudeSessionID).
+			SetKey(key).
+			SetValue(value).
+			Save(ctx); err != nil {
+			return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
+		}
 	}
+	return nil
+}
 
+func createClaudeSessionRow(ctx context.Context, tx *ent.Tx, sessionID int, data InstanceData) (*ent.ClaudeSession, error) {
+	claudeCreate := tx.ClaudeSession.Create().
+		SetSessionID(sessionID).
+		SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
+		SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
+		SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
+		SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
+		SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
+	if data.ClaudeSession.SquadSessionID != "" {
+		claudeCreate.SetConversationID(data.ClaudeSession.SquadSessionID)
+	}
+	if data.ClaudeSession.ProjectName != "" {
+		claudeCreate.SetProjectName(data.ClaudeSession.ProjectName)
+	}
+	if !data.ClaudeSession.LastAttached.IsZero() {
+		claudeCreate.SetLastAttached(data.ClaudeSession.LastAttached)
+	}
+	if data.ClaudeSession.Settings.PreferredSessionName != "" {
+		claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
+	}
+	created, err := claudeCreate.Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create claude session: %w", err)
+	}
+	return created, nil
+}
+
+// updateClaudeSessionRow updates the existing row and clears its metadata so
+// the caller can re-add the current entries.
+func updateClaudeSessionRow(ctx context.Context, tx *ent.Tx, existing *ent.ClaudeSession, data InstanceData) error {
+	claudeUpdate := tx.ClaudeSession.UpdateOne(existing).
+		SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
+		SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
+		SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
+		SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
+		SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
+	if data.ClaudeSession.SquadSessionID != "" {
+		claudeUpdate.SetConversationID(data.ClaudeSession.SquadSessionID)
+	}
+	if data.ClaudeSession.ProjectName != "" {
+		claudeUpdate.SetProjectName(data.ClaudeSession.ProjectName)
+	}
+	if !data.ClaudeSession.LastAttached.IsZero() {
+		claudeUpdate.SetLastAttached(data.ClaudeSession.LastAttached)
+	}
+	if data.ClaudeSession.Settings.PreferredSessionName != "" {
+		claudeUpdate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
+	}
+	if err := claudeUpdate.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to update claude session: %w", err)
+	}
+	if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.ID(existing.ID))).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to clear claude metadata: %w", err)
+	}
 	return nil
 }
 
@@ -2012,6 +2118,7 @@ func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program
 // the given session UUID, ordered by created_at DESC (most-recent first).
 // The 2000-row cap prevents unbounded reads for long-lived sessions.
 func (r *EntRepository) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]AnalyticsData, error) {
+	//nolint:nowrongdbentity known latent bug (ADR-036): analytics_events rows live in analytics.db, so this reads an empty table; fixed when analytics_events gets its own handle
 	entries, err := r.client.AnalyticsEvent.Query().
 		Where(analyticsevent.SessionIDEQ(sessionID)).
 		Order(ent.Desc(analyticsevent.FieldCreatedAt)).

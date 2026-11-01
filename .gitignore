@@ -31,7 +31,7 @@ stapler-squad-test
 # proto-gen; CI generates fresh before every consuming step. Committing these files
 # has caused real breakage twice: once by force-adding a stale/incomplete generation,
 # once by a CI workflow step ordering bug that only "worked" because these were
-# force-added in the first place (see PR #445 and CI job "no-checked-in-generated-protos").
+# force-added in the first place (see PR #445 and CI job "pr-diff-guards" (backlog-scaffolding-guard.yml)).
 gen/
 web/src/gen/
 web-app/src/gen/
@@ -80,7 +80,7 @@ tests/e2e/playwright-report-dev-mode/
 tests/e2e/test-results/
 tests/e2e/node_modules/
 tests/e2e/test-results-dev-mode/
-tests/e2e/fixtures/*-theme.json
+tests/e2e/fixtures/*-theme*.json
 tests/e2e/.bin/
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
@@ -139,3 +139,9 @@ benchmarks/
 # Runtime session-data artifacts leaked into the repo root by local dev runs
 /session/*/scrollback.jsonl.zst
 /server/services/backlog_item_public_id_backfill.lock
+
+# website demo-clip recorder output (scripts/record-website-demos.sh)
+tests/e2e/website-demo-output/
+
+# demo clips recorded during the deploy; never committed
+website/public/clips/

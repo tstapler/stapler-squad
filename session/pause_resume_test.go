@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,38 @@ type fakePauseResumeProcessManager struct {
 	alive     bool
 	startErr  error
 	startCall int
+	// ptyAttached mirrors TmuxSession: Start() leaves it false, only
+	// RestoreWithWorkDir() attaches the write PTY.
+	ptyAttached bool
+	pty         *os.File
+}
+
+func newFakePauseResumeProcessManager(t *testing.T) *fakePauseResumeProcessManager {
+	t.Helper()
+	pty, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pty.Close() })
+	return &fakePauseResumeProcessManager{pty: pty}
+}
+
+func (f *fakePauseResumeProcessManager) RestoreWithWorkDir(string) error {
+	f.ptyAttached = true
+	return nil
+}
+
+func (f *fakePauseResumeProcessManager) GetPTY() (*os.File, error) {
+	if !f.ptyAttached {
+		return nil, errors.New("PTY not initialized - session may not be started")
+	}
+	// Non-nil stand-in for the attached write PTY; callers only check attachment.
+	return f.pty, nil
+}
+
+func (f *fakePauseResumeProcessManager) SendKeys(string) (int, error) {
+	if _, err := f.GetPTY(); err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 func (f *fakePauseResumeProcessManager) IsAlive() bool { return f.alive }
@@ -117,7 +150,7 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 		Permissions: GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
-	fakePM := &fakePauseResumeProcessManager{alive: false}
+	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM
 
 	err := inst.Resume()
@@ -126,6 +159,26 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 	assert.Equal(t, Active, inst.Status)
 	assert.True(t, inst.Started())
 	assert.Equal(t, 1, fakePM.startCall, "Resume should start a fresh session when the old one is dead")
+}
+
+// TestResume_should_AttachPTY_When_TmuxWasKilledOnPause is the regression test
+// for "PTY not initialized" on steer_session/write_to_session after
+// resume_session: Pause kills tmux, so Resume takes the fresh-Start branch,
+// and Start() alone never attaches the write PTY.
+func TestResume_should_AttachPTY_When_TmuxWasKilledOnPause(t *testing.T) {
+	t.Parallel()
+	inst := &Instance{
+		Title:       "resume-pty",
+		Status:      Paused,
+		Permissions: GetManagedPermissions(),
+		Path:        t.TempDir(),
+	}
+	fakePM := newFakePauseResumeProcessManager(t)
+	inst.processManager = fakePM
+
+	require.NoError(t, inst.Resume())
+
+	require.NoError(t, inst.SendKeys("hello"), "write path must have a PTY after resume")
 }
 
 // TestResume_should_ReturnErrResumeNotPermitted_When_PermissionDenied mirrors
@@ -159,7 +212,7 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 		ConversationUUID: "does-not-exist",
 		Settings:         ClaudeSettings{AutoReattach: true},
 	}
-	fakePM := &fakePauseResumeProcessManager{alive: false}
+	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM
 
 	err := inst.Resume()

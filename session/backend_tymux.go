@@ -146,16 +146,16 @@ func (b *TymuxBackend) CapturePaneContentWithOptions(start, end string) (string,
 
 // CapturePaneRedraw makes TymuxBackend a RedrawCapturer: the daemon's emulator holds the pane's
 // real terminal state, which a text capture would drop. Timed with the other capture_pane calls.
-func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (string, bool, error) {
+func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
 	type redraw struct {
-		data      string
-		altScreen bool
+		data          string
+		altScreen, ok bool
 	}
 	r, err := timeBackendOp(tymuxIOOps.capturePane, func() (redraw, error) {
-		data, altScreen, err := b.mgr.CapturePaneRedraw(ctx)
-		return redraw{data, altScreen}, err
+		data, altScreen, ok, err := b.mgr.CapturePaneRedraw(ctx)
+		return redraw{data, altScreen, ok}, err
 	})
-	return r.data, r.altScreen, err
+	return r.data, r.altScreen, r.ok, err
 }
 func (b *TymuxBackend) CaptureViewport(lines int) (string, error) {
 	return timeBackendOp(tymuxIOOps.capturePane, func() (string, error) { return b.mgr.CaptureViewport(lines) })

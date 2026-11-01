@@ -89,6 +89,19 @@ func registerDiagnoseNudgeSessionTool(s *mcpserver.MCPServer, dh *diagnoseHandle
 	)
 }
 
+// remediationResettableReasons are the stuck reasons whose automated retry is parked behind a
+// RemediationDue backoff gate; re-arming any other row (rework_cap, bounce_cap_exhausted, ...)
+// would override a deliberate hand-off to a human.
+var remediationResettableReasons = map[domain.StuckReason]bool{
+	domain.StuckReasonAutonomousStuck: true,
+	domain.StuckReasonPRNeedsFix:      true,
+	domain.StuckReasonPushFailed:      true,
+	domain.StuckReasonBouncing:        true,
+	domain.StuckReasonAbandonedReview: true,
+	domain.StuckReasonStaleWork:       true,
+	domain.StuckReasonOrphanedTriage:  true,
+}
+
 func registerDiagnoseResetRemediationTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
 	s.AddTool(
 		mcpgo.NewTool("diagnose_reset_remediation",
@@ -121,12 +134,16 @@ func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.Call
 	if !reason.IsValid() {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid stuck_reason %q", reasonStr), ""), nil
 	}
+	if !remediationResettableReasons[reason] {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("stuck_reason %q has no automated retry to re-arm; it needs a human decision", reasonStr), declineToDiagnoseRemediation), nil
+	}
 	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID); errRes != nil {
 		return errRes, nil
 	}
 
 	// Claim the cap/cooldown slot atomically before the effect (no refund), so
-	// concurrent calls cannot overshoot the cap.
+	// concurrent calls cannot overshoot the cap. The slot lives on the open row, so when
+	// the reset then finds no row (a concurrent resolve), nothing is left to refund.
 	claim, claimErr := dh.storage.ClaimDiagnoseNudgeSlot(ctx, itemID, reason, 0)
 	if claimErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("claim re-arm slot: %v", claimErr), ""), nil

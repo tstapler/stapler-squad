@@ -330,6 +330,20 @@ func TestVCSFlights_CancelledWhileQueuedReleasesSlots(t *testing.T) {
 	assert.NotNil(t, st)
 }
 
+// With a free slot and an already-cancelled context both select cases are ready; acquireSlot
+// must still refuse, and must not leak the slot.
+func TestVCSFlights_AcquireSlotRefusesCancelledContextEvenWhenSlotFree(t *testing.T) {
+	var f vcsFlights
+	f.init()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 200; i++ {
+		_, err := f.acquireSlot(ctx, vcsMetrics())
+		require.ErrorIs(t, err, context.Canceled)
+		require.Empty(t, f.slots, "a refused acquire must not hold a slot")
+	}
+}
+
 // The compute bound starts after the slot is won, so time spent queued does not eat it.
 func TestVCSFlights_ComputeDeadlineStartsAfterSlotAcquired(t *testing.T) {
 	var f vcsFlights

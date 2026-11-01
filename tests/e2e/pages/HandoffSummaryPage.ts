@@ -1,7 +1,8 @@
 import { Page, Locator, Route } from "@playwright/test";
 import { SessionDetailPage } from "./SessionDetailPage";
+import { baseUrl } from '../helpers/base-url';
 
-const BASE_URL = process.env.TEST_SERVER_URL || "http://localhost:8544";
+const BASE_URL = baseUrl();
 
 /**
  * JSON shape of `session.v1.HandoffSummaryProto` as it appears over the wire
