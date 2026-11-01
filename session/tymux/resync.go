@@ -15,6 +15,7 @@ import (
 func (s *tymuxGRPCSession) applySnapshotResync(snap *v1.PaneSnapshot) error {
 	s.mu.Lock()
 	s.liveness = snap.GetLiveness()
+	s.restartIsPending = false
 	s.mu.Unlock()
 
 	// RenderSnapshotRedraw upgrades CellsToSGR's bare "\n" row separators to "\r\n" itself:

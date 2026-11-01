@@ -308,6 +308,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.paneID = pane.GetId()
 	s.cwd = pane.GetCwd()
 	s.liveness = v1.Liveness_LIVENESS_LIVE
+	s.restartIsPending = false
 	s.closed = false
 	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
 	// a reused session object (e.g. Start() after an earlier Close(), or
@@ -570,6 +571,7 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 // tymuxd is already restarting is adopted as is (reviving would bypass its backoff); a FAILED or
 // STOPPED pane is refused with ErrPaneNotRevivable; anything else is revived.
 func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Session) (*v1.Session, error) {
+	// Only the first pane is checked: tymux sessions here are single-pane.
 	if pane := firstPane(found); pane != nil {
 		if state, ok := s.paneLifecycleState(ctx, pane.GetId()); ok {
 			if isRestartPending(state) {
@@ -584,8 +586,10 @@ func (s *tymuxGRPCSession) reviveForRestore(ctx context.Context, found *v1.Sessi
 		SessionId: found.GetId(),
 	}))
 	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
-		// tymuxd refuses when every pane is STOPPED/FAILED; this is the same verdict as the
-		// pre-check above for daemons that cannot report pane state or on a state race.
+		// tymuxd v1.12.0 answers FAILED_PRECONDITION when every pane is STOPPED/FAILED (the
+		// pre-check's verdict, for daemons that cannot report pane state or on a state race) and
+		// also for EngineError::ReviveLaunch (launch.prepare failing, e.g. a deleted argument
+		// file). Both need an operator, so both map to ErrPaneNotRevivable.
 		return nil, fmt.Errorf("%w: session %q: %w", ErrPaneNotRevivable, found.GetId(), err)
 	}
 	if err != nil {
@@ -641,6 +645,7 @@ func (s *tymuxGRPCSession) Close() error {
 	s.closed = true
 	s.storedID = ""
 	s.liveness = v1.Liveness_LIVENESS_DEAD
+	s.restartIsPending = false
 	s.mu.Unlock()
 	if connect.CodeOf(err) == connect.CodeNotFound {
 		// Already gone daemon-side: the goal of Close is met.
@@ -689,6 +694,7 @@ func (s *tymuxGRPCSession) IsAlive() bool {
 		if connect.CodeOf(err) == connect.CodeNotFound && s.daemonConfirmsPaneGone(sessionID, paneID) {
 			s.mu.Lock()
 			s.liveness = v1.Liveness_LIVENESS_DEAD
+			s.restartIsPending = false
 			s.mu.Unlock()
 			log.Warn("tymux: IsAlive: pane gone daemon-side", logKeySessionID, sessionID, logKeyErr, err)
 			return false

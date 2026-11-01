@@ -193,12 +193,14 @@ func (s *tymuxGRPCSession) handleAttachEvent(event *v1.AttachEvent) {
 	case *v1.AttachEvent_Snapshot:
 		s.mu.Lock()
 		s.liveness = p.Snapshot.GetLiveness()
+		s.restartIsPending = false
 		s.mu.Unlock()
 	case *v1.AttachEvent_Output:
 		s.fanout.Broadcast(p.Output)
 	case *v1.AttachEvent_Exited:
 		s.mu.Lock()
 		s.liveness = v1.Liveness_LIVENESS_DEAD
+		s.restartIsPending = false
 		s.mu.Unlock()
 		s.deliverExit(exitReason(p.Exited))
 	case *v1.AttachEvent_GapExceeded:

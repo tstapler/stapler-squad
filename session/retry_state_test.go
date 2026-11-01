@@ -871,3 +871,31 @@ func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRu
 	inst.driverWG.Done()
 	require.False(t, SessionDriverRunningForTest(inst))
 }
+
+// A real StartSessionDriver followed by a continuation must count both goroutines, so the first
+// one to exit cannot clear driverRunning under the other.
+func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistered(t *testing.T) {
+	inst := &Instance{Title: "count", Status: Ready, processManager: &stuckDialogProcessManager{}}
+	inst.started.Store(true)
+	shrinkDriverTiming(t)
+
+	StartSessionDriver(inst, "/tmp")
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		StopSessionDriver(inst)
+		JoinSessionDriver(inst)
+	})
+	_, ok := inst.registerContinuation(nil)
+	require.True(t, ok)
+	go func() {
+		defer inst.driverWG.Done()
+		defer inst.driverGoroutineExited()
+		<-release
+	}()
+
+	inst.driverMu.Lock()
+	got := inst.driverGoroutines
+	inst.driverMu.Unlock()
+	require.Equal(t, 2, got, "StartSessionDriver did not count its own goroutine")
+}
