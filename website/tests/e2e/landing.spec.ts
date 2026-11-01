@@ -78,6 +78,7 @@ test.describe('Landing page — UX acceptance', () => {
 	}) => {
 		await page.route('**/demo.webm', (route) => route.fulfill({ status: 404, body: '' }));
 		await page.route('**/01-dashboard.png', (route) => route.fulfill({ status: 404, body: '' }));
+		await page.route('**/clips/*.webm', (route) => route.fulfill({ status: 404, body: '' }));
 
 		const landing = new LandingPage(page);
 		await landing.goto();
@@ -91,16 +92,28 @@ test.describe('Landing page — UX acceptance', () => {
 		expect(videoBox?.width).toBeGreaterThan(0);
 		expect(videoBox?.height).toBeGreaterThan(0);
 
-		// The broken <img> keeps its accessible alt text and its reserved box
-		// (explicit width/height attributes + CSS aspect-ratio), so a failed
-		// fetch never collapses to blank, layout-shifting space.
-		const brokenImage = page.getByAltText(
-			'Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance',
-		);
-		await expect(brokenImage).toBeVisible();
-		const imageBox = await brokenImage.boundingBox();
-		expect(imageBox?.width).toBeGreaterThan(0);
-		expect(imageBox?.height).toBeGreaterThan(0);
+		// The Dashboard card's media keeps its accessible name and reserved box
+		// whichever form the build gave it: an <img> (PR gate, no clips) or a
+		// <video> (deploy build, where the recorded clip replaces the screenshot).
+		// A failed fetch never collapses to blank, layout-shifting space.
+		const alt =
+			'Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance';
+		const card = landing.featureCards().filter({ has: page.getByRole('heading', { name: 'Dashboard', exact: true }) });
+		await expect(card).toHaveCount(1);
+		const clip = card.getByTestId('feature-card-video');
+		const media = (await clip.count()) > 0 ? clip : card.getByAltText(alt);
+		await media.scrollIntoViewIfNeeded();
+		await expect(media).toBeVisible();
+		const mediaBox = await media.boundingBox();
+		expect(mediaBox?.width).toBeGreaterThan(0);
+		expect(mediaBox?.height).toBeGreaterThan(0);
+
+		if ((await clip.count()) > 0) {
+			await expect(clip).toHaveAttribute('aria-label', new RegExp(alt));
+			// Lazy poster (data-poster -> poster once near the viewport) is the
+			// screenshot fallback for a dead clip, so it must have been applied.
+			await expect.poll(() => clip.evaluate((v: HTMLVideoElement) => v.poster)).toMatch(/01-dashboard\.png$/);
+		}
 	});
 
 	// Criterion 18: every <video> has a poster and is adjacent to its own

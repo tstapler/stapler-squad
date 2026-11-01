@@ -77,6 +77,7 @@ describe('FeatureCard', () => {
 		// Lazy: an eager poster= on every card starved the landing page's LCP (see FeatureCard.astro).
 		expect(html).toMatch(/data-poster="[^"]*01-dashboard\.png"/);
 		expect(html).not.toMatch(/\sposter=/);
-		expect(html).not.toContain('<img');
+		// No-JS users never get the data-poster script, so the screenshot rides in a <noscript>.
+		expect(html).toMatch(/<noscript>\s*<img[^>]*src="[^"]*01-dashboard\.png"/);
 	});
 });
