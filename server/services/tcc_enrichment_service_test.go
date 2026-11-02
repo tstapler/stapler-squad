@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,9 +54,9 @@ func TestTCCEnrichmentRPC_UnparksOnlyConsentedRoots(t *testing.T) {
 	for _, path := range []string{"/first/a", "/first/b", "/other/c"} {
 		e.Request(path)
 	}
-	for checks.Load() != 3 || len(gate.Roots()) != 2 {
-		runtime.Gosched()
-	}
+	require.Eventually(t, func() bool {
+		return checks.Load() == 3 && len(gate.Roots()) == 2
+	}, time.Second, time.Millisecond, "enrichment paths were not parked")
 	require.Empty(t, probes)
 	svc := &SessionService{}
 	svc.SetTCCEnrichment(gate, e, true)

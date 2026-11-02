@@ -245,6 +245,15 @@ func TestWorktreeEnricher_BackoffSuppressesEarlyRetry(t *testing.T) {
 	require.EqualValues(t, 2, e.Stats().TimedOut, "/p must not time out a second time inside backoff")
 }
 
+func waitEnrichmentSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("enrichment synchronization signal did not arrive")
+	}
+}
+
 func TestWorktreeEnricher_SlowReadinessReleasesWorker(t *testing.T) {
 	t.Parallel()
 	blocked, release, fast := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -266,10 +275,10 @@ func TestWorktreeEnricher_SlowReadinessReleasesWorker(t *testing.T) {
 	}, false)
 	t.Cleanup(func() { close(release) })
 	e.Request("/slow")
-	<-blocked
+	waitEnrichmentSignal(t, blocked)
 	deadline <- time.Now()
 	e.Request("/fast")
-	<-fast
+	waitEnrichmentSignal(t, fast)
 	require.EqualValues(t, 1, probes.Load())
 	require.EqualValues(t, 1, e.Stats().TimedOut)
 }
@@ -280,10 +289,10 @@ func TestWorktreeEnricher_StopWhileReadyPreventsProbe(t *testing.T) {
 	var probes atomic.Int32
 	e := NewWorktreeEnricher(WorktreeEnricherConfig{Ready: func(string) bool { close(entered); <-release; return true }, Probe: func(string) (*WorktreeInfo, error) { probes.Add(1); return okInfo(), nil }})
 	go func() { defer close(returned); _, _ = e.safeProbe("/protected") }()
-	<-entered
+	waitEnrichmentSignal(t, entered)
 	e.Stop()
 	close(release)
-	<-returned
+	waitEnrichmentSignal(t, returned)
 	require.Zero(t, probes.Load())
 }
 
@@ -304,7 +313,7 @@ func TestWorktreeEnricher_UnparkDuringReadiness(t *testing.T) {
 		Probe: func(string) (*WorktreeInfo, error) { return okInfo(), nil },
 	}, false)
 	e.Request("/protected/repo")
-	<-checked
+	waitEnrichmentSignal(t, checked)
 	ready.Store(true)
 	e.Unpark("/protected/repo")
 	close(release)
