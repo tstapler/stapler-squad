@@ -23,6 +23,13 @@ module.exports = {
       "telemetry/rpcTiming.ts",
     ].map((path) => [`./src/lib/${path}`, { lines: 80 }]),
   ),
+  // Default 5000ms is too tight for this project's full-suite runs: with
+  // ~350 suites sharing jest-worker processes, scheduler contention alone
+  // has intermittently pushed otherwise-fast async tests (e.g.
+  // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
+  // with no logic bug — each passes in well under 1s run in isolation.
+  // Must sit here, not inside `projects[]`: jest ignores it per-project (tests there still got 5000ms).
+  testTimeout: 20000,
   projects: [
     {
       displayName: "web-app",
@@ -39,12 +46,6 @@ module.exports = {
       // contain at least one test". Narrowing here fixes the root cause so a
       // future __tests__/ helper file can't silently break the same way.
       testMatch: ["**/?(*.)+(spec|test).ts?(x)"],
-      // Default 5000ms is too tight for this project's full-suite runs: with
-      // ~350 suites sharing jest-worker processes, scheduler contention alone
-      // has intermittently pushed otherwise-fast async tests (e.g.
-      // BacklogItemDetail.loadGuard, SessionDetailView.note-error) over 5s
-      // with no logic bug — each passes in well under 1s run in isolation.
-      testTimeout: 20000,
       moduleNameMapper: {
         // Window style modules get string class names (the proxy below trips React's
         // className check); these must stay ahead of the generic .css mappers.
