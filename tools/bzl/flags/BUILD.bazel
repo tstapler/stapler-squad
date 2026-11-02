@@ -1,0 +1,26 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+# Bool build settings behind --config=embed_tmux / --config=embed_tymux (ADR-007).
+bool_flag(
+    name = "embed_tmux",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "embed_tymux",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "embed_tmux_on",
+    flag_values = {":embed_tmux": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "embed_tymux_on",
+    flag_values = {":embed_tymux": "true"},
+    visibility = ["//visibility:public"],
+)
