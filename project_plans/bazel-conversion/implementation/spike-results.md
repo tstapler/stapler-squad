@@ -497,3 +497,17 @@ Directives-only path, no extension: actual cost S for the run plus M for diagnos
 
 - Decide whether Epic 1 deletes the S1 `go_proto_library` attempts (frees resolve lines) before running Task 1.1a.
 - Wire the TypeScript proto output (Task 0.6e) before expecting `//server:server` and `//server/web:*` to build.
+
+## Importer completion check (S2/S11)
+
+Run 2026-11-01 in worktree `bazel-epic0-importers` (branch `sdd/bazel-epic0-importers`, based on `sdd/bazel-epic0` with S-gomod, S1, S1-ts, S2, S3, S4, S5, S7, S11 and S13 merged), Bazel 9.3.1 via `tools/bazel`. Generated BUILD files were regenerated and not committed (Task 1.1a commits them).
+
+Previously UNEVALUATED: (a) S2's importer check covered only `//session/scanstate` (the other importers needed S1 and Story 0.11); (b) S11's importer build left 7 of 253 targets failing because the TypeScript proto output was not wired; (c) no importer test was ever executed.
+
+Measured (VERIFIED by command):
+
+1. `bazel run //:gazelle`: exit 0, 141 new and 23 modified BUILD.bazel files (same 141 as S11; the 23 modified are the `go_test` load-line rewrites). Only warnings: `pattern embed/tmux` and `pattern embed/tymuxd` matched no files (ADR-007). No `matches multiple rules` line. Second run `-mode=diff`: no diff, exit 0.
+2. `bazel build --config=agent --keep_going //session/... //server/...`: exit 0, **253 of 253 targets analyzed and built, 0 failed** (2306 actions, 36 s with a warm disk cache). The 7 S11 failures (`//server`, `//server:server`, `//server:server_test`, `//server/services:services_test`, `//server/web`, `//server/web:web_test`, `//server/web:dist_staged`) are gone because `//web-app:dist` now takes `gen = //tools/bzl/proto:gen_ts` (S1-ts). No directive or hand-file change was needed after the merge.
+3. `bazel test --config=agent` on `//pkg/events:events_test //session/ent/schema:schema_test //session/scanbuf:scanbuf_test //session/scanstate:scanstate_test //tools/lint/norawdb:norawdb_test`: 5 of 5 pass (4 executed, 1 cached). These import the generated ent tree. No sandbox failures seen in this subset; the tmux/git/port-binding tests were deliberately not run.
+
+Result: the ent and proto importer closure of `//session/... //server/...` builds in full, so S2's importer check is now satisfied. S2's verdict row stays `FallbackWorkaround` (its path is a workaround), S11 stays `Pass`; no verdict changes. Not covered: tests of `//session` and `//server/...` (they spawn tmux, git servers and bind ports; Epic 4 sandbox classes).
