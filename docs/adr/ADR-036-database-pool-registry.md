@@ -265,3 +265,7 @@ updated in the same PR as the move, as must `database_service` backup/merge/insp
    contention tests; before/after numbers on a `/tmp` copy.
 3. PR 3: runtime pool actuator, `/actuator/db` per-DB rows, dashboard panels (additive, stable uids, Tempo links), docs, CLAUDE.md row.
 4. Later waves: Backlog (after the edge removal), Workflow, Wake, Credentials, Errors, each with its own hot-query plan test.
+
+## Amendment: legacy `escape_events` drop (opt-in)
+
+The copy from `analytics.db` to `db/escape_events.db` (#1353) leaves the legacy table behind. `escapedb.DropLegacyEscapeEvents` removes it only when the migration ledger reads `done` and the new database has at least as many rows, via chunked deletes on the analytics writer (never one long statement, per the writer-contention constraint above), then `DROP TABLE` on the emptied table and bounded `incremental_vacuum`. It is gated by `STAPLER_SQUAD_ESCAPE_LEGACY_DROP` (default off; `dry-run` logs only) because it is destructive. See `docs/how-to/reclaim-sqlite-free-space.md`.

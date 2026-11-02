@@ -82,16 +82,49 @@ adaptive batches of about 40 ms writer hold; the ledger is the table `escape_eve
 the new file (`phase`, `cursor`, `scanned`, `inserted`). It resumes after a restart and ends
 `done` only when the source row count equals the rows scanned.
 
-The legacy table is **not dropped**: a follow-up change drops it after a soak. Deleting its rows
-is as expensive as the old retention deletes, so reclaim the space offline instead, with the
-service stopped and free disk about the size of `analytics.db`:
+The legacy table is **not dropped by default**. Dropping it is destructive, so it is opt-in through
+`STAPLER_SQUAD_ESCAPE_LEGACY_DROP` (read at boot; unset, `off` or any unrecognised value does nothing):
+
+| Value | Effect |
+|---|---|
+| unset / `off` | Nothing runs (default). |
+| `dry-run` | Evaluates the guards and logs both row counts and what it would do; changes nothing. |
+| `on` | Runs the drop below, once the copy above has finished in the same boot (or an earlier one). |
+
+Guards, all required, re-evaluated on every run from read-only connections (neither writer is held):
+
+1. `escape_events_migration.phase` in `escape_events.db` is `done` (a missing ledger, `copying` or `failed` refuses).
+2. `escape_events.db` holds at least as many rows as the legacy table (refuses on fewer).
+
+When both hold, the drop deletes the legacy rows in short `DELETE ... LIMIT` chunks on the analytics
+writer (adaptive to about 40 ms per chunk, with a pause between), then runs `DROP TABLE escape_events`
+on the empty table, then returns freed pages with up to 64 bounded `PRAGMA incremental_vacuum(1024)`
+steps if `analytics.db` is `auto_vacuum=INCREMENTAL` (the periodic maintenance loop reclaims any
+remainder; see above for converting a legacy file). A crash or shutdown mid-way leaves a smaller table;
+the next boot passes the guards again and continues. A finished run is a no-op on the next boot.
+
+Verify:
+
+```bash
+grep -E 'escape legacy' ~/.stapler-squad/logs/staplersquad.log   # guards passed / refused (both counts), dropped
+sqlite3 -readonly <analytics.db> "SELECT name FROM sqlite_master WHERE name='escape_events'"   # empty once dropped
+```
+
+Metrics: `escape_events.legacy_drop.runs{outcome=...}` (`dropped`, `dry_run`, `migration_incomplete`,
+`count_mismatch`, `no_legacy_table`, `error`) and `escape_events.legacy_drop.rows_deleted`.
+
+A `count_mismatch` refusal is permanent if retention keeps the new database below the legacy count
+(unverified; compare the two counts in the log). Reclaim the space with the offline path instead, with the service stopped and free disk about the size of
+`analytics.db`:
 
 ```bash
 sqlite3 <analytics.db> 'PRAGMA auto_vacuum=INCREMENTAL; DROP TABLE escape_events; VACUUM;'
 ```
 
-Run it only after `SELECT phase FROM escape_events_migration` reads `done` in `escape_events.db`.
-An older binary recreates the empty table on its next start; that is harmless.
+Run it only after `SELECT phase FROM escape_events_migration` reads `done` in `escape_events.db`. The
+offline `VACUUM` is also the only way to shrink a file that is not at `auto_vacuum=INCREMENTAL`.
+`OpenAnalyticsDB` recreates an empty `escape_events` table on every start (ent creates all tables), and
+an older binary does too; that is harmless, and the next `on` run drops the empty table again.
 
 ## Fallback external job
 
