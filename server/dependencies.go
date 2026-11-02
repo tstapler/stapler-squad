@@ -728,12 +728,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		})
 	})
 	enricherConfig := session.WorktreeEnricherConfig{}
-	if cfg.TCCEnrichmentConsentEnabled() {
+	// Isolated test/e2e instances never hit real protected roots: gate is not_needed.
+	tccGateEnabled := cfg.TCCEnrichmentConsentEnabled() && !config.IsTestMode() && os.Getenv("STAPLER_SQUAD_TEST_DIR") == ""
+	if tccGateEnabled {
 		enricherConfig.Ready = gate.Ready
 		enricherConfig.Probe = session.ConsentEnrichmentProbe(gate)
 	}
 	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
-	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
+	sessionService.SetTCCEnrichment(gate, enricher, tccGateEnabled)
 
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()

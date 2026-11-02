@@ -92,3 +92,10 @@ it("does not render on other platforms or when disabled", async () => {
  await waitFor(() => expect(mockStatus).toHaveBeenCalled());
  expect(container).toBeEmptyDOMElement();
 });
+
+it("links to System Settings when macOS denied access", async () => {
+ const settingsUrl = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders";
+ mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, appConsented: true, outcome: "denied", settingsUrl }] });
+ render(<TCCEnrichmentBanner />);
+ expect(await screen.findByTestId("tcc-settings-link")).toHaveAttribute("href", settingsUrl);
+});

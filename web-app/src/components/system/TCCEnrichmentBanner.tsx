@@ -69,6 +69,7 @@ export function TCCEnrichmentBanner() {
         Background worktree enrichment needs to read git metadata to identify repositories and worktrees in {root.root}.
         Affected sessions: {root.sessionTitles.length ? root.sessionTitles.join(", ") : root.paths.join(", ")}.
         {!root.appConsented ? <> This location is protected by a known lexical policy or needs readiness approval because its filesystem type is unknown. No filesystem classification runs before approval. Conventional code/worktree locations are treated as unprotected heuristically; mount protection there cannot be guaranteed without I/O. Continue when you are ready for a possible macOS permission request; macOS may not show one. Not now leaves this enrichment paused.</> : <> App consent saved. Enrichment: {root.outcome}. A slow or failed operation does not establish whether macOS permission is granted or denied; filesystem problems can also cause it.</>}
+        {root.outcome === "denied" && <> macOS denied access to this location. Allow stapler-squad under System Settings{root.settingsUrl ? <> (<a href={root.settingsUrl} data-testid="tcc-settings-link">Open Privacy settings</a>)</> : null}. App consent does not grant it.</>}
         {" "}This gates enrichment only, not other app or child-process filesystem access. Classification is heuristic, and app consent is not an OS grant.
         {errors[root.id] && <span role="alert"> {errors[root.id]}</span>}
       </>}

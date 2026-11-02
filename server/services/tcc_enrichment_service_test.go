@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -104,4 +106,36 @@ func TestTCCEnrichmentRPC_Disabled(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, status.Msg.Enabled)
 	require.Empty(t, status.Msg.Roots)
+}
+
+func TestTCCEnrichmentRPC_PermissionErrorReportsDeniedWithSettingsLink(t *testing.T) {
+	t.Parallel()
+	gate := tcc.NewConsentGate(func(string) tcc.Result {
+		return tcc.Result{Protected: true, Root: "/protected", Service: tcc.FilesAndFolders}
+	}, nil, nil)
+	probed := make(chan struct{}, 1)
+	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{Ready: gate.Ready, Probe: func(string) (*session.WorktreeInfo, error) {
+		defer func() { probed <- struct{}{} }()
+		return nil, fmt.Errorf("read: %w", os.ErrPermission)
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	e.Start(ctx)
+	t.Cleanup(func() { cancel(); e.Stop() })
+	svc := &SessionService{}
+	svc.SetTCCEnrichment(gate, e, true)
+	e.Request("/protected/repo")
+	require.Eventually(t, func() bool { return len(gate.Roots()) == 1 }, time.Second, time.Millisecond)
+	_, err := gate.Continue(gate.Roots()[0].ID)
+	require.NoError(t, err)
+	e.Unpark("/protected/repo")
+	select {
+	case <-probed:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not run after consent")
+	}
+	require.Eventually(t, func() bool {
+		status, err := svc.GetTCCEnrichmentStatus(context.Background(), connect.NewRequest(&sessionv1.GetTCCEnrichmentStatusRequest{}))
+		return err == nil && len(status.Msg.Roots) == 1 && status.Msg.Roots[0].Outcome == "denied" &&
+			status.Msg.Roots[0].SettingsUrl == tcc.SettingsURLFilesAndFolders
+	}, time.Second, time.Millisecond)
 }
