@@ -1259,6 +1259,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
+	instance.pinResolvedBackend()
 
 	// Initialize shell registry maps.
 	instance.initShellRegistry()
@@ -2123,7 +2124,11 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	}
 	i.stopVNC()
 	i.stopCDP()
-	return i.KillSession()
+	// A session that ran before this attempt is released, not killed.
+	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
+	return i.killSessionAttachedByThisAttempt()
 }
 
 // Kill terminates the instance and cleans up its resources. Like Destroy, it keeps a

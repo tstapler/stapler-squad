@@ -68,6 +68,24 @@ type DaemonSessionIDReporter interface {
 	DaemonSessionID() string
 }
 
+// StoredSessionProber answers "is the record's persisted daemon session live"
+// for a view that was never started in this process (a liveness shadow), where
+// HasSession is false by construction.
+type StoredSessionProber interface {
+	StoredSessionLive() bool
+}
+
+// AdoptedSessionReleaser lets a failed Start release a session it adopted (one that ran before
+// the attempt) instead of killing it. False means nothing was adopted.
+type AdoptedSessionReleaser interface {
+	ReleaseAdoptedSession() bool
+}
+
+// SessionLabeler follows an Instance rename: tymux identifies a record by its label.
+type SessionLabeler interface {
+	SetSessionLabel(label string)
+}
+
 // PaneCwdReporter reports the pane's live working directory (not a cached start dir).
 type PaneCwdReporter interface {
 	PaneCurrentPath() (string, error)

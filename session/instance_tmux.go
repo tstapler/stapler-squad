@@ -921,12 +921,26 @@ func (i *Instance) initTmuxSession() {
 
 // KillSession terminates the tmux session only (leaves worktree intact).
 func (i *Instance) KillSession() error {
-	if i.pm().HasSession() {
+	// An unrestored tymux record has no pane yet but still owns a daemon session.
+	return i.killSession(i.tymuxSessionID() != "")
+}
+
+// killSession closes the process session when a pane is attached, and also when
+// includeUnrestored is set and the record only stores a daemon session id.
+func (i *Instance) killSession(includeUnrestored bool) error {
+	if i.pm().HasSession() || includeUnrestored {
 		if err := i.pm().Close(); err != nil {
 			return fmt.Errorf("failed to close tmux session: %w", err)
 		}
 	}
 	return nil
+}
+
+// killSessionAttachedByThisAttempt is KillSession for a failed Start's cleanup: it never
+// closes a stored daemon session the failed attempt did not attach or create, which a
+// transient create/list error must not turn into killing a running agent.
+func (i *Instance) killSessionAttachedByThisAttempt() error {
+	return i.killSession(false)
 }
 
 // KillSessionKeepWorktree terminates tmux session but preserves worktree for recovery scenarios.
@@ -1116,6 +1130,24 @@ func (i *Instance) IsBackendProcessAlive() bool {
 	}
 	if p, ok := capabilityOf[OrphanProber](i.processManager); ok {
 		return p.PanePIDStillAlive()
+	}
+	return false
+}
+
+// IsLiveOrStoredSessionLive is IsBackendProcessAlive plus, for a view with no
+// pane (a liveness shadow or a not-yet-restored record), the record's persisted
+// daemon session. Only for "is some session still running" lookups: stream
+// paths must keep using IsBackendProcessAlive, since a true answer there means
+// a pane is attached and skips RestoreProcess.
+func (i *Instance) IsLiveOrStoredSessionLive() bool {
+	if i.IsBackendProcessAlive() {
+		return true
+	}
+	if i.pm().HasSession() {
+		return false
+	}
+	if p, ok := capabilityOf[StoredSessionProber](i.pm()); ok {
+		return p.StoredSessionLive()
 	}
 	return false
 }

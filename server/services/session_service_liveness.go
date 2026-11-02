@@ -228,7 +228,7 @@ func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *session.
 	if err != nil {
 		return nil
 	}
-	if !shadow.IsBackendProcessAlive() {
+	if !shadow.IsLiveOrStoredSessionLive() {
 		return nil
 	}
 	log.Warn("findConfirmedLiveInstance: session missing from live poller map but tmux/process truth check confirms it is still alive", "uuid", sessionUUID)
@@ -289,6 +289,7 @@ func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePat
 		return "", false
 	}
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
+		// Not IsLiveOrStoredSessionLive: a pane-less view has no cwd to compare, so its probe is a wasted RPC.
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
 		}
@@ -337,6 +338,7 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(q conversationOwner
 		return "", false
 	}
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
+		// Not IsLiveOrStoredSessionLive: the cwd check below needs a live pane, which a pane-less view lacks.
 		if inst == nil || inst.UUID == q.selfUUID || !inst.IsBackendProcessAlive() {
 			continue
 		}
