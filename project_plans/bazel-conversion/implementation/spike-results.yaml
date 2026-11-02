@@ -7,7 +7,6 @@
   verdict: FallbackWorkaround
   path: buf-generate-genrule-local-plugins
   cost: M
-||||||| 6b786209d
 - spike: S2
   verdict: FallbackWorkaround
   path: declared-output ent_gen rule + entc program (no GoSource rule, no fork); importer check run on a subset only (see spike-results.md S2)

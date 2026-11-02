@@ -110,7 +110,6 @@ Host onyx, Bazel 9.3.1, 2026-11-01. Targets: `//proto/session/v1:{sessionv1_go_p
 
 ### Verdict
 `S1`: **FallbackWorkaround** (path: `buf generate` as a genrule with local pinned plugins; cost M). The primary `go_proto_library` path fails the diff check; every PASS check holds for the workaround. Epic 2 inherits: `buf.gen.bazel.yaml`, `gen_go`, `compare-proto.sh`. The TypeScript half stays S1-ts (Task 0.6e).
-||||||| 6b786209d
 
 ## S2 ent generation as a Bazel action (Stories 0.4 / Tasks 0.4a-0.4c)
 
