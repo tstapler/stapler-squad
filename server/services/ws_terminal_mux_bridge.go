@@ -412,7 +412,9 @@ func (s *muxSocket) denyOpen(id uint32, reason string) bool {
 	muxMetrics.openDenied(s.listener, reason)
 	log.Warn("[TerminalMux] OPEN denied", "listener", s.listener, "reason", reason)
 	s.sendControl(encodeMuxClose(id, websocket.ClosePolicyViolation, "unauthorized"))
-	s.denials++
+	if reason == muxDenyUnauthenticated || reason == muxDenyForbidden { // transient errors never count
+		s.denials++
+	}
 	if s.denials < muxMaxOpenDenials {
 		return true
 	}
