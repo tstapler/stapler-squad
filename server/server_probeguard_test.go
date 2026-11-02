@@ -324,6 +324,8 @@ func TestLocalWriteGuard_ShouldKeepProbeProgramByteForByteAndListOnlyRegisteredP
 		replyProcedurePath:       middleware.ProfileRebinding,
 		updateQuotaProcedurePath: middleware.ProfileRebinding,
 		writeFileProcedurePath:   middleware.ProfileRebinding,
+
+		"/api" + sessionv1connect.SessionServiceContinueTCCEnrichmentProcedure: middleware.ProfileRebinding,
 	}
 	for _, p := range engineWriteProcedures { // pinned in quota_listener_test.go
 		want[p] = middleware.ProfileRebinding

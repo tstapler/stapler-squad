@@ -299,12 +299,6 @@ test.describe('notification tray variants', () => {
     });
 
     test('entry_should_be_one_visible_element_in_every_frame_once_it_exists_and_hold_its_anchor_across_state_changes', async ({ page, request }) => {
-      // KNOWN PRODUCT GAP (app vs acceptance criteria): project_plans/notification-tray-and-hidden-session-gate/design/ux.md
-      // TH-7/TH-8/TH-9 (lines 293-295) and its undo-placement line 235 ("returns to previous content when the window ends")
-      // say the entry is always present once it exists. TrayEntryChip returns null when
-      // !undo && !wide (web-app/src/components/ui/TrayHandle.tsx:112), so after the undo window of a "move all" the entry is
-      // removed and `data-undo="false"` is never observable. test.fail() keeps the gap visible; the comparator fails if it closes.
-      test.fail();
       const { client, session } = await openSession(page, { waitForText: false });
       try {
         const tray = new NotificationTray(page);
