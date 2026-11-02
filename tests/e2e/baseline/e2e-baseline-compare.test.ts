@@ -236,6 +236,40 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     });
   });
 
+  describe("test.fail() known gaps (expectedStatus: failed)", () => {
+    const rep = (results: { retry: number; status: string }[], expectedStatus?: string, description?: string): PwReport => ({
+      suites: [{ specs: [{ file: "a.spec.ts", title: "t", tests: [{ projectName: "chromium", expectedStatus, annotations: expectedStatus === "failed" ? [{ type: "fail", description }] : [], results }] }] }],
+    });
+    const FAIL1 = [{ retry: 0, status: "failed" }];
+    const PASS1 = [{ retry: 0, status: "passed" }];
+    const gate = (bun: PwReport) =>
+      compare({ baseline: { specs: [] }, expectedDiff: { entries: [] }, nextReport: null, bunReports: [bun] });
+
+    test("TF1: a spec absent from the baseline that fails as a test.fail() gap is not a failure", () => {
+      expect(gate(rep(FAIL1, "failed")).exitCode).toBe(0);
+    });
+
+    test("TF2: the same failure without test.fail() still fails the gate", () => {
+      expect(gate(rep(FAIL1, "passed")).exitCode).toBe(1);
+    });
+
+    test("TF3: a bare test.fail() known gap that now passes fails the gate (the gap closed; remove test.fail)", () => {
+      const r = gate(rep(PASS1, "failed"));
+      expect(r.exitCode).toBe(1);
+      expect(r.findings.some((f) => f.severity === "fail" && /known gap now passes/.test(f.message))).toBe(true);
+    });
+
+    test("TF4: a test.fail(condition, reason) precondition guard that passes is reported, not failed", () => {
+      const r = gate(rep(PASS1, "failed", "requires a clean backlog"));
+      expect(r.exitCode).toBe(0);
+      expect(r.findings.some((f) => f.severity === "report" && /precondition guard/.test(f.message))).toBe(true);
+    });
+
+    test("TF5: a test.fail() test that fails on every attempt is the expected outcome, with no finding", () => {
+      expect(gate(rep(FAIL1, "failed")).findings).toEqual([]);
+    });
+  });
+
   test("a comparator stub that always exits 0 would fail F1-F7 (adversarial framing, documented not executed)", () => {
     // This test exists to make the claim checkable without actually swapping the script: each
     // F-case above independently asserts a non-zero exit, which is exactly what an always-0 stub
