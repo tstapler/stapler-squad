@@ -61,6 +61,7 @@ type WorktreeEnricherConfig struct {
 
 	// Probe, AfterFunc and Now are injectable for deterministic tests.
 	Probe     func(path string) (*WorktreeInfo, error)
+	Timer     func(d time.Duration) (fired <-chan time.Time, stop func())
 	AfterFunc func(d time.Duration, f func())
 	Now       func() time.Time
 }
@@ -101,6 +102,12 @@ func NewWorktreeEnricher(cfg WorktreeEnricherConfig) *WorktreeEnricher {
 	}
 	if cfg.Probe == nil {
 		cfg.Probe = DetectWorktree
+	}
+	if cfg.Timer == nil {
+		cfg.Timer = func(d time.Duration) (<-chan time.Time, func()) {
+			t := time.NewTimer(d)
+			return t.C, func() { t.Stop() }
+		}
 	}
 	if cfg.AfterFunc == nil {
 		cfg.AfterFunc = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
@@ -144,15 +151,21 @@ func StopWorktreeEnricher() {
 	}
 }
 
+// WorktreeLookup is a cached detection outcome: Info on success, Err on failure.
+type WorktreeLookup struct {
+	Info *WorktreeInfo
+	Err  error
+}
+
 // Result returns the cached detection for path, if one is fresh. Memory only.
-func (e *WorktreeEnricher) Result(path string) (info *WorktreeInfo, err error, ready bool) {
+func (e *WorktreeEnricher) Result(path string) (WorktreeLookup, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	r, ok := e.results[path]
 	if !ok || e.cfg.Now().Sub(r.at) > e.cfg.ResultTTL {
-		return nil, nil, false
+		return WorktreeLookup{}, false
 	}
-	return r.info, r.err, true
+	return WorktreeLookup{Info: r.info, Err: r.err}, true
 }
 
 // Request queues a background probe for path (coalesced; no I/O on the caller).
@@ -196,13 +209,13 @@ func (e *WorktreeEnricher) handle(path string) {
 	ch := e.group.DoChan(path, func() (any, error) {
 		info, err := e.safeProbe(path)
 		e.finish(path, worktreeResult{info: info, err: err}, e.cfg.Now().Sub(start))
-		return nil, nil
+		return struct{}{}, nil
 	})
-	timer := time.NewTimer(e.cfg.Deadline)
-	defer timer.Stop()
+	deadline, stopTimer := e.cfg.Timer(e.cfg.Deadline)
+	defer stopTimer()
 	select {
 	case <-ch:
-	case <-timer.C:
+	case <-deadline:
 		e.markStuck(path, start)
 	}
 }

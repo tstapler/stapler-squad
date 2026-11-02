@@ -846,15 +846,16 @@ func (i *Instance) populateWorktreeInfoOnLoad() {
 	if path == "" {
 		return
 	}
-	info, err, ready := enricher.Result(path)
+	cached, ready := enricher.Result(path)
 	if !ready {
 		enricher.Request(path)
 		return
 	}
-	if err != nil {
-		log.Debug("worktree detection failed (cached)", "session", i.Title, "err", err)
+	if cached.Err != nil {
+		log.Debug("worktree detection failed (cached)", "session", i.Title, "err", cached.Err)
 		return
 	}
+	info := cached.Info
 	if info.isEmptyDetection() {
 		// "No .git here" can be stale (a recreated worktree) and would flip a persisted IsWorktree.
 		return
