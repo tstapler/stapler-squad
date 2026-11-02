@@ -1114,6 +1114,9 @@ ready: ci check-bazel-guards proto-breaking ready-complexity-gate ready-duplicat
 setup-git: ## Per-clone git setup: pre-push hook that rejects non-fast-forward pushes and main deletion (idempotent)
 	git config core.hooksPath scripts/hooks
 	@echo "git hooks: core.hooksPath=$$(git config core.hooksPath)"
+	git config merge.bazel-lockfile-merge.name "Merge driver for the Bazel lockfile (MODULE.bazel.lock)"
+	git config merge.bazel-lockfile-merge.driver "scripts/git-merge-bazel-lock.sh %O %A %B"
+	@command -v jq >/dev/null || echo "WARNING: jq 1.5+ is required by the MODULE.bazel.lock merge driver"
 
 check-bazel-guards: ## Bazel repo guardrails: .bazelignore, BUILD paths, no WORKSPACE/local spawn, no force-push, PR-title and hook tests
 	bash tools/bzl/check-bazelignore.sh

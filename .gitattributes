@@ -1,2 +1,6 @@
 benchmarks/**/*.txt filter=lfs diff=lfs merge=lfs -text
 benchmarks/**/*.json filter=lfs diff=lfs merge=lfs -text
+
+# Bazel lockfile merge driver (registered per clone by `make setup-git`; needs jq 1.5+).
+# https://bazel.build/external/lockfile#automatic-resolution
+MODULE.bazel.lock merge=bazel-lockfile-merge
