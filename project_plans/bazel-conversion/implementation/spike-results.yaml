@@ -35,3 +35,7 @@
   verdict: Fail
   path: "owner-gated: GitHub-side merge check pending (replay favours commit lock + driver + regen)"
   cost: S
+- spike: S11
+  verdict: Pass
+  path: gazelle-directives+map_kind (no extension)
+  cost: M
