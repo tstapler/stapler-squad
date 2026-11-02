@@ -1,5 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# Spike S12: lets tools/bzl/spike-nogo recompile the analyzer against the root x/tools.
+exports_files(["analyzer.go"])
+
 go_library(
     name = "norawgitcli",
     srcs = ["analyzer.go"],
@@ -24,8 +27,10 @@ go_test(
         "analyzer_test.go",
         "baseline_test.go",
     ],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
     deps = [
         ":norawgitcli",
+        "//tools/lint/internal/gotool",
         "@lint_x_tools//go/analysis/analysistest",
     ],
 )

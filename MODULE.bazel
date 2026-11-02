@@ -15,6 +15,8 @@ bazel_dep(name = "bazel_lib", version = "3.7.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.from_file(go_mod = "//:go.mod")
+# S12: nogo registration is OFF by default (it would lint every Go target). To enable:
+# go_sdk.nogo(nogo = "//tools/bzl/spike-nogo:nogo")
 
 # Root module universe. The go.mod `replace` for go-git is honoured here (root module only).
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
