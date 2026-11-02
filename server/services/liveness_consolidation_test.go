@@ -638,7 +638,7 @@ func (storedSessionTymux) GetSessionIdentifier() string       { return "" }
 // when its stored daemon session is. Probing with IsBackendProcessAlive alone calls
 // it dead, which lets backlog spawn a duplicate agent into the worktree.
 func TestFindConfirmedLiveInstance_MapMiss_TymuxShadowWithLiveStoredSession_ReturnsInstance(t *testing.T) {
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	withIsolatedStateDir(t)
 	session.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return storedSessionTymux{} })
 	storage, repo := createTestStorageWithRepo(t)
 	const uuid = "uuid-tymux-stored-live"
