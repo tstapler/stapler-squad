@@ -27,3 +27,7 @@
   verdict: Pass
   path: repo-rule+no-sandbox
   cost: M+M+S+S
+- spike: S11
+  verdict: Pass
+  path: gazelle-directives+map_kind (no extension)
+  cost: M

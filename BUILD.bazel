@@ -2,6 +2,8 @@ load("@gazelle//:def.bzl", "gazelle")
 
 # gazelle:prefix github.com/tstapler/stapler-squad
 # gazelle:go_naming_convention import_alias
+# gazelle:build_tags integration,gitoracle,sinkguard,harness,live_github,embed_tmux,embed_tymux,otelcauto,e2e_ghsignal
+# gazelle:map_kind go_test go_test //tools/bzl:go_test.bzl
 # gazelle:exclude .claude
 # gazelle:exclude worktrees
 # gazelle:exclude **/node_modules
@@ -12,14 +14,27 @@ load("@gazelle//:def.bzl", "gazelle")
 # gazelle:exclude **/testdata
 # gazelle:exclude gen
 # gazelle:exclude web-app/src/gen
-# Keep Gazelle out of the generated ent tree (it may be present after `make sync`) but inside the
-# hand-kept session/ent/schema: everything in session/ent not starting with "s", plus s* not
-# starting "sc" (schema is the only "sc" name).
+# Keep Gazelle out of the generated ent tree (present after `make sync`) but inside the hand-kept
+# session/ent/schema: these seven globs exclude every name under session/ent except exactly "schema"
+# (a prefix-by-prefix negation, because the doublestar matcher has no whole-word negation). S11 found
+# the earlier two-line form leaked a BUILD file into any new entity whose name starts with "sc".
 # gazelle:exclude session/ent/[!s]*
 # gazelle:exclude session/ent/s[!c]*
+# gazelle:exclude session/ent/sc[!h]*
+# gazelle:exclude session/ent/sch[!e]*
+# gazelle:exclude session/ent/sche[!m]*
+# gazelle:exclude session/ent/schem[!a]*
+# gazelle:exclude session/ent/schema?*
 # Generated ent packages live in //tools/bzl/ent (2 lines cover all 52; the schema alias is there too).
 # gazelle:resolve go github.com/tstapler/stapler-squad/session/ent //tools/bzl/ent:ent
 # gazelle:resolve_regexp go ^github.com/tstapler/stapler-squad/session/ent/(.+)$ //tools/bzl/ent:$1
+
+# Generated protos live in //proto/session/v1 (genrule from buf); the hand-written S1 go_proto_library
+# attempts there claim the same importpaths, so Gazelle needs these to disambiguate.
+# gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1 //proto/session/v1:sessionv1_go
+# gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect //proto/session/v1:sessionv1connect_go
+# server/web/fixture (S3 spike) reuses server/web's importpath.
+# gazelle:resolve go github.com/tstapler/stapler-squad/server/web //server/web:web
 
 gazelle(name = "gazelle")
 

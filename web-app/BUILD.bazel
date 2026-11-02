@@ -1,3 +1,4 @@
+# gazelle:ignore
 load("//tools/bzl/bun:bun.bzl", "bun_dist", "bun_jest_test")
 
 

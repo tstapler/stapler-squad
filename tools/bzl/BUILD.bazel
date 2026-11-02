@@ -1,2 +1,5 @@
 # Starlark helpers for the Bazel conversion (macros and rules loaded as //tools/bzl:<name>.bzl).
-exports_files(["ent.bzl"])
+exports_files([
+    "ent.bzl",
+    "go_test.bzl",
+])

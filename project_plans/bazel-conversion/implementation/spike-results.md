@@ -344,3 +344,71 @@ Inside the sandboxed action: stage (tar of sources plus `cp -al` of `node_module
 `S4`: **Pass**, path `repo-rule+no-sandbox`, cost M+M+S+S. Checks: (1) parity 380 of 380 files identical, 0 allow-listed deltas needed, **but against a pinned-environment `make web-build`; against the default developer environment the output differs in 174 files (explained above, not allow-listed), so a strict reading of the rule would make this `FallbackWorkaround`**: the orchestrator or owner should confirm the pinned reference; (2) Jest 231 of 231 equal; (3) escapes `0 0` (with the `public-allowlist.json` staging caveat); (4) wall time 2.6x sandboxed, 1.5-2.1x no-sandbox, above 1.5x so the `no-sandbox` path applies. Task 0.6e (S1-ts) skipped by instruction: no `S1-ts` row written here.
 
 Owner/follow-up inputs from S4: pin Node and set `globalStore = false` (or `BUN_INSTALL_GLOBAL_STORE=0`) in the make path before treating make output as a parity oracle; consider moving `public-allowlist.json` into `web-app/` or giving `build.ts` an explicit input; do not rely on the host `bun`/`node` (host Bun 1.4.4 and Node 26.8.1 here differ from the pins).
+
+## S11 whole-repo Gazelle (Story 0.11, Tasks 0.11a, 0.11b, 0.11c)
+
+Host onyx (load 16-24), Bazel 9.3.1 via `tools/bazel`, Gazelle 0.54.0, branch `sdd/bazel-epic0-s11-gazelle`. Generated BUILD files were NOT committed (Task 1.1a commits them); this spike commits only directives, the `go_test` macro, `# gazelle:ignore` lines on 5 hand-written BUILD files and these results.
+
+**Verdict: `Pass`, path = directives + `map_kind` macro, cost M** (no custom extension). All four PASS-iff checks are true as measured; the importer build below is an extra check, not part of the matrix row.
+
+### Checks (PASS iff list)
+
+| Check | Result | Evidence |
+|---|---|---|
+| Second whole-repo Gazelle run has zero diff | true | all 141 generated files removed, `bazel run //:gazelle` (exit 0), then `bazel run //:gazelle -- -mode=diff`: 0 output lines, exit 0. Repeated after the `build_tags` and `map_kind` directives were added: 0 lines, exit 0 |
+| Zero diff with and without a synced GenSurface | true | GenSurface = gitignored copies of `//proto/session/v1:gen_go` output in `gen/proto/go/session/v1` (37 `.go`) and `//tools/bzl/ent:ent_gen` output in `session/ent/**` (333 `.go`, `git check-ignore` confirms ignored). SHA-256 over (`git status --porcelain '*.bazel'` + content hashes of all added/modified BUILD files) was `ec62e531509af7e1` with the surface and `ec62e531509af7e1` after moving it away and re-running (also identical in an earlier pass before `build_tags`/`map_kind`: `3efaac9a02150cbe`/`3efaac9a02150cbe`); `-mode=diff` was 0 lines in both states. No `BUILD*` appears under `gen/` or the generated `session/ent/*` |
+| At most 8 `resolve`/`resolve_regexp` lines | true, 6 | root `BUILD.bazel`: 2 ent (1 `resolve` + 1 `resolve_regexp`, `$1` substitution works), 2 proto, 1 `server/web`; `tools/lint/BUILD.bazel`: 1 `resolve_regexp` (isolated `lint_x_tools`). No per-entity line |
+| `session/ent/schema` still gets its generated BUILD file | true | deleted `session/ent/schema/BUILD.bazel`, ran Gazelle: regenerated identically except for the hand-added `schema_srcs` filegroup, which Gazelle does not own and which survives a normal merge run (restored from backup) |
+
+### Numbers
+
+- Go package directories (outside excluded trees): 227 (`find`); BUILD.bazel files after the run: 181 = 40 tracked at start + 141 new. Gazelle wrote the 141 new files and rewrote 28 tracked ones (the `go_test` load line, the root package rules, and the 5 hand files before they were ignored); those rewrites were reverted, not committed.
+- `bazel query //...`: 566 labels; by kind: 222 `go_library`, 143 `go_test`, 15 `go_binary`, 155 `alias` (import_alias naming), plus hand-written rules. 0 query errors after the two fixes below.
+- Gazelle wall time: 1.05 s from an empty state (all generated BUILD files deleted), 0.5-3 s for `-mode=diff` (warm Bazel server, measured with `date`, host load about 22). A first call after server start queues behind the `tools/bazel` slot wrapper (one measured wait of 97 s that is queueing, not Gazelle).
+- Unresolved imports: 0. The only Gazelle warnings are `pattern embed/tmux: matched no files` and `pattern embed/tymuxd: matched no files` (empty directories, confirms ADR-007: the embed `select()` stays hand-maintained).
+- Exit codes of the freshness form `bazel run //:gazelle -- -mode=diff`: 0 when nothing differs, 1 when a diff exists (seen with 9322, 221 and 16-file diffs).
+
+### Task 0.11b: ent exclusion mechanism (decision)
+
+The S2 two-line form (`session/ent/[!s]*`, `session/ent/s[!c]*`) is **brittle, confirmed**: a throwaway `session/ent/scfoo/x.go` made Gazelle emit `session/ent/scfoo/BUILD.bazel`. Replaced with seven prefix-negation globs that exclude every name under `session/ent` except exactly `schema` (tested: `scfoo`, `sc`, `schemb`, `schemaX` all excluded, `schema` still generated). Residual limit: a generated package literally named `schema` cannot exist (ent reserves it), and one- or two-letter names `s`/`sc` are excluded by the earlier lines. No per-entity list, no extension. The `check-build-paths.sh --full` mode in Task 1.1a remains the backstop.
+
+### Task 0.11c: `map_kind` go_test macro
+
+`tools/bzl/go_test.bzl` (17 lines): `go_test(name, **kwargs)` wrapping rules_go `go_test`, sets `size`/`shard_count` from a package table (spike table: `server/services` -> enormous x4, `session` -> large x2). Root `# gazelle:map_kind go_test go_test //tools/bzl:go_test.bzl`. Gazelle then emits `load("//tools/bzl:go_test.bzl", "go_test")` in every package (141 generated + rewritten tracked files). Second run still zero diff. `bazel query 'attr(size, enormous, //server/services:all)'` prints `//server/services:services_test`; `attr(shard_count, 2, //session:all)` prints `//session:session_test`. Extending it for Epic 4 (sandbox tags, timeouts) is a table edit.
+
+### Importer build (S2 deferred check)
+
+`bazel build --config=agent --keep_going //session/... //server/...` (after Gazelle, with `build_tags`, GenSurface absent for Bazel since `gen/` and the generated ent are Bazel outputs): **246 of 253 top-level targets built, 7 failed, 1 failing action** (`BunWebBuild //web-app:dist`: `Could not resolve "@/gen/session/v1/session_pb"`, the TypeScript proto output of Task 0.6e/S1-ts is not wired). The 7 are exactly `rdeps(//session/... + //server/..., //web-app:dist)`: `//server`, `//server:server`, `//server:server_test`, `//server/services:services_test`, `//server/web`, `//server/web:web_test`, `//server/web:dist_staged`. All ent importers (`session`, `server/services`, `server/handlers`, ...) and all proto importers except via that embed chain compiled. Cause is outside Gazelle's remit (web build input), so a finding, not an S11 failure. Not built: nothing was run (tests not executed). This closes the S2 caveat for ent importers: nothing in the ent/proto resolution breaks, so S2 need not be downgraded to `Fail`.
+
+### Things Gazelle gets wrong or needs told (each with the directive)
+
+| Area | Behavior | Fix |
+|---|---|---|
+| Hand-written rules claim importpaths | `# gazelle:ignore` does NOT remove a file's rules from the resolver index: `gen/proto/go/session/v1`, `.../sessionv1connect` matched both S1's abandoned `go_proto_library` and the genrule `go_library` ("matches multiple rules"), and `server/web` matched `server/web/fixture:web`; Gazelle then silently dropped the dep from importers | 3 `gazelle:resolve` lines in root BUILD (above). Cleaner long term: delete the S1 `go_proto_library` attempts and give the fixture another importpath, which frees 3 lines |
+| Hand BUILD files get rewritten | without `# gazelle:ignore` Gazelle reformatted `web-app`, `server/web`, `proto/session/v1`, `spike-tags` and rewrote `proto/session/v1` rules | `# gazelle:ignore` first line added to those 5 (committed here) |
+| Nested directory that a hand file addresses by path | Gazelle created `tools/bzl/spike-tags/cmd/BUILD.bazel`, making `cmd/main.go` in the parent's `srcs` an invalid label (`bazel query //...` errors) | `# gazelle:exclude cmd` in `tools/bzl/spike-tags/BUILD.bazel` |
+| Build tags | tagged files are silently dropped without the directive (dozens of test files: gitoracle 16, integration 13, sinkguard 8, embed_tmux/embed_tymux 4 each, live_github 2, harness 2, otelcauto 2, e2e_ghsignal 1) | `# gazelle:build_tags integration,gitoracle,sinkguard,harness,live_github,embed_tmux,embed_tymux,otelcauto,e2e_ghsignal`; rules_go filters by `--@rules_go//go/config:tags` (S7). `otelcauto` and `e2e_ghsignal` are new relative to the S7 list |
+| cgo | root package (`infoplist_darwin.go`) emitted with `cgo = True`, `embedsrcs = ["CHANGELOG.md"]`; correct, no directive | none; `session/procinfo` and `session/tmux` also carry `cgo = True` |
+| `go:embed` of empty/ignored dirs | `embedsrcs` omitted (warnings above) | hand-maintained select (ADR-007) |
+| `**/testdata`, `node_modules`, `.claude`, `third_party/tmux`, `project_plans`, `website`, `web-app`, `gen` | no BUILD file generated in any of them (list of new BUILD dirs by top-level: session 58, server 24, internal 12, pkg 10, testutil 7, cmd 6, tests 5, tools 3, config 3, rest 1-2 each) | existing excludes work |
+| Vendor-like dirs | none exist in the tracked tree | none |
+| Nested modules | `tools/lint`, `tools/scanner`, `tuitest` keep their own `# gazelle:prefix`; `tools/lint` needs its `resolve_regexp` for the isolated universe | already in place |
+| `session/ent/schema` dep label | the ent `resolve_regexp` also rewrites `//session/ent/schema` imports to the alias `//tools/bzl/ent:schema` (entc's dep changed) | harmless; Epic 1 keeps the alias |
+
+### Cost and fallback
+
+Directives-only path, no extension: actual cost S for the run plus M for diagnosing the three resolver/hand-file interactions. Fallback (custom extension) not needed. Remaining resolve budget: 8 - 6 = 2 (3 more after the S1/fixture cleanup).
+
+### False or unsafe plan assumptions
+
+1. Task 1.1a says Gazelle output "is never rewritten wholesale" and hand files need only the header later; in fact `# gazelle:ignore` is needed before the first run, and ignore does not take a file's rules out of the resolve index, so abandoned hand rules with real importpaths force `gazelle:resolve` lines.
+2. Plan labels `//proto/session/v1:session_go_proto` / `:session_connect_go` do not exist; the real genrule-based labels are `:sessionv1_go` and `:sessionv1connect_go` (Task 1.1a should use those).
+3. "`session/ent/[!s]*` spares schema" (provisional form) was correct but incomplete for `s*` (S2) and still leaks `sc*`; seven globs are needed for an exact "all but schema".
+4. Plan says a second Gazelle run "changes nothing"; the first run over a tree holding hand-written `go_library` rules actually prints resolution ambiguities and drops deps silently (exit 0). Idempotence alone does not catch it; Task 1.1a should also fail on any `which matches multiple rules` line in Gazelle output.
+5. Plan Task 0.11a verify says `-mode=diff; echo $?` prints `0`; true only when nothing differs (exit 1 otherwise).
+6. `bazel query` and `--config=agent`: `agent` is a `build:` config and is rejected by `bazel query`.
+
+### Owner actions
+
+- Decide whether Epic 1 deletes the S1 `go_proto_library` attempts (frees resolve lines) before running Task 1.1a.
+- Wire the TypeScript proto output (Task 0.6e) before expecting `//server:server` and `//server/web:*` to build.
