@@ -198,6 +198,9 @@ export class TestServer {
         // A private tmux server, so this run's sessions never share the live service's
         // default server (where its leaked-control-mode sweeper could see them).
         STAPLER_SQUAD_TMUX_SOCKET: this.tmuxSocket(),
+        // The idle seed sessions would otherwise be flagged stale 5 min into the run, raising
+        // "No activity for Nm" toasts over whatever spec is running on this long-lived server.
+        STAPLER_SQUAD_REVIEW_STALENESS_THRESHOLD: '24h',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
