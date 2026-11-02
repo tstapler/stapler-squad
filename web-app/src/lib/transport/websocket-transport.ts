@@ -32,6 +32,7 @@ import {
 } from "@connectrpc/connect/protocol-connect";
 import { connect } from "it-ws/client";
 import duplex from "it-ws/duplex";
+import { connectCodeForRejectedStream } from "../utils/backoff";
 import { openTerminalSocket, terminalPoolEnabled } from "./terminal-socket";
 
 /**
@@ -386,7 +387,7 @@ export function createWebsocketBasedTransport(
           const statusCode = parseInt(status);
 
           if (statusCode !== 200) {
-            const code = statusCode === 401 ? Code.Unauthenticated : Code.Unknown;
+            const code = connectCodeForRejectedStream(statusCode, wsCloseCode);
             throw new ConnectError(
               `WebSocket response status: ${statusCode}`,
               code
