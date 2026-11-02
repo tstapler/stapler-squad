@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/tstapler/stapler-squad/log"
 	"sort"
 	"sync"
 	"syscall"
@@ -32,6 +33,8 @@ type ConsentGate struct {
 	consent       map[string]bool
 	denied        map[string]bool
 	persistDenied func(id string, denied bool) error
+	pending       []deniedOp
+	draining      bool
 }
 
 func NewConsentGate(classify func(string) Result, consent map[string]bool, persist func(string) error) *ConsentGate {
@@ -151,17 +154,49 @@ func (g *ConsentGate) ObserveResult(enrichmentKey string, err error) {
 			}
 		}
 	}
-	persist := g.persistDenied
 	for _, id := range ids {
 		g.denied[id] = true
 		root := g.roots[id]
 		root.Denied = true
 		g.roots[id] = root
+		g.enqueuePersistLocked(id, true)
 	}
 	g.mu.Unlock()
-	if persist != nil {
-		for _, id := range ids {
-			_ = persist(id, true) // in-memory state still holds for this process
+}
+
+type deniedOp struct {
+	id     string
+	denied bool
+}
+
+// enqueuePersistLocked queues a config write behind a single drain goroutine:
+// writes stay in state-change order (persist(true) cannot land after
+// persist(false)) and config.UpdateConfig disk I/O stays off the enricher worker.
+func (g *ConsentGate) enqueuePersistLocked(id string, denied bool) {
+	if g.persistDenied == nil {
+		return
+	}
+	g.pending = append(g.pending, deniedOp{id, denied})
+	if !g.draining {
+		g.draining = true
+		go g.drainPersist()
+	}
+}
+
+func (g *ConsentGate) drainPersist() {
+	for {
+		g.mu.Lock()
+		if len(g.pending) == 0 {
+			g.draining = false
+			g.mu.Unlock()
+			return
+		}
+		op := g.pending[0]
+		g.pending = g.pending[1:]
+		persist := g.persistDenied
+		g.mu.Unlock()
+		if err := persist(op.id, op.denied); err != nil {
+			log.Warn("tcc: failed to persist denied state; it will not survive a restart", "root_id", op.id, "denied", op.denied, "err", err)
 		}
 	}
 }
@@ -170,26 +205,17 @@ func (g *ConsentGate) ObserveResult(enrichmentKey string, err error) {
 // nil when the root was not denied.
 func (g *ConsentGate) Recheck(id string) ([]string, error) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	root, known := g.roots[id]
 	if !known {
-		g.mu.Unlock()
 		return nil, ErrUnknownRoot
 	}
 	if !g.denied[id] {
-		g.mu.Unlock()
 		return nil, nil
 	}
-	persist := g.persistDenied
-	g.mu.Unlock()
-	if persist != nil {
-		if err := persist(id, false); err != nil {
-			return nil, err
-		}
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	delete(g.denied, id)
 	root.Denied = false
 	g.roots[id] = root
+	g.enqueuePersistLocked(id, false)
 	return append([]string(nil), root.Paths...), nil
 }
