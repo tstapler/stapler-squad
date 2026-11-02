@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -52,7 +53,8 @@ const (
 	DropOutcomeDisabled            = "disabled"
 	DropOutcomeNoLegacyTable       = "no_legacy_table"
 	DropOutcomeMigrationIncomplete = "migration_incomplete"
-	DropOutcomeCountMismatch       = "count_mismatch"
+	DropOutcomeRefusedUncopied     = "refused_uncopied"
+	DropOutcomeEmptyTable          = "empty_table"
 	DropOutcomeDryRun              = "dry_run"
 	DropOutcomeDropped             = "dropped"
 	DropOutcomeError               = "error"
@@ -63,6 +65,9 @@ const (
 // inject Pause and BeforeChunk.
 type LegacyDropConfig struct {
 	Mode LegacyDropMode
+	// RetentionDays is the escape-event age retention (config EscapeAnalyticsRetentionDays);
+	// only legacy rows older than it may be missing from the new database. 0 means none may.
+	RetentionDays int
 	// TargetHold is the writer hold per delete chunk the chunk size adapts to (default 40 ms).
 	TargetHold time.Duration
 	// InitialChunk is the first delete chunk in rows (default 500).
@@ -75,6 +80,9 @@ type LegacyDropConfig struct {
 	Now            func() time.Time
 	// Pause waits between statements so the analytics writer is idle most of the time.
 	Pause func(ctx context.Context, d time.Duration) error
+	// AfterClassify, if set, runs after a chunk's ids were verified and before they
+	// are deleted, with the chunk's row count (tests: size bound, concurrent insert).
+	AfterClassify func(rows int)
 	// BeforeChunk, if set, runs before each delete chunk; a non-nil error stops the
 	// run there (a simulated crash).
 	BeforeChunk func() error
@@ -107,65 +115,103 @@ type LegacyDropResult struct {
 	Outcome    string
 	LegacyRows int64 // rows in the legacy table when the guards ran
 	NewRows    int64 // rows in db/escape_events.db when the guards ran
+	Uncopied   int64 // legacy ids absent from the new database and not retention-evictable
+	Evictable  int64 // legacy ids absent from the new database but older than the retention cutoff
 	Deleted    int64 // legacy rows deleted by this run
 	Dropped    bool
 }
 
 // DropLegacyEscapeEvents removes the legacy escape_events table from analytics.db
-// once the copy is provably complete. Guards, all required: the migration ledger
-// in newPath reads "done", and newPath holds at least as many rows as the legacy
-// table. Both counts are read on read-only connections, so neither writer is held.
+// once every legacy row is known to be safe to lose. What is checked, exactly:
 //
-// The legacy rows are deleted in short chunks on the analytics writer (adaptive
-// to TargetHold, with a pause between), then the now-empty table is dropped in
-// one trivial statement and freed pages are returned in bounded incremental_vacuum
-// steps. A crash or cancel leaves a smaller legacy table and the guards still
-// hold on the next run, which continues from there. Rows are only ever removed
-// from the legacy copy; db/escape_events.db is never written.
+//  1. the migration ledger in newPath reads "done" (a missing ledger refuses);
+//  2. every legacy row id is present in the new database (same id, not same
+//     content), or its wall_time is older than the age-retention cutoff
+//     (cfg.RetentionDays, as runEscapeEventRetention computes it), so the new
+//     database may legitimately have evicted it. A missing row newer than the
+//     cutoff refuses the run (refused_uncopied) with a sample of ids: that is
+//     the signature of a legacy write after the ledger turned done, such as an
+//     older binary. The per-session cap can also evict younger rows; those are
+//     treated as uncopied (conservative) and refuse.
+//
+// The check runs on read-only connections before any delete and again per chunk,
+// and each chunk deletes only the ids it just classified safe, so a legacy
+// insert after the check survives. Deletes run on the analytics writer in short
+// chunks (adaptive to TargetHold, with a pause between). The empty table is then
+// dropped inside a transaction that re-counts it, and freed pages are returned in
+// bounded incremental_vacuum steps. A crash or cancel leaves a smaller table and
+// the next run continues. db/escape_events.db is never written.
 func DropLegacyEscapeEvents(ctx context.Context, analyticsDrv dialect.ExecQuerier, analyticsPath, newPath string, cfg LegacyDropConfig) (LegacyDropResult, error) {
 	cfg = cfg.withDefaults()
-	res := LegacyDropResult{Outcome: DropOutcomeDisabled}
 	if cfg.Mode == LegacyDropOff {
-		return res, nil
+		return LegacyDropResult{Outcome: DropOutcomeDisabled}, nil
 	}
-	res, err := checkLegacyDropGuards(ctx, analyticsPath, newPath)
+	g, err := openDropGuards(ctx, analyticsPath, newPath)
 	if err != nil {
-		return res, err
+		return LegacyDropResult{}, err
 	}
+	defer g.close()
+	res := g.res
 	switch res.Outcome {
 	case DropOutcomeNoLegacyTable:
-		recordDropOutcome(ctx, res)
 		return res, nil
 	case DropOutcomeMigrationIncomplete:
 		log.Warn("escape legacy drop refused: migration ledger is not done; table left in place", "legacy_rows", res.LegacyRows)
 		recordDropOutcome(ctx, res)
 		return res, nil
-	case DropOutcomeCountMismatch:
-		log.Warn("escape legacy drop refused: new database has fewer rows than the legacy table; table left in place",
-			"legacy_rows", res.LegacyRows, "new_rows", res.NewRows)
+	case DropOutcomeEmptyTable:
+		if cfg.Mode == LegacyDropOn {
+			if _, err := dropIfEmpty(ctx, analyticsDrv); err != nil {
+				return res, err
+			}
+		}
+		return res, nil
+	}
+
+	cutoff := cfg.retentionCutoff()
+	if err := g.survey(ctx, cutoff, &res); err != nil {
+		return res, err
+	}
+	if res.Uncopied > 0 {
+		res.Outcome = DropOutcomeRefusedUncopied
+		log.Warn("escape legacy drop refused: legacy rows are missing from the new database and are not old enough to have been evicted; table left in place. To copy them, reset the ledger (see docs/how-to/reclaim-sqlite-free-space.md)",
+			"legacy_rows", res.LegacyRows, "new_rows", res.NewRows, "uncopied", res.Uncopied, "evictable", res.Evictable, "sample_ids", g.sample)
 		recordDropOutcome(ctx, res)
 		return res, nil
 	}
-	log.Info("escape legacy drop guards passed", "legacy_rows", res.LegacyRows, "new_rows", res.NewRows, "dry_run", cfg.Mode == LegacyDropDryRun)
+	log.Info("escape legacy drop guards passed", "legacy_rows", res.LegacyRows, "new_rows", res.NewRows, "evictable", res.Evictable, "dry_run", cfg.Mode == LegacyDropDryRun)
 	if cfg.Mode == LegacyDropDryRun {
-		log.Info("escape legacy drop dry run: would delete legacy rows in chunks, DROP TABLE escape_events, then incremental_vacuum; set "+LegacyDropEnv+"=on to run",
+		log.Info("escape legacy drop dry run: would delete verified legacy rows in chunks, DROP TABLE escape_events, then incremental_vacuum; set "+LegacyDropEnv+"=on to run",
 			"legacy_rows", res.LegacyRows)
 		res.Outcome = DropOutcomeDryRun
 		recordDropOutcome(ctx, res)
 		return res, nil
 	}
 
-	deleted, err := deleteLegacyChunks(ctx, analyticsDrv, cfg)
+	deleted, refused, err := g.deleteSafeChunks(ctx, analyticsDrv, cutoff, cfg)
 	res.Deleted = deleted
 	if err != nil {
 		res.Outcome = DropOutcomeError
 		recordDropOutcome(ctx, res)
 		return res, err
 	}
-	if err := analyticsDrv.Exec(ctx, "DROP TABLE IF EXISTS escape_events", []any{}, new(sql.Result)); err != nil {
+	if refused {
+		res.Outcome = DropOutcomeRefusedUncopied
+		log.Warn("escape legacy drop stopped: an uncopied legacy row appeared mid-run; it was kept", "deleted", deleted, "sample_ids", g.sample)
+		recordDropOutcome(ctx, res)
+		return res, nil
+	}
+	dropped, err := dropIfEmpty(ctx, analyticsDrv)
+	if err != nil {
 		res.Outcome = DropOutcomeError
 		recordDropOutcome(ctx, res)
-		return res, fmt.Errorf("escape legacy drop: drop table: %w", err)
+		return res, err
+	}
+	if !dropped {
+		res.Outcome = DropOutcomeRefusedUncopied
+		log.Warn("escape legacy drop kept the table: rows were written to it during the run", "deleted", deleted)
+		recordDropOutcome(ctx, res)
+		return res, nil
 	}
 	res.Dropped, res.Outcome = true, DropOutcomeDropped
 	log.Info("escape legacy table dropped", "deleted_rows", deleted, "legacy_rows", res.LegacyRows, "new_rows", res.NewRows)
@@ -174,76 +220,220 @@ func DropLegacyEscapeEvents(ctx context.Context, analyticsDrv dialect.ExecQuerie
 	return res, nil
 }
 
-func checkLegacyDropGuards(ctx context.Context, analyticsPath, newPath string) (LegacyDropResult, error) {
-	res := LegacyDropResult{}
+// retentionCutoff mirrors runEscapeEventRetention; nil when age retention is off,
+// in which case no missing row is ever treated as evicted.
+func (c LegacyDropConfig) retentionCutoff() *time.Time {
+	if c.RetentionDays <= 0 {
+		return nil
+	}
+	t := c.Now().AddDate(0, 0, -c.RetentionDays)
+	return &t
+}
+
+// dropGuards holds read-only connections to both databases.
+type dropGuards struct {
+	legacy, dst *sql.DB
+	res         LegacyDropResult
+	sample      []string
+}
+
+func (g *dropGuards) close() {
+	if g.legacy != nil {
+		_ = g.legacy.Close()
+	}
+	if g.dst != nil {
+		_ = g.dst.Close()
+	}
+}
+
+const (
+	surveyBatch = 2000
+	sampleIDs   = 5
+)
+
+// openDropGuards evaluates the cheap guards (table, ledger) and counts both tables.
+func openDropGuards(ctx context.Context, analyticsPath, newPath string) (*dropGuards, error) {
+	g := &dropGuards{}
 	if _, err := os.Stat(analyticsPath); errors.Is(err, os.ErrNotExist) {
-		res.Outcome = DropOutcomeNoLegacyTable
-		return res, nil
+		g.res.Outcome = DropOutcomeNoLegacyTable
+		return g, nil
 	}
-	legacy, err := dbpool.OpenForeignReadOnly(analyticsPath, 5*time.Second)
-	if err != nil {
-		return res, err
+	var err error
+	if g.legacy, err = dbpool.OpenForeignReadOnly(analyticsPath, 5*time.Second); err != nil {
+		return g, err
 	}
-	defer func() { _ = legacy.Close() }()
 	var hasTable int
-	if err := legacy.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'escape_events'").Scan(&hasTable); err != nil {
-		return res, fmt.Errorf("escape legacy drop: inspect analytics db: %w", err)
+	if err := g.legacy.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'escape_events'").Scan(&hasTable); err != nil {
+		return g, fmt.Errorf("escape legacy drop: inspect analytics db: %w", err)
 	}
 	if hasTable == 0 {
-		res.Outcome = DropOutcomeNoLegacyTable
-		return res, nil
+		g.res.Outcome = DropOutcomeNoLegacyTable
+		return g, nil
 	}
-	if err := legacy.QueryRowContext(ctx, "SELECT COUNT(*) FROM escape_events").Scan(&res.LegacyRows); err != nil {
-		return res, fmt.Errorf("escape legacy drop: count legacy rows: %w", err)
+	if err := g.legacy.QueryRowContext(ctx, "SELECT COUNT(*) FROM escape_events").Scan(&g.res.LegacyRows); err != nil {
+		return g, fmt.Errorf("escape legacy drop: count legacy rows: %w", err)
+	}
+	if g.res.LegacyRows == 0 {
+		// ent recreates the empty table on every start; nothing to verify or lose.
+		g.res.Outcome = DropOutcomeEmptyTable
+		return g, nil
 	}
 
 	if _, err := os.Stat(newPath); errors.Is(err, os.ErrNotExist) {
-		res.Outcome = DropOutcomeMigrationIncomplete
-		return res, nil
+		g.res.Outcome = DropOutcomeMigrationIncomplete
+		return g, nil
 	}
-	dst, err := dbpool.OpenForeignReadOnly(newPath, 5*time.Second)
-	if err != nil {
-		return res, err
+	if g.dst, err = dbpool.OpenForeignReadOnly(newPath, 5*time.Second); err != nil {
+		return g, err
 	}
-	defer func() { _ = dst.Close() }()
 	var phase string
-	err = dst.QueryRowContext(ctx, "SELECT phase FROM escape_events_migration WHERE id = 1").Scan(&phase)
-	if err != nil || phase != phaseDone {
+	if err := g.dst.QueryRowContext(ctx, "SELECT phase FROM escape_events_migration WHERE id = 1").Scan(&phase); err != nil || phase != phaseDone {
 		// A missing ledger table or row means the copy never started.
-		res.Outcome = DropOutcomeMigrationIncomplete
-		return res, nil
+		g.res.Outcome = DropOutcomeMigrationIncomplete
+		return g, nil
 	}
-	if err := dst.QueryRowContext(ctx, "SELECT COUNT(*) FROM escape_events").Scan(&res.NewRows); err != nil {
-		return res, fmt.Errorf("escape legacy drop: count new rows: %w", err)
+	if err := g.dst.QueryRowContext(ctx, "SELECT COUNT(*) FROM escape_events").Scan(&g.res.NewRows); err != nil {
+		return g, fmt.Errorf("escape legacy drop: count new rows: %w", err)
 	}
-	if res.NewRows < res.LegacyRows {
-		res.Outcome = DropOutcomeCountMismatch
-		return res, nil
-	}
-	res.Outcome = dropOutcomeGuardsPassed
-	return res, nil
+	g.res.Outcome = dropOutcomeGuardsPassed
+	return g, nil
 }
 
-// deleteLegacyChunks empties the legacy table with rowid-bounded DELETEs, one
-// statement per chunk so the writer is released between them.
-func deleteLegacyChunks(ctx context.Context, drv dialect.ExecQuerier, cfg LegacyDropConfig) (int64, error) {
-	var total int64
+type legacyRow struct {
+	id string
+	wt sql.NullTime
+}
+
+// batchAfter reads up to limit legacy rows with id > after, in id order.
+func (g *dropGuards) batchAfter(ctx context.Context, after string, limit int) ([]legacyRow, error) {
+	rows, err := g.legacy.QueryContext(ctx, "SELECT id, wall_time FROM escape_events WHERE id > ? ORDER BY id LIMIT ?", after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("escape legacy drop: read legacy batch: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []legacyRow
+	for rows.Next() {
+		var r legacyRow
+		if err := rows.Scan(&r.id, &r.wt); err != nil {
+			return nil, fmt.Errorf("escape legacy drop: scan legacy batch: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// present returns which of the ids exist in the new database.
+func (g *dropGuards) present(ctx context.Context, batch []legacyRow) (map[string]bool, error) {
+	args := make([]any, len(batch))
+	marks := make([]string, len(batch))
+	for i, r := range batch {
+		args[i], marks[i] = r.id, "?"
+	}
+	rows, err := g.dst.QueryContext(ctx, "SELECT id FROM escape_events WHERE id IN ("+strings.Join(marks, ",")+")", args...)
+	if err != nil {
+		return nil, fmt.Errorf("escape legacy drop: look up ids in new database: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	got := make(map[string]bool, len(batch))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		got[id] = true
+	}
+	return got, rows.Err()
+}
+
+// classify splits a batch into ids safe to delete (copied, or old enough that the
+// new database may have evicted them) and counts the rest as uncopied.
+func (g *dropGuards) classify(ctx context.Context, batch []legacyRow, cutoff *time.Time) (safe []string, uncopied, evictable int64, err error) {
+	if len(batch) == 0 {
+		return nil, 0, 0, nil
+	}
+	got, err := g.present(ctx, batch)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	for _, r := range batch {
+		switch {
+		case got[r.id]:
+			safe = append(safe, r.id)
+		case cutoff != nil && r.wt.Valid && r.wt.Time.Before(*cutoff):
+			safe = append(safe, r.id)
+			evictable++
+		default:
+			uncopied++
+			if len(g.sample) < sampleIDs {
+				g.sample = append(g.sample, r.id)
+			}
+		}
+	}
+	return safe, uncopied, evictable, nil
+}
+
+// survey classifies the whole legacy table read-only, before any delete.
+func (g *dropGuards) survey(ctx context.Context, cutoff *time.Time, res *LegacyDropResult) error {
+	after := ""
+	for {
+		batch, err := g.batchAfter(ctx, after, surveyBatch)
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		_, unc, ev, err := g.classify(ctx, batch, cutoff)
+		if err != nil {
+			return err
+		}
+		res.Uncopied += unc
+		res.Evictable += ev
+		after = batch[len(batch)-1].id
+	}
+}
+
+// deleteSafeChunks re-classifies each chunk right before deleting exactly the ids
+// it found safe. refused reports an uncopied row seen mid-run (the run stops).
+func (g *dropGuards) deleteSafeChunks(ctx context.Context, drv dialect.ExecQuerier, cutoff *time.Time, cfg LegacyDropConfig) (total int64, refused bool, err error) {
 	chunk := cfg.InitialChunk
+	after := ""
 	for {
 		if cfg.BeforeChunk != nil {
 			if err := cfg.BeforeChunk(); err != nil {
-				return total, err
+				return total, false, err
 			}
 		}
+		batch, err := g.batchAfter(ctx, after, chunk)
+		if err != nil {
+			return total, false, err
+		}
+		if len(batch) == 0 {
+			return total, false, nil
+		}
+		g.sample = g.sample[:0]
+		safe, unc, _, err := g.classify(ctx, batch, cutoff)
+		if err != nil {
+			return total, false, err
+		}
+		if unc > 0 {
+			return total, true, nil
+		}
+		after = batch[len(batch)-1].id
+		if cfg.AfterClassify != nil {
+			cfg.AfterClassify(len(safe))
+		}
 		start := cfg.Now()
+		args := make([]any, len(safe))
+		marks := make([]string, len(safe))
+		for i, id := range safe {
+			args[i], marks[i] = id, "?"
+		}
 		var r sql.Result
-		if err := drv.Exec(ctx, "DELETE FROM escape_events WHERE rowid IN (SELECT rowid FROM escape_events LIMIT ?)", []any{chunk}, &r); err != nil {
-			return total, fmt.Errorf("escape legacy drop: delete chunk: %w", err)
+		if err := drv.Exec(ctx, "DELETE FROM escape_events WHERE id IN ("+strings.Join(marks, ",")+")", args, &r); err != nil {
+			return total, false, fmt.Errorf("escape legacy drop: delete chunk: %w", err)
 		}
 		n, _ := r.RowsAffected()
-		if n == 0 {
-			return total, nil
-		}
 		total += n
 		elapsed := cfg.Now().Sub(start)
 		switch {
@@ -253,9 +443,45 @@ func deleteLegacyChunks(ctx context.Context, drv dialect.ExecQuerier, cfg Legacy
 			chunk = min(chunk*2, maxBatchRows)
 		}
 		if err := cfg.Pause(ctx, max(3*elapsed, 20*time.Millisecond)); err != nil {
-			return total, err
+			return total, false, err
 		}
 	}
+}
+
+// dropIfEmpty drops the table in one transaction that first re-counts it, so a
+// row written since the last chunk is never dropped with the table. Reports
+// false (no error) when the table still has rows or the driver has no transactions.
+func dropIfEmpty(ctx context.Context, drv dialect.ExecQuerier) (bool, error) {
+	d, ok := drv.(dialect.Driver)
+	if !ok {
+		return false, nil
+	}
+	tx, err := d.Tx(ctx)
+	if err != nil {
+		return false, fmt.Errorf("escape legacy drop: begin drop tx: %w", err)
+	}
+	var rows entsql.Rows
+	if err := tx.Query(ctx, "SELECT COUNT(*) FROM escape_events", []any{}, &rows); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("escape legacy drop: recount before drop: %w", err)
+	}
+	var n int64
+	if rows.Next() {
+		_ = rows.Scan(&n)
+	}
+	_ = rows.Close()
+	if n > 0 {
+		_ = tx.Rollback()
+		return false, nil
+	}
+	if err := tx.Exec(ctx, "DROP TABLE IF EXISTS escape_events", []any{}, new(sql.Result)); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("escape legacy drop: drop table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("escape legacy drop: commit drop: %w", err)
+	}
+	return true, nil
 }
 
 // reclaimLegacySpace returns freed pages to the filesystem in bounded steps. It

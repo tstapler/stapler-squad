@@ -2,7 +2,9 @@ package escapedb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,9 +15,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 )
 
 type dropFixture struct {
+	legacy  *ent.Client
 	dir     string
 	drv     dialect.ExecQuerier
 	dst     *dbpool.Database
@@ -33,7 +38,7 @@ func newDropFixture(t *testing.T, n int) *dropFixture {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = legacy.Close() })
 	_, dst := openDest(ctx, t, dir)
-	return &dropFixture{dir: dir, drv: drv, dst: dst, srcPath: filepath.Join(dir, "analytics.db"), dstPath: Path(dir)}
+	return &dropFixture{legacy: legacy, dir: dir, drv: drv, dst: dst, srcPath: filepath.Join(dir, "analytics.db"), dstPath: Path(dir)}
 }
 
 func (f *dropFixture) migrate(t *testing.T) {
@@ -145,20 +150,154 @@ func TestLegacyDrop_should_Refuse_when_LedgerNotDone(t *testing.T) {
 	}
 }
 
-func TestLegacyDrop_should_Refuse_when_NewDatabaseHasFewerRows(t *testing.T) {
+func (f *dropFixture) addLegacy(t *testing.T, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		f.legacy.EscapeEvent.Create().SetID(id).SetSessionID("late").SetStage("pty_read").SetSequenceType("SGR").
+			SetByteLength(1).SetRawBytes([]byte{1}).SetWallTime(time.Now()).SetSessionSeq(1).ExecX(context.Background())
+	}
+}
+
+func (f *dropFixture) legacyHas(t *testing.T, id string) bool {
+	t.Helper()
+	ok, err := f.legacy.EscapeEvent.Query().Where(escapeevent.ID(id)).Exist(context.Background())
+	require.NoError(t, err)
+	return ok
+}
+
+func TestLegacyDrop_should_Refuse_when_NewDatabaseIsMissingRecentRows(t *testing.T) {
 	f := newDropFixture(t, 200)
 	f.migrate(t)
 	_, err := f.dst.Writer().Exec("DELETE FROM escape_events WHERE rowid IN (SELECT rowid FROM escape_events LIMIT 5)")
 	require.NoError(t, err)
 
-	res, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn})
+	res, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn, RetentionDays: 7})
 	require.NoError(t, err)
-	assert.Equal(t, DropOutcomeCountMismatch, res.Outcome)
-	assert.EqualValues(t, 200, res.LegacyRows)
-	assert.EqualValues(t, 195, res.NewRows)
+	assert.Equal(t, DropOutcomeRefusedUncopied, res.Outcome)
+	assert.EqualValues(t, 5, res.Uncopied)
 	n, has := rowCount(t, f.srcPath, "escape_events")
 	assert.True(t, has)
 	assert.EqualValues(t, 200, n)
+}
+
+// The count-only guard passed here (new 230 >= legacy 220) and deleted 20 rows that were never copied.
+func TestLegacyDrop_should_KeepUncopied_when_LegacyWrittenAfterLedgerDone_and_NewDbKeptGrowing(t *testing.T) {
+	f := newDropFixture(t, 200)
+	f.migrate(t)
+	late := make([]string, 20)
+	for i := range late {
+		late[i] = fmt.Sprintf("late%02d", i)
+	}
+	f.addLegacy(t, late...)
+	for i := 0; i < 30; i++ { // the new database keeps growing, so counts alone look fine
+		_, err := f.dst.Writer().Exec("INSERT INTO escape_events (id, session_id, stage, sequence_type, byte_length, wall_time, session_seq) VALUES (?, 'n', 'pty_read', 'SGR', 1, ?, 1)",
+			fmt.Sprintf("new%02d", i), time.Now())
+		require.NoError(t, err)
+	}
+
+	res, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn, RetentionDays: 7})
+	require.NoError(t, err)
+
+	assert.Equal(t, DropOutcomeRefusedUncopied, res.Outcome)
+	assert.EqualValues(t, 20, res.Uncopied)
+	assert.Greater(t, res.NewRows, res.LegacyRows, "the count guard alone would have passed")
+	assert.Zero(t, res.Deleted)
+	for _, id := range late {
+		assert.True(t, f.legacyHas(t, id), id)
+	}
+}
+
+func TestLegacyDrop_should_Allow_when_MissingRowsAreOlderThanRetentionCutoff(t *testing.T) {
+	f := newDropFixture(t, 200)
+	f.migrate(t)
+	rows, err := f.dst.Writer().Query("SELECT id FROM escape_events LIMIT 5")
+	require.NoError(t, err)
+	var ids []string
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		ids = append(ids, id)
+	}
+	require.NoError(t, rows.Close())
+	for _, id := range ids { // retention evicted these from the new database
+		_, err := f.dst.Writer().Exec("DELETE FROM escape_events WHERE id = ?", id)
+		require.NoError(t, err)
+	}
+	for _, id := range ids {
+		require.NoError(t, f.drv.Exec(context.Background(), "UPDATE escape_events SET wall_time = ? WHERE id = ?",
+			[]any{time.Now().AddDate(0, 0, -30), id}, new(sql.Result)))
+	}
+
+	res, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn, RetentionDays: 7})
+	require.NoError(t, err)
+	assert.Equal(t, DropOutcomeDropped, res.Outcome)
+	assert.EqualValues(t, 5, res.Evictable)
+	assert.EqualValues(t, 200, res.Deleted)
+
+	// With age retention off nothing may be missing, however old.
+	f2 := newDropFixture(t, 50)
+	f2.migrate(t)
+	_, err = f2.dst.Writer().Exec("DELETE FROM escape_events WHERE rowid IN (SELECT rowid FROM escape_events LIMIT 1)")
+	require.NoError(t, err)
+	res, err = f2.drop(LegacyDropConfig{Mode: LegacyDropOn})
+	require.NoError(t, err)
+	assert.Equal(t, DropOutcomeRefusedUncopied, res.Outcome)
+}
+
+func TestLegacyDrop_should_NotLoseLegacyInsert_that_lands_between_check_and_delete(t *testing.T) {
+	for name, id := range map[string]string{
+		"after the cursor (seen by a later chunk)": "zzzz-late",
+		"before the cursor (behind every chunk)":   "!early-late",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newDropFixture(t, 300)
+			f.migrate(t)
+			inserted := false
+			res, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn, InitialChunk: 100, TargetHold: time.Nanosecond,
+				AfterClassify: func(int) {
+					if !inserted {
+						inserted = true
+						f.addLegacy(t, id)
+					}
+				}})
+			require.NoError(t, err)
+			assert.Equal(t, DropOutcomeRefusedUncopied, res.Outcome)
+			assert.False(t, res.Dropped)
+			assert.True(t, f.legacyHas(t, id), "the concurrent insert must survive")
+		})
+	}
+}
+
+func TestLegacyDrop_should_BoundChunkSize(t *testing.T) {
+	f := newDropFixture(t, 700)
+	f.migrate(t)
+	var sizes []int
+	_, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn, InitialChunk: 100, TargetHold: time.Nanosecond,
+		AfterClassify: func(n int) { sizes = append(sizes, n) }})
+	require.NoError(t, err)
+	require.NotEmpty(t, sizes)
+	for _, n := range sizes {
+		assert.LessOrEqual(t, n, 100)
+	}
+	assert.Greater(t, len(sizes), 1)
+}
+
+func TestLegacyDrop_should_DropRecreatedEmptyTableQuietly(t *testing.T) {
+	f := newDropFixture(t, 100)
+	f.migrate(t)
+	res, err := f.drop(LegacyDropConfig{Mode: LegacyDropOn})
+	require.NoError(t, err)
+	require.Equal(t, DropOutcomeDropped, res.Outcome)
+
+	require.NoError(t, f.legacy.Schema.Create(context.Background())) // what OpenAnalyticsDB does on every start
+	_, has := rowCount(t, f.srcPath, "escape_events")
+	require.True(t, has)
+
+	res, err = f.drop(LegacyDropConfig{Mode: LegacyDropOn})
+	require.NoError(t, err)
+	assert.Equal(t, DropOutcomeEmptyTable, res.Outcome)
+	_, has = rowCount(t, f.srcPath, "escape_events")
+	assert.False(t, has)
 }
 
 func TestLegacyDrop_should_ResumeAfterCrash_and_BeIdempotent(t *testing.T) {

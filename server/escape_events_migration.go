@@ -52,7 +52,7 @@ func (s *Server) startEscapeEventsMigration(ctx context.Context, deps *ServerDep
 			log.Warn("escape events migration failed; resumes next start", "err", err, "scanned", st.Scanned, "phase", st.Phase)
 		case st.Done() && dropMode != escapedb.LegacyDropOff && deps.AnalyticsDriver != nil:
 			res, dropErr := escapedb.DropLegacyEscapeEvents(ctx, deps.AnalyticsDriver,
-				filepath.Join(configDir, "analytics.db"), escapedb.Path(configDir), escapedb.LegacyDropConfig{Mode: dropMode})
+				filepath.Join(configDir, "analytics.db"), escapedb.Path(configDir), escapedb.LegacyDropConfig{Mode: dropMode, RetentionDays: cfg.EscapeAnalyticsRetentionDays})
 			if dropErr != nil && ctx.Err() == nil {
 				log.Warn("legacy escape_events drop failed; resumes next start", "err", dropErr, "outcome", res.Outcome, "deleted", res.Deleted)
 			}
