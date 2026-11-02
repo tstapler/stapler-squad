@@ -663,7 +663,7 @@ ent-gen: ensure-tools ## Generate ent ORM code from session/ent/schema
 	@if [ ! -f $(ENT_STAMP) ] \
 	   || [ "$$(find session/ent/schema -name '*.go' -newer $(ENT_STAMP) -print -quit)" ]; then \
 		echo "Generating ent ORM code..."; \
-		go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema; \
+		go run -mod=mod entgo.io/ent/cmd/ent generate $$(cat tools/bzl/ent/ent_flags.txt) ./session/ent/schema; \
 		touch $(ENT_STAMP); \
 		echo "✅ ent ORM code generated"; \
 	else \
