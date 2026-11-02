@@ -516,10 +516,6 @@ jobs:
   e2e-bun:
     name: e2e (Bun build)
     runs-on: ubuntu-latest
-    # Container run steps default to sh; the comparator requires Bash pipefail.
-    defaults:
-      run:
-        shell: bash
     needs: [detect-changes, e2e-env, e2e-binary-bun, e2e-bun-shard]
     # e2e-env failing leaves the shards skipped (no matrix); still run so this check goes red.
     if: always() && (needs.e2e-bun-shard.result != 'skipped' || needs.e2e-env.result == 'failure')
