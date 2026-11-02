@@ -4,6 +4,7 @@ load("@rules_go//proto:compiler.bzl", "go_proto_compiler")
 alias(
     name = "protoc_gen_connect_go",
     actual = "@com_connectrpc_connect//cmd/protoc-gen-connect-go",
+    visibility = ["//visibility:public"],
 )
 
 go_proto_compiler(

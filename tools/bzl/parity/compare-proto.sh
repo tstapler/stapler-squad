@@ -15,8 +15,8 @@ if [ -z "$ref" ]; then
   buf generate proto --template buf.gen.go-only.yaml -o "$ref" || { echo "compare-proto: reference generation failed" >&2; exit 2; }
 fi
 case "$mode" in
-  gopb) targets=(//proto/session/v1:sessionv1_go_proto //proto/session/v1:sessionv1connect_go_proto); groups=(--output_groups=go_generated_srcs) ;;
-  buf)  targets=(//proto/session/v1:gen_go); groups=() ;;
+  gopb) scan='sessionv1*_go_proto_'; targets=(//proto/session/v1:sessionv1_go_proto //proto/session/v1:sessionv1connect_go_proto); groups=(--output_groups=go_generated_srcs) ;;
+  buf)  scan='gen'; targets=(//proto/session/v1:gen_go); groups=() ;;
   *) echo "usage: $0 [gopb|buf]" >&2; exit 2 ;;
 esac
 bazel build --config=agent --keep_going --sandbox_default_allow_network=false "${groups[@]}" "${targets[@]}" 2>&1 | tail -3; [ "${PIPESTATUS[0]}" = 0 ] || echo "compare-proto: bazel build reported failures (continuing with what built)" >&2
@@ -26,7 +26,7 @@ while IFS= read -r f; do
     *.connect.go) cp "$f" "$out/sessionv1connect/" ;;
     *.pb.go) cp "$f" "$out/" ;;
   esac
-done < <(find -L "$(bazel info --config=agent bazel-bin 2>/dev/null)/proto/session/v1" \( -name '*.pb.go' -o -name '*.connect.go' \) -type f 2>/dev/null)
+done < <(find -L "$(bazel info --config=agent bazel-bin 2>/dev/null)"/proto/session/v1/$scan \( -name '*.pb.go' -o -name '*.connect.go' \) -type f 2>/dev/null)
 gofmt -w "$tmp/bazel" "$ref/gen" 2>/dev/null
 if diff -r "$ref/gen/proto/go" "$tmp/bazel/gen/proto/go" > "$tmp/diff.txt" 2>&1; then
   echo "compare-proto($mode): identical ($(find "$tmp/bazel" -name '*.go' | wc -l) files)"; exit 0

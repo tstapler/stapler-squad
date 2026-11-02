@@ -1,0 +1,18 @@
+# Bazel spike S1 (Task 0.3d): same managed mode and options as buf.gen.go-only.yaml, but with local
+# plugins built by Bazel (no BSR). @PROTOC_GEN_GO@ and @PROTOC_GEN_CONNECT_GO@ are replaced by the
+# genrule in proto/session/v1/BUILD.bazel with the plugins' execroot paths.
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/tstapler/stapler-squad/gen/proto/go
+plugins:
+  - local: ["@PROTOC_GEN_GO@"]
+    out: gen/proto/go
+    opt:
+      - paths=source_relative
+  - local: ["@PROTOC_GEN_CONNECT_GO@"]
+    out: gen/proto/go
+    opt:
+      - paths=source_relative

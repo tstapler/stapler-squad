@@ -1,4 +1,5 @@
 # Spike S1 (Task 0.3a): hand-written, listed in tools/bzl/hand-build-files.txt.
+load("@rules_go//go:def.bzl", "go_library")
 load("@rules_go//proto:def.bzl", "go_proto_library")
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
 
@@ -25,4 +26,131 @@ go_proto_library(
     proto = ":v1_proto",
     visibility = ["//visibility:public"],
     deps = [":sessionv1_go_proto"],
+)
+
+# Task 0.3d: buf generate (managed mode) as a hermetic action with local pinned plugins. buf.yaml has no
+# deps (Task 0.3e), so nothing is fetched. HOME/BUF_CACHE_DIR point into the action's scratch dir.
+genrule(
+    name = "gen_go",
+    srcs = glob(["*.proto"]) + [
+        "//:buf.gen.bazel.yaml",
+        "//:buf.yaml",
+    ],
+    outs = [
+        "gen/proto/go/session/v1/backlog.pb.go",
+        "gen/proto/go/session/v1/diagnose.pb.go",
+        "gen/proto/go/session/v1/events.pb.go",
+        "gen/proto/go/session/v1/github_user.pb.go",
+        "gen/proto/go/session/v1/guidance_request.pb.go",
+        "gen/proto/go/session/v1/handoff_summary.pb.go",
+        "gen/proto/go/session/v1/headless.pb.go",
+        "gen/proto/go/session/v1/import.pb.go",
+        "gen/proto/go/session/v1/insights.pb.go",
+        "gen/proto/go/session/v1/llm_backend.pb.go",
+        "gen/proto/go/session/v1/notification_action.pb.go",
+        "gen/proto/go/session/v1/quota.pb.go",
+        "gen/proto/go/session/v1/remote.pb.go",
+        "gen/proto/go/session/v1/rum_bundle.pb.go",
+        "gen/proto/go/session/v1/session.pb.go",
+        "gen/proto/go/session/v1/session_summary.pb.go",
+        "gen/proto/go/session/v1/sessionv1connect/backlog.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/diagnose.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/github_user.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/guidance_request.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/handoff_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/headless.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/import.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/insights.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/llm_backend.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/quota.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/remote.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/rum_bundle.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/tymux_rollout.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/unfinished.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/wake_trigger.connect.go",
+        "gen/proto/go/session/v1/tymux_rollout.pb.go",
+        "gen/proto/go/session/v1/types.pb.go",
+        "gen/proto/go/session/v1/unfinished.pb.go",
+        "gen/proto/go/session/v1/wake_trigger.pb.go",
+    ],
+    cmd = """
+set -eu
+export BUF_CACHE_DIR=$$(mktemp -d) HOME=$$(mktemp -d)
+root=$$PWD
+sed -e "s#@PROTOC_GEN_GO@#$$root/$(execpath @org_golang_google_protobuf//cmd/protoc-gen-go)#" \\
+    -e "s#@PROTOC_GEN_CONNECT_GO@#$$root/$(execpath //tools/bzl/proto:protoc_gen_connect_go)#" \\
+    $(execpath //:buf.gen.bazel.yaml) > $$BUF_CACHE_DIR/gen.yaml
+$(execpath @com_github_bufbuild_buf//cmd/buf) generate proto --template $$BUF_CACHE_DIR/gen.yaml -o $(RULEDIR)
+""",
+    tools = [
+        "//tools/bzl/proto:protoc_gen_connect_go",
+        "@com_github_bufbuild_buf//cmd/buf",
+        "@org_golang_google_protobuf//cmd/protoc-gen-go",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Compile check of the generated sources under the real import paths (Task 0.3d evidence).
+go_library(
+    name = "sessionv1_go",
+    srcs = [
+        "gen/proto/go/session/v1/backlog.pb.go",
+        "gen/proto/go/session/v1/diagnose.pb.go",
+        "gen/proto/go/session/v1/events.pb.go",
+        "gen/proto/go/session/v1/github_user.pb.go",
+        "gen/proto/go/session/v1/guidance_request.pb.go",
+        "gen/proto/go/session/v1/handoff_summary.pb.go",
+        "gen/proto/go/session/v1/headless.pb.go",
+        "gen/proto/go/session/v1/import.pb.go",
+        "gen/proto/go/session/v1/insights.pb.go",
+        "gen/proto/go/session/v1/llm_backend.pb.go",
+        "gen/proto/go/session/v1/notification_action.pb.go",
+        "gen/proto/go/session/v1/quota.pb.go",
+        "gen/proto/go/session/v1/remote.pb.go",
+        "gen/proto/go/session/v1/rum_bundle.pb.go",
+        "gen/proto/go/session/v1/session.pb.go",
+        "gen/proto/go/session/v1/session_summary.pb.go",
+        "gen/proto/go/session/v1/tymux_rollout.pb.go",
+        "gen/proto/go/session/v1/types.pb.go",
+        "gen/proto/go/session/v1/unfinished.pb.go",
+        "gen/proto/go/session/v1/wake_trigger.pb.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+go_library(
+    name = "sessionv1connect_go",
+    srcs = [
+        "gen/proto/go/session/v1/sessionv1connect/backlog.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/diagnose.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/github_user.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/guidance_request.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/handoff_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/headless.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/import.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/insights.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/llm_backend.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/quota.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/remote.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/rum_bundle.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/tymux_rollout.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/unfinished.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/wake_trigger.connect.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":sessionv1_go",
+        "@com_connectrpc_connect//:connect",
+    ],
 )

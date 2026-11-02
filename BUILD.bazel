@@ -16,3 +16,5 @@ load("@gazelle//:def.bzl", "gazelle")
 # gazelle:exclude session/ent/[!s]*
 
 gazelle(name = "gazelle")
+
+exports_files(["buf.yaml", "buf.gen.bazel.yaml"])

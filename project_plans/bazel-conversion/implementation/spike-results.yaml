@@ -3,3 +3,7 @@
   verdict: Pass
   path: direct
   cost: M
+- spike: S1
+  verdict: FallbackWorkaround
+  path: buf-generate-genrule-local-plugins
+  cost: M
