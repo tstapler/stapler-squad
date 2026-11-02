@@ -64,7 +64,10 @@ test.describe("session-board-view", () => {
     await boardToggle.click();
     await expect(boardToggle).toHaveAttribute("aria-pressed", "true");
 
-    await page.locator("body").press("b");
+    // useKeyboard ignores events from a focused BUTTON, and the click above left focus on the toggle;
+    // locator("body").press() does not move it, so drop focus the way a user clicking elsewhere would.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("b");
     await expect(listToggle).toHaveAttribute("aria-pressed", "true");
     await expect(boardToggle).toHaveAttribute("aria-pressed", "false");
   });

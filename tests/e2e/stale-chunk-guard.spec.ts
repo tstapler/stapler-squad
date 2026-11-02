@@ -56,9 +56,12 @@ test.describe('stale chunk recovery', () => {
     await fail404PageChunk(page);
     await shell.navLink(/rules/i).click({ force: true });
 
-    // The reload re-requests the real (unmocked) chunk and lands on the target route.
+    // The URL changes (pushState) before the chunk 404s, so wait for the reload itself rather than the route.
+    await expect.poll(() => reloads, { message: 'the guard reloads once' }).toBe(1);
     await expect(page).toHaveURL(/\/rules/);
     await expect(shell.drawerNav).toBeVisible();
+    // page.route outlives the reload, so the chunk 404s again; the guard's per-build flag must stop a second reload.
+    expect(await page.evaluate(() => sessionStorage.getItem('ssq:stale-chunk-reload')), 'reload flag recorded').not.toBeNull();
     expect(reloads, 'exactly one reload, not a loop').toBe(1);
   });
 });

@@ -328,7 +328,13 @@ test.describe('notification tray variants', () => {
         await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
         await page.getByTestId('toast-move-all-to-tray').click();
         await expect(tray.entry).toHaveAttribute('data-undo', 'true');
+        // The entry renders nothing once the moved toasts are in the tray and nothing else is queued, so
+        // queue three more during the undo window: it then hands over to the "+N more" row in place.
+        await seed(request, `tray-th8-after-${Date.now()}`, 3);
+        // The undo bar renders under the parked pointer, and hovering it pauses the countdown (WCAG 2.2.1), so move away.
+        await page.mouse.move(0, 0);
         await expect(tray.entry).toHaveAttribute('data-undo', 'false', { timeout: 15_000 });
+        await expect(tray.entry).toHaveAttribute('data-content', 'more-row');
 
         const frames = await page.evaluate(() => {
           const w = window as unknown as { __entryFrames: Array<{ visible: number; right: number; top: number }>; __entryStop: boolean };
