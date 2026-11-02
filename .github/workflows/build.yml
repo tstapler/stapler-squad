@@ -532,10 +532,6 @@ jobs:
     container:
       image: ${{ needs.e2e-env.outputs.playwright-version != '' && format('mcr.microsoft.com/playwright:v{0}-noble', needs.e2e-env.outputs.playwright-version) || 'ubuntu:24.04' }}
       options: --init --ipc=host
-    # Container jobs default `run` to sh (dash), which rejects `set -o pipefail` in the comparator step.
-    defaults:
-      run:
-        shell: bash
     steps:
       - name: Fail clearly if e2e-env produced no Playwright version
         if: needs.e2e-env.outputs.playwright-version == ''
