@@ -101,7 +101,7 @@ Each needs a one-screen entry in `docs/reference/bazel-troubleshooting.md` (prop
 | 7 | Out of disk | `No space left on device` in output base, disk cache, or `/tmp` | Order of reclaim: `bazel clean` in finished worktrees (the `worktree-disk-cleanup` skill), disk-cache GC, then `bazel clean --expunge`. Also memory `instinct_full_disk_tmp_gotmpdir_socket_path.md`: long temp paths break unix-socket tests. |
 | 8 | Bazel version drift (agent has a different `bazel`) | Rule APIs missing, "name 'x' is not defined" | `.bazelversion` + Bazelisk; point to `bazel-version-upgrades`. |
 | 9 | Concurrent command lock | `Another command (pid=N) is running. Waiting for it to complete on the server` | Expected per output base; not an error. Document: do not kill it, wait, or use a separate worktree. Note the cost: two agents in one worktree serialise. |
-| 10 | Remote cache unreachable or creds missing | Warnings about remote cache; slower build | Must degrade to local build (`--remote_local_fallback`, FROM-MEMORY name; verify). Credentials only via 1Password/GitHub secrets per requirements. |
+| 10 | Remote cache unreachable or creds missing | Warnings about remote cache; slower build | Must degrade to local build (timeout + retries + circuit breaker; `--remote_local_fallback` is a no-op for `--remote_cache` without `--incompatible_remote_local_fallback_for_remote_cache`, VERIFIED by run 2026-11-01). Credentials only via 1Password/GitHub secrets per requirements. |
 | 11 | macOS binary unsigned after build | TCC prompts reappear | "Bazel outputs are not codesigned; run `make _codesign-binary` / install path signs." This is a device-verified item per requirements. |
 
 ## 6. Jobs-to-be-done
