@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"errors"
-	"os"
 	"sort"
 
 	"connectrpc.com/connect"
@@ -42,7 +41,8 @@ func (s *SessionService) GetTCCEnrichmentStatus(_ context.Context, _ *connect.Re
 	}
 	for _, root := range state.gate.Roots() {
 		row := &sessionv1.TCCEnrichmentRoot{Id: root.ID, Root: root.Root, Paths: root.Paths, AppConsented: root.Consented, Outcome: enrichmentRootOutcome(state.enricher, root.Paths)}
-		if row.Outcome == tccOutcomeDenied {
+		if root.Denied {
+			row.Outcome = tccOutcomeDenied
 			row.SettingsUrl = root.Service.SettingsURL()
 		}
 		for _, path := range root.Paths {
@@ -56,14 +56,11 @@ func (s *SessionService) GetTCCEnrichmentStatus(_ context.Context, _ *connect.Re
 
 const tccOutcomeDenied = "denied"
 
-// enrichmentRootOutcome reports denied only for a permission error returned by
-// a probe; the OS grant itself is unobservable.
+// enrichmentRootOutcome reports the enrichment outcome only; "denied" is the
+// gate's sticky EPERM hint and is applied by the caller.
 func enrichmentRootOutcome(enricher *session.WorktreeEnricher, paths []string) string {
 	outcome := "completed"
 	for _, path := range paths {
-		if lookup, ok := enricher.Result(path); ok && errors.Is(lookup.Err, os.ErrPermission) {
-			return tccOutcomeDenied
-		}
 		current := enricher.Outcome(path)
 		switch {
 		case current == "unresolved/slow":
@@ -96,6 +93,13 @@ func (s *SessionService) ContinueTCCEnrichment(ctx context.Context, req *connect
 	}
 	for _, path := range paths {
 		state.enricher.Unpark(path)
+	}
+	rechecked, err := state.gate.Recheck(req.Msg.RootId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	for _, path := range rechecked {
+		state.enricher.Recheck(path)
 	}
 	return connect.NewResponse(&sessionv1.ContinueTCCEnrichmentResponse{}), nil
 }

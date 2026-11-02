@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"syscall"
 )
 
 var ErrUnknownRoot = errors.New("unknown protected root ID")
@@ -17,20 +18,24 @@ type ConsentRoot struct {
 	Service   Kind
 	Paths     []string
 	Consented bool
+	// Denied is sticky: set when a probe returns EPERM, cleared only by Recheck.
+	Denied bool
 }
 
 // ConsentGate parks enrichment until the user agrees to its filesystem access.
 // Ready may do filesystem I/O; run it only inside the enricher's probe boundary.
 type ConsentGate struct {
-	classify func(string) Result
-	persist  func(string) error
-	mu       sync.Mutex
-	roots    map[string]ConsentRoot
-	consent  map[string]bool
+	classify      func(string) Result
+	persist       func(string) error
+	mu            sync.Mutex
+	roots         map[string]ConsentRoot
+	consent       map[string]bool
+	denied        map[string]bool
+	persistDenied func(id string, denied bool) error
 }
 
 func NewConsentGate(classify func(string) Result, consent map[string]bool, persist func(string) error) *ConsentGate {
-	g := &ConsentGate{classify: classify, persist: persist, roots: map[string]ConsentRoot{}, consent: map[string]bool{}}
+	g := &ConsentGate{classify: classify, persist: persist, roots: map[string]ConsentRoot{}, consent: map[string]bool{}, denied: map[string]bool{}}
 	for id, allowed := range consent {
 		g.consent[id] = allowed
 	}
@@ -57,7 +62,7 @@ func (g *ConsentGate) ReadyDependency(dependency Dependency) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	root := g.roots[id]
-	root.ID, root.Root, root.Service, root.Consented = id, result.Root, result.Service, g.consent[id]
+	root.ID, root.Root, root.Service, root.Consented, root.Denied = id, result.Root, result.Service, g.consent[id], g.denied[id]
 	found := false
 	for _, p := range root.Paths {
 		if p == dependency.EnrichmentKey {
@@ -111,6 +116,80 @@ func (g *ConsentGate) Continue(id string) ([]string, error) {
 	g.consent[id] = true
 	root := g.roots[id]
 	root.Consented = true
+	g.roots[id] = root
+	return append([]string(nil), root.Paths...), nil
+}
+
+// SetDeniedStore restores persisted denied roots and sets the writer used when
+// that state changes. Call before serving requests.
+func (g *ConsentGate) SetDeniedStore(initial map[string]bool, persist func(id string, denied bool) error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for id, d := range initial {
+		g.denied[id] = d
+	}
+	g.persistDenied = persist
+}
+
+// IsTCCDenial reports whether err looks like a TCC denial. TCC returns EPERM,
+// while ordinary file permissions return EACCES. EPERM can also come from
+// immutable flags or MDM/SIP, so this is a hint, never proof of a TCC denial.
+func IsTCCDenial(err error) bool { return errors.Is(err, syscall.EPERM) }
+
+// ObserveResult marks the root holding enrichmentKey denied when err is EPERM.
+// Only roots already classified as protected by Ready are known here.
+func (g *ConsentGate) ObserveResult(enrichmentKey string, err error) {
+	if !IsTCCDenial(err) {
+		return
+	}
+	g.mu.Lock()
+	var ids []string
+	for id, root := range g.roots {
+		for _, p := range root.Paths {
+			if p == enrichmentKey && !g.denied[id] {
+				ids = append(ids, id)
+			}
+		}
+	}
+	persist := g.persistDenied
+	for _, id := range ids {
+		g.denied[id] = true
+		root := g.roots[id]
+		root.Denied = true
+		g.roots[id] = root
+	}
+	g.mu.Unlock()
+	if persist != nil {
+		for _, id := range ids {
+			_ = persist(id, true) // in-memory state still holds for this process
+		}
+	}
+}
+
+// Recheck clears a sticky denial and returns the root's paths to re-probe, or
+// nil when the root was not denied.
+func (g *ConsentGate) Recheck(id string) ([]string, error) {
+	g.mu.Lock()
+	root, known := g.roots[id]
+	if !known {
+		g.mu.Unlock()
+		return nil, ErrUnknownRoot
+	}
+	if !g.denied[id] {
+		g.mu.Unlock()
+		return nil, nil
+	}
+	persist := g.persistDenied
+	g.mu.Unlock()
+	if persist != nil {
+		if err := persist(id, false); err != nil {
+			return nil, err
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.denied, id)
+	root.Denied = false
 	g.roots[id] = root
 	return append([]string(nil), root.Paths...), nil
 }

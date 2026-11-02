@@ -98,4 +98,12 @@ it("links to System Settings when macOS denied access", async () => {
  mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, appConsented: true, outcome: "denied", settingsUrl }] });
  render(<TCCEnrichmentBanner />);
  expect(await screen.findByTestId("tcc-settings-link")).toHaveAttribute("href", settingsUrl);
+ expect(screen.getByTestId("tcc-settings-link")).toHaveAttribute("rel", "noreferrer noopener");
+});
+
+it("re-checks a denied root through the consent RPC", async () => {
+ mockStatus.mockResolvedValue({ enabled: true, roots: [{ ...root, appConsented: true, outcome: "denied", settingsUrl: "x-apple.systempreferences:a" }] });
+ render(<TCCEnrichmentBanner />);
+ fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+ await waitFor(() => expect(mockContinue).toHaveBeenCalledWith({ rootId: "opaque-id" }));
 });

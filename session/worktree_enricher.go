@@ -60,6 +60,9 @@ type WorktreeEnricherConfig struct {
 	// always ready.
 	Ready func(path string) bool
 
+	// OnResult observes every finished probe (not parked ones), outside locks.
+	OnResult func(path string, err error)
+
 	// Probe, AfterFunc and Now are injectable for deterministic tests.
 	Probe     func(path string) (*WorktreeInfo, error)
 	Timer     func(d time.Duration) (fired <-chan time.Time, stop func())
@@ -178,6 +181,14 @@ func (e *WorktreeEnricher) Request(path string) {
 
 // Unpark requeues a path parked by Config.Ready.
 func (e *WorktreeEnricher) Unpark(path string) { e.Request(path) }
+
+// Recheck drops the cached result for path and probes it again.
+func (e *WorktreeEnricher) Recheck(path string) {
+	e.mu.Lock()
+	delete(e.results, path)
+	e.mu.Unlock()
+	e.Request(path)
+}
 
 func (e *WorktreeEnricher) handle(path string) {
 	if e.stopped.Load() {
@@ -320,6 +331,9 @@ func (e *WorktreeEnricher) finish(path string, res worktreeResult, took time.Dur
 	}
 	if late {
 		log.Info("worktree enrichment: stuck path finished (slow, not stuck)", "path", path, "took", took)
+	}
+	if e.cfg.OnResult != nil {
+		e.cfg.OnResult(path, res.err)
 	}
 	e.completed.Add(1)
 	if res.err != nil {
