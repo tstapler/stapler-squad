@@ -505,8 +505,19 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 			}
 			stream, first, cancel, err = s.dialAttachInterruptible(paneID)
 		}
+		if err != nil && s.closing.Load() {
+			break // a deliberate Close() surfaces as a dial error; keep ReasonDeliberateClose
+		}
 		if err != nil && connect.CodeOf(err) == connect.CodeNotFound {
-			return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
+			if s.daemonConfirmsPaneGone(sessionID, paneID) {
+				return s.giveUpPaneGone(genCtx, sessionID, paneID, err)
+			}
+			// Unconfirmed, or the session respawned its pane: daemonConfirmsPaneGone
+			// repointed s.paneID, so redial that one.
+			s.mu.RLock()
+			paneID = s.paneID
+			s.mu.RUnlock()
+			continue
 		}
 		if err != nil {
 			continue

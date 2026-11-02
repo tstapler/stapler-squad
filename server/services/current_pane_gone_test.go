@@ -5,12 +5,16 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/protocol"
 )
 
 type paneAnswer func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error)
@@ -72,4 +76,71 @@ func TestBatchedCurrentPane_AnswersLiveSiblings_WhenOneIsGone(t *testing.T) {
 	require.Len(t, outputs, 2)
 	assert.Equal(t, "a", outputs[0].GetResyncId())
 	assert.Equal(t, "b", outputs[1].GetResyncId())
+}
+
+func answerCurrentPaneFor(t *testing.T, pane *paneFake) error {
+	t.Helper()
+	inst := firstPaintInstance(t, pane)
+	_, err := answerCurrentPane(context.Background(), "s", inst, &sessionv1.CurrentPaneRequest{ResyncId: "r"}, nil)
+	return err
+}
+
+// Drives the wiring (answerCurrentPane -> definitivelyGone -> IsBackendProcessAlive), not
+// pre-wrapped answers: only a NotFound the backend agrees is final may end the stream.
+func TestAnswerCurrentPane_should_WrapGone_OnlyWhenBackendConfirmsGone(t *testing.T) {
+	notFound := connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
+	for _, tc := range []struct {
+		name     string
+		err      error
+		dead     bool
+		wantGone bool
+	}{
+		{"not_found, backend dead", notFound, true, true},
+		{"not_found, backend alive", notFound, false, false},
+		{"unavailable, backend dead", connect.NewError(connect.CodeUnavailable, errors.New("restarting")), true, false},
+		{"plain error, backend dead", errors.New("boom"), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := answerCurrentPaneFor(t, &paneFake{redrawOK: true, redrawErr: tc.err, textErr: tc.err, dead: tc.dead})
+			if tc.wantGone {
+				require.ErrorIs(t, err, errSessionGone)
+				return
+			}
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, errSessionGone)
+		})
+	}
+}
+
+// A mid-stream resync the backend confirms gone must reach errChan, so the stream ends.
+func TestRunInputReadLoop_should_PropagateSessionGone_ToErrChan(t *testing.T) {
+	stream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+	notFound := connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
+	inst := firstPaintInstance(t, &paneFake{redrawOK: true, redrawErr: notFound, textErr: notFound, dead: true})
+
+	errChan := make(chan error, 2)
+	var settling atomic.Bool
+	go runInputReadLoop(inputReadLoopParams{
+		stream:         stream,
+		doneChan:       make(chan struct{}),
+		errChan:        errChan,
+		sessionID:      "s",
+		resizeSettling: &settling,
+		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+			return answerCurrentPane(ctx, "s", inst, req, nil)
+		},
+	})
+
+	td := &sessionv1.TerminalData{Data: &sessionv1.TerminalData_CurrentPaneRequest{CurrentPaneRequest: &sessionv1.CurrentPaneRequest{ResyncId: "r"}}}
+	payload, err := proto.Marshal(td)
+	require.NoError(t, err)
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, payload)))
+
+	select {
+	case got := <-errChan:
+		require.ErrorIs(t, got, errSessionGone)
+	case <-time.After(10 * time.Second):
+		t.Fatal("errSessionGone never reached errChan")
+	}
 }
