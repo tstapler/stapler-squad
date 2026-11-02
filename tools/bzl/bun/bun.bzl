@@ -59,7 +59,7 @@ tar -chf - -T "{manifest}" | tar -xf - -C "$W" --strip-components=1
 # tree must live under the work dir like it does in a `make` checkout. Hardlink-copy keeps that cheap.
 cp -al "$ROOT/{nm}/." "$W/node_modules" 2>/dev/null || cp -a "$ROOT/{nm}/." "$W/node_modules"
 cp "{allowlist}" "$W/public-allowlist.json"
-T1=$(date +%s.%N)
+{gencmd}T1=$(date +%s.%N)
 cd "$W"
 {prefix}bun build/build.ts --out "$W/out" --stats "$W/stats.json" --allowlist "$W/public-allowlist.json"
 T2=$(date +%s.%N)
@@ -92,10 +92,11 @@ def _bun_dist_impl(ctx):
         allowlist = ctx.file.allowlist.path,
         out = out.path,
         prefix = prefix,
+        gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$ROOT/" + ctx.file.gen.path + "/.\" \"$W/src/gen/\"\n") if ctx.file.gen else "",
     )
     ctx.actions.run_shell(
         mnemonic = "BunWebBuild",
-        inputs = ctx.files.srcs + [manifest, nm, ctx.file.node, ctx.file.bun, ctx.file.allowlist],
+        inputs = ctx.files.srcs + [manifest, nm, ctx.file.node, ctx.file.bun, ctx.file.allowlist] + ([ctx.file.gen] if ctx.file.gen else []),
         outputs = outputs,
         command = script,
         use_default_shell_env = False,
@@ -111,6 +112,7 @@ bun_dist = rule(
         "bun": attr.label(allow_single_file = True, mandatory = True),
         "node": attr.label(allow_single_file = True, mandatory = True),
         "allowlist": attr.label(allow_single_file = True, mandatory = True),
+        "gen": attr.label(allow_single_file = True, doc = "Tree artifact copied to src/gen (generated proto TS)."),
         "minify": attr.string(default = "0"),
         "cmd_prefix": attr.string(default = ""),
         "trace": attr.bool(default = False),
@@ -130,7 +132,7 @@ WS="$TEST_TMPDIR/ws"; W="$WS/web-app"; mkdir -p "$W/node_modules"
 mkdir -p "$WS/scripts/dev-stack" "$WS/tests/e2e"
 tar -chf - -C "$RF/_main" -T "$(rp {manifest})" | tar -xf - -C "$W" --strip-components=1
 cp -al "$NM/." "$W/node_modules" 2>/dev/null || cp -a "$NM/." "$W/node_modules"
-cd "$W"
+{gencmd}cd "$W"
 mkdir -p "$TEST_UNDECLARED_OUTPUTS_DIR"
 bun x jest --selectProjects web-app --ci --no-coverage --json --outputFile="$TEST_UNDECLARED_OUTPUTS_DIR/jest.json" {tests}
 """
@@ -145,8 +147,9 @@ def _bun_jest_test_impl(ctx):
         nm = ctx.file.node_modules.short_path,
         manifest = manifest.short_path,
         tests = " ".join(ctx.attr.tests),
+        gencmd = ("mkdir -p \"$W/src/gen\"; cp -RL \"$(rp " + ctx.file.gen.short_path + ")/.\" \"$W/src/gen/\"\n") if ctx.file.gen else "",
     ), is_executable = True)
-    rf = ctx.runfiles(files = ctx.files.srcs + [manifest, ctx.file.node, ctx.file.bun, ctx.file.node_modules])
+    rf = ctx.runfiles(files = ctx.files.srcs + [manifest, ctx.file.node, ctx.file.bun, ctx.file.node_modules] + ([ctx.file.gen] if ctx.file.gen else []))
     return [DefaultInfo(executable = script, runfiles = rf)]
 
 bun_jest_test = rule(
@@ -154,6 +157,7 @@ bun_jest_test = rule(
     test = True,
     attrs = {
         "srcs": attr.label_list(allow_files = True),
+        "gen": attr.label(allow_single_file = True),
         "tests": attr.string_list(mandatory = True),
         "node_modules": attr.label(allow_single_file = True, mandatory = True),
         "bun": attr.label(allow_single_file = True, mandatory = True),

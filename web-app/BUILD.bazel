@@ -33,7 +33,10 @@ filegroup(
             "src/**",
             "public/**",
         ],
-        exclude = ["build/__tests__/**"],
+        exclude = [
+            "build/__tests__/**",
+            "src/gen/**",  # supplied by //tools/bzl/proto:gen_ts
+        ],
     ),
 )
 
@@ -41,6 +44,7 @@ bun_dist(
     name = "dist",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
+    gen = "//tools/bzl/proto:gen_ts",
     bun = "@bun_linux_x64//:bun-linux-x64/bun",
     node = "@node_linux_x64//:bin/node",
     node_modules = "@web_node_modules//:node_modules",
@@ -51,6 +55,7 @@ bun_dist(
     name = "dist_nosandbox",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
+    gen = "//tools/bzl/proto:gen_ts",
     bun = "@bun_linux_x64//:bun-linux-x64/bun",
     exec_tags = ["no-sandbox"],
     node = "@node_linux_x64//:bin/node",
@@ -62,6 +67,7 @@ bun_dist(
     name = "dist_trace",
     srcs = [":dist_srcs"],
     allowlist = ":public_allowlist",
+    gen = "//tools/bzl/proto:gen_ts",
     bun = "@bun_linux_x64//:bun-linux-x64/bun",
     node = "@node_linux_x64//:bin/node",
     node_modules = "@web_node_modules//:node_modules",
@@ -77,6 +83,7 @@ filegroup(
 # Task 0.6c: 20 test suites (231 test cases) chosen from pure-logic suites under src/lib.
 bun_jest_test(
     name = "jest_subset",
+    gen = "//tools/bzl/proto:gen_ts",
     srcs = [":jest_srcs"],
     bun = "@bun_linux_x64//:bun-linux-x64/bun",
     node = "@node_linux_x64//:bin/node",

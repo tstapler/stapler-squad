@@ -154,3 +154,9 @@ go_library(
         "@com_connectrpc_connect//:connect",
     ],
 )
+
+filegroup(
+    name = "protos",
+    srcs = glob(["*.proto"]),
+    visibility = ["//visibility:public"],
+)

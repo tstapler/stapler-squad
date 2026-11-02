@@ -23,4 +23,4 @@ load("@gazelle//:def.bzl", "gazelle")
 
 gazelle(name = "gazelle")
 
-exports_files(["buf.yaml", "buf.gen.bazel.yaml"])
+exports_files(["buf.yaml", "buf.gen.bazel.yaml", "buf.gen.bazel-ts.yaml"])

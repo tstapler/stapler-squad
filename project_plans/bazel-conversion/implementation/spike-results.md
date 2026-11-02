@@ -344,3 +344,21 @@ Inside the sandboxed action: stage (tar of sources plus `cp -al` of `node_module
 `S4`: **Pass**, path `repo-rule+no-sandbox`, cost M+M+S+S. Checks: (1) parity 380 of 380 files identical, 0 allow-listed deltas needed, **but against a pinned-environment `make web-build`; against the default developer environment the output differs in 174 files (explained above, not allow-listed), so a strict reading of the rule would make this `FallbackWorkaround`**: the orchestrator or owner should confirm the pinned reference; (2) Jest 231 of 231 equal; (3) escapes `0 0` (with the `public-allowlist.json` staging caveat); (4) wall time 2.6x sandboxed, 1.5-2.1x no-sandbox, above 1.5x so the `no-sandbox` path applies. Task 0.6e (S1-ts) skipped by instruction: no `S1-ts` row written here.
 
 Owner/follow-up inputs from S4: pin Node and set `globalStore = false` (or `BUN_INSTALL_GLOBAL_STORE=0`) in the make path before treating make output as a parity oracle; consider moving `public-allowlist.json` into `web-app/` or giving `build.ts` an explicit input; do not rely on the host `bun`/`node` (host Bun 1.4.4 and Node 26.8.1 here differ from the pins).
+
+## S1-ts proto TypeScript generation (Story 0.6, Task 0.6e)
+
+Run 2026-11-01. `//tools/bzl/proto:gen_ts` (rule `buf_gen_ts` in `tools/bzl/proto/ts.bzl`, template `buf.gen.bazel-ts.yaml`) runs the Bazel-built buf v1.57.2 with `protoc-gen-es` 2.11.0 from `@web_node_modules//:node_modules/.bin` and the pinned Node 24.13.1 on PATH, and publishes a tree artifact equal to `web-app/src/gen`. It is `buf generate`, not `run_binary` of `protoc` as the task text suggested, because managed mode (the `go_package_prefix` override) changes the descriptors embedded in `*_pb.ts`, so the template keeps the same `managed:` block as `buf.gen.yaml`. First build worked without repair. `make proto-gen` applies no formatter to the TS half (no gofmt equivalent), so none is applied here.
+
+Checks (all VERIFIED by command):
+
+1. Parity: `PROTOC_GEN_ES=<main checkout web-app/node_modules/.bin/protoc-gen-es> bash tools/bzl/parity/compare-proto.sh ts` prints `compare-proto(ts): identical (20 files, sha256)`, exit 0. The reference is generated in a scratch dir by plain `buf generate` with the same TS plugin config but a plugin from the make-side install (shared store) under host Node 26.8.1, so the Bazel path (Node 24.13.1) and the make path (Node 26) agree. Also `diff -r bazel-bin/tools/bzl/proto/gen_ts/session <main checkout>/web-app/src/gen/session` is empty. `allowed-deltas.txt` needed 0 entries; the script's allow-list branch exists but was not exercised.
+2. No network: built with `--sandbox_default_allow_network=false`; buf cache and HOME are scratch dirs; `buf.yaml` has no deps.
+3. No source-tree writes: `git status` after all builds shows only intended edits; `web-app/src/gen` never appeared.
+4. Determinism: two `bazel clean` + `--disk_cache=` builds (51.4 s and 42.5 s, includes re-running the Bun install repository rule) give the same tree hash `0de074ff...4712a`.
+5. `//web-app:dist` consumes it: `bun_dist` got a `gen` attribute copied (`cp -RL`; a plain `cp -R` copies the sandbox symlinks and Bun then resolves modules from bazel-out) into `$W/src/gen`, `dist_srcs` excludes `src/gen/**`, and `dist`, `dist_nosandbox`, `dist_trace` and `jest_subset` take `gen = //tools/bzl/proto:gen_ts`. Baseline with the on-disk `src/gen` copied in: tree hash `b722078d930c...aff7`. With the generated target and no `src/gen` in the worktree: same hash `b722078d930c...aff7`, 380 files. `bazel test //web-app:jest_subset` passes (it needs `gen` too: without it the 20 suites fail because they import `src/gen`).
+
+Findings: (a) the plan's `diff -r bazel-bin/web-app/gen web-app/src/gen` path is wrong for this design; the output is `bazel-bin/tools/bzl/proto/gen_ts/` rooted at the gen dir. (b) `protoc-gen-es` runs straight from the Bun install: it is a `#!/usr/bin/env node` script, so the action only needs the pinned Node on PATH. (c) Pinned-tarball fallback of ADR-003 was not needed and not built (cost M estimated, unchanged).
+
+### Verdict
+
+`S1-ts`: **Pass**, path `buf-generate+protoc-gen-es-from-bun-install`, cost S. All five checks true; no explained deltas.

@@ -27,3 +27,7 @@
   verdict: Pass
   path: repo-rule+no-sandbox
   cost: M+M+S+S
+- spike: S1-ts
+  verdict: Pass
+  path: buf-generate+protoc-gen-es-from-bun-install
+  cost: S
