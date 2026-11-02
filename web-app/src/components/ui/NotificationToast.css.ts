@@ -756,6 +756,18 @@ export const riskLabel = style({
   color: vars.color.textSecondary,
 });
 
+export const trayEntryBell = style({
+  ...chipBase,
+  width: "44px",
+  minWidth: "44px",
+  padding: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "4px",
+  selectors: { "&:hover": { background: vars.color.hoverBackground } },
+});
+
 /** The single phone tray entry: one mounted node whose content changes in place (D10). */
 export const trayEntry = style({
   display: "flex",
