@@ -68,8 +68,10 @@ export function selectCandidates(findings: Finding[], bunReport: PwReport, max =
   walkTests(bunReport, (file, t, fullTitle, leafTitle) => {
     const key = keyString({ spec: file, project: t.projectName, title: fullTitle });
     if (!wanted.has(key)) return;
-    // A skipped test or one that never reported has nothing a rerun could change.
-    if (!hardFailed(attempts.get(key)?.attempts ?? [])) return;
+    // A skipped test has nothing a rerun could change. One with no result at all was cut off by the shard's
+    // --global-timeout (the JSON reporter lists unreached tests without results): a rerun is exactly what it needs.
+    const got = attempts.get(key)?.attempts ?? [];
+    if (got.length > 0 && !hardFailed(got)) return;
     candidates.push({ spec: file, project: t.projectName, title: fullTitle, leafTitle });
   });
   const status = candidates.length === 0 ? "none" : candidates.length > max ? "too-many" : "rerun";

@@ -597,6 +597,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # Fresh per-spec durations for run-ci-shard.sh's balanced assignment: download this artifact and commit it as
+      # tests/e2e/shard-timings.json when the suite or its slow specs shift (see tests/e2e/scripts/shard-assign.ts).
+      - name: Write shard timings
+        if: always() && hashFiles('tests/e2e/playwright-report/report.json') != ''
+        continue-on-error: true
+        run: bun tests/e2e/scripts/shard-assign.ts timings --report tests/e2e/playwright-report/report.json --out tests/e2e/shard-timings.new.json
+
+      - name: Upload shard timings
+        if: always() && hashFiles('tests/e2e/shard-timings.new.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shard-timings
+          path: tests/e2e/shard-timings.new.json
+          retention-days: 7
+
       # Main only (the comparator is main only). Selects the tests the comparator would fail; ends there with no
       # failures, and with more than 40 reruns nothing (that many failures is not load flakiness).
       - name: Select the tests to confirm

@@ -43,6 +43,14 @@ describe("e2e-confirm selection", () => {
     expect(sel.candidates.map((c) => c.title)).toEqual(["root"]);
   });
 
+  test("S5: a test with no result (cut off by the shard's global timeout) is selected for rerun", () => {
+    const next = Object.fromEntries(["cut", "ok"].map((k) => [k, PASS]));
+    const bun = report({ ok: PASS, cut: [] });
+    const input = { baseline: baseline(["cut", "ok"]), expectedDiff: { entries: [] }, nextReport: report(next) };
+    const sel = selectCandidates(compare({ ...input, bunReports: [bun] }).findings, bun);
+    expect(sel.candidates.map((c) => c.title)).toEqual(["cut"]);
+  });
+
   test(`S4: more than ${MAX_CONFIRM_TESTS} failures is too-many and selects nothing to rerun`, () => {
     const many = Object.fromEntries(Array.from({ length: MAX_CONFIRM_TESTS + 1 }, (_, i) => [`t${i}`, HARD]));
     const sel = run(many).selection;
