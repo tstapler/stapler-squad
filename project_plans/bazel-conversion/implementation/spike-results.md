@@ -105,7 +105,7 @@ Importer check, exactly what was run: Gazelle on `session/scanbuf session/scanst
 
 ### Cost and fallback
 
-Workaround measured as M (rule ~60 lines of Starlark, `entc` ~230 lines Go, plus a 52-entry generated listing and a 46-entry schema list). Fork (rules_go directory `srcs`) not needed, not costed further. Both lists need `bazel run //tools/bzl/ent:update_packages` / `schemas.go` edit on a schema change; the first is enforced by the action, the second by an AST check in the same action.
+Workaround measured as M (`ent.bzl` 83 lines, over the 40-line cap Task 2.3 names for the productionised file; `entc` 334 lines of Go in two files, plus a 52-entry generated listing and a 46-entry schema list). Fork (rules_go directory `srcs`) not needed, not costed further. Both lists need `bazel run //tools/bzl/ent:update_packages` / `schemas.go` edit on a schema change; the first is enforced by the action, the second by an AST check in the same action.
 
 ### False or unsafe plan assumptions
 
