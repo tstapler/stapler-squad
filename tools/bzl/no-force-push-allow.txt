@@ -1,0 +1,2 @@
+# Files allowed to contain a force push, with the reason. Keep this list near-empty.
+scripts/git-history-cutover/04-push-and-notify.sh  # one-off owner-run history rewrite; prints its own warning

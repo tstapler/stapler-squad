@@ -1,0 +1,5 @@
+# Verdict rows; schema {spike, verdict, path, cost}. Validated by tools/bzl/check-spike-results.py (Task 0.14a).
+- spike: S-gomod
+  verdict: Pass
+  path: direct
+  cost: M

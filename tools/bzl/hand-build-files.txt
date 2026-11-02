@@ -1,0 +1,14 @@
+# Every planned HandBuildFile, one per line: path  # planned: <Task>
+# Checked by tools/bzl/check-build-paths.sh: not git-ignored, not under a gitlink, not .bazelignore'd.
+tools/bzl/tmux/BUILD.bazel  # planned: Task 0.7
+tools/bzl/flags/BUILD.bazel  # planned: Task 0.8
+tools/bzl/windows/BUILD.bazel  # planned: Epic 6
+tools/bzl/ent/BUILD.bazel  # planned: Task 0.4
+tools/bzl/proto/BUILD.bazel  # planned: Task 0.3a
+proto/session/v1/BUILD.bazel  # planned: Task 0.3a
+session/ent/BUILD.bazel  # planned: Task 0.4
+server/web/BUILD.bazel  # planned: Task 0.5
+web-app/BUILD.bazel  # planned: Task 0.6
+macos/BUILD.bazel  # planned: Epic 6
+session/tmux/embed/BUILD.bazel  # planned: Task 0.7
+session/tymux/embed/BUILD.bazel  # planned: Task 0.7

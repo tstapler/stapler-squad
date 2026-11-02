@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: setup-git check-bazel-guards help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -1102,7 +1102,7 @@ ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration t
 # local equivalent (the external go-test-coverage action, the E2E-coverage PR
 # comment) — those only run in CI. `--new-from-rev=origin/main` requires a
 # reachable origin/main; `git fetch origin main` first if it's stale.
-ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
+ready: ci check-bazel-guards proto-breaking ready-complexity-gate ready-duplication-gate-web ready-vt-conformance-gate verify-eval-patch test-web-build lint-workflows ## Local approximation of every required PR check (make ci + complexity/duplication gates + web-app lint/scanner suites)
 	cd web-app && bun run lint:eslint
 	cd web-app && bun run lint:css && bun run lint:css-vars
 	tools/ci/check-tymux-pin.sh
@@ -1110,6 +1110,19 @@ ready: ci proto-breaking ready-complexity-gate ready-duplication-gate-web ready-
 	cd tools/scanner && go test ./...
 	cd tools/ci-gates && bun install --silent && bun run test
 	@echo "✅ ready: local approximation of PR checks complete"
+
+setup-git: ## Per-clone git setup: pre-push hook that rejects non-fast-forward pushes and main deletion (idempotent)
+	git config core.hooksPath scripts/hooks
+	@echo "git hooks: core.hooksPath=$$(git config core.hooksPath)"
+
+check-bazel-guards: ## Bazel repo guardrails: .bazelignore, BUILD paths, no WORKSPACE/local spawn, no force-push, PR-title and hook tests
+	bash tools/bzl/check-bazelignore.sh
+	bash tools/bzl/check-build-paths.sh
+	bash tools/bzl/check-bazelrc.sh
+	bash tools/bzl/check-bazelrc_test.sh
+	bash tools/bzl/check-no-force-push.sh
+	bash tools/bzl/check-no-force-push_test.sh
+	bash scripts/hooks/pre-push-no-force_test.sh
 
 test-tymux-pin: ## Test tools/ci/check-tymux-pin.sh against a local fixture remote (no network)
 	tools/ci/check-tymux-pin_test.sh
