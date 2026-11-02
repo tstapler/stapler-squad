@@ -226,15 +226,15 @@ test.describe('notification tray variants', () => {
         await expect(tray.tray).toHaveAttribute('data-variant', 'bottom-sheet');
         await expect(tray.tray).toHaveAttribute('data-sheet', 'peek');
         const viewportHeight = page.viewportSize()!.height;
-        const peek = await tray.tray.boundingBox();
-        expect(peek!.height / viewportHeight).toBeGreaterThanOrEqual(0.22);
-        expect(peek!.height / viewportHeight).toBeLessThanOrEqual(0.28);
+        // The sheet's height eases (0.2s) from its keyboard-open size after setKeyboardOpen(0), so a one-shot read can land mid-ease.
+        const sheetRatio = async () => (await tray.tray.boundingBox())!.height / viewportHeight;
+        await expect.poll(sheetRatio).toBeGreaterThanOrEqual(0.22);
+        await expect.poll(sheetRatio).toBeLessThanOrEqual(0.28);
 
         await tray.tray.getByTestId('tray-expand').click();
         await expect(tray.tray).toHaveAttribute('data-sheet', 'expanded');
-        const expanded = await tray.tray.boundingBox();
-        expect(expanded!.height / viewportHeight).toBeGreaterThanOrEqual(0.84);
-        expect(expanded!.height / viewportHeight).toBeLessThanOrEqual(0.86);
+        await expect.poll(sheetRatio).toBeGreaterThanOrEqual(0.84);
+        await expect.poll(sheetRatio).toBeLessThanOrEqual(0.86);
         // On touch the expanded sheet is non-trapping: no aria-modal, background not inert.
         expect(await tray.tray.getAttribute('aria-modal')).toBeNull();
         expect(await page.evaluate(() => document.getElementById('main-content')?.hasAttribute('inert'))).toBe(false);
