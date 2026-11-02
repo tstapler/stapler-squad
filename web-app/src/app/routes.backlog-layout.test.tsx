@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { useBacklogStream } from "@/components/backlog/BacklogStreamContext";
+import type { PageRoute } from "@/lib/nav/app-types";
 import { appRoutes } from "./routes";
 
 const mockWatch = jest.fn(() => ({ items: [], connectionState: "live" as const }));
@@ -26,7 +27,7 @@ describe.each(["/backlog", "/backlog/board"])("%s route wrap", (path) => {
   });
 
   it("gives every useBacklogStream consumer one shared watch stream", async () => {
-    const Wrap = appRoutes.find((r) => r.path === path && "wrap" in r)?.wrap;
+    const Wrap = appRoutes.find((r): r is PageRoute => r.path === path && "load" in r)?.wrap;
     if (!Wrap) throw new Error(`${path} has no wrap`);
     render(
       <FeatureFlagsProvider>
