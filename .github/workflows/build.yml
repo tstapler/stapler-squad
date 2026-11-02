@@ -768,10 +768,20 @@ jobs:
       (needs.e2e-next.result != 'skipped' && needs.e2e-next.result != 'cancelled'))
     # Merge + comparator ~2 min; on main add container start, select, and up to 18 min of rerun.
     timeout-minutes: 35
+    # An empty playwright-version (e2e-env failed) would make the image `v-noble`, which fails to pull with an
+    # opaque error; fall back to a plain image so the first step can say what is wrong. PRs pay for this container
+    # and the full checkout too: a container cannot be conditional on the event without changing the job shape
+    # (and so the per-PR check count), and the cost is roughly one image pull.
     container:
-      image: mcr.microsoft.com/playwright:v${{ needs.e2e-env.outputs.playwright-version }}-noble
+      image: ${{ needs.e2e-env.outputs.playwright-version != '' && format('mcr.microsoft.com/playwright:v{0}-noble', needs.e2e-env.outputs.playwright-version) || 'ubuntu:24.04' }}
       options: --init --ipc=host
     steps:
+      - name: Fail clearly if e2e-env produced no Playwright version
+        if: needs.e2e-env.outputs.playwright-version == ''
+        run: |
+          echo "::error::e2e-env produced no playwright-version (see the e2e-env job); the Playwright image tag cannot be built"
+          exit 1
+
       - uses: actions/checkout@v4
 
       - name: Ensure unzip, tmux and git
@@ -867,6 +877,9 @@ jobs:
       - name: Rerun the failing tests with one worker
         if: steps.select.outputs.status == 'rerun'
         continue-on-error: true
+        # Hard cap above the 18 min --budget-ms: a hang in Playwright teardown or spawnSync must not eat the
+        # job's 35 min and lose the comparator verdict (the step is continue-on-error, so the gate still runs).
+        timeout-minutes: 22
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo

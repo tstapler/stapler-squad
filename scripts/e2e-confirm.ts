@@ -143,6 +143,8 @@ export function summaryMarkdown(selection: Selection, entries: MergeEntry[] | nu
     "",
     ...section("Flaky under load (passed on the isolated rerun, not a gate failure)", "flaky-under-load"),
     ...section("Confirmed (failed again on the isolated rerun, still gates)", "confirmed"),
+    "_Note: a test in a `describe.configure({ mode: 'serial' })` block is rerun without its earlier setup tests, so it can fail again for that reason alone; treat a confirmed serial test as unverified._",
+    "",
     ...section("Not rerun (budget exhausted or the rerun did not reach them, still gates)", "not-rerun"),
   ].join("\n");
 }
