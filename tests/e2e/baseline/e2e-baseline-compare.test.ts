@@ -4,6 +4,7 @@
 // stub that always exits 0 would pass every Z-case here but fail every F-case -- the plan's own
 // framing ("a comparator that always exits 0 therefore fails seven of these cases").
 import { execFileSync } from "child_process";
+import * as fs from "fs";
 import * as path from "path";
 import { compare, PwReport, Baseline } from "../../../scripts/e2e-baseline-compare";
 
@@ -26,6 +27,12 @@ interface RunOpts {
 }
 
 function run(opts: RunOpts): { exitCode: number; stdout: string } {
+  // A missing ts-node would make every spawn exit non-zero, so the F-cases (which expect non-zero) would pass for the
+  // wrong reason and the Z-cases fail. CI runs this through jest's e2e-dev-mode project (web-app installed); under a bare
+  // `bun test` from a checkout without web-app/node_modules, say so instead of producing misleading results.
+  if (!fs.existsSync(TS_NODE)) {
+    throw new Error(`ts-node not found at ${TS_NODE}: run \`bun install\` in web-app (CI runs this file via web-app's jest e2e-dev-mode project)`);
+  }
   const args = [
     "--compiler-options",
     TSC_OPTS,
