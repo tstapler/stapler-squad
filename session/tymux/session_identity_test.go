@@ -984,3 +984,37 @@ func TestSetSessionLabel_ReregistersStoredIDUnderNewLabel(t *testing.T) {
 	assert.False(t, oldHeld)
 	assert.True(t, newHeld)
 }
+
+// A record with no stored id that is renamed before restore still finds the daemon session
+// created under its old label, instead of spawning a second agent.
+func TestRestoreWithWorkDir_RenamedRecordWithoutStoredIDFindsSessionByPriorLabel(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	old := seedDaemonSession(t, d, dir+" [old]", dir, true)
+	view := labeledView(d, "old", "")
+	view.SetSessionLabel("new")
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.Equal(t, old, view.GetSessionIdentifier())
+	assert.Len(t, d.ids(), 1)
+}
+
+// A record whose stored session is dead must not take another legacy record's live
+// Name == workDir session; only its own labeled name counts.
+func TestStart_DeadStoredSessionDoesNotAdoptLegacyDirNamedSession(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	dead := seedDaemonSession(t, d, dir+" [x]", dir, false)
+	legacy := seedDaemonSession(t, d, dir, dir, true) // someone else's, never stored by id
+	view := labeledView(d, "x", dead)
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.Start(dir))
+
+	assert.NotEqual(t, legacy, view.GetSessionIdentifier())
+	assert.True(t, d.ids()[legacy], "the other record's session must be left alone")
+}
