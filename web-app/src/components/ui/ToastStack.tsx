@@ -24,7 +24,7 @@ import { MOVE_UNDO_TIMER_ID } from "@/lib/contexts/toastTray";
 import { getStackTopOffset, subscribeStackTopOffset } from "@/lib/utils/toastDock";
 import { readTerminalCursor } from "@/lib/terminal/cursorRect";
 import { bottomRightFootprint, deckAnchor, type DeckAnchor } from "@/components/ui/toastDeckAnchor";
-import { readPinnedCollapseMs } from "@/lib/utils/deckSettings";
+import { BELL_SETTINGS_EVENT, readFloatingBell, readPinnedCollapseMs } from "@/lib/utils/deckSettings";
 import { TrayEntryChip } from "@/components/ui/TrayHandle";
 import { trayAffordanceVariant } from "@/components/ui/trayVariant";
 import {
@@ -253,6 +253,15 @@ function UndoBar({ count, timers, onUndo }: { count: number; timers: ToastTimerR
   );
 }
 
+const subscribeBellSettings = (cb: () => void) => {
+  window.addEventListener(BELL_SETTINGS_EVENT, cb);
+  return () => window.removeEventListener(BELL_SETTINGS_EVENT, cb);
+};
+
+function useFloatingBellEnabled(): boolean {
+  return useSyncExternalStore(subscribeBellSettings, readFloatingBell, () => false);
+}
+
 /** The capped deck: at most `cap` cards and a "+N more" chip for the rest. */
 function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const viewport = useDeckViewport();
@@ -273,7 +282,9 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   // Once the phone entry has said something it never disappears (TH-7, TH-8); it rests as the bell.
   const [phoneEntryShown, setPhoneEntryShown] = useState(false);
   if (onPhone && !phoneEntryShown && (undoShowing || liveContent !== "none")) setPhoneEntryShown(true);
-  const keepsEntry = onPhone && phoneEntryShown;
+  // The opt-in floating TrayHandle is the single entry while it is on and the keyboard is closed (TH-7).
+  const floatingHandleIsEntry = useFloatingBellEnabled() && !viewport.isVirtualKeyboardOpen;
+  const keepsEntry = onPhone && phoneEntryShown && !floatingHandleIsEntry;
   if (!hasContent && !keepsEntry) return null;
 
   // Phone: top dock under the session tab row when one is published, else above the bottom nav.

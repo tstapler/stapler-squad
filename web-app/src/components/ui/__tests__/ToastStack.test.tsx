@@ -1,3 +1,4 @@
+import { writeFloatingBell } from "@/lib/utils/deckSettings";
 import React from "react";
 import fs from "fs";
 import path from "path";
@@ -718,6 +719,21 @@ describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
     expect(node).toHaveAttribute("data-content", "bell");
     fireEvent.click(screen.getByTestId("tray-entry-open"));
     expect(notifications.isPanelOpen).toBe(true);
+  });
+
+  it.each([
+    [false, 1],
+    [true, 0],
+  ])("floatingBellEnabled=%s renders %i resting bell(s) from the deck, so exactly one tray entry exists", (floating, bells) => {
+    act(() => writeFloatingBell(floating));
+    mount();
+    addMany(3);
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    act(() => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(screen.queryAllByTestId("tray-entry-open")).toHaveLength(bells);
+    act(() => writeFloatingBell(false));
   });
 
   it("shows no entry on a phone page with no terminal and nothing to say", () => {
