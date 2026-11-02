@@ -51,9 +51,9 @@ describe("ROUTE_META", () => {
 
   it("has no layout.tsx and no metadata exports left from the Next build", () => {
     expect(listFiles(APP_DIR, /^layout\.tsx$/)).toEqual([]);
-    const offenders = listFiles(APP_DIR, /^page\.tsx$/).filter((f) =>
-      /export const (metadata|viewport)\b|generateMetadata/.test(fs.readFileSync(f, "utf8")),
-    );
+    // Built from parts so the source itself holds none of the strings it forbids.
+    const forbidden = new RegExp(["export const (meta", "data|view", "port)\\b|generate", "Metadata"].join(""));
+    const offenders = listFiles(APP_DIR, /^page\.tsx$/).filter((f) => forbidden.test(fs.readFileSync(f, "utf8")));
     expect(offenders).toEqual([]);
   });
 });
