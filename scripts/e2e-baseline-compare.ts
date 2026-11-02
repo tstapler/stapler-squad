@@ -43,6 +43,8 @@ export interface PwTestResult {
 
 export interface PwTest {
   projectName: string;
+  /** Playwright's own expectation: "failed" for a `test.fail()` known gap. */
+  expectedStatus?: string;
   results: PwTestResult[];
 }
 
@@ -73,6 +75,15 @@ export function keyString(k: SpecKey): string {
   return `${k.spec} :: ${k.project} :: ${k.title}`;
 }
 
+/**
+ * A `test.fail()` test is expected to fail: its failing attempts are the expected outcome (a known gap kept visible by the
+ * spec itself), so they must not read as a Bun-only failure forever. Passing attempts are left as they are: specs that call
+ * `test.fail(condition)` as a precondition guard (backlog.spec.ts) pass when the guard trips, and that was never gated.
+ */
+function attemptStatus(t: PwTest, status: string): string {
+  return t.expectedStatus === "failed" && FAILED_STATUSES.has(status) ? "passed" : status;
+}
+
 /** One entry per (spec file, project, title) found anywhere in the report, with that test's attempts. */
 export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; attempts: Attempt[] }> {
   const out = new Map<string, { key: SpecKey; attempts: Attempt[] }>();
@@ -82,7 +93,7 @@ export function collectAttempts(report: PwReport): Map<string, { key: SpecKey; a
         const key: SpecKey = { spec: spec.file, project: t.projectName, title: [...titles, spec.title].join(" > ") };
         out.set(keyString(key), {
           key,
-          attempts: (t.results ?? []).map((r) => ({ retry: r.retry, status: r.status })),
+          attempts: (t.results ?? []).map((r) => ({ retry: r.retry, status: attemptStatus(t, r.status) })),
         });
       }
     }

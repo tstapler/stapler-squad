@@ -56,6 +56,8 @@ test.describe('stale chunk recovery', () => {
     await fail404PageChunk(page);
     await shell.navLink(/rules/i).click({ force: true });
 
+    // toHaveURL passes on the SPA route change, before the recovery reload has loaded, so wait for the reload itself.
+    await expect.poll(() => reloads, { message: 'the recovery reload happened' }).toBe(1);
     // The reload re-requests the real (unmocked) chunk and lands on the target route.
     await expect(page).toHaveURL(/\/rules/);
     await expect(shell.drawerNav).toBeVisible();

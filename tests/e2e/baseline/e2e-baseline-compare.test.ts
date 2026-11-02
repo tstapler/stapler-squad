@@ -236,6 +236,28 @@ describe("scripts/e2e-baseline-compare.ts", () => {
     });
   });
 
+  describe("test.fail() known gaps (expectedStatus: failed)", () => {
+    const rep = (results: { retry: number; status: string }[], expectedStatus?: string): PwReport => ({
+      suites: [{ specs: [{ file: "a.spec.ts", title: "t", tests: [{ projectName: "chromium", expectedStatus, results }] }] }],
+    });
+    const FAIL1 = [{ retry: 0, status: "failed" }];
+    const PASS1 = [{ retry: 0, status: "passed" }];
+    const gate = (bun: PwReport) =>
+      compare({ baseline: { specs: [] }, expectedDiff: { entries: [] }, nextReport: null, bunReports: [bun] });
+
+    test("TF1: a spec absent from the baseline that fails as a test.fail() gap is not a failure", () => {
+      expect(gate(rep(FAIL1, "failed")).exitCode).toBe(0);
+    });
+
+    test("TF2: the same failure without test.fail() still fails the gate", () => {
+      expect(gate(rep(FAIL1, "passed")).exitCode).toBe(1);
+    });
+
+    test("TF3: a passing attempt of a test.fail() test is left alone (precondition-guard specs pass when the guard trips)", () => {
+      expect(gate(rep(PASS1, "failed")).exitCode).toBe(0);
+    });
+  });
+
   test("a comparator stub that always exits 0 would fail F1-F7 (adversarial framing, documented not executed)", () => {
     // This test exists to make the claim checkable without actually swapping the script: each
     // F-case above independently asserts a non-zero exit, which is exactly what an always-0 stub
