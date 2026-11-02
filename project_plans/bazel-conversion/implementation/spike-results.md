@@ -28,8 +28,8 @@ Host: onyx, Bazel 9.3.1 via bazelisk 1.28.1, run 2026-11-01. Bazel invoked with 
 6. **A systemd scope rejects `OOMScoreAdjust`**: `systemd-run --user --scope -p OOMScoreAdjust=500` -> `Unknown assignment: OOMScoreAdjust=500`. `tools/bazel` sets `/proc/self/oom_score_adj` to 500 inside the scope instead (wrapper_test asserts 500 and `MemoryMax=15032385536`).
 7. **`startup:<config>` is ignored by Bazel**, so `--config=agent` cannot set `--max_idle_secs`; `.bazelrc` has `startup --max_idle_secs=300` and `tools/bazel` passes `--max_idle_secs=30` (non-tty or `BAZEL_AGENT`) and `--host_jvm_args=-Xmx2g` on the command line, because `~/.bazelrc` sets 8g (confirmed: the server command line carries `-Xmx8g` from the home rc and the final `-Xmx2g` wins). `check-bazelrc.sh` rejects `startup:<non-platform-config>` lines.
 8. **Flags that do not exist on 9.3.1** and are not used: `--local_ram_resources`, `--local_cpu_resources`, `--incompatible_sandbox_hermetic_tmp`, `--experimental_guard_against_concurrent_changes` (grep of `bazel help build --long` returns 0). `--local_resources=cpu=...` and `memory=...` are used.
-9. **Disk cache GC**: `--experimental_disk_cache_gc_max_size=100G`, `--experimental_disk_cache_gc_max_age=30d`, `--experimental_disk_cache_gc_idle_delay=10s` (default 5m never fires when the server exits after 30 s idle). No `--repository_cache` flag: the repository cache is already shared per user by default.
-10. **`--remote_local_fallback` needs `--incompatible_remote_local_fallback_for_remote_cache`** for `--remote_cache`; both are in `build:ci-cache-read` along with the circuit breaker (`--experimental_circuit_breaker_strategy=failure`). Not exercised against a real cache (Epic 7 / Task 0.12).
+9. **Disk cache GC**: `--experimental_disk_cache_gc_max_size=100G`, `--experimental_disk_cache_gc_max_age=30d`, `--experimental_disk_cache_gc_idle_delay=10s` (default 5m never fires when the server exits after 30 s idle). `--repository_cache=~/.cache/stapler-squad-bazel/repo` and `--repo_contents_cache=.../repo/contents` are set explicitly beside each other (plan Task 0.2b; the default is already per-user shared, the committed paths are an owner-chosen location).
+10. **`--remote_local_fallback` is dropped** (no-op for `--remote_cache` without `--incompatible_remote_local_fallback_for_remote_cache`; the failure policy is timeout + retries + circuit breaker, identical in `ci-cache-read` and `ci-cache-write`, plus `--remote_cache_compression`). Not exercised against a real cache (Epic 7 / Task 0.12).
 11. **`analysistest` tests SKIP when `go` is not on PATH** (`analysistest.go:402: skipping because go tool not available`). Under the sandbox all 15 analyzer tests currently pass vacuously. The `//tools/lint/...` pass is therefore weaker than it looks; making them run needs the Go SDK in `data` and PATH (to be handled in Epic 4 / Story 0.13). Recorded as a finding, not fixed here.
 12. **Two pre-existing failures surfaced**: `//tools/lint/silenttransition:silenttransition_test` reads `../../../session/transition_callers.go` (outside runfiles; class `cwd`); `//tuitest/integration/claude_squad:claude_squad_test` imports packages `tuitest/go.mod` does not require and already fails `go vet` (and needs `//testutil/wait`). Both are `tags = ["manual"]  # keep` and listed in `tools/bzl/test-exclusions.yaml`. Also `//tools/scanner/backend:backend_test` fails under Bazel (reads `tools/scanner/list-backend-protos.sh` from cwd; class `cwd`); it is outside the `//tools/lint/...` gate and is not yet excluded.
 13. `bazel mod tidy` reports the root `go.mod` is behind Bazel's resolved versions (`x/net` 0.58.0->0.59.0, `x/sys`, `x/crypto`, `x/mod`, `x/sync`, `x/text`, `x/tools` 0.48.0->0.51.0): transitive requirements raise them. `go.mod` was not changed (owner approval needed); expect `go mod tidy` drift to be reconciled in Epic 1.
@@ -67,6 +67,21 @@ Host: onyx, Bazel 9.3.1 via bazelisk 1.28.1, run 2026-11-01. Bazel invoked with 
 | --test_output | spike-verified | `bazel help` 9.3.1: `--test_output (summary, errors, all or streamed; default: "summary")` |
 | --test_summary | spike-verified | `bazel help` 9.3.1: `--test_summary (short, short_uncached, terse, detailed, detailed_uncached, none or testcase; default: "short")` |
 | --verbose_failures | spike-verified | `bazel help` 9.3.1: `--[no]verbose_failures (a boolean; default: "false")` |
+| --batch_cpu_scheduling | spike-verified | `bazel help startup_options --long` 9.3.1: `--[no]batch_cpu_scheduling (a boolean; default: "false")` |
+| --enable_platform_specific_config | spike-verified | `bazel help build --long` 9.3.1: `--[no]enable_platform_specific_config (a boolean; default: "false")` |
+| --experimental_remote_cache_eviction_retries | spike-verified | `bazel help build --long` 9.3.1: `--experimental_remote_cache_eviction_retries (an integer; default: "5")` (not committed; Task 7.1a) |
+| --io_nice_level | spike-verified | `bazel help startup_options --long` 9.3.1: `--io_nice_level (an integer; default: "-1")` |
+| --remote_cache_compression | spike-verified | `bazel help build --long` 9.3.1: `--[no]remote_cache_compression (a boolean; default: "false")` |
+| --repo_contents_cache | spike-verified | `bazel help build --long` 9.3.1: `--repo_contents_cache (a path; default: see description)` |
+| --repo_contents_cache_gc_max_age | spike-verified | `bazel help build --long` 9.3.1: `--repo_contents_cache_gc_max_age (An immutable length of time.; default: "14d")` |
+| --repository_cache | spike-verified | `bazel help build --long` 9.3.1: `--repository_cache (a path; default: see description)` |
+| --sandbox_default_allow_network | spike-verified | `bazel help build --long` 9.3.1: `--[no]sandbox_default_allow_network (a boolean; default: "true")` (spike S1 uses `=false`; not committed) |
+| --shutdown_on_low_sys_mem | spike-verified | `bazel help startup_options --long` 9.3.1: `--[no]shutdown_on_low_sys_mem (a boolean; default: "false")` |
+| --experimental_run_in_user_cgroup | spike-verified | `bazel help build --long` 9.3.1: `--[no]experimental_run_in_user_cgroup (a boolean; default: "false")` (not committed; evaluated in E7, Task 0.10g) |
+| --local_ram_resources | absent | `grep -cE -- '--local_ram_resources' ` of `bazel help build --long` 9.3.1 prints 0 |
+| --local_cpu_resources | absent | same grep prints 0 |
+| --incompatible_sandbox_hermetic_tmp | absent | same grep prints 0 |
+| --experimental_guard_against_concurrent_changes | absent | same grep prints 0 |
 
 ## Fresh clone
 

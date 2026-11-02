@@ -1,5 +1,6 @@
 .claude/worktrees
 worktrees
+.bazel-out
 third_party/tmux
 project_plans
 website

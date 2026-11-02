@@ -44,6 +44,21 @@ if [ "$peak" -gt 2 ]; then ok "CI=true bypasses the semaphore (peak $peak)"; els
 # Missing BAZEL_REAL must fail loudly, not run something else.
 if env -u BAZEL_REAL "$wrapper" version >/dev/null 2>&1; then bad "unset BAZEL_REAL accepted"; else ok "unset BAZEL_REAL rejected"; fi
 
+# Startup args: heap always, absolute --output_base only in the S6 fallback mode.
+cat > "$T/args-bazel" <<'ARGS'
+#!/bin/sh
+echo "$*" > "$T/args.out"
+ARGS
+chmod +x "$T/args-bazel"
+mkdir -p "$T/locks"
+env T="$T" BAZEL_REAL="$T/args-bazel" BAZEL_WRAPPER_LOCK_DIR="$T/locks" BAZEL_WRAPPER_NO_SYSTEMD=1 "$wrapper" info >/dev/null 2>&1
+case "$(cat "$T/args.out")" in *-Xmx2g*) ok "heap -Xmx2g passed on the command line" ;; *) bad "no -Xmx2g: $(cat "$T/args.out")" ;; esac
+case "$(cat "$T/args.out")" in *--output_base*) bad "output_base set without BAZEL_WORKTREE_OUTPUT_BASE" ;; *) ok "no --output_base by default" ;; esac
+( cd "$root" && env T="$T" BAZEL_REAL="$T/args-bazel" BAZEL_WRAPPER_LOCK_DIR="$T/locks" BAZEL_WRAPPER_NO_SYSTEMD=1 BAZEL_WORKTREE_OUTPUT_BASE=1 "$wrapper" info >/dev/null 2>&1 )
+case "$(cat "$T/args.out")" in *"--output_base=$root/.bazel-out"*) ok "BAZEL_WORKTREE_OUTPUT_BASE=1 passes absolute --output_base=$root/.bazel-out" ;; *) bad "output_base arg: $(cat "$T/args.out")" ;; esac
+env T="$T" BAZEL_REAL="$T/args-bazel" BAZEL_WRAPPER_LOCK_DIR="$T/locks" BAZEL_WRAPPER_NO_SYSTEMD=1 BAZEL_AGENT=1 "$wrapper" info >/dev/null 2>&1
+case "$(cat "$T/args.out")" in *--max_idle_secs=30*) ok "agent caller gets --max_idle_secs=30" ;; *) bad "agent idle: $(cat "$T/args.out")" ;; esac
+
 # systemd scope properties, read from inside the scope.
 if command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   cat > "$T/probe-bazel" <<'PROBE'

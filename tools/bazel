@@ -5,6 +5,7 @@
 # Single-tenant CI (CI / GITHUB_ACTIONS set) skips all of it.
 # Knobs: BAZEL_WRAPPER_SLOTS (default 2, max 4), BAZEL_WRAPPER_NO_FLOCK=1 (force the mkdir lock),
 #        BAZEL_WRAPPER_NO_SYSTEMD=1, BAZEL_WRAPPER_MEMORY_MAX (default 14G),
+#        BAZEL_WORKTREE_OUTPUT_BASE=1 (absolute --output_base=<worktree>/.bazel-out, S6 fallback),
 #        BAZEL_WRAPPER_LOCK_DIR (lock location; tests use a private dir).
 set -eu
 
@@ -96,6 +97,13 @@ fi
 startup_args="--host_jvm_args=-Xmx${BAZEL_WRAPPER_HEAP:-2g}"
 if [ ! -t 1 ] || [ -n "${BAZEL_AGENT:-}" ]; then
   startup_args="$startup_args --max_idle_secs=30"
+fi
+
+# S6 fallback (Story 0.10): one output base per worktree, inside it. %workspace% is NOT expanded
+# in startup flags, so the absolute path comes from here; .bazel-out must be in .bazelignore.
+if [ -n "${BAZEL_WORKTREE_OUTPUT_BASE:-}" ]; then
+  ws=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  startup_args="$startup_args --output_base=$ws/.bazel-out"
 fi
 
 # Raising oom_score_adj needs no privilege; a systemd *scope* rejects OOMScoreAdjust= as a
