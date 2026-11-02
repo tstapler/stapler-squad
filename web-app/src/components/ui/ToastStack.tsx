@@ -267,7 +267,15 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const hasTerminal = topOffset !== null;
   const hasContent = visible.length > 0 || overflow > 0 || movedToTray !== null;
   const desktopAnchor = useDesktopDeckAnchor(!onPhone && hasContent, deckRef);
-  if (!hasContent) return null;
+  // A page with no terminal floats the entry above the bottom nav (the dock's own placement), but
+  // the entry still says the same thing: overflow, keyboard chip or the resting bell.
+  const liveContent = trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, true);
+  const undoShowing = movedToTray !== null;
+  // Once the phone entry has said something it never disappears (TH-7, TH-8); it rests as the bell.
+  const [phoneEntryShown, setPhoneEntryShown] = useState(false);
+  if (onPhone && !phoneEntryShown && (undoShowing || liveContent !== "none")) setPhoneEntryShown(true);
+  const keepsEntry = onPhone && phoneEntryShown;
+  if (!hasContent && !keepsEntry) return null;
 
   // Phone: top dock under the session tab row when one is published, else above the bottom nav.
   let placement: keyof typeof deckPlacement;
@@ -297,13 +305,7 @@ function Deck({ toasts, timers, onRemove, onOpenTray }: DeckProps) {
   const showMoveAll = toasts.length >= 2 && cap > 0;
   const undo = movedToTray ? <UndoBar count={movedToTray.count} timers={timers} onUndo={undoMoveToTray} /> : null;
 
-  const affordance = trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, hasTerminal);
-  // A page with no terminal floats the entry above the bottom nav (the dock's own placement), but
-  // the entry still says the same thing: overflow, keyboard chip or nothing.
-  const entryContent =
-    affordance === "floating-bottom"
-      ? trayAffordanceVariant(overflow, toasts.length, viewport.isVirtualKeyboardOpen, true)
-      : affordance;
+  const entryContent = liveContent === "none" && keepsEntry ? "bell" : liveContent;
 
   return (
     <div

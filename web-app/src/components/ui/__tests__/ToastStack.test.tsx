@@ -703,6 +703,23 @@ describe("single phone tray entry (Task 4.2i, TH-7..TH-9)", () => {
     expect(screen.queryByTestId("tray-entry-open")).toBeNull();
   });
 
+  it("keeps the same entry node mounted as a resting bell after the undo window ends", () => {
+    mount();
+    addMany(3);
+    const node = entries()[0];
+    fireEvent.click(screen.getByTestId("toast-move-all-to-tray"));
+    act(() => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(screen.queryByTestId("toast-undo-bar")).toBeNull();
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]).toBe(node);
+    expect(node).toHaveAttribute("data-undo", "false");
+    expect(node).toHaveAttribute("data-content", "bell");
+    fireEvent.click(screen.getByTestId("tray-entry-open"));
+    expect(notifications.isPanelOpen).toBe(true);
+  });
+
   it("shows no entry on a phone page with no terminal and nothing to say", () => {
     act(() => setStackTopOffset(null));
     mount();
