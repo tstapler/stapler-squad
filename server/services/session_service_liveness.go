@@ -338,7 +338,8 @@ func (s *SessionService) ConversationOwnedByOtherLiveSession(q conversationOwner
 		return "", false
 	}
 	for _, inst := range s.reviewQueuePoller.GetInstances() {
-		if inst == nil || inst.UUID == q.selfUUID || !inst.IsLiveOrStoredSessionLive() {
+		// Not IsLiveOrStoredSessionLive: the cwd check below needs a live pane, which a pane-less view lacks.
+		if inst == nil || inst.UUID == q.selfUUID || !inst.IsBackendProcessAlive() {
 			continue
 		}
 		if inst.GetClaudeConversationUUID() != q.conversationUUID {

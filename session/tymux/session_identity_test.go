@@ -843,3 +843,144 @@ func TestStart_RecoveryClearsRecordOwnedKillRight(t *testing.T) {
 
 	assert.NotContains(t, d.kills, fresh)
 }
+
+// failKillOnce is a daemon whose next KillSession fails as if tymuxd were unreachable.
+type failKillOnce struct {
+	*modelDaemon
+	fail bool
+}
+
+func (f *failKillOnce) KillSession(ctx context.Context, req *connect.Request[v1.KillSessionRequest]) (*connect.Response[v1.KillSessionResponse], error) {
+	if f.fail {
+		f.fail = false
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("tymuxd unreachable"))
+	}
+	return f.modelDaemon.KillSession(ctx, req)
+}
+
+// A Close whose kill failed leaves the session running and the view closed; a later Start on
+// the same view (pause/restart) must re-adopt that session, not create a second agent.
+func TestStart_AfterFailedCloseReadoptsTheStillRunningSession(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := &failKillOnce{modelDaemon: newModelDaemon()}
+	stored := seedDaemonSession(t, d.modelDaemon, dir+" [x]", dir, true)
+	view := NewTymuxGRPCSession(d)
+	view.SetSessionLabel("x")
+	view.SetStoredSessionID(stored)
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+	t.Cleanup(func() { _ = view.Close() })
+	d.fail = true
+	require.Error(t, view.Close())
+
+	require.NoError(t, view.Start(dir))
+
+	assert.Equal(t, stored, view.GetSessionIdentifier())
+	assert.Equal(t, map[string]bool{stored: true}, d.ids(), "the daemon must hold exactly one session")
+}
+
+// With the stored session dead, a live session under the record's label is the running agent:
+// adopt it, never replace the dead one with a second live agent.
+func TestStart_DeadStoredSessionAdoptsLiveLabelSession(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	dead := seedDaemonSession(t, d, "old-name", dir, false)
+	live := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	view := labeledView(d, "x", dead)
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.Start(dir))
+
+	assert.Equal(t, live, view.GetSessionIdentifier())
+	assert.Equal(t, map[string]bool{live: true}, d.ids(), "one live agent; the dead session is removed")
+}
+
+// A failed Start releases a session it adopted (it ran before the attempt) without killing it, and
+// keeps the record's id; a session the attempt created is left to the caller to kill.
+func TestReleaseAdoptedSession_KeepsAdoptedSessionRunning(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	stored := seedDaemonSession(t, d, dir+" [x]", dir, true)
+	view := labeledView(d, "x", stored)
+	require.NoError(t, view.Start(dir))
+
+	released := view.(interface{ ReleaseAdoptedSession() bool }).ReleaseAdoptedSession()
+
+	assert.True(t, released)
+	assert.Empty(t, d.kills)
+	assert.Equal(t, map[string]bool{stored: true}, d.ids())
+	assert.Equal(t, stored, view.PersistedSessionID())
+	assert.False(t, view.HasSession())
+	require.NoError(t, view.Close()) // the record still owns it
+	assert.Equal(t, []string{stored}, d.kills)
+}
+
+func TestReleaseAdoptedSession_RefusesASessionTheViewCreated(t *testing.T) {
+	resetClaims(t)
+	d := newModelDaemon()
+	view := NewTymuxGRPCSession(d)
+	require.NoError(t, view.Start(t.TempDir()))
+	t.Cleanup(func() { _ = view.Close() })
+
+	assert.False(t, view.(interface{ ReleaseAdoptedSession() bool }).ReleaseAdoptedSession())
+	assert.Len(t, d.ids(), 1)
+}
+
+// A dead pane tymuxd is restarting (BACKOFF/RESTARTING) is still the record's agent: Start adopts
+// it. Every other state is replaced by a fresh session.
+func TestStart_UnrestoredRecordAdoptsOnlyLiveOrRestartingPanes(t *testing.T) {
+	for _, p := range matrixStates {
+		t.Run(p.name, func(t *testing.T) {
+			resetClaims(t)
+			dir := t.TempDir()
+			calls := &matrixCalls{}
+			ft := matrixTransport(dir, p, calls)
+			view := NewTymuxGRPCSession(ft)
+			view.SetStoredSessionID(testSessionID)
+			t.Cleanup(func() { _ = view.Close() })
+
+			require.NoError(t, view.Start(dir))
+
+			wantAdopt := p.liveness == v1.Liveness_LIVENESS_LIVE || p.restartPending()
+			if wantAdopt {
+				assert.Zero(t, calls.create.Load(), "must adopt, not create")
+			} else {
+				assert.Equal(t, int32(1), calls.create.Load(), "must replace")
+			}
+		})
+	}
+}
+
+// A stored id the daemon lists is attached by the restore path without taking the claim early;
+// the claim is the view's once attached.
+func TestRestoreWithWorkDir_StoredIDAttachTakesTheClaim(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	d := newModelDaemon()
+	stored := seedDaemonSession(t, d, dir, dir, true)
+	view := NewTymuxGRPCSession(d).(*tymuxGRPCSession)
+	view.SetStoredSessionID(stored)
+	t.Cleanup(func() { _ = view.Close() })
+
+	require.NoError(t, view.RestoreWithWorkDir(dir))
+
+	assert.True(t, claimedSessions.holds(stored, view))
+}
+
+// A renamed record re-registers under its new label, or the old one stays registered.
+func TestSetSessionLabel_ReregistersStoredIDUnderNewLabel(t *testing.T) {
+	resetClaims(t)
+	d := newModelDaemon()
+	view := labeledView(d, "old", "id-1")
+
+	view.SetSessionLabel("new")
+
+	storedIDHolders.mu.Lock()
+	_, oldHeld := storedIDHolders.labels["id-1"]["old"]
+	_, newHeld := storedIDHolders.labels["id-1"]["new"]
+	storedIDHolders.mu.Unlock()
+	assert.False(t, oldHeld)
+	assert.True(t, newHeld)
+}

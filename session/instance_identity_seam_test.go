@@ -233,3 +233,53 @@ func TestSeam_FailedStartOfUnrestoredRecordDoesNotKillStoredSession(t *testing.T
 	assert.Zero(t, fake.closeCalls, "a failed Start must not close the stored daemon session")
 	assert.Equal(t, "d-80", inst.ToInstanceData().TymuxSessionID, "the record keeps its id")
 }
+
+// releasingTymux reports an adopted session and records release/label calls.
+type releasingTymux struct {
+	seamFakeTymux
+	attached bool
+	released int
+	label    string
+}
+
+func (f *releasingTymux) HasSession() bool            { return f.attached }
+func (f *releasingTymux) SetSessionLabel(l string)    { f.label = l }
+func (f *releasingTymux) ReleaseAdoptedSession() bool { f.released++; return true }
+
+func restoredTymuxWith(t *testing.T, fake tymux.TymuxManager, title string) *Instance {
+	t.Helper()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	orig := newTymuxSessionFn
+	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
+	t.Cleanup(func() { newTymuxSessionFn = orig })
+	data := restoredPausedData(t, title)
+	data.Backend = BackendTymux
+	data.TymuxSessionID = "d-81"
+	inst, err := FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+	return inst
+}
+
+// A failed Start that attached a session already running before the attempt releases it instead
+// of killing the agent.
+func TestSeam_FailedStartReleasesAdoptedSessionInsteadOfKillingIt(t *testing.T) {
+	fake := &releasingTymux{attached: true}
+	inst := restoredTymuxWith(t, fake, "failed-start-adopted")
+
+	require.NoError(t, inst.cleanupAfterFailedStart(false))
+
+	assert.Equal(t, 1, fake.released)
+	assert.Zero(t, fake.closeCalls, "an adopted session must not be killed")
+}
+
+// Tymux identifies a record by its label, so a rename must reach the backend.
+func TestSeam_RenameAndSetTitleDirectUpdateTheProcessLabel(t *testing.T) {
+	fake := &releasingTymux{}
+	inst := restoredTymuxWith(t, fake, "label-before")
+
+	require.NoError(t, inst.Rename("label-renamed"))
+	assert.Equal(t, "label-renamed", fake.label)
+
+	inst.SetTitleDirect("label-rollback")
+	assert.Equal(t, "label-rollback", fake.label)
+}

@@ -63,6 +63,9 @@ type tymuxGRPCSession struct {
 	// so Close kills it even when another view of the same record holds the
 	// claim. Name-matched adoption stays claim-exclusive.
 	recordOwned bool
+	// adoptedPreexisting marks a session adopted (not created) by the latest Start/Restore;
+	// ReleaseAdoptedSession lets go of it instead of killing it.
+	adoptedPreexisting bool
 
 	// extraEnv is launch env added via AppendEnv; merged into the create
 	// request at Start() (see launchEnv for precedence).
@@ -369,8 +372,12 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	s.mu.RUnlock()
 	ctx := context.Background()
 	adopted, staleID, err := s.adoptStoredSessionForStart(ctx, dir)
-	if err != nil || adopted {
+	if err != nil {
 		return err
+	}
+	if adopted {
+		s.killReplacedStoredSession(ctx, staleID)
+		return nil
 	}
 	s.killStaleGeneration(ctx)
 	req := &v1.CreateSessionRequest{Name: s.sessionName(dir), Cwd: dir, Env: s.launchEnv()}
@@ -383,6 +390,7 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	}
 	s.mu.Lock()
 	s.recordOwned = false
+	s.adoptedPreexisting = false
 	s.mu.Unlock()
 	if err := s.cacheFromSession(resp.Msg); err != nil {
 		return err
@@ -391,23 +399,26 @@ func (s *tymuxGRPCSession) Start(dir string) error {
 	return nil
 }
 
-// adoptStoredSessionForStart keeps a view that was never restored in this process, but whose
-// record stores a daemon session id, from spawning a second agent next to its own session. The
+// adoptStoredSessionForStart keeps a view that is not attached to its session, but whose record
+// stores a daemon session id, from spawning a second agent next to it. That is a view never
+// restored in this process, or one whose Close could not kill the session (killFailedID). The
 // record's session (by id, else by label, as restore does) is adopted when live or when tymuxd is
-// restarting it; staleID names a dead one Start is about to replace. An unanswered ListSessions
-// is an error, not a reason to create blind.
+// restarting it. A dead one is replaced, unless a live session under the record's label exists:
+// that is adopted instead. staleID names a dead session to remove once Start is done. An
+// unanswered ListSessions is an error, not a reason to create blind.
 func (s *tymuxGRPCSession) adoptStoredSessionForStart(ctx context.Context, dir string) (adopted bool, staleID string, err error) {
 	s.mu.RLock()
-	storedID, restored, closed := s.storedID, s.sessionID != "", s.closed
+	storedID, restored, closed, killFailed := s.storedID, s.sessionID != "", s.closed, s.killFailedID != ""
 	s.mu.RUnlock()
-	if storedID == "" || restored || closed {
+	if !killFailed && (storedID == "" || restored || closed) {
 		return false, "", nil
 	}
 	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return false, "", classifyRPCError("Start", err)
 	}
-	found, viaStoredID := s.claimOwnSession(dir, resp.Msg.GetSessions())
+	sessions := resp.Msg.GetSessions()
+	found, viaStoredID := s.claimOwnSession(dir, sessions)
 	if found == nil {
 		return false, "", nil
 	}
@@ -415,7 +426,51 @@ func (s *tymuxGRPCSession) adoptStoredSessionForStart(ctx context.Context, dir s
 		return true, "", s.adopt(ctx, found, viaStoredID)
 	}
 	claimedSessions.CompareAndDelete(found.GetId(), any(s))
+	if live := s.claimLiveLabelSession(dir, sessions, found.GetId()); live != nil {
+		return true, found.GetId(), s.adopt(ctx, live, false)
+	}
 	return false, found.GetId(), nil
+}
+
+// claimLiveLabelSession claims a live session named for this record other than exceptID.
+func (s *tymuxGRPCSession) claimLiveLabelSession(workDir string, sessions []*v1.Session, exceptID string) *v1.Session {
+	for _, name := range []string{s.sessionName(workDir), workDir} {
+		for _, sess := range sessions {
+			if sess.GetName() == name && sess.GetId() != exceptID && sess.GetLiveness() == v1.Liveness_LIVENESS_LIVE &&
+				!s.storedByOtherRecord(sess.GetId()) && s.tryClaim(sess.GetId()) {
+				return sess
+			}
+		}
+	}
+	return nil
+}
+
+// ReleaseAdoptedSession lets go of a session this view adopted (it existed before the current
+// Start/Restore) without killing it: the stream is dropped, the claim released, and the view goes
+// back to the unrestored state keeping the record's stored id. False means nothing was adopted,
+// so the caller still owns what it created and may kill it.
+func (s *tymuxGRPCSession) ReleaseAdoptedSession() bool {
+	s.mu.RLock()
+	id, adopted := s.sessionID, s.adoptedPreexisting
+	s.mu.RUnlock()
+	if id == "" || !adopted {
+		return false
+	}
+	s.beginClosing()
+	s.teardownStandingStream()
+	claimedSessions.CompareAndDelete(id, any(s))
+	s.mu.Lock()
+	pty := s.pty
+	s.pty = nil
+	s.sessionID, s.paneID, s.cwd = "", "", ""
+	s.adoptedPreexisting, s.recordOwned = false, false
+	s.liveness = v1.Liveness_LIVENESS_UNSPECIFIED
+	s.restartIsPending = false
+	s.mu.Unlock()
+	if pty != nil {
+		pty.close()
+	}
+	return true
 }
 
 // listedRestartPending reports whether sess's first pane is dead but between tymuxd's automatic restarts.
@@ -679,8 +734,8 @@ func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Sessio
 		for _, sess := range sessions {
 			if sess.GetId() == storedID {
 				// Another view of this same record may already hold the claim; the
-				// record's own id is never a twin, so attach instead of spawning.
-				s.tryClaim(storedID)
+				// record's own id is never a twin, so attach instead of spawning; cacheFromSession
+				// takes the claim. Records sharing a label are one record (titles are unique per DB).
 				return sess, true
 			}
 		}
@@ -736,6 +791,7 @@ func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStor
 	}
 	s.mu.Lock()
 	s.recordOwned = viaStoredID
+	s.adoptedPreexisting = true
 	s.mu.Unlock()
 	return s.cacheFromSession(found)
 }

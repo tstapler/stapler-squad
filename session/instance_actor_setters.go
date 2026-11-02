@@ -567,6 +567,7 @@ func setTitleDirectLocked(s *instanceState, title string) {
 	snap := buildSnapshot(s.inst)
 	s.inst.mu.Unlock()
 	s.inst.snapshot.Store(snap)
+	s.inst.syncProcessLabel(title)
 }
 
 // SetTitleDirect sets the Title field directly without tmux-session constraints.

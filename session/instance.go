@@ -2124,6 +2124,10 @@ func (i *Instance) cleanupAfterFailedStart(firstTimeSetup bool) error {
 	}
 	i.stopVNC()
 	i.stopCDP()
+	// A session that ran before this attempt is released, not killed.
+	if r, ok := capabilityOf[AdoptedSessionReleaser](i.pm()); ok && r.ReleaseAdoptedSession() {
+		return nil
+	}
 	return i.killSessionAttachedByThisAttempt()
 }
 

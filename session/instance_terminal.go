@@ -117,6 +117,7 @@ func (i *Instance) Rename(newTitle string) error {
 	i.UpdatedAt = time.Now()
 	i.snapshot.Store(buildSnapshot(i))
 
+	i.syncProcessLabel(newTitle)
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
 }
@@ -455,4 +456,12 @@ func (i *Instance) UpdatePRStatus(update PRStatusUpdate) prUpdateResult {
 		return result, nil
 	})
 	return result
+}
+
+// syncProcessLabel tells the process manager the record's new title: tymux keys record identity
+// and daemon session names on it, so a stale label would leave the old one registered.
+func (i *Instance) syncProcessLabel(title string) {
+	if l, ok := capabilityOf[SessionLabeler](i.pm()); ok {
+		l.SetSessionLabel(title)
+	}
 }

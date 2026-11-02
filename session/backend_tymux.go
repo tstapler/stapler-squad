@@ -118,6 +118,15 @@ func (b *TymuxBackend) StoredSessionLive() bool {
 	return ok && p.StoredSessionLive()
 }
 
+// ReleaseAdoptedSession implements AdoptedSessionReleaser when the manager can.
+func (b *TymuxBackend) ReleaseAdoptedSession() bool {
+	r, ok := b.mgr.(AdoptedSessionReleaser)
+	return ok && r.ReleaseAdoptedSession()
+}
+
+// SetSessionLabel implements SessionLabeler.
+func (b *TymuxBackend) SetSessionLabel(label string) { b.mgr.SetSessionLabel(label) }
+
 // GetSessionIdentifier implements ProcessManager by delegating to the underlying
 // TymuxManager's own identifier.
 func (b *TymuxBackend) GetSessionIdentifier() string { return b.mgr.GetSessionIdentifier() }
