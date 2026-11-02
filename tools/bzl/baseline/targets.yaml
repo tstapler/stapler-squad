@@ -1,0 +1,51 @@
+# SCAFFOLD for Task 0.1g. NOT confirmed and NOT computed: every baseline_value
+# and target_value depends on measurements still pending (see baselines.md,
+# "Not yet measured") or on owner confirmation (targets_confirmed in
+# owner-attestations.yaml, which does not exist yet). Formulas are the plan's
+# proposals ("Improvement targets" table); the final value is set from baseline
+# and owner-confirmed. The verify command of Task 0.1g (all rows have non-null
+# baseline_value and target_value) therefore fails on purpose until then.
+status: unconfirmed
+targets:
+  - id: T1
+    formula: "at most 0.30, or 1.5 x measured median reverse-dependency fan-out of the 30 partial-change PR diffs, whichever is smaller"
+    baseline_value: null  # input available: baselines.md RA1 0.259; target not computed
+    target_value: null
+    source: "baselines.md RA1 / Task 0.1f partial-change PR set"
+  - id: T2
+    formula: "partial class: runner-minutes p50 <= 0.70 x baseline, ttg p50 <= 0.90 x baseline; whole population: ttg p50 <= 1.00 x, runner-minutes p50 <= 0.90 x"
+    baseline_value: null  # inputs available in baselines.md (ci-billed-minutes.sh); target not computed
+    target_value: null
+    source: "ci-time-to-green.sh joined with ci-billed-minutes.sh (Task 0.1i)"
+  - id: T3
+    formula: "second cold build <= 0.25 x first Bazel cold build; output_base_disk_kb <= 1.0 x disk_kb_worktree; 5-worktree aggregate <= 0.80 x 5 x disk_kb_worktree"
+    baseline_value: null  # PENDING-QUIET-HOST (worktree-cost.sh)
+    target_value: null
+    source: "baseline-worktree.json (not yet produced)"
+  - id: T4
+    formula: "at most max(1.25 x baseline warm one-package go test, baseline + 5 s)"
+    baseline_value: null  # PENDING-QUIET-HOST (pain-numbers.sh warm_one_pkg_test_s)
+    target_value: null
+    source: "Task 0.1f warm one-package latency (go test -short -count=1 ./config; make test has no PKG variable)"
+  - id: T5
+    formula: "100% of the 9 fixtures print a Remedy: line within 20 lines and at most 60 lines total"
+    baseline_value: null  # input available: 1 of 4 make-applicable fixtures names a correct remedy
+    target_value: null
+    source: "tools/bzl/baseline/fixtures/make-path-results.json"
+  - id: T6
+    formula: "at most 10% of baseline median regen steps per session after the flip"
+    baseline_value: null  # input available: median 0 (degenerate, see baselines.md)
+    target_value: null
+    source: "regen-steps.sh"
+  - id: T7
+    formula: "H1 host executables <= 0.50 x make baseline, 0 network destinations in build actions; H2 true; H3 = 0; H4 = owner-accepted downgrades"
+    baseline_value: null  # PENDING-QUIET-HOST (hermeticity.sh --system make)
+    target_value: null
+    source: "hermeticity-make.json (not yet produced)"
+economic_gate_factors:
+  # Proposals from plan.md Task 0.14e; not confirmed.
+  EG1: "projected PR time-to-green p50 > 1.10 x baseline p50"
+  EG2: "cold CI > 1.5 x baseline p50"
+  EG3: "first-worktree Bazel cold > 3 x make median, or second > 2 x the S6 bound"
+  EG4: "re-costed CU total > 1.25 x verified total"
+  EG5: "RA1 median fan-out > 0.60 or RA2 non-Go share > 0.60"
