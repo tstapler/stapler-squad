@@ -5,6 +5,7 @@ import "github.com/linkdata/deadlock"
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +42,24 @@ type ReviewQueuePollerConfig struct {
 
 // DefaultReviewQueuePollerConfig returns sensible defaults for polling.
 func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
+	cfg := baseReviewQueuePollerConfig()
+	if d, ok := stalenessThresholdFromEnv(); ok {
+		cfg.StalenessThreshold = d
+	}
+	return cfg
+}
+
+// StalenessThresholdEnv overrides StalenessThreshold (a Go duration, e.g. "24h").
+// The e2e harness sets it so long-lived test servers never flag their idle
+// seed sessions stale mid-run, which raised toasts over unrelated specs.
+const StalenessThresholdEnv = "STAPLER_SQUAD_REVIEW_STALENESS_THRESHOLD"
+
+func stalenessThresholdFromEnv() (time.Duration, bool) {
+	d, err := time.ParseDuration(os.Getenv(StalenessThresholdEnv))
+	return d, err == nil && d > 0
+}
+
+func baseReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	return ReviewQueuePollerConfig{
 		PollInterval:       2 * time.Second,  // Poll every 2 seconds for immediate detection
 		SlowPollInterval:   8 * time.Second,  // Back off to 8s when queue is empty
