@@ -462,7 +462,8 @@ test.describe('async session creation (Epic 5.2: SessionCard Failed-state render
       if (target) {
         Object.assign(target, fields);
       }
-      await route.fulfill({ response, json });
+      // A reload can abort a still-pending handler from the previous navigation; fulfilling it then throws.
+      await route.fulfill({ response, json }).catch(() => {});
     });
 
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
