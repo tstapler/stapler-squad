@@ -32,6 +32,9 @@ test('uxAnalysis_AxeStep_should_NotHaveContinueOnError_When_ParsedFromRealYAML',
 });
 
 test('build_E2eBunRunSteps_should_UseBash_InPlaywrightContainer', () => {
+  const source = fs.readFileSync(path.join(WORKFLOWS_DIR, 'build.yml'), 'utf8');
+  const duplicateDefaults = source.replace('    defaults:', '    defaults: {}\n    defaults:');
+  assert.throws(() => yaml.load(duplicateDefaults), /duplicated mapping key/);
   const job = loadWorkflow('build.yml').jobs['e2e-bun'];
   assert.ok(job.container);
   assert.equal(job.defaults?.run?.shell, 'bash');
