@@ -23,7 +23,8 @@ const DYNAMIC = `export const load = () => import("@connectrpc/connect-web");\n`
 const transportBan = (errs: string[]) => errs.filter((e) => /unary transports only in lib\/api\/transport\.ts/.test(e));
 
 const CODEMIRROR = `import { EditorView } from "@codemirror/view";\nexport const v = EditorView;\n`;
-const NAV = `import { useRouter } from "next/navigation";\nexport const r = useRouter;\n`;
+const NEXT_MODULE = ["next", "navigation"].join("/"); // built up so the source holds no literal next import
+const NAV = `import { useRouter } from "${NEXT_MODULE}";\nexport const r = useRouter;\n`;
 const FILES_UI = "src/components/sessions/files/Foo.tsx";
 const HOOK = "src/lib/hooks/useFoo.ts";
 

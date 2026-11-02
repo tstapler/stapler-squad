@@ -1,6 +1,5 @@
-// Entry of the Bun build (WEB_BUILD=bun). Mirrors Next's persistent root layout: RootShell sits inside the
-// router (its hooks need it) and outlives every navigation. The html theme class and FOUC script that
-// layout.tsx emits are injected into index.html by build/html.ts, not here.
+// Entry of the web build. RootShell sits inside the router (its hooks need it) and outlives every
+// navigation. The html theme class and FOUC script are injected into index.html by build/html.ts, not here.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./app/fonts.css";

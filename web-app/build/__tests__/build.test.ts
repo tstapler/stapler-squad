@@ -78,7 +78,7 @@ describe("build.ts toggles and failures", () => {
     expect(r.leftoverTmp).toEqual([]);
   });
 
-  it("names the importer when a next import is refused", () => {
+  it("names the importer when an import cannot be resolved (next is no longer installed)", () => {
     const r = scenario<{ err: string }>("ban");
     expect(r.err).toContain("[web-build:bundle]");
     expect(r.err).toContain("main.tsx");

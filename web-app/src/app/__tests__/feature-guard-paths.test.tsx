@@ -1,5 +1,5 @@
 /**
- * Characterises the feature-flag guard layouts (Story 1.4 / 1.7): render null while flags
+ * Characterises the feature-flag guard on each guarded path (Story 1.4 / 1.7): render null while flags
  * load, render null and `router.replace("/")` once when the flag is off, render children when on.
  * Runs against the real FeatureFlagsProvider with a mocked RPC client.
  */
@@ -8,9 +8,8 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { resetFlagStoreForTest } from "@/lib/features/flagStore";
 import { ROUTE_META } from "../route-meta";
-import BacklogLayout from "../backlog/layout";
-import BacklogSourcesSettingsLayout from "../settings/backlog-sources/layout";
-import ChangelogLayout from "../changelog/layout";
+import { FeatureGuard } from "../FeatureGuard";
+import type { GuardFlag } from "../route-meta";
 
 const mockReplace = jest.fn();
 let mockPathname = "/";
@@ -21,36 +20,28 @@ jest.mock("@/lib/nav", () => ({
   usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
-// The backlog layout wraps children in a Redux-backed stream provider; this suite only tests the guard.
-jest.mock("@/components/backlog/BacklogStreamContext", () => ({
-  BacklogStreamProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
-// BacklogStreamProvider reads the redux store; the guard under test needs no stream.
-jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
-  useWatchBacklogItems: () => ({ items: [], connectionState: "disconnected" }),
-}));
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({ getFeatureFlags: mockGetFeatureFlags }),
 }));
 
-const cases: Array<[string, string, string, React.ComponentType<{ children: React.ReactNode }>]> = [
-  ["backlog/layout.tsx", "backlog", "/backlog", BacklogLayout],
-  ["settings/backlog-sources/layout.tsx", "backlog", "/settings/backlog-sources", BacklogSourcesSettingsLayout],
-  ["changelog/layout.tsx", "changelog", "/changelog", ChangelogLayout],
+const cases: Array<[string, GuardFlag, string]> = [
+  ["backlog", "backlog", "/backlog"],
+  ["settings/backlog-sources", "backlog", "/settings/backlog-sources"],
+  ["changelog", "changelog", "/changelog"],
 ];
 
-function renderLayout(Layout: React.ComponentType<{ children: React.ReactNode }>) {
+function renderGuarded(flag: GuardFlag) {
   return render(
     <FeatureFlagsProvider>
-      <Layout>
+      <FeatureGuard flag={flag}>
         <span>guarded child</span>
-      </Layout>
+      </FeatureGuard>
     </FeatureFlagsProvider>,
   );
 }
 
-describe.each(cases)("%s", (_file, flag, path, Layout) => {
+describe.each(cases)("%s", (_name, flag, path) => {
   beforeEach(() => {
     resetFlagStoreForTest();
     mockPathname = path;
@@ -61,7 +52,7 @@ describe.each(cases)("%s", (_file, flag, path, Layout) => {
   it("renders null and does not redirect while flags are loading", async () => {
     let resolve!: (v: unknown) => void;
     mockGetFeatureFlags.mockReturnValue(new Promise((r) => { resolve = r; }));
-    const { container } = renderLayout(Layout);
+    const { container } = renderGuarded(flag);
 
     expect(container).toBeEmptyDOMElement();
     expect(document.head.querySelector("title")?.textContent).toBe((ROUTE_META as Record<string, { title: string }>)[path].title);
@@ -72,7 +63,7 @@ describe.each(cases)("%s", (_file, flag, path, Layout) => {
 
   it("renders null and replaces to / exactly once when the flag is off", async () => {
     mockGetFeatureFlags.mockResolvedValue({ flags: [{ name: flag, enabled: false, scopes: [] }] });
-    const { container } = renderLayout(Layout);
+    const { container } = renderGuarded(flag);
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/"));
     expect(mockReplace).toHaveBeenCalledTimes(1);
@@ -81,7 +72,7 @@ describe.each(cases)("%s", (_file, flag, path, Layout) => {
 
   it("renders children when the flag is on", async () => {
     mockGetFeatureFlags.mockResolvedValue({ flags: [{ name: flag, enabled: true, scopes: [] }] });
-    renderLayout(Layout);
+    renderGuarded(flag);
 
     expect(await screen.findByText("guarded child")).toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();

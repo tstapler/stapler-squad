@@ -5,27 +5,17 @@
  * auth-exempt prefixes would redirect that asset to /login and lock every user out.
  *
  * Passkey auth is attached only to the remote HTTPS listener, so this starts a dedicated server
- * with `remoteAuth` and drives it with TLS errors ignored (private CA). Observed on Next: the
- * login page's RPC fetches (/api/...) answer 401 by design, and Next's <Link> RSC prefetches
- * (<route>/index.txt, fetch type) answer 302 -> /login; neither is an asset. Every other request is
- * a static asset and must be 2xx with no redirect.
- *
- * Set RECORD_LOGIN_REQUESTS=1 to rewrite server/middleware/testdata/login-requests.json (input
- * for the Go allowlist walk, Story 6.8).
- *
- * Story 7.13b (PR 7b, Bun): the same run against the Bun build, plus checking every requested path
- * against the exempt prefixes or server/middleware/testdata/public-allowlist.json (Story 5.9).
+ * with `remoteAuth` and drives it with TLS errors ignored (private CA). The login page's RPC
+ * fetches (/api/...) answer 401 by design; every other request is a static asset and must be 2xx
+ * with no redirect, and its path must be under an exempt prefix or in
+ * server/middleware/testdata/public-allowlist.json (Story 5.9).
  */
-import * as fs from 'fs';
-import * as path from 'path';
 import { test, expect, type Page } from '@playwright/test';
-import { isBunBuild } from './helpers/web-build';
 import { TestServer } from './helpers/test-server';
 import allowlist from '../../server/middleware/testdata/public-allowlist.json';
 
-const REQUESTS_FIXTURE = path.join(__dirname, '..', '..', 'server', 'middleware', 'testdata', 'login-requests.json');
 const API_PREFIX = '/api/';
-/** fetch/xhr are data requests (RPCs, Next RSC prefetches); everything else is a loaded asset. */
+/** fetch/xhr are data requests (RPCs); everything else is a loaded asset. */
 const DATA_TYPES = new Set(['fetch', 'xhr']);
 const MIN_ASSETS = 5;
 const SERVER_BOOT_TIMEOUT_MS = 180_000;
@@ -91,58 +81,6 @@ function isExempt(pathname: string): boolean {
 
 test.describe('login page static assets (remote auth, no session)', () => {
   test.describe.configure({ mode: 'serial', timeout: TEST_TIMEOUT_MS });
-  test.skip(isBunBuild(), 'Story 7.13b (below) covers the Bun build; this block is the Next baseline');
-
-  let server: TestServer;
-
-  test.beforeAll(async () => {
-    test.setTimeout(SERVER_BOOT_TIMEOUT_MS); // a cold test-mode boot has taken 30-45s
-    server = new TestServer({
-      port: 0,
-      testDir: `/tmp/stapler-squad-test-login-${process.pid}`,
-      seedSessions: 0,
-      liveSeedSessions: 0,
-      remoteAuth: true,
-    });
-    await server.start();
-  });
-
-  test.afterAll(async () => {
-    await server?.stop();
-  });
-
-  test('every static asset /login needs loads 2xx with no redirect to /login', async ({ browser }) => {
-    const context = await browser.newContext({ ignoreHTTPSErrors: true });
-    const page = await context.newPage();
-    const { assets, seen } = await collectLoginAssets(page, server.getRemoteBaseUrl());
-
-    expect(assets.length, 'the login page loads static assets').toBeGreaterThan(MIN_ASSETS);
-    const redirected = assets.filter((r) => r.status >= 300 && r.status < 400);
-    expect(redirected.map((r) => `${r.status} ${r.path} -> ${r.location}`), 'assets redirected (to /login)').toEqual([]);
-    const notOk = assets.filter((r) => r.status < 200 || r.status >= 300);
-    expect(notOk.map((r) => `${r.status} ${r.path}`), 'non-2xx static assets').toEqual([]);
-
-    // Next's <Link> prefetches each route's RSC payload (<route>/index.txt, type fetch). With no
-    // session those answer 302 -> /login. They are not assets the login page needs, so they are
-    // recorded here instead of failing the guard.
-    const prefetches = seen.filter((r) => !r.path.startsWith(API_PREFIX) && DATA_TYPES.has(r.type));
-    test.info().annotations.push({
-      type: 'next-rsc-prefetch',
-      description: `${prefetches.length} non-API fetches; ${prefetches.filter((r) => r.status === 302).length} redirected to /login`,
-    });
-
-    if (process.env.RECORD_LOGIN_REQUESTS === '1') {
-      const paths = [...new Set(assets.map((r) => `${r.type} ${r.path}`))].sort();
-      fs.mkdirSync(path.dirname(REQUESTS_FIXTURE), { recursive: true });
-      fs.writeFileSync(REQUESTS_FIXTURE, `${JSON.stringify({ capturedFrom: 'next', requests: paths }, null, 2)}\n`);
-    }
-    await context.close();
-  });
-});
-
-test.describe('login page static assets (Bun only, PR 7b)', () => {
-  test.describe.configure({ mode: 'serial', timeout: TEST_TIMEOUT_MS });
-  test.skip(!isBunBuild(), 'this block only exercises the Bun build');
 
   let server: TestServer;
 

@@ -112,7 +112,7 @@ export default defineConfig({
     ['list'], // Console output
     ['html', { outputFolder: './playwright-report' }],
     ['allure-playwright', { outputFolder: 'allure-results' }],
-    // scripts/e2e-baseline-compare.ts's input (Task 0.1e/7.10a): e2e-next/e2e-bun (build.yml)
+    // scripts/e2e-baseline-compare.ts's input (Task 0.1e/7.10a): e2e-bun (build.yml)
     // and the local baseline/expected-diff procedures (Stories 0.1, 7.11, 8.1) all read this.
     ['json', { outputFile: process.env.PLAYWRIGHT_JSON_REPORT_PATH || './playwright-report/report.json' }],
   ],
