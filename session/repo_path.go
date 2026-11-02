@@ -532,7 +532,7 @@ func DetectWorktree(path string) (*WorktreeInfo, error) {
 	}
 	detectWorktreeCache.RUnlock()
 
-	info, err := detectWorktreeUncached(path)
+	info, err := detectWorktreeUncachedFn(path)
 
 	detectWorktreeCache.Lock()
 	detectWorktreeCache.m[path] = detectWorktreeCacheEntry{info: info, err: err, expiry: now.Add(detectWorktreeCacheTTL)}
@@ -540,6 +540,9 @@ func DetectWorktree(path string) (*WorktreeInfo, error) {
 
 	return info, err
 }
+
+// detectWorktreeUncachedFn is the cache-miss seam for tests.
+var detectWorktreeUncachedFn = detectWorktreeUncached
 
 func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 	info := &WorktreeInfo{}

@@ -51,13 +51,13 @@ func TestDetectWorktreeBounded_BlockedPathDoesNotStall(t *testing.T) {
 	t.Cleanup(func() { inflightWorktreeDetections.Delete("/stuck") })
 
 	withWatchdog(t, func() {
-		if _, err := detectWorktreeBounded("/stuck", 20*time.Millisecond, nil); err == nil {
+		if _, err := detectWorktreeBounded("/stuck", 20*time.Millisecond); err == nil {
 			t.Error("expected timeout error")
 		}
-		if info, err := detectWorktreeBounded("/ok", 20*time.Millisecond, nil); err != nil || info == nil {
+		if info, err := detectWorktreeBounded("/ok", 20*time.Millisecond); err != nil || info == nil {
 			t.Errorf("readable path: info=%v err=%v", info, err)
 		}
-		if _, err := detectWorktreeBounded("/stuck", 20*time.Millisecond, nil); err == nil {
+		if _, err := detectWorktreeBounded("/stuck", 20*time.Millisecond); err == nil {
 			t.Error("expected fast failure for still-stuck path")
 		}
 	})
@@ -84,7 +84,7 @@ func TestDetectWorktreeBounded_ConcurrentCallersSpawnOneGoroutine(t *testing.T) 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := detectWorktreeBounded("/c", 30*time.Millisecond, nil); err == nil {
+				if _, err := detectWorktreeBounded("/c", 30*time.Millisecond); err == nil {
 					t.Error("expected error")
 				}
 			}()
@@ -98,67 +98,67 @@ func TestDetectWorktreeBounded_ConcurrentCallersSpawnOneGoroutine(t *testing.T) 
 	waitUntil(t, func() bool { _, ok := inflightWorktreeDetections.Load("/c"); return !ok })
 }
 
-func TestDetectWorktreeBounded_LateSuccessIsDelivered(t *testing.T) {
-	release := make(chan struct{})
-	stubDetect(t, func(string) (*WorktreeInfo, error) {
-		<-release
-		return &WorktreeInfo{GitHubOwner: "o", GitHubRepo: "r"}, nil
-	})
-	late := make(chan *WorktreeInfo, 1)
-	withWatchdog(t, func() {
-		if _, err := detectWorktreeBounded("/late", 20*time.Millisecond, func(i *WorktreeInfo) { late <- i }); err == nil {
-			t.Error("expected timeout")
-		}
-	})
-	close(release)
-	select {
-	case info := <-late:
-		if info.GitHubOwner != "o" || info.GitHubRepo != "r" {
-			t.Fatalf("late info = %+v", info)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("late result never delivered")
-	}
-}
-
 func TestStatBounded_TimesOut(t *testing.T) {
 	release := make(chan struct{})
 	orig := statFn
-	statFn = func(string) (fs.FileInfo, error) { <-release; return nil, nil }
-	t.Cleanup(func() { statFn = orig; close(release) })
+	var calls atomic.Int32
+	statFn = func(string) (fs.FileInfo, error) { calls.Add(1); <-release; return nil, nil }
+	t.Cleanup(func() {
+		close(release)
+		waitUntil(t, func() bool { _, ok := inflightStats.Load("/x"); return !ok })
+		statFn = orig
+	})
 	withWatchdog(t, func() {
-		if _, timedOut := statBounded("/x", 20*time.Millisecond); !timedOut {
-			t.Error("expected timeout")
+		for range 3 {
+			if _, timedOut := statBounded("/x", 20*time.Millisecond); !timedOut {
+				t.Error("expected timeout")
+			}
 		}
 	})
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("stat calls = %d, want 1 (single-flight)", n)
+	}
 }
 
-// Load of a session whose detection blocks returns promptly, leaves GitHub info
-// empty and unpersisted, and applies the result once the call finally returns.
+// A session whose detection blocks loads promptly with GitHub info empty and
+// unpersisted; once the abandoned call returns it has filled detectWorktreeCache,
+// so the next load applies the result instantly.
 func TestFromInstanceData_BlockedDetectionDoesNotStallLoad(t *testing.T) {
+	const repo = "/stuck-repo"
 	release := make(chan struct{})
-	origTimeout := startupWorktreeDetectTimeout
+	origTimeout, origUncached := startupWorktreeDetectTimeout, detectWorktreeUncachedFn
 	startupWorktreeDetectTimeout = 20 * time.Millisecond
-	stubDetect(t, func(path string) (*WorktreeInfo, error) {
-		if path == "/stuck-repo" {
+	detectWorktreeUncachedFn = func(path string) (*WorktreeInfo, error) {
+		if path == repo {
 			<-release
 			return &WorktreeInfo{GitHubOwner: "late", GitHubRepo: "repo"}, nil
 		}
 		return &WorktreeInfo{}, nil
+	}
+	t.Cleanup(func() {
+		waitUntil(t, func() bool { _, ok := inflightWorktreeDetections.Load(repo); return !ok })
+		startupWorktreeDetectTimeout, detectWorktreeUncachedFn = origTimeout, origUncached
+		detectWorktreeCache.Lock()
+		delete(detectWorktreeCache.m, repo)
+		delete(detectWorktreeCache.m, "/fine-repo")
+		detectWorktreeCache.Unlock()
 	})
 	t.Cleanup(func() {
-		startupWorktreeDetectTimeout = origTimeout
-		inflightWorktreeDetections.Delete("/stuck-repo")
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
 	})
 
 	now := time.Now()
 	mk := func(title, path string) InstanceData {
 		return InstanceData{Title: title, Path: path, Status: Paused, CreatedAt: now, UpdatedAt: now, Program: "claude"}
 	}
-	var stuck, fine *Instance
+	var stuck, fine, again *Instance
 	withWatchdog(t, func() {
 		var err error
-		if stuck, err = FromInstanceData(mk("stuck", "/stuck-repo")); err != nil {
+		if stuck, err = FromInstanceData(mk("stuck", repo)); err != nil {
 			t.Errorf("stuck: %v", err)
 		}
 		if fine, err = FromInstanceData(mk("fine", "/fine-repo")); err != nil {
@@ -169,8 +169,24 @@ func TestFromInstanceData_BlockedDetectionDoesNotStallLoad(t *testing.T) {
 		t.Fatal("instances not restored")
 	}
 	if d := stuck.ToInstanceData(); d.GitHubOwner != "" || d.GitHubRepo != "" {
-		t.Fatalf("GitHub info persisted after timeout: %q/%q", d.GitHubOwner, d.GitHubRepo)
+		t.Fatalf("GitHub info set after timeout: %q/%q", d.GitHubOwner, d.GitHubRepo)
 	}
+
 	close(release)
-	waitUntil(t, func() bool { return stuck.ToInstanceData().GitHubOwner == "late" })
+	waitUntil(t, func() bool { _, ok := inflightWorktreeDetections.Load(repo); return !ok })
+	waitUntil(t, func() bool {
+		detectWorktreeCache.RLock()
+		defer detectWorktreeCache.RUnlock()
+		_, ok := detectWorktreeCache.m[repo]
+		return ok
+	})
+	withWatchdog(t, func() {
+		var err error
+		if again, err = FromInstanceData(mk("again", repo)); err != nil {
+			t.Errorf("again: %v", err)
+		}
+	})
+	if d := again.ToInstanceData(); d.GitHubOwner != "late" || d.GitHubRepo != "repo" {
+		t.Fatalf("next load got %q/%q, want late/repo", d.GitHubOwner, d.GitHubRepo)
+	}
 }
