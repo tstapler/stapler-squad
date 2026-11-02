@@ -216,3 +216,58 @@ tymuxd: `scripts/fetch-tymuxd.sh` + `scripts/tymuxd-checksums.txt` (v1.12.0 = Ma
 3. "tymuxd `http_file`": the asset is a tarball, so `http_archive` is needed.
 4. "`tools/ci/check-tymux-pin.sh` ... pass iff the gitlink commit equals the `PIN` commit": the existing script does not check the tmux submodule at all.
 5. `tools/bazel` cannot be invoked directly (needs `BAZEL_REAL`); it runs through `bazel`/`bazelisk`.
+
+## S7 Go build tags as Bazel configs (Story 0.8 / Tasks 0.8a, 0.8b)
+
+**Verdict: `Pass`, path = direct, cost S.** Every check of the S7 row is true on Bazel 9.3.1 / rules_go 0.65.0, but two plan assumptions are false and Task 1.4a must use the corrected form (see the last section).
+
+Spike files: `tools/bzl/flags/BUILD.bazel` (the tracked HandBuildFile: two `bool_flag`s and their `config_setting`s), `tools/bzl/spike-tags/` (throwaway package: one `t_<tag>.go` per tag, `go_library` + `go_binary tagdump` that prints the tags whose files were compiled, `spike.bazelrc`). Fake payloads (`embed/tmux`, `embed/tymuxd`) are `testonly` `write_file` targets, so nothing tracked under `session/` changed. Configs were passed with `bazel --bazelrc=tools/bzl/spike-tags/spike.bazelrc ...`; `.bazelrc` itself is untouched. Every Bazel call ran through `tools/bazel`, one at a time.
+
+### Exact syntax that worked (rules_go 0.65.0)
+
+The repository name is `@rules_go`, NOT `@io_bazel_rules_go` (`MODULE.bazel` has no `repo_name`). With the old name every command fails: `ERROR: @io_bazel_rules_go//go/config:pure :: Error loading option ...: No repository visible as '@io_bazel_rules_go' from main repository`.
+
+```
+build:linux       --@rules_go//go/config:pure                      # auto-applies via enable_platform_specific_config
+build:race        --@rules_go//go/config:pure=false
+build:race        --@rules_go//go/config:race
+build:embed_tmux  --@rules_go//go/config:tags=embed_tmux
+build:embed_tmux  --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --@rules_go//go/config:tags=embed_tmux,embed_tymux   # ONE flag listing both
+build:embed_tymux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --//tools/bzl/flags:embed_tymux=true
+build:sinkguard   --@rules_go//go/config:tags=sinkguard            # likewise gitoracle, integration
+build:release     --config=embed_tymux                             # release has no other definition in the plan; assumed = embed_tymux
+```
+
+`go/config:tags`, `race`, `pure` all accepted. `static` and `msan` were not exercised (not used by this repo).
+
+### Checks (PASS iff list)
+
+| Check | Result | Evidence |
+|---|---|---|
+| All 7 `TagConfig` build (spike package) | true | `bazel run --config=<c> //tools/bzl/spike-tags:tagdump` exit 0 for none/embed_tmux/embed_tymux/sinkguard/gitoracle/integration/race/release; output: `!race`, `!race embed_tmux:FAKE-TMUX`, `!race embed_tmux:FAKE-TMUX embed_tymux:FAKE-TYMUXD`, `!race sinkguard`, `!race gitoracle`, `!race integration`, `race`, release = embed_tymux output |
+| All 7 `TagConfig` build (real targets, Story 1.4 loop) | true | `bazel build --config=<c> //tools/lint/...` for embed_tmux, embed_tymux, sinkguard, gitoracle, integration, race, release: all `Build completed successfully` (54 targets). Weak evidence for tags (tools/lint carries none of them), real evidence the configs parse and compose with the tree |
+| `embed_tymux` implies `embed_tmux` | true by construction, enforced by a compile guard | `cquery ... --config=embed_tymux` on `GoInfo.mode`: `tags = ["embed_tmux", "embed_tymux"]`, `pure = True`, `race = False`. Bazel has no implication mechanism: `tags=embed_tymux` alone fails to compile `t_tymux_requires_tmux.go:6:9: undefined: embedTymuxRequiresEmbedTmux` (my guard file, `//go:build embed_tymux && !embed_tmux`) |
+| `select()` on `//tools/bzl/flags:embed_tmux` wires the embed file | true | flag true + tag: `embed_tmux:FAKE-TMUX` compiled in; `cquery` `embedsrcs` = `[embed/tmux, embed/tymuxd]` under `embed_tymux`. Flag true, tag off: builds, no embed (`!race`). Tag on, flag false: `t_embed_tmux.go:7:12: could not embed embed/tmux: no matching files found` (the failure ADR-007 predicts; it comes from the compile action, not at analysis) |
+| `--config=linux --config=race` builds | true | `bazel build --config=linux --config=race //tools/lint/...` exit 0, 166 actions. `bazel aquery --config=race 'mnemonic("GoCompilePkg", //tools/lint/...)' \| grep -c -- '-race'` = 52 (>= 1). `tagdump` under `--config=race` prints `race` (the `!race` file is excluded) |
+| Race without `pure=false` fails (the INFERRED claim) | VERIFIED | `--@rules_go//go/config:race` with `build:linux pure` set: `Error in fail: race instrumentation can't be enabled when cgo is disabled. Check that pure is not set to "off" and a C/C++ toolchain is configured.` |
+| Linux default has no C compile | true | `bazel aquery --config=linux 'mnemonic("CppCompile", //tools/lint/...)'` = 0 actions |
+
+### Gazelle `# gazelle:build_tags` (Task 0.8a)
+
+- Spike package with 11 tagged/untagged files, no directive: `srcs = [t_norace.go, t_race.go, tags.go]`, so the 8 other tag files are silently dropped. With `# gazelle:build_tags integration,gitoracle,sinkguard,harness,live_github,embed_tmux,embed_tymux`: all 11 files in `srcs`. `race`/`!race` files are always kept (`race` is treated as known).
+- Real package `testutil/gitoracle` (`//go:build gitoracle` test): `gazelle update -mode=print testutil/gitoracle` emits only `go_library`; with `-build_tags=gitoracle` it also emits `go_test srcs = ["oracle_test.go"]`. So the directive is required, not optional, for the 15 gitoracle / 12 integration / 7 sinkguard / `harness` / `live_github` files.
+- `//go:embed embed/tmux` with no file present: Gazelle warns `pattern embed/tmux: matched no files` and emits no `embedsrcs`, so the embed `select()` is hand-maintained (confirms ADR-007). In the real tree `session/tmux/embed` and `session/tymux/embed` are empty directories.
+
+### Cost and fallback
+
+Pass path costs S (3 rc lines per config plus the 4-target flags package). The fallback in the matrix (transition macro for tag lists, cost S) is not needed for the sealed single-tag set. It would be needed only for combinations of tag configs in one invocation (see below). Not built.
+
+### False or unsafe plan assumptions
+
+1. **Label spelling**: every `@io_bazel_rules_go//go/config:*` in the plan (Task 1.1c, Story 0.8, `research/architecture.md:149-150`, `stack.md`) is wrong for this repo; use `@rules_go//go/config:*`. Task 1.1c's verify would fail as written.
+2. **"additive behaviour of `--config` chains" (Task 0.8a) and `architecture.md:150` (`build:embed_tymux --config=embed_tmux` then a second `tags=` line)**: the `tags` flag is last-wins. Measured: `--config=embed_tmux --config=sinkguard --config=gitoracle --config=integration` compiles only `integration`; chain-style `embed_tymux` (config=embed_tmux + `tags=embed_tymux`) compiles with `-tags embed_tymux` only and fails on the guard. Consequences: (a) `embed_tymux` must list `embed_tmux,embed_tymux` in one flag (Story 1.4's "lists both tags" is right, `architecture.md:150` is wrong); (b) a second tag config combined with an embed or tag config silently drops the first; the sealed set therefore cannot be composed pairwise. `make` today uses only single-tag runs plus `embed_tmux embed_tymux`, so no current recipe is lost; any future combination needs its own named config or the transition macro.
+3. **Story 0.8 AC "`bazel cquery --output=starlark` inspects `gotags`"**: there is no `gotags` provider field; the value is `GoInfo.mode.tags` (provider key `@@rules_go+//go/private:providers.bzl%GoInfo`).
+4. **"Tag alone is silent"** (`architecture.md:163`): wrong direction of detail, not of conclusion. Tag-on with the flag off fails in the compile action with `could not embed embed/tmux: no matching files found`, not at analysis; the flag-on/tag-off combination builds without embedding. Both knobs must be set by the same config.
+5. **`build:linux --...:pure` is only auto-applied** because `.bazelrc` has `--enable_platform_specific_config`; the plan relies on it without saying so (fine, but a macOS dev must not expect it).
