@@ -52,6 +52,9 @@ type tymuxGRPCSession struct {
 	// label disambiguates this Instance's tymuxd session name from other
 	// Instances rooted at the same directory (see sessionName).
 	label string
+	// priorLabels are earlier labels of a record that had no stored id when it was renamed; the
+	// daemon session it created is still named after one of them. Lookup only, in-process.
+	priorLabels []string
 
 	// storedID is the daemon session id persisted with the Instance record;
 	// when set, RestoreWithWorkDir adopts that session regardless of its Name.
@@ -432,9 +435,26 @@ func (s *tymuxGRPCSession) adoptStoredSessionForStart(ctx context.Context, dir s
 	return false, found.GetId(), nil
 }
 
+// labeledNames are the daemon session names this record's label (current, then prior) gives dir;
+// empty for an unlabeled record, whose only name is the legacy dir.
+func (s *tymuxGRPCSession) labeledNames(dir string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.label == "" {
+		return nil
+	}
+	names := []string{dir + " [" + s.label + "]"}
+	for _, l := range s.priorLabels {
+		names = append(names, dir+" ["+l+"]")
+	}
+	return names
+}
+
 // claimLiveLabelSession claims a live session named for this record other than exceptID.
 func (s *tymuxGRPCSession) claimLiveLabelSession(workDir string, sessions []*v1.Session, exceptID string) *v1.Session {
-	for _, name := range []string{s.sessionName(workDir), workDir} {
+	// Labeled names only: a record with a stored id was created after labeling, and the legacy
+	// Name == workDir session may belong to another record.
+	for _, name := range s.labeledNames(workDir) {
 		for _, sess := range sessions {
 			if sess.GetName() == name && sess.GetId() != exceptID && sess.GetLiveness() == v1.Liveness_LIVENESS_LIVE &&
 				!s.storedByOtherRecord(sess.GetId()) && s.tryClaim(sess.GetId()) {
@@ -582,6 +602,10 @@ func (s *tymuxGRPCSession) killStaleGeneration(ctx context.Context) {
 // session name. Call before Start()/RestoreWithWorkDir().
 func (s *tymuxGRPCSession) SetSessionLabel(label string) {
 	s.mu.Lock()
+	if s.label != "" && s.label != label && s.storedID == "" {
+		// No stored id yet: the daemon session may still carry the old label's name.
+		s.priorLabels = append(s.priorLabels, s.label)
+	}
 	s.label = label
 	if s.storedID != "" {
 		s.setStoredIDLocked(s.storedID) // re-register under the new label
@@ -743,8 +767,7 @@ func (s *tymuxGRPCSession) claimOwnSession(workDir string, sessions []*v1.Sessio
 		// not saved yet): fall through to the label so the still-running agent
 		// is re-adopted instead of duplicated.
 	}
-	labeled := s.sessionName(workDir)
-	for _, name := range []string{labeled, workDir} {
+	for _, name := range append(s.labeledNames(workDir), workDir) {
 		for _, sess := range sessions {
 			// A session some other record stores by id is never adopted by name.
 			if sess.GetName() == name && !s.storedByOtherRecord(sess.GetId()) && s.tryClaim(sess.GetId()) {

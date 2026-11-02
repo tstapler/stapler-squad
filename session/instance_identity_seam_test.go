@@ -7,12 +7,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tymux"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // seamFakeTymux is a tymux.TymuxManager that records identity-relevant calls.
@@ -282,4 +284,35 @@ func TestSeam_RenameAndSetTitleDirectUpdateTheProcessLabel(t *testing.T) {
 
 	inst.SetTitleDirect("label-rollback")
 	assert.Equal(t, "label-rollback", fake.label)
+}
+
+// Rename must not call into the process manager while holding i.mu: pm() takes pmMu, and
+// updateProcessManagerForRestart takes pmMu and then i.mu when migrating backends (ABBA).
+func TestSeam_RenameDoesNotHoldInstanceLockWhileTakingPMLock(t *testing.T) {
+	inst := restoredTymuxWith(t, &releasingTymux{}, "lock-order-before")
+	inst.pmMu.Lock() // as the migrating branch holds it before taking i.mu
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			inst.pmMu.Unlock() // let a failed run's Rename finish instead of hanging
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- inst.Rename("lock-order-after") }()
+
+	// Rename publishes the new title before it reaches the process manager, so once it is
+	// visible Rename is past the update and about to block on (or already past) pmMu.
+	wait.RequireEventually(t, func() bool { return inst.Snapshot().Title == "lock-order-after" },
+		5*time.Second, time.Millisecond, "Rename never started")
+	wait.RequireEventually(t, func() bool {
+		if inst.mu.TryLock() {
+			inst.mu.Unlock()
+			return true
+		}
+		return false
+	}, 5*time.Second, time.Millisecond, "Rename holds i.mu while blocked on pmMu")
+
+	released = true
+	inst.pmMu.Unlock()
+	require.NoError(t, <-done)
 }

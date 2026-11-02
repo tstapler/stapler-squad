@@ -109,14 +109,15 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// Use mutex for thread safety
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	// Update the title
 	oldTitle := i.Title
 	i.Title = newTitle
 	i.UpdatedAt = time.Now()
 	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
 
+	// After releasing i.mu: pm() takes pmMu, and updateProcessManagerForRestart nests i.mu inside
+	// pmMu, so calling it with i.mu held would be an ABBA deadlock.
 	i.syncProcessLabel(newTitle)
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
